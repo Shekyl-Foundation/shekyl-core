@@ -19,6 +19,7 @@ mod participation;
 mod retrieval;
 mod reward;
 mod scenarios;
+mod transport;
 
 use scenarios::{build_scenarios, run_sim, ScenarioResult};
 
@@ -99,6 +100,12 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  set (deep_und~0) = coverage!=retrieval (correlated failure binds). 0/1 outside L15."
     );
+    eprintln!(
+        "  trU = TRANSPORT-depressed uptime (L16); rTgtA rises as trU falls — the onion path"
+    );
+    eprintln!(
+        "  depresses u and stipulating r_target_deep=6 silently assumed clearnet u. 0 outside L16."
+    );
     eprintln!("  auN = NAIVE audit cadence (challenge every shard at a*); auC = CREDITED cadence");
     eprintln!("  (real reads self-prove → auC<<auN); auDp = deep share of oversight (~1 = traffic");
     eprintln!(
@@ -106,7 +113,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -142,6 +149,7 @@ fn print_summary(results: &[ScenarioResult]) {
         "rUDp",
         "rAvl",
         "rTgtA",
+        "trU",
         "auN",
         "auC",
         "auDp",
@@ -155,7 +163,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -194,6 +202,7 @@ fn print_summary(results: &[ScenarioResult]) {
             r.retr_under_deep,
             r.retr_avail_deep,
             r.r_target_avail as usize,
+            r.transport_u_eff,
             r.audit_oversight_naive,
             r.audit_oversight_credited,
             r.audit_deep_share,

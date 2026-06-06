@@ -17,6 +17,7 @@ use crate::participation::{
 };
 use crate::retrieval::{r_target_for_availability, serving_availability};
 use crate::reward::{evaluate, RewardParams};
+use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
@@ -214,6 +215,16 @@ pub struct SimConfig {
     /// fails first at both temporal ends (L12 hand-off, L13 thinning).
     pub floor_age_tilt: f64,
 
+    /// **Transport / latency-regime coupling (L16).** When on, `fetch_latency_per_unit`
+    /// is the onion-rendezvous operating point (L10 seating lag) and depresses the
+    /// per-holder uptime used in the L15 retrieval SLA (`u_eff = u_base / (1+k·L)`).
+    /// Implies retrieval scoring. Off ⇒ byte-identical.
+    pub transport_model: bool,
+    /// Baseline holder uptime before transport depression (the L15 `u` at `L=0`).
+    pub transport_u_base: f64,
+    /// Depression per epoch of deep fetch latency in `u_eff = u_base / (1 + k·L)`.
+    pub transport_u_k: f64,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -327,6 +338,9 @@ pub struct ScenarioResult {
     /// independence — `r_target_deep` read off the availability target rather than
     /// stipulated. `0` outside the retrieval model.
     pub r_target_avail: f64,
+    /// **Transport-depressed uptime** (L16): the effective `u` used in retrieval scoring
+    /// when `transport_model` couples latency to the SLA. `0` outside L16.
+    pub transport_u_eff: f64,
     /// **Naive audit cadence** (L14): the per-shard challenge probability `a*` deterrence
     /// requires when *every* shard is challenged uniformly (no read credit). `0` outside
     /// the audit model.
@@ -417,6 +431,16 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
         }
     }
     world
+}
+
+/// Per-holder uptime used in L15 retrieval scoring; L16 depresses it from transport lag.
+fn retrieval_uptime(cfg: &SimConfig) -> f64 {
+    if cfg.transport_model {
+        let lat = regime_latency_epochs(cfg.deep_shard_size, cfg.fetch_latency_per_unit);
+        effective_uptime(cfg.transport_u_base, lat, cfg.transport_u_k)
+    } else {
+        cfg.retr_uptime
+    }
 }
 
 pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
@@ -618,9 +642,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // failure domains among seated holders), scored over the deep set against the
         // SLA `retr_avail_target`. This is the coverage≠retrieval read — a shard can be
         // *covered* (serving_r ≥ R_target) yet fail the SLA if its holders cluster into
-        // too few domains. Inert when `!retrieval_model`.
-        if cfg.retrieval_model {
-            let avail = serving_availability(&world, cfg.retr_uptime, cfg.retr_n_domains);
+        // too few domains. Inert when `!retrieval_model && !transport_model`.
+        if cfg.retrieval_model || cfg.transport_model {
+            let u = retrieval_uptime(cfg);
+            let avail = serving_availability(&world, u, cfg.retr_n_domains);
             let mut dn = 0usize;
             let mut under = 0usize;
             let mut sum = 0.0_f64;
@@ -824,11 +849,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         1.0
     };
-    let r_target_avail = if cfg.retrieval_model {
-        r_target_for_availability(cfg.retr_uptime, cfg.retr_avail_target) as f64
+    let retr_u = retrieval_uptime(cfg);
+    let r_target_avail = if cfg.retrieval_model || cfg.transport_model {
+        r_target_for_availability(retr_u, cfg.retr_avail_target) as f64
     } else {
         0.0
     };
+    let transport_u_eff = if cfg.transport_model { retr_u } else { 0.0 };
     // L14 proof-of-archival audit: the non-productive (oversight-only) challenge traffic
     // needed to keep free-riding unprofitable, computed over the final age distribution
     // (steady in steady state). `a*` is the per-shard audit probability deterrence
@@ -946,6 +973,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         retr_under_deep,
         retr_avail_deep,
         r_target_avail,
+        transport_u_eff,
         audit_oversight_naive,
         audit_oversight_credited,
         audit_deep_share,
@@ -1068,6 +1096,12 @@ fn baseline() -> SimConfig {
         // P3 age-stratified floor: uniform by default (tilt 0 ⇒ byte-identical to the
         // L12/L13 floor). The P3 scenarios opt in.
         floor_age_tilt: 0.0,
+        // L16 transport coupling: off by default (inert, byte-identical). The L16
+        // scenarios opt in. Defaults: 90% baseline uptime, depression k=0.07 per epoch
+        // of deep fetch latency (the onion-rendezvous operating band L2–L6).
+        transport_model: false,
+        transport_u_base: 0.9,
+        transport_u_k: 0.07,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -2094,6 +2128,81 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.floor_replicas = 6; // = r_target_deep, matching l12_boot_floor
         c.floor_decay_pop = 80.0;
         c.floor_age_tilt = tilt;
+        out.push(c);
+    }
+
+    // --- L16: transport / latency-regime coupling. The firewalled-pseudonym requirement
+    // forces heavy fetch onto onion rendezvous, so `fetch_latency_per_unit` is the
+    // transport operating point on the L2–L6 band (L10 seating lag) AND depresses the
+    // per-holder uptime the retrieval SLA sees (L15). These scenarios compose both on the
+    // L11 lean attractor (covered, low ρ) and sweep the regime grid the L10 hardening
+    // already mapped — now read as *transport*, not a free stress parameter.
+    let l16_base = || {
+        let mut c = l11_base();
+        c.init_active_frac = 0.0;
+        c.reservation_lo = 0.01;
+        c.reservation_hi = 0.01;
+        c.transport_model = true;
+        c.retrieval_model = true;
+        c.transport_u_base = 0.9;
+        c.transport_u_k = 0.07;
+        c.retr_avail_target = 0.999;
+        c.retr_n_domains = 0; // independent — isolate transport from diversity
+        c.epochs = 120;
+        c.churn_window = 40;
+        c.epoch_aging = 0.05;
+        c
+    };
+    // (L16a) REGIME sweep: L ∈ {0,1,2,3,4,6}. At L=0 the coupling is inert (u_eff=u_base,
+    // rTgtA=3); as L rises, u_eff falls, derived R_target climbs, and a *covered* deep set
+    // (`deep_und≈0`) can fail the SLA (`rUDp>0`) purely from transport depression — the
+    // stipulated `r_target_deep=6` silently assumed a clearnet u the onion path does not
+    // deliver. `sDeepU`/`sOUmx` track the L10 seating cost on the same axis.
+    for (llabel, lpu) in [
+        ("L0", 0.0),
+        ("L1", 1.0),
+        ("L2", 2.0),
+        ("L3", 3.0),
+        ("L4", 4.0),
+        ("L6", 6.0),
+    ] {
+        let mut c = l16_base();
+        c.name = format!("l16_regime_{llabel}");
+        c.axis = "l16_transport_regime".into();
+        c.fetch_latency_per_unit = lpu;
+        out.push(c);
+    }
+    // (L16b) L6 saturation + duration backstop: at the band ceiling, age-scaled duration
+    // should still damp serving oscillation (L10 H1) even when transport has depressed u.
+    for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+        let mut c = l16_base();
+        c.name = format!("l16_L6_{dlabel}");
+        c.axis = "l16_duration_backstop".into();
+        c.fetch_latency_per_unit = 6.0;
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
+    }
+    // (L16c) Operating point L4 + diversity d=3: compose transport depression with the
+    // correlated-failure bind (L15) — the architecture-tension preview (diversity needed
+    // for three-nines, but location hidden). Soundness-pass work, not sim economics.
+    {
+        let mut c = l16_base();
+        c.name = "l16_L4_d3".into();
+        c.axis = "l16_transport_diversity".into();
+        c.fetch_latency_per_unit = 4.0;
+        c.retr_n_domains = 3;
+        out.push(c);
+    }
+    // (L16d) L6 + foundation floor: the floor adds R replicas (retrieval coverage) but
+    // does NOT raise u — so at saturation the SLA can still fail even with the floor on.
+    // Separates capacity backstop from uptime depression (feeds P4 / soundness pass).
+    {
+        let mut c = l16_base();
+        c.name = "l16_L6_floor".into();
+        c.axis = "l16_floor_backstop".into();
+        c.fetch_latency_per_unit = 6.0;
+        c.floor_replicas = 6;
+        c.floor_decay_pop = 200.0; // persist through the run (~80 archivers)
         out.push(c);
     }
 

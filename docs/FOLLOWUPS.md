@@ -7484,7 +7484,41 @@ one place to confirm each item's relationship to the wallet stack.
 
   *Reference:* `docs/ANONYMITY_NETWORKS.md` §*Transport for the
   staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
-  ledger item L16 + §*Transport coupling*; `docs/design/V3_STAKER_ARCHIVAL.md`.
+  ledger item L16 + §*Transport coupling* + §*L16*; `docs/design/V3_STAKER_ARCHIVAL.md`.
+
+- **L14 read-credit soundness: per-(holder, shard), never shard-global
+  (gate 4 / consensus crypto; soundness pass).** The iteration-3 sim
+  validated retrieval-as-proof economics **conditional** on read-credit
+  being unforgeable. Soundness requires crediting only **reader-verified,
+  successful serves** that reduce **that holder's** challenge burden —
+  never a shard-global `p_read` that would let one holder's fake
+  self-reads shield a dropping co-holder by inflating popularity for
+  everyone. Secondary check: a credible slash that minimizes oversight
+  traffic must still leave an acceptable `a*` at the L11-feasible bond
+  (penalty couples to bond/APR denominator).
+
+  *Target:* gate 4 soundness pass, before genesis challenge-cadence pin.
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
+  (L14), §*L14×L15*, ledger L14.
+
+- **L15 diversity under location-hiding (gate 4–6 / architecture;
+  soundness pass — load-bearing).** A three-nines retrieval SLA needs
+  ≥3 failure domains per deep shard, but failure domains are
+  location/operator/ISP correlation and the firewalled pseudonym `P`
+  exists so network location cannot be observed or linked — diversity
+  cannot be verified or steered using a property committed to hiding.
+  Soundness pass must pick among: (1) correlation-inferred diversity
+  (privacy-preserving on location, availability-fingerprint metadata
+  cost); (2) honestly relaxed `A*` / diversity-free SLA; (3) foundation
+  as perpetual diversity anchor (sharper than P4 — trustless terminal
+  subsidy buys capacity without buying domain-independence). This is
+  the only iteration-3 item that can still move load-bearing walls;
+  resolution feeds privacy claims and decentralization story.
+
+  *Target:* gate 4–6 soundness pass, sequenced with transport (L16
+  shows transport+diversity compose worse than either alone).
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
+  (L15), §*L15*, §*L16* finding 4.
 
 - **Permanent fee-era backstop must be a trustless terminal subsidy,
   not the foundation floor (gate 7 / consensus monetary policy;
@@ -7518,10 +7552,11 @@ one place to confirm each item's relationship to the wallet stack.
   source*, not just its post-testnet magnitude, is the gate-7 call.
   The L13→gate-7 handoff.
 
-  The terminal subsidy must additionally carry the **P3 age-tilt**
-  (below): it is the *permanent* capacity source for the irreplaceable
-  tail, so its per-shard reward weight is age-stratified the same way
-  the foundation floor is, concentrating the perpetual subsidy on the
+  The terminal subsidy must additionally carry the **P3 floor-tilt**
+  (below — *not* L9/L10 bond-duration age-scaling): it is the
+  *permanent* capacity source for the irreplaceable tail, so its
+  per-shard reward weight is age-stratified the same way the
+  foundation floor is, concentrating the perpetual subsidy on the
   oldest band that the fee market abandons first.
 
   *Target:* gate 7 (terminal monetary policy), before genesis (the
@@ -7531,7 +7566,11 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **Age-stratify the foundation floor AND the terminal subsidy toward
   the irreplaceable oldest band (gate 5 + gate 7; shape derived,
-  magnitude post-testnet).** P3 band-resolved the L12/L13 residual with
+  magnitude post-testnet).** *Disposition note:* this is
+  **`foundation_floor_aged` floor-tilt**, a mean-preserving capacity
+  reallocation — **not** the L9/L10 bond-duration age-scaling
+  disposition (tilting the floor is unambiguously good where tilting
+  duration was ambiguous). P3 band-resolved the L12/L13 residual with
   a new oldest-band metric (`boOld`, age ≥ 0.8) and found the exposure
   is **asymmetric across the two temporal ends**: the **fee-era**
   floored residual concentrates in the oldest band (`l13_floor`:
