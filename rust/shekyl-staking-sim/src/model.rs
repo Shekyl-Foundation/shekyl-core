@@ -101,16 +101,57 @@ pub struct World {
     pub actors: Vec<Actor>,
     /// `holdings[a]` = set of shard ids actor `a` currently retains.
     pub holdings: Vec<Vec<bool>>,
+    /// `locks[a][s]` = epochs remaining on actor `a`'s retention commitment to deep
+    /// shard `s` (0 = unlocked/free to drop). A locked holding cannot be dropped
+    /// without slashing the bond, so a rational actor retains it — this is how the
+    /// age-scaled **duration** (L9) damps churn. Always 0 in the static iteration-1
+    /// model (no `dynamic`/duration), so iteration-1 behavior is unchanged.
+    pub locks: Vec<Vec<u32>>,
 }
 
 impl World {
     pub fn new(shards: Vec<Shard>, actors: Vec<Actor>) -> Self {
         let n_shard = shards.len();
         let holdings = vec![vec![false; n_shard]; actors.len()];
+        let locks = vec![vec![0u32; n_shard]; actors.len()];
         Self {
             shards,
             actors,
             holdings,
+            locks,
+        }
+    }
+
+    /// Advance the world one epoch in the **dynamic frontier-window** model (L9 churn
+    /// source): every shard ages by `age_step`; any shard reaching `age ≥ 1.0` is
+    /// retired and its slot recycled as a fresh `age = 0` shard (holdings + locks on
+    /// that slot cleared — a retired shard is out of the active window). Remaining
+    /// locks decrement by one epoch. This is the realistic churn pressure (the chain
+    /// grows; shards transit hot→deep), and it is the only thing that gives the
+    /// duration knob something to damp.
+    ///
+    /// **Modeling simplification (documented):** the window models the *churn
+    /// frontier* (the hot→deep transit where acquisition/drop decisions happen).
+    /// Permanent archival of the truly-oldest state is a gate-5 foundation concern,
+    /// out of this window — so "retire at age 1" is a window boundary, not a claim
+    /// that irreplaceable data is discarded.
+    pub fn advance_epoch(&mut self, age_step: f64) {
+        for (s, shard) in self.shards.iter_mut().enumerate() {
+            shard.age += age_step;
+            if shard.age >= 1.0 {
+                // Retire + recycle the slot.
+                shard.age = 0.0;
+                for a in 0..self.actors.len() {
+                    self.holdings[a][s] = false;
+                    self.locks[a][s] = 0;
+                }
+            }
+        }
+        // Decrement remaining locks.
+        for a in 0..self.actors.len() {
+            for l in self.locks[a].iter_mut() {
+                *l = l.saturating_sub(1);
+            }
         }
     }
 
@@ -158,6 +199,20 @@ pub fn bond_age(age: f64, bond_rate: f64, bond_age_scale: f64, deep_threshold: f
     let deep_mid = (deep_threshold + 1.0) / 2.0;
     let factor = (1.0 + bond_age_scale * (age - deep_mid)).max(0.05);
     bond_rate * factor
+}
+
+/// Per-deep-shard bond **duration** (retention-commitment horizon, in epochs) as a
+/// function of age — the L9 second bond axis, orthogonal to magnitude. `base` is the
+/// flat horizon; `dur_age_scale > 0` makes older shards carry a *longer* commitment
+/// (`base · (1 + dur_age_scale · age)`), encoding the tier system's old
+/// commitment-horizon job. Unlike magnitude, duration is an opportunity-cost on
+/// *willingness* (the same capital committed longer), not a hard affordability gate —
+/// it does not shrink the affording pool, so it damps tail churn without concentrating
+/// distinct holders (see `docs/design/STAKER_ARCHIVAL_SIM.md` L4/L9). Returns whole
+/// epochs (rounded, floored at 1 for deep shards).
+pub fn bond_duration(age: f64, base: f64, dur_age_scale: f64) -> u32 {
+    let d = base * (1.0 + dur_age_scale * age);
+    (d.round() as i64).max(1) as u32
 }
 
 /// Age-dependent durability replication floor `R_target(age)`. Higher for deep

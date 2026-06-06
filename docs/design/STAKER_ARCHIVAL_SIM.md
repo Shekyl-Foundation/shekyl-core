@@ -1,11 +1,25 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 1 BUILT, RUN, ROBUSTNESS-SWEPT, and L4-CLOSED (2026-06-05).** Crate
-`rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
-build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
-residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
-flat-vs-age-scaled-bond fork (L4)*, and the forward worklist in §*Adjustment ledger* at
-the end of this doc. The 1c result, **L4 resolved**: keep flat bond *magnitude*
+**Status: iteration 2 BUILT and RUN — duration (L9) + co-location pair sweep (L8)
+(2026-06-06).** Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 —
+results (first build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps
+and residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
+flat-vs-age-scaled-bond fork (L4)*, the bond-duration + co-location work in §*Iteration 2
+— bond duration (L9) and co-location (L8)*, and the forward worklist in §*Adjustment
+ledger* at the end of this doc.
+
+**Iteration-2 headline.** (i) The seating metric is now the **L8 min-form** —
+`Σ_actor min(⌊capital/bond⌋, ⌊storage/shard_size⌋) / Σ_deep R_target` — which catches the
+co-location starvation the aggregate ratio missed: `bscale_s0` reads `0.86 < 1` (was
+aggregate `3.24`) matching `deep_und 0.75`. (ii) The **(bond × shard-size) pair sweep**
+confirms L8's joint claim — neither leg moves coverage alone (low bond + big shard, or
+small shard + high bond, each still starve), only the *pair* clears deep, exactly when the
+min-form crosses 1. (iii) **Age-scaled bond *duration* (L9)** damps oldest-band churn
+under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) without suppressing
+participation; under anticipatory agents a **willingness ceiling** appears and is *steep*
+(deep acquisition collapses) because deep's coverage margin is thin in this regime — the
+clean churn-vs-participation gradient is gate-4 fine-sweep work in a positive-margin
+regime. The 1c result, **L4 resolved**: keep flat bond *magnitude*
 (durability survival arithmetic — redundancy dominates per-holder reliability, so the
 irreplaceable tail wants the *most distinct holders* → the *most accessible* bond, never
 scaled up; age-scaling magnitude flips the binding constraint from the tractable `dS/dN`
@@ -513,14 +527,21 @@ mechanism is invisible when every actor's capital dwarfs every per-shard bond.
    starves. Any age-scaling must be mean-preserving (lower the base) even to be
    comparable — itself a caution against the naive form.
 
-2. **Mean-preserving age-tilt is a weak, non-monotonic lever.** Oldest-band residual
-   moves `0.71 → 0.78 → 0.69` and oldest-band actor-Gini `0.542 → 0.562 → 0.573` across
+2. **Mean-preserving age-tilt is a weak, non-monotonic lever — because it fights the
+   reward premium it is supposed to complement.** Oldest-band residual moves
+   `0.71 → 0.78 → 0.69` and oldest-band actor-Gini `0.542 → 0.562 → 0.573` across
    `scale {0,1,3}` — a mild upward concentration push, not a sharp tail break. Two
    reasons: (a) the distinct-actor *afford-one* count stays at 80 (the tilt changes
    *how many* oldest shards a capital-poor archiver holds, not *whether* it can hold
-   one — so the distinct-actor empty-window never trips); (b) the `g(age)` reward
-   premium pulls attraction *toward* the oldest in direct opposition to the bond tilt,
-   so the two age-gradients largely cancel on the oldest shards.
+   one — so the distinct-actor empty-window never trips); (b) — **the general
+   mechanism** — the age-tilt on bond *magnitude* and the age premium on *reward*
+   (`g·scarcity`) pull coverage in **exactly opposite directions**: the premium pulls
+   *toward* the oldest, the magnitude-tilt pushes *away* from it, so they cancel. This
+   is not a property of the particular tilt shape — *any* age-scaling of bond magnitude
+   fights the reward premium already doing the age work, so it can only ever be a
+   wash-or-worse. Flat magnitude is therefore not merely the empirical winner; it is the
+   only magnitude shape that does not sabotage the lever (`g`) that actually relocates
+   coverage.
 
 3. **The dominant deep-coverage lever in the capital-poor regime is a capital-rich
    actor, not the bond shape.** With a whale present, `deep_und` collapses
@@ -529,14 +550,19 @@ mechanism is invisible when every actor's capital dwarfs every per-shard bond.
    capital-rich actor's deep share, and it is essentially independent of the bond's
    age-shape.
 
-4. **`dS/dN ≥ 1` is necessary but not sufficient (the co-location finding).**
-   `bscale_s0` (flat bond) shows `dS/dN = 3.24` — ample aggregate capital — yet
-   `deep_und = 0.75`. Deep needs both storage *and* bond-capital on the **same** actor;
-   when capital sits with storage-poor capital-rich actors and storage sits with
-   bond-constrained capital-poor archivers, deep falls in the co-location gap. The
-   whale (ample on both axes) is what closes it. This sharpens the empty-window
-   definition (L8): the feasibility check is on the *joint* storage×capital
-   distribution, not aggregate capital alone.
+4. **Aggregate `dS/dN ≥ 1` is necessary but not sufficient — the co-location finding,
+   now folded into the metric (L8).** `bscale_s0` (flat bond) has *aggregate* capital
+   coverage `3.24` — ample — yet `deep_und = 0.75`. Deep needs both storage *and*
+   bond-capital on the **same** actor; when capital sits with storage-poor capital-rich
+   actors and storage sits with bond-constrained capital-poor archivers, deep falls in
+   the co-location gap (the whale, ample on both axes, is what closes it). The
+   **corrected min-form** metric counts each actor's *smaller* leg —
+   `Σ_actor min(⌊capital/bond⌋, ⌊storage/shard_size⌋) / Σ_deep R_target` — and reads
+   `0.86 < 1` for `bscale_s0`, predicting the `0.75` starvation that the aggregate `3.24`
+   masked. This is the metric the sim now reports as the `dS/dN` column; the aggregate is
+   retained only as a secondary line. (It also *unifies* L3's two binding axes: the
+   `min(capital-leg, storage-leg)` form collapses the separate capital and storage
+   conditions into one co-located number.)
 
 **Disposition (L4): flat bond *magnitude*.** The sim evidence above (weak, mildly
 regressive tilt that fights the premium) is corroborating; the *decisive* argument is
@@ -566,6 +592,17 @@ Reward attracts; flat magnitude keeps-accessible; age-scaled duration commits �
 jobs on three knobs, no collisions. The L4 mistake to avoid is folding
 commitment-horizon into magnitude, where it fights redundancy.
 
+**The L4 reversion trigger (made measurable).** Flat-magnitude-no-duration is *complete*
+unless a specific signal fires: a **churn-stability failure on the oldest band
+specifically** — coverage present but oscillating, holders cycling off the irreplaceable
+shards (the `oChrn` metric on the deepest band). If the oldest-band churn sub-claim holds,
+flat magnitude without any duration term is the final shape and L9 stays parked. If it
+*fails on the tail*, that — and only that — is when age-scaled **duration** (never
+magnitude) earns its complexity. Iteration 2 exercises exactly this: under myopic agents
+the trigger does fire (`oChrn 0.215` at flat duration) and age-scaled duration damps it
+(`→ 0.108`), so duration has a demonstrated job; the open question its fine-tuning leaves
+for gate 4 is the willingness-ceiling tradeoff (below).
+
 **The genuinely new gate-inputs:** the **co-location finding (L8)** — deep durability
 needs actors rich on storage *and* bond-capital jointly (or a foundation/whale
 backstop) — and the **duration axis (L9)**, which requires a model refinement
@@ -585,6 +622,103 @@ one.
   afford-one count. A budget-capacity per-band metric is a candidate 1d refinement if
   the distinct-actor tail mechanism ever needs sharper resolution.
 
+## Iteration 2 — bond duration (L9) and co-location (L8)
+
+Iteration 2 lands the model refinement L4/L8/L9 demanded before the gate-4 fine sweep:
+**bond magnitude and duration are separated**, the world **ages dynamically** so duration
+has churn to act on, and the seating metric is the **co-located min-form**.
+
+### Model refinement
+
+- **Magnitude vs duration.** `bond_age(age)` (flat by L4) sets the slashable *amount*;
+  the new `bond_duration(age) = base·(1 + dur_age_scale·age)` sets the *commitment
+  horizon* (in epochs). Magnitude gates affordability (hard — distinct-holder count →
+  redundancy); duration is an opportunity-cost on *willingness* (soft — same capital
+  committed longer), so it never shrinks the affording pool.
+- **Dynamic frontier-window world.** Shards age each epoch; the oldest recycle (a fresh
+  frontier shard replaces a retired one), creating the churn duration must damp. A
+  per-`(actor, shard)` **lock** counts down the retention commitment: a deep shard under
+  an unexpired lock cannot be dropped (force-kept), and fresh deep acquisitions arm a lock
+  of length `bond_duration(age)`. The `oChrn` metric reports holding-flips in the deepest
+  band per epoch.
+- **Lock anticipation.** Forward-looking agents add a willingness penalty to a *fresh*
+  deep acquisition proportional to the lock they would incur (`anticipation · duration ·
+  storage_unit_cost`) — the "willingness ceiling." Myopic agents (`anticipation = 0`)
+  ignore the future lock.
+- **Storage leg / granularity.** `deep_shard_size` is the storage a deep shard occupies
+  (default `1.0` = iteration-1 behavior). It is the L8 storage leg and gate-5's
+  granularity lever; smaller deep shards clear more actors' storage leg.
+
+### L8 — the co-location min-form and the joint lever
+
+The seating metric is now `colocated_coverage = Σ_actor min(⌊capital/bond⌋,
+⌊storage/shard_size⌋) / Σ_deep R_target` (reported as the `dS/dN` column). Validation:
+`bscale_s0` reads **0.86 < 1**, matching `deep_und 0.75`, where the aggregate ratio (3.24)
+gave a false pass.
+
+The **(bond × shard-size) pair sweep** (stark split-endowment regime, where co-location is
+scarce) confirms neither leg moves the co-located pool alone — lowering the bond recruits
+the storage-rich (raises their capital leg), shrinking the shard recruits the capital-rich
+(raises their storage leg) — and deep durability needs the *joint* count. Cells are
+`colocated dS/dN / deep_und`:
+
+| flat bond ↓ \ shard size → | `1.0` | `0.5` | `0.25` |
+|---|---|---|---|
+| **2.0** | 0.38 / **1.00** | 0.55 / **1.00** | 0.91 / 0.47 |
+| **1.0** | 0.57 / **1.00** | 0.75 / **1.00** | 1.11 / **0.00** |
+| **0.5** | 0.97 / 0.65 | 1.15 / **0.00** | 1.50 / **0.00** |
+
+The lowest bond at full shard size (0.97 / 0.65) and the smallest shard at high bond
+(0.91 / 0.47) each still starve; only the *pair* clears deep to zero, and clearing
+coincides with the min-form crossing 1. This is the empirical statement of L8: **gates 4
+and 5 are re-entangled** — the binding quantity is the count of co-located non-whale
+actors per deep shard, a joint function of bond (gate-4's capital leg) and shard size
+(gate-5's storage leg), so the gates cannot close independently. The two levers to grow
+the co-located pool — **low-flat bond** (recruits the storage-rich) and **finer deep-shard
+granularity** (recruits the capital-rich) — must be tuned together. (The stark archetypes
+are a stress test; in the real design every archiver is co-located *by construction*, so
+the real form of L8 is **ratio-matching**: the deep shard's storage:bond requirement ratio
+must sit inside the population's storage:capital endowment-ratio distribution, or
+ratio-mismatched actors seat deep inefficiently.)
+
+### L9 — bond duration
+
+Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
+
+| scenario | agents | `oChrn` (oldest-band churn) | `oldU` (oldest residual) | `deep_und` |
+|---|---|---|---|---|
+| `dur_s0` | myopic | 0.215 | 0.000 | 0.125 |
+| `dur_s2` | myopic | 0.123 | 0.041 | 0.205 |
+| `dur_s4` | myopic | 0.108 | 0.000 | 0.188 |
+| `dur_s0_antic` | anticipatory (0.25) | 0.072 | 0.980 | 0.991 |
+| `dur_s2_antic` | anticipatory (0.25) | 0.006 | 1.000 | 0.955 |
+| `dur_s4_antic` | anticipatory (0.25) | 0.005 | 0.980 | 0.955 |
+
+- **Myopic: duration damps tail churn without suppressing participation.** Age-scaling the
+  duration roughly halves oldest-band churn (`0.215 → 0.108`) while the oldest residual
+  stays ≈0 — exactly the commitment-horizon job, with no affordability cost (the affording
+  pool is unchanged, as designed).
+- **Anticipatory: the willingness ceiling exists and is *steep*.** With even modest
+  anticipation (0.25), forward-looking agents collapse deep acquisition (`oldU ≈ 0.98`)
+  rather than grading down smoothly with scale. The cause is regime-specific: deep's
+  coverage margin is *thin* here (deep `R ≈ R_target`, so the marginal deep shard's net is
+  ≈0), and any anticipated lock cost flips it negative. The honest reading is that the
+  ceiling is real and sharp when deep is marginal; the clean churn-vs-participation
+  gradient (a duration horizon that damps churn *without* tripping the ceiling) only
+  appears where deep has positive margin — a **gate-4 fine-sweep** in a higher-`g` /
+  higher-provisioning regime, which is exactly where L9 said duration calibration belongs.
+
+### Iteration-2 caveats
+
+- The split-endowment pair-sweep regime is a stress construction (co-location made scarce
+  on purpose); the structural takeaways (joint lever; min-form tracks the crossing) carry
+  forward, not the specific cell magnitudes.
+- The dynamic world's recycling and lock dynamics are a minimal churn model, sufficient to
+  give duration a job and to expose the willingness ceiling; richer arrival/exit processes
+  are a later refinement if the gate-4 duration sweep needs them.
+- `deep_shard_size = 1.0` keeps every prior (iteration-1) scenario byte-identical; only the
+  pair sweep varies it.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
@@ -596,24 +730,27 @@ where a decision is provisional.
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|
 | L1 | **`g(age)` value** (gate 4 / near-term pin) | `g` doesn't just clear deep — it **relocates the crux**: the unavoidable finite-provisioning residual sits on the **oldest tail at `g=1`**, the **shoulder at `g≈2`**, and **inverts (oldest over-covered, hot starving) at `g≥4`**. The shoulder (youngest deep shards, just aged out of hot, still partly replicated, *least* irreplaceable) is strictly less harmful than the tail (oldest, most irreplaceable, no recency backstop). | **Decided (target restated), leaning `g≈2`.** The goal is **not** "eliminate the residual" (impossible under reallocation at finite provisioning) but **"seat the residual on the least-critical band"** — i.e. choose `g` so coverage matches `R_target(age)`: highest-`R_target` oldest shards best-covered, shortfall on the shoulder. `g≈2` is that regime, not a lucky midpoint. `g` is genesis-fixed: pin for the *thick steady state*. Reopen if the thick-state sweep moves the shoulder-seating `g`. |
-| L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → `dS/dN=0.97` → deep starves; the binding condition is `Σ⌊capital/bond⌋ ≥ Σ_deep R_target`, **not** distinct-actor count (slack at 80≥6). | **Decided (constraint form):** gate-4's upper bound is a **durability** constraint stated as `dS/dN ≥ 1` over the expected capital distribution — not a fairness limit. Fine sweep pins the rate that is simultaneously Sybil-deterring and `dS/dN ≥ 1`. |
-| L3 | **Empty-window definition** (gate 4) | Two orthogonal binding axes: capital (`dS/dN`) and storage (provisioning). `bond_high` is capital-bound (`dS/dN 0.97`); `pop_thin` is storage-bound (`dS/dN 1.21`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. Storage adequacy is gate 5's axis, tested separately; the two are not conflated. |
+| L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → min-form `dS/dN=0.83` → deep starves; the binding condition is the **co-located min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋) ≥ Σ_deep R_target` (L8), **not** distinct-actor count (slack at 80≥6). | **Decided (constraint form):** gate-4's upper bound is a **durability** constraint stated as min-form `dS/dN ≥ 1` over the expected *joint* storage×capital distribution — not a fairness limit. Fine sweep pins the rate that is simultaneously Sybil-deterring and min-form `dS/dN ≥ 1`. |
+| L3 | **Empty-window definition** (gate 4) | The L8 min-form **unifies** what looked like two axes: `min(capital-leg, storage-leg)` is a single co-located number that binds on whichever leg is scarcer. `bond_high` binds on capital (min-form `0.83`); `pop_thin` binds on storage (min-form `0.39`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies min-form `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. The capital and storage axes are not separate tests — they are the two legs of the one min-form, and gate 5's provisioning sets the storage leg (L8 re-entangles gates 4 and 5). |
 | L4 | **Flat vs age-scaled bond *magnitude*** (gate 4) | Sim evidence: the mean-preserving tilt is a weak, mildly regressive lever that fights the premium (1c). The **decisive** argument is durability survival arithmetic: for irreplaceable data redundancy dominates per-holder reliability — `N=3,p=0.99 → ~1−10⁻⁶` vs `N=20,p=0.9 → ~1−10⁻²⁰`; the number of *distinct holders* swamps per-holder commitment for "does the data survive at all." So the oldest shards want the **most distinct holders → the most accessible (flat/low) bond**, never scaled up. Age-scaling magnitude raises the bond exactly where the widest pool is needed, and **flips the binding constraint** from the tractable aggregate-slot `dS/dN` (distinct-actor slack 80≥6) to the intractable **tail-distinct-actor** concentration (#4 aimed at the worst place). | **Resolved: flat magnitude.** The same evidence that gave the clean `dS/dN` condition (L2) *is* the argument for flat — age-scaling trades a tractable capacity constraint for an intractable tail-concentration one. Attraction onto old shards lives on the **reward** (`g·scarcity`, L1): reward attracts, flat bond keeps-accessible, no collision. The commitment-horizon instinct behind "age-scale it" is real but belongs in **duration, not magnitude** (L9). **Reversion:** reopen only if a gate-4 requirement needs stronger slashable commitment on the oldest *that duration (L9) cannot carry*. |
-| L8 | **`dS/dN≥1` is necessary, not sufficient** (gate 4↔5 coupling) | `bscale_s0` (flat) has `dS/dN=3.24` yet `deep_und=0.75`: capital sits with storage-poor capital-rich actors and storage sits with bond-constrained capital-poor archivers, so deep — which needs *both* storage and bond-capital on the *same* actor — falls in the gap. A whale (ample on both axes) collapses `deep_und 0.75→0.058`. | **Decided (definition refinement):** the empty-window test is not `dS/dN≥1` alone; it requires enough actors with storage **and** bond-capital *co-located*. Gate 4's feasibility check must use the joint distribution, and gate 5's floor must backstop the co-location gap (an actor rich in one axis and poor in the other cannot seat deep). |
+| L8 | **co-location: the min-form seating metric** (gate 4↔5 re-entanglement) | `bscale_s0` (flat) has *aggregate* `dS/dN=3.24` yet `deep_und=0.75`: capital sits with storage-poor capital-rich actors and storage with bond-constrained capital-poor archivers, so deep — needing *both* on the *same* actor — falls in the gap. The **min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋)/Σ_deep R_target` reads **0.86<1**, predicting the starvation the aggregate masked. The **(bond × shard-size) pair sweep** confirms the joint lever: low-bond-alone (0.97/0.65) and small-shard-alone (0.91/0.47) each starve; the *pair* clears deep to 0, coinciding with the min-form crossing 1. | **Decided (metric swapped + gates re-entangled):** the seating metric is now the co-located min-form (implemented; the reported `dS/dN`). Gates 4 and 5 **cannot close independently** — the binding quantity is the count of co-located non-whale actors per deep shard, a joint function of bond (gate-4 capital leg) and shard size (gate-5 storage leg). Two levers grow the pool, tuned **together**: **low-flat bond** (recruits storage-rich) + **finer deep-shard granularity** (recruits capital-rich). Real-design form: **ratio-matching** (deep shard's storage:bond ratio inside the population's storage:capital distribution). |
 | L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
 | L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state to **seat the residual on the shoulder** (L1 — coverage matched to `R_target(age)`); let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
-| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did (oldest needs the longest retention commitment) belongs in the bond's **duration**, not its magnitude. Duration is an opportunity-cost on *willingness* (same capital committed longer), **not** a hard affordability gate — it doesn't shrink the affording pool the way magnitude does, so it encodes horizon-matching and damps churn on the irreplaceable tail *without* concentrating distinct holders. | **Decided (new axis), needs model work.** Gate 4 sweeps **two** bond axes: magnitude (flat — find the `dS/dN ≥ 1` window, L2) and **duration (age-scaled — find the horizon that minimizes oldest-tail churn without suppressing participation, the willingness ceiling)**. The current single-knob bond conflates them; **separating magnitude from duration is the model refinement that must land before the gate-4 fine sweep.** Duration shows up in churn-stability (the iteration-2 / anticipatory-agent dimension). |
+| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude (opportunity-cost on *willingness*, not a hard affordability gate). **Iteration 2 (built + run):** in a dynamic recycling world, age-scaled duration damps oldest-band churn under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) with `oldU ≈ 0` — horizon-matching with no affordability cost, as designed. Under anticipatory agents a **willingness ceiling** appears and is *steep* (`oldU ≈ 0.98`, deep acquisition collapses) because deep's margin is thin here (marginal deep net ≈ 0, so any anticipated lock flips it negative). | **Decided (axis confirmed); fine-tune deferred to gate 4.** Model split landed (magnitude flat, duration age-scaled, dynamic churn). Myopic damping confirms duration has a real job; the L4 reversion trigger (oldest-band churn) *fires* at flat duration and duration quells it. The clean churn-vs-participation gradient (damp churn without tripping the ceiling) needs a **positive-margin regime** (higher `g`/provisioning) — that is the gate-4 fine sweep. **Reopen condition for *not* shipping duration:** if gate-4's positive-margin sweep shows flat duration already passes the oldest-band churn sub-claim, duration stays parked (L4 reversion). |
 
 ### Robustness-sweep verdicts (which findings are structural)
 
 - **Structural (survive the provisioning/endowment sweeps):** deep starves without a
   premium (direction); `g(age)` reallocates rather than manufactures coverage; total
-  coverage is supply-bound; the empty-window is an aggregate-capital (`dS/dN`) condition
-  on the capital axis distinct from the storage axis — *and* `dS/dN≥1` is
-  necessary-not-sufficient (deep needs storage×capital co-located, L8); actor-level
-  spread contains the whale the pseudonym metric hides; the age-tilted bond is a weak,
-  mildly regressive lever that fights the `g(age)` premium (L4 → flat-on-deep default).
+  coverage is supply-bound; the empty-window is the **co-located min-form**
+  `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋) ≥ Σ_deep R_target` (L8) — which unifies the
+  capital and storage axes into one binding number and catches the co-location starvation
+  the aggregate ratio misses (and which the (bond × shard-size) pair sweep confirms is a
+  *joint* lever); actor-level spread contains the whale the pseudonym metric hides; the
+  age-tilted bond is a weak, mildly regressive lever that fights the `g(age)` premium
+  (L4 → flat-on-deep default); age-scaled bond *duration* damps oldest-band churn under
+  myopic agents without an affordability cost (L9).
 - **Margin-artifacts (regime-specific, do not generalize):** the `deep_und=1.000`
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`
