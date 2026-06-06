@@ -213,6 +213,52 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
         .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
 }
 
+/// The daemon's reply to a `send_raw_transaction` broadcast.
+///
+/// Mirrors the daemon's `on_send_raw_transaction` response
+/// (`core_rpc_server.cpp`): `status == "OK"` means the transaction was
+/// accepted into the pool (possibly with `not_relayed` set when the
+/// caller asked for it); any other status means rejection, with the
+/// boolean flags identifying the failure class and `reason` carrying a
+/// human-readable note when the daemon supplies one.
+///
+/// [`Rpc::publish_transaction`] returns this verbatim — including on
+/// rejection — so callers can map the daemon's decision onto their own
+/// submission-outcome type. The RPC layer does not editorialize: a
+/// transport- or protocol-level failure is an [`RpcError`]; a
+/// daemon-level accept-or-reject is a populated `TxRelayResponse`.
+/// `#[serde(default)]` tolerates a daemon that omits a flag rather than
+/// erroring, so an absent field reads as "not set" instead of failing
+/// the whole parse.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TxRelayResponse {
+    /// Daemon status string: `"OK"` on accept, otherwise a rejection
+    /// status (e.g. `"Failed"`).
+    pub status: String,
+    /// The transaction double-spends an output already spent or in-pool.
+    pub double_spend: bool,
+    /// The offered fee is below the daemon's required minimum.
+    pub fee_too_low: bool,
+    /// An input failed validation.
+    pub invalid_input: bool,
+    /// An output failed validation.
+    pub invalid_output: bool,
+    /// The transaction's ring size is below the daemon's minimum.
+    pub low_mixin: bool,
+    /// The transaction was accepted but not relayed (caller opted out of
+    /// relay, or the daemon chose not to relay it).
+    pub not_relayed: bool,
+    /// Inputs exceed outputs plus fee (or otherwise overspend).
+    pub overspend: bool,
+    /// The transaction exceeds the daemon's size limit.
+    pub too_big: bool,
+    /// The transaction has fewer outputs than consensus requires.
+    pub too_few_outputs: bool,
+    /// Human-readable rejection note, when the daemon supplies one.
+    pub reason: String,
+}
+
 /// An RPC connection to a Monero daemon.
 ///
 /// This is abstract such that users can use an HTTP library (which being their choice), a
@@ -773,40 +819,33 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Publish a transaction.
+    /// Broadcast a transaction to the daemon, returning the daemon's
+    /// accept-or-reject decision.
+    ///
+    /// The returned [`TxRelayResponse`] carries the daemon's verdict
+    /// verbatim, including on rejection: an [`Err`] is reserved for
+    /// transport- or protocol-level failures, while a daemon that parses
+    /// the transaction and decides to reject it yields an [`Ok`] with
+    /// `status != "OK"` and the relevant rejection flags set. Callers map
+    /// the verdict onto their own submission-outcome type; this method
+    /// does not collapse a daemon rejection into an error, because the
+    /// rejection class (double-spend, fee-too-low, …) is information the
+    /// caller needs.
     fn publish_transaction(
         &self,
         tx: &Transaction,
-    ) -> impl Send + Future<Output = Result<(), RpcError>> {
+    ) -> impl Send + Future<Output = Result<TxRelayResponse, RpcError>> {
         async move {
-            #[allow(dead_code)]
-            #[derive(Debug, Deserialize)]
-            struct SendRawResponse {
-                status: String,
-                double_spend: bool,
-                fee_too_low: bool,
-                invalid_input: bool,
-                invalid_output: bool,
-                low_mixin: bool,
-                not_relayed: bool,
-                overspend: bool,
-                too_big: bool,
-                too_few_outputs: bool,
-                reason: String,
-            }
+            let res: TxRelayResponse = self
+                .rpc_call(
+                    "send_raw_transaction",
+                    Some(
+                        json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": false }),
+                    ),
+                )
+                .await?;
 
-            let res: SendRawResponse = self
-        .rpc_call(
-          "send_raw_transaction",
-          Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": false })),
-        )
-        .await?;
-
-            if res.status != "OK" {
-                Err(RpcError::InvalidTransaction(tx.hash()))?;
-            }
-
-            Ok(())
+            Ok(res)
         }
     }
 
