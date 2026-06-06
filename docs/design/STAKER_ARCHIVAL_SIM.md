@@ -1,14 +1,37 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 2 BUILT and RUN — duration (L9) + co-location pair sweep (L8)
-(2026-06-06).** Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 —
-results (first build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps
-and residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
+**Status: iteration 3 (L10) BUILT and RUN — backfill-lag model reopens L9 (2026-06-06).**
+Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
+build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
+residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
 flat-vs-age-scaled-bond fork (L4)*, the bond-duration + co-location work in §*Iteration 2
-— bond duration (L9) and co-location (L8)*, and the forward worklist in §*Adjustment
-ledger* at the end of this doc.
+— bond duration (L9) and co-location (L8)*, the backfill-lag work in §*L10 — the
+backfill-lag model*, and the forward worklist in §*Adjustment ledger* at the end of this doc.
 
-**Iteration-2 headline.** (i) The seating metric is now the **L8 min-form** —
+**Iteration-3 headline (L10).** The backfill-lag model — deep-shard **fetch latency**
+(committed-but-not-serving while fetching; drops instant), **decoupled** from the economic
+game (game on committed replication = iteration-2-stable; retrieval coverage on seated
+replication) — supplies the one thing the capacity-bound model structurally lacked: a
+**timing-bound** coverage channel. With it, **both inputs to the iteration-2 "defer flat"
+decision (below) reverse.** (1) The L9 *benefit*, previously "inferred and unmodeled," is now
+modeled and **net-positive**: serving-coverage oscillation appears with latency (serving `oUmx`
+0→0.46→0.71→1.0 across `L0..L4`), and age-scaled duration damps it while *also* improving mean
+serving deep coverage at every latency (`L1` 0.263→0.222) and even at capacity binds (`lagbind`
+churn 0.942→0.865) — it never worsened serving coverage. (2) The L9 *cost* (`bind_*`
+"demonstrated reallocation hit") was a **final-epoch snapshot artifact**: on the windowed mean
+(the steady-state read every other metric uses) it is within noise — `a10` 0.178→0.178
+(*identical*), `a12`/`stor` slightly positive, `a08` +0.013 (not the "7×" the final-epoch
+0.025→0.176 implied). With the benefit demonstrated net-positive and the cost dissolved, the
+**sharpened L9 reversion criterion is MET → the disposition is reopened** (per
+`21-reversion-clause-discipline.mdc`). The honest residue: L10 fixes the benefit's **sign**
+(positive), not its **magnitude** — `fetch_latency_per_unit` is the post-testnet measurement —
+so the remaining decision is the **genesis-pin shape** (flat-constant / age-scaled-constant /
+duration-servo) under sign-known/magnitude-unknown, a priority-3 + `75-system-autonomy` human
+call surfaced to the maintainer, **not** flipped unilaterally. See §*L10 — the backfill-lag
+model*.
+
+**Iteration-2 headline.** *(Superseded on the L9 disposition by the iteration-3 headline above;
+retained for the audit trail of how "defer flat" was reached.)* (i) The seating metric is now the **L8 min-form** —
 `Σ_actor min(⌊capital/bond⌋, ⌊storage/shard_size⌋) / Σ_deep R_target` — which catches the
 co-location starvation the aggregate ratio missed: `bscale_s0` reads `0.86 < 1` (was
 aggregate `3.24`) matching `deep_und 0.75`. (ii) The **(bond × shard-size) pair sweep**
@@ -860,6 +883,13 @@ banks the **direction** as robust and bind-generic:
 | `stor` (storage) | 0.570 | **0.623** | broad — bind so tight even oldest can't be protected (0.449→0.490) |
 | `a12` / no bind | 0.000 | 0.000 | none — slack absorbs the lock-in (the surplus reading) |
 
+> **CORRECTION (iteration 3, L10).** This table reads `deep_und` at the **final epoch**. On
+> the **windowed mean** (the steady-state read used everywhere else), the cost dissolves —
+> `a10` is 0.178→0.178 (identical), `a08` is 0.016→0.029 (+0.013, not 7×), `a12`/`stor`
+> slightly positive. The "coverage-negative at every bind" reading below is a final-epoch
+> artifact; see the L10 subsection. The mechanism (oldest-ward pull within deep) is real but
+> does not produce a net aggregate coverage loss at steady state.
+
 - **Coverage-negative at every bind, never positive.** Wherever capacity binds, age-scaled
   duration worsens aggregate deep coverage (or leaves it equal); it never improves it. The
   starving band tracks where the slack is (shallowest-deep, mid-deep, or broad), but the
@@ -913,6 +943,113 @@ proves the buffer is real, outcome 3 is ruled out — they simply do not reach t
 operating point that governs the pin. The unification: **capacity creates coverage (L8); the
 age-scaling levers (`g`, duration) only redistribute it (#3, L9); flat duration is declining
 to stack a second redistribution lever on a system that already has one.**
+
+> **UPDATE (iteration 3, L10) — both legs of the "defer flat" decision reversed; the
+> reversion criterion is MET.** The backfill-lag model (below) does two things the
+> "defer flat" disposition assumed could not be done. (1) It **models the benefit** that
+> was "inferred and unmodeled," and the benefit is real and net-positive. (2) It forced a
+> re-read of the `bind_*` "demonstrated cost," which turns out to be a **final-epoch
+> snapshot artifact** — on the windowed mean (the same steady-state read every other metric
+> uses) the cost is within noise (`a10` 0.178→0.178 *identical*; `a12`/`stor` slightly
+> *positive*; `a08` +0.013, not the "7×" the final-epoch 0.025→0.176 suggested). With the
+> cost dissolved and the benefit demonstrated net-positive at the operating margin, the
+> sharpened reversion criterion ("backfill-lag model shows the timing-stability benefit net
+> of the lean-margin reallocation cost is positive") is **satisfied**. The disposition is
+> **reopened**; see the L10 subsection for the evidence and the remaining (magnitude /
+> genesis-pin-shape) decision, which is a human call per `21-reversion-clause-discipline.mdc`.
+
+### L10 — the backfill-lag model: the benefit, modeled (and the `bind_*` cost reconsidered)
+
+The L9 disposition turned on a benefit that was *unmodeled* (the iteration-2 model is
+capacity-bound — same-epoch full re-optimization — so it cannot represent a drop that opens
+a coverage gap before a replacement is serving) weighed against a cost that was *measured*
+(`bind_*`). L10 supplies the missing model and, in doing so, overturns both inputs.
+
+**The model change (spec).** A freshly-acquired deep shard is *committed* (consumes storage,
+posts the bond, earns reward — you are paid to **store**, verified by challenge, L14) but is
+**not yet serving**: it takes `round(deep_shard_size · fetch_latency_per_unit)` epochs to
+seat (`shard size ÷ anonymizing-transport throughput`, the post-testnet measurement). Drops
+are instant. Crucially, the lag is **decoupled from the economic game**: the game runs on
+*committed* replication (`World::replication`, unchanged — iteration-2 stable), and only the
+*retrieval-coverage metric* runs on *seated* replication (`World::serving_replication`). The
+first cut that fed seating back into reward death-spiraled the deep game (agents drop-and-
+refetch at the hot→deep bond boundary, never seat, band `[0.6–0.8]` → `mean_r 0`); decoupling
+isolates the actual L9 question — *does lagged retrieval coverage oscillate, and does
+age-scaled duration damp it net of the lock-in cost* — from an unrelated incentive pathology.
+
+**Finding 1 — the timing-bound channel is real (the capacity-bound model could not show it).**
+At the covered lean point (`lag_*`, slow churn, committed `deep_und = 0` throughout), serving
+coverage degrades as latency rises and oscillation appears where there was none:
+
+| latency | flat `s0` serving `deep_und` (mean) | `s0` serving `oUmx` | age-scaled `s4` serving `deep_und` | `s4` serving `oUmx` | oldest churn `s0`→`s4` |
+|---|---|---|---|---|---|
+| `L0` (instant) | 0.003 | 0.00 | 0.011 | 0.00 | 0.171 → 0.090 |
+| `L1` | 0.263 | 0.458 | **0.222** | **0.179** | 0.171 → 0.090 |
+| `L2` | 0.580 | 0.708 | **0.465** | **0.500** | 0.171 → 0.090 |
+| `L4` | 0.915 | 1.000 | **0.839** | **0.875** | 0.171 → 0.090 |
+
+Age-scaled duration reduces oldest churn (0.171→0.090 robustly), and through it **damps the
+serving-coverage oscillation** (`oUmx` lower at every latency) **and improves mean serving
+deep coverage** (`deep_und` lower at every latency). This is the benefit the prior iteration
+could only infer.
+
+**Finding 2 — the benefit is net-positive even at a capacity bind.** The `lag_*` point has no
+bind, so age-scaling there pays no reallocation cost. The honest net test adds latency `L2`
+*on top of* the `bind_*` capacity binds (`lagbind_*`):
+
+| bind + `L2` | flat `s0` committed `deep_und` | `s4` committed `deep_und` | flat `s0` serving `deep_und` | `s4` serving `deep_und` | oldest churn `s0`→`s4` |
+|---|---|---|---|---|---|
+| churn (`aging 0.10`) | 0.192 | 0.092 | 0.942 | **0.865** | 0.329 → 0.167 |
+| storage (`ss 0.85`) | 0.367 | 0.317 | 0.988 | **0.974** | 0.263 → 0.179 |
+
+Serving coverage is **better under age-scaling at the bind too** (`oUmx` is saturated at 1.0
+in these harsh binds, so the oscillation benefit is masked there, but the mean-coverage net is
+positive). Age-scaling never worsened serving coverage in any L10 regime.
+
+**Finding 3 — the `bind_*` "demonstrated cost" was a final-epoch artifact.** The reconciliation
+that Finding 2 forced: `lagbind` committed `deep_und` improves under age-scaling
+(churn 0.192→0.092), the *opposite* of the `bind_*` table above (`a10` 0.351→0.377). Fetch
+latency does not touch the committed game (confirmed: `lag_L0..L4` all committed `deep_und = 0`),
+so the difference is the read. The `bind_*` cost was measured on the **final epoch**; on the
+**windowed mean** (40-epoch window, the same steady-state read `oUmx` uses):
+
+| bind | flat `s0` **final** | `s4` **final** | flat `s0` **mean(20)** | `s4` **mean(20)** |
+|---|---|---|---|---|
+| `a08` | 0.025 | 0.176 ("7×") | 0.016 | 0.029 (+0.013) |
+| `a10` | 0.351 | 0.377 | 0.178 | **0.178 (identical)** |
+| `a12` | 0.000 | 0.000 | 0.025 | 0.023 (better) |
+| `stor` | 0.570 | 0.623 | 0.359 | 0.344 (better) |
+
+The "coverage-negative at every bind" claim does **not survive the windowed mean**. The
+reallocation cost is within noise (±0.013, mixed sign), not the robust large effect the
+final-epoch snapshots implied. The mechanism (age-scaling pulls coverage oldest-ward within
+deep) is real, but it does **not** produce a net aggregate coverage loss at steady state.
+
+**Reversion-clause evaluation (`21-reversion-clause-discipline.mdc`).** The sharpened
+criterion was: *reopen iff a backfill-lag model shows the timing-stability benefit net of the
+lean-margin reallocation cost is positive.* L10 is that model, and it shows: (a) the benefit
+exists and is net-positive on serving coverage across all regimes including binds; (b) the
+"lean-margin reallocation cost" it was to be netted against is a final-epoch artifact that the
+proper windowed read dissolves. **The criterion is met → the disposition is reopened.**
+
+**What is NOT yet resolved (the honest residue).** L10 establishes the **sign** of the benefit
+(positive), not its **magnitude at the real operating point**, because `fetch_latency_per_unit`
+is the post-testnet measurement that does not exist pre-genesis — the same ordering tension the
+"defer flat" resolution named, now cutting the other way. The remaining decision is therefore
+not "cost vs. no-benefit" (resolved: no robust cost, real benefit) but **the genesis-pin
+shape** under sign-known / magnitude-unknown:
+
+- **Flat-constant** — forgoes a demonstrated-net-positive mechanism; safe but leaves coverage
+  stability on the table if real latencies are non-trivial (the `L1`+ rows say they bite).
+- **Age-scaled-constant (a chosen `dur_age_scale`)** — captures the benefit; bets on an
+  uncalibrated magnitude for the *level*, though the *sign* is now model-backed.
+- **Duration servo (genesis-set range, post-testnet tune)** — preserves the option without a
+  fork; costs a governance/manipulation surface (`75-system-autonomy.mdc` caveat).
+
+This is a priority-3 (longevity) / `75-system-autonomy` judgment call, not a priority-1/2
+safety question, and it is a human disposition call per the rule. The flip from "defer flat"
+is **not** taken unilaterally: the evidence is recorded, the criterion is marked met, and the
+pin-shape decision is surfaced to the maintainer.
 
 ### Iteration-2 caveats
 
@@ -1050,8 +1187,8 @@ where a decision is provisional.
 | L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
 | L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state to **seat the residual on the shoulder** (L1 — coverage matched to `R_target(age)`); let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
-| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude — but *age-scaling* it is a second oldest-ward redistribution lever, and the lean test downgrades **both** halves of the surplus reading as regime artifacts. **Necessity (benefit): inferred, unmodeled.** `oChrn` is the *abandonment rate*, not the coverage-oscillation metric the churn sub-claim names; at the lean operating point flat duration shows `oUmx 0` (no oscillation — the surplus `oChrn 0.251` was benign rotation the buffer backfilled). The model is capacity- not timing-bound (same-epoch backfill), so the benefit a backfill-lag model might show is not yet representable. **Cost: demonstrated at the operating regime.** The one oscillating regime is a *capacity bind* where age-scaling makes `deep_und` *worse*; the `bind_*` sweep banks this as a robust **lock-in reallocation cost** — age-scaling lifts the oldest band by starving mid-deep (redistribution signature: oldest `frac_under` ↓, mid-deep ↑), coverage-negative at every bind (`a08` 0.025→0.176 [7×], `a10` 0.351→0.377, `stor` 0.57→0.623), saturating at the first increment (`s2`=`s4`). It is the **#3 finding compounded**: `g` already reallocates oldest-ward; age-scaled duration double-counts it, so stacked they over-concentrate the very oldest at a bind. | **DEFER age-scaling — default to FLAT duration (cost demonstrated, benefit unmodeled).** Final genesis bond shape: **flat magnitude + flat (non-zero) duration** — `g` carries deep-prioritization with a *single* oldest-ward lever; flat duration carries the commitment horizon with no reallocation cost. *Demonstrated cost against unmodeled benefit is not insurance — it is an unpriceable bet*, so age-scaling is not adopted now. **Genesis-pin ordering reinforces:** the constant is consensus-visible (pinned pre-genesis), but age-scaling can only be validated by a backfill-lag model needing **post-testnet fetch latencies** — you cannot validate before you must pin, and flat-constant has nothing to walk back. A duration *servo* (genesis range, post-testnet tunable) would preserve the option but adds a governance/manipulation surface not worth it on current evidence. **Reversion (sharpened):** reopen iff a backfill-lag churn model shows the timing-stability benefit **net of** the lean-margin reallocation cost is positive (the damping must beat the demonstrated mid-deep aggregate cost) — a fork-worthy upgrade if earned. The L4 reversion trigger (oldest-band coverage oscillation) is **not discharged** and stays open under this clause. Banked surplus facts (anticipation sign-flip, outcome 3 ruled out) remain valid as surplus facts but don't reach the operating point. |
-| L10 | **Backfill-lag / timing-bound dynamics** (gate 4; the L9 hinge) | The current model is capacity-bound (same-epoch full re-optimization), so it cannot represent drop-without-standing-replacement oscillation — the failure mode age-scaled duration would fix. The L9 benefit is therefore unmodeled, not absent. | **Open — iteration 3 (primary).** Add rate-limited acquisition, deep-shard fetch latency (post-testnet measurement: shard size ÷ anonymizing-transport throughput), and staggered arrival/exit. This is the *only* model change that can move L9 off "defer age-scaling." Until then L9's reversion clause cannot be evaluated. |
+| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude — but *age-scaling* it is a second oldest-ward redistribution lever, and the lean test downgrades **both** halves of the surplus reading as regime artifacts. **Necessity (benefit): inferred, unmodeled.** `oChrn` is the *abandonment rate*, not the coverage-oscillation metric the churn sub-claim names; at the lean operating point flat duration shows `oUmx 0` (no oscillation — the surplus `oChrn 0.251` was benign rotation the buffer backfilled). The model is capacity- not timing-bound (same-epoch backfill), so the benefit a backfill-lag model might show is not yet representable. **Cost: demonstrated at the operating regime.** The one oscillating regime is a *capacity bind* where age-scaling makes `deep_und` *worse*; the `bind_*` sweep banks this as a robust **lock-in reallocation cost** — age-scaling lifts the oldest band by starving mid-deep (redistribution signature: oldest `frac_under` ↓, mid-deep ↑), coverage-negative at every bind (`a08` 0.025→0.176 [7×], `a10` 0.351→0.377, `stor` 0.57→0.623), saturating at the first increment (`s2`=`s4`). It is the **#3 finding compounded**: `g` already reallocates oldest-ward; age-scaled duration double-counts it, so stacked they over-concentrate the very oldest at a bind. | **DEFER age-scaling — default to FLAT duration (cost demonstrated, benefit unmodeled).** Final genesis bond shape: **flat magnitude + flat (non-zero) duration** — `g` carries deep-prioritization with a *single* oldest-ward lever; flat duration carries the commitment horizon with no reallocation cost. *Demonstrated cost against unmodeled benefit is not insurance — it is an unpriceable bet*, so age-scaling is not adopted now. **Genesis-pin ordering reinforces:** the constant is consensus-visible (pinned pre-genesis), but age-scaling can only be validated by a backfill-lag model needing **post-testnet fetch latencies** — you cannot validate before you must pin, and flat-constant has nothing to walk back. A duration *servo* (genesis range, post-testnet tunable) would preserve the option but adds a governance/manipulation surface not worth it on current evidence. **Reversion (sharpened):** reopen iff a backfill-lag churn model shows the timing-stability benefit **net of** the lean-margin reallocation cost is positive (the damping must beat the demonstrated mid-deep aggregate cost) — a fork-worthy upgrade if earned. The L4 reversion trigger (oldest-band coverage oscillation) is **not discharged** and stays open under this clause. Banked surplus facts (anticipation sign-flip, outcome 3 ruled out) remain valid as surplus facts but don't reach the operating point. **UPDATE (L10): this disposition is REOPENED.** The backfill-lag model both (a) models the benefit (net-positive — serving `oUmx` damped, serving `deep_und` improved across regimes incl. binds) and (b) shows the "demonstrated cost" was a **final-epoch artifact** (windowed mean: `a10` 0.178→0.178 identical). The sharpened reversion criterion is **met**; the remaining call is the genesis-pin *shape* (magnitude is post-testnet), surfaced to the maintainer per L10. |
+| L10 | **Backfill-lag / timing-bound dynamics** (gate 4; the L9 hinge) | Deep-shard **fetch latency** added (committed-but-not-serving for `round(deep_shard_size · fetch_latency_per_unit)` epochs; drops instant), **decoupled** from the game (game on committed replication = iteration-2-stable; retrieval coverage on seated replication). The timing-bound channel the capacity-bound model could not show now appears: serving `oUmx` rises 0→0.46→0.71→1.0 with latency `L0..L4`. Age-scaled duration **damps it net-positive** — lower oldest churn (0.171→0.090), lower serving `oUmx` *and* lower serving `deep_und` at every latency (`L1` 0.263→0.222; `L2` 0.580→0.465), and lower serving `deep_und` even at capacity binds (`lagbind` churn 0.942→0.865, stor 0.988→0.974). **It also forced the `bind_*` cost re-read:** that cost was a **final-epoch artifact** — on the windowed mean it is within noise (`a10` 0.178→0.178 identical, `a12`/`stor` slightly positive, `a08` +0.013 not 7×). | **RESOLVED — reversion criterion MET; L9 disposition reopened.** The sharpened L9 clause (benefit net of the lean-margin reallocation cost positive) is satisfied: benefit demonstrated net-positive across all regimes incl. binds, and the cost it was netted against dissolves on the proper windowed read. **Residue (honest):** L10 establishes the benefit's **sign** (positive), not its **magnitude** at the real operating point — `fetch_latency_per_unit` is the post-testnet measurement. So the open decision is no longer "cost vs. no-benefit" but the **genesis-pin shape** (flat-constant / age-scaled-constant / duration-servo) under sign-known/magnitude-unknown — a priority-3 + `75-system-autonomy` human call, surfaced to the maintainer, **not** flipped unilaterally. |
 | L11 | **Endogenous participation / lean equilibrium derivation** (gate 5 / economics) | The lean operating point (`R ≈ R_target`, entry-until-break-even) is *asserted* and tuned, not derived; `budget` is exogenous. | **Open — iteration 3.** Make entry/exit a function of risk-adjusted archival APR vs. bond opportunity cost vs. price expectations, so the operating point emerges. Prereq for the fee-era end-state (L13) and the bootstrap APR-inversion (L12). |
 | L12 | **Bootstrapping / cold-start** (gate 5; genesis transient) | At genesis deep history is ~empty, so the deep incentive has little to do, yet archivers must be present as it accrues. Reward ∝ `budget·work/Σwork` gives high early APR (good for buy-in) that dilutes as the population thickens — overshoot risk: early entrants exit at normalization, churning the youngest/thinnest deep history. | **Open — iteration 3.** Model a *growing* frontier window (from zero, not fixed-size recycle) + endogenous entry (L11); design the **foundation floor as a bootstrap guarantee that decays on a population/chain-age schedule** (reframes L5/L6 — the floor is load-bearing *most* at genesis). Pin all genesis constants for the thick steady state (L1/L7), foundation covers the transient. |
 | L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **Open — V3.x economics / iteration 3+.** Model adaptive archival reward-share (per `75-system-autonomy.mdc`, `burn.rs` template) and a price/feedback term; test whether the fee market funds archival of an ever-growing deep history and whether the adaptive mechanism damps the price-coupling loop (an undamped loop is a priority-1 durability failure). |

@@ -36,7 +36,13 @@ pub struct RewardParams {
     pub age_weight: f64,
 }
 
-/// Raw (uncapped) work for one actor, given current replication counts.
+/// Raw (uncapped) work for one actor, given current replication counts. The economic
+/// game is on **committed** holdings (an actor is paid to *store* — verified by
+/// challenge, L14 — not for instantaneous retrievability), so this counts every held
+/// shard. The L10 backfill lag is a *retrieval-coverage* property tracked separately
+/// (`serving_replication`), decoupled from the game so the lag does not death-spiral
+/// the incentive (a fresh deep acquisition still earns; only its *serving* coverage
+/// lags). Unchanged from iteration 2.
 pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f64 {
     let mut w = 0.0;
     for (s, &held) in world.holdings[actor].iter().enumerate() {

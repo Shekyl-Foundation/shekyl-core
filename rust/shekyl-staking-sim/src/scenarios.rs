@@ -7,7 +7,9 @@
 //! product — to keep runtime bounded while exercising each axis.
 
 use crate::agent::{run_epoch, AgentParams};
-use crate::metrics::{churn_rate, coverage, CoverageMetrics, TargetParams, N_BANDS};
+use crate::metrics::{
+    churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
+};
 use crate::model::{Actor, Rng, Shard, World};
 use crate::reward::{evaluate, RewardParams};
 use serde::Serialize;
@@ -65,6 +67,12 @@ pub struct SimConfig {
     /// Anticipation of the lock cost (0 = myopic; >0 = willingness ceiling).
     pub lock_anticipation: f64,
 
+    // L10 backfill-lag axis (iteration 3; inert when `fetch_latency_per_unit == 0`).
+    /// Epochs of deep-shard fetch per storage unit over the anonymizing transport.
+    pub fetch_latency_per_unit: f64,
+    /// Max fresh deep fetches per actor per epoch (0 = unlimited bandwidth).
+    pub acq_rate: usize,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -109,6 +117,18 @@ pub struct ScenarioResult {
     pub oldest_under_max: f64,
     /// Variance of oldest-band `frac_under` over the churn window (oscillation amplitude).
     pub oldest_under_var: f64,
+    /// **Serving** (retrieval-coverage) deep under-target fraction, windowed mean — the
+    /// L10 *cost* axis. Counts only seated replicas (`serving_replication`), so the
+    /// backfill lag depresses it below the committed `deep_frac_under_target`. Equals
+    /// the committed value when `fetch_latency == 0`. The lock-in reallocation cost
+    /// (confirmed in `bind_*`) shows here as a higher value under age-scaled duration.
+    pub serving_deep_under: f64,
+    /// **Serving** oldest-band coverage oscillation — the L10 *benefit* axis: max seated
+    /// oldest-band `frac_under` over the churn window. `> 0` is the timing-bound gap a
+    /// drop-without-seated-replacement opens; age-scaled duration should *damp* it
+    /// (fewer oldest drops ⇒ fewer in-flight gaps). The net L9 verdict weighs this
+    /// reduction against the `serving_deep_under` increase.
+    pub serving_oldest_under_max: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -173,6 +193,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bond_dur_base: cfg.bond_dur_base,
         bond_dur_age_scale: cfg.bond_dur_age_scale,
         lock_anticipation: cfg.lock_anticipation,
+        fetch_latency_per_unit: cfg.fetch_latency_per_unit,
+        acq_rate: cfg.acq_rate,
     };
     let tp = TargetParams {
         r_target_hot: cfg.r_target_hot,
@@ -201,6 +223,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // Oldest-band coverage oscillation (L9 necessity): the per-epoch under-target fraction
     // of the deepest band. Abandonment (above) is benign if this stays at 0.
     let mut series_old_under = Vec::with_capacity(cfg.epochs);
+    // L10 serving (retrieval-coverage) view: deep under-target and oldest-band under per
+    // epoch, computed against seated replicas only (`serving_replication`). Identical to
+    // the committed series when `fetch_latency == 0`.
+    let mut series_serving_deep_under = Vec::with_capacity(cfg.epochs);
+    let mut series_serving_old_under = Vec::with_capacity(cfg.epochs);
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
@@ -249,6 +276,19 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .map(|b| b.frac_under)
                 .unwrap_or(0.0),
         );
+
+        // L10 serving view: recompute coverage against seated replicas only. Free of
+        // extra simulation cost (just a second pass over holdings/inflight).
+        let serving_r = world.serving_replication();
+        let serving_metrics = coverage_with_r(&world, &serving_r, &last_eval.pseudonyms, &tp);
+        series_serving_deep_under.push(serving_metrics.deep_frac_under_target);
+        series_serving_old_under.push(
+            serving_metrics
+                .bands
+                .last()
+                .map(|b| b.frac_under)
+                .unwrap_or(0.0),
+        );
     }
 
     let total_held: usize = (0..world.actors.len())
@@ -281,6 +321,16 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L10 serving (retrieval-coverage) aggregates over the same window: the cost axis
+    // (windowed mean deep under-target) and the benefit axis (peak oldest-band under).
+    let sdu_window = &series_serving_deep_under[series_serving_deep_under.len() - w..];
+    let serving_deep_under = if w > 0 {
+        sdu_window.iter().sum::<f64>() / w as f64
+    } else {
+        0.0
+    };
+    let sou_window = &series_serving_old_under[series_serving_old_under.len() - w..];
+    let serving_oldest_under_max = sou_window.iter().copied().fold(0.0_f64, f64::max);
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -303,6 +353,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         oldest_churn,
         oldest_under_max,
         oldest_under_var,
+        serving_deep_under,
+        serving_oldest_under_max,
         claims: SubClaims {
             covered,
             spread,
@@ -365,6 +417,10 @@ fn baseline() -> SimConfig {
         bond_dur_base: 0.0,
         bond_dur_age_scale: 0.0,
         lock_anticipation: 0.0,
+        // L10: no fetch latency by default ⇒ instant seating ⇒ capacity-bound
+        // iteration-1/2 model unchanged. The L10 scenarios opt in.
+        fetch_latency_per_unit: 0.0,
+        acq_rate: 0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -684,6 +740,79 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.storage_scale = 0.85;
         c.bond_dur_age_scale = dscale;
         out.push(c);
+    }
+
+    // --- L10: the BACKFILL-LAG test — the one model change that can price the L9
+    // benefit. Iteration-2's model is capacity-bound (same-epoch full re-optimization),
+    // so it *structurally* cannot show drop-without-standing-replacement oscillation —
+    // the failure mode age-scaled duration would damp. L10 adds deep-shard fetch latency
+    // (a fresh deep acquisition is committed but NOT serving for `round(deep_shard_size ·
+    // fetch_latency_per_unit)` epochs; drops are instant), making coverage timing-bound.
+    //
+    // The clean experiment: start from the lean point that was *covered with oUmx = 0*
+    // in the capacity-bound model (`lean_osc_a05`: slow churn, oldest at R ≈ R_target),
+    // so any oscillation that appears is purely from the lag, not from a capacity gap.
+    // Crank latency `L ∈ {0,1,2,4}` epochs, flat (s0) vs age-scaled (s4) duration, and
+    // read BOTH halves of the sharpened reversion clause:
+    //   - benefit: does flat-duration `oUmx` rise > 0 with latency (timing oscillation),
+    //     and does age-scaled duration *damp* it?
+    //   - cost: does mean `deep_und` (the lock-in reallocation cost, confirmed in `bind_*`)
+    //     still bite under age-scaling?
+    // Net verdict = does age-scaling's oUmx reduction beat its deep_und increase on the
+    // aggregate. Longer run (120 ep / 40-window) for stable oscillation statistics.
+    // `acq_rate` variants add the bandwidth bound (slower backfill ⇒ more lag). ---
+    let lag_base = || {
+        let mut c = lean_base();
+        c.epochs = 120;
+        c.churn_window = 40;
+        c.epoch_aging = 0.05; // the covered lean point (capacity-bound oUmx = 0)
+        c
+    };
+    for (llabel, lpu) in [("L0", 0.0), ("L1", 1.0), ("L2", 2.0), ("L4", 4.0)] {
+        for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+            let mut c = lag_base();
+            c.name = format!("lag_{llabel}_{dlabel}");
+            c.axis = "backfill_lag".into();
+            c.fetch_latency_per_unit = lpu;
+            c.bond_dur_age_scale = dscale;
+            out.push(c);
+        }
+    }
+    // Bandwidth-bound variant: at a fixed latency, throttle fresh fetches to 1/epoch so
+    // backfill cannot keep pace with churn — the regime most likely to surface a real
+    // timing benefit for duration. Flat vs age-scaled.
+    for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+        let mut c = lag_base();
+        c.name = format!("lag_rate1_{dlabel}");
+        c.axis = "backfill_lag".into();
+        c.fetch_latency_per_unit = 2.0;
+        c.acq_rate = 1;
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
+    }
+
+    // --- L10 NET test: the backfill benefit AGAINST the lock-in cost, at a genuine
+    // capacity bind. The `lag_*` block sits at the covered lean point (no bind), so
+    // age-scaling there only helps — it shows the benefit *exists* but not whether it
+    // *beats the cost*, because there is no reallocation cost to pay when the committed
+    // game has slack. The sharpened L9 reversion clause asks for the NET: re-run at the
+    // `bind_*` capacity binds (fast churn `a10`; storage-tightened `0.85`) WITH latency
+    // `L2`, flat (s0) vs age-scaled (s4). Read serving `deep_und` (the net retrieval
+    // coverage) against committed `deep_und` (the pure reallocation cost banked in
+    // `bind_*`) and `servOUmx` (the benefit). The verdict: if age-scaling's serving
+    // deep_und is *lower* at the bind, the timing benefit beats the reallocation cost
+    // (reopen); if *higher*, the cost dominates (defer holds). ---
+    for (blabel, aging, stor) in [("churn", 0.10, 1.0), ("stor", 0.10, 0.85)] {
+        for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+            let mut c = lag_base();
+            c.name = format!("lagbind_{blabel}_{dlabel}");
+            c.axis = "backfill_lag_bind".into();
+            c.epoch_aging = aging;
+            c.storage_scale = stor;
+            c.fetch_latency_per_unit = 2.0;
+            c.bond_dur_age_scale = dscale;
+            out.push(c);
+        }
     }
 
     // --- L8: the (bond-level × deep-shard-size) PAIR sweep. L8 says neither leg moves
