@@ -153,6 +153,21 @@ pub struct SimConfig {
     /// coverage). `0.0` ⇒ no coupling. The L13 question is whether the adaptive servo
     /// damps this loop (bounded) or it runs away (priority-1 durability failure).
     pub price_coupling: f64,
+    /// **Fiat flow cost (P2 / second death-spiral leg).** When on, the per-actor flow
+    /// cost is fiat-denominated and divided by `token_price` in the exit APR
+    /// (`apr = R/B − F/(B·p)`), so a low/falling price raises the real flow-cost drag and
+    /// can force exit with **no** trust-loss trigger. Off ⇒ token-denominated flow cost
+    /// (the price cancels; every pre-P2 scenario), byte-identical.
+    pub flow_cost_fiat: bool,
+    /// Initial token price (fiat per token) used when `flow_cost_fiat`. `1.0` ⇒ the fiat
+    /// flow cost equals the token-denominated one (the cancellation case).
+    pub token_price: f64,
+    /// Per-epoch geometric decay of the token price toward `price_floor` — a *static*
+    /// price decline independent of coverage trust (isolates the level channel from the
+    /// expectation channel). `0.0` ⇒ constant price.
+    pub price_decay: f64,
+    /// Terminal token price the decay approaches.
+    pub price_floor: f64,
 
     // targets
     pub r_target_hot: f64,
@@ -407,6 +422,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut base_budget = cfg.budget;
     let mut signal = 0.0_f64;
     let mut series_fee_budget = Vec::with_capacity(cfg.epochs);
+    // P2: the (exogenous) token price. Decays toward `price_floor` when `price_decay > 0`
+    // (a static price decline, independent of the coverage-trust signal — so the fiat
+    // flow-cost level channel is isolated from the expectation channel). Constant at
+    // `token_price` otherwise; consulted only when `flow_cost_fiat`.
+    let mut tok_price = cfg.token_price;
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
@@ -550,8 +570,19 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // who hold no bond) for `patience` consecutive epochs leave and drop their
         // holdings. Realized rewards come from the just-computed `last_eval`. Inert when
         // `!endogenous`.
+        if cfg.price_decay > 0.0 {
+            tok_price = cfg.price_floor + (tok_price - cfg.price_floor) * (1.0 - cfg.price_decay);
+        }
         if cfg.endogenous {
-            process_exits(&mut world, &last_eval, &ap, &pp, res_add);
+            process_exits(
+                &mut world,
+                &last_eval,
+                &ap,
+                &pp,
+                res_add,
+                cfg.flow_cost_fiat,
+                tok_price,
+            );
         }
         series_active.push(world.active.iter().filter(|&&x| x).count());
         series_bonded_active.push(bonded_active_count(&world, &ap));
@@ -788,6 +819,13 @@ fn baseline() -> SimConfig {
         share_gain: 0.0,
         budget_ceiling: 0.0,
         price_coupling: 0.0,
+        // P2: token-denominated flow cost by default (price cancels; every pre-P2
+        // scenario). The fiat-flow-cost scenarios opt in. `token_price = 1.0` keeps the
+        // fiat path identical to the token path even when a scenario flips the flag.
+        flow_cost_fiat: false,
+        token_price: 1.0,
+        price_decay: 0.0,
+        price_floor: 1.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1544,6 +1582,117 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.budget_floor = 40.0;
         c.floor_replicas = 6; // = r_target_deep
         c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
+        out.push(c);
+    }
+
+    // --- P1 (L8×L11 entanglement): does the L11 "smooth monotone lever" survive when the
+    // pool's CO-LOCATION distribution puts the *seatable subset* near the deep floor? The
+    // banked L11 gradient sat on an ALL-SEATABLE pool: baseline archetypes each seat ~10
+    // deep shards (storage_rich `min(⌊20/2⌋,⌊22/1⌋)=10`, capital-limited; capital_rich
+    // `min(⌊100/2⌋,⌊10/1⌋)=10`, storage-limited), so total seating ~2400 ≫ the ~720 deep
+    // floor (120 deep shards × R_target_deep 6) — every one of the 240 was seatable, and
+    // the breakeven population (~72) cleared the floor with 3× headroom. L8's lesson is
+    // that headcount is not the binding constraint, co-located `min(⌊capital/bond⌋,
+    // ⌊storage/shard⌋)` is. Here we POLARIZE the archetypes so each seats few deep
+    // (storage_rich: ample storage, capital just 8 ⇒ `min(4,22)=4`; capital_rich: ample
+    // capital, storage just 3 ⇒ `min(50,3)=3`), giving seating ~840 — still above the 720
+    // floor, but now feasibility needs ~86% of the pool active (~206) vs ~30% loose. The
+    // question: across the ρ band that gave a smooth loose gradient, does deep coverage
+    // transition smoothly or JUMP (a knife-edge) — i.e. is the equilibrium self-correcting
+    // or fragile when co-location, not headcount, sets the floor?
+    let l11_coloc_base = || {
+        let mut c = l11_base();
+        c.frac_storage_rich = 0.5;
+        c.storage_rich_storage = 22; // ample storage…
+        c.storage_rich_capital = 8.0; // …capital-limited to ⌊8/2⌋=4 deep seats
+        c.capital_rich_storage = 3; // storage-limited to 3 deep seats…
+        c.capital_rich_capital = 100.0; // …capital ample
+        c.init_active_frac = 0.0; // boot from fill (entry-limited equilibrium)
+        c
+    };
+    // (P1a) co-location-binding ρ gradient — compare bondA/deep_und vs ρ against the loose
+    // `l11_rho_*` sweep. A smooth fall ⇒ the lever survives co-location; a 0→1 jump ⇒ the
+    // smooth gradient was a seatable-pool artifact and the realistic equilibrium is a
+    // knife-edge.
+    for (label, rho) in [
+        ("r005", 0.005_f64),
+        ("r01", 0.01),
+        ("r015", 0.015),
+        ("r02", 0.02),
+        ("r03", 0.03),
+    ] {
+        let mut c = l11_coloc_base();
+        c.name = format!("p1_coloc_{label}");
+        c.axis = "p1_coloc_gradient".into();
+        c.reservation_lo = rho;
+        c.reservation_hi = rho;
+        out.push(c);
+    }
+    // (P1b) budget → coverage transfer under binding co-location: if the gradient is a
+    // knife-edge in ρ, can budget (raising APR) still buy coverage smoothly, or does the
+    // co-location ceiling cap it regardless of purse? Fixed interior ρ, sweep budget.
+    for (label, budget) in [("b100", 100.0_f64), ("b200", 200.0), ("b400", 400.0)] {
+        let mut c = l11_coloc_base();
+        c.name = format!("p1_coloc_{label}");
+        c.axis = "p1_coloc_transfer".into();
+        c.budget = budget;
+        c.reservation_lo = 0.01;
+        c.reservation_hi = 0.01;
+        out.push(c);
+    }
+
+    // --- P2 (flow-cost denomination / second death-spiral leg): is the L13 disposition
+    // complete? The price-coupling insight (token-denominated reward and bond cancel in
+    // the APR ratio, so only *expected depreciation* bites) holds only if EVERY term is
+    // token-denominated. The operational flow cost (bandwidth, storage hardware) is paid
+    // in fiat. With `flow_cost_fiat`, the exit APR is `R/B − F/(B·p)`: a low/falling price
+    // raises the real flow-cost drag — a LEVEL channel that can ignite exit with NO
+    // trust-loss trigger (`price_coupling = 0`). These scenarios fund the token side
+    // ADEQUATELY (`budget_floor = 100`, the L11 knee) and set `price_coupling = 0`, so any
+    // collapse is the fiat leg alone, not subsidy starvation or expectation feedback.
+    let l13_fiat_base = || {
+        let mut c = l13_base();
+        c.budget_floor = 100.0; // token side sustainable (above the L11 knee)
+        c.price_coupling = 0.0; // NO expectation channel — isolate the level channel
+        c.flow_cost_fiat = true; // flow cost paid in fiat
+        c.token_price = 1.0; // start at parity (fiat cost == token cost)
+        c
+    };
+    // (P2a) CONTROL: fiat flow cost, price stays at parity. `F/(B·1) = F/B`, so this must
+    // reproduce the token-denominated behavior — coverage holds. Confirms the flag is
+    // inert at `p = 1`.
+    {
+        let mut c = l13_fiat_base();
+        c.name = "p2_fiat_stable".into();
+        c.axis = "p2_fiat".into();
+        out.push(c);
+    }
+    // (P2b) FALLING PRICE, no trust trigger: the token loses 75% of its value over the run
+    // (`price_floor = 0.25`) while coverage funding stays adequate and `price_coupling = 0`.
+    // If `fee_deep_under_peak` lights up and `bondA` thins, the fiat drag alone forced exit
+    // — the level channel ignites WITHOUT trust loss, and the L13 disposition is incomplete
+    // (the spiral has two legs, not one).
+    {
+        let mut c = l13_fiat_base();
+        c.name = "p2_fiat_fall".into();
+        c.axis = "p2_fiat".into();
+        c.price_decay = 0.02;
+        c.price_floor = 0.25;
+        out.push(c);
+    }
+    // (P2c) SERVO vs the level channel: the burn.rs servo tops up the *token* purse. Higher
+    // token reward R lifts `R/B` and can offset `F/(B·p)` — but only with enough ceiling
+    // headroom to over-pay the fiat drag. Tests whether the SAME damping apparatus that
+    // caught the expectation channel also catches the level channel, and at what ceiling.
+    {
+        let mut c = l13_fiat_base();
+        c.name = "p2_fiat_fall_servo".into();
+        c.axis = "p2_fiat".into();
+        c.price_decay = 0.02;
+        c.price_floor = 0.25;
+        c.adaptive_share = true;
+        c.share_gain = 8.0;
+        c.budget_ceiling = 400.0; // more headroom than the expectation-channel servo needed
         out.push(c);
     }
 

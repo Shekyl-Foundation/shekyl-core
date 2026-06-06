@@ -122,12 +122,28 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// `reservation_add` from a coverage-confidence signal (low coverage ⇒ loss of trust ⇒
 /// expected depreciation ⇒ higher effective reservation ⇒ more exit ⇒ worse coverage),
 /// closing the candidate loop. `0.0` ⇒ no coupling (legacy / non-fee-era).
+///
+/// `flow_cost_fiat`/`token_price` (L13 / P2) decide the **second death-spiral leg**.
+/// `reward_a` and the bond are token-denominated, so they cancel in the ratio and only
+/// *expected* depreciation (the `reservation_add` channel) bites — **if every term is
+/// token-denominated**. But the operational flow cost (bandwidth, storage hardware) is
+/// paid in fiat regardless of token price. When `flow_cost_fiat` is set, the flow cost
+/// is divided by the token price before netting:
+///
+/// `apr = (reward_a − flow_cost_a / token_price) / committed_a = R/B − F/(B·p)`
+///
+/// so a *low static price* raises the real flow-cost drag and can force exit with **no
+/// trust-loss trigger** (`reservation_add = 0`) — a level-driven ignition the
+/// expectation channel does not model. `token_price = 1.0` ⇒ identical to the
+/// token-denominated case; `flow_cost_fiat = false` ⇒ legacy (price never consulted).
 pub fn process_exits(
     world: &mut World,
     eval: &RewardEval,
     ap: &AgentParams,
     pp: &ParticipationParams,
     reservation_add: f64,
+    flow_cost_fiat: bool,
+    token_price: f64,
 ) {
     let n = world.actors.len();
     let mut to_exit: Vec<usize> = Vec::new();
@@ -140,7 +156,14 @@ pub fn process_exits(
             // Deployed no capital — came to stake, couldn't. Idle capital exits.
             true
         } else {
-            let net = eval.rewards[a] - flow_cost(world, a, ap, eval.pseudonyms[a], pp);
+            let fcost = flow_cost(world, a, ap, eval.pseudonyms[a], pp);
+            // Fiat flow cost (P2): the fiat burden in token terms rises as the price
+            // falls. `token_price = 1.0` (and `!flow_cost_fiat`) reduce to the legacy net.
+            let net = if flow_cost_fiat {
+                eval.rewards[a] - fcost / token_price
+            } else {
+                eval.rewards[a] - fcost
+            };
             let apr = net / committed;
             apr < world.actors[a].reservation + reservation_add
         };
