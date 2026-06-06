@@ -55,25 +55,37 @@ use crate::engine::pending::TxHash;
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a is expected to extend this struct with per-snapshot
-/// metadata (e.g. estimation timestamp, daemon-reported
-/// `quantization_mask`, observed mempool weight). `#[non_exhaustive]`
-/// permits the additive growth without a Stage 1 `DaemonEngine`
-/// amendment per §8.2: callers construct via field-by-name and
-/// match exhaustively only on the listed fields.
+/// Phase 2a may extend this struct with further per-snapshot
+/// metadata (e.g. estimation timestamp, observed mempool weight).
+/// `#[non_exhaustive]` permits the additive growth without a Stage 1
+/// `DaemonEngine` amendment per §8.2: callers construct via
+/// field-by-name and match exhaustively only on the listed fields.
 ///
 /// # Per-tier `FeeRate`
 ///
 /// `FeeRate` is the `shekyl_rpc::FeeRate` (per-weight cost + rounding
-/// mask) returned by [`Rpc::get_fee_rate`]. The three fields on this
-/// struct correspond one-to-one with the three non-`Custom`
+/// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
+/// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
 /// is a structural projection rather than a fresh daemon call.
+///
+/// # Atomic single-RPC snapshot (§3.3)
+///
+/// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
+/// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
+/// `get_fee_rate` calls): the response's fee array maps to the three
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`3` per
+/// `V3_WALLET_DECISION_LOG.md`) and its single `quantization_mask`
+/// is stored once on [`Self::quantization_mask`]. This guarantees the
+/// tier band and the
+/// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
+/// mask all derive from the same daemon view, with no tier-vs-tier
+/// skew from interleaved calls.
 ///
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 2a-stub: production callers land with §3.1 fee policy.
+#[allow(dead_code)] // tier fields read by the §3.1 fee policy (2a-2); snapshot produced here in 2a-1.
 pub(crate) struct FeeEstimates {
     /// Fee rate corresponding to
     /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
@@ -91,6 +103,15 @@ pub(crate) struct FeeEstimates {
     /// the fastest tier short of fee-spiking, targeting next-block
     /// inclusion under normal mempool conditions.
     pub priority: FeeRate,
+
+    /// The daemon's fee-rounding `quantization_mask` for this
+    /// snapshot, carried **once** so a
+    /// [`Custom`](super::super::FeePriority::Custom) feerate can be
+    /// constructed against the same daemon view as the tier band
+    /// (`FeeRate::new(rate, quantization_mask)`, §3.3). Identical to
+    /// the `mask` already embedded in each tier `FeeRate`; surfaced
+    /// here so the `Custom` path does not need a fresh daemon call.
+    pub quantization_mask: u64,
 }
 
 /// Outcome of a daemon transaction submission via
