@@ -4216,6 +4216,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-staking-sim"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "shekyl-tx-builder"
 version = "3.1.0"
 dependencies = [

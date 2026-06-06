@@ -1,0 +1,19 @@
+[package]
+name = "shekyl-staking-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent-based staker-archival coverage simulation (docs/design/STAKER_ARCHIVAL_SIM.md, iteration 1)"
+
+# NOTE: this crate intentionally does NOT set `[lints] workspace = true`.
+# Like `shekyl-economics-sim`, it is a numeric simulation harness (not
+# consensus/crypto code), so the workspace's strict cast/float clippy denies
+# (cast_precision_loss, float_cmp, ...) would be pure friction here. The crate
+# is excluded from the consensus-critical lint surface by the same reasoning
+# the economics sim is.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1"

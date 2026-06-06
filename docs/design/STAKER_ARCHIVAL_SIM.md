@@ -1,12 +1,16 @@
 # Staker-archival simulation — design spec
 
-**Status: reviewed and blessed to build (2026-06-05). Iteration 1 (coverage
-dynamics) specified in full with the review's four conditions absorbed into scope
-(actor-level spread metric; coarse bond sweep; age-weighted scarcity incl. `g=1`;
-whale-under-bond; competitive-share servo incentive); later iterations mapped, not
-yet specified. Spec-first per `05-system-thinking.mdc`; a sim that re-prices *what
-staking is* is a planning activity per `20-rust-vs-cpp-policy.mdc`, not "while we're
-here." Build: new `shekyl-staking-sim` crate (decision below).**
+**Status: iteration 1 BUILT AND RUN (2026-06-05).** Crate `rust/shekyl-staking-sim`;
+results and findings in §*Iteration 1 — results (first build)* at the end of this
+doc. Headline: the sim reproduces the predicted `g=1` deep-history starvation
+(validating it against the equilibrium analysis), `g(age)` clears deep monotonically,
+and the high-bond empty-window threat surfaces under the coarse 3-point sweep exactly
+as designed. Specification (below) reviewed and blessed to build with the review's
+four conditions absorbed into scope (actor-level spread metric; coarse bond sweep;
+age-weighted scarcity incl. `g=1`; whale-under-bond; competitive-share servo
+incentive); later iterations mapped, not yet specified. Spec-first per
+`05-system-thinking.mdc`; a sim that re-prices *what staking is* is a planning
+activity per `20-rust-vs-cpp-policy.mdc`, not "while we're here."**
 
 This is the gate-7 instrument for the pay-for-service / firewalled-pseudonym
 rebasing. The model it simulates is canonical in
@@ -274,3 +278,111 @@ that is now folded into the iteration-1 scope above:
    affirmation is contingent on retention-not-retrieval holding**: if any retrieval
    term ever enters the reward, single-region becomes wrong and network topology has
    to come in.
+
+## Iteration 1 — results (first build)
+
+**Status: built and run (2026-06-05).** Crate: `rust/shekyl-staking-sim`
+(agent-based, deterministic, no new dependencies — inline splitmix64 PRNG,
+`serde_json` for output). Run `cargo run -p shekyl-staking-sim` — JSON results to
+stdout, the summary table + threshold legend to stderr. The curated sweep set
+(baseline + one-axis sweeps over bond, `g(age)`, population, endowment mix, curve
+cap, age distribution, plus the whale×bond cross) is in `src/scenarios.rs`. Verdict
+thresholds are stated in code and reported alongside raw metrics so a reviewer can
+re-judge: `covered = frac_under<0.05 & min_R≥1`; `spread = gini_actor<0.6 &
+max_actor_share<0.20` (actor-level); `deep = deep_frac_under<0.10`;
+`churn_stable = churn<0.05`.
+
+### What the first build establishes
+
+1. **The sim is validated against the equilibrium analysis (the headline).** At
+   `g(age)=1` (pure `1/R`, no age premium) deep history *completely* starves —
+   `deep_frac_under = 1.000`, every deep shard below its `R_target(age)` — while hot
+   coverage is fine. This is the spec's predicted bond-asymmetry failure reproduced
+   exactly: a deep shard carries a bond a hot shard does not, so at equal `R` it is
+   strictly less attractive, agents fill hot and starve deep. The model reproducing
+   the *predicted* failure is what licenses trusting its other outputs.
+
+2. **`g(age)` clears deep, monotonically.** `deep_frac_under` falls
+   `1.000 → 0.125 → 0.100 → 0.075 → 0.067` as `g(age)` (the slope in
+   `g = 1 + age_weight·age`) climbs through `{0, 2, 3, 4, 5}`. The clearing premium
+   exists; deep coverage passes its bar by `age_weight ≈ 4`. Age is a public shard
+   property, so this is the privacy-clean replacement for the killed tier weighting,
+   confirmed to do the job it was introduced for.
+
+3. **But `g(age)` *reallocates* coverage hot→deep; it does not manufacture it.** At
+   the margin-calibrated baseline, raising `g` improves deep coverage and *worsens*
+   overall coverage in lockstep (`frac_under` rises `0.062 → 0.150` as `g` climbs
+   past 2), because scarce storage shifted to deep is robbed from hot. **No single
+   `g` clears both `covered` and `deep` at marginal storage.** Total coverage is a
+   storage-*supply* question (population thickness / the foundation floor, gate 5),
+   not a `g(age)` question — `g(age)` only fixes the deep-vs-hot allocation. This is
+   a genuine finding, not an artifact to tune away: it sharpens what the age premium
+   is *for*.
+
+4. **The window is non-empty when supply is adequate.** `pop_thick` (200 actors,
+   mid bond, `g=2`) passes all four sub-claims — the existence result complementing
+   (3): given enough aggregate storage, the `(bond=mid, g=2)` config clears
+   coverage, spread, deep, and churn together.
+
+5. **The empty-window keystone-threat is real at high bond — and the coarse 3-point
+   sweep is what makes it visible.** `bond_high` (rate 8) collapses deep coverage
+   (`deep_frac_under = 0.875`) with no whale present: the bond high enough to deter a
+   whale also prices capital-poor archivers out of deep retention. A single fixed
+   bond rate could never have shown this; the low/mid/high sweep is doing exactly the
+   job the spec advertised for it. Pinning whether the window is merely *narrow* or
+   genuinely *empty* is gate 4 (fine bond sweep).
+
+6. **High bond centralizes deep history in the capital-rich.** `bond_high_whale`
+   recovers deep coverage (`0.875 → 0.292`) precisely because the whale is the only
+   actor who can afford the deep bonds — i.e. a high bond buys Sybil-deterrence at the
+   cost of concentrating deep retention in whale hands. This is a real tension for
+   gate-4 calibration that the analysis had not surfaced.
+
+7. **The actor-level spread metric earns its place.** Under the bond, the whale is
+   contained at the actor level (`max_actor_share ≈ 0.11 < 0.20`), while the
+   pseudonym-level Gini reads systematically *more* egalitarian (`≈ 0.19`) — the
+   on-chain observer under-counts the whale exactly as the spec warned. The pass/fail
+   is taken from the actor-level metric the live chain cannot see; the sim is the only
+   place this is measurable.
+
+8. **Thin population is fragile; churn is a non-issue under myopia.** `pop_thin`
+   (25 actors) fails coverage outright (`frac_under = 1.000`) — the regime the
+   foundation floor exists to backstop (gate 5; the sim sizes where coverage breaks
+   without the floor). Churn is *zero* at steady state across every scenario: the
+   myopic Gauss–Seidel best-response reaches a fixed point in ~2 epochs and stays, so
+   `churn_stable` passes on its own terms and the learning-agent re-test
+   pre-commitment is **not** triggered.
+
+### Model-fidelity caveats (what iteration 1 does and does not earn)
+
+- **Calibration sits the baseline at the coverage margin deliberately.** Storage is
+  ~18 % above the bare full-coverage requirement and capital is ample at mid bond,
+  so storage binds and the `g(age)`/bond tensions are exercised. An over-provisioned
+  baseline covers everything trivially and tests nothing; the calibration is a
+  modeling decision, not a result, and is documented in `baseline()`.
+- **Fast convergence means the equilibrium, not the path, is the story.** ~2-epoch
+  convergence makes iteration 1 effectively a one-shot equilibrium solver. This is
+  appropriate for the steady-state sub-claims; any future term that introduces
+  genuine dynamics (learning agents, stochastic challenges) would re-open the path as
+  a question.
+- **Self-replication is assumed irrational and not modeled.** Per the model
+  docstring, an actor holding a shard twice doubles its storage cost and lowers its
+  own `1/R` reward, so `R` (distinct actors) equals distinct-pseudonym `R`. A
+  soundness pass — not this sim — owns whether the per-`(P,shard)`-nullifier counting
+  actually forecloses self-replication (gate 3).
+- **Thresholds are strict and stated.** `covered<0.05` is a demanding bar for a
+  myopic sim at marginal storage; the borderline `covered` failures (e.g. `0.062` at
+  `g=2`) are reported with raw metrics so the bar can be re-judged rather than being
+  silently load-bearing.
+
+### What feeds forward
+
+- **Gate 4 (fine bond window):** iteration 1 brackets the live tension — mid bond
+  leaves deep coverage to `g(age)`; high bond collapses it (capital-poor exclusion)
+  and centralizes it (whale dependence). The fine sweep pins whether a rate exists
+  that is simultaneously Sybil-deterring and not deep-coverage-collapsing.
+- **Gate 5 (bootstrap floor):** `pop_thin` failing outright sizes the floor — total
+  coverage is supply-bound, and `g(age)` cannot substitute for thin population.
+- **`g(age)` near-term pin:** the clearing premium lives near `age_weight ≈ 3–4` at
+  this baseline, but it trades against hot coverage; the right value is coupled to
+  aggregate supply, so it is pinned *with* the floor, not independently.

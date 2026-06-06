@@ -9,6 +9,12 @@ members = [
     "shekyl-economics",
     "shekyl-staking",
     "shekyl-economics-sim",
+
+    # Agent-based staker-archival coverage simulation (iteration 1).
+    # Epoch-granular agent dynamics; distinct instrument from the
+    # year-granular macro `shekyl-economics-sim`. See
+    # docs/design/STAKER_ARCHIVAL_SIM.md.
+    "shekyl-staking-sim",
     "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
