@@ -7431,6 +7431,61 @@ one place to confirm each item's relationship to the wallet stack.
   visualization design home); `docs/V3_STAKER_ARCHIVAL.md`
   (companion archival design that produces the shards).
 
+- **Transport selection for the staker-archival path (gate 6 /
+  networking; forward consideration, NOT yet scheduled).** The
+  firewalled-pseudonym requirement forces the heavy archival
+  fetch onto an onion-service↔Tor-client **rendezvous** path
+  (the pseudonym `P`'s network location must not link to the
+  principal, so — unlike Monero's public chain sync — there is no
+  clearnet fallback for the archival serving path). This couples
+  the transport choice to the staker-archival sim's latency axis:
+  the `L2–L6` band in `docs/design/STAKER_ARCHIVAL_SIM.md` (§*L10*,
+  §*L10 hardening*) is the **operating regime by construction**, not
+  a stress corner, and `fetch_latency_per_unit` is the
+  onion-rendezvous latency. The sim has already designed around the
+  worst case (age-scaled duration win-or-harmless across `L2–L6`;
+  foundation floor backstops the `L6` ceiling), so transport latency
+  is a **bounded, modeled** constraint rather than a discovery.
+
+  Disposition: **Tor primary** (maturity + TCP + persistent-
+  reachable-service + longevity; the inherited Levin/TCP stack drops
+  in without impedance mismatch — note the Tor↔TCP commitment is
+  *coupled*, so a future UDP/QUIC sync would reopen it). I2P is a
+  defensible secondary (dual-support à la Monero); Lokinet
+  (Oxen-tied, UDP — the longevity risk Tor avoids) and Nym (mixnet,
+  latency-disqualifying for heavy fetch) are out.
+
+  Three forks deferred to the transport PR: (1) **embed Arti
+  in-process** (Rust-canonical; claimed viable on the Arti 2.x LTS
+  line with onion-service *hosting*) **vs. external Tor daemon over
+  SOCKS** (Monero's model, more battle-tested, external dependency);
+  (2) whether to keep the **I2P secondary door open** architecturally
+  even if not built at genesis (reversion-clause shape per
+  `21-reversion-clause-discipline.mdc`); (3) a **dedicated privacy
+  threat pass** on the rendezvous-forced heavy path — Monero flags
+  its anonymity-network support experimental and does *not* lean on
+  the rendezvous config, so this is no-inheritance-by-assumption, not
+  "does Tor exist."
+
+  **Dependency-discipline gate (binding):** every maturity/capability
+  claim above (Arti onion-service hosting, the 2.x LTS branch,
+  Monero's over-Tor traffic split) is **to be re-verified at source**
+  when the PR opens, per `17-dependency-discipline.mdc` — recorded
+  here as rationale to test, not banked fact.
+
+  *The one transport input that feeds the sim:* whether the heavy
+  path stays **pure-rendezvous** (worst-case L-regime, maximal
+  firewall) or admits a **bandwidth-buying relaxation that does not
+  link `P`** — the lever that sets where Shekyl lands on the `L2–L6`
+  curve.
+
+  *Target:* V3.x (gate 6 / transport pass) — sequenced after the
+  staker-archival economics gates (4/5) close; no work until then.
+
+  *Reference:* `docs/ANONYMITY_NETWORKS.md` §*Transport for the
+  staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
+  ledger item L16 + §*Transport coupling*; `docs/design/V3_STAKER_ARCHIVAL.md`.
+
 ---
 
 ## V4+ — horizontal scaling

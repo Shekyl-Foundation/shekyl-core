@@ -1406,6 +1406,33 @@ yield rises). The honest residue: ρ and `budget` are still genesis/economic inp
 *real* values are post-testnet measurements — L11 derives the *shape* of the equilibrium
 (attractor, monotone transfer, sorting), not the operating ρ a live market will sit at.
 
+### Transport coupling — the `L2–L6` band is the operating regime, not a stress corner
+
+A forward note connecting the latency axis to the (deferred) transport choice; the full
+analysis lives in [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the
+staker-archival path*. No transport work is scheduled — this records why the sim's latency
+sweeps are already pointed at the right regime.
+
+The firewalled-pseudonym requirement forces the **heavy archival fetch path onto an
+onion-service-to-Tor-client rendezvous** (the pseudonym `P`'s location must not link to the
+principal, so the serving path cannot fall back to clearnet the way Monero's public chain
+sync does). Rendezvous is the slowest configuration Tor has. The consequence for this sim:
+
+- **`fetch_latency_per_unit` is not a free stress parameter — it is the onion-rendezvous
+  latency by construction.** The `L2–L6` band the L10 sweeps treated as "survivable-to-
+  extreme" is the *operating* band, and the post-testnet "real fetch latency" unknown
+  (flagged in §*L10*) is just *where on that band* the live transport sits, measured against
+  Monero's documented heavy-over-Tor bandwidth cost.
+- **The model has already designed around it:** age-scaled duration is win-or-harmless
+  across `L2–L6` (L10 H1/H4), and the foundation floor backstops the `L6` ceiling where
+  backfill cannot keep pace regardless of incentive. So the worst-case transport is a
+  *known, bounded, already-modeled* constraint, not a discovery waiting to happen.
+- **The one transport parameter that feeds this sim** is whether the heavy path stays
+  pure-rendezvous (worst-case L-regime, maximal firewall) or admits a bandwidth-buying
+  relaxation that does *not* link `P`. That choice is the lever that moves where Shekyl lands
+  on the `L2–L6` curve; everything else in transport selection is downstream of it and does
+  not change the sim. See ledger item L16.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
@@ -1431,6 +1458,7 @@ where a decision is provisional.
 | L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **Open — V3.x economics / iteration 3+.** Model adaptive archival reward-share (per `75-system-autonomy.mdc`, `burn.rs` template) and a price/feedback term; test whether the fee market funds archival of an ever-growing deep history and whether the adaptive mechanism damps the price-coupling loop (an undamped loop is a priority-1 durability failure). |
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the unmodeled challenge/audit cadence, not the bond. | **Open — gate 7 / consensus design.** The bond is the capital cost; the challenge frequency + fake-cost + penalty are the operational Sybil/free-rider economics. Model challenge cadence vs. faking cost; couple to retrieval (L15). |
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. | **Open — iteration 3+.** Add per-holder uptime + read-path latency to derive `R_target` from a retrieval-availability target (rather than stipulating it); add a privacy-compatible **diversity axis** (jurisdiction/ASN/implementation) to the spread metric so correlated loss is visible (mission priority 2 tension: diversity measurement must not leak). |
+| L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **Open — forward consideration, NOT scheduled.** Captured so the eventual transport PR starts from a stated position. The model is **already designed around the worst case** (duration win-or-harmless `L2–L6` per L10 H1/H4; foundation floor backstops the `L6` ceiling), so transport latency is a *bounded, modeled* constraint, not a discovery. **The one transport input that feeds the sim:** whether the heavy path stays pure-rendezvous (worst-case L-regime) or admits a bandwidth-buying relaxation that does **not** link `P` — the lever that sets where Shekyl lands on the `L2–L6` curve. Forks deferred to the transport PR: (1) embed Arti vs. external Tor daemon; (2) keep the I2P secondary door open architecturally (reversion-clause shape); (3) a dedicated privacy threat pass on the rendezvous-forced heavy path (Monero does not lean on that config — no inheritance-by-assumption). |
 
 ### Robustness-sweep verdicts (which findings are structural)
 
