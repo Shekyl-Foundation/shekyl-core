@@ -200,7 +200,13 @@ pub fn run_epoch(
 ) -> usize {
     let before: Vec<Vec<bool>> = world.holdings.clone();
 
-    let mut order: Vec<usize> = (0..world.actors.len()).collect();
+    // Only *active* actors best-respond (L11 endogenous participation). Inactive actors
+    // hold nothing and earn nothing — they are potential entrants the free-entry layer
+    // may admit. With the default all-active world (every pre-L11 scenario), this is the
+    // full population in shuffled order, byte-identical to before.
+    let mut order: Vec<usize> = (0..world.actors.len())
+        .filter(|&a| world.active[a])
+        .collect();
     rng.shuffle(&mut order);
     for a in order {
         best_response(world, a, price, ap, age_weight);

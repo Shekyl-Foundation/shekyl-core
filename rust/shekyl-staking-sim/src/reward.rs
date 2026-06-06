@@ -89,6 +89,11 @@ pub struct RewardEval {
     pub r: Vec<usize>,
     pub pseudonyms: Vec<usize>,
     pub price: f64,
+    /// Realized per-actor token reward this epoch = `price · capped_work_a` (the servo
+    /// share `budget · capped_a / Σ capped`). Drives the L11 participation yield
+    /// (`net reward ÷ committed bond capital` vs. reservation). Zero for inactive or
+    /// zero-work actors.
+    pub rewards: Vec<f64>,
 }
 
 /// Evaluate rewards for the whole world. `price_hint` seeds the split decision
@@ -118,9 +123,13 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         0.0
     };
 
+    // Realized token reward = servo share = price · capped_work (= budget·capped/Σcapped).
+    let rewards: Vec<f64> = capped.iter().map(|&c| price * c).collect();
+
     RewardEval {
         r,
         pseudonyms,
         price,
+        rewards,
     }
 }

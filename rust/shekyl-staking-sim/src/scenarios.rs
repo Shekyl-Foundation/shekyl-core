@@ -11,6 +11,9 @@ use crate::metrics::{
     churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
 use crate::model::{Actor, Rng, Shard, World};
+use crate::participation::{
+    admit_entrants, bonded_active_count, process_exits, ParticipationParams,
+};
 use crate::reward::{evaluate, RewardParams};
 use serde::Serialize;
 
@@ -72,6 +75,24 @@ pub struct SimConfig {
     pub fetch_latency_per_unit: f64,
     /// Max fresh deep fetches per actor per epoch (0 = unlimited bandwidth).
     pub acq_rate: usize,
+
+    // L11 endogenous-participation axis (iteration 3; inert when `!endogenous`).
+    /// Free entry/exit on. When off, the population is fixed at `n_actors` all-active —
+    /// every pre-L11 scenario, byte-identical.
+    pub endogenous: bool,
+    /// Fraction of the `n_actors` pool active at `t=0`. Run `0.0` (fill-up, bootstrap-
+    /// like) and `1.0` (trim-down) to show the operating point is an *attractor*
+    /// independent of initialization.
+    pub init_active_frac: f64,
+    /// Inactive actors admitted per epoch (rate capital arrives).
+    pub entry_per_epoch: usize,
+    /// Consecutive sub-reservation (or zero-bond) epochs before an active actor exits.
+    pub participation_patience: u32,
+    /// Reservation yield (opportunity cost of staking capital, per epoch) drawn uniform
+    /// in `[reservation_lo, reservation_hi]` per actor (heterogeneous alternatives;
+    /// `lo == hi` ⇒ homogeneous). Compared to realized `apr = net reward / committed bond`.
+    pub reservation_lo: f64,
+    pub reservation_hi: f64,
 
     // targets
     pub r_target_hot: f64,
@@ -136,6 +157,16 @@ pub struct ScenarioResult {
     /// (fewer oldest drops ⇒ fewer in-flight gaps). The net L9 verdict weighs this
     /// reduction against the `serving_deep_under` increase.
     pub serving_oldest_under_max: f64,
+    /// **Emergent active fraction** (L11): windowed-mean share of the `n_actors` pool
+    /// that is active in steady state. With free entry/exit this is the equilibrium
+    /// participation level the reservation-yield mechanism settles on, *not* an asserted
+    /// constant. Flat at `1.0` for non-endogenous scenarios (fixed population).
+    pub active_frac: f64,
+    /// **Emergent bonded-archiver count** (L11): windowed-mean number of active actors
+    /// actually holding bonded deep shards in steady state — the emergent size of the
+    /// archiver set. The attractor check requires this converge to the same value from
+    /// fill-up (`init_active_frac=0`) and trim-down (`init_active_frac=1`) starts.
+    pub bonded_active: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -155,6 +186,16 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 
     let scale = |s: usize| ((s as f64 * cfg.storage_scale).round() as usize).max(1);
 
+    // Reservation yield (L11): drawn only when endogenous, so non-endogenous scenarios
+    // consume zero extra RNG and stay byte-identical.
+    let draw_reservation = |rng: &mut Rng| -> f64 {
+        if cfg.endogenous {
+            cfg.reservation_lo + rng.next_f64() * (cfg.reservation_hi - cfg.reservation_lo)
+        } else {
+            0.0
+        }
+    };
+
     let mut actors: Vec<Actor> = Vec::with_capacity(cfg.n_actors);
     for _ in 0..cfg.n_actors {
         let storage_rich = rng.next_f64() < cfg.frac_storage_rich;
@@ -163,21 +204,36 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
         } else {
             (scale(cfg.capital_rich_storage), cfg.capital_rich_capital)
         };
+        let reservation = draw_reservation(rng);
         actors.push(Actor {
             storage_capacity,
             capital,
             is_whale: false,
+            reservation,
         });
     }
     if cfg.whale {
+        let reservation = draw_reservation(rng);
         actors.push(Actor {
             storage_capacity: scale(cfg.whale_storage),
             capital: cfg.whale_capital,
             is_whale: true,
+            reservation,
         });
     }
 
-    World::new(shards, actors)
+    let mut world = World::new(shards, actors);
+    // L11 initial participation: when endogenous, only the first `init_active_frac`
+    // share of the pool starts active (the rest are potential entrants). Off ⇒ all
+    // active (legacy).
+    if cfg.endogenous {
+        let n = world.actors.len();
+        let n_active = (cfg.init_active_frac * n as f64).round() as usize;
+        for a in 0..n {
+            world.active[a] = a < n_active;
+        }
+    }
+    world
 }
 
 pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
@@ -202,6 +258,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         lock_anticipation: cfg.lock_anticipation,
         fetch_latency_per_unit: cfg.fetch_latency_per_unit,
         acq_rate: cfg.acq_rate,
+    };
+    let pp = ParticipationParams {
+        entry_per_epoch: cfg.entry_per_epoch,
+        patience: cfg.participation_patience,
+        pseudonym_cost: cfg.pseudonym_cost,
     };
     let tp = TargetParams {
         r_target_hot: cfg.r_target_hot,
@@ -235,12 +296,22 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // the committed series when `fetch_latency == 0`.
     let mut series_serving_deep_under = Vec::with_capacity(cfg.epochs);
     let mut series_serving_old_under = Vec::with_capacity(cfg.epochs);
+    // L11 emergent participation: active count and bonded-active count per epoch. When
+    // `!endogenous` these stay flat at the full population (legacy population is fixed).
+    let mut series_active = Vec::with_capacity(cfg.epochs);
+    let mut series_bonded_active = Vec::with_capacity(cfg.epochs);
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
             world.advance_epoch(cfg.epoch_aging);
+        }
+
+        // L11 entry: trickle inactive actors into the active set (inert when
+        // `entry_per_epoch == 0`, i.e. every non-endogenous scenario).
+        if cfg.endogenous {
+            admit_entrants(&mut world, &pp);
         }
 
         let before = world.holdings.clone();
@@ -296,6 +367,16 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .map(|b| b.frac_under)
                 .unwrap_or(0.0),
         );
+
+        // L11 exit: active actors whose realized APR sits below their reservation (or
+        // who hold no bond) for `patience` consecutive epochs leave and drop their
+        // holdings. Realized rewards come from the just-computed `last_eval`. Inert when
+        // `!endogenous`.
+        if cfg.endogenous {
+            process_exits(&mut world, &last_eval, &ap, &pp);
+        }
+        series_active.push(world.active.iter().filter(|&&x| x).count());
+        series_bonded_active.push(bonded_active_count(&world, &ap));
     }
 
     let total_held: usize = (0..world.actors.len())
@@ -347,6 +428,22 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L11 emergent participation, windowed means over the same steady-state window:
+    // the active fraction (of the full pool) and the bonded-active count (the emergent
+    // archiver-set size). For non-endogenous scenarios these are the fixed population.
+    let pool = world.actors.len().max(1) as f64;
+    let active_window = &series_active[series_active.len() - w..];
+    let active_frac = if w > 0 {
+        active_window.iter().sum::<usize>() as f64 / w as f64 / pool
+    } else {
+        0.0
+    };
+    let ba_window = &series_bonded_active[series_bonded_active.len() - w..];
+    let bonded_active = if w > 0 {
+        ba_window.iter().sum::<usize>() as f64 / w as f64
+    } else {
+        0.0
+    };
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -372,6 +469,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         serving_deep_under,
         serving_oldest_under_max,
         committed_deep_under,
+        active_frac,
+        bonded_active,
         claims: SubClaims {
             covered,
             spread,
@@ -438,6 +537,14 @@ fn baseline() -> SimConfig {
         // iteration-1/2 model unchanged. The L10 scenarios opt in.
         fetch_latency_per_unit: 0.0,
         acq_rate: 0,
+        // L11: fixed all-active population by default (every pre-L11 scenario). The
+        // participation scenarios opt in.
+        endogenous: false,
+        init_active_frac: 1.0,
+        entry_per_epoch: 0,
+        participation_patience: 1,
+        reservation_lo: 0.0,
+        reservation_hi: 0.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -900,6 +1007,102 @@ pub fn build_scenarios() -> Vec<SimConfig> {
             c.deep_shard_size = size;
             out.push(c);
         }
+    }
+
+    // --- L11: endogenous participation. The operating point is no longer asserted via
+    // `budget`; entry/exit is governed by realized APR vs. a per-actor reservation. The
+    // pool (`n_actors`) is the set of *potential* archivers; how many actually bond in
+    // steady state is emergent. Base config: a large pool (so the active set can be an
+    // interior fraction), trickle entry, hysteretic exit. The static baseline world is
+    // kept (no frontier churn) so the first L11 read isolates the participation servo
+    // from the L9/L10 timing dynamics. ---
+    let l11_base = || {
+        let mut c = baseline();
+        c.endogenous = true;
+        // Pool MUST exceed the coverage floor with slack so the participation servo can
+        // settle at an interior point that is ALSO coverage-feasible. The coverage floor
+        // is ~90 co-located archivers (Σ slot-demand ≈ 1080 at ~16 storage/actor); a pool
+        // of 240 gives the servo ~150 actors of headroom to find breakeven above the
+        // floor. With pool ≈ floor (the first cut used 120), any pruning breaks coverage
+        // and the equilibrium is interior-but-infeasible (a cliff, not a margin).
+        c.n_actors = 240;
+        c.entry_per_epoch = 6; // capital arrives at a finite rate
+        c.participation_patience = 3; // a few bad epochs, not one, before exit
+        c.epochs = 160; // pool=240 at 6/epoch fills in ~40; give exit room to settle
+        c.churn_window = 50; // steady-state read window
+        c
+    };
+
+    // (1) ATTRACTOR check: the emergent operating point must be independent of where the
+    // population starts. `fill` boots from near-empty (init_active_frac=0 ⇒ bootstrap-
+    // like, entrants trickle in) and `trim` boots from full (init_active_frac=1 ⇒ an
+    // over-subscribed start the exit channel must prune). If both converge to the same
+    // `bondA`/`deep_und` over the window, the operating point is a genuine attractor of
+    // the entry/exit dynamic, not an artifact of initialization. Homogeneous mid
+    // reservation so the two runs differ ONLY in initialization.
+    for (label, init) in [("fill", 0.0_f64), ("trim", 1.0_f64)] {
+        let mut c = l11_base();
+        c.name = format!("l11_{label}");
+        c.axis = "participation_attractor".into();
+        c.init_active_frac = init;
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        out.push(c);
+    }
+
+    // (2) RESERVATION sensitivity / calibration: sweep the (homogeneous) reservation
+    // yield. As ρ rises, the marginal archiver's breakeven tightens, fewer actors clear
+    // it, the emergent `bondA` falls, and `deep_und` rises — the participation servo
+    // trading the opportunity-cost floor against coverage. This sweep also CALIBRATES
+    // the interior point (the ρ where active_frac sits strictly inside (0,1)), which the
+    // attractor/transfer scenarios reuse. Boot from fill so the level is the entry-
+    // limited equilibrium, not a trim residue.
+    for (label, rho) in [
+        ("r000", 0.0_f64),
+        ("r01", 0.01),
+        ("r02", 0.02),
+        ("r03", 0.03),
+        ("r05", 0.05),
+        ("r10", 0.10),
+        ("r20", 0.20),
+    ] {
+        let mut c = l11_base();
+        c.name = format!("l11_rho_{label}");
+        c.axis = "participation_reservation".into();
+        c.init_active_frac = 0.0;
+        c.reservation_lo = rho;
+        c.reservation_hi = rho;
+        out.push(c);
+    }
+
+    // (3) BUDGET → COVERAGE transfer: with participation endogenous, raising `budget`
+    // raises realized APR, clears more marginal archivers, and should self-provision MORE
+    // coverage WITHOUT retuning the population — the emergent transfer function from the
+    // reward purse to deep coverage. Read `bondA`/`deep_und` against `budget` at a fixed
+    // interior reservation (mid). This is the L11 headline: budget buys coverage through
+    // participation, not through an asserted population.
+    for (label, budget) in [("b50", 50.0_f64), ("b100", 100.0), ("b200", 200.0)] {
+        let mut c = l11_base();
+        c.name = format!("l11_bud_{label}");
+        c.axis = "participation_transfer".into();
+        c.init_active_frac = 0.0;
+        c.budget = budget;
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        out.push(c);
+    }
+
+    // (4) HETEROGENEOUS reservation: a realistic alternative-yield spread. Entrants with
+    // low ρ stay; high-ρ entrants probe and leave. The emergent active set should be the
+    // low-ρ tail of the pool — a sorting result that the homogeneous sweep can't show.
+    {
+        let mut c = l11_base();
+        c.name = "l11_hetero".into();
+        c.axis = "participation_reservation".into();
+        c.init_active_frac = 0.0;
+        c.reservation_lo = 0.0;
+        c.reservation_hi = 0.05;
+        out.push(c);
     }
 
     out

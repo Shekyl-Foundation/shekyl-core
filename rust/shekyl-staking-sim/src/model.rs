@@ -93,6 +93,14 @@ pub struct Actor {
     pub storage_capacity: usize,
     pub capital: f64,
     pub is_whale: bool,
+    /// **Reservation yield** (L11): the per-epoch risk-adjusted return this actor's
+    /// staking capital could earn elsewhere (its opportunity cost). The actor
+    /// participates as a bonded archiver only while its realized archival yield
+    /// (`net token reward ÷ committed bond capital`) clears this. Heterogeneous across
+    /// actors (different capital has different alternatives). Ignored when the scenario
+    /// is not `endogenous` (fixed population — every prior iteration), so legacy
+    /// behavior is unchanged.
+    pub reservation: f64,
 }
 
 /// The simulated world: shards, actors, and per-actor holdings (sets of shard ids).
@@ -119,20 +127,54 @@ pub struct World {
     /// Always 0 when `fetch_latency == 0` (every prior scenario), so iteration-1/2
     /// behavior is byte-identical.
     pub inflight: Vec<Vec<u32>>,
+    /// `active[a]` = whether actor `a` is currently participating (L11 endogenous
+    /// participation). An inactive actor holds nothing and earns nothing; it is a
+    /// *potential* entrant the free-entry dynamics may admit. Initialized all-`true`
+    /// (the fixed-population model of every prior iteration); `run_sim` overrides it
+    /// only when the scenario is `endogenous`, so legacy behavior is byte-identical.
+    pub active: Vec<bool>,
+    /// `below_streak[a]` = consecutive epochs actor `a`'s realized yield has failed its
+    /// reservation (or it has deployed zero bond capital). Exit fires after the
+    /// scenario's patience window — hysteresis that damps entry/exit thrashing, the
+    /// same async-update discipline the shard game uses. Inert unless `endogenous`.
+    pub below_streak: Vec<u32>,
 }
 
 impl World {
     pub fn new(shards: Vec<Shard>, actors: Vec<Actor>) -> Self {
         let n_shard = shards.len();
-        let holdings = vec![vec![false; n_shard]; actors.len()];
-        let locks = vec![vec![0u32; n_shard]; actors.len()];
-        let inflight = vec![vec![0u32; n_shard]; actors.len()];
+        let n_actor = actors.len();
+        let holdings = vec![vec![false; n_shard]; n_actor];
+        let locks = vec![vec![0u32; n_shard]; n_actor];
+        let inflight = vec![vec![0u32; n_shard]; n_actor];
+        let active = vec![true; n_actor];
+        let below_streak = vec![0u32; n_actor];
         Self {
             shards,
             actors,
             holdings,
             locks,
             inflight,
+            active,
+            below_streak,
+        }
+    }
+
+    /// Deactivate actor `a` (L11 exit): clears its holdings, locks, and in-flight
+    /// fetches. Exit forfeits any posted bond (a slash) and overrides retention locks —
+    /// duration (L9) deters *voluntary drop while staying*, not *capital flight*, so an
+    /// exiting actor abandons even locked shards. Resets its streak.
+    pub fn deactivate(&mut self, a: usize) {
+        self.active[a] = false;
+        self.below_streak[a] = 0;
+        for h in self.holdings[a].iter_mut() {
+            *h = false;
+        }
+        for l in self.locks[a].iter_mut() {
+            *l = 0;
+        }
+        for f in self.inflight[a].iter_mut() {
+            *f = 0;
         }
     }
 

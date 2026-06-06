@@ -14,6 +14,7 @@
 mod agent;
 mod metrics;
 mod model;
+mod participation;
 mod reward;
 mod scenarios;
 
@@ -69,9 +70,13 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  under max (L10 retrieval view; = committed when fetch_latency=0). sOUmx is the timing benefit."
     );
+    eprintln!(
+        "  actv = EMERGENT active fraction of the pool; bondA = EMERGENT bonded-archiver count"
+    );
+    eprintln!("  (L11 free entry/exit; flat at full population when endogenous=false).");
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6}",
         "scenario",
         "axis",
         "bond",
@@ -96,6 +101,8 @@ fn print_summary(results: &[ScenarioResult]) {
         "cDeepU",
         "sDeepU",
         "sOUmx",
+        "actv",
+        "bondA",
     );
 
     for r in results {
@@ -105,7 +112,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -133,6 +140,8 @@ fn print_summary(results: &[ScenarioResult]) {
             r.committed_deep_under,
             r.serving_deep_under,
             r.serving_oldest_under_max,
+            r.active_frac,
+            r.bonded_active,
         );
     }
 
@@ -234,6 +243,7 @@ mod tests {
             storage_capacity: 4,
             capital: 10.0,
             is_whale: false,
+            reservation: 0.0,
         }];
         let mut w = World::new(shards, actors);
         w.holdings[0][0] = true;

@@ -1,7 +1,8 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 3 (L10 + hardening) BUILT and RUN — backfill-lag model reopens L9;
-hardening leans the pin toward age-scaled-constant (2026-06-06).**
+**Status: iteration 3 (L10 + hardening, L11) BUILT and RUN — backfill-lag model reopens L9
+and hardening leans the pin toward age-scaled-constant; L11 derives the lean equilibrium
+as an emergent attractor (2026-06-06).**
 Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
 build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
 residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
@@ -37,6 +38,24 @@ the servo's affirmative case); the cost stays **dissolved across a widened bind 
 resembles the real transport is the clearest win (improves even committed coverage 0.106→0.069).
 On that basis the call **leans age-scaled-constant at a safe-side scale**, still a human
 disposition. See §*L10 — the backfill-lag model* and §*L10 hardening*.
+
+**Iteration-3 headline (L11).** Endogenous participation removes the last *asserted* input:
+the lean operating point was previously a fixed population with a tuned `budget`. L11 makes
+entry/exit a function of realized risk-adjusted yield (`apr = (reward − flow_cost) /
+committed_bond`) vs. a per-actor reservation ρ, over a pool of *potential* archivers
+(trickle-entry + hysteretic realized-yield-exit; fully gated, every pre-L11 scenario
+byte-identical). The lean equilibrium then **emerges with three model-backed properties**:
+(1) it is an **attractor** — cold-start-from-empty and trim-from-oversubscribed converge to
+the same ~79-archiver, deep-covered point; (2) reservation is a **smooth monotone lever**
+with a coverage knee (interior-feasible at ρ≈0.02); (3) **budget transfers to coverage
+*through participation*** — `budget → APR → marginal entry → archiver count → coverage`, no
+asserted population in the loop. Participation churn at the lean margin is **benign for
+coverage** (`oUmx=0`, the L9 benign-rotation shape), and the lean-vs-robust spread tradeoff
+is now emergent rather than tuned. The honest residue: L11 fixes the equilibrium's *shape*
+(attractor, monotone transfer, sorting), not the live operating ρ a real market sits at
+(post-testnet). It **unlocks L12/L13** as perturbations of this attractor (bootstrap = the
+cold-start fill trajectory; fee-era = budget-shrink thinning; ρ is the home for L13's
+price-feedback term). See §*L11 — endogenous participation*.
 
 **Iteration-2 headline.** *(Superseded on the L9 disposition by the iteration-3 headline above;
 retained for the audit trail of how "defer flat" was reached.)* (i) The seating metric is now the **L8 min-form** —
@@ -1280,6 +1299,113 @@ bootstrap is "capacity not yet present," fee-era is "capacity no longer paid for
 why the foundation floor (the one non-market capacity source) is load-bearing at *both* ends
 and why getting its sizing/decay right (L5/L6) is the highest-leverage open item.
 
+### L11 — endogenous participation: the lean equilibrium *derived*, not asserted
+
+Every prior iteration **asserted** the lean operating point: the population was fixed at
+`n_actors` and `budget` was tuned so coverage landed near `R_target`. That makes "the
+system sits at the lean equilibrium" an input, not a result. L11 removes the assertion —
+the population becomes a **pool of potential archivers**, and entry/exit is governed by
+**realized risk-adjusted yield vs. a per-actor reservation**, so the operating point
+*emerges*.
+
+**Specification.** Each actor `a` carries a `reservation` ρ_a — its opportunity cost per
+epoch for capital deployed into bonds. Each epoch:
+
+- **Entry (trickle):** up to `entry_per_epoch` inactive actors are admitted (capital
+  arrives at a finite rate, not instantaneously). Admitted actors best-respond and bond
+  this epoch.
+- **Yield:** after the reward servo runs, actor `a`'s realized
+  `apr_a = (reward_a − flow_cost_a) / committed_bond_capital_a`, where `reward_a` is its
+  `Σwork`-servo share (`reward.rs`), `flow_cost_a` is per-epoch storage + bond-carry +
+  pseudonym-split cost, and the denominator is the capital actually staked into deep-shard
+  bonds (undeployed capital is free to pursue the alternative, so it is *not* charged).
+- **Exit (hysteretic):** `a` accrues a strike if `apr_a < ρ_a` **or** it deployed no bond
+  (came to stake, couldn't — idle capital leaves). After `patience` consecutive strikes it
+  exits and drops its holdings. Hysteresis damps thrash, mirroring the shard game's async
+  damping.
+
+The dynamic is **trickle-entry + realized-yield-exit**: as the population grows the `Σwork`
+servo dilutes the share price, realized `apr` falls, and exit balances entry — the
+population converges to the **marginal-archiver-breaks-even** point *without expectations*.
+Coverage at that emergent point is then **read, not tuned**. The participation layer is
+fully gated (`endogenous=false` ⇒ fixed all-active population, every pre-L11 scenario
+byte-identical: non-endogenous scenarios consume zero extra RNG and skip every entry/exit
+call).
+
+**Calibration (the pool must have slack).** The first cut used a pool barely above the
+coverage floor (~90 co-located archivers for Σ slot-demand ≈ 1080 at ~16 storage/actor) and
+produced a **cliff**: ρ=0 gave full coverage, *any* ρ>0 pruned the population below the
+floor and deep coverage collapsed to `deep_und=1.0` — an interior-but-infeasible
+equilibrium. Widening the pool to 240 (≈150 actors of headroom above the floor) turns the
+cliff into a **gradient**: the servo settles at a breakeven population that, for a band of
+reservations, lands *above* the floor. The interior-feasible operating point is ρ≈0.02
+(bonded-archiver count ≈79, deep covered).
+
+**Finding 1 — the operating point is an attractor.** Booting from near-empty
+(`l11_fill`, `init_active_frac=0`, bootstrap-like) and from over-subscribed
+(`l11_trim`, `init_active_frac=1`) converge to the **same** steady state — bondA 79.4 vs.
+78.6, deep_und 0.002 vs. 0.005. Initialization-independent: the entry/exit dynamic has a
+genuine attractor, not an artifact of where the population started. This is the property
+that licenses calling the emergent point an *equilibrium* rather than a starting guess.
+
+**Finding 2 — reservation is a smooth monotone participation lever with a coverage knee.**
+Sweeping ρ (homogeneous) gives a clean gradient in the emergent bonded-archiver count and a
+sharp coverage knee where the breakeven population crosses the floor:
+
+| ρ | bondA (emergent) | deep_und | read |
+|---|---|---|---|
+| 0.00 | 143 | 0.000 | over-provisioned (no opportunity cost ⇒ everyone bonds) |
+| 0.01 | 101 | 0.000 | over-provisioned |
+| 0.02 | 79 | 0.002 | **interior + feasible** (the lean equilibrium, *derived*) |
+| 0.03 | 65 | 0.392 | knee (breakeven dips below the coverage floor) |
+| 0.05 | 50 | 1.000 | broken |
+| 0.10 | 32 | 1.000 | broken |
+
+The lean equilibrium that iteration 1–2 *asserted* now **falls out** of the reservation
+mechanism at ρ≈0.02 — `R ≈ R_target` is the emergent outcome of entry-until-breakeven, not
+a tuned `budget`.
+
+**Finding 3 — budget transfers to coverage *through participation*.** Holding ρ at the
+interior 0.02 and sweeping `budget` (the reward purse), coverage is bought monotonically by
+**recruiting archivers**, not by a retuned population:
+
+| budget | bondA (emergent) | deep_und | read |
+|---|---|---|---|
+| 50 | 43 | 1.000 | under-funded — breakeven pop below the floor |
+| 100 | 79 | 0.002 | funded — clears the floor |
+| 200 | 154 | 0.000 | over-funded — clears comfortably, spread PASS too |
+
+This is the L11 headline transfer function: **`budget → APR → marginal entry → archiver
+count → coverage`**, all emergent. The gate-5 lever (how big the archival purse is) maps to
+deep coverage *via the participation servo*, with no asserted population in the loop.
+
+**Finding 4 — heterogeneous reservations sort.** With ρ drawn uniform on [0, 0.05],
+the emergent active set is the **low-ρ tail** of the pool (bondA 70, deep_und 0.192) —
+landing between the homogeneous ρ=0.02 and ρ=0.03 points (its mean ρ=0.025), exactly the
+sorting a real alternative-yield spread produces: cheap-capital archivers stay, expensive-
+capital probes leave.
+
+**Relation to prior iterations.** The **participation churn** at lean points (chrn
+sub-claim fails: the marginal archiver flickers in/out at the breakeven margin) is **benign
+for coverage** — `oUmx=0` at ρ=0.02, so the oldest band never opens a gap even while the
+participant set churns. This is the *same shape* as the L9 finding that abandonment is
+benign rotation when `oUmx=0`: churn in *who* archives is harmless as long as coverage is
+backfilled. The spread sub-claim also fails at the lean point (fewer archivers ⇒ more
+concentrated; gini 0.71 at ρ=0.02 vs. 0.46 at budget 200) — the classic lean-vs-robust
+tradeoff, now **emergent** rather than asserted: a thinner purse buys exactly-enough but
+concentrated coverage; a fatter purse buys spread.
+
+**Residue / what this unlocks.** L11 supplies the economic layer the two far ends
+(L12 bootstrap, L13 fee-era) were missing. The attractor + transfer function mean those can
+now be modeled as *perturbations of an emergent equilibrium* rather than re-assertions:
+bootstrap is "the pool fills from zero up the attractor" (the `l11_fill` trajectory is
+literally the cold-start), and the fee-era is "the budget shrinks and the attractor thins,
+exposing the oldest tail." The reservation ρ is the natural home for L13's price/feedback
+term (token-price death-spiral coupling = ρ rising as the token-denominated alternative
+yield rises). The honest residue: ρ and `budget` are still genesis/economic inputs whose
+*real* values are post-testnet measurements — L11 derives the *shape* of the equilibrium
+(attractor, monotone transfer, sorting), not the operating ρ a live market will sit at.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
@@ -1300,7 +1426,7 @@ where a decision is provisional.
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state to **seat the residual on the shoulder** (L1 — coverage matched to `R_target(age)`); let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
 | L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude — but *age-scaling* it is a second oldest-ward redistribution lever, and the lean test downgrades **both** halves of the surplus reading as regime artifacts. **Necessity (benefit): inferred, unmodeled.** `oChrn` is the *abandonment rate*, not the coverage-oscillation metric the churn sub-claim names; at the lean operating point flat duration shows `oUmx 0` (no oscillation — the surplus `oChrn 0.251` was benign rotation the buffer backfilled). The model is capacity- not timing-bound (same-epoch backfill), so the benefit a backfill-lag model might show is not yet representable. **Cost: demonstrated at the operating regime.** The one oscillating regime is a *capacity bind* where age-scaling makes `deep_und` *worse*; the `bind_*` sweep banks this as a robust **lock-in reallocation cost** — age-scaling lifts the oldest band by starving mid-deep (redistribution signature: oldest `frac_under` ↓, mid-deep ↑), coverage-negative at every bind (`a08` 0.025→0.176 [7×], `a10` 0.351→0.377, `stor` 0.57→0.623), saturating at the first increment (`s2`=`s4`). It is the **#3 finding compounded**: `g` already reallocates oldest-ward; age-scaled duration double-counts it, so stacked they over-concentrate the very oldest at a bind. | **DEFER age-scaling — default to FLAT duration (cost demonstrated, benefit unmodeled).** Final genesis bond shape: **flat magnitude + flat (non-zero) duration** — `g` carries deep-prioritization with a *single* oldest-ward lever; flat duration carries the commitment horizon with no reallocation cost. *Demonstrated cost against unmodeled benefit is not insurance — it is an unpriceable bet*, so age-scaling is not adopted now. **Genesis-pin ordering reinforces:** the constant is consensus-visible (pinned pre-genesis), but age-scaling can only be validated by a backfill-lag model needing **post-testnet fetch latencies** — you cannot validate before you must pin, and flat-constant has nothing to walk back. A duration *servo* (genesis range, post-testnet tunable) would preserve the option but adds a governance/manipulation surface not worth it on current evidence. **Reversion (sharpened):** reopen iff a backfill-lag churn model shows the timing-stability benefit **net of** the lean-margin reallocation cost is positive (the damping must beat the demonstrated mid-deep aggregate cost) — a fork-worthy upgrade if earned. The L4 reversion trigger (oldest-band coverage oscillation) is **not discharged** and stays open under this clause. Banked surplus facts (anticipation sign-flip, outcome 3 ruled out) remain valid as surplus facts but don't reach the operating point. **UPDATE (L10): this disposition is REOPENED.** The backfill-lag model both (a) models the benefit (net-positive — serving `oUmx` damped, serving `deep_und` improved across regimes incl. binds) and (b) shows the "demonstrated cost" was a **final-epoch artifact** (windowed mean: `a10` 0.178→0.178 identical). The sharpened reversion criterion is **met**; the remaining call is the genesis-pin *shape* (magnitude is post-testnet), surfaced to the maintainer per L10. |
 | L10 | **Backfill-lag / timing-bound dynamics** (gate 4; the L9 hinge) | Deep-shard **fetch latency** added (committed-but-not-serving for `round(deep_shard_size · fetch_latency_per_unit)` epochs; drops instant), **decoupled** from the game (game on committed replication = iteration-2-stable; retrieval coverage on seated replication). The timing-bound channel the capacity-bound model could not show now appears: serving `oUmx` rises 0→0.46→0.71→1.0 with latency `L0..L4`. Age-scaled duration **damps it net-positive** — lower oldest churn (0.171→0.090), lower serving `oUmx` *and* lower serving `deep_und` at every latency (`L1` 0.263→0.222; `L2` 0.580→0.465), and lower serving `deep_und` even at capacity binds (`lagbind` churn 0.942→0.865, stor 0.988→0.974). **It also forced the `bind_*` cost re-read:** that cost was a **final-epoch artifact** — on the windowed mean it is within noise (`a10` 0.178→0.178 identical, `a12`/`stor` slightly positive, `a08` +0.013 not 7×). | **RESOLVED — reversion criterion MET; L9 disposition reopened.** The sharpened L9 clause (benefit net of the lean-margin reallocation cost positive) is satisfied: benefit demonstrated net-positive across all regimes incl. binds, and the cost it was netted against dissolves on the proper windowed read. **Residue (honest):** L10 establishes the benefit's **sign** (positive), not its **magnitude** at the real operating point — `fetch_latency_per_unit` is the post-testnet measurement. So the open decision is no longer "cost vs. no-benefit" but the **genesis-pin shape** (flat-constant / age-scaled-constant / duration-servo) under sign-known/magnitude-unknown — a priority-3 + `75-system-autonomy` human call, surfaced to the maintainer, **not** flipped unilaterally. **HARDENED (§*L10 hardening*):** denser latency grid `L1–L6` shows the benefit is robust across the survivable band and honestly **washes out at `L6`** (both arms saturate; nothing helps when backfill can't keep pace); the `dur_age_scale` sweep shows the benefit **saturates** (scale 4 ≡ 8 — a genesis *constant* is calibration-insensitive, which removes the servo's affirmative case); the widened bind grid (`a06–a14`) keeps the committed cost **dissolved** (Δ within ±0.015, mixed sign, on the now-banked `cDeepU` windowed-mean column); the **bandwidth-bound** regime (`acq_rate=1`) is the clearest win (improves even committed coverage 0.106→0.069). Net: the call **leans age-scaled-constant at a safe-side scale**, still a human disposition. Correlated *actor* exit is scoped to L15 (duration is a shard-drop deterrent, not an uptime guarantee). |
-| L11 | **Endogenous participation / lean equilibrium derivation** (gate 5 / economics) | The lean operating point (`R ≈ R_target`, entry-until-break-even) is *asserted* and tuned, not derived; `budget` is exogenous. | **Open — iteration 3.** Make entry/exit a function of risk-adjusted archival APR vs. bond opportunity cost vs. price expectations, so the operating point emerges. Prereq for the fee-era end-state (L13) and the bootstrap APR-inversion (L12). |
+| L11 | **Endogenous participation / lean equilibrium derivation** (gate 5 / economics) | The lean operating point was *asserted* (fixed pop + tuned `budget`). L11 makes entry/exit a function of realized `apr = (reward − flow_cost)/committed_bond` vs. per-actor reservation ρ (trickle-entry + hysteretic realized-yield-exit; pool of potential archivers; fully gated, legacy byte-identical). The lean equilibrium now **emerges**: (1) it is an **attractor** — fill-from-empty (`l11_fill`, bondA 79.4) and trim-from-full (`l11_trim`, 78.6) converge to the same point, deep covered; (2) reservation is a **smooth monotone lever** with a coverage knee (ρ 0.01/0.02/0.03 → bondA 101/79/65, deep_und 0/0.002/0.392 — the interior-feasible lean point is ρ≈0.02); (3) **budget transfers to coverage *through participation*** (budget 50/100/200 → bondA 43/79/154, deep_und 1.0/0.002/0 — emergent, no asserted pop); (4) **heterogeneous ρ sorts** (the low-ρ tail self-selects). Calibration note: the pool must exceed the coverage floor with slack or the equilibrium is interior-but-infeasible (a cliff); pool 240 vs. floor ~90 gives the gradient. | **RESOLVED (shape derived) — iteration 3.** The lean equilibrium is no longer asserted: it is the attractor of entry-until-breakeven, and `budget → APR → marginal entry → archiver count → coverage` is the emergent transfer function. Participation churn at the lean margin is **benign for coverage** (`oUmx=0` — same shape as L9 benign rotation); the spread/lean tradeoff is now emergent (thin purse ⇒ exact-but-concentrated, fat purse ⇒ spread). **Residue:** ρ and `budget` real values are post-testnet/market — L11 fixes the equilibrium's *shape* (attractor, monotone transfer, sorting), not the live operating ρ. **Unlocks L12/L13** as perturbations of this attractor (bootstrap = `l11_fill` cold-start trajectory; fee-era = budget-shrink thinning; ρ is the natural home for L13's price-feedback term). |
 | L12 | **Bootstrapping / cold-start** (gate 5; genesis transient) | At genesis deep history is ~empty, so the deep incentive has little to do, yet archivers must be present as it accrues. Reward ∝ `budget·work/Σwork` gives high early APR (good for buy-in) that dilutes as the population thickens — overshoot risk: early entrants exit at normalization, churning the youngest/thinnest deep history. | **Open — iteration 3.** Model a *growing* frontier window (from zero, not fixed-size recycle) + endogenous entry (L11); design the **foundation floor as a bootstrap guarantee that decays on a population/chain-age schedule** (reframes L5/L6 — the floor is load-bearing *most* at genesis). Pin all genesis constants for the thick steady state (L1/L7), foundation covers the transient. |
 | L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **Open — V3.x economics / iteration 3+.** Model adaptive archival reward-share (per `75-system-autonomy.mdc`, `burn.rs` template) and a price/feedback term; test whether the fee market funds archival of an ever-growing deep history and whether the adaptive mechanism damps the price-coupling loop (an undamped loop is a priority-1 durability failure). |
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the unmodeled challenge/audit cadence, not the bond. | **Open — gate 7 / consensus design.** The bond is the capital cost; the challenge frequency + fake-cost + penalty are the operational Sybil/free-rider economics. Model challenge cadence vs. faking cost; couple to retrieval (L15). |
