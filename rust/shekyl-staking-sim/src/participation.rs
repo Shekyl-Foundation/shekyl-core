@@ -155,3 +155,35 @@ pub fn bonded_active_count(world: &World, ap: &AgentParams) -> usize {
         .filter(|&a| world.active[a] && committed_bond_capital(world, a, ap) > 0.0)
         .count()
 }
+
+/// **Foundation floor** (L12): the number of deep-shard replicas the foundation runs
+/// as a *bootstrap* coverage guarantee, decaying as the staker population thickens.
+///
+/// L5/L6 framed the floor as a thin-period backstop; bootstrapping reframes it as the
+/// **genesis coverage guarantee that backs off on a population-indexed schedule** —
+/// foundation holds the line until the market can, then withdraws (per
+/// `75-system-autonomy.mdc`: population-adaptive, no manual reset). The schedule is a
+/// linear decay in the bonded-archiver population `pop`:
+///
+/// `floor(pop) = round( floor0 · max(0, 1 − pop / decay_pop) )`
+///
+/// so `pop = 0 ⇒ floor0` (full genesis backstop) and `pop ≥ decay_pop ⇒ 0` (the market
+/// is deemed thick enough; foundation withdraws). `decay_pop` is the population at which
+/// the floor reaches zero — set near the emergent steady-state bonded-archiver count so
+/// the floor is ≈0 in steady state and re-engages adaptively only if the population dips
+/// (the backstop property). `floor0 = 0` or `decay_pop ≤ 0` ⇒ no floor (legacy / the
+/// pure-market read).
+///
+/// **The floor is invisible to the reward servo by construction.** Foundation replicas
+/// are separately funded (not paid from `budget`) and are *not* counted in the staker
+/// reward `R`/`Σwork` — they add retrieval coverage only. So the floor backstops
+/// availability **without** raising on-shard `R` (which would lower the `1/R` staker
+/// reward and crowd out the very entry the bootstrap needs). The market keeps its full
+/// reason to come; the floor only guarantees the chain is retrievable while it does.
+pub fn foundation_floor(pop: usize, floor0: usize, decay_pop: f64) -> usize {
+    if floor0 == 0 || decay_pop <= 0.0 {
+        return 0;
+    }
+    let frac = (1.0 - pop as f64 / decay_pop).max(0.0);
+    (floor0 as f64 * frac).round() as usize
+}

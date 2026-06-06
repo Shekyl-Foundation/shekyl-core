@@ -178,6 +178,23 @@ impl World {
         }
     }
 
+    /// Append a fresh `age` shard to the frontier — the L12 **growing-window**
+    /// (bootstrap) primitive. The steady-state `advance_epoch` recycles a *fixed-size*
+    /// window in place; bootstrap instead starts from a small genesis core and grows the
+    /// window toward its steady-state size as the chain produces blocks, so deep history
+    /// accrues *from zero* rather than being present at `t=0`. Extends every actor's
+    /// holdings/locks/inflight by one (unheld, unlocked, not-in-flight) slot so the new
+    /// shard is consistently indexable. No-op on legacy scenarios (never called when
+    /// `!bootstrap`).
+    pub fn append_shard(&mut self, age: f64) {
+        self.shards.push(Shard { age });
+        for a in 0..self.actors.len() {
+            self.holdings[a].push(false);
+            self.locks[a].push(0);
+            self.inflight[a].push(0);
+        }
+    }
+
     /// Advance the world one epoch in the **dynamic frontier-window** model (L9 churn
     /// source): every shard ages by `age_step`; any shard reaching `age ≥ 1.0` is
     /// retired and its slot recycled as a fresh `age = 0` shard (holdings + locks on

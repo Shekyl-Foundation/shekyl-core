@@ -10,9 +10,9 @@ use crate::agent::{run_epoch, AgentParams};
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{Actor, Rng, Shard, World};
+use crate::model::{r_target, Actor, Rng, Shard, World};
 use crate::participation::{
-    admit_entrants, bonded_active_count, process_exits, ParticipationParams,
+    admit_entrants, bonded_active_count, foundation_floor, process_exits, ParticipationParams,
 };
 use crate::reward::{evaluate, RewardParams};
 use serde::Serialize;
@@ -94,6 +94,30 @@ pub struct SimConfig {
     pub reservation_lo: f64,
     pub reservation_hi: f64,
 
+    // L12 bootstrap / cold-start axis (iteration 3; inert when `!bootstrap`).
+    /// Growing frontier window: start from a small genesis core and append shards as the
+    /// chain produces blocks, so deep history accrues *from zero* (vs. the steady-state
+    /// `dynamic` window that recycles a full set in place). Requires `dynamic` (shards
+    /// must age for deep history to form) and is meant to run `endogenous` (entry tracks
+    /// the growing deep incentive). Off ⇒ the window is full at `t=0` (every prior
+    /// scenario), byte-identical.
+    pub bootstrap: bool,
+    /// Genesis shard count — the chain at `t=0` (a handful of hot blocks). The window
+    /// grows from here toward `n_shard`.
+    pub n_shard_genesis: usize,
+    /// Shards appended per epoch (the block-production / chain-growth rate) until the
+    /// window reaches `n_shard`, after which the steady-state recycle holds it.
+    pub shard_growth_per_epoch: usize,
+    /// **Foundation floor** (L12): deep-shard replicas the foundation runs at genesis as
+    /// the bootstrap coverage guarantee, decaying linearly to zero as the bonded-archiver
+    /// population reaches `floor_decay_pop`. `0` ⇒ no floor (the pure-market read showing
+    /// the unbacked transient gap). Counts toward retrieval coverage only, never the
+    /// reward servo (see `participation::foundation_floor`).
+    pub floor_replicas: usize,
+    /// Bonded-archiver population at which the foundation floor reaches zero (it withdraws
+    /// once the market is this thick). Set near the emergent steady-state archiver count.
+    pub floor_decay_pop: f64,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -167,6 +191,20 @@ pub struct ScenarioResult {
     /// archiver set. The attractor check requires this converge to the same value from
     /// fill-up (`init_active_frac=0`) and trim-down (`init_active_frac=1`) starts.
     pub bonded_active: f64,
+    /// **Bootstrap worst deep gap, unfloored** (L12): peak serving deep under-target over
+    /// the whole run — the bare-market cold-start transient (deep history accrues before
+    /// the archiver population that covers it does). `0` outside bootstrap.
+    pub boot_deep_under_peak: f64,
+    /// **Bootstrap worst deep gap, floored** (L12): the same peak with the
+    /// population-decaying foundation floor added. The floor is load-bearing iff this is
+    /// ≈0 while `boot_deep_under_peak` is large — the floor covering the transient the
+    /// market cannot yet. `0` outside bootstrap.
+    pub boot_deep_under_floored_peak: f64,
+    /// **Peak bonded-archiver count** (L12): max over the run. `bonded_active_peak −
+    /// bonded_active` (steady) is the overshoot the APR-inversion warning predicts;
+    /// ≈0 means entry tracked demand monotonically (no overshoot-and-shed). Equals
+    /// `bonded_active` outside endogenous runs.
+    pub bonded_active_peak: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -176,13 +214,22 @@ pub struct ScenarioResult {
 }
 
 fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
-    let shards: Vec<Shard> = (0..cfg.n_shard)
-        .map(|_| {
-            let u = rng.next_f64();
-            let age = u.powf(cfg.age_skew);
-            Shard { age }
-        })
-        .collect();
+    // L12 bootstrap: the chain starts as a small genesis core of *hot* (age 0) shards —
+    // there is no deep history at t=0; it accrues as these age and `run_sim` appends new
+    // shards. The full-window draw below is the steady-state (every prior scenario).
+    let shards: Vec<Shard> = if cfg.bootstrap {
+        (0..cfg.n_shard_genesis)
+            .map(|_| Shard { age: 0.0 })
+            .collect()
+    } else {
+        (0..cfg.n_shard)
+            .map(|_| {
+                let u = rng.next_f64();
+                let age = u.powf(cfg.age_skew);
+                Shard { age }
+            })
+            .collect()
+    };
 
     let scale = |s: usize| ((s as f64 * cfg.storage_scale).round() as usize).max(1);
 
@@ -300,12 +347,29 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // `!endogenous` these stay flat at the full population (legacy population is fixed).
     let mut series_active = Vec::with_capacity(cfg.epochs);
     let mut series_bonded_active = Vec::with_capacity(cfg.epochs);
+    // L12 bootstrap: the deep retrieval-coverage transient. `boot_deep_under` is the
+    // *unfloored* serving deep under-target per epoch (the bare-market cold-start gap);
+    // `boot_deep_under_floored` adds the population-decaying foundation floor (the backed
+    // transient). Peaks are taken over the WHOLE run (the transient is early, not in the
+    // steady-state window). Both equal the serving deep under-target outside bootstrap.
+    let mut series_boot_deep_under = Vec::with_capacity(cfg.epochs);
+    let mut series_boot_deep_floored = Vec::with_capacity(cfg.epochs);
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
             world.advance_epoch(cfg.epoch_aging);
+        }
+
+        // L12 chain growth: append fresh hot shards until the window reaches its
+        // steady-state size. From `ep > 0` (the genesis core is what agents act on at
+        // ep 0), so deep history accrues as these age. Inert when `!bootstrap`.
+        if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
+            let room = cfg.n_shard - world.shards.len();
+            for _ in 0..cfg.shard_growth_per_epoch.min(room) {
+                world.append_shard(0.0);
+            }
         }
 
         // L11 entry: trickle inactive actors into the active set (inert when
@@ -367,6 +431,42 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .map(|b| b.frac_under)
                 .unwrap_or(0.0),
         );
+
+        // L12 bootstrap deep coverage: serving deep under-target with and without the
+        // foundation floor. The floor decays with the current bonded-archiver population
+        // and adds replicas to *deep* shards only (retrieval coverage, not the reward
+        // servo — see `participation::foundation_floor`). Computed inline over deep shards
+        // to avoid a third full coverage pass. Outside bootstrap (`floor_replicas == 0`)
+        // both equal the serving deep under-target.
+        let pop_now = bonded_active_count(&world, &ap);
+        let floor_eff = foundation_floor(pop_now, cfg.floor_replicas, cfg.floor_decay_pop);
+        let mut deep_n = 0usize;
+        let mut deep_under_bare = 0usize;
+        let mut deep_under_floored = 0usize;
+        #[allow(clippy::needless_range_loop)]
+        for s in 0..world.shards.len() {
+            let age = world.shards[s].age;
+            if age >= cfg.deep_threshold {
+                deep_n += 1;
+                let tgt = r_target(age, cfg.r_target_hot, cfg.r_target_deep);
+                if serving_r[s] < tgt {
+                    deep_under_bare += 1;
+                }
+                if serving_r[s] + floor_eff < tgt {
+                    deep_under_floored += 1;
+                }
+            }
+        }
+        series_boot_deep_under.push(if deep_n > 0 {
+            deep_under_bare as f64 / deep_n as f64
+        } else {
+            0.0
+        });
+        series_boot_deep_floored.push(if deep_n > 0 {
+            deep_under_floored as f64 / deep_n as f64
+        } else {
+            0.0
+        });
 
         // L11 exit: active actors whose realized APR sits below their reservation (or
         // who hold no bond) for `patience` consecutive epochs leave and drop their
@@ -444,6 +544,20 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L12 bootstrap aggregates, taken over the WHOLE run (the cold-start transient is at
+    // the *start*, not in the steady-state window): the worst deep retrieval gap with and
+    // without the foundation floor, and the peak bonded-archiver count. `bonded_active_peak`
+    // above the steady `bonded_active` is the **overshoot** — entrants the high early APR
+    // pulled in beyond the steady-state set, which then shed (the early-churn risk).
+    let boot_deep_under_peak = series_boot_deep_under
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max);
+    let boot_deep_under_floored_peak = series_boot_deep_floored
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max);
+    let bonded_active_peak = series_bonded_active.iter().copied().max().unwrap_or(0) as f64;
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -471,6 +585,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         committed_deep_under,
         active_frac,
         bonded_active,
+        boot_deep_under_peak,
+        boot_deep_under_floored_peak,
+        bonded_active_peak,
         claims: SubClaims {
             covered,
             spread,
@@ -545,6 +662,13 @@ fn baseline() -> SimConfig {
         participation_patience: 1,
         reservation_lo: 0.0,
         reservation_hi: 0.0,
+        // L12: full window at t=0 by default (every pre-L12 scenario). The bootstrap
+        // scenarios opt in.
+        bootstrap: false,
+        n_shard_genesis: 0,
+        shard_growth_per_epoch: 0,
+        floor_replicas: 0,
+        floor_decay_pop: 0.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1102,6 +1226,89 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.init_active_frac = 0.0;
         c.reservation_lo = 0.0;
         c.reservation_hi = 0.05;
+        out.push(c);
+    }
+
+    // --- L12: bootstrapping / cold-start. The L11 layer settled the *steady-state*
+    // attractor; L12 asks how the system gets there from genesis, where deep history is
+    // ~empty and accrues over time while the archiver population grows into it. Three
+    // mechanisms compose: the L11 endogenous entry (init_active_frac=0 ⇒ the empty
+    // start), the L9/L10 dynamic aging (deep history forms as hot shards age), and the
+    // new growing-window (the chain produces blocks from a small genesis core). The
+    // questions: (a) does endogenous entry track the growing deep demand or OVERSHOOT
+    // (high early APR pulls in entrants who shed at normalization, churning the youngest/
+    // thinnest deep history)? (b) does the population-decaying foundation floor cover the
+    // transient the market cannot yet? Reuses the L11 interior-feasible economics
+    // (ρ=0.02, budget=100, pool 240, entry 6/epoch). ---
+    let l12_base = || {
+        let mut c = l11_base();
+        c.dynamic = true;
+        c.epoch_aging = 0.05; // hot→retire ~20 epochs; deep (age≥0.5) forms ~10 in
+        c.bootstrap = true;
+        c.n_shard_genesis = 6; // a handful of genesis blocks — all hot, no deep history
+        c.shard_growth_per_epoch = 6; // chain grows to n_shard=240 in ~40 epochs
+        c.init_active_frac = 0.0; // the literal cold start: zero archivers at genesis
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        c.epochs = 200; // clear transient (~0–50) then long steady state
+        c.churn_window = 60; // steady-state read window (epochs 140–200)
+        c
+    };
+
+    // (1) COLD-START, no floor: the bare-market transient. `boot_deep_under_peak` is the
+    // worst deep retrieval gap (deep history accrues before archivers do); the steady
+    // `deep_und`/`bondA` show whether the market recovers to the L11 attractor; and
+    // `bonded_active_peak` vs steady `bondA` is the OVERSHOOT read (the APR-inversion
+    // early-churn risk). This is the honest unbacked picture.
+    {
+        let mut c = l12_base();
+        c.name = "l12_boot_nofloor".into();
+        c.axis = "bootstrap".into();
+        c.floor_replicas = 0;
+        out.push(c);
+    }
+
+    // (2) COLD-START + foundation floor: the same run with the foundation running
+    // r_target_deep replicas at genesis, decaying to zero as the bonded-archiver
+    // population reaches the emergent steady-state count (~80). `boot_deep_under_floored_peak`
+    // ≈0 while the unfloored peak is large is the floor doing its bootstrap job —
+    // covering the transient without crowding out entry (it is invisible to the reward
+    // servo) and withdrawing once the market is thick.
+    {
+        let mut c = l12_base();
+        c.name = "l12_boot_floor".into();
+        c.axis = "bootstrap".into();
+        c.floor_replicas = 6; // = r_target_deep: full deep coverage at genesis
+        c.floor_decay_pop = 80.0; // withdraw as the archiver set reaches ~steady size
+        out.push(c);
+    }
+
+    // (3) FLOOR-DECAY schedule: how fast the foundation withdraws. Aggressive (decay_pop
+    // small ⇒ floor gone while the market is still half-built) should leave a residual
+    // transient gap; gentle (decay_pop large ⇒ floor lingers) fully covers but keeps the
+    // foundation working longer. The schedule is the lever trading bootstrap-risk against
+    // foundation-burden; the floored peak as a function of decay_pop locates the safe
+    // withdrawal speed.
+    for (label, decay) in [("fast", 40.0_f64), ("mid", 80.0), ("slow", 160.0)] {
+        let mut c = l12_base();
+        c.name = format!("l12_decay_{label}");
+        c.axis = "bootstrap_floor_decay".into();
+        c.floor_replicas = 6;
+        c.floor_decay_pop = decay;
+        out.push(c);
+    }
+
+    // (4) GROWTH-RATE: the chain-growth vs. entry-rate race. Faster block production
+    // (more shards/epoch) accrues deep demand faster while entry stays bandwidth-limited
+    // (6/epoch), so the bare transient gap should widen with growth — the bootstrap
+    // stress is the growth/entry mismatch, not the economics. No floor, so the bare gap
+    // is visible. (Steady state is the same L11 attractor regardless of growth rate.)
+    for (label, growth) in [("slow", 3usize), ("mid", 6), ("fast", 12)] {
+        let mut c = l12_base();
+        c.name = format!("l12_growth_{label}");
+        c.axis = "bootstrap_growth".into();
+        c.shard_growth_per_epoch = growth;
+        c.floor_replicas = 0;
         out.push(c);
     }
 
