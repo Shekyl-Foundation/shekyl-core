@@ -1,10 +1,12 @@
 # Staker-archival simulation — design spec
 
-**Status: spec-first, pre-code. Iteration 1 (coverage dynamics) specified in full;
-later iterations mapped, not yet specified. Reviewed before any code is written,
-per `05-system-thinking.mdc` (specification first) and `20-rust-vs-cpp-policy.mdc`
-(a sim that re-prices *what staking is* is a planning activity, not "while we're
-here").**
+**Status: reviewed and blessed to build (2026-06-05). Iteration 1 (coverage
+dynamics) specified in full with the review's four conditions absorbed into scope
+(actor-level spread metric; coarse bond sweep; age-weighted scarcity incl. `g=1`;
+whale-under-bond; competitive-share servo incentive); later iterations mapped, not
+yet specified. Spec-first per `05-system-thinking.mdc`; a sim that re-prices *what
+staking is* is a planning activity per `20-rust-vs-cpp-policy.mdc`, not "while we're
+here." Build: new `shekyl-staking-sim` crate (decision below).**
 
 This is the gate-7 instrument for the pay-for-service / firewalled-pseudonym
 rebasing. The model it simulates is canonical in
@@ -46,14 +48,29 @@ explicitly allowed to be wrong here — that is what the sim is for).
 
 | Sub-claim | Metric | Fails if |
 |---|---|---|
-| **Covered enough** | min over shards of replication count `R(shard)`, and the fraction of shards with `R < R_target` | a non-trivial fraction of shards sit below `R_target` at steady state |
-| **Spread (no whale)** | Gini / top-1% share of *shards-held* across pseudonyms; max single-holder shard fraction | one (or a few) holders accumulate an outsized share despite the cap |
-| **Deep history held** | replication `R` restricted to deep-history (high-`age`, rarely-queried) shards | deep-history shards are systematically under-`R` relative to hot-set |
-| **Churn-stable** | shard abandonment rate; coverage variance over time | coverage oscillates / shards repeatedly drop below `R_target` |
+| **Covered enough** | min over shards of replication count `R(shard)`, and the fraction of shards with `R < R_target(age)` | a non-trivial fraction of shards sit below `R_target(age)` at steady state |
+| **Spread (no whale)** | Gini / top-1% share of *shards-held* **across actors** (ground-truth actor↔pseudonym map); max single-actor shard fraction | one (or a few) **actors** accumulate an outsized share despite the cap + bond |
+| **Deep history held** | replication `R` restricted to deep-history (high-`age`, rarely-queried) shards, vs `R_target(age)` | deep-history shards are systematically under-`R` relative to their (higher) target |
+| **Churn-stable** | shard abandonment rate; coverage variance over time | coverage oscillates / shards repeatedly drop below `R_target(age)` (see myopia caveat in *Success / failure*) |
 
-`R_target` is a model input (the protocol's intended replication floor for
-durability), not an output — iteration 1 reports coverage *relative to* a stated
-target, it does not invent the target.
+**The spread metric is actor-level, and this is the sim's whole reason to exist on
+this axis.** The firewall makes pseudonyms unlinkable, so a Sybil whale *is* many
+pseudonyms; a Gini computed over pseudonyms reads a whale as a crowd of small
+holders — egalitarian, passing, exactly wrong, blinding the very sub-claim built to
+catch the whale. On the live chain you *cannot* observe actor concentration (that is
+the privacy guarantee working as designed), so the **only** place the bond's
+actor-level deterrence can ever be measured is the sim, where the actor↔pseudonym
+map is a model input held as ground truth. The sub-claim's pass/fail is therefore
+**actor-level**; a secondary pseudonym-level line is reported as "what an on-chain
+observer would (mis)conclude," not as the pass criterion.
+
+`R_target(age)` is a model input (the protocol's intended replication floor for
+durability), not an output — and it is **age-dependent**: higher for deep history,
+because deep state is *irreplaceable* (lose every copy and it is gone forever),
+while hot/recent state is widely held anyway. Iteration 1 reports coverage
+*relative to* this stated age-dependent target; it does not invent the target.
+Age-dependent target and age-weighted scarcity (below) are the same coupling seen
+from both ends.
 
 ### Model
 
@@ -65,53 +82,100 @@ target, it does not invent the target.
 - **Time.** `T` epochs. Each epoch: challenges are issued (retention is proven or
   not), rewards are computed and paid, agents reconsider their shard portfolios
   (acquire / hold / drop).
-- **Agents (pseudonyms `P`).** A population with heterogeneous endowments —
-  **storage capacity** (how many shards they *can* hold) and **capital** (how much
-  per-shard bond they *can* post). The three archetypes the keystone must survive:
-  storage-rich/capital-poor, capital-rich/storage-poor, and the **Sybil whale**
-  (one actor, many `P`s, shared endowment). Iteration 1 includes the whale as a
-  *coverage* perturbation (does splitting let one actor dominate coverage?); its
-  *cost* (gate 4/5) is iteration-2.
-- **Reward (the model under test).** Per the canonical doc:
-  `work_P = Σ_shards scarcity(shard) · proven_retention(P, shard)`, where
-  `scarcity(shard) ∝ 1/R(shard)`; `reward_P = Curve(work_P)` with `Curve` a
-  piecewise-linear banded plateau-cap (decreasing marginal rates → flat top).
-  The **Σwork servo** (`reward_P = budget · work_P / Σwork`) is present as a fixed
-  normalizer so per-staker numbers are budget-consistent, but its *supply-safety
-  behavior under population growth* is gate 1 (iteration 2), not exercised here.
-- **Per-shard retention bond.** Holding a deep-history shard requires posting a
-  bond `bond(shard)`; dropping it inside the retention window slashes the bond.
-  Bond rate is a **fixed input** in iteration 1 (its *calibration* is gate 4 /
-  iteration 2); iteration 1 asks only whether, *at a plausible fixed rate*, the
-  bonds + scarcity + cap produce coverage.
-- **Agent behavior.** Reward-maximizing under a budget: each epoch an agent
-  estimates marginal `reward` per additional shard (falling, because acquiring a
-  shard raises its `R` and dilutes its own `1/R` payout, and because the per-staker
-  curve is concave-to-cap), nets it against the bond cost and storage cost, and
-  acquires/drops accordingly. Myopic best-response in iteration 1; richer learning
-  is a later refinement only if myopic gives degenerate dynamics.
+- **Agents (pseudonyms `P`) and actors.** A population of pseudonyms with
+  heterogeneous endowments — **storage capacity** (how many shards they *can* hold)
+  and **capital** (how much per-shard bond they *can* post) — each owned by an
+  **actor** via a ground-truth actor↔pseudonym map the sim controls as a model
+  input. The three archetypes the keystone must survive: storage-rich/capital-poor,
+  capital-rich/storage-poor, and the **Sybil whale** (one actor, many `P`s, shared
+  endowment). The whale is in iteration 1 as a *coverage* perturbation — **but only
+  carrying the bond cost.** A whale tested with free splitting trivially dominates
+  and fails the spread sub-claim, but that failure is an artifact of removing the
+  defense (the per-shard bond *is* the G-E Sybil deterrent), not a finding about the
+  design. So the whale is bonded, which is what pulls a coarse bond sweep into
+  iteration 1 (below).
+- **Reward (the model under test).** Per the canonical doc, with two refinements the
+  equilibrium analysis forces into iteration 1:
+  - `work_P = Σ_shards scarcity(shard) · proven_retention(P, shard)`, where
+    **`scarcity(shard) ∝ (1/R(shard)) · g(age)`** — age-weighted, not pure `1/R`.
+    `g(age)` is a **swept model parameter from the start**, *not* a "maybe discover"
+    correctable finding: `g(age)=1` is a baseline point included specifically to
+    *confirm* the predicted pure-`1/R` deep-history failure (validating the sim
+    against the analysis), and `g(age)>1` curves are swept to find the premium that
+    clears deep coverage. Age is a **public shard property**, so age-weighting is the
+    privacy-clean replacement for the killed tier weighting — it carries no oracle.
+  - `reward_P = Curve(work_P)` with `Curve` a piecewise-linear banded plateau-cap
+    (decreasing marginal rates → flat top).
+  - The **Σwork servo is a competitive-share game, not a fixed normalizer.**
+    `reward_P = budget · work_P / Σwork` makes each agent's reward its *share* of a
+    fixed budget, so adding work **dilutes everyone (including yourself)** — a
+    **third dilution channel** beyond the `1/R` self-dilution and the concave cap.
+    Agents must maximize the *share* reward, not a fixed rate-per-work. The
+    atomistic approximation (a single agent ignores its own negligible effect on
+    `Σwork`) is fine, but the share shape is constitutive of acquisition behavior and
+    is where rent-dissipation and reward-compression-with-population-thickness live —
+    exactly what the population sweep must see. (The servo's *supply-safety under
+    growth* — `Σreward ≤ budget` as population grows — remains gate 1; only its
+    incentive shape is exercised here.)
+- **Per-shard retention bond (in iteration 1, coarsely swept).** Holding a
+  deep-history shard requires posting a bond `bond(shard)`; dropping it inside the
+  retention window slashes the bond. The bond cannot be a clean iteration-2 deferral
+  because it is the whale deterrent (above) *and* because the keystone-threatening
+  "empty window" finding the spec advertises is **structurally undetectable at a
+  single fixed rate** — one point cannot establish an empty window. So iteration 1
+  runs a **coarse 3-point bond sweep (low / mid / high)**, which both gives the whale
+  its deterrent and lets the empty-window result surface cheaply, pre-build. **Fine
+  calibration stays gate 4.**
+- **Agent behavior.** Share-reward-maximizing under storage and capital budgets:
+  each epoch an agent estimates the marginal *share* reward per additional shard
+  (falling through three channels — acquiring a shard raises its `R` and dilutes its
+  own `(1/R)·g(age)` payout; the per-staker curve is concave-to-cap; and adding work
+  dilutes the `Σwork` denominator), nets it against the bond cost (capital budget)
+  and storage cost, and acquires/drops accordingly. **Myopic best-response** in
+  iteration 1; learning agents are a conditional escalation (see *Success /
+  failure*).
 
 ### What is held fixed (deferred-gate inputs)
 
-Iteration 1 must not silently turn deferred-gate parameters into free knobs:
+Iteration 1 must not silently turn deferred-gate parameters into free knobs. The
+boundary is redrawn from the first draft: the bond, age-weighting, and the
+whale are **entangled** — they jointly *are* the deep-history and spread questions,
+so they are **in** iteration 1; the genuinely-separable gates are out. What is in:
+`{coarse 3-point bond sweep, age-weighted scarcity incl. g=1, whale-under-bond,
+actor-level spread metric}`. What is cleanly deferred (none of these touch the
+coverage equilibrium):
 
-- **bond rate** — fixed (gate 4 sweeps it later).
-- **Σwork servo / budget** — fixed normalizer (gate 1 stresses it later).
+- **fine bond calibration** — gate 4 (iteration 1 runs only the coarse low/mid/high
+  sweep, enough to give the whale a deterrent and to make an empty-window result
+  detectable; the precise window is gate 4).
+- **Σwork supply-safety under growth** — gate 1 (`Σreward ≤ budget` as population
+  grows). The servo's *incentive shape* (competitive share) is in iteration 1; its
+  *supply-safety* is not.
 - **foundation floor / bootstrap** — iteration 1 runs at steady state (foundation
   absent or a fixed background coverage); the handoff dynamics are gate 5.
 - **locked-supply re-pricing** — macro, not modeled here (gate 7 / the macro sim).
-- **privacy firewall** — out of scope (a soundness/hygiene property, not economic).
+- **privacy firewall + all soundness** — out of scope (a soundness/hygiene property,
+  not economic; analyzed, not simulated).
 
 ### Sweeps (iteration 1)
 
 The coverage thesis must hold across regimes, not at one lucky point:
 
+- **Coarse bond rate (low / mid / high).** The 3-point sweep that gives the whale
+  its deterrent and makes the "empty window" keystone-threat detectable (one point
+  cannot). Fine calibration is gate 4.
+- **Age-weight `g(age)`.** Swept from `g(age)=1` (baseline, expected to *confirm*
+  pure-`1/R` deep-history failure — sim-validates the equilibrium analysis) through
+  `g(age)>1` curves to find the premium that clears deep coverage. Coupled to
+  `R_target(age)`.
 - **Population thickness.** Thin → thick staker populations (the thin regime is
   where coverage is most fragile and where the foundation floor exists for a
   reason — iteration 1 reports where thin-population coverage breaks *without* the
-  floor, which sizes the floor for gate 5).
-- **Endowment mix.** Fraction storage-rich vs capital-rich; presence/absence and
-  size of a Sybil whale.
+  floor, which sizes the floor for gate 5). Under the competitive-share servo this
+  is also where reward-compression-with-thickness shows up.
+- **Endowment mix + whale.** Fraction storage-rich vs capital-rich; presence/absence
+  and size of a Sybil whale — **whale always under the bond cost** (a free-splitting
+  whale is a strawman that fails by having its defense removed).
 - **Curve shape.** Number of bands and the cap height (plateau position) — the
   near-term pin from the canonical doc; iteration 1 is where "where does the cap go"
   gets evidence.
@@ -127,28 +191,43 @@ state + their time series, so a reviewer sees both the endpoint and the path
 
 ### Success / failure / finding
 
-- **Pass:** all four sub-claims hold across the swept regimes at a plausible fixed
-  bond rate and cap. The coverage model is blessed; iterations 2+ proceed to
+- **Pass:** all four sub-claims hold across the swept regimes at some `(bond, g(age),
+  cap)` combination in the coarse grid. The coverage model is blessed; iterations 2+
   calibrate the deferred gates on top of it.
 - **Correctable finding:** a sub-claim fails in a specific regime in a way a model
-  change addresses (e.g. deep-history under-`R` → the scarcity weight needs an
-  age term; whale dominance → the cap or bond needs restructuring). Recorded,
-  fed back, re-run.
-- **Keystone-threatening finding:** coverage fails *because* `1/R` +
-  cap + bonds are structurally insufficient (e.g. no fixed bond rate covers deep
-  history without excluding storage-rich agents — gate 4's window is empty even
-  before iteration 2 sweeps it). This is the result that sends the design back to
-  the drawing board, and surfacing it cheaply is the entire point of doing the sim
-  before building the subsystem.
+  change addresses (e.g. whale dominance at low bond → the bond floor is higher than
+  assumed; deep-history clears only at a `g(age)` so steep it over-rewards deep →
+  the age curve needs reshaping). Recorded, fed back, re-run. (Note: bare
+  deep-history-under-`R` at `g(age)=1` is *expected*, not a finding — it validates
+  the analysis; the informative result is which `g(age)>1` clears it.)
+- **Keystone-threatening finding:** coverage fails *because* `(1/R)·g(age)` + cap +
+  bonds are structurally insufficient — e.g. across the whole coarse bond sweep,
+  **no** bond rate covers deep history (under `R_target(age)`) without excluding
+  storage-rich agents: the bond high enough to deter the whale and guarantee deep
+  retention is also high enough to price out capital-poor archivers, so gate 4's
+  window is **empty**. The 3-point sweep is what makes this detectable in iteration 1
+  (a single rate cannot establish emptiness). This sends the design back to the
+  drawing board, and surfacing it cheaply, pre-build, is the entire point.
+
+**Myopia pre-commitment (churn-stability only).** Myopic best-response is the
+iteration-1 agent model, but a **churn-stability failure under myopic agents must be
+re-tested under anticipatory / learning agents before it is recorded as a
+keystone-threatening finding** — oscillation around the `1/R`-and-servo equilibrium
+is the canonical myopia artifact (agents over-react to last epoch's prices and
+thrash). The other three sub-claims (covered, spread, deep-history) are
+steady-state properties and are myopia-safe; only churn-stability carries this
+caveat.
 
 ## Later iterations (mapped, not specified)
 
 Each layers onto iteration 1's coverage model; each has the gate it discharges and
 the metric it needs. Specified when iteration 1 closes.
 
-- **Iteration 2 — bond-rate window (gate 4).** Sweep `bond rate`; find the band
-  that is simultaneously Sybil-deterring, deep-history-guaranteeing, and not
-  storage-rich-excluding. Output: the window, or the finding that it is empty.
+- **Iteration 2 — fine bond-rate window (gate 4).** *Fine* sweep of `bond rate`
+  within the coarse band iteration 1 leaves open; find the precise sub-band that is
+  simultaneously Sybil-deterring, deep-history-guaranteeing, and not
+  storage-rich-excluding. (Iteration 1's coarse 3-point sweep already establishes
+  whether the window is plausibly non-empty; iteration 2 sharpens it.)
 - **Iteration 3 — Σwork servo supply-safety (gate 1).** Grow the population under
   the servo; confirm `Σreward ≤ budget` and characterize per-staker reward
   compression as population grows. (This and gate 7 may run in the macro
@@ -162,34 +241,36 @@ the metric it needs. Specified when iteration 1 closes.
   stops multiplying reward, and what does that do to the V3 economy assumptions?
   Macro; couples to `shekyl-economics-sim`.
 
-## Build decision (not part of this spec — flagged for the post-review PR)
+## Build decision — confirmed: separate `shekyl-staking-sim` crate
 
-Two viable shapes, decided after this spec is blessed:
+A **new crate `shekyl-staking-sim`** (agent-based) for iterations 1, 2, 4; macro
+numbers wired from `shekyl-economics-sim` for iterations 3, 5. Epoch-granular agent
+dynamics and year-granular macro supply are different instruments, and the
+**actor-level ground-truth bookkeeping** the spread metric requires is exactly the
+kind of state that would warp the macro sim if bolted on. Extending
+`shekyl-economics-sim` is rejected on `15-deletion-and-debt.mdc`'s "two instruments,
+two scopes" reading.
 
-1. **New crate `shekyl-staking-sim`** (agent-based) for iterations 1, 2, 4; wire
-   macro numbers from `shekyl-economics-sim` for iterations 3, 5. Clean separation:
-   the agent sim is a different instrument from the macro emission/burn sim.
-2. **Extend `shekyl-economics-sim`** with an agent-based mode. Reuses the JSON/
-   scenario harness; risks entangling two instruments with different granularities
-   (year-macro vs epoch-agent).
+## Resolved — review sign-off (four conditions)
 
-The spec is implementation-agnostic; the recommendation (pending review) is **(1)**
-— the macro sim is year-granular aggregate-supply and the coverage sim is
-epoch-granular agent-based, and `15-deletion-and-debt.mdc`'s "two instruments,
-two scopes" reading favors not overloading the economics sim.
+The four open questions are resolved *yes-directionally, each with one condition*
+that is now folded into the iteration-1 scope above:
 
-## Open questions for review
-
-1. **`R_target` source.** Is the durability replication floor a stated protocol
-   constant (with a documented rationale per `75-system-autonomy.mdc`), or itself a
-   sim output to be discovered? Iteration 1 assumes the former.
-2. **Whale in iteration 1.** Include the Sybil whale as a coverage perturbation now
-   (recommended — it stresses the "spread" sub-claim), or defer it entirely to
-   gate-4/iteration-2 where its *cost* lives?
-3. **Myopic vs learning agents.** Start myopic best-response (recommended for a
-   first coverage read), escalate to learning only if myopic dynamics are
-   degenerate?
-4. **Single-region.** Iteration 1 omits network topology / latency-routing (the
-   secondary market). Confirm that is acceptable for a coverage-incentive read, or
-   whether routing materially changes acquisition behavior and must be in from the
-   start.
+1. **`R_target` is a stated constant — but `R_target(age)`.** Not a sim output; an
+   age-dependent durability floor, higher for irreplaceable deep history (lose every
+   copy → gone forever; hot state is widely held anyway). Couples to age-weighted
+   scarcity and sharpens the deep-history bar.
+2. **Whale in iteration 1 — yes, but only carrying the bond cost.** The bond is the
+   G-E Sybil deterrent; a free-splitting whale is a strawman. This pulls the coarse
+   bond sweep into iteration 1, which is also what makes the empty-window
+   keystone-threat detectable.
+3. **Myopic best-response — yes as first cut, with the churn pre-commitment.** A
+   churn-stability failure under myopic agents is re-tested under
+   anticipatory/learning agents before being recorded as a keystone finding (the
+   other three sub-claims are steady-state and myopia-safe).
+4. **Single-region — yes, and the reason is load-bearing.** Acceptable *because the
+   reward is retention-based, not retrieval-based*, so latency-routing affects only
+   the query secondary-market and never the acquisition incentive. **This
+   affirmation is contingent on retention-not-retrieval holding**: if any retrieval
+   term ever enters the reward, single-region becomes wrong and network topology has
+   to come in.
