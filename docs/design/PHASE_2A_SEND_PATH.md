@@ -460,10 +460,39 @@ named FOLLOWUPS row with reversion clause, not a silent stub.
    A remote/untrusted daemon must not be able to influence the id the wallet
    records for its own transaction; the daemon response is consulted only for
    accept/reject/already-known status, not for identity.
-3. `Rpc::publish_transaction(&tx)`.
-4. Map daemon response → `TxSubmitOutcome::Submitted { hash }` /
-   `AlreadyKnown { hash }` (hash = the locally-computed value from step 2) /
-   `ProofStale` (see below) / `DaemonRejectedTerminal` / `DaemonAmbiguous`.
+3. `Rpc::publish_transaction(&tx)` — returns the daemon's verdict as a
+   `TxRelayResponse` (the daemon-level accept/reject, flags, and `reason`);
+   `Err` is reserved for transport/protocol failures.
+4. Map daemon response → `TxSubmitOutcome` (hash = the locally-computed value
+   from step 2). See the **honest-subset mapping** below.
+
+**Honest-subset mapping (verified against `core_rpc_server.cpp`).**
+`on_send_raw_transaction` sets a dedicated boolean flag only for
+`double_spend` and `fee_too_low`. Every other rejection — `invalid_input`,
+`invalid_output`, `overspend`, `too_big`, `too_few_outputs`, an
+**already-known duplicate**, and a **stale FCMP++ root** — collapses into the
+same generic `status == "Failed"` bucket, frequently with an empty `reason`
+(the specific cause is only `LOG_PRINT_L0`'d server-side, never propagated).
+`DaemonClient::submit_transaction` therefore produces only:
+
+| Daemon reply | `TxSubmitOutcome` |
+|--------------|-------------------|
+| `status == "OK"` (incl. `not_relayed`) | `Submitted { hash }` |
+| `status != "OK"` + `double_spend` | `DaemonRejectedTerminal { DoubleSpend }` |
+| `status != "OK"` + `fee_too_low` | `DaemonRejectedTerminal { FeeTooLow }` |
+| `status != "OK"`, any other / no flag | `DaemonRejectedTerminal { Malformed }` |
+| `tx_bytes` fail to re-parse (our own bytes) | `DaemonRejectedTerminal { Malformed }` (no round-trip) |
+| transport / protocol failure | `Err(Self::Error)` → orchestrator maps to `SubmitError::DaemonAmbiguous` |
+
+`AlreadyKnown` is **not** a daemon-verdict outcome — the daemon gives no
+distinguishing signal. It is the **orchestrator's** wallet-side §5.2
+retry-contract product: on a retry where the wallet already recorded a
+`TxHash` for these exact bytes, a generic daemon rejection is interpreted as
+already-known (best effort). `DaemonAmbiguous` is likewise not a
+`TxSubmitOutcome` variant: ambiguity is the *absence* of a daemon verdict
+(`Err`), mapped to the existing `SubmitError::DaemonAmbiguous` (R9, reservation
+retained) by the orchestrator — representing it as an outcome would duplicate
+the concept across two enums.
 
 **`ProofStale` outcome.** FCMP++ membership proofs are bound to a curve-tree
 `tree_root` snapshot (§3.4). Between build and submit the chain can advance and
@@ -475,10 +504,32 @@ be preserved; only the proof is stale). Phase 2a adds a `ProofStale` variant to
 the submit outcome so the caller can drive a bounded rebuild loop rather than
 discarding the reservation.
 
+**`ProofStale` detection is deferred to Phase 6 (reversion clause,
+`21-reversion-clause-discipline.mdc`).** The `ProofStale` *variant* exists in
+`TxSubmitOutcome` from 2a-1 so the bounded rebuild loop has a stable target,
+but **no code path constructs it yet**: per the honest-subset mapping above, a
+stale root is presently indistinguishable from a generic terminal rejection
+(both are `status == "Failed"`, empty `reason`), so it maps to
+`TerminalErrorKind::Malformed`.
+
+- **Rejection (now).** Wallet-side heuristic detection (e.g. resubmit-and-diff,
+  or treating every generic `Failed` as possibly-stale) is rejected: it would
+  misclassify genuine malformed-tx build bugs as recoverable and drive
+  pointless rebuild loops.
+- **Reopening criterion (substrate-anchored).** A **daemon-side stale-root
+  signal** — a dedicated flag on `send_raw_transaction` (or an equivalent
+  consensus-exposed reason code) that distinguishes "reference block too
+  old/recent/not-found" from generic verification failure. Tracked as a
+  `SHEKYLD_PREREQUISITE` in `docs/FOLLOWUPS.md`.
+- **Interim guard.** The proactive `reference.rs` validity horizon (§5.4 /
+  `select_reference_block`) bounds how stale a built proof can get before the
+  wallet pre-emptively rebuilds, so the reactive signal is a backstop, not the
+  primary defense.
+
 The exact **validity-horizon bound** (how many blocks a built proof stays
 submittable before the wallet should pre-emptively rebuild) is **deferred** — see
-§9 open question. Phase 2a only needs the reactive `ProofStale` signal; the
-proactive horizon is a later refinement.
+§9 open question. Phase 2a only needs the `ProofStale` *variant*; both the
+reactive detection and the proactive horizon tuning are later refinements.
 
 **Privacy note (remote-daemon origin leak).** When the wallet submits to a
 **remote** daemon, that daemon learns the wallet's IP originated this tx, even
@@ -1526,9 +1577,9 @@ synthetic vectors satisfy that seam without the client existing yet.
 | Signer / builder failure | `SendError::Tx` or `SendError::CannotSign` |
 | Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::CannotSign` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
-| Malformed tx at submit | `SubmitError::DaemonRejectedTerminal` |
-| Ambiguous daemon | `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
-| Stale FCMP++ root at submit | `TxSubmitOutcome::ProofStale` → bounded rebuild/re-sign/re-submit (§3.6); **not** terminal, **not** ambiguous |
+| Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |
+| Ambiguous daemon (transport/protocol failure) | `Err(Self::Error)` → `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
+| Stale FCMP++ root at submit | **Deferred to Phase 6** — currently maps to `DaemonRejectedTerminal { Malformed }` (indistinguishable from generic `Failed`). `TxSubmitOutcome::ProofStale` variant exists for the future bounded rebuild loop; detection reopens on a daemon-side stale-root signal (`SHEKYLD_PREREQUISITE`, §3.6). Interim guard: proactive `reference.rs` horizon |
 
 Pre-genesis: **no** fallback to stub fee or synthetic tx hash on production
 paths. The tx hash is always computed locally from the submitted bytes (§3.6

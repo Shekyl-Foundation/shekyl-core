@@ -4298,6 +4298,7 @@ by the rewrite plan's half-day review gate, item 3):
 | Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
 | Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
 | Cross-linked, not absorbed | `shekyld` `fee_policy_version` daemon-side exposure | V3.1 daemon release (wallet uses `Option<u32>` forward-compat) |
+| Cross-linked, not absorbed | `shekyld` stale-FCMP++-root signal on `send_raw_transaction` | V3.1 daemon release (reopening criterion for deferred `ProofStale` detection; wallet ships variant unconstructed) |
 | Cross-linked, not absorbed | `tx_pool` / `blockchain_db` LMDB transactional wrapper | V3.1.x peer plan (separate from rewrite) |
 | Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
 | Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
@@ -4427,6 +4428,47 @@ one place to confirm each item's relationship to the wallet stack.
   V3 wallet decision log entry "shekyld fee policy version absence"
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
+
+- **`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.**
+  Surfaced by the Phase 2a send-path audit
+  ([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
+  appended 2026-06). The daemon's reference-block-age validation
+  (`src/cryptonote_core/blockchain.cpp:3620–3652`) signals failure
+  through the generic `tvc.m_verifivation_failed` with no dedicated
+  sub-flag, and `on_send_raw_transaction`
+  (`src/rpc/core_rpc_server.cpp:1334–1368`) consequently maps a stale
+  FCMP++ root to `status == "Failed"` with **no flag set and an empty
+  `reason`** — indistinguishable from a genuinely malformed transaction.
+  The wallet therefore cannot reactively detect the *recoverable*
+  stale-root case (rebuild-against-fresh-root, re-sign, re-submit) and
+  currently maps it to `DaemonRejectedTerminal { Malformed }`
+  (`PHASE_2A_SEND_PATH.md` §3.6 honest-subset mapping).
+
+  This is the substrate-anchored **reopening criterion** for the
+  deferred `TxSubmitOutcome::ProofStale` detection (rejected now per
+  `21-reversion-clause-discipline.mdc`; the variant exists unconstructed
+  from 2a-1).
+
+  Scope of the daemon work:
+  1. Add a dedicated rejection flag to the `send_raw_transaction` reply
+     (`COMMAND_RPC_SEND_RAW_TX::response_t`), e.g.
+     `reference_block_invalid: bool`, optionally with a sub-reason
+     discriminating too-old / too-recent / not-found.
+  2. Set it in `on_send_raw_transaction` when reference-block validation
+     (`blockchain.cpp:3620–3652`) is the cause of `m_verifivation_failed`
+     — additive, no consensus-rule change, no breaking RPC change.
+  3. The Rust wallet's `submit_outcome_from_response`
+     (`rust/shekyl-engine-core/src/engine/daemon.rs`) then splits
+     `ProofStale` out of the generic `Malformed` bucket and the
+     orchestrator drives the §3.6 bounded rebuild loop.
+
+  **Not a Phase 2a blocker.** The proactive `reference.rs` validity
+  horizon (`select_reference_block`, `PHASE_2A_SEND_PATH.md` §5.4) is the
+  interim guard; the reactive path lights up additively when the daemon
+  flag lands, with no wallet wire-format break. **Target: V3.1 daemon
+  release (Phase 6 end-to-end harness consumes it). Cross-link:
+  [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
+  `PHASE_2A_SEND_PATH.md` §3.6.**
 
 - **`ActivityMetric` producer actor (wallet-side coherent bundle).** Surfaced by
   Stage 1 PR 7 segment **2i** G4 disposition
