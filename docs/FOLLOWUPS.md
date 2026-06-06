@@ -7431,6 +7431,154 @@ one place to confirm each item's relationship to the wallet stack.
   visualization design home); `docs/V3_STAKER_ARCHIVAL.md`
   (companion archival design that produces the shards).
 
+- **Transport selection for the staker-archival path (gate 6 /
+  networking; forward consideration, NOT yet scheduled).** The
+  firewalled-pseudonym requirement forces the heavy archival
+  fetch onto an onion-service↔Tor-client **rendezvous** path
+  (the pseudonym `P`'s network location must not link to the
+  principal, so — unlike Monero's public chain sync — there is no
+  clearnet fallback for the archival serving path). This couples
+  the transport choice to the staker-archival sim's latency axis:
+  the `L2–L6` band in `docs/design/STAKER_ARCHIVAL_SIM.md` (§*L10*,
+  §*L10 hardening*) is the **operating regime by construction**, not
+  a stress corner, and `fetch_latency_per_unit` is the
+  onion-rendezvous latency. The sim has already designed around the
+  worst case (age-scaled duration win-or-harmless across `L2–L6`;
+  foundation floor backstops the `L6` ceiling), so transport latency
+  is a **bounded, modeled** constraint rather than a discovery.
+
+  Disposition: **Tor primary** (maturity + TCP + persistent-
+  reachable-service + longevity; the inherited Levin/TCP stack drops
+  in without impedance mismatch — note the Tor↔TCP commitment is
+  *coupled*, so a future UDP/QUIC sync would reopen it). I2P is a
+  defensible secondary (dual-support à la Monero); Lokinet
+  (Oxen-tied, UDP — the longevity risk Tor avoids) and Nym (mixnet,
+  latency-disqualifying for heavy fetch) are out.
+
+  Three forks deferred to the transport PR: (1) **embed Arti
+  in-process** (Rust-canonical; claimed viable on the Arti 2.x LTS
+  line with onion-service *hosting*) **vs. external Tor daemon over
+  SOCKS** (Monero's model, more battle-tested, external dependency);
+  (2) whether to keep the **I2P secondary door open** architecturally
+  even if not built at genesis (reversion-clause shape per
+  `21-reversion-clause-discipline.mdc`); (3) a **dedicated privacy
+  threat pass** on the rendezvous-forced heavy path — Monero flags
+  its anonymity-network support experimental and does *not* lean on
+  the rendezvous config, so this is no-inheritance-by-assumption, not
+  "does Tor exist."
+
+  **Dependency-discipline gate (binding):** every maturity/capability
+  claim above (Arti onion-service hosting, the 2.x LTS branch,
+  Monero's over-Tor traffic split) is **to be re-verified at source**
+  when the PR opens, per `17-dependency-discipline.mdc` — recorded
+  here as rationale to test, not banked fact.
+
+  *The one transport input that feeds the sim:* whether the heavy
+  path stays **pure-rendezvous** (worst-case L-regime, maximal
+  firewall) or admits a **bandwidth-buying relaxation that does not
+  link `P`** — the lever that sets where Shekyl lands on the `L2–L6`
+  curve.
+
+  *Target:* V3.x (gate 6 / transport pass) — sequenced after the
+  staker-archival economics gates (4/5) close; no work until then.
+
+  *Reference:* `docs/ANONYMITY_NETWORKS.md` §*Transport for the
+  staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
+  ledger item L16 + §*Transport coupling*; `docs/design/V3_STAKER_ARCHIVAL.md`.
+
+- **Permanent fee-era backstop must be a trustless terminal subsidy,
+  not the foundation floor (gate 7 / consensus monetary policy;
+  GENESIS-CLASS decision).** The L13 sim (`docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L13*) shows the fee-era death spiral is dampable *conditional on*
+  (a) a smoothed trust signal and (b) an adequate fee-market ceiling
+  (~115); below the ceiling the adaptive servo saturates (graceful
+  loud failure) and the **foundation floor re-engages** to catch
+  coverage (`bDUf 0.425`). Chained, these create a structural hazard:
+  **if the fee market never clears ~115 — the live existential
+  fee-era question, not a corner — the foundation floor stops being a
+  transient damper and becomes a *permanent load-bearing party*,
+  silently reintroducing the trusted party a
+  privacy/decentralization-maximalist chain exists to avoid.** The
+  P2 hardening sharpens the stakes: the death spiral has a
+  *second, level-driven leg* (fiat flow cost ÷ token price) that a
+  token-denominated servo damps only partially even at 2× ceiling, so
+  the steady-state risk is worse than the one-leg model showed.
+
+  Disposition (to ratify at gate 7): **separate the two backstops by
+  trust model.** The *permanent* floor is a **protocol terminal
+  subsidy funded by a trustless source** — a Monero-style perpetual
+  tail emission sized **above** the ~80–100 coverage knee with margin
+  (so the *market* keeps providing capacity perpetually, and the
+  irreplaceable tail does not sit in the residual `fee_deep_under_peak`
+  ~0.21 that persists even with the full apparatus). The **foundation
+  floor stays strictly transient** — bootstrap (L12) plus short
+  fee-volatility dips — and is **architecturally barred** from becoming
+  the steady-state floor. This is a **consensus-visible, genesis-class
+  monetary decision** (tail-emission rate and floor): its *funding
+  source*, not just its post-testnet magnitude, is the gate-7 call.
+  The L13→gate-7 handoff.
+
+  The terminal subsidy must additionally carry the **P3 age-tilt**
+  (below): it is the *permanent* capacity source for the irreplaceable
+  tail, so its per-shard reward weight is age-stratified the same way
+  the foundation floor is, concentrating the perpetual subsidy on the
+  oldest band that the fee market abandons first.
+
+  *Target:* gate 7 (terminal monetary policy), before genesis (the
+  emission schedule is consensus-pinned). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 + the
+  iteration-3 hardening headline (P2/P4).
+
+- **Age-stratify the foundation floor AND the terminal subsidy toward
+  the irreplaceable oldest band (gate 5 + gate 7; shape derived,
+  magnitude post-testnet).** P3 band-resolved the L12/L13 residual with
+  a new oldest-band metric (`boOld`, age ≥ 0.8) and found the exposure
+  is **asymmetric across the two temporal ends**: the **fee-era**
+  floored residual concentrates in the oldest band (`l13_floor`:
+  `boOld 0.612 > bDUf 0.425` — L13#2's oscillation is the
+  least-replaceable band thinning), but the **bootstrap** residual does
+  **not** (the genesis core is covered earliest, so the L12 hand-off
+  slice `bDUf 0.019` lands on the freshly-deepened, *most* re-derivable
+  band, `boOld≈0`). So the irreplaceable-tail risk is a fee-era
+  phenomenon, and uniform treatment of "deep" is the wrong granularity
+  there. The lever — `participation::foundation_floor_aged`, a
+  **mean-preserving** oldest-ward tilt (`factor 1+tilt·(2x−1)` over the
+  deep range, mirroring `R_target(age)`, at equal total foundation
+  cost) — cuts the oldest-band gap ~80% (`p3_fee_tilt_*`: tilt 0/0.6/0.9
+  → `boOld 0.612/0.391/0.125`) at the cost of a modest aggregate rise
+  (`0.425→0.467`, the re-derivable band under-floors). **Disposition:**
+  both the (transient) foundation floor and the (permanent, trustless —
+  see P4 above) terminal subsidy carry an age-stratified per-shard
+  weight tilted toward the oldest band, the same shape `R_target(age)`
+  already uses. The *shape* is the genesis decision; the live tilt
+  magnitude is a post-testnet calibration. *Target:* gate 5 (floor
+  tilt) + gate 7 (terminal-subsidy tilt), shape pre-genesis. *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 HARDENED (P3) +
+  the iteration-3 hardening headline (P3).
+
+- **L12 floor-decay schedule should be coupled to the growth↔entry
+  crossover, not a free constant (gate 5 / economics; substrate
+  note).** L12 finding 6 is a *race*: deep history forms as the chain
+  grows (≈12 shards/epoch fast, 3 slow) while archiver entry seats it
+  (≈6/epoch). The foundation-floor decay schedule (`floor_decay_pop`)
+  currently a free constant must persist *at least* as long as the
+  growth-minus-entry gap takes to close — so the decay should be
+  derived from the measured genesis growth rate vs. entry rate, not
+  tuned independently. *Target:* gate 5, post-testnet (needs the live
+  chain-growth and entry rates). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L12* findings 5–6.
+
+- **Bootstrap APR overshoot is a purse-efficiency note, not a
+  correctness one (gate 5 / economics; substrate note).** L12 finding
+  1: on slow growth the prolonged high-APR phase over-pays during
+  bootstrap (peak `bondA` 83–97 vs steady 76–78), and the subsequent
+  shed is *coverage-neutral* (`oUmx=0`, benign rotation). So it costs
+  purse, not durability. Candidate mitigation (gate 5): a
+  growth-indexed early-budget taper so the genesis purse tracks the
+  thin early population instead of over-paying it. *Target:* gate 5,
+  post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L12* finding 1.
+
 ---
 
 ## V4+ — horizontal scaling

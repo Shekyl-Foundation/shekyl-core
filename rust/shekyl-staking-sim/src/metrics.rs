@@ -150,7 +150,22 @@ pub struct TargetParams {
 }
 
 pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> CoverageMetrics {
-    let r = &eval.r;
+    coverage_with_r(world, &eval.r, &eval.pseudonyms, tp)
+}
+
+/// Coverage metrics computed against an explicit replication vector — either the
+/// committed counts (`World::replication`, the economic-game view used by `coverage`)
+/// or the seated counts (`World::serving_replication`, the L10 retrieval-coverage
+/// view). Splitting on the `r` argument lets `run_sim` report both without
+/// duplicating the band/spread arithmetic. `pseudonyms` drives only the pseudonym-spread
+/// read (a game-side quantity); the serving-view caller passes the committed pseudonyms
+/// since spread is not the L10 metric of interest.
+pub fn coverage_with_r(
+    world: &World,
+    r: &[usize],
+    pseudonyms: &[usize],
+    tp: &TargetParams,
+) -> CoverageMetrics {
     let n_shard = world.shards.len();
 
     let min_r = r.iter().copied().min().unwrap_or(0);
@@ -229,9 +244,9 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     // pseudonym count. This is what an on-chain observer sees — a splitting whale
     // disaggregates into many small pseudonyms.
     let mut pseudonym_counts: Vec<f64> = Vec::new();
-    for a in 0..world.actors.len() {
+    for (a, &p) in pseudonyms.iter().enumerate() {
         let held = world.actor_shard_count(a);
-        let m = eval.pseudonyms[a].max(1);
+        let m = p.max(1);
         if held == 0 {
             continue;
         }

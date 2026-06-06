@@ -17,7 +17,7 @@
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
 use crate::model::Rng;
-use crate::model::{bond_age, bond_duration, g_age, World};
+use crate::model::{bond_age, bond_duration, fetch_latency, g_age, World};
 
 #[derive(Debug, Clone)]
 pub struct AgentParams {
@@ -48,6 +48,15 @@ pub struct AgentParams {
     /// deters *acquisition* of long-duration (old) shards, surfacing the willingness
     /// ceiling the spec pre-committed to testing under anticipatory agents.
     pub lock_anticipation: f64,
+    // --- L10 backfill-lag axis (iteration 3; inert when `fetch_latency_per_unit == 0`) ---
+    /// Epochs of fetch per storage unit over the anonymizing transport (the
+    /// post-testnet measurement). A deep shard takes `round(deep_shard_size · this)`
+    /// epochs to seat after acquisition; during the fetch it is committed (storage +
+    /// bond) but not serving. `0` ⇒ instant seating ⇒ capacity-bound iteration-1/2.
+    pub fetch_latency_per_unit: f64,
+    /// Max *fresh* deep-shard fetches an actor may start per epoch (bandwidth bound).
+    /// `0` = unlimited (the default; fetch latency alone carries the lag).
+    pub acq_rate: usize,
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -117,7 +126,10 @@ fn best_response(world: &mut World, actor: usize, price: f64, ap: &AgentParams, 
     // Highest net first.
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Greedily fill remaining budget with positive-net shards.
+    // Greedily fill remaining budget with positive-net shards. `fresh_fetches` counts
+    // new deep acquisitions started this epoch, capped by `acq_rate` (bandwidth bound;
+    // 0 = unlimited).
+    let mut fresh_fetches = 0usize;
     for (s, net, deep, bond) in ranked {
         if net <= 0.0 {
             break;
@@ -132,10 +144,20 @@ fn best_response(world: &mut World, actor: usize, price: f64, ap: &AgentParams, 
         if deep && bonded && used_bond + bond > capital {
             continue;
         }
+        // Acquisition-rate bound (L10): a *fresh* deep fetch (not already held) consumes
+        // one of the epoch's fetch slots. Held-through deep shards re-selected here are
+        // free (no new fetch). Hot shards are unthrottled (seat instantly).
+        let fresh_deep = deep && !was_held[s];
+        if fresh_deep && ap.acq_rate > 0 && fresh_fetches >= ap.acq_rate {
+            continue;
+        }
         new_held[s] = true;
         used_storage += stor_cost(deep);
         if deep && bonded {
             used_bond += bond;
+        }
+        if fresh_deep {
+            fresh_fetches += 1;
         }
     }
 
@@ -148,6 +170,21 @@ fn best_response(world: &mut World, actor: usize, price: f64, ap: &AgentParams, 
                     bond_duration(world.shards[s].age, ap.bond_dur_base, ap.bond_dur_age_scale);
             }
         }
+    }
+
+    // L10 backfill lag: start the fetch clock on *fresh* deep acquisitions (committed
+    // but not serving until it seats); held-through shards keep their counting-down
+    // fetch; dropped/unheld shards clear to 0. Inert when `fetch_latency_per_unit == 0`.
+    for s in 0..n_shard {
+        let deep = world.shards[s].is_deep(ap.deep_threshold);
+        if new_held[s] && !was_held[s] {
+            world.inflight[actor][s] =
+                fetch_latency(deep, ap.deep_shard_size, ap.fetch_latency_per_unit);
+        } else if !new_held[s] {
+            world.inflight[actor][s] = 0;
+        }
+        // held-through (new_held && was_held): leave inflight as-is (decremented by
+        // advance_epoch each epoch until seated).
     }
     world.holdings[actor] = new_held;
 }
@@ -163,7 +200,13 @@ pub fn run_epoch(
 ) -> usize {
     let before: Vec<Vec<bool>> = world.holdings.clone();
 
-    let mut order: Vec<usize> = (0..world.actors.len()).collect();
+    // Only *active* actors best-respond (L11 endogenous participation). Inactive actors
+    // hold nothing and earn nothing — they are potential entrants the free-entry layer
+    // may admit. With the default all-active world (every pre-L11 scenario), this is the
+    // full population in shuffled order, byte-identical to before.
+    let mut order: Vec<usize> = (0..world.actors.len())
+        .filter(|&a| world.active[a])
+        .collect();
     rng.shuffle(&mut order);
     for a in order {
         best_response(world, a, price, ap, age_weight);

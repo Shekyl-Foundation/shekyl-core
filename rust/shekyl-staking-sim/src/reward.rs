@@ -36,7 +36,13 @@ pub struct RewardParams {
     pub age_weight: f64,
 }
 
-/// Raw (uncapped) work for one actor, given current replication counts.
+/// Raw (uncapped) work for one actor, given current replication counts. The economic
+/// game is on **committed** holdings (an actor is paid to *store* — verified by
+/// challenge, L14 — not for instantaneous retrievability), so this counts every held
+/// shard. The L10 backfill lag is a *retrieval-coverage* property tracked separately
+/// (`serving_replication`), decoupled from the game so the lag does not death-spiral
+/// the incentive (a fresh deep acquisition still earns; only its *serving* coverage
+/// lags). Unchanged from iteration 2.
 pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f64 {
     let mut w = 0.0;
     for (s, &held) in world.holdings[actor].iter().enumerate() {
@@ -83,6 +89,11 @@ pub struct RewardEval {
     pub r: Vec<usize>,
     pub pseudonyms: Vec<usize>,
     pub price: f64,
+    /// Realized per-actor token reward this epoch = `price · capped_work_a` (the servo
+    /// share `budget · capped_a / Σ capped`). Drives the L11 participation yield
+    /// (`net reward ÷ committed bond capital` vs. reservation). Zero for inactive or
+    /// zero-work actors.
+    pub rewards: Vec<f64>,
 }
 
 /// Evaluate rewards for the whole world. `price_hint` seeds the split decision
@@ -112,9 +123,13 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         0.0
     };
 
+    // Realized token reward = servo share = price · capped_work (= budget·capped/Σcapped).
+    let rewards: Vec<f64> = capped.iter().map(|&c| price * c).collect();
+
     RewardEval {
         r,
         pseudonyms,
         price,
+        rewards,
     }
 }
