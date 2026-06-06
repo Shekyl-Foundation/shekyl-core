@@ -14,12 +14,22 @@ co-location starvation the aggregate ratio missed: `bscale_s0` reads `0.86 < 1` 
 aggregate `3.24`) matching `deep_und 0.75`. (ii) The **(bond × shard-size) pair sweep**
 confirms L8's joint claim — neither leg moves coverage alone (low bond + big shard, or
 small shard + high bond, each still starve), only the *pair* clears deep, exactly when the
-min-form crosses 1. (iii) **Age-scaled bond *duration* (L9)** damps oldest-band churn
-under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) without suppressing
-participation; under anticipatory agents a **willingness ceiling** appears and is *steep*
-(deep acquisition collapses) because deep's coverage margin is thin in this regime — the
-clean churn-vs-participation gradient is gate-4 fine-sweep work in a positive-margin
-regime. The 1c result, **L4 resolved**: keep flat bond *magnitude*
+min-form crosses 1. (iii) **Age-scaled bond *duration* (L9): cost RESOLVED, necessity
+INFERRED — adopt as cheap insurance.** The thin/surplus pair sweep settles **cost** (gentle,
+not a cliff: at surplus anticipation costs *zero* coverage and the anticipation **sign-flip**
+— it collapses deep when thin but *helps* it at surplus — validates that the buffer is real;
+outcome 3 / foundation-permafloor ruled out). It does **not** settle **necessity**: `oChrn`
+is the *abandonment rate*, not the coverage-oscillation metric the churn sub-claim names, and
+`oChrn 0.251` with `deep_und 0` is **benign rotation** (turnover the surplus buffer backfills
+instantly). The **lean-equilibrium oscillation test** (oldest band at `R ≈ R_target`, buffer
+removed; read `oUmx` = max oldest-band `frac_under`) lands on the *second* informative
+outcome: under flat duration `oUmx = 0` — **no coverage oscillation at the operating point** —
+and the one regime that does oscillate (`lean_osc_a10`, `oUmx 0.184`) is a *capacity bind*
+(`deep_und 0.35`) that age-scaled duration does **not** damp (identical `oUmx`, *worse*
+`deep_und`). So duration is adopted as **lean-operation stability insurance** — necessity
+inferred, not confirmed — with gate-4's duration axis shrunk to level-tuning but **not**
+closed, and a named reversion trigger (a backfill-lag churn model that surfaces lean
+oscillation duration damps would upgrade necessity to direct). The 1c result, **L4 resolved**: keep flat bond *magnitude*
 (durability survival arithmetic — redundancy dominates per-holder reliability, so the
 irreplaceable tail wants the *most distinct holders* → the *most accessible* bond, never
 scaled up; age-scaling magnitude flips the binding constraint from the tractable `dS/dN`
@@ -598,10 +608,19 @@ specifically** — coverage present but oscillating, holders cycling off the irr
 shards (the `oChrn` metric on the deepest band). If the oldest-band churn sub-claim holds,
 flat magnitude without any duration term is the final shape and L9 stays parked. If it
 *fails on the tail*, that — and only that — is when age-scaled **duration** (never
-magnitude) earns its complexity. Iteration 2 exercises exactly this: under myopic agents
-the trigger does fire (`oChrn 0.215` at flat duration) and age-scaled duration damps it
-(`→ 0.108`), so duration has a demonstrated job; the open question its fine-tuning leaves
-for gate 4 is the willingness-ceiling tradeoff (below).
+magnitude) earns its complexity. The trigger is the churn sub-claim's *fail metric*:
+**coverage oscillation** (oldest-band `frac_under` dipping `> 0`), with abandonment
+(`oChrn`) as the *diagnostic*, not the trigger. Iteration 2 exercises this and finds the
+trigger **does not fire at the operating point**: abandonment persists thin (`oChrn 0.215`),
+lean (0.17–0.40), and surplus (`oChrn 0.251`), but it is **benign rotation** — coverage never
+drops (`deep_und 0`, and at the lean equilibrium `oUmx = 0` under flat duration). The one
+regime with `oUmx > 0` is a *capacity bind* (`lean_osc_a10`, `deep_und 0.35`) that age-scaled
+duration does **not** damp. So the L4 reversion trigger is **not** discharged by direct
+evidence; duration is adopted on **cost grounds plus inferred necessity** (cheap lean-operation
+insurance), and the clause stays open under the named reversion criterion (a backfill-lag churn
+model surfacing lean oscillation duration damps; see §*L9 resolver — lean-equilibrium
+oscillation test*). Magnitude stays flat regardless; duration is the separate knob that carries
+the commitment horizon.
 
 **The genuinely new gate-inputs:** the **co-location finding (L8)** — deep durability
 needs actors rich on storage *and* bond-capital jointly (or a foundation/whale
@@ -698,15 +717,135 @@ Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
   duration roughly halves oldest-band churn (`0.215 → 0.108`) while the oldest residual
   stays ≈0 — exactly the commitment-horizon job, with no affordability cost (the affording
   pool is unchanged, as designed).
-- **Anticipatory: the willingness ceiling exists and is *steep*.** With even modest
-  anticipation (0.25), forward-looking agents collapse deep acquisition (`oldU ≈ 0.98`)
-  rather than grading down smoothly with scale. The cause is regime-specific: deep's
-  coverage margin is *thin* here (deep `R ≈ R_target`, so the marginal deep shard's net is
-  ≈0), and any anticipated lock cost flips it negative. The honest reading is that the
-  ceiling is real and sharp when deep is marginal; the clean churn-vs-participation
-  gradient (a duration horizon that damps churn *without* tripping the ceiling) only
-  appears where deep has positive margin — a **gate-4 fine-sweep** in a higher-`g` /
-  higher-provisioning regime, which is exactly where L9 said duration calibration belongs.
+- **Anticipatory (thin regime): the result is *confounded*, not concludable.** With even
+  modest anticipation (0.25), forward-looking agents collapse deep acquisition
+  (`oldU ≈ 0.98`). But at thin margin (deep `R ≈ R_target`, marginal deep net ≈ 0) the
+  *same* near-zero-net condition produces *both* the churn duration would fix (holders flip
+  easily) *and* the steep ceiling (any anticipated lock flips them negative). So the thin
+  sweep **cannot distinguish "duration is unnecessary" from "duration is merely
+  unaffordable"** — at this margin they are the same amplification seen from two sides. The
+  thin regime is therefore not a parkable gate-4 unknown; it says nothing. The **surplus
+  regime below** is the only place the two halves come apart.
+
+### L9 resolver — necessity and cost separated (surplus regime)
+
+The surplus sweep (`surp_*`: `g = 4`, `budget = 300`, `storage_scale = 1.6`) changes the
+holder *distribution* — generous reward + strong deep premium + ample storage seat many
+*inframarginal* deep holders carrying a buffer (deep is fully covered, `deep_und = 0`, on
+every row, so the regime is genuinely surplus, not merely well-provisioned).
+
+| scenario | agents | `oChrn` (oldest-band churn) | `oldU` | `deep_und` |
+|---|---|---|---|---|
+| `surp_s0` | myopic | 0.251 | 0.000 | 0.000 |
+| `surp_s2` | myopic | 0.110 | 0.000 | 0.000 |
+| `surp_s4` | myopic | 0.084 | 0.000 | 0.000 |
+| `surp_s0_antic` | anticipatory (0.25) | 0.137 | 0.000 | 0.000 |
+| `surp_s2_antic` | anticipatory (0.25) | 0.045 | 0.000 | 0.000 |
+| `surp_s4_antic` | anticipatory (0.25) | 0.010 | 0.000 | 0.000 |
+
+The surplus sweep settles the **cost** half cleanly, but — crucially — it **cannot settle
+the necessity half**, and the distinction turns on *which metric* `oChrn` is:
+
+- **`oChrn` is the abandonment rate, not the coverage-oscillation metric.** It measures
+  holding-*flips* per held-epoch in the deepest band (`flips ÷ mean held`). The churn
+  sub-claim's *failure condition*, by its own definition, is **coverage oscillation**
+  (oldest-band `frac_under` dipping `> 0` — a shard repeatedly dropping below `R_target`);
+  abandonment is the *diagnostic*, not the fail metric. `oChrn = 0.251` with `deep_und =
+  0.000` is exactly consistent with **benign rotation**: holders turn over at 25%, but
+  coverage never drops because at surplus a replacement is always standing by. Abandonment
+  is not coverage-instability when the frontier backfills instantly.
+- **Cost — gentle, not a cliff (this half is solid).** The thin-regime collapse was a
+  **pure margin artifact**. At surplus, anticipation costs *zero* coverage (`deep_und =
+  0.000`, `oldU = 0.000` on every `_antic` row) and *further* reduces abandonment (`surp_s0`
+  0.251 → 0.137; `surp_s4` 0.084 → 0.010). The **anticipation sign-flip** — anticipation
+  collapses deep when thin but *helps* it at surplus (0.137 < 0.251, 0.010 < 0.084) — is a
+  self-check that can't be a tuning artifact: it is the buffer becoming real, anticipating
+  holders self-selecting into shards they will keep rather than fleeing a knife-edge.
+  **Outcome 3 (steep cost even at surplus → foundation permafloor) is ruled out**, and the
+  market mechanism suffices on cost.
+- **Why surplus cannot answer necessity.** The surplus regime, *by construction*,
+  over-provisions — its slack is itself a coverage-stability mechanism. Coverage holds at
+  surplus *because* of the buffer, which masks whatever duration is or isn't contributing.
+  Duration is tested in the one regime where it isn't needed for stability. The
+  decision-relevant comparison — does coverage *oscillate* at the operating point under flat
+  duration, and does age-scaled duration damp it? — lives at the **lean equilibrium** the
+  zero-profit entry condition actually drives toward (`R ≈ R_target`, no buffer), which the
+  surplus sweep brackets from above and the thin sweep brackets from below without landing
+  on.
+
+### L9 resolver — the lean-equilibrium oscillation test (necessity, directly)
+
+The lean equilibrium is the chain's real operating point: agents enter until the marginal
+deep holder breaks even, so `R` settles toward *just-covering* (`R ≈ R_target`, no buffer).
+There, abandonment turns into a coverage gap only if it actually does — a holder drops and
+no replacement is standing by, so the oldest band's `frac_under` blips `> 0` and recovers.
+The probe (`lean_probe_*`, `lean_osc_*`) tunes provisioning to put the *oldest band itself*
+at `R ≈ R_target` (`mean_r ≈ 6`, the band's target), then reads **`oUmx`** — the max
+oldest-band `frac_under` over the window, i.e. the coverage-oscillation metric the sub-claim
+names — flat (`s0`) vs age-scaled (`s4`) duration.
+
+| scenario | oldest `mean_r` / `r_tgt` | `deep_und` | **`oUmx`** (oscillation) | `oUvar` | `oChrn` (abandon.) |
+|---|---|---|---|---|---|
+| `dur_s0` (g2, budget 100) | 5.80 / 6 | 0.125 | **0.000** | 0 | 0.215 |
+| `lean_probe_p090` | 6.33 / 6 | 0.116 | **0.000** | 0 | 0.169 |
+| `lean_probe_p100/115/130` | 6.94–8.65 / 6 | 0.000 | **0.000** | 0 | 0.19–0.21 |
+| `lean_osc_a05_s0` (lean, slow churn, flat) | 6.55 / 6 | 0.000 | **0.000** | 0 | 0.177 |
+| `lean_osc_a05_s4` (lean, slow churn, age-scaled) | 6.55 / 6 | 0.018 | **0.000** | 0 | 0.100 |
+| `lean_osc_a10_s0` (capacity bind, flat) | 6.41 / 6 | 0.351 | **0.184** | 0.0016 | 0.313 |
+| `lean_osc_a10_s4` (capacity bind, age-scaled) | 6.45 / 6 | 0.377 | **0.184** | 0.0016 | 0.172 |
+| `lean_osc_a20_s0/s4` (fast churn) | 7.00 / 6 | 0.000 | **0.000** | 0 | 0.397 |
+
+The test lands on the user's **second informative outcome**: at the lean equilibrium, flat
+duration shows **no coverage oscillation**, so necessity is **not** directly confirmed.
+
+- **No oscillation at the lean equilibrium under flat duration.** Across two lean points
+  flanking the target — `dur_s0` (oldest `mean_r = 5.80`, *below* target) and `lean_osc_a05`
+  (`6.55`, just above) — and the just-covering `lean_probe` points, `oUmx = 0` and `oUvar =
+  0` under flat duration. The oldest band, buffer removed, **never dips below `R_target`**;
+  the full-re-optimization frontier backfills any drop within the epoch. The abandonment
+  (`oChrn` 0.17–0.40) is **benign rotation** all the way down. The surplus `0.251` was
+  benign rotation, confirmed.
+- **The one regime that oscillates is a capacity bind duration does *not* fix.** `oUmx > 0`
+  appears only at `lean_osc_a10` (`oUmx = 0.184`) — but that is **persistent under-coverage**
+  (`deep_und = 0.35`, co-located `dS/dN = 1.00`, the seating constraint binding), not lean
+  churn oscillation. Age-scaled duration there gives an **identical `oUmx = 0.184` and a
+  *worse* `deep_und` (0.377)**: locking holders in place reduces reallocation flexibility
+  and mildly aggravates the shortfall. Duration is the wrong tool for a capacity gap, and
+  this is direct evidence *against* the "duration stabilizes coverage" mechanism in the only
+  regime where coverage is unstable.
+- **Modeling bound on the negative result.** `run_epoch` re-optimizes every actor each epoch
+  (honoring locks), so backfill is same-epoch and coverage is **capacity-determined, not
+  timing-determined**. The model therefore *cannot* exhibit drop-without-standing-replacement
+  oscillation unless capacity binds — at which point it shows as persistent under-coverage
+  (the `a10` row), not oscillation. A richer arrival/exit process with backfill *lag* is the
+  refinement that could surface lean oscillation if it exists; until then, the negative
+  result is "no oscillation in a model without backfill friction," which is suggestive, not
+  conclusive — hence necessity **inferred**, not refuted.
+
+**Resolution (L9): adopt age-scaled bond *duration* as cheap lean-operation insurance —
+necessity INFERRED, cost established.** The disposition is robust either way (the
+gentle-cost finding is solid, so the worst case is adopting cheap insurance), but the
+evidentiary claim is the *inferred* one, not the direct one:
+
+- **Cost: established.** Anticipation is gentle and the sign-flip validates the buffer;
+  outcome 3 (steep cost / foundation permafloor) is ruled out.
+- **Necessity: inferred, not directly observed.** Abandonment persists across thin, lean,
+  and surplus, but **coverage-oscillation-from-churn is not observed at the lean
+  equilibrium** under flat duration (`oUmx = 0`); the one oscillating regime is a capacity
+  bind duration does not damp. Duration is adopted as **lean-operation stability insurance**
+  (it *plausibly* lets the chain run just-covering rather than over-provisioning), priced
+  cheap by the cost half.
+- **Gate 4's duration axis shrinks to level-tuning** (horizon level, not the in-or-out
+  question), but it does **not** close as "necessity confirmed."
+- **Reversion criterion (`21-reversion-clause-discipline.mdc`).** Necessity is unproven, so
+  the axis stays open under a named trigger: **if a regime is found (richer churn model with
+  backfill lag, or a lean point this model misses) where age-scaled duration damps oldest-band
+  coverage oscillation that flat duration does not — `oUmx > 0` under flat, `→ 0` under
+  age-scaled — necessity upgrades to direct and the entry is rewritten "necessity confirmed."
+  If no such regime is found, duration remains level-tuning-only insurance and may be retired
+  if the implementation cost ever exceeds the insurance value.** The surplus sweep earns the
+  inferred claim; only the lean oscillation (under a backfill-lag model) would earn the
+  direct one.
 
 ### Iteration-2 caveats
 
@@ -716,6 +855,12 @@ Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
 - The dynamic world's recycling and lock dynamics are a minimal churn model, sufficient to
   give duration a job and to expose the willingness ceiling; richer arrival/exit processes
   are a later refinement if the gate-4 duration sweep needs them.
+- The surplus regime (`surp_*`) is a constructed *thick* counterpart to the thin `dur_*`
+  sweep — its specific levers (`g = 4`, `budget = 300`, `storage_scale = 1.6`) are chosen
+  to seat inframarginal deep holders, not calibrated to a target chain state. What carries
+  forward is the *separation* it produces (churn persists at surplus; anticipation costs no
+  coverage there), not the magnitudes. The thin/surplus pair spans gate-4 (duration) ×
+  gate-5 (thickness) — the same joint shape the L8 re-entanglement established.
 - `deep_shard_size = 1.0` keeps every prior (iteration-1) scenario byte-identical; only the
   pair sweep varies it.
 
@@ -737,7 +882,7 @@ where a decision is provisional.
 | L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
 | L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state to **seat the residual on the shoulder** (L1 — coverage matched to `R_target(age)`); let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
-| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude (opportunity-cost on *willingness*, not a hard affordability gate). **Iteration 2 (built + run):** in a dynamic recycling world, age-scaled duration damps oldest-band churn under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) with `oldU ≈ 0` — horizon-matching with no affordability cost, as designed. Under anticipatory agents a **willingness ceiling** appears and is *steep* (`oldU ≈ 0.98`, deep acquisition collapses) because deep's margin is thin here (marginal deep net ≈ 0, so any anticipated lock flips it negative). | **Decided (axis confirmed); fine-tune deferred to gate 4.** Model split landed (magnitude flat, duration age-scaled, dynamic churn). Myopic damping confirms duration has a real job; the L4 reversion trigger (oldest-band churn) *fires* at flat duration and duration quells it. The clean churn-vs-participation gradient (damp churn without tripping the ceiling) needs a **positive-margin regime** (higher `g`/provisioning) — that is the gate-4 fine sweep. **Reopen condition for *not* shipping duration:** if gate-4's positive-margin sweep shows flat duration already passes the oldest-band churn sub-claim, duration stays parked (L4 reversion). |
+| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude. **Cost** is settled by the surplus sweep (`surp_*`: `g=4`, `budget=300`, `storage_scale=1.6`): anticipation costs **zero** coverage (`deep_und 0`, `oldU 0` on every `_antic` row) and the anticipation **sign-flip** (collapses deep when thin, *helps* it at surplus: 0.137<0.251, 0.010<0.084) validates the buffer — outcome 3 (steep cost / foundation permafloor) ruled out. **Necessity is *not* settled by surplus**: `oChrn` is the *abandonment rate*, not the coverage-oscillation metric the churn sub-claim names; `oChrn 0.251` with `deep_und 0` is **benign rotation** the buffer backfills. The **lean-equilibrium oscillation test** (oldest band at `R≈R_target`; read `oUmx` = max oldest-band `frac_under`) finds **no oscillation under flat duration** (`oUmx 0` at `dur_s0`/`lean_osc_a05`/`lean_probe`); the one oscillating regime (`lean_osc_a10`, `oUmx 0.184`) is a *capacity bind* (`deep_und 0.35`) age-scaled duration does **not** damp (identical `oUmx`, worse `deep_und`). | **ADOPTED as cheap insurance — cost RESOLVED, necessity INFERRED (not confirmed).** Final bond shape: **flat magnitude + age-scaled duration**. Cost is gentle; necessity is *inferred* (coverage-oscillation-from-churn not observed at the lean equilibrium — abandonment is benign rotation; the one oscillating regime is a capacity bind duration can't fix). Duration is adopted as **lean-operation stability insurance** (worst case: cheap insurance, per the gentle-cost finding). Gate 4's duration axis shrinks to **level-tuning** but does **not** close as "necessity confirmed." **Reversion:** necessity upgrades to *direct* iff a regime (richer churn model with backfill *lag*, or a lean point this re-optimizing model misses) shows `oUmx > 0` under flat duration and `→ 0` under age-scaled. If none is found, duration stays level-tuning-only insurance and may be retired if implementation cost exceeds insurance value. The L4 reversion trigger (oldest-band coverage oscillation) is therefore **not discharged by direct evidence** — it remains open under this clause. |
 
 ### Robustness-sweep verdicts (which findings are structural)
 
@@ -749,8 +894,12 @@ where a decision is provisional.
   the aggregate ratio misses (and which the (bond × shard-size) pair sweep confirms is a
   *joint* lever); actor-level spread contains the whale the pseudonym metric hides; the
   age-tilted bond is a weak, mildly regressive lever that fights the `g(age)` premium
-  (L4 → flat-on-deep default); age-scaled bond *duration* damps oldest-band churn under
-  myopic agents without an affordability cost (L9).
+  (L4 → flat-on-deep default); age-scaled bond *duration* damps oldest-band *abandonment*
+  under myopic agents without an affordability cost, and its anticipation cost is gentle at
+  surplus (L9 cost half — structural). What is **not** structural: that duration is
+  *necessary* — at the lean equilibrium flat duration shows no oldest-band coverage
+  oscillation (`oUmx 0`), so the abandonment it damps is benign rotation; necessity is
+  inferred, not observed (L9 necessity half — open under the reversion clause).
 - **Margin-artifacts (regime-specific, do not generalize):** the `deep_und=1.000`
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`
