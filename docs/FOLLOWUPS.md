@@ -7486,6 +7486,66 @@ one place to confirm each item's relationship to the wallet stack.
   staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
   ledger item L16 + §*Transport coupling*; `docs/design/V3_STAKER_ARCHIVAL.md`.
 
+- **Permanent fee-era backstop must be a trustless terminal subsidy,
+  not the foundation floor (gate 7 / consensus monetary policy;
+  GENESIS-CLASS decision).** The L13 sim (`docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L13*) shows the fee-era death spiral is dampable *conditional on*
+  (a) a smoothed trust signal and (b) an adequate fee-market ceiling
+  (~115); below the ceiling the adaptive servo saturates (graceful
+  loud failure) and the **foundation floor re-engages** to catch
+  coverage (`bDUf 0.425`). Chained, these create a structural hazard:
+  **if the fee market never clears ~115 — the live existential
+  fee-era question, not a corner — the foundation floor stops being a
+  transient damper and becomes a *permanent load-bearing party*,
+  silently reintroducing the trusted party a
+  privacy/decentralization-maximalist chain exists to avoid.** The
+  P2 hardening sharpens the stakes: the death spiral has a
+  *second, level-driven leg* (fiat flow cost ÷ token price) that a
+  token-denominated servo damps only partially even at 2× ceiling, so
+  the steady-state risk is worse than the one-leg model showed.
+
+  Disposition (to ratify at gate 7): **separate the two backstops by
+  trust model.** The *permanent* floor is a **protocol terminal
+  subsidy funded by a trustless source** — a Monero-style perpetual
+  tail emission sized **above** the ~80–100 coverage knee with margin
+  (so the *market* keeps providing capacity perpetually, and the
+  irreplaceable tail does not sit in the residual `fee_deep_under_peak`
+  ~0.21 that persists even with the full apparatus). The **foundation
+  floor stays strictly transient** — bootstrap (L12) plus short
+  fee-volatility dips — and is **architecturally barred** from becoming
+  the steady-state floor. This is a **consensus-visible, genesis-class
+  monetary decision** (tail-emission rate and floor): its *funding
+  source*, not just its post-testnet magnitude, is the gate-7 call.
+  The L13→gate-7 handoff.
+
+  *Target:* gate 7 (terminal monetary policy), before genesis (the
+  emission schedule is consensus-pinned). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 + the
+  iteration-3 hardening headline (P2/P4).
+
+- **L12 floor-decay schedule should be coupled to the growth↔entry
+  crossover, not a free constant (gate 5 / economics; substrate
+  note).** L12 finding 6 is a *race*: deep history forms as the chain
+  grows (≈12 shards/epoch fast, 3 slow) while archiver entry seats it
+  (≈6/epoch). The foundation-floor decay schedule (`floor_decay_pop`)
+  currently a free constant must persist *at least* as long as the
+  growth-minus-entry gap takes to close — so the decay should be
+  derived from the measured genesis growth rate vs. entry rate, not
+  tuned independently. *Target:* gate 5, post-testnet (needs the live
+  chain-growth and entry rates). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L12* findings 5–6.
+
+- **Bootstrap APR overshoot is a purse-efficiency note, not a
+  correctness one (gate 5 / economics; substrate note).** L12 finding
+  1: on slow growth the prolonged high-APR phase over-pays during
+  bootstrap (peak `bondA` 83–97 vs steady 76–78), and the subsequent
+  shed is *coverage-neutral* (`oUmx=0`, benign rotation). So it costs
+  purse, not durability. Candidate mitigation (gate 5): a
+  growth-indexed early-budget taper so the genesis purse tracks the
+  thin early population instead of over-paying it. *Target:* gate 5,
+  post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L12* finding 1.
+
 ---
 
 ## V4+ — horizontal scaling
