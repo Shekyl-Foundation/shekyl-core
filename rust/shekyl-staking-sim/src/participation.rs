@@ -112,11 +112,22 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// reservation; it accrues a strike if `apr < reservation` *or* it deployed no bond
 /// capital. After `patience` consecutive strikes it exits (`World::deactivate`). Call
 /// **after** `evaluate`.
+///
+/// `reservation_add` (L13) is a *uniform* additive bump to every active actor's
+/// reservation — the **price-coupling / death-spiral channel**. The staking yield and
+/// bond capital are both token-denominated, so a static token price cancels in the
+/// `apr` ratio; what does *not* cancel is **expected depreciation**: if holders expect
+/// the token to lose value against their outside numéraire, the opportunity cost of
+/// keeping capital staked rises by that expected depreciation rate. The caller drives
+/// `reservation_add` from a coverage-confidence signal (low coverage ⇒ loss of trust ⇒
+/// expected depreciation ⇒ higher effective reservation ⇒ more exit ⇒ worse coverage),
+/// closing the candidate loop. `0.0` ⇒ no coupling (legacy / non-fee-era).
 pub fn process_exits(
     world: &mut World,
     eval: &RewardEval,
     ap: &AgentParams,
     pp: &ParticipationParams,
+    reservation_add: f64,
 ) {
     let n = world.actors.len();
     let mut to_exit: Vec<usize> = Vec::new();
@@ -131,7 +142,7 @@ pub fn process_exits(
         } else {
             let net = eval.rewards[a] - flow_cost(world, a, ap, eval.pseudonyms[a], pp);
             let apr = net / committed;
-            apr < world.actors[a].reservation
+            apr < world.actors[a].reservation + reservation_add
         };
         if strike {
             world.below_streak[a] += 1;

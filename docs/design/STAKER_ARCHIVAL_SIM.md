@@ -1,9 +1,12 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 3 (L10 + hardening, L11, L12) BUILT and RUN — backfill-lag model reopens
-L9 and hardening leans the pin toward age-scaled-constant; L11 derives the lean equilibrium
-as an emergent attractor; L12 shows the genesis cold-start reaches that attractor and the
-population-decaying foundation floor covers the transient (2026-06-06).**
+**Status: iteration 3 (L10 + hardening, L11, L12, L13) BUILT and RUN — backfill-lag model
+reopens L9 and hardening leans the pin toward age-scaled-constant; L11 derives the lean
+equilibrium as an emergent attractor; L12 shows the genesis cold-start reaches that attractor
+and the population-decaying foundation floor covers the transient; L13 shows the fee-era
+shrinking subsidy thins the attractor (oldest tail first), the price-coupling death spiral is
+*dampable* by an adaptive reward-share servo conditional on an adequate fee-market ceiling, and
+the foundation floor re-engages as the market thins (2026-06-06).**
 Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
 build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
 residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
@@ -78,6 +81,28 @@ steady state, let the population-decaying floor cover the transient — and that
 *bootstrap* role is now its primary one (reframing L5/L6). Residue: the real growth rate,
 genesis floor size, and safe decay schedule are post-testnet calibrations of an
 already-understood curve. See §*L12 — bootstrapping / cold-start*.
+
+**Iteration-3 headline (L13).** The fee-era end-state is the L11 attractor under a *shrinking*
+purse (block subsidy → fees / bounded terminal subsidy; fully gated, legacy byte-identical).
+Five findings: (1) a decaying subsidy **thins the attractor monotonically** along the L11
+transfer curve in reverse, with a coverage knee at a terminal subsidy of ~80–100 (`bondA` 81→67
+→54 as the floor drops 100→80→60); (2) the **oldest tail goes under first** — at the knee the
+oldest band oscillates under (`oUmx 0.163`) while mid-deep still holds (`cDeepU 0.057`),
+confirming the irreplaceable band is the most exposed; (3) the **price-coupling death spiral is
+real** — a coverage shortfall lifting effective reservation (lost trust ⇒ expected
+depreciation) deepens the collapse (`bondA` 39→17 vs the same floor without coupling); (4) the
+**adaptive reward-share servo damps it** (burn.rs template: `bondA` 17→62, deep shortfall
+1.0→0.21, by drawing fees up to ~116) — so the loop is **dampable, not an automatic priority-1
+failure** — *conditional* on (a) the servo keying off a **sticky/smoothed** trust signal (a
+servo reacting to the raw shortfall oscillates and underperforms a constant purse) and (b) an
+**adequate fee-market ceiling**: below ~115 the servo saturates at the ceiling and coverage
+stays gone — a **graceful loud failure** (fees cannot fund the deep history); (5) the L12
+**foundation floor re-engages automatically** as the market thins (its population decay run in
+reverse: `bDUf 0.425` vs bare `1.0`), the one non-market capacity source load-bearing at *both*
+ends. Disposition: the durability requirement is the **adaptive servo + a backstop** (adequate
+terminal-subsidy/fee ceiling, or the foundation floor); with them the spiral is bounded, without
+them it runs. Residue: the live fee-market ceiling, the coupling strength, and the trust horizon
+are post-testnet empirics of an already-understood control loop. See §*L13 — fee-era end-state*.
 
 **Iteration-2 headline.** *(Superseded on the L9 disposition by the iteration-3 headline above;
 retained for the audit trail of how "defer flat" was reached.)* (i) The seating metric is now the **L8 min-form** —
@@ -1531,6 +1556,106 @@ already-understood curve — the same sign-known/magnitude-unknown posture as L9
 floor's genesis size and decay schedule are gate-5 foundation parameters, pinnable for the
 thick-state hand-off and re-tunable as the foundation observes the real entry rate.
 
+### L13 — fee-era end-state: the attractor under a shrinking purse
+
+L11 derived the lean equilibrium as an attractor at a *fixed* purse; L12 showed the genesis
+cold-start reaches it. L13 takes the other temporal end (`00-mission.mdc` timeframe 2, ~30 yr):
+as block subsidy → 0 the archival purse comes from **fees or a bounded terminal subsidy**, so
+the purse **shrinks**. The questions, all perturbations of the L11 attractor: does a shrinking
+purse thin the equilibrium, and is the **oldest (irreplaceable) tail** the most exposed? Is the
+**token-price death-spiral** (`coverage ↓ → trust ↓ → price ↓ → token-denominated yield ↓ →
+exit ↑ → coverage ↓`) damped or undamped? Can an **adaptive reward-share servo**
+(`75-system-autonomy.mdc`, the `burn.rs` template) damp it, and where does the fee market's
+finite capacity turn damping into failure?
+
+**Model (three composed mechanisms, all gated behind `fee_era`; every pre-L13 scenario
+byte-identical).**
+- **Shrinking subsidy.** The base purse decays geometrically toward a **bounded terminal
+  subsidy** `budget_floor` each epoch (`base ← floor + (base − floor)·(1 − budget_decay)`). The
+  run starts well-funded (`budget=200`, above the L11 ~budget-100 knee) so the decay sweeps the
+  population *down* through the L11 budget→coverage transfer curve.
+- **Price-coupling / death spiral.** The staking yield and the bond capital are both
+  token-denominated, so a *static* token price cancels in the `apr` ratio; what does not cancel
+  is **expected depreciation**. A deep retrieval shortfall (lost trust) raises every active
+  actor's *effective* reservation by `price_coupling · signal` (`process_exits`'
+  `reservation_add`), so a coverage failure makes staking look worse against the outside option
+  and forces more exit — closing the loop. The `signal` is an **EMA** of the serving deep
+  shortfall (λ=0.25, ~4-epoch trust horizon): trust is *sticky*, and this stickiness is
+  load-bearing (below).
+- **Adaptive reward-share servo.** When `adaptive_share` is on, the effective purse is raised
+  above the decayed base in proportion to the shortfall, `budget_eff = base·(1 + share_gain·
+  signal)`, **bounded by `budget_ceiling`** — the most fees *can* fund. This is the
+  autonomy-rule mechanism: fees flow to archival automatically when coverage slips, no manual
+  reset. The L12 **foundation floor** is reused unchanged as the non-market backstop.
+
+New observables: `feB` (the realized purse, windowed mean — how far the subsidy decayed and how
+much the servo topped up; `≈budget_ceiling` ⇒ fees saturated) and `fDUpk` (worst *serving* deep
+gap over the run's second half — the thinned end-state; sustained-high ⇒ death-spiral /
+unsustainable). The L11/L12 `bondA`, `cDeepU`, `oUmx`, and `bDUf` carry the rest.
+
+**Findings.**
+
+1. **A shrinking subsidy thins the attractor monotonically** — the L11 transfer curve run in
+   reverse. Terminal subsidy `100 / 80 / 60 / 40 / 20 → bondA 81 / 67 / 54 / 39 / 21`, with a
+   **coverage knee at ~80–100**: at floor 100 deep is fully covered (`cDeepU 0`), at floor 60 it
+   has collapsed (`cDeepU 0.99`). The minimum viable terminal subsidy is a model output, not an
+   assertion: ~budget-80 sustains the ~67-archiver set that covers deep.
+2. **The oldest tail goes under first.** At the knee (floor 80) the oldest band oscillates under
+   (`oUmx 0.163`, `sOUmx 0.163`) while mid-deep still holds (`cDeepU 0.057`) — the irreplaceable
+   band (most data, least fresh fee activity to pay for it) is the most exposed exactly as the
+   far-end-B analysis predicted. Below the knee the collapse is total across deep (the L11
+   interior-feasibility cliff), so the oldest-first gradient is visible *at* the knee, which is
+   the operating margin that matters.
+3. **The price-coupling death spiral is real.** With coupling on at an unsustainable floor (40)
+   and no servo, `bondA` falls to **17** vs **39** at the same floor without coupling — the
+   depreciation premium amplifies the thinning into a deeper collapse. Undamped, this is the
+   priority-1 durability failure the ledger flagged.
+4. **The adaptive servo damps it — conditionally.** Same coupling + the servo with an adequate
+   ceiling recovers `bondA` **17 → 62** and cuts the deep shortfall **`cDeepU` 1.0 → 0.21**, by
+   drawing the purse up to **~116** (`feB`). So the loop is **dampable — not an automatic
+   priority-1 failure**. Two conditions are load-bearing:
+   - **Sticky trust signal.** The servo (and the coupling) must key off the *smoothed* shortfall.
+     A servo reacting to the *instantaneous* shortfall relaxes the moment coverage is briefly met;
+     with rate-limited entry and hysteretic exit the population then bleeds back down and the
+     system oscillates, underperforming a *constant* purse of the same average size. The EMA holds
+     the response across the few epochs entry needs to rebuild. (This is itself a finding: a naive
+     reactive servo is destabilizing; the autonomy mechanism must integrate/smooth.)
+   - **Adequate fee-market ceiling.** The servo can only draw what fees provide. Sweeping the
+     ceiling: at **70 and 110** the servo **saturates at the ceiling** (`feB = 70.0 / 110.0`
+     exactly) and coverage stays gone (`cDeepU 1.0`) — a **graceful loud failure** (the metric
+     pins at the ceiling and the gap stays open: detectable, not silent); at **200** the servo
+     draws only the ~116 it needs and damps. The binding ceiling under this coupling is ~115
+     (above the no-coupling sustainable ~100, because the premium shifts the knee up).
+5. **The foundation floor re-engages automatically as the market thins.** The L12 floor is
+   `floor0·max(0, 1 − pop/decay_pop)` — in bootstrap `pop` rises and the floor withdraws; in the
+   fee-era `pop` thins and the **floor re-engages with no new mechanism**. At the unsustainable
+   floor (40) with the foundation floor on and no servo, the bare deep gap is total (`bDU 1.0`)
+   but the **floored** gap is `bDUf 0.425` — the foundation backstops ~57% of the deep tail's
+   retrieval as the paid market collapses, and (as in L12) it is invisible to the reward servo so
+   it does not crowd out what market remains. The one non-market capacity source is load-bearing
+   at **both** temporal ends, confirming the iteration-3 unifying note (capacity creates
+   coverage; bootstrap is "capacity not yet present," fee-era is "capacity no longer paid for").
+
+**Disposition (shape derived).** The fee-era death spiral is **not** an undamped priority-1
+failure *provided* the system ships the damping apparatus: (a) an adaptive reward-share servo
+keyed to a **smoothed** trust/coverage signal (a reactive servo oscillates and is worse than
+nothing), (b) a fee-market / terminal-subsidy ceiling **above** the coupling-shifted sustainable
+purse (below it the failure is graceful and loud but is still a failure), and (c) the foundation
+floor as the non-market backstop that re-engages automatically when the market thins. With the
+apparatus the loop is bounded; without any of it the coupling runs. This is a concrete gate-5
+economics requirement, not a tuning preference.
+
+**Residue / what is post-testnet.** L13 fixes the *shape* (thinning is monotone along the known
+transfer curve; oldest-first exposure; the spiral is real and dampable; the servo must be
+smoothed; the ceiling sets a graceful-failure threshold; the floor re-engages). It does **not**
+fix the live magnitudes: the real fee-market ceiling (how much fee revenue a mature Shekyl
+actually directs to archival), the coupling strength (how sharply trust/price tracks coverage),
+the bounded terminal-subsidy level, and the trust horizon (the EMA λ) are post-testnet /
+economic-layer empirics of an already-understood control loop — the same sign-known /
+magnitude-unknown posture as L9/L10/L12. The adaptive-share servo's gain and ceiling are gate-5
+parameters; the terminal subsidy floor is a `00-mission.mdc`-timeframe-2 consensus constant
+whose *minimum* is now bounded below by the ~budget-80 knee (in model units).
+
 ### Transport coupling — the `L2–L6` band is the operating regime, not a stress corner
 
 A forward note connecting the latency axis to the (deferred) transport choice; the full
@@ -1580,7 +1705,7 @@ where a decision is provisional.
 | L10 | **Backfill-lag / timing-bound dynamics** (gate 4; the L9 hinge) | Deep-shard **fetch latency** added (committed-but-not-serving for `round(deep_shard_size · fetch_latency_per_unit)` epochs; drops instant), **decoupled** from the game (game on committed replication = iteration-2-stable; retrieval coverage on seated replication). The timing-bound channel the capacity-bound model could not show now appears: serving `oUmx` rises 0→0.46→0.71→1.0 with latency `L0..L4`. Age-scaled duration **damps it net-positive** — lower oldest churn (0.171→0.090), lower serving `oUmx` *and* lower serving `deep_und` at every latency (`L1` 0.263→0.222; `L2` 0.580→0.465), and lower serving `deep_und` even at capacity binds (`lagbind` churn 0.942→0.865, stor 0.988→0.974). **It also forced the `bind_*` cost re-read:** that cost was a **final-epoch artifact** — on the windowed mean it is within noise (`a10` 0.178→0.178 identical, `a12`/`stor` slightly positive, `a08` +0.013 not 7×). | **RESOLVED — reversion criterion MET; L9 disposition reopened.** The sharpened L9 clause (benefit net of the lean-margin reallocation cost positive) is satisfied: benefit demonstrated net-positive across all regimes incl. binds, and the cost it was netted against dissolves on the proper windowed read. **Residue (honest):** L10 establishes the benefit's **sign** (positive), not its **magnitude** at the real operating point — `fetch_latency_per_unit` is the post-testnet measurement. So the open decision is no longer "cost vs. no-benefit" but the **genesis-pin shape** (flat-constant / age-scaled-constant / duration-servo) under sign-known/magnitude-unknown — a priority-3 + `75-system-autonomy` human call, surfaced to the maintainer, **not** flipped unilaterally. **HARDENED (§*L10 hardening*):** denser latency grid `L1–L6` shows the benefit is robust across the survivable band and honestly **washes out at `L6`** (both arms saturate; nothing helps when backfill can't keep pace); the `dur_age_scale` sweep shows the benefit **saturates** (scale 4 ≡ 8 — a genesis *constant* is calibration-insensitive, which removes the servo's affirmative case); the widened bind grid (`a06–a14`) keeps the committed cost **dissolved** (Δ within ±0.015, mixed sign, on the now-banked `cDeepU` windowed-mean column); the **bandwidth-bound** regime (`acq_rate=1`) is the clearest win (improves even committed coverage 0.106→0.069). Net: the call **leans age-scaled-constant at a safe-side scale**, still a human disposition. Correlated *actor* exit is scoped to L15 (duration is a shard-drop deterrent, not an uptime guarantee). |
 | L11 | **Endogenous participation / lean equilibrium derivation** (gate 5 / economics) | The lean operating point was *asserted* (fixed pop + tuned `budget`). L11 makes entry/exit a function of realized `apr = (reward − flow_cost)/committed_bond` vs. per-actor reservation ρ (trickle-entry + hysteretic realized-yield-exit; pool of potential archivers; fully gated, legacy byte-identical). The lean equilibrium now **emerges**: (1) it is an **attractor** — fill-from-empty (`l11_fill`, bondA 79.4) and trim-from-full (`l11_trim`, 78.6) converge to the same point, deep covered; (2) reservation is a **smooth monotone lever** with a coverage knee (ρ 0.01/0.02/0.03 → bondA 101/79/65, deep_und 0/0.002/0.392 — the interior-feasible lean point is ρ≈0.02); (3) **budget transfers to coverage *through participation*** (budget 50/100/200 → bondA 43/79/154, deep_und 1.0/0.002/0 — emergent, no asserted pop); (4) **heterogeneous ρ sorts** (the low-ρ tail self-selects). Calibration note: the pool must exceed the coverage floor with slack or the equilibrium is interior-but-infeasible (a cliff); pool 240 vs. floor ~90 gives the gradient. | **RESOLVED (shape derived) — iteration 3.** The lean equilibrium is no longer asserted: it is the attractor of entry-until-breakeven, and `budget → APR → marginal entry → archiver count → coverage` is the emergent transfer function. Participation churn at the lean margin is **benign for coverage** (`oUmx=0` — same shape as L9 benign rotation); the spread/lean tradeoff is now emergent (thin purse ⇒ exact-but-concentrated, fat purse ⇒ spread). **Residue:** ρ and `budget` real values are post-testnet/market — L11 fixes the equilibrium's *shape* (attractor, monotone transfer, sorting), not the live operating ρ. **Unlocks L12/L13** as perturbations of this attractor (bootstrap = `l11_fill` cold-start trajectory; fee-era = budget-shrink thinning; ρ is the natural home for L13's price-feedback term). |
 | L12 | **Bootstrapping / cold-start** (gate 5; genesis transient) | Growing frontier window (genesis hot core + per-epoch block growth via `World::append_shard`, deep history accrues *from zero*) + L11 endogenous entry from empty + a population-decaying foundation floor (`participation::foundation_floor`, invisible to the reward servo); fully gated, legacy byte-identical. Findings: (1) the cold start **reaches the L11 attractor** (steady `bondA≈76`, deep covered) — bootstrap is the *transient approach*, not a separate equilibrium; (2) the bare transient deep gap is **total** (`bDU=1.0`) — a *timing* hole (deep forms ~10 epochs before archivers seat it), not an economic one; (3) a `r_target_deep` floor decaying to ~steady pop collapses it to `bDUf=0.019` with **steady `bondA` unchanged** (no crowd-out — floor not in `R`/`Σwork`); (4) decay schedule is a fine lever (`decay_pop` 40/80/160 → floored gap 0.019/0.019/0.000 — wide safe band); (5) **overshoot is real but modest and is a growth/entry race** (peak `bondA` 83–97 vs steady 76–78; worse on *slow* growth — prolonged high-APR phase), and the shed is **coverage-neutral** (`oUmx=0`, `deep_und` steady ≈0.001 — benign rotation, L9/L11 shape); (6) the stress is the growth/entry mismatch (fast growth 12/epoch > entry 6 ⇒ total gap; slow 3 ⇒ gap 0.009), not the economics. | **RESOLVED (shape derived) — iteration 3.** Disposition confirmed: pin genesis constants for the **thick steady state** (L1/L7); the **population-decaying foundation floor** covers the transient (load-bearing *most* at genesis, withdraws adaptively per `75-system-autonomy.mdc`, does not crowd out entry). Overshoot bounded + coverage-neutral. **Reframes L5/L6:** the floor's bootstrap role is now the primary one; gate-5 sizes the genesis floor + decay schedule. **Residue:** real chain-growth rate, genesis floor size, and safe decay schedule are post-testnet calibrations of an already-understood curve (sign-known/magnitude-unknown, as L9/L10). **Unlocks L13** (fee-era = the budget-shrink mirror of this budget-transfer; the floor's decay reverses into a re-engagement as the market thins). |
-| L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **Open — V3.x economics / iteration 3+.** Model adaptive archival reward-share (per `75-system-autonomy.mdc`, `burn.rs` template) and a price/feedback term; test whether the fee market funds archival of an ever-growing deep history and whether the adaptive mechanism damps the price-coupling loop (an undamped loop is a priority-1 durability failure). |
+| L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **RESOLVED (shape derived) — iteration 3.** Modeled the shrinking purse + price-coupling + adaptive reward-share servo + foundation-floor backstop (gated, legacy byte-identical). Findings: decay thins the attractor along the L11 transfer curve in reverse (coverage knee at terminal subsidy ~80–100); the **oldest tail goes under first** (`oUmx 0.163` at the knee vs `cDeepU 0.057`); the price-coupling spiral is **real** (`bondA` 39→17) but **dampable** by the burn.rs-style servo (`bondA` 17→62, shortfall 1.0→0.21) **conditional** on (a) a *smoothed* trust signal (a reactive servo oscillates) and (b) an adequate fee-market ceiling (below it the servo saturates → graceful loud failure); the L12 floor **re-engages automatically** as the market thins (`bDUf 0.425` vs bare `1.0`). The loop is **not** an undamped priority-1 failure provided the damping apparatus ships; without it, it runs. Residue: live ceiling, coupling strength, terminal-subsidy level, trust horizon are post-testnet empirics. See §*L13 — fee-era end-state*. |
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the unmodeled challenge/audit cadence, not the bond. | **Open — gate 7 / consensus design.** The bond is the capital cost; the challenge frequency + fake-cost + penalty are the operational Sybil/free-rider economics. Model challenge cadence vs. faking cost; couple to retrieval (L15). |
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. | **Open — iteration 3+.** Add per-holder uptime + read-path latency to derive `R_target` from a retrieval-availability target (rather than stipulating it); add a privacy-compatible **diversity axis** (jurisdiction/ASN/implementation) to the spread metric so correlated loss is visible (mission priority 2 tension: diversity measurement must not leak). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **Open — forward consideration, NOT scheduled.** Captured so the eventual transport PR starts from a stated position. The model is **already designed around the worst case** (duration win-or-harmless `L2–L6` per L10 H1/H4; foundation floor backstops the `L6` ceiling), so transport latency is a *bounded, modeled* constraint, not a discovery. **The one transport input that feeds the sim:** whether the heavy path stays pure-rendezvous (worst-case L-regime) or admits a bandwidth-buying relaxation that does **not** link `P` — the lever that sets where Shekyl lands on the `L2–L6` curve. Forks deferred to the transport PR: (1) embed Arti vs. external Tor daemon; (2) keep the I2P secondary door open architecturally (reversion-clause shape); (3) a dedicated privacy threat pass on the rendezvous-forced heavy path (Monero does not lean on that config — no inheritance-by-assumption). |

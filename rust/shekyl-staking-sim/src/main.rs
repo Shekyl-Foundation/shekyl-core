@@ -81,9 +81,14 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  archiver count (baPk - bondA is the OVERSHOOT). L12; all 0/=bondA outside bootstrap."
     );
+    eprintln!(
+        "  feB = FEE-ERA realized purse at end (< budget = subsidy decayed; = ceiling = servo"
+    );
+    eprintln!("  saturated); fDUpk = worst serving deep gap over the run's 2nd half (death-spiral");
+    eprintln!("  read — sustained high = priority-1 failure). L13; =budget/0 outside fee-era.");
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} | {:>6} {:>6}",
         "scenario",
         "axis",
         "bond",
@@ -113,6 +118,8 @@ fn print_summary(results: &[ScenarioResult]) {
         "bDU",
         "bDUf",
         "baPk",
+        "feB",
+        "fDUpk",
     );
 
     for r in results {
@@ -122,7 +129,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} | {:>6.1} {:>6.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -155,6 +162,8 @@ fn print_summary(results: &[ScenarioResult]) {
             r.boot_deep_under_peak,
             r.boot_deep_under_floored_peak,
             r.bonded_active_peak,
+            r.fee_budget_end,
+            r.fee_deep_under_peak,
         );
     }
 

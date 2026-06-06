@@ -118,6 +118,42 @@ pub struct SimConfig {
     /// once the market is this thick). Set near the emergent steady-state archiver count.
     pub floor_decay_pop: f64,
 
+    // L13 fee-era / sustainability axis (mission timeframe 2; inert when `!fee_era`).
+    /// As block subsidy → 0 the archival purse comes from fees / a bounded terminal
+    /// subsidy. When on, the (base) `budget` decays geometrically toward `budget_floor`
+    /// each epoch — the shrinking-subsidy stress. Off ⇒ `budget` is constant (every prior
+    /// scenario), byte-identical.
+    pub fee_era: bool,
+    /// Per-epoch geometric decay of the base budget toward `budget_floor` (the subsidy
+    /// halving / emission taper). `0.0` ⇒ no decay (budget at `budget_floor` forever if
+    /// already there).
+    pub budget_decay: f64,
+    /// **Bounded terminal subsidy** (`00-mission.mdc` timeframe 2): the floor the base
+    /// budget decays to. Coverage at this floor is the pure-terminal-subsidy read; if it
+    /// is below the sustainable purse the market thins and the oldest tail goes under
+    /// (the fee market / adaptive share / floor must close the gap).
+    pub budget_floor: f64,
+    /// **Adaptive archival reward-share servo** (`75-system-autonomy.mdc`, `burn.rs`
+    /// template): when on, the effective purse is raised above the decayed base toward
+    /// `budget_ceiling` in proportion to the observed deep retrieval shortfall — fees
+    /// flow to archival automatically when coverage slips, no manual reset. Off ⇒ the
+    /// purse is just the decayed base (the unmanaged read).
+    pub adaptive_share: bool,
+    /// Proportional gain of the adaptive servo: `budget_eff = base · (1 + gain · shortfall)`
+    /// clamped to `[base, budget_ceiling]`.
+    pub share_gain: f64,
+    /// Fee-market capacity ceiling on the adaptive purse — the most fees *can* fund. If
+    /// the sustainable purse exceeds this, the servo pins at the ceiling and coverage
+    /// stays short: a **graceful loud failure** (the fee market cannot fund the deep
+    /// history; a higher terminal subsidy or the foundation floor is required).
+    pub budget_ceiling: f64,
+    /// **Price-coupling / death-spiral strength.** A deep retrieval shortfall lifts every
+    /// actor's effective reservation by `price_coupling · shortfall` (lost trust ⇒
+    /// expected token depreciation ⇒ higher opportunity cost ⇒ more exit ⇒ worse
+    /// coverage). `0.0` ⇒ no coupling. The L13 question is whether the adaptive servo
+    /// damps this loop (bounded) or it runs away (priority-1 durability failure).
+    pub price_coupling: f64,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -205,6 +241,15 @@ pub struct ScenarioResult {
     /// ≈0 means entry tracked demand monotonically (no overshoot-and-shed). Equals
     /// `bonded_active` outside endogenous runs.
     pub bonded_active_peak: f64,
+    /// **Fee-era realized purse at end** (L13): the budget in the final epoch. Below the
+    /// initial `budget` it shows the subsidy decay; at `budget_ceiling` it shows the
+    /// adaptive servo saturated (fee market maxed). Equals `budget` outside fee-era.
+    pub fee_budget_end: f64,
+    /// **Fee-era worst serving deep gap** (L13): peak serving deep under-target over the
+    /// run's second half — the thinned-tail / death-spiral read. A sustained high value
+    /// is a priority-1 durability failure (the deep tail is unfunded and going dark);
+    /// ≈0 means the decayed purse, adaptive servo, or foundation floor held the tail.
+    pub fee_deep_under_peak: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -287,7 +332,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut rng = Rng::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
 
-    let rp = RewardParams {
+    let mut rp = RewardParams {
         budget: cfg.budget,
         cap: cfg.cap,
         pseudonym_cost: cfg.pseudonym_cost,
@@ -354,6 +399,14 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // steady-state window). Both equal the serving deep under-target outside bootstrap.
     let mut series_boot_deep_under = Vec::with_capacity(cfg.epochs);
     let mut series_boot_deep_floored = Vec::with_capacity(cfg.epochs);
+    // L13 fee-era: the base subsidy decays toward `budget_floor`; the adaptive servo may
+    // top it up toward `budget_ceiling`; the realized purse per epoch is tracked here.
+    // `signal` is the previous epoch's *serving* deep retrieval shortfall (the trust
+    // proxy) — it drives both the servo (top-up) and the price-coupling reservation bump,
+    // a one-epoch-delayed feedback controller. Inert when `!fee_era`.
+    let mut base_budget = cfg.budget;
+    let mut signal = 0.0_f64;
+    let mut series_fee_budget = Vec::with_capacity(cfg.epochs);
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
@@ -371,6 +424,31 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 world.append_shard(0.0);
             }
         }
+
+        // L13 fee-era: shrink the base subsidy toward the terminal floor, then (if the
+        // adaptive servo is on) raise the effective purse toward the fee-market ceiling in
+        // proportion to last epoch's deep retrieval shortfall. The realized `rp.budget`
+        // drives this epoch's reward share. `res_add` is the price-coupling reservation
+        // bump applied at exit. Inert when `!fee_era` (purse stays `cfg.budget`).
+        let res_add = if cfg.fee_era {
+            base_budget =
+                cfg.budget_floor + (base_budget - cfg.budget_floor) * (1.0 - cfg.budget_decay);
+            let budget_eff = if cfg.adaptive_share {
+                // Servo raises the purse with the shortfall, bounded by the fee-market
+                // ceiling. The cap is `max(base, ceiling)`: in the thinned end-state the
+                // base has decayed below the ceiling and the ceiling binds the top-up; if
+                // the base subsidy still exceeds the ceiling (early transition), the
+                // subsidy flows unimpeded (the ceiling caps fees, not the subsidy).
+                let cap_hi = base_budget.max(cfg.budget_ceiling);
+                (base_budget * (1.0 + cfg.share_gain * signal)).min(cap_hi)
+            } else {
+                base_budget
+            };
+            rp.budget = budget_eff;
+            cfg.price_coupling * signal
+        } else {
+            0.0
+        };
 
         // L11 entry: trickle inactive actors into the active set (inert when
         // `entry_per_epoch == 0`, i.e. every non-endogenous scenario).
@@ -473,10 +551,21 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // holdings. Realized rewards come from the just-computed `last_eval`. Inert when
         // `!endogenous`.
         if cfg.endogenous {
-            process_exits(&mut world, &last_eval, &ap, &pp);
+            process_exits(&mut world, &last_eval, &ap, &pp, res_add);
         }
         series_active.push(world.active.iter().filter(|&&x| x).count());
         series_bonded_active.push(bonded_active_count(&world, &ap));
+
+        // L13: record the realized purse and refresh the feedback signal. The signal is an
+        // EMA of the *serving* deep shortfall, not its instantaneous value — trust/price is
+        // STICKY (it does not snap to "fine" after one good epoch, nor crater after one bad
+        // one). The smoothing is load-bearing: a servo (or depreciation premium) keyed to
+        // the raw shortfall relaxes the instant coverage is briefly met, which — with
+        // rate-limited entry and hysteretic exit — lets the population bleed back down and
+        // oscillate; the EMA holds the response across the few epochs entry needs to
+        // rebuild. λ=0.25 ⇒ ~4-epoch trust horizon. Drives next epoch's servo + coupling.
+        signal = 0.75 * signal + 0.25 * serving_metrics.deep_frac_under_target;
+        series_fee_budget.push(rp.budget);
     }
 
     let total_held: usize = (0..world.actors.len())
@@ -558,6 +647,25 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .copied()
         .fold(0.0_f64, f64::max);
     let bonded_active_peak = series_bonded_active.iter().copied().max().unwrap_or(0) as f64;
+    // L13 fee-era aggregates. `fee_budget_end` is the realized purse averaged over the
+    // steady read window — how far the subsidy decayed and how much the adaptive servo
+    // topped it up (≈`budget_ceiling` ⇒ the fee market is saturated). A windowed mean, not
+    // the final epoch, since the proportional servo can ripple epoch-to-epoch.
+    // `fee_deep_under_peak` is the worst *serving* deep retrieval gap over the run's
+    // **second half** (the thinned end-state, excluding any warm-up): a sustained high
+    // value is the death-spiral / unsustainable read; ≈0 means the purse (decayed base, or
+    // servo, or floor) held the deep tail.
+    let fb_window = &series_fee_budget[series_fee_budget.len() - w..];
+    let fee_budget_end = if w > 0 {
+        fb_window.iter().sum::<f64>() / w as f64
+    } else {
+        cfg.budget
+    };
+    let half = series_serving_deep_under.len() / 2;
+    let fee_deep_under_peak = series_serving_deep_under[half..]
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max);
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -588,6 +696,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         boot_deep_under_peak,
         boot_deep_under_floored_peak,
         bonded_active_peak,
+        fee_budget_end,
+        fee_deep_under_peak,
         claims: SubClaims {
             covered,
             spread,
@@ -669,6 +779,15 @@ fn baseline() -> SimConfig {
         shard_growth_per_epoch: 0,
         floor_replicas: 0,
         floor_decay_pop: 0.0,
+        // L13: constant budget by default (every pre-L13 scenario). The fee-era
+        // scenarios opt in.
+        fee_era: false,
+        budget_decay: 0.0,
+        budget_floor: 0.0,
+        adaptive_share: false,
+        share_gain: 0.0,
+        budget_ceiling: 0.0,
+        price_coupling: 0.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1309,6 +1428,122 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.axis = "bootstrap_growth".into();
         c.shard_growth_per_epoch = growth;
         c.floor_replicas = 0;
+        out.push(c);
+    }
+
+    // --- L13: fee-era end-state / sustainability (mission timeframe 2, ~30 yr). L11/L12
+    // settled the steady-state attractor and the cold-start approach to it *at a fixed
+    // purse*. L13 asks the other end: as block subsidy → 0 the archival purse comes from
+    // fees / a bounded terminal subsidy, so the purse SHRINKS. Mature chain (dynamic full
+    // window, deep history present and aging), start at a healthy population, then decay
+    // the subsidy toward `budget_floor` and read: (a) does the lean equilibrium thin and
+    // the OLDEST tail go under first (the irreplaceable band)? (b) with price coupling on,
+    // does coverage collapse run away (death spiral) or stay bounded? (c) does the
+    // adaptive reward-share servo (burn.rs template) damp it, and where does the fee-market
+    // ceiling turn damping into a graceful loud failure? (d) does the L12 foundation floor
+    // RE-ENGAGE as the market thins (its decay schedule run in reverse)? Reuses the L11
+    // interior economics (ρ=0.02, pool 240, entry 6/epoch), starting full and well-funded
+    // (budget 200 ⇒ bondA well above the ~80 knee) so the decay sweeps DOWN through the
+    // L11 transfer curve. ---
+    let l13_base = || {
+        let mut c = l11_base();
+        c.dynamic = true; // mature aging frontier: deep history continuously produced
+        c.epoch_aging = 0.05;
+        c.init_active_frac = 1.0; // start full/healthy, let the shrinking purse thin it
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        c.budget = 200.0; // well-funded at t=0 (above the L11 ~budget-100 coverage knee)
+        c.fee_era = true;
+        c.budget_decay = 0.02; // subsidy taper toward the terminal floor over the run
+        c.epochs = 200;
+        c.churn_window = 60; // steady-state (thinned end-state) read window
+        c
+    };
+
+    // (1) DECAY / terminal-subsidy sweep: no servo, no coupling, no floor — the bare
+    // shrinking-purse read. Vary the terminal `budget_floor` the subsidy decays to. As the
+    // floor drops below the sustainable purse (~100 from the L11 transfer), the emergent
+    // `bondA` thins and the deep tail goes under — `serving_oldest_under_max` should light
+    // up FIRST (the oldest band is the most data / least fresh-fee-activity, the
+    // irreplaceable band most exposed). Locates the minimum viable terminal subsidy.
+    for (label, floor) in [
+        ("hi", 100.0_f64),
+        ("knee", 80.0),
+        ("mid", 60.0),
+        ("lo", 40.0),
+        ("min", 20.0),
+    ] {
+        let mut c = l13_base();
+        c.name = format!("l13_decay_{label}");
+        c.axis = "fee_decay".into();
+        c.budget_floor = floor;
+        out.push(c);
+    }
+
+    // (2) DEATH-SPIRAL: price coupling on, unsustainable floor, NO servo. A deep retrieval
+    // shortfall lifts every reservation (lost trust ⇒ expected depreciation), forcing more
+    // exit, deepening the shortfall. If `fee_deep_under_peak` runs to ~1 and `bondA`
+    // collapses, the loop is undamped — a priority-1 durability failure absent a damping
+    // mechanism. This is the unmanaged fee-era at the bad end.
+    {
+        let mut c = l13_base();
+        c.name = "l13_spiral".into();
+        c.axis = "fee_spiral".into();
+        c.budget_floor = 40.0;
+        c.price_coupling = 0.10;
+        out.push(c);
+    }
+
+    // (3) ADAPTIVE SERVO damps the spiral: same coupling + the burn.rs-style reward-share
+    // servo with an adequate ceiling. When coverage slips, the servo raises the purse
+    // toward `budget_ceiling`, clearing more archivers and closing the shortfall before the
+    // coupling can run away. `fee_deep_under_peak` low + `fee_budget_end` elevated (servo
+    // topped the purse up) is the damped result the autonomy rule requires.
+    {
+        let mut c = l13_base();
+        c.name = "l13_servo".into();
+        c.axis = "fee_servo".into();
+        c.budget_floor = 40.0;
+        c.price_coupling = 0.10;
+        c.adaptive_share = true;
+        c.share_gain = 8.0;
+        c.budget_ceiling = 200.0; // adequate fee-market capacity
+        out.push(c);
+    }
+
+    // (4) CEILING sweep: the servo can only draw what the fee market provides. Sweep the
+    // ceiling across the sustainable purse (~100). Below it the servo pins at the ceiling
+    // and coverage stays short — a GRACEFUL LOUD FAILURE (fees cannot fund the deep
+    // history; a higher terminal subsidy or the foundation floor is required). Above it the
+    // servo damps. `fee_budget_end` at the ceiling with a high `fee_deep_under_peak` is the
+    // saturated-and-still-short signature.
+    for (label, ceil) in [("lo", 70.0_f64), ("mid", 110.0), ("hi", 200.0)] {
+        let mut c = l13_base();
+        c.name = format!("l13_ceiling_{label}");
+        c.axis = "fee_ceiling".into();
+        c.budget_floor = 40.0;
+        c.price_coupling = 0.10;
+        c.adaptive_share = true;
+        c.share_gain = 8.0;
+        c.budget_ceiling = ceil;
+        out.push(c);
+    }
+
+    // (5) FOUNDATION FLOOR re-engagement: the L12 floor decay schedule, run in REVERSE. The
+    // floor is `floor0 · max(0, 1 − pop/decay_pop)` — in bootstrap `pop` rises and the floor
+    // withdraws; in the fee-era `pop` THINS as the purse shrinks, so the floor automatically
+    // re-engages. Decay (unsustainable floor) + foundation floor, no servo: the bare deep
+    // gap (`boot_deep_under_peak`) is large as the market thins, but the FLOORED gap
+    // (`boot_deep_under_floored_peak`) stays ≈0 — retrieval coverage held by the foundation
+    // backstop without paying the staker servo. The one non-market capacity source is
+    // load-bearing at BOTH ends (genesis and fee-era), as the unifying note predicts.
+    {
+        let mut c = l13_base();
+        c.name = "l13_floor".into();
+        c.axis = "fee_floor".into();
+        c.budget_floor = 40.0;
+        c.floor_replicas = 6; // = r_target_deep
+        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
         out.push(c);
     }
 
