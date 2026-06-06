@@ -517,6 +517,43 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(ca);
     }
 
+    // --- L9 resolver: the duration NECESSITY-AND-COST sweep in a thick/surplus regime.
+    // The thin `dur_` sweep above confounds both halves of the duration question: at
+    // near-zero deep margin, holders flip easily (the churn duration would fix) AND any
+    // anticipated lock flips them negative (the steep ceiling) — so "duration unnecessary"
+    // and "duration merely unaffordable" look identical. The surplus regime changes the
+    // holder *distribution*: a generous budget + strong deep premium (high g) + ample
+    // storage seat many *inframarginal* deep holders carrying a buffer. There we can
+    // finally separate (a) NECESSITY — does oldest-band churn persist when holders aren't
+    // on the knife-edge? — from (b) COST — anticipation should now cost a *gentle*
+    // participation trim (marginal entrants drop, inframarginal holders tolerate the lock)
+    // rather than a cliff. Three decision-useful outcomes: churn dissolves → duration
+    // retires (L4 closes flat-no-duration, reversion discharged); churn persists + gentle
+    // cost → adopt duration as the tail-churn tool with a known price; churn persists +
+    // steep cost even at surplus → a real bind pointing at a foundation permafloor on the
+    // oldest tail rather than a market mechanism. Flat magnitude throughout (L4). ---
+    let surplus_base = || {
+        let mut c = dyn_base();
+        c.age_weight = 4.0; // strong deep premium → deep pays well above cost
+        c.budget = 300.0; // ample reward pool → holders sit inframarginal, not knife-edge
+        c.storage_scale = 1.6; // ample storage → coverage is not the binding constraint
+        c
+    };
+    for (label, dscale) in [("s0", 0.0), ("s2", 2.0), ("s4", 4.0)] {
+        let mut c = surplus_base();
+        c.name = format!("surp_{label}");
+        c.axis = "bond_duration_surplus".into();
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
+
+        let mut ca = surplus_base();
+        ca.name = format!("surp_{label}_antic");
+        ca.axis = "bond_duration_surplus".into();
+        ca.bond_dur_age_scale = dscale;
+        ca.lock_anticipation = 0.25;
+        out.push(ca);
+    }
+
     // --- L8: the (bond-level × deep-shard-size) PAIR sweep. L8 says neither leg moves
     // the co-located pool alone — lowering the bond recruits the storage-rich, shrinking
     // the deep shard recruits the capital-rich, and deep durability needs the *joint*

@@ -14,12 +14,15 @@ co-location starvation the aggregate ratio missed: `bscale_s0` reads `0.86 < 1` 
 aggregate `3.24`) matching `deep_und 0.75`. (ii) The **(bond × shard-size) pair sweep**
 confirms L8's joint claim — neither leg moves coverage alone (low bond + big shard, or
 small shard + high bond, each still starve), only the *pair* clears deep, exactly when the
-min-form crosses 1. (iii) **Age-scaled bond *duration* (L9)** damps oldest-band churn
-under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) without suppressing
-participation; under anticipatory agents a **willingness ceiling** appears and is *steep*
-(deep acquisition collapses) because deep's coverage margin is thin in this regime — the
-clean churn-vs-participation gradient is gate-4 fine-sweep work in a positive-margin
-regime. The 1c result, **L4 resolved**: keep flat bond *magnitude*
+min-form crosses 1. (iii) **Age-scaled bond *duration* (L9) is RESOLVED — adopt it.** A
+thin/surplus pair sweep separates the two halves the thin regime confounds: oldest-band
+churn *persists at surplus* (`oChrn 0.251` at flat duration with deep fully covered — so
+the churn is structural, not a knife-edge artifact → duration is *necessary*), and
+age-scaled duration damps it (`0.251 → 0.084`) while anticipation costs *zero* coverage at
+surplus (`deep_und 0` on every anticipatory row → the thin-regime collapse was a pure
+margin artifact → the cost is *gentle*). Outcome: flat magnitude **plus** age-scaled
+duration; the L4 reversion trigger (oldest-band churn) fires even at surplus, so duration
+is in, and gate-4's duration axis is pre-settled to a level-tuning question. The 1c result, **L4 resolved**: keep flat bond *magnitude*
 (durability survival arithmetic — redundancy dominates per-holder reliability, so the
 irreplaceable tail wants the *most distinct holders* → the *most accessible* bond, never
 scaled up; age-scaling magnitude flips the binding constraint from the tractable `dS/dN`
@@ -598,10 +601,13 @@ specifically** — coverage present but oscillating, holders cycling off the irr
 shards (the `oChrn` metric on the deepest band). If the oldest-band churn sub-claim holds,
 flat magnitude without any duration term is the final shape and L9 stays parked. If it
 *fails on the tail*, that — and only that — is when age-scaled **duration** (never
-magnitude) earns its complexity. Iteration 2 exercises exactly this: under myopic agents
-the trigger does fire (`oChrn 0.215` at flat duration) and age-scaled duration damps it
-(`→ 0.108`), so duration has a demonstrated job; the open question its fine-tuning leaves
-for gate 4 is the willingness-ceiling tradeoff (below).
+magnitude) earns its complexity. Iteration 2 exercises exactly this and **discharges
+the clause with evidence**: the trigger fires not only thin (`oChrn 0.215`) but *at
+surplus* (`oChrn 0.251`, deep fully covered), so the churn is structural and flat-no-duration
+is incomplete; age-scaled duration damps it (`→ 0.084`) and, in the surplus regime,
+anticipation costs zero coverage — so duration is **adopted**, not parked (see §*L9
+resolver*). Magnitude stays flat regardless; duration is the separate knob that carries the
+commitment horizon.
 
 **The genuinely new gate-inputs:** the **co-location finding (L8)** — deep durability
 needs actors rich on storage *and* bond-capital jointly (or a foundation/whale
@@ -698,15 +704,61 @@ Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
   duration roughly halves oldest-band churn (`0.215 → 0.108`) while the oldest residual
   stays ≈0 — exactly the commitment-horizon job, with no affordability cost (the affording
   pool is unchanged, as designed).
-- **Anticipatory: the willingness ceiling exists and is *steep*.** With even modest
-  anticipation (0.25), forward-looking agents collapse deep acquisition (`oldU ≈ 0.98`)
-  rather than grading down smoothly with scale. The cause is regime-specific: deep's
-  coverage margin is *thin* here (deep `R ≈ R_target`, so the marginal deep shard's net is
-  ≈0), and any anticipated lock cost flips it negative. The honest reading is that the
-  ceiling is real and sharp when deep is marginal; the clean churn-vs-participation
-  gradient (a duration horizon that damps churn *without* tripping the ceiling) only
-  appears where deep has positive margin — a **gate-4 fine-sweep** in a higher-`g` /
-  higher-provisioning regime, which is exactly where L9 said duration calibration belongs.
+- **Anticipatory (thin regime): the result is *confounded*, not concludable.** With even
+  modest anticipation (0.25), forward-looking agents collapse deep acquisition
+  (`oldU ≈ 0.98`). But at thin margin (deep `R ≈ R_target`, marginal deep net ≈ 0) the
+  *same* near-zero-net condition produces *both* the churn duration would fix (holders flip
+  easily) *and* the steep ceiling (any anticipated lock flips them negative). So the thin
+  sweep **cannot distinguish "duration is unnecessary" from "duration is merely
+  unaffordable"** — at this margin they are the same amplification seen from two sides. The
+  thin regime is therefore not a parkable gate-4 unknown; it says nothing. The **surplus
+  regime below** is the only place the two halves come apart.
+
+### L9 resolver — necessity and cost separated (surplus regime)
+
+The surplus sweep (`surp_*`: `g = 4`, `budget = 300`, `storage_scale = 1.6`) changes the
+holder *distribution* — generous reward + strong deep premium + ample storage seat many
+*inframarginal* deep holders carrying a buffer (deep is fully covered, `deep_und = 0`, on
+every row, so the regime is genuinely surplus, not merely well-provisioned).
+
+| scenario | agents | `oChrn` (oldest-band churn) | `oldU` | `deep_und` |
+|---|---|---|---|---|
+| `surp_s0` | myopic | 0.251 | 0.000 | 0.000 |
+| `surp_s2` | myopic | 0.110 | 0.000 | 0.000 |
+| `surp_s4` | myopic | 0.084 | 0.000 | 0.000 |
+| `surp_s0_antic` | anticipatory (0.25) | 0.137 | 0.000 | 0.000 |
+| `surp_s2_antic` | anticipatory (0.25) | 0.045 | 0.000 | 0.000 |
+| `surp_s4_antic` | anticipatory (0.25) | 0.010 | 0.000 | 0.000 |
+
+The two halves now separate cleanly, and they land on **outcome 2** (of the three the
+resolver was set up to distinguish):
+
+- **Necessity — churn *persists* at surplus.** Flat-duration `surp_s0` churns `oChrn = 0.251`
+  — *higher* than the thin `dur_s0` (0.215), with coverage complete throughout. The oldest
+  tail oscillates even when holders carry a buffer, so the churn is **structural to the
+  frontier-window dynamics, not a knife-edge artifact**. Outcome 1 (churn dissolves with
+  surplus → duration retires) is ruled out: duration has a real job.
+- **Duration damps it, coverage intact.** `surp_s0 → s2 → s4` = `0.251 → 0.110 → 0.084`
+  (≈3×), with `deep_und = 0` the whole way — the tail-churn tool works in the regime that
+  matters.
+- **Cost — gentle, not a cliff.** The thin-regime collapse was a **pure margin artifact**:
+  at surplus, anticipation costs *zero* coverage (`deep_und = 0.000`, `oldU = 0.000` on
+  every `_antic` row) and in fact *further* reduces churn (`surp_s0` 0.251 → 0.137;
+  `surp_s4` 0.084 → 0.010), because forward-looking holders who do acquire commit more
+  stably. The willingness ceiling is affordable precisely where deep coverage has a buffer.
+- **Internal validation of "surplus."** If holders were knife-edge, anticipation would
+  collapse them as in the thin regime; it does not (`deep_und` stays 0). The buffer is
+  real, which is what licenses reading the necessity and cost answers as separated.
+
+**Resolution (L9): adopt age-scaled bond *duration* as the oldest-tail churn tool.** Churn
+persists with surplus (necessity established) and its participation cost is gentle in the
+well-provisioned regime (cost established). The L4 reversion trigger — oldest-band churn —
+*fires even at surplus*, so flat-magnitude-**no-duration** is not the final shape; flat
+magnitude **plus** age-scaled duration is. Gate 4's duration axis is thereby pre-settled:
+it tunes the horizon level, not the in-or-out question. (Outcome 3 — churn persists with a
+steep cost even at surplus, which would have pointed at a foundation permafloor instead of
+a market mechanism — is *not* what the evidence shows; the market duration mechanism
+suffices.)
 
 ### Iteration-2 caveats
 
@@ -716,6 +768,12 @@ Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
 - The dynamic world's recycling and lock dynamics are a minimal churn model, sufficient to
   give duration a job and to expose the willingness ceiling; richer arrival/exit processes
   are a later refinement if the gate-4 duration sweep needs them.
+- The surplus regime (`surp_*`) is a constructed *thick* counterpart to the thin `dur_*`
+  sweep — its specific levers (`g = 4`, `budget = 300`, `storage_scale = 1.6`) are chosen
+  to seat inframarginal deep holders, not calibrated to a target chain state. What carries
+  forward is the *separation* it produces (churn persists at surplus; anticipation costs no
+  coverage there), not the magnitudes. The thin/surplus pair spans gate-4 (duration) ×
+  gate-5 (thickness) — the same joint shape the L8 re-entanglement established.
 - `deep_shard_size = 1.0` keeps every prior (iteration-1) scenario byte-identical; only the
   pair sweep varies it.
 
@@ -737,7 +795,7 @@ where a decision is provisional.
 | L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
 | L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state to **seat the residual on the shoulder** (L1 — coverage matched to `R_target(age)`); let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
-| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude (opportunity-cost on *willingness*, not a hard affordability gate). **Iteration 2 (built + run):** in a dynamic recycling world, age-scaled duration damps oldest-band churn under myopic agents (`oChrn 0.215 → 0.108` across scale `{0,2,4}`) with `oldU ≈ 0` — horizon-matching with no affordability cost, as designed. Under anticipatory agents a **willingness ceiling** appears and is *steep* (`oldU ≈ 0.98`, deep acquisition collapses) because deep's margin is thin here (marginal deep net ≈ 0, so any anticipated lock flips it negative). | **Decided (axis confirmed); fine-tune deferred to gate 4.** Model split landed (magnitude flat, duration age-scaled, dynamic churn). Myopic damping confirms duration has a real job; the L4 reversion trigger (oldest-band churn) *fires* at flat duration and duration quells it. The clean churn-vs-participation gradient (damp churn without tripping the ceiling) needs a **positive-margin regime** (higher `g`/provisioning) — that is the gate-4 fine sweep. **Reopen condition for *not* shipping duration:** if gate-4's positive-margin sweep shows flat duration already passes the oldest-band churn sub-claim, duration stays parked (L4 reversion). |
+| L9 | **Age-scaled bond *duration*** (gate 4, second axis) | The commitment-horizon job the tier system did belongs in the bond's **duration**, not magnitude (opportunity-cost on *willingness*, not an affordability gate). The **thin** dynamic sweep confounds the question: at near-zero deep margin the *same* condition produces both the churn (holders flip) and the steep ceiling (anticipation flips them negative), so it cannot tell "unnecessary" from "unaffordable." The **surplus** sweep (`surp_*`: `g=4`, `budget=300`, `storage_scale=1.6`; deep fully covered, holders inframarginal) separates them: oldest-band churn **persists** (`oChrn 0.251` at flat duration, *higher* than thin — structural, not knife-edge) and duration damps it (`0.251 → 0.084`); anticipation costs **zero** coverage at surplus (`deep_und 0`, `oldU 0` on every `_antic` row) and further lowers churn (`0.251 → 0.137`). | **RESOLVED: adopt age-scaled duration (outcome 2).** Necessity established (churn persists at surplus) and cost is gentle (the thin-regime collapse was a margin artifact). Final bond shape: **flat magnitude + age-scaled duration**. The L4 reversion trigger (oldest-band churn) *fires even at surplus*, so flat-no-duration is not the final shape. Gate 4's duration axis is pre-settled to **level tuning** (which horizon), not in/out. Outcome 3 (steep cost even at surplus → foundation permafloor) is *not* observed; the market mechanism suffices. |
 
 ### Robustness-sweep verdicts (which findings are structural)
 
