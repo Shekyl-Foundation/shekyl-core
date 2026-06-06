@@ -96,7 +96,19 @@ pub struct ScenarioResult {
     pub final_metrics: CoverageMetrics,
     pub churn: f64,
     /// Churn rate restricted to the deepest age band (L9: the duration knob's target).
+    /// This is the **abandonment-rate** (flips ÷ held), *not* a coverage-stability
+    /// metric — high `oldest_churn` with zero coverage gap is benign rotation when the
+    /// frontier backfills.
     pub oldest_churn: f64,
+    /// **Oldest-band coverage oscillation** (L9 necessity): max oldest-band `frac_under`
+    /// over the churn window — the coverage-instability diagnostic the churn sub-claim
+    /// actually names. `> 0` under flat duration means abandonment is producing real
+    /// coverage gaps (a holder drops with no replacement standing by); `→ 0` under
+    /// age-scaled duration is direct necessity. At surplus this is ≈0 by construction
+    /// (slack backfills), so it only discriminates at the lean equilibrium.
+    pub oldest_under_max: f64,
+    /// Variance of oldest-band `frac_under` over the churn window (oscillation amplitude).
+    pub oldest_under_var: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -186,6 +198,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let old_lo = (N_BANDS - 1) as f64 / N_BANDS as f64;
     let mut series_old_changes = Vec::with_capacity(cfg.epochs);
     let mut series_old_held = Vec::with_capacity(cfg.epochs);
+    // Oldest-band coverage oscillation (L9 necessity): the per-epoch under-target fraction
+    // of the deepest band. Abandonment (above) is benign if this stays at 0.
+    let mut series_old_under = Vec::with_capacity(cfg.epochs);
 
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
@@ -227,6 +242,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         series_deep_frac_under.push(last_metrics.deep_frac_under_target);
         series_gini_actor.push(last_metrics.gini_actor);
         series_changes.push(changes);
+        series_old_under.push(
+            last_metrics
+                .bands
+                .last()
+                .map(|b| b.frac_under)
+                .unwrap_or(0.0),
+        );
     }
 
     let total_held: usize = (0..world.actors.len())
@@ -245,6 +267,17 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     };
     let oldest_churn = if old_held_mean > 0.0 {
         (old_changes_sum as f64 / w as f64) / old_held_mean
+    } else {
+        0.0
+    };
+    // Oldest-band coverage oscillation over the same window: max and variance of the
+    // under-target fraction. This is the L9 *necessity* metric (abandonment turning into
+    // coverage gaps), distinct from the abandonment rate above.
+    let ou_window = &series_old_under[series_old_under.len() - w..];
+    let oldest_under_max = ou_window.iter().copied().fold(0.0_f64, f64::max);
+    let oldest_under_var = if w > 0 {
+        let mean = ou_window.iter().sum::<f64>() / w as f64;
+        ou_window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / w as f64
     } else {
         0.0
     };
@@ -268,6 +301,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         final_metrics: last_metrics,
         churn,
         oldest_churn,
+        oldest_under_max,
+        oldest_under_var,
         claims: SubClaims {
             covered,
             spread,
@@ -552,6 +587,64 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         ca.bond_dur_age_scale = dscale;
         ca.lock_anticipation = 0.25;
         out.push(ca);
+    }
+
+    // --- L9 lean-equilibrium PROBE: find the just-covering operating point (R ≈ R_target,
+    // buffer removed) where coverage oscillation — not benign rotation — is the diagnostic.
+    // Surplus over-provisions (slack backfills, masking duration); thin under-covers. The
+    // chain's real operating point is the zero-profit entry equilibrium in between. Sweep
+    // storage provisioning at the deep-priority g, flat duration, and read `oUmx` (oldest-
+    // band coverage oscillation): the lean point is the lowest provisioning where mean
+    // deep coverage is ~complete but `oUmx > 0`. ---
+    for (label, ss) in [
+        ("p090", 0.90),
+        ("p100", 1.00),
+        ("p115", 1.15),
+        ("p130", 1.30),
+    ] {
+        let mut c = dyn_base();
+        c.name = format!("lean_probe_{label}");
+        c.axis = "lean_probe".into();
+        c.age_weight = 4.0;
+        c.budget = 150.0;
+        c.storage_scale = ss;
+        out.push(c);
+    }
+
+    // --- L9 lean-equilibrium OSCILLATION test: the decision-relevant necessity check.
+    // The surplus resolver established cost (gentle) but cannot answer necessity: its slack
+    // is itself a coverage-stability mechanism, so it tests duration in the one regime where
+    // it isn't needed. The probe above locates the lean operating point — the oldest band at
+    // R ≈ R_target (mean_r ≈ 6 = target, buffer removed), the zero-profit entry equilibrium
+    // the chain actually runs at. Here the failure mode the churn sub-claim *names* —
+    // coverage oscillation (oldest-band frac_under dipping > 0, a holder dropping with no
+    // replacement standing by) rather than abandonment (benign turnover) — can finally
+    // manifest if it exists. Stress backfill with faster aging (more retire/recycle per
+    // epoch) at lean capacity, flat (s0) vs age-scaled (s4) duration, and read `oUmx`
+    // (oldest-band coverage oscillation, the necessity metric) — NOT `oChrn` (abandonment).
+    // Prediction (rule-21 honesty): if `oUmx > 0` under flat and → 0 under age-scaled,
+    // necessity is DIRECT (duration buys lean-and-stable operation). If `oUmx ≈ 0` under
+    // both, the abandonment is benign rotation, duration prevents a non-problem at the
+    // operating point, and L9 necessity stays INFERRED with the reversion axis open. ---
+    let lean_base = || {
+        let mut c = baseline();
+        c.dynamic = true;
+        c.epochs = 80;
+        c.bond_dur_base = 4.0;
+        c.age_weight = 3.0; // deep premium present but not over-defending the oldest band
+        c.budget = 120.0; // tuned so the oldest band sits at R ≈ R_target (lean, no buffer)
+        c.storage_scale = 1.0; // no storage slack — capacity is the bind, not abundance
+        c
+    };
+    for (alabel, aging) in [("a05", 0.05), ("a10", 0.10), ("a20", 0.20)] {
+        for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+            let mut c = lean_base();
+            c.name = format!("lean_osc_{alabel}_{dlabel}");
+            c.axis = "lean_oscillation".into();
+            c.epoch_aging = aging;
+            c.bond_dur_age_scale = dscale;
+            out.push(c);
+        }
     }
 
     // --- L8: the (bond-level × deep-shard-size) PAIR sweep. L8 says neither leg moves

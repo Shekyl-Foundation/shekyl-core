@@ -51,10 +51,16 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("  affording_actors >= R_target(deepest) (capital-leg distinct count); oldU/wB4 =");
     eprintln!("  oldest-band residual/whale share.");
     eprintln!();
-    eprintln!("  oChrn = oldest-band churn rate (flips/held-epoch in the deepest band; L9 duration target).");
+    eprintln!(
+        "  oChrn = oldest-band churn rate (flips/held-epoch in the deepest band; L9 abandonment)."
+    );
+    eprintln!(
+        "  oUmx  = max oldest-band frac_under over the window (L9 NECESSITY: coverage oscillation;"
+    );
+    eprintln!("          abandonment is benign rotation unless this is > 0 — discriminates only at lean).");
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6}",
         "scenario",
         "axis",
         "bond",
@@ -75,6 +81,7 @@ fn print_summary(results: &[ScenarioResult]) {
         "oldU",
         "wB4",
         "oChrn",
+        "oUmx",
     );
 
     for r in results {
@@ -84,7 +91,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -108,6 +115,7 @@ fn print_summary(results: &[ScenarioResult]) {
                 None => "-".into(),
             },
             r.oldest_churn,
+            r.oldest_under_max,
         );
     }
 
