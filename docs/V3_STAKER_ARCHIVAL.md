@@ -194,14 +194,16 @@ mutable state for a bug to corrupt.
 
 ### Tier interaction: lock duration as archival commitment depth
 
-> **Superseded in steady state by *Pay-for-service rebasing* below (the tier
-> decision, gate 4).** The tier-weighted pricing described here is the **tier
-> oracle** F-ARCHIVAL identifies: it makes the public shard-set Bayesian evidence
-> of the backing stake's tier. The rebasing replaces tier-weighted pricing with
-> **tier-neutral, longevity-priced** critical-shard stability, recovering the
-> coverage property without the tier disclosure. Read this subsection as the
-> rationale for the property longevity-pricing must reproduce (deep-history
-> retention-horizon matching), not the current target.
+> **Superseded in steady state by *Pay-for-service rebasing* below (the keystone /
+> gate 4).** The tier-weighted pricing described here is the **tier oracle**
+> F-ARCHIVAL identifies: it makes the public shard-set Bayesian evidence of the
+> backing stake's tier. The rebasing **deletes the staker tier** and recovers the
+> deep-history retention-horizon matching it provided with a **slashable per-shard
+> retention bond** — *not* with demonstrated-longevity, which is a past signal that
+> cannot bind future retention (an earlier draft proposed longevity-pricing for this
+> and is corrected by the keystone). Read this subsection as the rationale for the
+> property the per-shard bond must reproduce (deep-history retention-horizon
+> matching), not the current target.
 
 The existing tier system serves double duty.
 
@@ -342,6 +344,16 @@ two-stream / consensus-bond framing in *Decoupling* and the tier-elegance in
 *Tier interaction* above. Gated on the simulation work and a fresh soundness
 pass (the gate-list at the end of this section) before it is consensus-real.**
 
+**Why this is a genesis-class decision, not a deferrable privacy refinement.**
+Capital-bonded yield has **no justification in the fee-only era**: paying new
+emission to lock idle coins is precisely the rent `00-mission.mdc` forbids, and it
+is the one part of the staking design that *cannot re-justify itself* once the
+block subsidy ends. Archival demand and its burn-redirect funding both persist past
+the subsidy; capital-bonded yield does not. So this is not a refinement that could
+land in V3.x — it is the version of staking that survives the chain's own lifecycle
+(now / mining-era-end / fee-only), which is what makes pre-genesis the right (and
+bounded) time to obsolete the partially-built confidential-yield subsystem.
+
 This section follows the *Problem 1* enumeration ("what useful work do stakers
 do?") all the way down and changes the answer's shape. The earlier draft answered
 "decouple two kinds of work and pay two streams." Walking every candidate service
@@ -364,7 +376,10 @@ Enumerating every candidate, the others are not services staking renders:
   against*. Here the principal is slashable for **nothing**: consensus is not
   staking's job, and the *Decoupling* design explicitly keeps archival failure off
   the principal. A bond that cannot be slashed for any network failure is not
-  bonding anything; it is locked coins.
+  bonding anything; it is locked coins. (The keystone below restores a *genuinely*
+  slashable bond — the **per-shard retention bond** — which bonds the actual
+  service, distinct from the never-slashed principal. So capital does not leave; it
+  is re-based from idle-principal-yield to slashable-per-shard-collateral.)
 - **Supply / monetary effects — real, but not a service, and the machinery is not
   needed for it.** Locking coins reduces circulating supply, but *anyone* achieves
   that by not spending — no claims, tiers, nullifiers, or membership proofs
@@ -397,10 +412,12 @@ not via an escape hatch that should not exist.
 - **Principal becomes locked collateral, not yield-bearing-for-being-a-bond.** It
   always returns at unlock and is **never slashed** (preserving the resilience
   rationale of *Decoupling*: an infra outage costs reward, not principal, so a
-  staker does not rage-unstake). The lock stops being a yield multiplier and
-  becomes three things: the **price of admission**, the **per-pseudonym Sybil
-  cost** (below), and a **credibility/longevity signal** (longer lock buys
-  deeper-archival standing, not a larger yield coefficient).
+  staker does not rage-unstake). The lock stops being a yield multiplier and becomes
+  a **small eligibility gate** only. The Sybil cost and the deep-archival commitment
+  are carried **not** by the lock but by the **per-shard retention bonds** (the
+  keystone, below) — which is what *de-overloads* the lock: the lock can stay small
+  (the monetary supply-sink knob) while the bonds scale (the anti-hoard / anti-Sybil
+  capital), two separate parameters instead of one pulled two ways.
 
 ### The firewalled-pseudonym identity model
 
@@ -456,19 +473,59 @@ stakes could back P. The fix is **tier-neutral shard pricing** — price purely 
 replication scarcity (the BitTorrent insight), so any tier profitably holds any
 shard and the sorting disappears.
 
-But tier-weighting was buying something real: **coverage stability for critical
-shards** (tier-1 churn creates gaps). Recover that **without** the oracle by
-pricing the critical-shard stability premium on **demonstrated holding-longevity
-rather than tier-class**: a holder who keeps a shard a long time earns the stability
-premium *regardless of tier*; a churner does not, regardless of tier. Longevity is
-observable under the pseudonym but **is not tier** (a re-staking tier-1 holder can
-be stable; a tier-3 can exit early), so it decouples the stability incentive from
-tier disclosure. **The cost is losing the "tier-3 stakers naturally become the
-archivists" emergent elegance** — a genuine privacy-vs-elegance trade, paid because
-otherwise tier-neutralizing the claim wire is pointless while this sibling layer
-re-publishes tier. (This is also why de-tiering the claim alone stays parked: it is
-the *portfolio* channel that must be neutralized, and longevity-pricing does that
-without touching the claim economics.)
+But tier-weighting was buying something real: **a credible commitment to
+long-horizon retention of critical (deep-history) shards.** An earlier draft of
+this section proposed recovering that with a **demonstrated-holding-longevity**
+premium; that is **insufficient and is corrected below.** Longevity is a *past*
+signal — it prices observed stability — but deep history needs a commitment to
+*future* retention, and past stability does not guarantee it (a long-time holder
+can drop a shard tomorrow). Observed longevity can still feed the scarcity/coverage
+signal, but it **cannot carry the deep-history guarantee.** The keystone that can
+is a per-shard bond.
+
+### Per-shard retention bonds — the keystone (deep-history guarantee + Sybil cost + de-overloaded lock)
+
+The deep-history commitment does **not** have to be a staker-wide property (a
+tier). Make it **per-shard**: holding a deep-history shard requires posting
+**slashable collateral against retaining it for a duration.** Drop the shard inside
+the window → lose the bond (the *archival* bond only — principal stays
+never-slashed, bounded and voluntary, consistent with *Decoupling*'s resilience
+rationale). Three things fall out of one mechanism:
+
+- **The deep-history guarantee becomes real, not inferred.** A bond at risk is a
+  credible commitment to *future* retention — exactly what demonstrated-longevity
+  could not provide. This is the property tier-weighting was actually buying,
+  recovered honestly.
+- **The staker-wide tier disappears, so F0 dies and the oracle dies with it.** With
+  no principal tier driving shard allocation, there is no `tier_num` for the claim
+  wire (F0) and the public residual is "**pseudonym P holds these shard-types**,"
+  firewalled — *not* a stake-cohort key. The tier oracle (F-ARCHIVAL coupling #2)
+  closes because per-shard bonds replace the tier, **not** because tier "falls out
+  for free."
+- **Sybil-resistance inverts in our favor (G-E).** The bond is the Sybil cost, and
+  **total bond = shards-held × rate, independent of how many pseudonyms you split
+  into** — you bond per shard whether you are one identity or ten thousand. So
+  Sybil-splitting buys nothing, and the scarce, security-relevant input **flips back
+  from cheap-invisible storage to expensive-countable capital**, Sybil-immune
+  because it scales with work.
+
+This **de-overloads the lock parameter**: the eligibility lock can stay small (the
+monetary supply-sink knob you want small), while the **per-shard bonds** are the
+anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
+**two separate parameters** instead of one pulled two ways.
+
+**The honest correction this forces.** "Pay for work, not wealth" was wrong, and
+the per-shard bond is why: **capital re-enters, proportional to work.** The reframe
+does not *escape* capital — it **re-bases** it, from "wealth as a yield multiplier"
+(the old principal bond, which bonded nothing slashable) to "**capital as slashable
+service-collateral**" (the bond, which bonds the actual service). That is the better
+answer to the founding *Problem 1* critique: drop a shard, lose the bond, principal
+untouched. The accurate slogan is **"pay for work, where doing the work requires
+proportional capital-at-risk that bonds the work."** The real residual tension is
+**calibration** — the bond rate must be high enough for Sybil-deterrence and the
+deep-history guarantee, low enough not to exclude capital-poor-but-storage-rich
+archivers — a genuine sim-and-design bind (it is G-E's overload, relocated to one
+honest place), not a knob set by eye.
 
 ### The firewall is a stack, not a key
 
@@ -533,77 +590,105 @@ confidential-staking threads:
 - **F0 (cleartext tier reveal) dissolves at the source.** The tier was on the claim
   wire only because reward `= tier_num · amount` and the verifier needed `tier_num`
   to compute it. Reward `= f(archival work)` does not need the tier, so the
-  cohort-collapse driver leaves the wire. (Whole-system tier privacy still requires
-  the tier-neutral pricing above — that is the *portfolio* channel, F-ARCHIVAL
-  coupling #2 — which is why both levers move together.)
-- **F-INFLATION 8a (confidential-reward soundness) dissolves.** With reward computed
-  over public quantities there is no hidden amount in the entitlement: no
-  `M·amount`, no bounded-remainder, no confidential reward range proof. Anyone
-  recomputes P's payout from public archival history; the claim collapses to "I am
-  P, P is backed by some active stake (membership + `N_arch`), here is my
-  publicly-computed reward, mint it to a stealth output." The only ZK left on the
-  reward path is **membership/backing + the stealth payout**. Silent inflation has
-  nothing confidential left to hide in — it becomes loud (recomputable) rather than
-  silent.
+  cohort-collapse driver leaves the wire.
+- **The portfolio tier oracle (F-ARCHIVAL coupling #2) dissolves too — the third
+  convergence.** Because the deep-history commitment is now a **per-shard bond**
+  rather than a staker tier (keystone above), there is no tier for a portfolio to
+  Bayesian-signal. This is the convergence that is *earned*, not free: it holds
+  **because per-shard bonds replace the staker tier**, so both tier levers (claim
+  wire + portfolio) close together.
+- **F-INFLATION 8a (confidential-reward soundness) transforms into a *loud* 8c.**
+  With reward computed over public quantities there is no hidden amount in the
+  entitlement: no `M·amount`, no bounded-remainder, no confidential reward range
+  proof. Anyone recomputes P's payout from public archival history; the claim
+  collapses to "I am P, P is backed by some active stake (membership + `N_arch`),
+  here is my publicly-computed reward, mint it to a stealth output." The only ZK left
+  on the reward path is **membership/backing + the stealth payout**. The existential
+  soundness item does not vanish — it **moves to retention-proof unforgeability (the
+  new 8c)** — but it moves from *silent* (confidential, undetectable) to *loud*
+  (public, recomputable, detectable). Turning silent inflation into detectable
+  inflation is the single best thing that can happen to a confidential system's
+  soundness posture.
 
 Privacy stops being "hide the amounts" and becomes entirely **firewall the
-identity** — simpler to make sound and arguably more robust.
+identity** — simpler to make sound and arguably more robust. **Reward is publicly
+computable globally, not locally** (a P's payout needs the public aggregate
+`Σwork` via the supply servo, gate 1) — but *public, not local,* is what kills
+silent inflation, so 8a-dissolution survives the servo.
 
 ### Gate-list — what must be blessed before this is consensus-real
 
 This rebasing is bigger than a curve; it changes *what staking is* (from
-capital-bonded yield to work-paid service with a capital eligibility gate). The
-near-term pin is the curve shape (banded plateau-cap, retention-based,
-scarcity-weighted); the following must be resolved by simulation and a fresh
-soundness pass before it ships:
+capital-bonded yield to **work-paid service collateralized by per-shard capital
+bonds**). The near-term pin is the curve shape (banded plateau-cap,
+retention-based, scarcity-weighted); the following must be resolved by simulation
+and a fresh soundness pass before it ships:
 
-1. **Aggregate supply-safety normalizer (does not come free).** Today the servo
-   `ρ_e = budget_e/band_sum_e` guarantees `Σreward ≤ budget_e` *by construction*.
-   A per-staker plateau-cap bounds only per-staker reward; nothing bounds the
-   aggregate. Restoring supply-safety needs `reward_P = budget · work_P / Σwork` —
-   a servo over **`Σwork`** — which reintroduces a global-state dependency *and* a
-   **differencing leak** (a large archiver entering/leaving moves `Σwork`
-   observably), the §14 `band_sum`-differencing concern reborn on archival work.
-2. **Retention-proof soundness + state-cost (8a transforms, not vanishes).** Reward
-   becomes loud only if every node recomputes every P's challenge-pass record and
-   per-shard replication — i.e. **per-P, per-shard retention state in consensus**,
-   validated each claim. The existential soundness item moves from "hard ZK proof"
-   to "retention-proof unforgeability + consensus state-growth/recompute cost." For
-   a chain whose archival exists *because* tree state outgrows retention, putting
-   the archival *reward accounting* into replicated state is the irony to weigh.
-3. **Private replication counting becomes central, not peripheral.** Scarcity
-   pricing now drives the *whole* reward, so a credible per-shard distinct-holder
-   count `R` is load-bearing. Counting holders without identifying them (private set
-   cardinality / proof-of-distinct-holders) is the unsolved primitive public binding
-   gets for free; the firewalled-pseudonym model makes private binding the
-   presumption, so this primitive must be solved.
-4. **The tier decision (no "free" option).** Either tier **dies** system-wide
-   (F0 + the portfolio tier-oracle both close, but the deep-history
-   retention-horizon matching that tier-weighting provided must be fully recovered by
-   longevity-pricing), **or** tier **lives** as retention-horizon matching and the
-   oracle lives with it. "Tier falls out for free" is not available; longevity-pricing
-   is the proposed replacement and must be shown to cover critical-history matching.
-5. **Sybil scarce-input shift + overloaded lock.** The scarce, security-relevant
-   input moves from **capital** (expensive, semi-visible on-chain) to **storage +
-   bandwidth** (cheap, invisible, firewall-hidden): a data-center actor runs many Ps
-   cheaply, and unlinkable Ps mean you cannot tell ten archivers from one actor
-   running ten. The only lever is the per-P locked principal as Sybil cost — but
-   that lock is **overloaded**: minimizing it (the monetary concern, since
-   work-decoupled reward shrinks locked supply toward minimum × population) makes
-   Sybiling cheap and the cap toothless. Calibrate the cap against "capital a whale
-   must lock to evade," a **simulation input**, accepting that privacy and
-   cap-enforced decentralization are in irreducible tension (an identity-counting
-   problem a privacy chain refuses to solve).
-6. **Bootstrap shape (months 0–6).** With no archival load yet, either pay nothing
-   (zero staker population at the foundation→staker handoff — a cold-start coverage
-   cliff exactly when archival begins to matter) or pay a **named, time-limited
-   launch subsidy** that sunsets into archival-conditional. A subsidy is the retired
-   rent, temporarily; its **privacy shape matters** — a flat per-P subsidy is clean,
-   an amount-scaled one resurrects F0/8a for the bootstrap window.
-7. **`P` / `N_arch` are unbuilt.** No `N_arch`, `G_arch`, or pseudonym primitive
-   exists in code or design today. The persistent-pseudonym lifecycle and the
-   one-P-per-stake binding are the crux on which the whole privacy reframe rests and
-   must be designed and soundness-reviewed, not assumed.
+1. **Σwork supply-safety servo (does not come free — but is differencing-clean).**
+   Today `ρ_e = budget_e/band_sum_e` guarantees `Σreward ≤ budget_e` *by
+   construction*; a per-staker plateau-cap bounds only per-staker reward, so the
+   aggregate is unbounded against budget. The servo is **forced, re-based from
+   `band_sum` onto `Σwork`**: `reward_P = budget · work_P / Σwork`. This concedes the
+   earlier "locally computable" claim — a P's reward needs the public aggregate. But
+   **the §14 differencing leak does *not* transfer:** `band_sum` leaked because it
+   aggregated *confidential* amounts, so its deltas exposed hidden components.
+   `Σwork` is a sum of **continuously public** numbers (challenge-responses are
+   on-chain events, replication is a public count), so differencing it reveals
+   nothing not already readable off P's public archival record. The servo is
+   therefore supply-safe **and** differencing-clean — strictly better than `band_sum`
+   on the privacy axis; the side-channel dies with the confidentiality of its inputs.
+2. **Retention-proof soundness + state-cost (8a → loud 8c).** Reward is loud only if
+   every node recomputes every P's challenge-pass record and per-shard replication —
+   i.e. **per-P, per-shard retention state in consensus**, validated each claim. The
+   existential soundness item moves from "hard *silent* ZK proof" to
+   "**retention-proof unforgeability (8c)** + consensus state-growth/recompute cost,"
+   and from undetectable to detectable. For a chain whose archival exists *because*
+   tree state outgrows retention, putting the archival *reward accounting* into
+   replicated state is the irony to weigh — but loud-and-bounded beats
+   silent-and-existential.
+3. **Per-shard-nullifier counting primitive (replication count public, holders
+   private).** Scarcity pricing drives the *whole* reward, so a credible per-shard
+   distinct-holder count `R` is load-bearing — but a public `R` does **not** force
+   public binding. Per-`(P, shard)` nullifiers `ν = H(P_key, shard)` make `R` the
+   count of distinct `ν` for a shard (publicly countable), with `P` hidden by
+   preimage resistance. The count is solvable while binding stays private; this adds
+   a **nullifier domain** (real crypto growth) and leaves **portfolio exposure at
+   claim** (P aggregates its shards to be paid) as the residual — which is the
+   keystone's problem (item 4), not a counting problem.
+4. **Per-shard retention bond replacing tier (the keystone — collapses old G-D/G-E).**
+   Deep-history retention needs a commitment to *future* retention; demonstrated
+   longevity (a past signal) cannot provide it. A **slashable per-shard retention
+   bond** does, and simultaneously kills the staker tier (→ F0 + portfolio oracle
+   both close) and makes Sybil-splitting worthless (**total bond = shards × rate,
+   independent of pseudonym count**), flipping the scarce input back to
+   expensive-countable capital. It de-overloads the lock (small eligibility lock vs.
+   scaling per-shard bonds = two separate parameters). The real residual is
+   **bond-rate calibration** — high enough for Sybil-deterrence + deep-history
+   guarantee, low enough not to exclude capital-poor-storage-rich archivers — a
+   sim-and-design bind, not a knob set by eye. (This supersedes the earlier
+   tier-decision / longevity-pricing framing of this gate.)
+5. **Bootstrap shape (months 0–6) — overlapped, flat, sunset.** Not a cliff if the
+   **foundation floor overlaps**: foundation stays full-archival and sheds only as
+   staker coverage is *demonstrated*, so there is no zero-coverage instant. The
+   subsidy shape must be **privacy-decided, not just sunset-dated**: a **flat
+   per-active-bonded-shard** subsidy is privacy-clean; an amount-scaled one
+   resurrects F0 for the bootstrap window. So bootstrap reward = **flat,
+   per-bonded-shard, foundation-overlapped, sunset**.
+6. **`P` backing-and-firewall design (unbuilt; uniqueness no longer load-bearing).**
+   No `N_arch`/`G_arch`/pseudonym primitive exists in code or design today; the
+   persistent-pseudonym lifecycle is the remaining design-to-do and the crux the
+   privacy reframe rests on. The keystone **relaxes** it: one-P-per-stake uniqueness
+   is no longer load-bearing for Sybil-resistance (the per-shard bonds carry that),
+   and replication-Sybil is self-defeating anyway (faking replication lowers your own
+   `1/R` scarcity reward). So `P` needs **unlinkability + backing-proof, not
+   uniqueness** — a simpler primitive than the earlier one-P-per-stake nullifier.
+7. **Economic simulation re-priced for capital-collateralizes-work (the foundational
+   gate).** This is not tuning a curve — it is re-pricing *what staking is*: from
+   capital that multiplies yield to capital that collateralizes service. Locked
+   principal decouples from reward (work-heavy small holders out-earn idle large
+   holders), so the locked-supply assumptions the V3 economy sims baked in must be
+   re-priced, and the bond-rate calibration (item 4) is a sim output, not an armchair
+   number. Until the sim blesses the re-pricing, the rebasing is not consensus-real.
 
 **Honest residual.** An opted-in staker has a **long-lived public pseudonymous
 profile** — shard-set, longevity, performance — *by function*, and the count of
@@ -612,9 +697,12 @@ already in the accepted-leak column). No individual is deanonymized if the firew
 holds across all four layers (crypto + network + timing + output), but "firewalled
 pseudonym" is a **discipline maintained over the pseudonym's whole life**, not a
 property set once. Cross-pseudonym intersection is the residual class to name: a
-person with multiple stakes runs multiple Ps (one per stake, by the nullifier), and
-if those Ps share network/timing/output fingerprints they re-merge into one
-profile — the firewall hygiene must hold *per pseudonym*.
+person may run multiple Ps, and if those Ps share network/timing/output fingerprints
+they re-merge into one profile — the firewall hygiene must hold *per pseudonym*.
+(Note the keystone *relaxes* the Sybil concern here: because per-shard bonds, not
+pseudonym-uniqueness, carry Sybil-resistance, running multiple Ps is not itself an
+attack — it buys no bond savings — so the residual is a *privacy* hygiene concern,
+not a *security* one.)
 
 **Scope note (relation to existing sections).** This rebasing **replaces** the
 two-stream confidential-yield subsystem rather than extending it: the
@@ -944,9 +1032,11 @@ storage-chain designs.
 > (PoW does consensus; the principal bonds nothing slashable). The steady-state
 > innovation is sharper and simpler than "decouple two streams": **staking is the
 > opt-in to archival because staking = archiving**, one work-paid reward, principal
-> as collateral-and-Sybil-cost, privacy via a firewalled pseudonym. Points 5
-> (additive two-stream rewards) and 6 (tier-sorted depth) above are superseded by
-> the single-stream, tier-neutral / longevity-priced model, pending the gate-list.
+> as a small eligibility gate, the deep-history commitment and Sybil cost carried by
+> **per-shard retention bonds** (the keystone — capital re-based to slashable
+> service-collateral), privacy via a firewalled pseudonym. Points 5 (additive
+> two-stream rewards) and 6 (tier-sorted depth) above are superseded by the
+> single-stream, tier-neutral, **per-shard-bonded** model, pending the gate-list.
 
 V3.0 ships with the architectural surface in place (Stage 4 RPC
 boundary refinements, multi-peer archival routing client surface,

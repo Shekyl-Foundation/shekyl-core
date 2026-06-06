@@ -95,6 +95,48 @@
   distinctive held-shard-sets can bridge identity → on-chain-holder → claim-cohort — an
   archival / `shekyl-shard-visual` privacy-review item, not Phase 2B scope. `FOLLOWUPS.md`
   V3.1 entry extended.
+- **stake-lifecycle: F-ARCHIVAL refinement — per-shard retention bonds (the keystone),
+  replace-not-converge framing, and gate-list correction.** Iterates the resolution below
+  across `docs/V3_STAKER_ARCHIVAL.md`, `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3,
+  `docs/FOLLOWUPS.md` (2026-06-05). **Framing (replace, not converge):** F0 and 8a dissolve
+  *because* pay-for-retention **abandons** the subsystem they live in — the reserve-DLEQ
+  entitlement, bounded-remainder, `entitlement.rs`/`tiers.rs`/`rewards.rs` become **dead
+  code**, not adapted; "converge" wrongly implies the entitlement proof still applies. What
+  transfers: the adversarial method + the primitives (membership proofs, DDH-independent
+  nullifiers, firewall hygiene). **Keystone — per-shard retention bonds (collapses the old
+  tier-decision + Sybil-overloaded-lock gates into one):** demonstrated longevity is a *past*
+  signal and cannot bind *future* retention; a **slashable per-shard retention bond** can
+  (drop the shard → lose the *archival* bond, principal untouched). One mechanism gives (a)
+  the deep-history guarantee (bond-at-risk, not inferred); (b) **death of the staker tier** →
+  F0 + the portfolio tier-oracle both close *because bonds replace tier* (the third
+  convergence, earned not free); (c) Sybil-immunity — **total bond = shards × rate,
+  pseudonym-count-independent**, so splitting buys nothing, flipping the scarce input back to
+  expensive-countable capital; (d) **de-overloaded lock** (small eligibility lock vs. scaling
+  per-shard bonds = two separate parameters). **Slogan corrected:** not "pay for work, not
+  wealth" (capital re-enters proportional to work) but "**pay for work, where doing the work
+  requires proportional capital-at-risk that bonds the work**" — capital re-based from "yield
+  multiplier" to "**slashable service-collateral**," the better answer to the founding
+  *Problem 1* critique (the old principal bond bonded nothing). **Two over-reaches in the
+  prior gate-list, corrected:** (1) the `Σwork` servo is **differencing-clean** — `band_sum`
+  leaked because it aggregated *confidential* amounts; `Σwork` sums *continuously-public*
+  numbers (challenge-responses, replication counts), so differencing reveals nothing not
+  already on P's public record (supply-safe **and** strictly better than `band_sum` on
+  privacy); (2) public `R` does **not** force public binding — per-`(P,shard)` nullifiers
+  `ν = H(P_key, shard)` make `R` the count of distinct `ν` (public) with `P` hidden by
+  preimage resistance. **8a → loud 8c:** the existential item moves to retention-proof
+  unforgeability, *detectable* not silent. **`P` simplified:** needs unlinkability +
+  backing-proof, **not** uniqueness (bonds carry Sybil; replication-Sybil is self-defeating).
+  **Bootstrap:** flat per-active-bonded-shard, **foundation-overlapped** (no zero-coverage
+  instant), sunset. **Genesis-class:** capital-bonded yield cannot re-justify itself in the
+  fee-only era (the rent the mission forbids; the one part that fails once the subsidy ends),
+  so this is not a deferrable refinement — the corrected **foundational gate** is the economic
+  sim re-priced for capital-collateralizing-work, not curve-tuning. **Corrected gate-list:**
+  (1) `Σwork` servo (supply-safe + differencing-clean); (2) retention-proof soundness + state
+  cost (8a → loud 8c); (3) per-shard-nullifier counting; (4) **per-shard retention bond
+  replacing tier** (keystone; residual = bond-rate calibration); (5) bootstrap = flat
+  per-bonded-shard, overlapped, sunset; (6) `P` backing+firewall (unbuilt; uniqueness relaxed);
+  (7) **economic sim re-priced** (the foundational gate). Next step: **build and iterate the
+  sim.**
 - **stake-lifecycle: F-ARCHIVAL RESOLVED IN DESIGN — pay-for-service rebasing +
   firewalled-pseudonym identity model (supersedes the two-stream framing; pending
   sim/soundness ratification).** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3

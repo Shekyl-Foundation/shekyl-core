@@ -2140,7 +2140,9 @@ replication counting:** scarcity pricing needs a per-shard replication count (re
 counting distinct holders *without identifying them* (private set cardinality / proof-of-distinct-
 holders) is the non-trivial primitive public binding gets for free. That tension is *why* public is
 tempting and is the thing a private design must solve; it does not change the presumption, but it is
-the cost to weigh.
+the cost to weigh. **Resolved in the resolution subsection below:** per-`(P,shard)` nullifiers
+`ν = H(P_key, shard)` make `R` the count of distinct `ν` (publicly countable) with `P` hidden by
+preimage resistance — the count is solvable while binding stays private (gate 3).
 
 **Organizing principle — graceful degradation.** A user who shares should disclose *what they chose*
 — "I stake, here's cool art" — and not have it silently cascade into tier, claim history, and
@@ -2199,60 +2201,91 @@ privacy tier** — privacy is won inside a firewalled pseudonym, not an escape h
 
 **The model (low-new-primitive).** One staker type (archiver); one reward (performance-scaled,
 retention-based, scarcity-weighted, banded plateau-cap); principal = locked collateral that **never
-slashes** (resilience) and serves as admission + per-pseudonym Sybil cost + longevity-credibility,
-**not** a yield multiplier. Archival cannot be unlinkable like a claim (reachability + persistence +
-challengeability require a stable holder), so the goal is a **firewalled pseudonym P**: replace the
-direct `StakeEngine::is_active_staker(entity_id)` lookup with **membership-proof registration** ("some
-active stake backs me") + an **archival nullifier `N_arch = x·G_arch`** over a base independent of
-`Hp(O)` and `G_S` (Sybil-resistance: one stake → one P; uniqueness without revealing which stake) +
-**HKDF-derived independent keypair** P (no algebraic link to the stake key) + **periodic liveness
-re-proof** that lapses on unstake. This **extends T7's DDH requirement to a third base
-`{Hp(O), G_S, G_arch}`** that must be mutually independent. **Tier-neutral, longevity-priced** shard
-pricing breaks the tier oracle (critical-shard stability premium on demonstrated holding-longevity,
-which is observable but is *not* tier). The **firewall is a stack** — network (P's circuits separate
-from spend/claim broadcasts), timing (randomized registration delay vs. stake creation), output
-(reward → stealth output, no linkable consolidation).
+slashes** (resilience) and serves as the (small) eligibility/admission gate, **not** a yield
+multiplier. Archival cannot be unlinkable like a claim (reachability + persistence + challengeability
+require a stable holder), so the goal is a **firewalled pseudonym P**: replace the direct
+`StakeEngine::is_active_staker(entity_id)` lookup with **membership-proof registration** ("some active
+stake backs me") + an **archival nullifier `N_arch = x·G_arch`** over a base independent of `Hp(O)` and
+`G_S` + **HKDF-derived independent keypair** P (no algebraic link to the stake key) + **periodic
+liveness re-proof** that lapses on unstake. This **extends T7's DDH requirement to a third base
+`{Hp(O), G_S, G_arch}`** that must be mutually independent. **P needs unlinkability + backing-proof,
+not uniqueness** — the keystone below carries Sybil-resistance, so one-P-per-stake is no longer
+load-bearing. The **firewall is a stack** — network (P's circuits separate from spend/claim
+broadcasts), timing (randomized registration delay vs. stake creation), output (reward → stealth
+output, no linkable consolidation).
 
-**The convergence (why this outranks fighting F0/8a separately).** Work-based reward is **publicly
-computable**, so it dissolves two threads at once: **F0** (tier left the claim wire — reward no longer
-needs `tier_num`) and **F-INFLATION 8a** (no confidential amount in the entitlement — reward is
-recomputable from public archival history, so silent inflation becomes *loud*). The only ZK left on
-the reward path is membership/backing + stealth payout. Privacy stops being "hide the amounts" and
-becomes entirely "firewall the identity." (Whole-system tier privacy still needs the tier-neutral
-pricing — the portfolio channel — which is why both tier levers move together.)
+**The keystone — per-shard retention bonds (corrects the longevity framing).** An earlier draft priced
+the critical-shard premium on demonstrated **holding-longevity**; that is **insufficient** — longevity
+is a *past* signal and deep history needs a commitment to *future* retention. The fix is a **slashable
+per-shard retention bond** (post collateral against retaining a deep-history shard for a duration; drop
+it → lose the *archival* bond, principal untouched). One mechanism resolves three gaps: (a) the
+deep-history guarantee becomes real (bond-at-risk, not inferred); (b) the **staker-wide tier
+disappears**, so F0 + the portfolio tier-oracle both close *because bonds replace tier*, not "for
+free"; (c) Sybil-splitting buys nothing — **total bond = shards × rate, independent of pseudonym
+count** — flipping the scarce input back to expensive-countable capital and **de-overloading the lock**
+(small eligibility lock vs. scaling per-shard bonds = two separate parameters). This **re-bases
+capital** from "wealth as yield multiplier" to "**slashable service-collateral**" — the accurate
+slogan is "pay for work, where doing the work requires proportional capital-at-risk that bonds the
+work" (not the earlier "pay for work, not wealth"). The residual is **bond-rate calibration** (a
+sim-and-design bind).
+
+**What this replaces, and what dissolves (replace, not converge).** This **replaces** the
+confidential-yield subsystem — the entitlement machinery (reserve-DLEQ, bounded-remainder,
+`entitlement.rs`/`tiers.rs`/`rewards.rs`) becomes **dead code**, not adapted; a reader who sees
+"converge" would wrongly assume the entitlement proof still applies to a subsystem that no longer
+exists. What transfers is the **adversarial method** and the **primitives** (membership proofs,
+DDH-independent nullifiers, firewall hygiene). Work-based reward is **publicly computable**, dissolving
+**three** threads: **F0** (tier left the claim wire — reward no longer needs `tier_num`); the
+**portfolio tier-oracle** (no staker tier to signal, *because per-shard bonds replace it*); and
+**F-INFLATION 8a → a loud 8c** (no confidential amount in the entitlement — reward recomputable from
+public archival history, so silent inflation becomes **detectable** inflation; the existential item
+moves to retention-proof unforgeability, public not silent). The only ZK left on the reward path is
+membership/backing + stealth payout. Reward is publicly computable **globally** (via the `Σwork` servo,
+gate 1), not locally — but *public, not local,* is what kills silent inflation. Privacy stops being
+"hide the amounts" and becomes entirely "firewall the identity."
 
 **Gate-list — must be blessed by sim + a fresh soundness pass before consensus-real** (full text in
 `V3_STAKER_ARCHIVAL.md`):
 
-1. **Aggregate supply normalizer** — the §14 servo guaranteed `Σreward ≤ budget`; a per-staker cap
-   does not. A `budget · work_P / Σwork` servo restores it but reintroduces a global-state dependency
-   and `Σwork`-differencing (the `band_sum`-differencing concern reborn on archival work).
-2. **Retention-proof soundness + state cost** — 8a transforms rather than vanishes: reward is "loud"
-   only if every node recomputes every P's challenge-pass + replication record → per-P/per-shard
-   retention state **in consensus**, the irony being archival-reward accounting becomes the
-   state-growth problem archival exists to solve.
-3. **Private replication counting becomes central** — scarcity now drives the whole reward, so a
-   credible distinct-holder count without identifying holders (private set cardinality) is
-   load-bearing, not peripheral.
-4. **Tier decision (no "free" option)** — either tier dies system-wide (F0 + portfolio oracle both
-   close, but longevity-pricing must fully recover deep-history retention-horizon matching) or tier
-   lives as retention-horizon matching and the oracle lives with it.
-5. **Sybil scarce-input shift + overloaded lock** — the scarce input moves from capital
-   (expensive/semi-visible) to storage+bandwidth (cheap/invisible/firewall-hidden); unlinkable Ps hide
-   Sybil whales; the per-P lock is the only lever but is overloaded (small for monetary reasons vs.
-   large for cap-teeth). Calibrate against capital-to-evade — a sim input.
-6. **Bootstrap shape (months 0–6)** — no archival load yet: pay nothing (cold-start coverage cliff at
-   the foundation→staker handoff) or a named time-limited launch subsidy whose **privacy shape**
-   matters (flat per-P clean; amount-scaled resurrects F0/8a for the window).
-7. **`P`/`N_arch` are unbuilt** — no `N_arch`/`G_arch`/pseudonym primitive exists in code or design;
-   the persistent-pseudonym lifecycle + one-P-per-stake binding is the crux the whole reframe rests on.
+1. **Σwork supply servo (supply-safe *and* differencing-clean)** — a per-staker cap does not bound the
+   aggregate; the servo is forced, re-based from `band_sum` onto `Σwork` (`reward_P = budget · work_P /
+   Σwork`), conceding the "locally computable" claim. But the `band_sum`-differencing leak does **not**
+   transfer: `band_sum` leaked because it aggregated *confidential* amounts; `Σwork` sums
+   *continuously-public* numbers (challenge-responses, replication counts), so differencing reveals
+   nothing not already on P's public record. Strictly better than `band_sum` on privacy.
+2. **Retention-proof soundness + state cost (8a → loud 8c)** — reward is "loud" only if every node
+   recomputes every P's challenge-pass + replication record → per-P/per-shard retention state **in
+   consensus**; the existential item is now **retention-proof unforgeability**, detectable not silent.
+3. **Per-shard-nullifier counting primitive** — public `R` does **not** force public binding:
+   per-`(P,shard)` nullifiers `ν = H(P_key, shard)` make `R` the count of distinct `ν` (public) with
+   `P` hidden by preimage resistance. Adds a nullifier domain; leaves portfolio-exposure-at-claim as
+   the residual (the keystone's problem, gate 4).
+4. **Per-shard retention bond replacing tier (keystone — collapses old G-D/G-E)** — slashable
+   per-shard collateral gives the *future*-retention commitment longevity could not; kills the staker
+   tier (→ F0 + oracle close); makes Sybil-splitting worthless (`total bond = shards × rate`); flips
+   the scarce input to expensive-countable capital; de-overloads the lock. Residual: **bond-rate
+   calibration** (sim output). *Supersedes the old "tier decision / longevity-pricing" framing.*
+5. **Bootstrap shape (months 0–6) — overlapped, flat, sunset** — not a cliff if the foundation floor
+   **overlaps** (foundation stays full-archival, sheds only as staker coverage is demonstrated); the
+   subsidy is **flat per-active-bonded-shard** (privacy-clean; amount-scaled resurrects F0).
+6. **`P` backing-and-firewall design (unbuilt; uniqueness relaxed)** — no `N_arch`/`G_arch`/pseudonym
+   primitive exists; the persistent-pseudonym lifecycle is the design-to-do. The keystone relaxes it:
+   `P` needs unlinkability + backing-proof, **not** uniqueness (bonds carry Sybil-resistance;
+   replication-Sybil is self-defeating).
+7. **Economic sim re-priced for capital-collateralizes-work (the foundational gate)** — not a curve
+   tune but a re-pricing of what staking *is*; locked-supply assumptions baked into the V3 economy sims
+   must be re-priced, and the bond-rate (gate 4) is a sim output. The strongest pre-genesis argument:
+   capital-bonded yield has no justification in the fee-only era (it is the rent the mission forbids,
+   the one part that cannot re-justify itself once the subsidy ends), so this is a **genesis-class**
+   decision, not a deferrable refinement.
 
 **Honest residual.** An opted-in staker has a long-lived **public pseudonymous profile** (shard-set,
 longevity, performance) *by function*; pseudonym count ≈ active-stake count (an aggregate, accepted-leak
 column, like `band_sum`). No individual is deanonymized if the firewall holds across all four layers,
 but it is a **discipline maintained over the pseudonym's life**, not a one-time property — and
-cross-pseudonym intersection (one person, multiple stakes, multiple Ps) re-merges profiles if
-network/timing/output hygiene fails per-pseudonym.
+cross-pseudonym intersection (one person, multiple Ps) re-merges profiles if network/timing/output
+hygiene fails per-pseudonym. The keystone makes this a *privacy* hygiene concern, not a *security* one
+(multiple Ps buy no bond savings, so running many is not itself an attack).
 
 **Scope.** This **replaces** the confidential-yield subsystem (reserve-DLEQ entitlement,
 bounded-remainder, `tier_num·amount`; `CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/`

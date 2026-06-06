@@ -2547,24 +2547,33 @@ sustainability is unaffected by the recalibration.
   governance = downstream) → the staking reward **is** payment for archival → **no opt-out tier**
   (it re-creates the *Problem 1* rent). Model: one archiver type; one **work-paid** reward
   (retention-based, scarcity-weighted, **banded plateau-cap**); principal = never-slashed collateral
-  = admission + per-P Sybil cost + longevity signal; **firewalled pseudonym P** replaces
-  `is_active_staker(entity_id)` with **membership-proof registration** + **`N_arch = x·G_arch`**
-  (independent of `Hp(O)`/`G_S`; one stake → one P; extends T7 DDH to a third base) + **HKDF-derived
-  P** + **periodic liveness re-proof** (lapses on unstake); **tier-neutral / longevity-priced** shards
-  break the tier oracle; firewall is a **4-layer stack** (crypto + network + timing + output).
-  **Convergence:** publicly-computable reward **dissolves F0** (tier off the claim wire) **and
-  F-INFLATION 8a** (no confidential amount → silent inflation becomes loud). **Gate-list before
-  consensus-real** (full text in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service rebasing*): (1) aggregate
-  supply normalizer (`Σwork` servo — `band_sum`-differencing reborn); (2) retention-proof soundness +
-  per-P/per-shard **consensus state-cost**; (3) **private replication counting now central**;
-  (4) tier decision (dies-with-longevity-replacement vs. lives-with-oracle — no free option);
-  (5) Sybil scarce-input shift capital→storage + **overloaded lock** (small for supply vs. large for
-  cap-teeth); (6) bootstrap shape (cold-start cliff vs. named time-limited subsidy whose privacy shape
-  matters); (7) **`P`/`N_arch` unbuilt** (the crux). **Scope:** this **replaces** the confidential-yield
-  subsystem (`CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/` `entitlement.rs`/`tiers.rs`/`rewards.rs`),
-  a large audit-surface deletion; `CONFIDENTIAL_STAKING.md` not edited until gates 4 + 1 settle. Nutshell:
-  **staking = archiving.** Resolution recorded in `PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (F-ARCHIVAL
-  resolution) and `V3_STAKER_ARCHIVAL.md`.
+  = (small) eligibility gate; **firewalled pseudonym P** replaces `is_active_staker(entity_id)` with
+  **membership-proof registration** + **`N_arch = x·G_arch`** (independent of `Hp(O)`/`G_S`; extends T7
+  DDH to a third base) + **HKDF-derived P** + **periodic liveness re-proof** (lapses on unstake); `P`
+  needs **unlinkability + backing, not uniqueness** (keystone carries Sybil); firewall is a **4-layer
+  stack** (crypto + network + timing + output). **Keystone — per-shard retention bonds:** slashable
+  per-shard collateral gives the *future*-retention commitment longevity (a past signal) cannot;
+  **replaces the staker tier** (so F0 + portfolio oracle close *because bonds replace tier*); makes
+  Sybil-splitting worthless (`total bond = shards × rate`, pseudonym-count-independent); de-overloads
+  the lock (small eligibility lock vs. scaling bonds). Re-bases capital from "yield multiplier" to
+  "**slashable service-collateral**" — slogan corrected to "pay for work, where doing the work requires
+  proportional capital-at-risk that bonds the work." **Dissolves (replace, not converge):** the
+  entitlement machinery (reserve-DLEQ/bounded-remainder/`entitlement.rs`/`tiers.rs`/`rewards.rs`)
+  becomes **dead code**; publicly-computable reward dissolves **F0**, the **portfolio tier-oracle**, and
+  **8a → a loud 8c** (retention-proof unforgeability — silent inflation becomes detectable).
+  **Gate-list before consensus-real** (full text in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service
+  rebasing*): (1) **`Σwork` servo** — supply-safe **and** differencing-clean (its inputs are public, so
+  the `band_sum`-differencing leak does *not* transfer); (2) retention-proof soundness + per-P/per-shard
+  **consensus state-cost** (8a → loud 8c); (3) **per-shard-nullifier counting** `ν = H(P_key,shard)`
+  (public `R`, private `P`); (4) **per-shard retention bond replacing tier** (keystone — collapses the
+  old tier-decision + Sybil-overloaded-lock gates; residual = bond-rate calibration); (5) bootstrap
+  shape = **flat per-bonded-shard, foundation-overlapped, sunset**; (6) **`P` backing+firewall** unbuilt
+  (uniqueness relaxed); (7) **economic sim re-priced** for capital-collateralizes-work (the foundational
+  gate — genesis-class: capital-bonded yield cannot re-justify itself in the fee-only era). **Scope:**
+  this **replaces** the confidential-yield subsystem (`CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/`
+  `entitlement.rs`/`tiers.rs`/`rewards.rs`), a large audit-surface deletion; `CONFIDENTIAL_STAKING.md`
+  not edited until gates 4 + 1 settle. Nutshell: **staking = archiving.** Resolution recorded in
+  `PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (F-ARCHIVAL resolution) and `V3_STAKER_ARCHIVAL.md`.
   **Target:** V3.1. **Ref:**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
 
