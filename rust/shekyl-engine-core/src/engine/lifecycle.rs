@@ -734,8 +734,7 @@ impl Engine<SoloSigner> {
         // consuming spawn.
         let key = super::key_actor::KeyEngineHandle::spawn(keys);
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
-        let fee_snapshot_source =
-            super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
+        let fee_snapshot_source = super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
         let pending = super::LocalPendingTx::new(
             // §6 step 4: the signer no longer holds `Arc<AllKeysBlob>`; it
             // carries a `KeyEngineHandle` clone and the future signing path

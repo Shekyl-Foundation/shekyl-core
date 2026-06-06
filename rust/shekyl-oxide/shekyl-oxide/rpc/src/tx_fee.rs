@@ -16,9 +16,9 @@ pub const K_DUST: u64 = 1;
 
 /// Weight one additional input adds at `D_ref = MAX_TREE_DEPTH (24)`.
 ///
-/// Provisional stub: `32 + 32 + 3385` hybrid auth + input framing,
-/// with zero FCMP proof increment until the 2a-3 KAT replaces this.
-/// Reopen iff the KAT moves this by more than a token amount.
+/// Provisional stub: `32 + 32 + 3385 + 8` (hybrid auth, input framing,
+/// varint overhead), with zero FCMP proof increment until the 2a-3 KAT
+/// replaces this. Reopen iff the KAT moves this by more than a token amount.
 pub const MARGINAL_INPUT_WEIGHT: usize = 32 + 32 + 3385 + 8;
 
 /// Fee-relative dust boundary: fold change at or below spend cost.

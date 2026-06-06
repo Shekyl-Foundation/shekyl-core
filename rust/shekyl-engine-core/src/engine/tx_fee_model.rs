@@ -36,22 +36,17 @@ fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
 
 /// Structural weight predictor (§3.10.1). Clawback is 0 for 2a (`n_out ∈ {1,2}`).
 #[must_use]
-pub(crate) fn predict_weight(
-    n_in: usize,
-    n_out: usize,
-    tree_depth: u8,
-    fee: u64,
-) -> usize {
-    let blob = TX_PREFIX_EXTRA_WEIGHT
+pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64) -> usize {
+    TX_PREFIX_EXTRA_WEIGHT
         + n_in.saturating_mul(PER_INPUT_FIXED_WEIGHT)
         + n_out.saturating_mul(PER_OUTPUT_WEIGHT)
         + fcmp_proof_size(n_in, tree_depth)
-        + varint_len(fee);
-    blob
+        + varint_len(fee)
 }
 
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
 #[must_use]
+#[allow(dead_code)] // 2a-3 dust-fold consumes; 2a-2 uses `tx_fee::MARGINAL_INPUT_WEIGHT` stub.
 pub(crate) fn marginal_input_weight_at_d_ref(tree_depth: u8) -> usize {
     let fee = 0;
     let n_out = 1;
@@ -70,8 +65,8 @@ pub(crate) fn fee_rate_for_priority(
     priority: super::fee_estimator::FeePriority,
     snapshot: &super::traits::FeeEstimates,
 ) -> Result<FeeRate, super::error::FeeEstimatorError> {
-    use super::fee_estimator::FeePriority;
     use super::error::FeeEstimatorError;
+    use super::fee_estimator::FeePriority;
 
     match priority {
         FeePriority::Economy => Ok(snapshot.economy),
@@ -89,9 +84,7 @@ pub(crate) fn fee_rate_for_priority(
                     reason: "custom feerate below economy floor",
                 });
             }
-            let ceiling_fee = floor
-                .calculate_fee_from_weight(1)
-                .saturating_mul(100);
+            let ceiling_fee = floor.calculate_fee_from_weight(1).saturating_mul(100);
             if custom.calculate_fee_from_weight(1) > ceiling_fee {
                 return Err(FeeEstimatorError::DaemonResponseInvalid {
                     reason: "custom feerate above sanity ceiling",
@@ -136,8 +129,7 @@ pub(crate) fn build_fee_directive(
     let n_with_change = payment_output_count + 1;
     let seed = fee_from_weight(rate, predict_weight(n_in, n_no_change, tree_depth, 0));
     let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, seed);
-    let fee_with_change =
-        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change);
+    let fee_with_change = converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change);
     FeeDirective {
         fee_no_change,
         fee_with_change,
@@ -147,6 +139,7 @@ pub(crate) fn build_fee_directive(
 
 /// Fee charged for the no-change variant (orchestrator picks variant in 2a-3).
 #[must_use]
+#[allow(dead_code)] // 2a-3 F4/F8 dust-fold calls this; 2a-2 stores raw fee on `PendingTx`.
 pub(crate) fn fee_no_change_atomic(directive: &FeeDirective) -> AtomicUnits {
     AtomicUnits::from_raw(directive.fee_no_change)
 }

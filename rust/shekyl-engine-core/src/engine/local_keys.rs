@@ -2098,7 +2098,7 @@ mod tests {
     #[tokio::test]
     async fn sign_transaction_returns_named_gap_stub() {
         let keys = LocalKeys::from_test_seed(TEST_SEED);
-        use crate::engine::traits::key::{FeeDirective, FcmpPlusPlusContext};
+        use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective};
         use shekyl_tx_builder::TreeContext;
         let tx = TxToSign {
             inputs: vec![],

@@ -85,8 +85,7 @@ use crate::engine::pending::TxHash;
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // tier fields read by the §3.1 fee policy (2a-2); snapshot produced here in 2a-1.
-pub(crate) struct FeeEstimates {
+pub struct FeeEstimates {
     /// Fee rate corresponding to
     /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
     /// the slowest, cheapest tier targeting confirmation within a

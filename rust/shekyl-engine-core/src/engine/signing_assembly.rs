@@ -39,7 +39,7 @@ pub(crate) fn assemble_tx_to_sign(
     let mut inputs = Vec::with_capacity(selected_indices.len());
 
     for &index in selected_indices {
-        let td = transfers.get(index).ok_or_else(|| SendError::CannotSign {
+        let td = transfers.get(index).ok_or(SendError::CannotSign {
             reason: "selected transfer index out of range",
         })?;
         inputs.push(input_context_from_transfer(td)?);
@@ -73,10 +73,10 @@ pub(crate) fn assemble_tx_to_sign(
 }
 
 fn input_context_from_transfer(td: &TransferDetails) -> Result<TxInputSigningContext, SendError> {
-    let handle = td.output_handle.ok_or_else(|| SendError::CannotSign {
+    let handle = td.output_handle.ok_or(SendError::CannotSign {
         reason: "transfer missing output_handle (engine post-pass not run)",
     })?;
-    let source_ciphertext = td.source_ciphertext.clone().ok_or_else(|| SendError::CannotSign {
+    let source_ciphertext = td.source_ciphertext.clone().ok_or(SendError::CannotSign {
         reason: "transfer missing source_ciphertext",
     })?;
     let output_key = output_key_bytes(&td.key);
@@ -114,7 +114,7 @@ fn commitment_bytes(commitment: &Commitment) -> [u8; 32] {
 fn key_image_bytes(td: &TransferDetails) -> Result<[u8; 32], SendError> {
     td.key_image
         .map(|ki| *ki.as_bytes())
-        .ok_or_else(|| SendError::CannotSign {
+        .ok_or(SendError::CannotSign {
             reason: "transfer missing key_image",
         })
 }

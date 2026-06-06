@@ -58,9 +58,6 @@ use super::error::{
 };
 use super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::fee_snapshot::FeeSnapshotSource;
-use super::signing_assembly::assemble_tx_to_sign;
-use super::traits::key::FeeDirective;
-use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 use super::local_ledger::LocalLedger;
 use super::network::Network;
 use super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
@@ -70,7 +67,10 @@ use super::pending::{
 };
 use super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::signer::{Signer, TransferSigningContext};
+use super::signing_assembly::assemble_tx_to_sign;
+use super::traits::key::FeeDirective;
 use super::traits::{LedgerEngine, PendingTxEngine};
+use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 /// Per-output identifier used as the `output_locks` map key.
 ///
@@ -567,23 +567,23 @@ where
         })?;
 
         let estimate = |input_count: usize, output_count: usize| {
-            self.fee_estimator.estimate_fee(
-                request.priority,
-                &FeeEstimationContext {
-                    ledger: &ledger_snapshot,
-                    recipient_count: payment_count,
-                    input_count,
-                    output_count,
-                    fee_snapshot,
-                    tree_depth,
-                },
-            )
-            .map_err(|err| map_fee_estimator_error(&err.into()))
+            self.fee_estimator
+                .estimate_fee(
+                    request.priority,
+                    &FeeEstimationContext {
+                        ledger: &ledger_snapshot,
+                        recipient_count: payment_count,
+                        input_count,
+                        output_count,
+                        fee_snapshot,
+                        tree_depth,
+                    },
+                )
+                .map_err(|err| map_fee_estimator_error(&err.into()))
         };
 
-        let fee_pass_a = estimate(1, payment_count + 1).map_err(|err| {
-            fail_build_after_attempted(self.sink.as_ref(), err)
-        })?;
+        let fee_pass_a = estimate(1, payment_count + 1)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
             fail_build_after_attempted(
@@ -608,9 +608,8 @@ where
                 mapped
             })?;
 
-        let fee_pass_b = estimate(selected.indices.len(), payment_count + 1).map_err(|err| {
-            fail_build_after_attempted(self.sink.as_ref(), err)
-        })?;
+        let fee_pass_b = estimate(selected.indices.len(), payment_count + 1)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if fee_pass_b > fee_pass_a {
             let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
                 fail_build_after_attempted(
@@ -634,14 +633,11 @@ where
                     mapped
                 })?;
         }
-        let fee = fee_pass_b;
+        let fee = estimate(selected.indices.len(), payment_count + 1)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        let fee_directive = build_fee_directive(
-            &rate,
-            selected.indices.len(),
-            payment_count,
-            tree_depth,
-        );
+        let fee_directive =
+            build_fee_directive(&rate, selected.indices.len(), payment_count, tree_depth);
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -917,6 +913,7 @@ where
     /// The orchestrator constructs `LocalPendingTx` in
     /// `Engine::create` / `Engine::open_*` (`engine/lifecycle.rs`),
     /// which is the production assembly site.
+    #[allow(clippy::too_many_arguments)] // mirrors `Engine::open_*` assembly arity.
     pub fn new(
         signer: Arc<S>,
         output_selector: O,
@@ -975,29 +972,24 @@ where
     FS: FeeSnapshotSource,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
-    fn build(
-        &self,
-        request: TxRequest,
-    ) -> impl Future<Output = Result<PendingTx, SendError>> + Send {
-        async move {
-            if request.recipients.is_empty() {
-                let err = SendError::InvalidRecipient {
-                    reason: "TxRequest must carry at least one recipient",
-                };
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::BuildFailed {
-                        kind: build_error_kind(&err),
-                    },
-                );
-                return Err(err);
-            }
-
-            let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
-                fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
-            })?;
-            self.build_sync(&request, fee_snapshot)
+    async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
+        if request.recipients.is_empty() {
+            let err = SendError::InvalidRecipient {
+                reason: "TxRequest must carry at least one recipient",
+            };
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::BuildFailed {
+                    kind: build_error_kind(&err),
+                },
+            );
+            return Err(err);
         }
+
+        let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
+            fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
+        })?;
+        self.build_sync(&request, fee_snapshot)
     }
 
     fn submit(
@@ -1037,17 +1029,17 @@ mod tests {
     };
     use crate::engine::fee_estimator::DaemonFeeEstimator;
     use crate::engine::fee_snapshot::FixedFeeSnapshotSource;
-    use crate::engine::traits::FeeEstimates;
-    use shekyl_rpc::FeeRate;
     use crate::engine::key_actor::KeyEngineHandle;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
     use crate::engine::pending::{FeePriority, TxRecipient};
     use crate::engine::signer::LocalSigner;
+    use crate::engine::traits::FeeEstimates;
     use crate::engine::traits::PendingTxEngine;
     use crate::engine::LocalLedger;
     use shekyl_crypto_pq::account::{
         rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
+    use shekyl_rpc::FeeRate;
     use shekyl_scanner::RecoveredWalletOutput;
 
     /// Deterministic test seed. Distinct from
@@ -1180,9 +1172,7 @@ mod tests {
         // Scan-only test paths skip the merge post-pass; seed signing fields
         // so `assemble_tx_to_sign` can run in build tests.
         use shekyl_crypto_pq::{
-            handle::derive_output_handle,
-            kem::HybridCiphertext,
-            key_image::KeyImage,
+            handle::derive_output_handle, kem::HybridCiphertext, key_image::KeyImage,
         };
         const VIEW_SECRET: [u8; 32] = [0xAB; 32];
         let transfer_count = ledger_block.transfer_count();

@@ -108,6 +108,7 @@ impl EngineSignerKind for SoloSigner {}
 pub struct TransferSigningContext {
     /// Populated signing message (§3.4 / §3.9). Phase 2a-3 consumes
     /// this in `LocalSigner::sign_transfer` via `KeyEngine::sign_transaction`.
+    #[allow(dead_code)] // read in 2a-3 `LocalSigner::sign_transfer`.
     pub(crate) tx: super::traits::key::TxToSign,
 }
 
@@ -349,11 +350,11 @@ mod tests {
     //! runtime hosts the actor task fine (`kameo`'s spawn is `tokio::spawn`).
     use super::*;
     use crate::engine::error::KeyEngineError;
-    use crate::engine::traits::key::{FeeDirective, FcmpPlusPlusContext, KeyEngine, TxToSign};
-    use shekyl_tx_builder::TreeContext;
+    use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective, KeyEngine, TxToSign};
     use shekyl_crypto_pq::account::{
         rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
+    use shekyl_tx_builder::TreeContext;
 
     /// Deterministic test seed. Distinct from
     /// `DEFAULT_TEST_SEED` (daemon-side, 32 bytes) and from

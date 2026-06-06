@@ -584,6 +584,7 @@ impl std::fmt::Debug for TxToSign {
 #[non_exhaustive]
 pub(crate) struct OutputDestination {
     /// Canonical encoded recipient address from the build request.
+    #[allow(dead_code)] // 2a-3 recipient output construction reads this.
     pub address: String,
 }
 
@@ -603,6 +604,7 @@ pub(crate) enum TxOutputContext {
     /// User payment. `amount` is the only confidential field.
     Payment {
         #[zeroize(skip)]
+        #[allow(dead_code)] // 2a-3 recipient output construction reads `dest.address`.
         dest: OutputDestination,
         amount: u64,
     },
@@ -635,6 +637,7 @@ impl std::fmt::Debug for TxOutputContext {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub(crate) struct FcmpPlusPlusContext {
+    #[allow(dead_code)] // 2a-3 `sign_transaction` consumes `tree`.
     pub tree: TreeContext,
 }
 

@@ -169,8 +169,6 @@ pub(crate) mod fault_injecting_pending_tx;
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
 pub(crate) mod fee_snapshot;
-pub(crate) mod signing_assembly;
-pub(crate) mod tx_fee_model;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -192,7 +190,9 @@ pub mod refresh;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub mod signer;
+pub(crate) mod signing_assembly;
 pub(crate) mod traits;
+pub(crate) mod tx_fee_model;
 pub mod view_material;
 
 #[cfg(test)]
