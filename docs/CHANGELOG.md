@@ -95,6 +95,55 @@
   distinctive held-shard-sets can bridge identity → on-chain-holder → claim-cohort — an
   archival / `shekyl-shard-visual` privacy-review item, not Phase 2B scope. `FOLLOWUPS.md`
   V3.1 entry extended.
+- **stake-lifecycle: F-ARCHIVAL RESOLVED IN DESIGN — pay-for-service rebasing +
+  firewalled-pseudonym identity model (supersedes the two-stream framing; pending
+  sim/soundness ratification).** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3
+  (F-ARCHIVAL resolution subsection) + `docs/V3_STAKER_ARCHIVAL.md` (new canonical
+  §*Pay-for-service rebasing and the firewalled-pseudonym identity model*, with
+  *Decoupling* / *Tier interaction* / *Conclusion* forward-annotated as superseded)
+  + `docs/V3_SHARD_VISUALIZATION.md` (graceful-degradation-achieved resolution) +
+  `docs/FOLLOWUPS.md` (2026-06-05). **Enumeration:** archival is the **only** service
+  staking provides — consensus is PoW's job (no block-production/fork-choice/finality;
+  the classic-PoS attack class was retired for this reason); the capital "bond" is
+  slashable for nothing so it bonds nothing; supply/monetary effects are achievable by
+  just-holding; governance signaling is downstream of staking existing. So the staking
+  reward **is** payment for archival, "stake without archiving" is the *Problem 1* rent
+  the design exists to kill, and there is **no opt-out privacy tier**. **Model:** one
+  archiver type; one **work-paid** reward (proven-**retention**-based — not retrieval —
+  scarcity-weighted, **banded plateau-cap** reusing the rate-servo band machinery for
+  deterministic recomputability); principal = **never-slashed** collateral serving as
+  admission + per-pseudonym Sybil cost + longevity-credibility, **not** a yield
+  multiplier. Archival cannot be unlinkable like a claim (reachability + persistence +
+  challengeability require a stable holder), so the goal is a **firewalled pseudonym P**:
+  replace `StakeEngine::is_active_staker(entity_id)` with **membership-proof registration**
+  ("some active stake backs me") + an **archival nullifier `N_arch = x·G_arch`** over a
+  base independent of `Hp(O)` and `G_S` (one stake → one P Sybil-resistance; uniqueness
+  without revealing which stake; **extends T7 DDH to a third base `{Hp(O), G_S, G_arch}`**)
+  + **HKDF-derived independent keypair** P + **periodic liveness re-proof** that lapses on
+  unstake. **Tier-neutral, longevity-priced** shard pricing breaks the tier oracle
+  (critical-shard stability premium on demonstrated holding-longevity, which is observable
+  but is *not* tier) — paying the loss of the "tier-3 → archivist" elegance to stop the
+  portfolio re-publishing tier. The **firewall is a 4-layer stack** (crypto + network +
+  timing + output). **Convergence:** publicly-computable reward **dissolves F0** (tier
+  leaves the claim wire — reward no longer needs `tier_num`) **and F-INFLATION 8a** (no
+  confidential amount in the entitlement → silent inflation becomes *loud*/recomputable);
+  the only ZK left on the reward path is membership/backing + stealth payout. **Gate-list
+  before consensus-real:** (1) **aggregate supply normalizer** (the §14 servo guaranteed
+  `Σreward ≤ budget`; a per-staker cap does not — a `budget·work_P/Σwork` servo restores it
+  but reintroduces `Σwork`-differencing, `band_sum`-differencing reborn); (2) **retention-proof
+  soundness + per-P/per-shard consensus state-cost** (8a transforms, not vanishes — the irony
+  being archival-reward accounting becomes the state-growth problem archival exists to solve);
+  (3) **private replication counting becomes central** (scarcity drives the whole reward now);
+  (4) **tier decision — no free option** (dies system-wide with longevity-pricing recovering
+  deep-history retention-horizon matching, vs. lives-with-oracle); (5) **Sybil scarce-input
+  shift** capital→storage+bandwidth (cheap/invisible/firewall-hidden) + **overloaded lock**
+  (small for monetary supply vs. large for cap-teeth); (6) **bootstrap shape** (cold-start
+  coverage cliff vs. named time-limited subsidy whose privacy shape matters); (7) **`P`/`N_arch`
+  unbuilt** — the persistent-pseudonym lifecycle is the crux. **Scope:** this **replaces** the
+  confidential-yield subsystem (`CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/`
+  `entitlement.rs`/`tiers.rs`/`rewards.rs`) — a large audit-surface deletion, which is the
+  point; `CONFIDENTIAL_STAKING.md` left untouched until gates 4 + 1 settle. **Nutshell: staking
+  is the opt-in to archival because staking = archiving.**
 - **stake-lifecycle: F-ARCHIVAL — archival commitment binding is the load-bearing
   whole-system tier/membership question, outranks the F0 `W`-choice.**
   `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (new finding, 2026-06-05), with

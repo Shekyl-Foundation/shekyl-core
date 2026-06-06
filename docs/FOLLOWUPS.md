@@ -2541,6 +2541,30 @@ sustainability is unaffected by the recalibration.
   membership/tier/portfolio. Decide **before `ArchivalEngine` ships** (pre-genesis discount: design
   private from the start). Cross-track to `V3_STAKER_ARCHIVAL.md` / `V3_SHARD_VISUALIZATION.md`
   (both updated 2026-06-05).
+  **RESOLVED IN DESIGN (2026-06-05) — private, via pay-for-service rebasing + firewalled pseudonym;
+  pending sim/soundness ratification.** Enumeration: **archival is the only service staking provides**
+  (consensus = PoW's job; the capital "bond" is slashable for nothing; supply effects = just-holding;
+  governance = downstream) → the staking reward **is** payment for archival → **no opt-out tier**
+  (it re-creates the *Problem 1* rent). Model: one archiver type; one **work-paid** reward
+  (retention-based, scarcity-weighted, **banded plateau-cap**); principal = never-slashed collateral
+  = admission + per-P Sybil cost + longevity signal; **firewalled pseudonym P** replaces
+  `is_active_staker(entity_id)` with **membership-proof registration** + **`N_arch = x·G_arch`**
+  (independent of `Hp(O)`/`G_S`; one stake → one P; extends T7 DDH to a third base) + **HKDF-derived
+  P** + **periodic liveness re-proof** (lapses on unstake); **tier-neutral / longevity-priced** shards
+  break the tier oracle; firewall is a **4-layer stack** (crypto + network + timing + output).
+  **Convergence:** publicly-computable reward **dissolves F0** (tier off the claim wire) **and
+  F-INFLATION 8a** (no confidential amount → silent inflation becomes loud). **Gate-list before
+  consensus-real** (full text in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service rebasing*): (1) aggregate
+  supply normalizer (`Σwork` servo — `band_sum`-differencing reborn); (2) retention-proof soundness +
+  per-P/per-shard **consensus state-cost**; (3) **private replication counting now central**;
+  (4) tier decision (dies-with-longevity-replacement vs. lives-with-oracle — no free option);
+  (5) Sybil scarce-input shift capital→storage + **overloaded lock** (small for supply vs. large for
+  cap-teeth); (6) bootstrap shape (cold-start cliff vs. named time-limited subsidy whose privacy shape
+  matters); (7) **`P`/`N_arch` unbuilt** (the crux). **Scope:** this **replaces** the confidential-yield
+  subsystem (`CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/` `entitlement.rs`/`tiers.rs`/`rewards.rs`),
+  a large audit-surface deletion; `CONFIDENTIAL_STAKING.md` not edited until gates 4 + 1 settle. Nutshell:
+  **staking = archiving.** Resolution recorded in `PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (F-ARCHIVAL
+  resolution) and `V3_STAKER_ARCHIVAL.md`.
   **Target:** V3.1. **Ref:**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
 

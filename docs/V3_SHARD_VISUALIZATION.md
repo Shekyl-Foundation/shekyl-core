@@ -564,6 +564,28 @@ portfolio links social identity to staking history, and that the rarer the
 shard, the more uniquely it identifies the holder. This is a V3.x share-UX
 design item, gated with the archival commitment-binding decision.
 
+**Resolution — the firewalled-pseudonym model achieves graceful degradation
+(F-ARCHIVAL resolution; `docs/V3_STAKER_ARCHIVAL.md` §*Pay-for-service rebasing
+and the firewalled-pseudonym identity model*).** The visualization **composes
+cleanly** under the resolved model, which retroactively validates the
+share-feature instinct. The image is shard-keyed and identical across holders,
+so it does not identify the holder by itself; sharing it discloses "I am
+pseudonym **P**, I hold these shards" — *the pseudonym's own public facts* — and
+with the firewall in place (membership-proof binding, HKDF-separated identity,
+network/timing/output isolation) that disclosure **does not cascade** to claims,
+spends, principal, or tier. The two cascade-drivers above are closed at the
+source: **tier** is neutralized by tier-neutral / longevity-based shard pricing
+(so a portfolio is no longer a tier oracle), and the **claim-cohort bridge**
+(F0) dissolves because the pay-for-service reward removes `tier`/`creation` from
+the claim wire. Net: a sharer reveals exactly the pseudonym they chose to attach
+to a social identity, and nothing behind it. The shared portfolio is still a
+fingerprint *of P*, but fingerprinting a firewalled pseudonym only yields the
+pseudonym the sharer already surfaced — the cost of sharing is **bounded to the
+pseudonym**, which is the right place for a voluntary, social, opt-in feature to
+spend privacy. The share-UX **warning still applies** (the disclosure is real, it
+is just bounded), and the guarantee is contingent on the firewall holding across
+all four layers and on the gate-list in `V3_STAKER_ARCHIVAL.md` ratifying.
+
 ---
 
 ## Implementation notes
