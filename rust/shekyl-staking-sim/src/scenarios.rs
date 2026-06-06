@@ -647,6 +647,45 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         }
     }
 
+    // --- L9 cost confirmation: the lock-in REALLOCATION cost across capacity binds. The
+    // lean-oscillation `a10` row exposed a redistribution signature, not noise: age-scaled
+    // duration *lifts* the oldest band (mean_r 6.41→6.45, frac_under 0.041→0.020) while the
+    // adjacent mid-deep band [0.6–0.8] *starves* (frac_under 0.346→0.410) and aggregate
+    // deep_und worsens (0.351→0.377). Mechanism: at a capacity bind, locking holders onto
+    // the oldest shards (the duration knob working as designed) denies those actors to
+    // mid-deep, which has no slack to backfill — a lock-in opportunity cost that bites
+    // exactly at the operating regime (surplus "gentle cost" was the slack absorbing it).
+    // This is the SAME shape as finding #3: g reallocates hot→deep, age-scaled duration
+    // reallocates within-deep oldest-ward; both redistribute without manufacturing coverage
+    // (only capacity / L8 does), so stacked they double-count an oldest-ward pull. Confirm
+    // the *direction* (not the magnitude) across several genuine binds — sweep aging through
+    // the bind window and a storage-tightened bind, graded duration s0→s2→s4 — and read the
+    // per-band split (oldest frac_under DOWN, mid-deep [0.6–0.8] frac_under UP under
+    // age-scaling). If the signature replicates, the lean-margin reallocation cost is banked
+    // as demonstrated; the surplus "gentle" reading is regime-specific. Flat magnitude
+    // throughout (L4). ---
+    for (alabel, aging) in [("a08", 0.08), ("a10", 0.10), ("a12", 0.12)] {
+        for (dlabel, dscale) in [("s0", 0.0), ("s2", 2.0), ("s4", 4.0)] {
+            let mut c = lean_base();
+            c.name = format!("bind_{alabel}_{dlabel}");
+            c.axis = "duration_realloc_cost".into();
+            c.epoch_aging = aging;
+            c.bond_dur_age_scale = dscale;
+            out.push(c);
+        }
+    }
+    // A storage-tightened bind (independent lever): capacity bound via storage scarcity
+    // rather than recycle speed, to show the cost is bind-generic, not aging-specific.
+    for (dlabel, dscale) in [("s0", 0.0), ("s2", 2.0), ("s4", 4.0)] {
+        let mut c = lean_base();
+        c.name = format!("bind_stor_{dlabel}");
+        c.axis = "duration_realloc_cost".into();
+        c.epoch_aging = 0.10;
+        c.storage_scale = 0.85;
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
+    }
+
     // --- L8: the (bond-level × deep-shard-size) PAIR sweep. L8 says neither leg moves
     // the co-located pool alone — lowering the bond recruits the storage-rich, shrinking
     // the deep shard recruits the capital-rich, and deep durability needs the *joint*
