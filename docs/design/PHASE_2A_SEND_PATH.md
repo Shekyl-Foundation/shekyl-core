@@ -1,6 +1,9 @@
 # Phase 2a — refresh + send path (design)
 
-**Status:** Round 0 — specification for implementation.  
+**Status:** Implementation — §10 pre-implementation checklist agreement items
+signed off (§1 DoD, §5 PR split, §9 open-question owners/targets); remaining
+unchecked §10 boxes are per-PR implementation work (2a-1…2a-4). PR 2a-1
+(daemon fee snapshot + broadcast) in progress.  
 **Scope:** Land a **real** transfer on `Engine<S>`: daemon-backed fees, signed
 `tx_bytes`, daemon broadcast. Excludes Phase **2b** (stake), **2c**
 (addresses/proofs), **2d** (cold bundles), and Phase **6** regtest e2e (tracked
@@ -1641,7 +1644,7 @@ step 2), never read from a daemon field.
 
 ## 10. Review checklist (pre-implementation)
 
-- [ ] §1 definition of done agreed (incl. locally-computed-path reframe + real-root gating)
+- [x] §1 definition of done agreed (incl. locally-computed-path reframe + real-root gating)
 - [x] §3.0 F1 decided: no per-leaf path query; bulk-leaf RPC + local assembly
 - [x] §3.0.5 F10 closed into F1; real-root validity gated on curve-tree client + Phase 6
 - [ ] §3.0.3 bulk-leaf RPC + KAT added to `SHEKYLD_PREREQUISITES.md`
@@ -1664,8 +1667,8 @@ step 2), never read from a daemon field.
 - [x] §3.6 remote-daemon origin-leak documented in threat model
 - [x] §4 two-phase PQC encode sequence + transfer-kind scope pinned
 - [x] §4 wire encoder owner agreed — byte layout owned by `shekyl-oxide`; thin `SignedProofs → Transaction::V2` adapter in `shekyl-tx-builder` `wire` module (no `shekyl-tx-wire` crate; not engine-core; not `shekyl-io`)
-- [ ] §5 PR split fits branching policy
-- [ ] §9 open questions have owners / Round 1 targets (incl. #5 validity horizon)
+- [x] §5 PR split fits branching policy
+- [x] §9 open questions have owners / Round 1 targets (incl. #5 validity horizon)
 - [ ] `WALLET_REWRITE_PLAN.md` cross-link added when 2a-1 lands
 
 ---
