@@ -36,16 +36,24 @@
 //!   path (CT-1, gated behind the CT-2 KAT baseline).
 //! - [`assemble`]: membership-path assembly (CT-4).
 //! - [`client`]: orchestration over synced blocks (CT-3).
+//! - [`reference`](mod@reference): reference-block selection + proof
+//!   validity-horizon arithmetic (§5), pure functions over heights.
 
 #![deny(unsafe_code)]
 
 pub mod assemble;
 pub mod client;
 pub mod recon;
+pub mod reference;
 pub mod store;
 pub mod types;
 
 pub use client::{BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs};
+pub use reference::{
+    proof_expired, proof_submittable, reference_block_age, select_reference_height,
+    should_reanchor, PROOF_VALIDITY_HORIZON, REBUILD_AT, REFERENCE_BLOCK_MAX_AGE,
+    REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
+};
 pub use types::{
     AssembledPath, ChunkLeaf, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
 };

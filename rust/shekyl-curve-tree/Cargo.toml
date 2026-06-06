@@ -32,6 +32,14 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 
+# Reads `config/consensus_constants.json` to emit the FCMP++
+# reference-block age constants (`build.rs`). Mirrors
+# `rust/shekyl-difficulty`'s build-time JSON read so the wallet's
+# reference-block selection cannot drift from consensus
+# (`17-dependency-discipline.mdc`, `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
+[build-dependencies]
+serde_json = "1"
+
 # Parses the checked-in CT-2 Tier-A KAT oracle
 # (`tests/fixtures/ct2_tier_a.json`, generated offline by
 # `gen_ct2_fixture.py` from a regtest daemon). Test-only; not in the

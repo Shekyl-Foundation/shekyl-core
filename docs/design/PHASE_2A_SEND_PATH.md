@@ -1597,19 +1597,22 @@ step 2), never read from a daemon field.
    premise behind D is confirmed only when the §3.10.1 KAT shows the depth term is
    immaterial across `[1,8]×[1,24]`; if it isn't, `D_ref` becomes a fold-direction
    choice re-decided under privacy > features (§3.10.2).
-5. **FCMP++ proof validity horizon + reference-block selection (deferred):**
+5. **FCMP++ proof validity horizon + reference-block selection (RESOLVED):**
    §3.6 handles stale roots *reactively* via `ProofStale`. The *proactive* bound
    — how many blocks a built proof stays submittable before the wallet should
-   pre-emptively rebuild against a fresh `tree_root` — is unbounded in Round 0.
-   This is now coupled to **reference-block selection** in the curve-tree client
-   (§3.0.4): which checkpoint/block the wallet anchors the path to directly
-   determines how stale the proof is at submit. Owner: curve-tree-client phase
-   (with a Phase 2b cross-check — stake lifecycle has the same exposure).
-   **Opened in `CURVE_TREE_CLIENT.md` §5:** reference block selected at
-   `tip − REF_ANCHOR_AGE` (= `MIN_AGE + 1 = 6`, canonical convention); proactive
-   horizon = `MAX_AGE − REF_ANCHOR_AGE = 94` blocks with a `REBUILD_AT ≈ 47`
-   re-anchor rule, complementing 2A's reactive `ProofStale` (§3.6). That doc's
-   §5.4 also flags a C2 terminology correction here (§3.7.6 — two ages, not one).
+   pre-emptively rebuild against a fresh `tree_root` — was unbounded in Round 0.
+   This was coupled to **reference-block selection** in the curve-tree client
+   (§3.0.4): which block the wallet anchors the path to directly determines how
+   stale the proof is at submit. **Resolved and landed** in
+   `CURVE_TREE_CLIENT.md` §5 / `rust/shekyl-curve-tree/src/reference.rs`:
+   reference block selected at `tip − REF_ANCHOR_AGE` (= `MIN_AGE + 1 = 6`,
+   canonical convention); proactive horizon = `MAX_AGE − REF_ANCHOR_AGE = 94`
+   blocks with a `REBUILD_AT = MAX_AGE / 2 = 50` re-anchor rule, complementing
+   2A's reactive `ProofStale` (§3.6). Exposed as total height-arithmetic
+   predicates (`select_reference_height`, `proof_submittable`, `proof_expired`,
+   `should_reanchor`). Phase 2b cross-check (stake lifecycle has the same
+   exposure) remains open. That doc's §5.4 also flags a C2 terminology
+   correction here (§3.7.6 — two ages, not one).
 
 **Closed by §3.0 (no longer open):**
 
