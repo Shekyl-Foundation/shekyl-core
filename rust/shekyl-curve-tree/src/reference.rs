@@ -82,12 +82,16 @@ const _: () = assert!(
 /// preference (§5.1 reversion clause).
 pub const REF_ANCHOR_AGE: u64 = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
 
-/// Submittable lifetime of a proof, in blocks, measured from build time
+/// Submittable lifetime of a proof, in blocks past build time
 /// (§5.2): `MAX_AGE − REF_ANCHOR_AGE`. Built at `reference_height =
-/// tip_build − REF_ANCHOR_AGE`, the proof's reference age crosses
-/// `MAX_AGE` after this many blocks, at which point the daemon rejects it
-/// as too stale. This is the proactive bound `PHASE_2A_SEND_PATH.md` §9
-/// #5 left unbounded in Round 0.
+/// tip_build − REF_ANCHOR_AGE`, the reference age is `REF_ANCHOR_AGE + N`
+/// after `N` blocks, so the proof stays submittable through
+/// `tip_build + PROOF_VALIDITY_HORIZON` **inclusive** (where the age is
+/// exactly `MAX_AGE`, still accepted), and is rejected as too stale only
+/// at `tip_build + PROOF_VALIDITY_HORIZON + 1` (age `MAX_AGE + 1`). I.e.
+/// the daemon's acceptance window is inclusive at both ends. This is the
+/// proactive bound `PHASE_2A_SEND_PATH.md` §9 #5 left unbounded in
+/// Round 0.
 pub const PROOF_VALIDITY_HORIZON: u64 = FCMP_REFERENCE_BLOCK_MAX_AGE - REF_ANCHOR_AGE;
 
 /// Reference-block age at which the wallet proactively re-anchors an

@@ -460,7 +460,9 @@ A leaf is in the tree at the reference block iff its insertion (drain) height
 side-effect-free arithmetic over heights (`select_reference_height`,
 `reference_block_age`, `proof_submittable`, `proof_expired`,
 `should_reanchor`) plus the constants `REF_ANCHOR_AGE` (6),
-`PROOF_VALIDITY_HORIZON` (94), and `REBUILD_AT` (50).
+`PROOF_VALIDITY_HORIZON` (94 — the proof stays submittable through
+`tip_build + 94` inclusive, where the age is exactly `MAX_AGE`), and
+`REBUILD_AT` (50).
 `REFERENCE_BLOCK_{MIN,MAX}_AGE` are emitted from
 `config/consensus_constants.json` by the crate's `build.rs` (same JSON
 authority as the C++ header), with const-eval sentinels guarding the
@@ -499,8 +501,11 @@ event). Not a per-wallet knob.
 ### 5.2 Proof validity horizon (the proactive bound)
 
 A built proof is submittable while its reference block satisfies
-`tip_now − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)`. Built at
-`tip_build` with `reference_height = tip_build − 6`, the proof **expires** after:
+`tip_now − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)` (inclusive).
+Built at `tip_build` with `reference_height = tip_build − 6`, the reference
+age is `6 + N` after `N` blocks, so the proof stays submittable **through**
+`tip_build + 94` inclusive (age exactly `MAX_AGE`) and is rejected as too
+stale only at `tip_build + 95` (age `101`):
 
 ```text
 horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
