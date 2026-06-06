@@ -2277,7 +2277,8 @@ gate 1), not locally — but *public, not local,* is what kills silent inflation
    must be re-priced, and the bond-rate (gate 4) is a sim output. The strongest pre-genesis argument:
    capital-bonded yield has no justification in the fee-only era (it is the rent the mission forbids,
    the one part that cannot re-justify itself once the subsidy ends), so this is a **genesis-class**
-   decision, not a deferrable refinement.
+   decision, not a deferrable refinement. The sim is specified (spec-first, pre-code) in
+   `STAKER_ARCHIVAL_SIM.md`; iteration 1 isolates **coverage dynamics**, gates 1/4/5/7 layered after.
 
 **Honest residual.** An opted-in staker has a long-lived **public pseudonymous profile** (shard-set,
 longevity, performance) *by function*; pseudonym count ≈ active-stake count (an aggregate, accepted-leak

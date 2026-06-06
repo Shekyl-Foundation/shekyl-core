@@ -135,8 +135,10 @@
   cost (8a → loud 8c); (3) per-shard-nullifier counting; (4) **per-shard retention bond
   replacing tier** (keystone; residual = bond-rate calibration); (5) bootstrap = flat
   per-bonded-shard, overlapped, sunset; (6) `P` backing+firewall (unbuilt; uniqueness relaxed);
-  (7) **economic sim re-priced** (the foundational gate). Next step: **build and iterate the
-  sim.**
+  (7) **economic sim re-priced** (the foundational gate). **Next step — the sim, spec-first:**
+  `docs/design/STAKER_ARCHIVAL_SIM.md` (new), iteration 1 isolating **coverage dynamics**
+  (`1/R` + plateau-cap + per-shard bonds → covered/spread/none-holds-everything/deep-history-held),
+  gates 1/4/5/7 layered as later iterations; no code until the spec is reviewed.
 - **stake-lifecycle: F-ARCHIVAL RESOLVED IN DESIGN — pay-for-service rebasing +
   firewalled-pseudonym identity model (supersedes the two-stream framing; pending
   sim/soundness ratification).** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3

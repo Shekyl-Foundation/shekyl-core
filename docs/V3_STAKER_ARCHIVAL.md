@@ -688,7 +688,12 @@ and a fresh soundness pass before it ships:
    principal decouples from reward (work-heavy small holders out-earn idle large
    holders), so the locked-supply assumptions the V3 economy sims baked in must be
    re-priced, and the bond-rate calibration (item 4) is a sim output, not an armchair
-   number. Until the sim blesses the re-pricing, the rebasing is not consensus-real.
+   number. Until the sim blesses the re-pricing, the rebasing is not consensus-real. The
+   sim is specified (spec-first, pre-code) in
+   [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md); iteration 1 isolates
+   **coverage dynamics** (does `1/R` + plateau-cap + per-shard bonds actually produce
+   "every shard covered, spread, none-holds-everything"?), with the other gates layered as
+   later iterations.
 
 **Honest residual.** An opted-in staker has a **long-lived public pseudonymous
 profile** — shard-set, longevity, performance — *by function*, and the count of

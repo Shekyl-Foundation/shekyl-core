@@ -2574,6 +2574,10 @@ sustainability is unaffected by the recalibration.
   `entitlement.rs`/`tiers.rs`/`rewards.rs`), a large audit-surface deletion; `CONFIDENTIAL_STAKING.md`
   not edited until gates 4 + 1 settle. Nutshell: **staking = archiving.** Resolution recorded in
   `PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (F-ARCHIVAL resolution) and `V3_STAKER_ARCHIVAL.md`.
+  **Next step (active): the sim.** Spec-first, pre-code, in
+  [`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md); iteration 1 isolates
+  **coverage dynamics** (`1/R` + plateau-cap + per-shard bonds → "covered, spread,
+  none-holds-everything, deep-history held"), gates 1/4/5/7 layered as later iterations.
   **Target:** V3.1. **Ref:**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
 
