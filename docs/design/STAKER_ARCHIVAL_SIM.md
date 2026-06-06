@@ -9,7 +9,10 @@ shrinking subsidy thins the attractor (oldest tail first), the price-coupling de
 the foundation floor re-engages as the market thins; the P1/P2 hardening confirms the L11 lever
 survives co-location (graded, not a cliff, but with a narrower feasible band) and that the L13
 spiral has a second, level-driven leg (a falling token price collapses coverage via fiat flow
-cost with no trust-loss trigger) (2026-06-06).**
+cost with no trust-loss trigger); L15 shows **coverage ≠ retrieval** — a fully-covered deep set
+fails its retrieval SLA when holders cluster into too few failure domains, so **diversity, not
+replica count, is the binding retrieval constraint** and `R_target` is derivable from the SLA
+`(u, A*)` rather than stipulated (2026-06-06).**
 Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
 build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
 residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
@@ -1803,6 +1806,71 @@ failure* (the L4 survival arithmetic assumed independence); L14 finds the challe
 that makes free-riding unprofitable *given* that hot shards self-prove, so the cadence — the
 non-productive traffic — lands only on the cold tail.
 
+### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
+
+L15 is the first layer that scores the property users actually need — *retrieval* (≥1 holder
+reachable at a target availability `A*`) — rather than *coverage* (`R ≥ R_target`, replicas
+merely exist). The model (`src/retrieval.rs`, gated by `retrieval_model`, legacy
+byte-identical) adds two facts the coverage score ignored:
+
+- **Per-holder uptime `u`.** A holder is not always serving (downtime, churn, the slow onion
+  path of L16). One replica delivers `u`, not `1`; redundancy is what converts `u` into `A*`.
+- **Correlated failure.** The L4 survival arithmetic (`N=3, p=0.99 ⇒ 1−10⁻⁶`) assumed
+  *independent* holder failure. Real holders share **failure domains** — jurisdiction, ASN,
+  client implementation — and a domain fails as a unit. A shard's effective redundancy is its
+  count of **distinct domains** `d`, not its raw replica count `R`. Availability
+  `= 1 − (1−u)^d`; extra replicas inside an already-covered domain add nothing.
+
+Both findings run on the **healthy L11 attractor at a low ρ** — a *fully covered* deep set
+(`deep_und=0`, `R≈6`) — so what they surface is not a coverage shortfall but a property the
+coverage score is blind to.
+
+**Finding 1 — coverage ≠ retrieval; diversity is the binding constraint.** Under independent
+failure (`l15_indep`, each holder its own domain ⇒ `d=R`), the covered set clears a three-nines
+SLA: `rAvl=1.0`, `rUDp=0`. Bucketing the *same* holders into fewer domains (`l15_corr_*`,
+`R` unchanged):
+
+| domains `d` | deep-set mean availability `rAvl` | deep frac under SLA `rUDp` |
+|---|---|---|
+| 6 | 0.9997 | 0.007 |
+| 3 | 0.9967 | 0.202 |
+| 2 | 0.9884 | 1.000 |
+| 1 | 0.9000 | 1.000 |
+
+The deep set is fully covered at every row (`deep_und=0`); availability collapses purely from
+domain clustering. **Diversity (≥3 distinct domains per deep shard at `u=0.9, A*=0.999`), not
+replica count, is the binding retrieval constraint** — a covered-but-clustered set is a latent
+availability failure that the L1–L13 coverage metric reports as healthy.
+
+**Finding 2 — `R_target` is derivable from the SLA, not stipulated.** Inverting the
+availability formula, `R_target = ⌈ln(1−A*)/ln(1−u)⌉` (`l15_uptime_*`, independent domains):
+
+| holder uptime `u` | derived deep `R_target` (`rTgtA`) |
+|---|---|
+| 0.95 | 2 |
+| 0.90 | 3 |
+| 0.80 | 5 |
+| 0.50 | 10 |
+
+The stipulated `r_target_deep = 6` silently assumes `u ≳ 0.85`. Below that the covered set is
+**under-redundant for the SLA even under independent failure** (`u50`: `rUDp=1.0` despite
+`R≈6`). So `R_target` should be *read off* the stated SLA `(u, A*)` rather than asserted as a
+constant.
+
+**Disposition.** Gate-4/5 must (a) state the retrieval SLA `(u, A*)` and derive `R_target`
+from it (the L16 onion path depresses `u`, which raises the derived `R_target` — the two
+layers compose), and (b) add a **diversity floor co-located with the coverage floor**: a deep
+shard needs ≥`d*` distinct domains *and* `R ≥ R_target`, the latter being insufficient alone.
+This **reinforces P3** — the oldest band, thinnest in both replica count and (therefore) domain
+spread, is the first to fall under the diversity floor, exactly as it is first under the
+coverage floor at both temporal ends. **Privacy tension (mission priority 2):** the diversity
+axis must be measured in coarse, deterministic buckets (the model's `a % n_domains`), never
+per-holder geolocation — a diversity metric that leaks holder location defeats the
+firewalled-pseudonym requirement it exists to protect. **Residue:** live `u`, the SLA `A*`, and
+the real domain-correlation structure are post-testnet empirics; L15 fixes the *shape*
+(coverage≠retrieval, derived-`R_target`, diversity-floor), not the live values. L15 is the
+serving/diversity substrate L14's challenge cadence rides on.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
@@ -1827,7 +1895,7 @@ where a decision is provisional.
 | L12 | **Bootstrapping / cold-start** (gate 5; genesis transient) | Growing frontier window (genesis hot core + per-epoch block growth via `World::append_shard`, deep history accrues *from zero*) + L11 endogenous entry from empty + a population-decaying foundation floor (`participation::foundation_floor`, invisible to the reward servo); fully gated, legacy byte-identical. Findings: (1) the cold start **reaches the L11 attractor** (steady `bondA≈76`, deep covered) — bootstrap is the *transient approach*, not a separate equilibrium; (2) the bare transient deep gap is **total** (`bDU=1.0`) — a *timing* hole (deep forms ~10 epochs before archivers seat it), not an economic one; (3) a `r_target_deep` floor decaying to ~steady pop collapses it to `bDUf=0.019` with **steady `bondA` unchanged** (no crowd-out — floor not in `R`/`Σwork`); (4) decay schedule is a fine lever (`decay_pop` 40/80/160 → floored gap 0.019/0.019/0.000 — wide safe band); (5) **overshoot is real but modest and is a growth/entry race** (peak `bondA` 83–97 vs steady 76–78; worse on *slow* growth — prolonged high-APR phase), and the shed is **coverage-neutral** (`oUmx=0`, `deep_und` steady ≈0.001 — benign rotation, L9/L11 shape); (6) the stress is the growth/entry mismatch (fast growth 12/epoch > entry 6 ⇒ total gap; slow 3 ⇒ gap 0.009), not the economics. | **RESOLVED (shape derived) — iteration 3.** Disposition confirmed: pin genesis constants for the **thick steady state** (L1/L7); the **population-decaying foundation floor** covers the transient (load-bearing *most* at genesis, withdraws adaptively per `75-system-autonomy.mdc`, does not crowd out entry). Overshoot bounded + coverage-neutral. **Reframes L5/L6:** the floor's bootstrap role is now the primary one; gate-5 sizes the genesis floor + decay schedule. **Residue:** real chain-growth rate, genesis floor size, and safe decay schedule are post-testnet calibrations of an already-understood curve (sign-known/magnitude-unknown, as L9/L10). **Unlocks L13** (fee-era = the budget-shrink mirror of this budget-transfer; the floor's decay reverses into a re-engagement as the market thins). |
 | L13 | **Fee-era end-state / sustainability** (mission timeframe 2; ~30 yr) | As subsidy → 0 the archival budget must come from fees/terminal subsidy; a shrinking budget thins the lean equilibrium and the oldest (irreplaceable) tail is most exposed. Deep history grows unboundedly while the paid population may not; token-price ↓ → reward ↓ → exit ↓ → coverage ↓ is a candidate death spiral. | **RESOLVED (shape derived) — iteration 3.** Modeled the shrinking purse + price-coupling + adaptive reward-share servo + foundation-floor backstop (gated, legacy byte-identical). Findings: decay thins the attractor along the L11 transfer curve in reverse (coverage knee at terminal subsidy ~80–100); the **oldest tail goes under first** (`oUmx 0.163` at the knee vs `cDeepU 0.057`); the price-coupling spiral is **real** (`bondA` 39→17) but **dampable** by the burn.rs-style servo (`bondA` 17→62, shortfall 1.0→0.21) **conditional** on (a) a *smoothed* trust signal (a reactive servo oscillates) and (b) an adequate fee-market ceiling (below it the servo saturates → graceful loud failure); the L12 floor **re-engages automatically** as the market thins (`bDUf 0.425` vs bare `1.0`). The loop is **not** an undamped priority-1 failure provided the damping apparatus ships; without it, it runs. Residue: live ceiling, coupling strength, terminal-subsidy level, trust horizon are post-testnet empirics. See §*L13 — fee-era end-state*. **HARDENED (P2 — flow-cost denomination):** `flow_cost` is **token-denominated** in the model (every APR term shares the `budget` unit), so the price-cancellation behind "only expected depreciation bites" was a *modeling artifact*. Adding a **fiat** flow cost (`apr = R/B − F/(B·p)`, `p2_fiat_*`) confirms a **second, level-driven leg**: a price falling to 0.25 *with `price_coupling = 0`* (no trust trigger) collapses deep coverage outright (`deep_und 1.0`, `bondA 81→28`) — the level channel ignites the loop with no expectation feedback. It is the **more dangerous leg**: the token-denominated servo damps it only *partially* even at ceiling 400 (2× the purse: `deep_und 1.0→0.607`), because it must over-pay the fiat drag in tokens. The L13 disposition is **sharpened, not overturned** — dampable, but the level-leg damping condition is far stronger than the expectation-leg one, **reinforcing P4** (a token-denominated backstop is weak against a low-price fiat-cost collapse; the terminal subsidy must carry real margin). |
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the unmodeled challenge/audit cadence, not the bond. | **Open — gate 7 / consensus design.** The bond is the capital cost; the challenge frequency + fake-cost + penalty are the operational Sybil/free-rider economics. Model challenge cadence vs. faking cost; couple to retrieval (L15). |
-| L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. | **Open — iteration 3+.** Add per-holder uptime + read-path latency to derive `R_target` from a retrieval-availability target (rather than stipulating it); add a privacy-compatible **diversity axis** (jurisdiction/ASN/implementation) to the spread metric so correlated loss is visible (mission priority 2 tension: diversity measurement must not leak). |
+| L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **Open — forward consideration, NOT scheduled.** Captured so the eventual transport PR starts from a stated position. The model is **already designed around the worst case** (duration win-or-harmless `L2–L6` per L10 H1/H4; foundation floor backstops the `L6` ceiling), so transport latency is a *bounded, modeled* constraint, not a discovery. **The one transport input that feeds the sim:** whether the heavy path stays pure-rendezvous (worst-case L-regime) or admits a bandwidth-buying relaxation that does **not** link `P` — the lever that sets where Shekyl lands on the `L2–L6` curve. Forks deferred to the transport PR: (1) embed Arti vs. external Tor daemon; (2) keep the I2P secondary door open architecturally (reversion-clause shape); (3) a dedicated privacy threat pass on the rendezvous-forced heavy path (Monero does not lean on that config — no inheritance-by-assumption). |
 
 ### Robustness-sweep verdicts (which findings are structural)

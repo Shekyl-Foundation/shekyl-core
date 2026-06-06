@@ -15,6 +15,7 @@ mod agent;
 mod metrics;
 mod model;
 mod participation;
+mod retrieval;
 mod reward;
 mod scenarios;
 
@@ -86,9 +87,16 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!("  saturated); fDUpk = worst serving deep gap over the run's 2nd half (death-spiral");
     eprintln!("  read — sustained high = priority-1 failure). L13; =budget/0 outside fee-era.");
+    eprintln!("  rUDp = RETRIEVAL deep frac under the SLA (1-(1-u)^d < A*); rAvl = deep-set mean");
+    eprintln!(
+        "  availability; rTgtA = DERIVED R_target from (u,A*). L15; nonzero rUDp on a covered"
+    );
+    eprintln!(
+        "  set (deep_und~0) = coverage!=retrieval (correlated failure binds). 0/1 outside L15."
+    );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} | {:>6} {:>6}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -120,6 +128,9 @@ fn print_summary(results: &[ScenarioResult]) {
         "baPk",
         "feB",
         "fDUpk",
+        "rUDp",
+        "rAvl",
+        "rTgtA",
     );
 
     for r in results {
@@ -129,7 +140,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} | {:>6.1} {:>6.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -164,6 +175,9 @@ fn print_summary(results: &[ScenarioResult]) {
             r.bonded_active_peak,
             r.fee_budget_end,
             r.fee_deep_under_peak,
+            r.retr_under_deep,
+            r.retr_avail_deep,
+            r.r_target_avail as usize,
         );
     }
 

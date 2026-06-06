@@ -14,6 +14,7 @@ use crate::model::{r_target, Actor, Rng, Shard, World};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor, process_exits, ParticipationParams,
 };
+use crate::retrieval::{r_target_for_availability, serving_availability};
 use crate::reward::{evaluate, RewardParams};
 use serde::Serialize;
 
@@ -169,6 +170,23 @@ pub struct SimConfig {
     /// Terminal token price the decay approaches.
     pub price_floor: f64,
 
+    /// **Retrieval availability (L15).** When on, the sim scores not just coverage
+    /// (`R ≥ R_target`) but realized *retrieval availability* `1 − (1−u)^d` per shard,
+    /// where `d` is the count of distinct failure domains among a shard's serving
+    /// holders. Surfaces the coverage≠retrieval gap and lets correlated failure
+    /// (`retr_n_domains` small) erode a fully-covered deep set. Off ⇒ inert,
+    /// byte-identical.
+    pub retrieval_model: bool,
+    /// Per-holder uptime `u` (probability a holder is serving in an outage realization).
+    pub retr_uptime: f64,
+    /// Target retrieval availability `A*` the deep set must clear (e.g. `0.999`). Used
+    /// both to derive `R_target` and to score `retr_under_deep` (deep shards below `A*`).
+    pub retr_avail_target: f64,
+    /// Failure-domain count for the correlated-failure bucketing (`a % n_domains`).
+    /// `0` ⇒ each holder its own domain (independent / L4 best case); small values
+    /// (1–6) model jurisdiction/ASN/implementation clustering.
+    pub retr_n_domains: usize,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -265,6 +283,18 @@ pub struct ScenarioResult {
     /// is a priority-1 durability failure (the deep tail is unfunded and going dark);
     /// ≈0 means the decayed purse, adaptive servo, or foundation floor held the tail.
     pub fee_deep_under_peak: f64,
+    /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
+    /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
+    /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
+    /// correlated failure (few distinct domains), not replica shortfall, is binding.
+    pub retr_under_deep: f64,
+    /// **Deep-set mean retrieval availability** (L15): windowed-mean `1 − (1−u)^d` over
+    /// deep shards. Equals `1.0` outside the retrieval model.
+    pub retr_avail_deep: f64,
+    /// **Derived deep redundancy** (L15): the `R_target` the SLA `(u, A*)` requires under
+    /// independence — `r_target_deep` read off the availability target rather than
+    /// stipulated. `0` outside the retrieval model.
+    pub r_target_avail: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -403,6 +433,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // the committed series when `fetch_latency == 0`.
     let mut series_serving_deep_under = Vec::with_capacity(cfg.epochs);
     let mut series_serving_old_under = Vec::with_capacity(cfg.epochs);
+    // L15 retrieval availability: per-epoch fraction of *deep* shards whose realized
+    // retrieval availability `1 − (1−u)^d` falls below the SLA `retr_avail_target`, and
+    // the deep-set mean availability. Inert (empty/zero) when `!retrieval_model`.
+    let mut series_retr_under_deep = Vec::with_capacity(cfg.epochs);
+    let mut series_retr_avail_deep = Vec::with_capacity(cfg.epochs);
     // L11 emergent participation: active count and bonded-active count per epoch. When
     // `!endogenous` these stay flat at the full population (legacy population is fixed).
     let mut series_active = Vec::with_capacity(cfg.epochs);
@@ -529,6 +564,37 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .map(|b| b.frac_under)
                 .unwrap_or(0.0),
         );
+
+        // L15 retrieval availability: realized `1 − (1−u)^d` per shard (d = distinct
+        // failure domains among seated holders), scored over the deep set against the
+        // SLA `retr_avail_target`. This is the coverage≠retrieval read — a shard can be
+        // *covered* (serving_r ≥ R_target) yet fail the SLA if its holders cluster into
+        // too few domains. Inert when `!retrieval_model`.
+        if cfg.retrieval_model {
+            let avail = serving_availability(&world, cfg.retr_uptime, cfg.retr_n_domains);
+            let mut dn = 0usize;
+            let mut under = 0usize;
+            let mut sum = 0.0_f64;
+            #[allow(clippy::needless_range_loop)]
+            for s in 0..world.shards.len() {
+                if world.shards[s].age >= cfg.deep_threshold {
+                    dn += 1;
+                    sum += avail[s];
+                    if avail[s] < cfg.retr_avail_target {
+                        under += 1;
+                    }
+                }
+            }
+            series_retr_under_deep.push(if dn > 0 {
+                under as f64 / dn as f64
+            } else {
+                0.0
+            });
+            series_retr_avail_deep.push(if dn > 0 { sum / dn as f64 } else { 1.0 });
+        } else {
+            series_retr_under_deep.push(0.0);
+            series_retr_avail_deep.push(1.0);
+        }
 
         // L12 bootstrap deep coverage: serving deep under-target with and without the
         // foundation floor. The floor decays with the current bonded-archiver population
@@ -664,6 +730,30 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L15 retrieval availability, windowed means over the same steady-state window:
+    // `retr_under_deep` is the fraction of deep shards below the SLA `A*` (the
+    // coverage≠retrieval gap — nonzero here with covered shards means correlated failure
+    // is the binding constraint), and `retr_avail_deep` is the deep-set mean availability.
+    // `r_target_avail` is the *derived* deep redundancy the SLA requires under
+    // independence — what `r_target_deep` should be, read off `(u, A*)` rather than
+    // stipulated.
+    let rud_window = &series_retr_under_deep[series_retr_under_deep.len() - w..];
+    let retr_under_deep = if w > 0 {
+        rud_window.iter().sum::<f64>() / w as f64
+    } else {
+        0.0
+    };
+    let rad_window = &series_retr_avail_deep[series_retr_avail_deep.len() - w..];
+    let retr_avail_deep = if w > 0 {
+        rad_window.iter().sum::<f64>() / w as f64
+    } else {
+        1.0
+    };
+    let r_target_avail = if cfg.retrieval_model {
+        r_target_for_availability(cfg.retr_uptime, cfg.retr_avail_target) as f64
+    } else {
+        0.0
+    };
     // L12 bootstrap aggregates, taken over the WHOLE run (the cold-start transient is at
     // the *start*, not in the steady-state window): the worst deep retrieval gap with and
     // without the foundation floor, and the peak bonded-archiver count. `bonded_active_peak`
@@ -729,6 +819,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bonded_active_peak,
         fee_budget_end,
         fee_deep_under_peak,
+        retr_under_deep,
+        retr_avail_deep,
+        r_target_avail,
         claims: SubClaims {
             covered,
             spread,
@@ -826,6 +919,14 @@ fn baseline() -> SimConfig {
         token_price: 1.0,
         price_decay: 0.0,
         price_floor: 1.0,
+        // L15 retrieval model: off by default (inert, byte-identical). The retrieval
+        // scenarios opt in. Defaults describe a three-nines SLA at 90% holder uptime
+        // with independent domains; scenarios override `retr_n_domains` to add
+        // correlation.
+        retrieval_model: false,
+        retr_uptime: 0.9,
+        retr_avail_target: 0.999,
+        retr_n_domains: 0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1693,6 +1794,65 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.adaptive_share = true;
         c.share_gain = 8.0;
         c.budget_ceiling = 400.0; // more headroom than the expectation-channel servo needed
+        out.push(c);
+    }
+
+    // --- L15 (retrieval availability / correlated failure): coverage ≠ retrieval. Every
+    // prior layer scored a shard "covered" at `R ≥ R_target`. The property users need is
+    // *retrieval* — ≥1 holder reachable at a target availability `A*`. Two facts the
+    // coverage score ignores: (i) holders have per-holder uptime `u < 1`, so redundancy
+    // is what converts `u` into `A*`; (ii) holders share **failure domains**
+    // (jurisdiction / ASN / client), and a shard's effective redundancy is its count of
+    // *distinct domains* `d`, not its raw replica count `R`. Availability `= 1 − (1−u)^d`.
+    // These scenarios run on a HEALTHY, fully-covered deep set (the L11 attractor at a low
+    // ρ) and ask: does the covered set actually meet its retrieval SLA, and what erodes it?
+    let l15_base = || {
+        let mut c = l11_base();
+        c.init_active_frac = 0.0; // boot from fill → entry-limited covered equilibrium
+        c.reservation_lo = 0.01; // low ρ → deep covered with headroom (R ≥ R_target_deep)
+        c.reservation_hi = 0.01;
+        c.retrieval_model = true;
+        c.retr_uptime = 0.9; // 90% holder uptime (self-hosted node over the L16 onion path)
+        c.retr_avail_target = 0.999; // three-nines retrieval SLA
+        c.retr_n_domains = 0; // independent (each holder its own domain) — overridden below
+        c
+    };
+    // (L15a) INDEPENDENT baseline: each holder its own domain (`d == R`). With R≈6 deep and
+    // u=0.9, availability `1 − 0.1^6 ≈ 1` ≫ A* — retr_under_deep ≈ 0. This recovers the L4
+    // arithmetic and confirms the covered set meets the SLA *when failure is independent*.
+    {
+        let mut c = l15_base();
+        c.name = "l15_indep".into();
+        c.axis = "l15_domains".into();
+        out.push(c);
+    }
+    // (L15b) CORRELATED sweep: bucket holders into `n_domains` failure classes. As domains
+    // fall, `d` caps below `R` and availability `1 − 0.1^d` drops: d=3 ⇒ 0.999 (at the
+    // SLA), d=2 ⇒ 0.99 (under), d=1 ⇒ 0.9 (far under). The deep set stays fully *covered*
+    // (R unchanged) yet `retr_under_deep` climbs — the headline coverage≠retrieval result:
+    // **diversity (≥3 domains), not replica count, is the binding retrieval constraint.**
+    for (label, nd) in [("d1", 1usize), ("d2", 2), ("d3", 3), ("d6", 6)] {
+        let mut c = l15_base();
+        c.name = format!("l15_corr_{label}");
+        c.axis = "l15_domains".into();
+        c.retr_n_domains = nd;
+        out.push(c);
+    }
+    // (L15c) UPTIME sweep → derived R_target. Hold domains independent and vary `u`; the
+    // reported `rTgtA` is the deep redundancy the SLA *requires* (`⌈ln(1−A*)/ln(1−u)⌉`),
+    // read off `(u, A*)` rather than stipulated. u=0.9 ⇒ 3, u=0.8 ⇒ 5, u=0.5 ⇒ 10: the
+    // stipulated `r_target_deep = 6` silently assumes `u ≳ 0.85`. Below that, the covered
+    // set is under-redundant for the SLA even with independent failure.
+    for (label, u) in [
+        ("u95", 0.95_f64),
+        ("u90", 0.90),
+        ("u80", 0.80),
+        ("u50", 0.50),
+    ] {
+        let mut c = l15_base();
+        c.name = format!("l15_uptime_{label}");
+        c.axis = "l15_uptime".into();
+        c.retr_uptime = u;
         out.push(c);
     }
 
