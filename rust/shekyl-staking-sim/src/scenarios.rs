@@ -7,7 +7,7 @@
 //! product — to keep runtime bounded while exercising each axis.
 
 use crate::agent::{run_epoch, AgentParams};
-use crate::metrics::{churn_rate, coverage, CoverageMetrics, TargetParams};
+use crate::metrics::{churn_rate, coverage, CoverageMetrics, TargetParams, N_BANDS};
 use crate::model::{Actor, Rng, Shard, World};
 use crate::reward::{evaluate, RewardParams};
 use serde::Serialize;
@@ -49,6 +49,21 @@ pub struct SimConfig {
     pub bond_age_scale: f64,
     pub bond_carry: f64,
     pub deep_threshold: f64,
+    /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
+    /// `1.0` = iteration-1 behavior; the (bond × shard-size) pair sweep varies it.
+    pub deep_shard_size: f64,
+
+    // L9 duration axis + dynamic world (iteration 2; inert when `!dynamic`).
+    /// Dynamic frontier-window: shards age each epoch and recycle at age 1.
+    pub dynamic: bool,
+    /// Age advance per epoch (only used when `dynamic`).
+    pub epoch_aging: f64,
+    /// Flat retention-commitment horizon (epochs). `0` disables duration locks.
+    pub bond_dur_base: f64,
+    /// Age-scaling of the commitment horizon (older ⇒ longer).
+    pub bond_dur_age_scale: f64,
+    /// Anticipation of the lock cost (0 = myopic; >0 = willingness ceiling).
+    pub lock_anticipation: f64,
 
     // targets
     pub r_target_hot: f64,
@@ -80,6 +95,8 @@ pub struct ScenarioResult {
     pub whale: bool,
     pub final_metrics: CoverageMetrics,
     pub churn: f64,
+    /// Churn rate restricted to the deepest age band (L9: the duration knob's target).
+    pub oldest_churn: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -140,6 +157,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bond_age_scale: cfg.bond_age_scale,
         bond_carry: cfg.bond_carry,
         deep_threshold: cfg.deep_threshold,
+        deep_shard_size: cfg.deep_shard_size,
+        bond_dur_base: cfg.bond_dur_base,
+        bond_dur_age_scale: cfg.bond_dur_age_scale,
+        lock_anticipation: cfg.lock_anticipation,
     };
     let tp = TargetParams {
         r_target_hot: cfg.r_target_hot,
@@ -147,6 +168,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         deep_threshold: cfg.deep_threshold,
         bond_rate: cfg.bond_rate,
         bond_age_scale: cfg.bond_age_scale,
+        deep_shard_size: cfg.deep_shard_size,
     };
 
     // Seed price so the first epoch's marginal-value calc is non-degenerate.
@@ -159,10 +181,46 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut last_eval = evaluate(&world, &rp, price);
     let mut last_metrics = coverage(&world, &last_eval, &tp);
 
-    for _ in 0..cfg.epochs {
+    // Oldest-band churn (L9): flips and holdings in the deepest age band per epoch.
+    // The duration knob is meant to damp *this* specifically.
+    let old_lo = (N_BANDS - 1) as f64 / N_BANDS as f64;
+    let mut series_old_changes = Vec::with_capacity(cfg.epochs);
+    let mut series_old_held = Vec::with_capacity(cfg.epochs);
+
+    for ep in 0..cfg.epochs {
+        // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
+        // agents react. Skip on the first epoch so the initial distribution settles.
+        if cfg.dynamic && ep > 0 {
+            world.advance_epoch(cfg.epoch_aging);
+        }
+
+        let before = world.holdings.clone();
         let changes = run_epoch(&mut world, price, &ap, cfg.age_weight, &mut rng);
+
+        // Oldest-band churn attribution (at the ages agents acted on this epoch).
+        let mut old_changes = 0usize;
+        let mut old_held = 0usize;
+        for (a, hb) in before.iter().enumerate() {
+            for (s, &b) in hb.iter().enumerate() {
+                if world.shards[s].age >= old_lo {
+                    if b != world.holdings[a][s] {
+                        old_changes += 1;
+                    }
+                    if world.holdings[a][s] {
+                        old_held += 1;
+                    }
+                }
+            }
+        }
+        series_old_changes.push(old_changes);
+        series_old_held.push(old_held);
+
         last_eval = evaluate(&world, &rp, price);
-        price = if last_eval.price > 0.0 { last_eval.price } else { price };
+        price = if last_eval.price > 0.0 {
+            last_eval.price
+        } else {
+            price
+        };
         last_metrics = coverage(&world, &last_eval, &tp);
 
         series_frac_under.push(last_metrics.frac_under_target);
@@ -175,6 +233,21 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .map(|a| world.actor_shard_count(a))
         .sum();
     let churn = churn_rate(&series_changes, total_held, cfg.churn_window);
+    // Oldest-band churn rate: flips per held-shard-epoch in the deepest band over the
+    // window (mean held as the denominator, since the band's holdings vary).
+    let w = cfg.churn_window.min(series_old_changes.len());
+    let oc_start = series_old_changes.len() - w;
+    let old_changes_sum: usize = series_old_changes[oc_start..].iter().sum();
+    let old_held_mean: f64 = if w > 0 {
+        series_old_held[oc_start..].iter().sum::<usize>() as f64 / w as f64
+    } else {
+        0.0
+    };
+    let oldest_churn = if old_held_mean > 0.0 {
+        (old_changes_sum as f64 / w as f64) / old_held_mean
+    } else {
+        0.0
+    };
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -194,6 +267,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         whale: cfg.whale,
         final_metrics: last_metrics,
         churn,
+        oldest_churn,
         claims: SubClaims {
             covered,
             spread,
@@ -249,6 +323,13 @@ fn baseline() -> SimConfig {
         bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)
         bond_carry: 0.03,
         deep_threshold: 0.5,
+        deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
+        // Static iteration-1 world by default; the L9 dynamic/duration scenarios opt in.
+        dynamic: false,
+        epoch_aging: 0.0,
+        bond_dur_base: 0.0,
+        bond_dur_age_scale: 0.0,
+        lock_anticipation: 0.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -309,7 +390,11 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     }
 
     // --- Endowment mix. ---
-    for (label, frac) in [("capital_heavy", 0.2), ("balanced", 0.5), ("storage_heavy", 0.8)] {
+    for (label, frac) in [
+        ("capital_heavy", 0.2),
+        ("balanced", 0.5),
+        ("storage_heavy", 0.8),
+    ] {
         let mut c = baseline();
         c.name = format!("mix_{label}");
         c.axis = "endowment_mix".into();
@@ -395,6 +480,66 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         cw.bond_age_scale = scale;
         cw.whale = true;
         out.push(cw);
+    }
+
+    // --- L9: age-scaled bond DURATION in the dynamic frontier-window (iteration 2).
+    // Flat magnitude (L4-resolved); the swept knob is the commitment horizon. The
+    // dynamic world (shards age, transit hot→deep, recycle) is the churn source the
+    // duration is meant to damp. `dur_s0` = flat horizon (control); `dur_s2/s4` =
+    // age-scaled (older shards lock longer). Run myopic (lock_anticipation=0: duration
+    // can only damp churn) and anticipatory (>0: a long horizon also deters acquisition
+    // → the willingness ceiling). Read `oldest_churn` (should fall with age-scaling) vs
+    // oldest-band coverage/affording (should NOT fall under myopia; may fall under
+    // anticipation — the ceiling). ---
+    let dyn_base = || {
+        let mut c = baseline();
+        c.dynamic = true;
+        c.epoch_aging = 0.05; // ~20 epochs hot→retire
+        c.epochs = 80; // enough transit for a steady churn frontier
+        c.bond_dur_base = 4.0; // flat horizon floor
+        c
+    };
+    for (label, dscale) in [("s0", 0.0), ("s2", 2.0), ("s4", 4.0)] {
+        let mut c = dyn_base();
+        c.name = format!("dur_{label}");
+        c.axis = "bond_duration".into();
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
+
+        // Anticipation tuned to 0.25 so the willingness ceiling shows as *graded*
+        // (acquisition of the longest-duration oldest shards is deterred first) rather
+        // than the saturated cliff a high value produces.
+        let mut ca = dyn_base();
+        ca.name = format!("dur_{label}_antic");
+        ca.axis = "bond_duration".into();
+        ca.bond_dur_age_scale = dscale;
+        ca.lock_anticipation = 0.25;
+        out.push(ca);
+    }
+
+    // --- L8: the (bond-level × deep-shard-size) PAIR sweep. L8 says neither leg moves
+    // the co-located pool alone — lowering the bond recruits the storage-rich, shrinking
+    // the deep shard recruits the capital-rich, and deep durability needs the *joint*
+    // count. Run the stark split-endowment regime (where co-location is scarce and the
+    // whale is the only co-located actor) and read `colocated_coverage` (the min-form
+    // dS/dN) + non-whale deep coverage as the pair varies. Flat magnitude throughout
+    // (L4). ---
+    for &bond in &[2.0f64, 1.0, 0.5] {
+        for &size in &[1.0f64, 0.5, 0.25] {
+            let mut c = baseline();
+            c.name = format!("pair_b{bond}_z{size}");
+            c.axis = "bond_x_shardsize".into();
+            // Stark split: storage-rich are capital-poor, capital-rich are storage-poor,
+            // so co-location is scarce (the L8 stress regime).
+            c.frac_storage_rich = 0.6;
+            c.storage_rich_storage = 22;
+            c.storage_rich_capital = 6.0; // capital-poor
+            c.capital_rich_storage = 3; // storage-poor
+            c.capital_rich_capital = 100.0;
+            c.bond_rate = bond;
+            c.deep_shard_size = size;
+            out.push(c);
+        }
     }
 
     out

@@ -56,7 +56,11 @@ pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f6
 /// Returns `(effective_capped_work, pseudonym_count, split_cost)`.
 fn split_decision(raw_work: f64, price: f64, p: &RewardParams) -> (f64, usize, f64) {
     if raw_work <= p.cap || p.cap <= 0.0 {
-        return (raw_work.min(if p.cap > 0.0 { p.cap } else { raw_work }), 1, 0.0);
+        return (
+            raw_work.min(if p.cap > 0.0 { p.cap } else { raw_work }),
+            1,
+            0.0,
+        );
     }
     // Value of fully crediting the over-cap work vs. running one capped pseudonym.
     let recovered = raw_work - p.cap; // work beyond a single pseudonym's cap
@@ -89,7 +93,9 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
     let r = world.replication();
     let n = world.actors.len();
 
-    let raw: Vec<f64> = (0..n).map(|a| raw_work(world, a, &r, p.age_weight)).collect();
+    let raw: Vec<f64> = (0..n)
+        .map(|a| raw_work(world, a, &r, p.age_weight))
+        .collect();
 
     let mut capped = vec![0.0; n];
     let mut pseudonyms = vec![1usize; n];

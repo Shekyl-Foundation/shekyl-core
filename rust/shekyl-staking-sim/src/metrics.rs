@@ -39,6 +39,12 @@ pub struct AgeBandMetrics {
     /// oldest tail — L4). `usize::MAX` is reported as the actor count when the bond
     /// is disabled.
     pub affording: usize,
+    /// Number of **co-located** actors for this band: those whose *smaller* leg can
+    /// seat at least one deep shard, `min(⌊capital/bond⌋, ⌊storage/shard_size⌋) ≥ 1`
+    /// (L8). A deep shard needs both legs on the *same* actor — capital sitting on a
+    /// storage-poor actor (or storage on a capital-poor actor) cannot seat it. This is
+    /// the binding count; `affording` (capital leg alone) overcounts it.
+    pub colocated: usize,
     /// `R_target(age)` at this band's oldest edge (the seating bar for the band).
     pub r_target: usize,
 }
@@ -109,11 +115,18 @@ pub struct CoverageMetrics {
     pub r_target_deepest: usize,
     /// `affording_actors ≥ r_target_deepest`: the distinct-actor seating condition.
     pub seating_feasible: bool,
-    /// **Capital-coverage ratio** = `Σ_actor capital / Σ_{deep} bond_age(age)·R_target(age)`
-    /// — the *binding* aggregate empty-window condition (the `dS/dN` column). `< 1`
-    /// means the network's total capital cannot post the bonds the deep set demands,
-    /// regardless of distinct-actor counts. Generalizes the flat-bond slot ratio to
-    /// age-scaled bonds.
+    /// **Co-located coverage ratio** (the `dS/dN` column, L8): the *min-form* seating
+    /// condition `Σ_actor min(⌊capital/bond⌋, ⌊storage/shard_size⌋) / Σ_{deep} R_target(age)`.
+    /// A deep shard needs storage *and* bond-capital on the **same** actor, so each
+    /// actor contributes only its *smaller* leg — capital on a storage-poor actor (or
+    /// vice versa) cannot seat anything. `< 1` ⇒ the co-located population cannot seat
+    /// the deep set even if every actor devoted everything to deep. This is the metric
+    /// gate 4/5 own jointly; it predicts the starvation the aggregate ratio misses
+    /// (`bscale_s0`: aggregate 3.24 but co-located ≈ 0.71, matching `deep_und` 0.75).
+    pub colocated_coverage: f64,
+    /// **Aggregate capital-coverage** = `Σ_actor capital / Σ_{deep} bond_age·R_target`
+    /// — necessary-not-sufficient (treats capital as fungible across actors). Retained
+    /// as the secondary line; `colocated_coverage` is the binding one.
     pub capital_coverage: f64,
     /// Total deep bond capital demanded `Σ_{deep} bond_age(age)·R_target(age)`.
     pub deep_bond_demand: f64,
@@ -131,6 +144,9 @@ pub struct TargetParams {
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4), needed to compute per-band affording counts.
     pub bond_age_scale: f64,
+    /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
+    /// Smaller shards clear more actors' storage leg, enlarging the co-located pool.
+    pub deep_shard_size: f64,
 }
 
 pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> CoverageMetrics {
@@ -201,17 +217,13 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     } else {
         0.0
     };
-    let whale_shard_share = world
-        .actors
-        .iter()
-        .position(|a| a.is_whale)
-        .map(|w| {
-            if total_held > 0.0 {
-                actor_counts[w] / total_held
-            } else {
-                0.0
-            }
-        });
+    let whale_shard_share = world.actors.iter().position(|a| a.is_whale).map(|w| {
+        if total_held > 0.0 {
+            actor_counts[w] / total_held
+        } else {
+            0.0
+        }
+    });
 
     // Spread: pseudonym-level. Each actor's shards split (≈evenly) across its
     // pseudonym count. This is what an on-chain observer sees — a splitting whale
@@ -256,6 +268,8 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     }
     let bonded = tp.bond_rate > 0.0;
     let n_actors_total = world.actors.len();
+    // Storage leg: how many deep shards (of size `deep_shard_size`) an actor can store.
+    let storage_slots = |stor: usize| (stor as f64 / tp.deep_shard_size).floor() as usize;
     let bands: Vec<AgeBandMetrics> = (0..N_BANDS)
         .map(|b| {
             let lo = b as f64 / N_BANDS as f64;
@@ -265,21 +279,42 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
             let band_total: f64 = counts.iter().sum();
             // Affording at this band: worst-case bond at the band's oldest edge.
             let deep_band = hi > tp.deep_threshold;
-            let (affording, r_tgt) = if bonded && deep_band {
+            let r_tgt = r_target(hi, tp.r_target_hot, tp.r_target_deep);
+            let (affording, colocated) = if bonded && deep_band {
                 let bond_here = bond_age(hi, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold);
-                (
-                    world.actors.iter().filter(|a| a.capital >= bond_here).count(),
-                    r_target(hi, tp.r_target_hot, tp.r_target_deep),
-                )
+                let aff = world
+                    .actors
+                    .iter()
+                    .filter(|a| a.capital >= bond_here)
+                    .count();
+                // Co-located: BOTH legs seat ≥1 deep shard on the same actor (L8).
+                let colo = world
+                    .actors
+                    .iter()
+                    .filter(|a| {
+                        let cap_slots = (a.capital / bond_here).floor() as usize;
+                        let stor_slots = storage_slots(a.storage_capacity);
+                        cap_slots.min(stor_slots) >= 1
+                    })
+                    .count();
+                (aff, colo)
             } else {
-                (n_actors_total, r_target(hi, tp.r_target_hot, tp.r_target_deep))
+                (n_actors_total, n_actors_total)
             };
             AgeBandMetrics {
                 band_lo: lo,
                 band_hi: hi,
                 n_shards: n,
-                mean_r: if n > 0 { band_r_sum[b] as f64 / n as f64 } else { 0.0 },
-                frac_under: if n > 0 { band_under[b] as f64 / n as f64 } else { 0.0 },
+                mean_r: if n > 0 {
+                    band_r_sum[b] as f64 / n as f64
+                } else {
+                    0.0
+                },
+                frac_under: if n > 0 {
+                    band_under[b] as f64 / n as f64
+                } else {
+                    0.0
+                },
                 gini_actor: gini(counts),
                 whale_share: whale_idx.map(|w| {
                     if band_total > 0.0 {
@@ -289,6 +324,7 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
                     }
                 }),
                 affording,
+                colocated,
                 r_target: r_tgt,
             }
         })
@@ -298,7 +334,11 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     let r_target_deepest = r_target(1.0, tp.r_target_hot, tp.r_target_deep);
     let bond_deepest = bond_age(1.0, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold);
     let affording_actors = if bonded {
-        world.actors.iter().filter(|a| a.capital >= bond_deepest).count()
+        world
+            .actors
+            .iter()
+            .filter(|a| a.capital >= bond_deepest)
+            .count()
     } else {
         n_actors_total
     };
@@ -330,6 +370,30 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     } else {
         f64::INFINITY
     };
+    // Co-located coverage (L8 min-form): each actor contributes only its *smaller* leg
+    // — capital-slots ⌊capital/bond⌋ vs storage-slots ⌊storage/shard_size⌋ — because a
+    // deep shard needs both on the same actor. Representative bond = mean deep bond
+    // (= bond_rate under flat magnitude). This is the binding seating condition.
+    let colocated_coverage = if bonded && deep_n > 0 && deep_need_total > 0 {
+        let mean_deep_bond: f64 = world
+            .shards
+            .iter()
+            .filter(|s| s.is_deep(tp.deep_threshold))
+            .map(|s| bond_age(s.age, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold))
+            .sum::<f64>()
+            / deep_n as f64;
+        let colocated_slots: usize = world
+            .actors
+            .iter()
+            .map(|a| {
+                let cap_slots = (a.capital / mean_deep_bond).floor() as usize;
+                cap_slots.min(storage_slots(a.storage_capacity))
+            })
+            .sum();
+        colocated_slots as f64 / deep_need_total as f64
+    } else {
+        f64::INFINITY
+    };
 
     CoverageMetrics {
         min_r,
@@ -346,6 +410,7 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
         affording_actors,
         r_target_deepest,
         seating_feasible,
+        colocated_coverage,
         capital_coverage,
         deep_bond_demand,
         total_capital,

@@ -37,14 +37,24 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
     eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
     eprintln!();
-    eprintln!("Durability columns: dS/dN = total capital / deep bond demand (Sum bond_age*R_target)");
-    eprintln!("  = the aggregate empty-window condition (<1 => capital cannot post the deep bonds).");
-    eprintln!("  NOTE: necessary, not sufficient — deep can still starve at dS/dN>1 if capital and");
-    eprintln!("  storage are not co-located. seat = affording_actors >= R_target(deepest) (distinct-");
-    eprintln!("  actor condition; slack except in tiny pops); oldU/wB4 = oldest-band residual/whale share.");
+    eprintln!("Durability columns: dS/dN = CO-LOCATED coverage (L8 min-form) =");
+    eprintln!(
+        "  Sum_actor min(floor(capital/bond), floor(storage/shard_size)) / Sum_deep R_target."
+    );
+    eprintln!(
+        "  Each actor contributes only its SMALLER leg — a deep shard needs storage AND bond-"
+    );
+    eprintln!(
+        "  capital on the same actor — so this catches starvation the aggregate ratio misses"
+    );
+    eprintln!("  (bscale_s0: aggregate 3.24 but co-located ~0.71, matching deep_und 0.75). seat =");
+    eprintln!("  affording_actors >= R_target(deepest) (capital-leg distinct count); oldU/wB4 =");
+    eprintln!("  oldest-band residual/whale share.");
+    eprintln!();
+    eprintln!("  oChrn = oldest-band churn rate (flips/held-epoch in the deepest band; L9 duration target).");
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6}",
         "scenario",
         "axis",
         "bond",
@@ -64,6 +74,7 @@ fn print_summary(results: &[ScenarioResult]) {
         "seat",
         "oldU",
         "wB4",
+        "oChrn",
     );
 
     for r in results {
@@ -71,9 +82,9 @@ fn print_summary(results: &[ScenarioResult]) {
         let old = m.bands.last();
         let old_under = old.map(|b| b.frac_under).unwrap_or(0.0);
         let whale_b4 = old.and_then(|b| b.whale_share);
-        let slot_ratio = m.capital_coverage;
+        let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -96,6 +107,7 @@ fn print_summary(results: &[ScenarioResult]) {
                 Some(v) => format!("{v:.2}"),
                 None => "-".into(),
             },
+            r.oldest_churn,
         );
     }
 
@@ -122,7 +134,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::metrics::gini;
-    use crate::model::{bond_age, g_age, r_target};
+    use crate::model::{bond_age, bond_duration, g_age, r_target, World};
+    use crate::model::{Actor, Shard};
 
     #[test]
     fn gini_equal_is_zero() {
@@ -170,6 +183,46 @@ mod tests {
         assert!(bond_age(1.0, 2.0, 3.0, dt) > bond_age(0.6, 2.0, 3.0, dt));
         // Floor keeps the youngest deep shard from bonding free at high scale.
         assert!(bond_age(0.5, 2.0, 100.0, dt) > 0.0);
+    }
+
+    #[test]
+    fn bond_duration_flat_when_scale_zero() {
+        // scale 0 ⇒ every deep shard commits for exactly `base` epochs (rounded).
+        assert_eq!(bond_duration(0.5, 4.0, 0.0), 4);
+        assert_eq!(bond_duration(1.0, 4.0, 0.0), 4);
+    }
+
+    #[test]
+    fn bond_duration_age_scaled_is_longer_for_older() {
+        // Older shards carry a strictly longer commitment horizon when scaled.
+        let young = bond_duration(0.5, 4.0, 2.0);
+        let old = bond_duration(1.0, 4.0, 2.0);
+        assert!(old > young, "old {old} should exceed young {young}");
+        // Floored at 1 so a near-zero-age deep shard still commits.
+        assert!(bond_duration(0.0, 0.1, 0.0) >= 1);
+    }
+
+    #[test]
+    fn advance_epoch_retires_oldest_and_decrements_locks() {
+        let shards = vec![Shard { age: 0.98 }, Shard { age: 0.2 }];
+        let actors = vec![Actor {
+            storage_capacity: 4,
+            capital: 10.0,
+            is_whale: false,
+        }];
+        let mut w = World::new(shards, actors);
+        w.holdings[0][0] = true;
+        w.locks[0][0] = 3;
+        w.holdings[0][1] = true;
+        w.locks[0][1] = 0;
+        w.advance_epoch(0.05);
+        // Shard 0 crossed age 1.0 → retired/recycled: age reset, holding+lock cleared.
+        assert!((w.shards[0].age - 0.0).abs() < 1e-12);
+        assert!(!w.holdings[0][0]);
+        assert_eq!(w.locks[0][0], 0);
+        // Shard 1 just ages; its (zero) lock stays floored at 0.
+        assert!((w.shards[1].age - 0.25).abs() < 1e-12);
+        assert!(w.holdings[0][1]);
     }
 
     #[test]
