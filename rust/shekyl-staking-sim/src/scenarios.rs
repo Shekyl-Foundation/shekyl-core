@@ -45,6 +45,8 @@ pub struct SimConfig {
     pub age_weight: f64,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
+    /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
+    pub bond_age_scale: f64,
     pub bond_carry: f64,
     pub deep_threshold: f64,
 
@@ -135,6 +137,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let ap = AgentParams {
         storage_unit_cost: cfg.storage_unit_cost,
         bond_rate: cfg.bond_rate,
+        bond_age_scale: cfg.bond_age_scale,
         bond_carry: cfg.bond_carry,
         deep_threshold: cfg.deep_threshold,
     };
@@ -143,6 +146,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         r_target_deep: cfg.r_target_deep,
         deep_threshold: cfg.deep_threshold,
         bond_rate: cfg.bond_rate,
+        bond_age_scale: cfg.bond_age_scale,
     };
 
     // Seed price so the first epoch's marginal-value calc is non-degenerate.
@@ -241,7 +245,8 @@ fn baseline() -> SimConfig {
         pseudonym_cost: 0.05,
         age_weight: 2.0,
         storage_unit_cost: 0.03,
-        bond_rate: 2.0, // mid
+        bond_rate: 2.0,      // mid
+        bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)
         bond_carry: 0.03,
         deep_threshold: 0.5,
         r_target_hot: 3.0,
@@ -357,6 +362,39 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.age_weight = 0.0;
         c.storage_scale = scale;
         out.push(c);
+    }
+
+    // --- Bond age-scaling (L4), in a capital-poor-archiver regime. The mean-preserving
+    // tilt redistributes the *same* aggregate bond demand toward older shards while
+    // holding the average deep bond fixed, so flat (s0) vs. tilted (s1,s3) are
+    // comparable at equal `dS/dN`. The mechanism only bites when a genuinely
+    // capital-poor archiver class exists (the baseline's storage-rich actors carry
+    // capital 20, far above any per-shard bond, so the aggregate always binds first):
+    // here the storage-rich are the capital-poor archivers the design worries about
+    // (capital 3), in an ample-storage / capital-bound regime. The L4 evidence is the
+    // per-band `affording` + `gini_actor` + `whale_share`: does tilting price the poor
+    // out of the *oldest* shards specifically, concentrating the tail onto the
+    // capital-rich (and onto a whale, if present)? ---
+    for (label, scale) in [("s0", 0.0), ("s1", 1.0), ("s3", 3.0)] {
+        let mut c = baseline();
+        c.name = format!("bscale_{label}");
+        c.axis = "bond_age_scale".into();
+        c.frac_storage_rich = 0.6; // majority capital-poor archivers
+        c.storage_rich_capital = 8.0; // poor enough that the tilt prices them out of
+                                      // the oldest (mean bond 2 → ~4 deep; oldest bond
+                                      // at s3 = 3.5 → only ~2 oldest), rich enough that
+                                      // deep is coverable at the flat baseline
+        c.bond_age_scale = scale;
+        out.push(c);
+
+        let mut cw = baseline();
+        cw.name = format!("bscale_{label}_whale");
+        cw.axis = "bond_age_scale".into();
+        cw.frac_storage_rich = 0.6;
+        cw.storage_rich_capital = 8.0;
+        cw.bond_age_scale = scale;
+        cw.whale = true;
+        out.push(cw);
     }
 
     out

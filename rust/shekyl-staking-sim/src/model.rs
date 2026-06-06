@@ -144,6 +144,22 @@ pub fn g_age(age: f64, age_weight: f64) -> f64 {
     1.0 + age_weight * age
 }
 
+/// Per-deep-shard bond cost as a function of age. `bond_age_scale = 0` gives a
+/// **flat** bond (`bond_rate` for every deep shard — iteration-1's model). `> 0`
+/// gives a **mean-preserving age-tilted** bond that *redistributes* bond demand
+/// toward older shards while holding the average deep bond at `bond_rate`:
+/// `bond_rate · (1 + scale·(age − deep_mid))`, with `deep_mid = (deep_threshold+1)/2`
+/// the mean deep age under a uniform age distribution. Mean-preservation is what makes
+/// flat vs. tilted comparable at equal *aggregate* capital demand, so the L4 question
+/// (does tilting concentrate affording-actor scarcity onto the oldest tail?) is
+/// isolated from a mere total-cost increase. Clamped to a small positive floor so the
+/// youngest deep shards never bond free. Hot shards carry no bond (callers guard).
+pub fn bond_age(age: f64, bond_rate: f64, bond_age_scale: f64, deep_threshold: f64) -> f64 {
+    let deep_mid = (deep_threshold + 1.0) / 2.0;
+    let factor = (1.0 + bond_age_scale * (age - deep_mid)).max(0.05);
+    bond_rate * factor
+}
+
 /// Age-dependent durability replication floor `R_target(age)`. Higher for deep
 /// history because deep state is irreplaceable (lose every copy → gone forever),
 /// while hot state is widely held anyway. Linear from `r_target_hot` (age 0) to

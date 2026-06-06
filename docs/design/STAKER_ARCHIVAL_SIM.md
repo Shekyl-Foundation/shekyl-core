@@ -1,10 +1,14 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 1 BUILT, RUN, and ROBUSTNESS-SWEPT (2026-06-05).** Crate
+**Status: iteration 1 BUILT, RUN, ROBUSTNESS-SWEPT, and L4-CLOSED (2026-06-05).** Crate
 `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
 build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
-residual-by-age*, and the forward worklist in §*Adjustment ledger* at the end of this
-doc. Headline: the sim reproduces the predicted `g=1` deep-history starvation
+residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
+flat-vs-age-scaled-bond fork (L4)*, and the forward worklist in §*Adjustment ledger* at
+the end of this doc. The 1c result: age-scaling the bond is a weak, mildly regressive
+lever (flat-on-deep is the better default), and the genuinely new gate-input is that
+`dS/dN≥1` is necessary-not-sufficient — deep durability needs storage and bond-capital
+*co-located* on the same actor (ledger L8). Headline: the sim reproduces the predicted `g=1` deep-history starvation
 (validating it against the equilibrium analysis), `g(age)` clears deep monotonically,
 and the high-bond empty-window threat surfaces under the coarse 3-point sweep exactly
 as designed. The 1b sweeps then establish *which findings are structural vs.
@@ -481,6 +485,71 @@ empty-window ratio; plus the looser distinct-actor `seating_feasible`). Epochs t
   the *sole* deep holder. A gate-4 stress (whale sized to the only-affording-actor regime
   under an age-scaled bond) is the sharpened durability test #4 points at.
 
+## Iteration 1c — the flat-vs-age-scaled-bond fork (L4)
+
+**Status: run (2026-06-05), same crate.** Closes the L4 fork the 1b sweeps opened.
+Added a **mean-preserving age-tilted bond** (`model::bond_age`): for deep shards,
+`bond_rate · (1 + scale·(age − deep_mid))` with `deep_mid = (deep_threshold+1)/2`, so
+the *average* deep bond is held at `bond_rate` while demand tilts toward older shards
+as `scale` rises (`scale = 0` is the flat iteration-1 bond). Mean-preservation is what
+makes flat vs. tilted comparable at equal aggregate capital demand — isolating the L4
+question (does tilting concentrate scarcity on the oldest tail?) from a mere total-cost
+increase. The agent budget became `Σ bond(age) ≤ capital` (capital-sum, replacing the
+flat count cap). The sweep runs in a deliberately constructed **capital-poor-archiver**
+regime (storage-rich actors carry capital 8, not the baseline's 20) because the tilt
+mechanism is invisible when every actor's capital dwarfs every per-shard bond.
+
+### What the fork establishes
+
+1. **Naive (fixed-base) age-scaling is strictly coverage-regressive.** Holding
+   `bond_rate` fixed and adding an age term raises total deep demand, so capital
+   coverage falls `dS/dN = 1.03 → 0.59 → 0.31` across `scale {0,1,3}` and deep fully
+   starves. Any age-scaling must be mean-preserving (lower the base) even to be
+   comparable — itself a caution against the naive form.
+
+2. **Mean-preserving age-tilt is a weak, non-monotonic lever.** Oldest-band residual
+   moves `0.71 → 0.78 → 0.69` and oldest-band actor-Gini `0.542 → 0.562 → 0.573` across
+   `scale {0,1,3}` — a mild upward concentration push, not a sharp tail break. Two
+   reasons: (a) the distinct-actor *afford-one* count stays at 80 (the tilt changes
+   *how many* oldest shards a capital-poor archiver holds, not *whether* it can hold
+   one — so the distinct-actor empty-window never trips); (b) the `g(age)` reward
+   premium pulls attraction *toward* the oldest in direct opposition to the bond tilt,
+   so the two age-gradients largely cancel on the oldest shards.
+
+3. **The dominant deep-coverage lever in the capital-poor regime is a capital-rich
+   actor, not the bond shape.** With a whale present, `deep_und` collapses
+   `0.75 → 0.058` and the oldest bands fully cover at *every* scale — but the whale then
+   holds 16–19 % of each deep band. The durability concentration to watch is the
+   capital-rich actor's deep share, and it is essentially independent of the bond's
+   age-shape.
+
+4. **`dS/dN ≥ 1` is necessary but not sufficient (the co-location finding).**
+   `bscale_s0` (flat bond) shows `dS/dN = 3.24` — ample aggregate capital — yet
+   `deep_und = 0.75`. Deep needs both storage *and* bond-capital on the **same** actor;
+   when capital sits with storage-poor capital-rich actors and storage sits with
+   bond-constrained capital-poor archivers, deep falls in the co-location gap. The
+   whale (ample on both axes) is what closes it. This sharpens the empty-window
+   definition (L8): the feasibility check is on the *joint* storage×capital
+   distribution, not aggregate capital alone.
+
+**Disposition (L4):** flat-on-deep bond is the better default — age-scaling buys little,
+mildly worsens tail concentration, and fights the premium; reopened only for a
+commitment requirement beyond coverage (see ledger L4). The genuinely new gate-input is
+the **co-location finding (L8)**: deep durability needs actors rich on both axes (or a
+foundation/whale backstop), which gates 4 and 5 must model jointly.
+
+### 1c model-fidelity caveats
+
+- **The capital-poor-archiver regime is a constructed scenario, not the baseline.** It
+  exists to make the tilt mechanism observable; its specific magnitudes (capital 8,
+  `frac_storage_rich 0.6`) are illustrative, not calibrated. The structural takeaways
+  (tilt is weak; co-location binds) are what carry forward, not the numbers.
+- **The per-band `affording` metric measures afford-*one*, not budget capacity.** It
+  stays at the full actor count here because the binding effect is on *how many* oldest
+  shards an actor bonds (budget exhaustion), which surfaces in coverage/Gini, not in the
+  afford-one count. A budget-capacity per-band metric is a candidate 1d refinement if
+  the distinct-actor tail mechanism ever needs sharper resolution.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
@@ -494,7 +563,8 @@ where a decision is provisional.
 | L1 | **`g(age)` value** (gate 4 / near-term pin) | Clearing premium ≈ `age_weight 2–4`; raising `g` reallocates hot→deep; residual minimized (parked at shoulder) near `g≈2–3`; `g≥4` wastes replication on the oldest and starves hot. | **Open, leaning `g≈2–3`.** `g` is a genesis-fixed consensus constant: pick it for the *thick steady state* (where `pop_thick` clears all four), not the thin margin. Reopen if the thick-state sweep at the chosen supply moves the residual-minimizing `g`. |
 | L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → `dS/dN=0.97` → deep starves; the binding condition is `Σ⌊capital/bond⌋ ≥ Σ_deep R_target`, **not** distinct-actor count (slack at 80≥6). | **Decided (constraint form):** gate-4's upper bound is a **durability** constraint stated as `dS/dN ≥ 1` over the expected capital distribution — not a fairness limit. Fine sweep pins the rate that is simultaneously Sybil-deterring and `dS/dN ≥ 1`. |
 | L3 | **Empty-window definition** (gate 4) | Two orthogonal binding axes: capital (`dS/dN`) and storage (provisioning). `bond_high` is capital-bound (`dS/dN 0.97`); `pop_thin` is storage-bound (`dS/dN 1.21`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. Storage adequacy is gate 5's axis, tested separately; the two are not conflated. |
-| L4 | **Flat vs age-scaled bond** (gate 4) | Sim models flat deep bond; mechanism-(a) actor scarcity never concentrates at the tail under flat bonds. | **Open.** An age-scaled bond would move the affording-actor scarcity onto the oldest shards specifically. Decide flat-on-deep vs age-scaled before gate-4 fine sweep; re-run the seating metric under the chosen shape. |
+| L4 | **Flat vs age-scaled bond** (gate 4) | Implemented + swept a **mean-preserving age tilt** (`bond_rate·(1+scale·(age−deep_mid))`) in a capital-poor-archiver regime. Tilt is a **weak, non-monotonic** lever: oldest-band residual `0.71→0.78→0.69` and oldest-band Gini `0.542→0.562→0.573` across scale `{0,1,3}`. The distinct-actor "afford-one" count stays at 80 (the tilt changes *how many* oldest a poor archiver holds, not *whether*), and the `g(age)` reward premium tilts attraction *toward* the oldest in direct opposition to the bond tilt. Naive (fixed-base) age-scaling is strictly coverage-regressive (`dS/dN 1.03→0.31`). | **Decided, leaning flat-on-deep.** Age-scaling buys little, mildly worsens tail concentration, raises aggregate demand unless mean-preserved, and fights the premium. **Reversion (per `21-reversion-clause-discipline.mdc`):** reopen only if a gate-4 requirement needs *stronger slashable commitment specifically on the oldest* for a reason beyond coverage (e.g. irreplaceability bonding), in which case `g(age)` must be re-tuned to offset the tilt's coverage cost. |
+| L8 | **`dS/dN≥1` is necessary, not sufficient** (gate 4↔5 coupling) | `bscale_s0` (flat) has `dS/dN=3.24` yet `deep_und=0.75`: capital sits with storage-poor capital-rich actors and storage sits with bond-constrained capital-poor archivers, so deep — which needs *both* storage and bond-capital on the *same* actor — falls in the gap. A whale (ample on both axes) collapses `deep_und 0.75→0.058`. | **Decided (definition refinement):** the empty-window test is not `dS/dN≥1` alone; it requires enough actors with storage **and** bond-capital *co-located*. Gate 4's feasibility check must use the joint distribution, and gate 5's floor must backstop the co-location gap (an actor rich in one axis and poor in the other cannot seat deep). |
 | L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
 | L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
 | L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state; let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
@@ -503,9 +573,11 @@ where a decision is provisional.
 
 - **Structural (survive the provisioning/endowment sweeps):** deep starves without a
   premium (direction); `g(age)` reallocates rather than manufactures coverage; total
-  coverage is supply-bound; the empty-window is an aggregate-slot (`dS/dN`) condition on
-  the capital axis distinct from the storage axis; actor-level spread contains the whale
-  the pseudonym metric hides.
+  coverage is supply-bound; the empty-window is an aggregate-capital (`dS/dN`) condition
+  on the capital axis distinct from the storage axis — *and* `dS/dN≥1` is
+  necessary-not-sufficient (deep needs storage×capital co-located, L8); actor-level
+  spread contains the whale the pseudonym metric hides; the age-tilted bond is a weak,
+  mildly regressive lever that fights the `g(age)` premium (L4 → flat-on-deep default).
 - **Margin-artifacts (regime-specific, do not generalize):** the `deep_und=1.000`
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`

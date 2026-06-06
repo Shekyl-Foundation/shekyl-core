@@ -37,10 +37,11 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
     eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
     eprintln!();
-    eprintln!("Durability columns: dS/dN = deep bond-slots / deep need (the BINDING empty-window");
-    eprintln!("  condition: <1 => aggregate slot shortage => deep starves); seat = affording_actors");
-    eprintln!("  >= R_target(deepest) (the looser distinct-actor condition; slack except in tiny pops);");
-    eprintln!("  oldU = frac_under in the oldest age band; wB4 = whale share in the oldest band.");
+    eprintln!("Durability columns: dS/dN = total capital / deep bond demand (Sum bond_age*R_target)");
+    eprintln!("  = the aggregate empty-window condition (<1 => capital cannot post the deep bonds).");
+    eprintln!("  NOTE: necessary, not sufficient — deep can still starve at dS/dN>1 if capital and");
+    eprintln!("  storage are not co-located. seat = affording_actors >= R_target(deepest) (distinct-");
+    eprintln!("  actor condition; slack except in tiny pops); oldU/wB4 = oldest-band residual/whale share.");
     eprintln!();
     eprintln!(
         "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5}",
@@ -70,11 +71,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let old = m.bands.last();
         let old_under = old.map(|b| b.frac_under).unwrap_or(0.0);
         let whale_b4 = old.and_then(|b| b.whale_share);
-        let slot_ratio = if m.deep_need_total > 0 {
-            m.deep_slots_total as f64 / m.deep_need_total as f64
-        } else {
-            0.0
-        };
+        let slot_ratio = m.capital_coverage;
         eprintln!(
             "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5}",
             r.name,
@@ -125,7 +122,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::metrics::gini;
-    use crate::model::{g_age, r_target};
+    use crate::model::{bond_age, g_age, r_target};
 
     #[test]
     fn gini_equal_is_zero() {
@@ -154,6 +151,25 @@ mod tests {
     #[test]
     fn g_age_premium_rises_with_age() {
         assert!(g_age(1.0, 2.0) > g_age(0.0, 2.0));
+    }
+
+    #[test]
+    fn bond_age_flat_when_scale_zero() {
+        // scale 0 ⇒ every deep shard bonds at exactly bond_rate.
+        assert!((bond_age(0.5, 2.0, 0.0, 0.5) - 2.0).abs() < 1e-12);
+        assert!((bond_age(1.0, 2.0, 0.0, 0.5) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bond_age_tilt_is_mean_preserving() {
+        // The tilt pivots about deep_mid = (deep_threshold+1)/2, so at deep_mid the
+        // bond equals bond_rate regardless of scale, and it rises with age above it.
+        let dt = 0.5;
+        let mid = (dt + 1.0) / 2.0; // 0.75
+        assert!((bond_age(mid, 2.0, 3.0, dt) - 2.0).abs() < 1e-12);
+        assert!(bond_age(1.0, 2.0, 3.0, dt) > bond_age(0.6, 2.0, 3.0, dt));
+        // Floor keeps the youngest deep shard from bonding free at high scale.
+        assert!(bond_age(0.5, 2.0, 100.0, dt) > 0.0);
     }
 
     #[test]

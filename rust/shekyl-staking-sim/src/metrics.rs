@@ -7,7 +7,7 @@
 //! *only* place the bond's actor-level deterrence can be measured. A pseudonym-level
 //! line is reported as the secondary "what an on-chain observer would (mis)conclude."
 
-use crate::model::{r_target, World};
+use crate::model::{bond_age, r_target, World};
 use crate::reward::RewardEval;
 use serde::Serialize;
 
@@ -32,6 +32,15 @@ pub struct AgeBandMetrics {
     /// Whale's share of all holdings *within this band* (durability-critical
     /// concentration), if a whale is present.
     pub whale_share: Option<f64>,
+    /// Number of actors who could afford *one* bond at this band's bond level (the
+    /// worst-case bond at `band_hi`). Under an age-scaled bond this declines with
+    /// age; if it drops below `R_target` for the band, the band cannot be seated by
+    /// enough distinct actors (the distinct-actor empty-window, concentrated at the
+    /// oldest tail — L4). `usize::MAX` is reported as the actor count when the bond
+    /// is disabled.
+    pub affording: usize,
+    /// `R_target(age)` at this band's oldest edge (the seating bar for the band).
+    pub r_target: usize,
 }
 
 /// Gini coefficient of a non-negative distribution. 0 = perfectly equal, →1 =
@@ -90,20 +99,27 @@ pub struct CoverageMetrics {
     pub bands: Vec<AgeBandMetrics>,
 
     // --- durability seating (gate-4 empty-window condition) ---
-    /// Number of actors with `capital ≥ bond_rate` (i.e. who can afford at least one
-    /// deep-shard bond). If this drops below `r_target_deepest`, the deepest shards
-    /// *cannot* be seated by enough distinct actors — a durability failure, not a
-    /// fairness one. This is the precise empty-window condition #4 sharpened to.
+    /// Number of actors who can afford the *deepest* bond (`bond_age(1.0)`). If this
+    /// drops below `r_target_deepest`, the deepest shards *cannot* be seated by enough
+    /// distinct actors — a durability failure, not a fairness one (the distinct-actor
+    /// empty-window). Slack under a flat bond in a populous network; an age-scaled bond
+    /// is what can make it bind at the tail (L4).
     pub affording_actors: usize,
     /// `R_target` at the deepest age (the seating bar for the oldest tail).
     pub r_target_deepest: usize,
-    /// `affording_actors ≥ r_target_deepest`: the necessary condition for the oldest
-    /// tail to be durably seatable at this bond rate / capital distribution.
+    /// `affording_actors ≥ r_target_deepest`: the distinct-actor seating condition.
     pub seating_feasible: bool,
-    /// Aggregate deep-bond slots `Σ floor(capital / bond_rate)` vs aggregate deep
-    /// need `Σ_{deep} R_target(age)` (the aggregate-capacity companion to the
-    /// per-shard seating count).
-    pub deep_slots_total: usize,
+    /// **Capital-coverage ratio** = `Σ_actor capital / Σ_{deep} bond_age(age)·R_target(age)`
+    /// — the *binding* aggregate empty-window condition (the `dS/dN` column). `< 1`
+    /// means the network's total capital cannot post the bonds the deep set demands,
+    /// regardless of distinct-actor counts. Generalizes the flat-bond slot ratio to
+    /// age-scaled bonds.
+    pub capital_coverage: f64,
+    /// Total deep bond capital demanded `Σ_{deep} bond_age(age)·R_target(age)`.
+    pub deep_bond_demand: f64,
+    /// Total actor capital in the network.
+    pub total_capital: f64,
+    /// Aggregate deep replica need `Σ_{deep} R_target(age)` (context).
     pub deep_need_total: usize,
 }
 
@@ -113,6 +129,8 @@ pub struct TargetParams {
     pub deep_threshold: f64,
     /// Bond rate in force, needed to compute durability seating.
     pub bond_rate: f64,
+    /// Age-scaling of the bond (L4), needed to compute per-band affording counts.
+    pub bond_age_scale: f64,
 }
 
 pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> CoverageMetrics {
@@ -236,6 +254,8 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
             }
         }
     }
+    let bonded = tp.bond_rate > 0.0;
+    let n_actors_total = world.actors.len();
     let bands: Vec<AgeBandMetrics> = (0..N_BANDS)
         .map(|b| {
             let lo = b as f64 / N_BANDS as f64;
@@ -243,6 +263,17 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
             let n = band_n[b];
             let counts = &band_actor_counts[b];
             let band_total: f64 = counts.iter().sum();
+            // Affording at this band: worst-case bond at the band's oldest edge.
+            let deep_band = hi > tp.deep_threshold;
+            let (affording, r_tgt) = if bonded && deep_band {
+                let bond_here = bond_age(hi, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold);
+                (
+                    world.actors.iter().filter(|a| a.capital >= bond_here).count(),
+                    r_target(hi, tp.r_target_hot, tp.r_target_deep),
+                )
+            } else {
+                (n_actors_total, r_target(hi, tp.r_target_hot, tp.r_target_deep))
+            };
             AgeBandMetrics {
                 band_lo: lo,
                 band_hi: hi,
@@ -257,34 +288,48 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
                         0.0
                     }
                 }),
+                affording,
+                r_target: r_tgt,
             }
         })
         .collect();
 
     // Durability seating (gate-4 empty-window condition).
-    let affording_actors = world
-        .actors
-        .iter()
-        .filter(|a| tp.bond_rate <= 0.0 || a.capital >= tp.bond_rate)
-        .count();
     let r_target_deepest = r_target(1.0, tp.r_target_hot, tp.r_target_deep);
-    let seating_feasible = affording_actors >= r_target_deepest;
-    let deep_slots_total: usize = if tp.bond_rate > 0.0 {
-        world
-            .actors
-            .iter()
-            .map(|a| (a.capital / tp.bond_rate).floor() as usize)
-            .sum()
+    let bond_deepest = bond_age(1.0, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold);
+    let affording_actors = if bonded {
+        world.actors.iter().filter(|a| a.capital >= bond_deepest).count()
     } else {
-        // No bond: every actor can seat any deep shard up to its storage.
-        world.actors.iter().map(|a| a.storage_capacity).sum()
+        n_actors_total
     };
+    let seating_feasible = affording_actors >= r_target_deepest;
+    let total_capital: f64 = world.actors.iter().map(|a| a.capital).sum();
     let deep_need_total: usize = world
         .shards
         .iter()
         .filter(|s| s.is_deep(tp.deep_threshold))
         .map(|s| r_target(s.age, tp.r_target_hot, tp.r_target_deep))
         .sum();
+    // Capital the deep set demands: each deep shard needs R_target(age) copies, each
+    // posting bond_age(age). The binding aggregate empty-window condition.
+    let deep_bond_demand: f64 = if bonded {
+        world
+            .shards
+            .iter()
+            .filter(|s| s.is_deep(tp.deep_threshold))
+            .map(|s| {
+                bond_age(s.age, tp.bond_rate, tp.bond_age_scale, tp.deep_threshold)
+                    * r_target(s.age, tp.r_target_hot, tp.r_target_deep) as f64
+            })
+            .sum()
+    } else {
+        0.0
+    };
+    let capital_coverage = if deep_bond_demand > 0.0 {
+        total_capital / deep_bond_demand
+    } else {
+        f64::INFINITY
+    };
 
     CoverageMetrics {
         min_r,
@@ -301,7 +346,9 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
         affording_actors,
         r_target_deepest,
         seating_feasible,
-        deep_slots_total,
+        capital_coverage,
+        deep_bond_demand,
+        total_capital,
         deep_need_total,
     }
 }
