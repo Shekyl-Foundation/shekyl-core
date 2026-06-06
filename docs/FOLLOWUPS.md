@@ -7518,10 +7518,43 @@ one place to confirm each item's relationship to the wallet stack.
   source*, not just its post-testnet magnitude, is the gate-7 call.
   The L13→gate-7 handoff.
 
+  The terminal subsidy must additionally carry the **P3 age-tilt**
+  (below): it is the *permanent* capacity source for the irreplaceable
+  tail, so its per-shard reward weight is age-stratified the same way
+  the foundation floor is, concentrating the perpetual subsidy on the
+  oldest band that the fee market abandons first.
+
   *Target:* gate 7 (terminal monetary policy), before genesis (the
   emission schedule is consensus-pinned). *Reference:*
   `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 + the
   iteration-3 hardening headline (P2/P4).
+
+- **Age-stratify the foundation floor AND the terminal subsidy toward
+  the irreplaceable oldest band (gate 5 + gate 7; shape derived,
+  magnitude post-testnet).** P3 band-resolved the L12/L13 residual with
+  a new oldest-band metric (`boOld`, age ≥ 0.8) and found the exposure
+  is **asymmetric across the two temporal ends**: the **fee-era**
+  floored residual concentrates in the oldest band (`l13_floor`:
+  `boOld 0.612 > bDUf 0.425` — L13#2's oscillation is the
+  least-replaceable band thinning), but the **bootstrap** residual does
+  **not** (the genesis core is covered earliest, so the L12 hand-off
+  slice `bDUf 0.019` lands on the freshly-deepened, *most* re-derivable
+  band, `boOld≈0`). So the irreplaceable-tail risk is a fee-era
+  phenomenon, and uniform treatment of "deep" is the wrong granularity
+  there. The lever — `participation::foundation_floor_aged`, a
+  **mean-preserving** oldest-ward tilt (`factor 1+tilt·(2x−1)` over the
+  deep range, mirroring `R_target(age)`, at equal total foundation
+  cost) — cuts the oldest-band gap ~80% (`p3_fee_tilt_*`: tilt 0/0.6/0.9
+  → `boOld 0.612/0.391/0.125`) at the cost of a modest aggregate rise
+  (`0.425→0.467`, the re-derivable band under-floors). **Disposition:**
+  both the (transient) foundation floor and the (permanent, trustless —
+  see P4 above) terminal subsidy carry an age-stratified per-shard
+  weight tilted toward the oldest band, the same shape `R_target(age)`
+  already uses. The *shape* is the genesis decision; the live tilt
+  magnitude is a post-testnet calibration. *Target:* gate 5 (floor
+  tilt) + gate 7 (terminal-subsidy tilt), shape pre-genesis. *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 HARDENED (P3) +
+  the iteration-3 hardening headline (P3).
 
 - **L12 floor-decay schedule should be coupled to the growth↔entry
   crossover, not a free constant (gate 5 / economics; substrate

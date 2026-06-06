@@ -221,3 +221,33 @@ pub fn foundation_floor(pop: usize, floor0: usize, decay_pop: f64) -> usize {
     let frac = (1.0 - pop as f64 / decay_pop).max(0.0);
     (floor0 as f64 * frac).round() as usize
 }
+
+/// **Age-stratified floor (P3).** The uniform `foundation_floor` adds the same backstop to
+/// every deep shard; P3 (and L13 finding 2 / L15) show the **oldest band fails first** — it
+/// is the most irreplaceable *and* the thinnest in replicas and domain diversity. This tilts
+/// the floor **oldest-ward, mean-preserving**: a deep shard at normalized age `age` (with
+/// `deep_threshold ≤ age ≤ 1`) gets `floor_uniform · (1 + tilt·(2x − 1))` replicas, where
+/// `x = (age − deep_threshold)/(1 − deep_threshold) ∈ [0,1]`. So the just-deep shoulder
+/// (`x=0`) gets `floor_uniform·(1−tilt)` and the oldest tail (`x=1`) gets
+/// `floor_uniform·(1+tilt)`; the mean over a uniform deep-age distribution is unchanged —
+/// the **same total foundation cost, reallocated to the irreplaceable tail** (the same
+/// mean-preserving shape the L4 bond-age tilt used, applied to the backstop instead of the
+/// bond). `tilt = 0` ⇒ uniform (byte-identical to `foundation_floor`). Mirrors `R_target(age)`
+/// tilting redundancy toward the deep, one level deeper into the irreplaceable tail.
+pub fn foundation_floor_aged(
+    pop: usize,
+    floor0: usize,
+    decay_pop: f64,
+    tilt: f64,
+    age: f64,
+    deep_threshold: f64,
+) -> usize {
+    let base = foundation_floor(pop, floor0, decay_pop);
+    if base == 0 || tilt == 0.0 {
+        return base;
+    }
+    let span = (1.0 - deep_threshold).max(f64::EPSILON);
+    let x = ((age - deep_threshold) / span).clamp(0.0, 1.0);
+    let factor = 1.0 + tilt * (2.0 * x - 1.0);
+    (base as f64 * factor).round().max(0.0) as usize
+}

@@ -13,7 +13,7 @@ use crate::metrics::{
 };
 use crate::model::{r_target, Actor, Rng, Shard, World};
 use crate::participation::{
-    admit_entrants, bonded_active_count, foundation_floor, process_exits, ParticipationParams,
+    admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
 use crate::retrieval::{r_target_for_availability, serving_availability};
 use crate::reward::{evaluate, RewardParams};
@@ -207,6 +207,13 @@ pub struct SimConfig {
     /// Deterrence threshold `a* = freeride_benefit / freeride_penalty`.
     pub freeride_penalty: f64,
 
+    /// **Age-stratified floor tilt (P3).** Mean-preserving oldest-ward tilt of the
+    /// foundation floor (and, in the fee-era, the terminal-subsidy backstop): the oldest
+    /// deep shards get `floor·(1+tilt)`, the just-deep shoulder `floor·(1−tilt)`, same total
+    /// cost. `0.0` ⇒ uniform floor (byte-identical). Protects the irreplaceable tail that
+    /// fails first at both temporal ends (L12 hand-off, L13 thinning).
+    pub floor_age_tilt: f64,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -294,6 +301,11 @@ pub struct ScenarioResult {
     /// ≈0 means entry tracked demand monotonically (no overshoot-and-shed). Equals
     /// `bonded_active` outside endogenous runs.
     pub bonded_active_peak: f64,
+    /// **Oldest-band floored gap peak** (P3): the worst floored deep gap restricted to the
+    /// oldest band. `> boot_deep_under_floored_peak` ⇒ the residual concentrates in the
+    /// irreplaceable tail (uniform floor); an age-stratified floor pulls it down at equal
+    /// total foundation cost. `0` outside bootstrap/fee-era.
+    pub boot_oldest_floored_peak: f64,
     /// **Fee-era realized purse at end** (L13): the budget in the final epoch. Below the
     /// initial `budget` it shows the subsidy decay; at `budget_ceiling` it shows the
     /// adaptive servo saturated (fee market maxed). Equals `budget` outside fee-era.
@@ -483,6 +495,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // steady-state window). Both equal the serving deep under-target outside bootstrap.
     let mut series_boot_deep_under = Vec::with_capacity(cfg.epochs);
     let mut series_boot_deep_floored = Vec::with_capacity(cfg.epochs);
+    // P3 band-resolve: the floored deep gap restricted to the OLDEST band (the most
+    // irreplaceable tail), to test whether the aggregate floored residual concentrates there.
+    let mut series_boot_oldest_floored = Vec::with_capacity(cfg.epochs);
     // L13 fee-era: the base subsidy decays toward `budget_floor`; the adaptive servo may
     // top it up toward `budget_ceiling`; the realized purse per epoch is tracked here.
     // `signal` is the previous epoch's *serving* deep retrieval shortfall (the trust
@@ -637,21 +652,42 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // to avoid a third full coverage pass. Outside bootstrap (`floor_replicas == 0`)
         // both equal the serving deep under-target.
         let pop_now = bonded_active_count(&world, &ap);
-        let floor_eff = foundation_floor(pop_now, cfg.floor_replicas, cfg.floor_decay_pop);
+        // P3: the floor is age-stratified (oldest-ward, mean-preserving) when `floor_age_tilt
+        // > 0`; `foundation_floor_aged` reduces to the uniform `foundation_floor` at tilt 0.
+        // The oldest band (top 1/N_BANDS of the age range) is resolved separately to test
+        // whether the floored residual concentrates in the irreplaceable tail (P3 / L13#2).
+        let oldest_lo = (N_BANDS - 1) as f64 / N_BANDS as f64;
         let mut deep_n = 0usize;
         let mut deep_under_bare = 0usize;
         let mut deep_under_floored = 0usize;
+        let mut old_n = 0usize;
+        let mut old_under_floored = 0usize;
         #[allow(clippy::needless_range_loop)]
         for s in 0..world.shards.len() {
             let age = world.shards[s].age;
             if age >= cfg.deep_threshold {
                 deep_n += 1;
                 let tgt = r_target(age, cfg.r_target_hot, cfg.r_target_deep);
+                let floor_eff = foundation_floor_aged(
+                    pop_now,
+                    cfg.floor_replicas,
+                    cfg.floor_decay_pop,
+                    cfg.floor_age_tilt,
+                    age,
+                    cfg.deep_threshold,
+                );
                 if serving_r[s] < tgt {
                     deep_under_bare += 1;
                 }
-                if serving_r[s] + floor_eff < tgt {
+                let floored_under = serving_r[s] + floor_eff < tgt;
+                if floored_under {
                     deep_under_floored += 1;
+                }
+                if age >= oldest_lo {
+                    old_n += 1;
+                    if floored_under {
+                        old_under_floored += 1;
+                    }
                 }
             }
         }
@@ -662,6 +698,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         });
         series_boot_deep_floored.push(if deep_n > 0 {
             deep_under_floored as f64 / deep_n as f64
+        } else {
+            0.0
+        });
+        series_boot_oldest_floored.push(if old_n > 0 {
+            old_under_floored as f64 / old_n as f64
         } else {
             0.0
         });
@@ -841,6 +882,14 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .iter()
         .copied()
         .fold(0.0_f64, f64::max);
+    // P3: peak floored gap on the OLDEST band over the run. `boot_oldest_floored_peak >
+    // boot_deep_under_floored_peak` confirms the residual concentrates in the irreplaceable
+    // tail (uniform floor); an age-stratified floor (`floor_age_tilt > 0`) should pull this
+    // down toward the aggregate at equal total foundation cost.
+    let boot_oldest_floored_peak = series_boot_oldest_floored
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max);
     let bonded_active_peak = series_bonded_active.iter().copied().max().unwrap_or(0) as f64;
     // L13 fee-era aggregates. `fee_budget_end` is the realized purse averaged over the
     // steady read window — how far the subsidy decayed and how much the adaptive servo
@@ -891,6 +940,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         boot_deep_under_peak,
         boot_deep_under_floored_peak,
         bonded_active_peak,
+        boot_oldest_floored_peak,
         fee_budget_end,
         fee_deep_under_peak,
         retr_under_deep,
@@ -1015,6 +1065,9 @@ fn baseline() -> SimConfig {
         read_cold: 0.01,
         freeride_benefit: 0.1,
         freeride_penalty: 1.0,
+        // P3 age-stratified floor: uniform by default (tilt 0 ⇒ byte-identical to the
+        // L12/L13 floor). The P3 scenarios opt in.
+        floor_age_tilt: 0.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1995,6 +2048,52 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = format!("l14_read_{label}");
         c.axis = "l14_readrate".into();
         c.read_cold = cold;
+        out.push(c);
+    }
+
+    // --- P3 (age-stratified floor / irreplaceable-tail protection): L13#2 found the OLDEST
+    // band oscillates under (oUmx 0.163) while mid-deep holds (cDeepU 0.057), and the L12
+    // hand-off residual (0.019) is an *aggregate* deep figure that may hide an oldest-band
+    // concentration. The new `boOld` column band-resolves the floored gap: `boOld > bDUf`
+    // on the uniform-floor scenarios (l12_*, l13_floor) is the band-resolve test — it
+    // confirms the residual sits in the irreplaceable tail. P3's lever is an age-stratified
+    // floor: `foundation_floor_aged` applies a MEAN-PRESERVING oldest-ward tilt (same total
+    // foundation cost, redistributed toward the deepest band — the same way `R_target(age)`
+    // already tilts). These scenarios run the REALISTIC re-engagement floor
+    // (`floor_replicas = 6 = r_target_deep`, matching `l13_floor`), at which the fee-era
+    // residual concentrates in the oldest band (`l13_floor`: boOld 0.612 > bDUf 0.425),
+    // then sweep the tilt: `boOld` should fall toward 0 as the tilt steers replicas to the
+    // oldest band, at the cost of a modest rise in the aggregate gap (younger, re-derivable
+    // deep history under-floored). That trade — protect the irreplaceable, let the
+    // replaceable ride the market — is the P3 disposition.
+    //
+    // (P3a) FEE-ERA re-engagement (= `l13_floor` at tilt 0). The market thins, the floor
+    // re-engages, but the oldest band is abandoned by the market FIRST (age-weight churn),
+    // so the floored residual lands on the irreplaceable tail. The tilt over-floors the
+    // oldest band (round(6·(1+tilt))) at the expense of the freshly-deepened band
+    // (round(6·(1−tilt))). `boOld` ↓ while `bDUf` holds/rises slightly is the trade.
+    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
+        let mut c = l13_base();
+        c.name = format!("p3_fee_tilt_{label}");
+        c.axis = "p3_fee_tilt".into();
+        c.budget_floor = 40.0;
+        c.floor_replicas = 6; // = r_target_deep, the realistic re-engagement floor
+        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
+        c.floor_age_tilt = tilt;
+        out.push(c);
+    }
+    // (P3b) BOOTSTRAP (= `l12_boot_floor` at tilt 0). The asymmetry check: at genesis the
+    // oldest shards are the genesis core (covered earliest/longest), so the bootstrap
+    // residual is the freshly-deepened band, NOT the oldest (`boOld` ≈ 0). The tilt should
+    // therefore leave `boOld` at ~0 — confirming the irreplaceable tail is exposed at the
+    // FEE-ERA end, not the bootstrap end, so the age-stratification is a fee-era lever.
+    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
+        let mut c = l12_base();
+        c.name = format!("p3_boot_tilt_{label}");
+        c.axis = "p3_boot_tilt".into();
+        c.floor_replicas = 6; // = r_target_deep, matching l12_boot_floor
+        c.floor_decay_pop = 80.0;
+        c.floor_age_tilt = tilt;
         out.push(c);
     }
 
