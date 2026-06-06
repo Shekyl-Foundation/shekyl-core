@@ -42,9 +42,12 @@
 use std::future::Future;
 
 use serde_json::{json, Value};
-use shekyl_rpc::{FeeRate, Rpc, RpcError};
+use shekyl_oxide::transaction::Transaction;
+use shekyl_rpc::{FeeRate, Rpc, RpcError, TxRelayResponse};
 use shekyl_simple_request_rpc::SimpleRequestRpc;
 
+use crate::engine::error::TerminalErrorKind;
+use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 
 /// Grace-block horizon passed to the daemon's `get_fee_estimate`
@@ -122,6 +125,44 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
     })
 }
 
+/// Map a daemon `send_raw_transaction` reply onto a [`TxSubmitOutcome`]
+/// (§3.6, honest-subset mapping).
+///
+/// `hash` is the **locally**-computed transaction id (§3.6 step 2); the
+/// daemon reply is consulted only for the accept/reject verdict, never
+/// for identity. The mapping is deliberately narrow because the daemon
+/// is too: `on_send_raw_transaction` (`core_rpc_server.cpp`) sets a
+/// dedicated flag only for `double_spend` and `fee_too_low`. Every
+/// other rejection — invalid input/output, overspend, too-big,
+/// too-few-outputs, an **already-known** duplicate, and a **stale
+/// FCMP++ root** — lands in the same generic `status == "Failed"`
+/// bucket (frequently with an empty `reason`), so it maps to
+/// [`TerminalErrorKind::Malformed`].
+///
+/// Consequently this function never produces
+/// [`TxSubmitOutcome::AlreadyKnown`] (the orchestrator derives that
+/// wallet-side per §5.2) nor [`TxSubmitOutcome::ProofStale`] (detection
+/// deferred to Phase 6). Both are documented on the enum.
+fn submit_outcome_from_response(resp: &TxRelayResponse, hash: TxHash) -> TxSubmitOutcome {
+    if resp.status == "OK" {
+        // `not_relayed` (daemon relayed locally only) is still an
+        // accept into the pool; the wallet's broadcast landed.
+        return TxSubmitOutcome::Submitted { hash };
+    }
+
+    let kind = if resp.double_spend {
+        TerminalErrorKind::DoubleSpend
+    } else if resp.fee_too_low {
+        TerminalErrorKind::FeeTooLow
+    } else {
+        // Generic verification failure: maps to `Malformed` until a
+        // daemon-side stale-root signal lets `ProofStale` split out
+        // (Phase 6, SHEKYLD_PREREQUISITE).
+        TerminalErrorKind::Malformed
+    };
+    TxSubmitOutcome::DaemonRejectedTerminal { kind }
+}
+
 /// Engine's view of the daemon RPC connection.
 ///
 /// Held on [`Engine`](super::Engine) and shared, by clone, with
@@ -186,22 +227,36 @@ impl DaemonEngine for DaemonClient {
         }
     }
 
-    /// Phase 2a target. The Stage 1 surface defines the contract; the
-    /// production wiring parses `tx_bytes`, calls
-    /// [`Rpc::publish_transaction`], and observes the daemon's response
-    /// to distinguish [`TxSubmitOutcome::Submitted`] from
-    /// [`TxSubmitOutcome::AlreadyKnown`]. Phase 2a lands the body
-    /// alongside `Engine::submit_pending_tx`'s real-broadcast wiring.
+    /// Broadcast `tx_bytes` to the daemon and map its verdict to a
+    /// [`TxSubmitOutcome`] (§3.6).
+    ///
+    /// 1. Parse `tx_bytes` back into a [`Transaction`]. A round-trip
+    ///    failure is a malformed-tx terminal condition (step 1) — these
+    ///    are the wallet's *own* serialized bytes, so a parse failure is
+    ///    a build-path defect, not a daemon verdict; no round-trip is
+    ///    issued.
+    /// 2. Compute the tx id **locally** from the parsed transaction
+    ///    (step 2); never read it back from a daemon field, so an
+    ///    untrusted daemon cannot influence the id the wallet records.
+    /// 3. [`Rpc::publish_transaction`]; a transport/protocol failure
+    ///    surfaces as [`Self::Error`] (the orchestrator maps it to the
+    ///    ambiguous-reservation path), not as an outcome.
+    /// 4. Map the daemon verdict via [`submit_outcome_from_response`].
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,
     ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         async move {
-            let _ = tx_bytes;
-            todo!(
-                "Phase 2a: parse tx_bytes, call Rpc::publish_transaction, observe daemon response \
-                 for AlreadyKnown vs Submitted distinction per docs/V3_ENGINE_TRAIT_BOUNDARIES.md §2.5"
-            )
+            let Ok(tx) = Transaction::read(&mut tx_bytes.as_slice()) else {
+                return Ok(TxSubmitOutcome::DaemonRejectedTerminal {
+                    kind: TerminalErrorKind::Malformed,
+                });
+            };
+
+            let hash = TxHash(tx.hash());
+
+            let resp = self.publish_transaction(&tx).await?;
+            Ok(submit_outcome_from_response(&resp, hash))
         }
     }
 }
@@ -307,5 +362,121 @@ mod tests {
             fee_estimates_from_value(&result),
             Err(RpcError::InvalidFee)
         ));
+    }
+
+    /// A `status == "OK"` reply is a fresh accept into the pool.
+    #[test]
+    fn submit_ok_maps_to_submitted() {
+        let hash = TxHash([7u8; 32]);
+        let resp = TxRelayResponse {
+            status: "OK".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, hash),
+            TxSubmitOutcome::Submitted { hash }
+        );
+    }
+
+    /// `not_relayed` (daemon relayed locally only) is still an accept:
+    /// the broadcast landed in the pool.
+    #[test]
+    fn submit_ok_not_relayed_is_still_submitted() {
+        let hash = TxHash([1u8; 32]);
+        let resp = TxRelayResponse {
+            status: "OK".to_string(),
+            not_relayed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, hash),
+            TxSubmitOutcome::Submitted { hash }
+        );
+    }
+
+    #[test]
+    fn submit_double_spend_is_terminal_double_spend() {
+        let resp = TxRelayResponse {
+            status: "Failed".to_string(),
+            double_spend: true,
+            reason: "double spend".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            TxSubmitOutcome::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::DoubleSpend
+            }
+        );
+    }
+
+    #[test]
+    fn submit_fee_too_low_is_terminal_fee_too_low() {
+        let resp = TxRelayResponse {
+            status: "Failed".to_string(),
+            fee_too_low: true,
+            reason: "fee too low".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            TxSubmitOutcome::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::FeeTooLow
+            }
+        );
+    }
+
+    /// `status != "OK"` with no recognized flag and an empty `reason`
+    /// is the generic-verification-failure bucket — the same bucket an
+    /// already-known duplicate and a stale FCMP++ root land in. It maps
+    /// to `Malformed` until Phase 6 splits `ProofStale` out.
+    #[test]
+    fn submit_generic_failure_is_terminal_malformed() {
+        let resp = TxRelayResponse {
+            status: "Failed".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            TxSubmitOutcome::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::Malformed
+            }
+        );
+    }
+
+    /// A non-double-spend, non-fee flag (e.g. `invalid_input`) is not
+    /// individually discriminated — it collapses to `Malformed`.
+    #[test]
+    fn submit_other_flag_is_terminal_malformed() {
+        let resp = TxRelayResponse {
+            status: "Failed".to_string(),
+            invalid_input: true,
+            reason: "invalid input".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            TxSubmitOutcome::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::Malformed
+            }
+        );
+    }
+
+    /// When both `double_spend` and `fee_too_low` are set, double-spend
+    /// wins: it is the stronger (output-conflict) terminal signal.
+    #[test]
+    fn submit_double_spend_precedes_fee_too_low() {
+        let resp = TxRelayResponse {
+            status: "Failed".to_string(),
+            double_spend: true,
+            fee_too_low: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            TxSubmitOutcome::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::DoubleSpend
+            }
+        );
     }
 }

@@ -39,7 +39,7 @@
 
 use shekyl_rpc::{FeeRate, Rpc};
 
-use crate::engine::error::IoError;
+use crate::engine::error::{IoError, TerminalErrorKind};
 use crate::engine::pending::TxHash;
 
 /// Multi-priority fee snapshot returned by
@@ -117,52 +117,105 @@ pub(crate) struct FeeEstimates {
 /// Outcome of a daemon transaction submission via
 /// [`DaemonEngine::submit_transaction`].
 ///
-/// Carries the daemon's view of the submission: whether the daemon
-/// accepted the transaction freshly ([`Self::Submitted`]) or
-/// recognized it as a duplicate of one it already knows
-/// ([`Self::AlreadyKnown`]). Both variants carry the resulting
-/// [`TxHash`] so callers can correlate with the wallet's local
-/// reservation tracking and with §5.2's retry-contract verification:
-/// resubmitting bytes for which the wallet already received a hash
-/// must produce that same hash regardless of which variant the
-/// daemon returned.
+/// Carries the daemon's view of the submission. The variant set is the
+/// **honest subset** the daemon's `send_raw_transaction` reply can
+/// actually distinguish (§3.6, as amended), plus two variants the
+/// orchestrator / a later phase produce rather than the daemon-verdict
+/// mapping:
+///
+/// - [`Self::Submitted`] — daemon `status == "OK"`; accepted to the
+///   pool.
+/// - [`Self::DaemonRejectedTerminal`] — daemon `status != "OK"`; a
+///   final, non-recoverable rejection. The daemon distinguishes only
+///   `double_spend` and `fee_too_low`; every other rejection
+///   (invalid input/output, overspend, too-big, **already-known**, and
+///   a **stale FCMP++ root**) collapses into the same generic
+///   `status == "Failed", reason == ""` bucket and maps to
+///   [`TerminalErrorKind::Malformed`]. Verified against
+///   `core_rpc_server.cpp::on_send_raw_transaction`.
+/// - [`Self::AlreadyKnown`] — **not** produced by the daemon-verdict
+///   mapping (the daemon gives no distinguishing signal). It is the
+///   orchestrator's wallet-side product: on a §5.2 retry where the
+///   wallet already recorded a [`TxHash`] for these exact bytes, a
+///   generic daemon rejection is interpreted as already-known. Best
+///   effort, by construction.
+/// - [`Self::ProofStale`] — reactive stale-root signal whose
+///   **detection is deferred to Phase 6** (the daemon currently emits
+///   no stale-root-specific flag, so a stale root is presently
+///   indistinguishable from a generic terminal rejection). The variant
+///   exists now so the §3.6 bounded rebuild loop has a stable target;
+///   the proactive `reference.rs` validity horizon is the interim
+///   guard. Reopening criterion: a daemon-side stale-root signal
+///   (`SHEKYLD_PREREQUISITE`, tracked in `docs/FOLLOWUPS.md`).
+///
+/// # Transport failures are not an outcome
+///
+/// A failed daemon round-trip (timeout, connection drop) is **not** a
+/// `TxSubmitOutcome`: it is [`Self::Error`](DaemonEngine::Error), which
+/// the orchestrator maps to
+/// [`SubmitError::DaemonAmbiguous`](crate::engine::error::SubmitError::DaemonAmbiguous)
+/// (R9 discipline — reservation retained). Ambiguity is the *absence*
+/// of a daemon verdict; representing it here too would duplicate the
+/// concept across two enums.
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a may add variants for richer daemon outcomes
-/// (mempool-rejected-with-reason, relayed-but-unconfirmed, etc.);
 /// `#[non_exhaustive]` lets the enum extend without a Stage 1
-/// amendment per §8.2.
+/// amendment per §8.2 (e.g. a relayed-but-unconfirmed advisory once
+/// daemon feedback supports it).
 ///
 /// # Retry contract (§5.2)
 ///
 /// Per the §5.2 retry contract, [`DaemonEngine::submit_transaction`]
 /// is conditionally idempotent: same `tx_bytes` produce the same
-/// [`TxHash`] (because the hash is a deterministic function of the
-/// bytes) and the daemon dedupes by hash. A caller may retry on
-/// transient transport failures and observe `AlreadyKnown` on the
-/// second attempt; that is success, not duplicate work.
+/// [`TxHash`] (the hash is a deterministic function of the bytes) and
+/// the daemon dedupes by hash. A caller may retry on transient
+/// transport failures; the wallet-side hash record is what lets the
+/// orchestrator recognize the retry as [`Self::AlreadyKnown`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
 pub(crate) enum TxSubmitOutcome {
-    /// The daemon accepted this transaction as a fresh submission.
-    /// Subsequent submission of the same bytes returns
-    /// [`Self::AlreadyKnown`] with the same hash.
+    /// The daemon accepted this transaction as a fresh submission
+    /// (`status == "OK"`).
     Submitted {
         /// Hash of the submitted transaction. Deterministic in the
-        /// `tx_bytes` argument: the daemon and the caller compute
-        /// the same hash from the same bytes.
+        /// `tx_bytes` argument and computed **locally** from those
+        /// bytes (§3.6 step 2), never read from a daemon field.
         hash: TxHash,
     },
 
-    /// The daemon recognized this transaction as already-known. The
-    /// caller may treat this as a successful idempotent retry per
-    /// §5.2.
+    /// The transaction is already known to the daemon. Produced by the
+    /// orchestrator's §5.2 retry-contract logic (wallet-side dedup by
+    /// local hash), **not** by the daemon-verdict mapping — the daemon
+    /// collapses already-known into the generic terminal bucket.
     AlreadyKnown {
-        /// Hash of the submitted transaction. Equal to the hash the
-        /// daemon returned on the original [`Self::Submitted`].
+        /// Hash of the submitted transaction. Equal to the hash
+        /// recorded on the original [`Self::Submitted`].
         hash: TxHash,
+    },
+
+    /// The transaction's FCMP++ membership proof references a curve-tree
+    /// root the daemon no longer accepts. Recoverable by rebuilding
+    /// against a fresh root, re-signing, and re-submitting (§3.6); the
+    /// spend selection may be preserved. **Detection deferred to Phase
+    /// 6** (see the type-level reopening criterion); no code path
+    /// constructs this variant yet.
+    ProofStale {
+        /// Hash of the (stale) submitted transaction, locally computed.
+        hash: TxHash,
+    },
+
+    /// The daemon rejected the transaction with a final,
+    /// non-recoverable outcome. The orchestrator drops the reservation
+    /// from `in_flight` and releases its `output_locks`; recourse is to
+    /// rebuild against current chain state.
+    DaemonRejectedTerminal {
+        /// The terminal sub-discriminant. The daemon distinguishes only
+        /// [`TerminalErrorKind::DoubleSpend`] and
+        /// [`TerminalErrorKind::FeeTooLow`]; all other terminal
+        /// rejections map to [`TerminalErrorKind::Malformed`].
+        kind: TerminalErrorKind,
     },
 }
 
