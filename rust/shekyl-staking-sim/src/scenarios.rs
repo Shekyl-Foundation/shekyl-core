@@ -123,6 +123,13 @@ pub struct ScenarioResult {
     /// the committed value when `fetch_latency == 0`. The lock-in reallocation cost
     /// (confirmed in `bind_*`) shows here as a higher value under age-scaled duration.
     pub serving_deep_under: f64,
+    /// **Committed** deep under-target fraction, windowed mean over the churn window —
+    /// the steady-state read of the pure (lag-free) reallocation cost. This is the
+    /// honest counterpart to `final_metrics.deep_frac_under_target` (a single final-epoch
+    /// snapshot): the L10 reconciliation showed the `bind_*` "demonstrated cost" was a
+    /// final-epoch artifact that this windowed mean dissolves, so the windowed mean is
+    /// banked as a first-class number to keep the steady-state read the default one.
+    pub committed_deep_under: f64,
     /// **Serving** oldest-band coverage oscillation — the L10 *benefit* axis: max seated
     /// oldest-band `frac_under` over the churn window. `> 0` is the timing-bound gap a
     /// drop-without-seated-replacement opens; age-scaled duration should *damp* it
@@ -331,6 +338,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     };
     let sou_window = &series_serving_old_under[series_serving_old_under.len() - w..];
     let serving_oldest_under_max = sou_window.iter().copied().fold(0.0_f64, f64::max);
+    // Committed deep under-target, windowed mean — the steady-state reallocation-cost
+    // read (vs. the final-epoch snapshot in `final_metrics`). Same window as everything
+    // above so the cost and benefit axes are read on one consistent steady-state window.
+    let cdu_window = &series_deep_frac_under[series_deep_frac_under.len() - w..];
+    let committed_deep_under = if w > 0 {
+        cdu_window.iter().sum::<f64>() / w as f64
+    } else {
+        0.0
+    };
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
@@ -355,6 +371,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         oldest_under_var,
         serving_deep_under,
         serving_oldest_under_max,
+        committed_deep_under,
         claims: SubClaims {
             covered,
             spread,
@@ -720,7 +737,18 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // age-scaling). If the signature replicates, the lean-margin reallocation cost is banked
     // as demonstrated; the surplus "gentle" reading is regime-specific. Flat magnitude
     // throughout (L4). ---
-    for (alabel, aging) in [("a08", 0.08), ("a10", 0.10), ("a12", 0.12)] {
+    // Widened aging grid (hardening): a06..a14 brackets the bind window denser, so the
+    // Finding-3 cost-dissolution (committed deep_und windowed mean within noise under
+    // age-scaling) is read across the envelope, not at three points. Read `cDeepU`
+    // (committed windowed mean) — NOT the final-epoch `deep_und`, which is the snapshot
+    // that produced the original (retracted) "7×" artifact.
+    for (alabel, aging) in [
+        ("a06", 0.06),
+        ("a08", 0.08),
+        ("a10", 0.10),
+        ("a12", 0.12),
+        ("a14", 0.14),
+    ] {
         for (dlabel, dscale) in [("s0", 0.0), ("s2", 2.0), ("s4", 4.0)] {
             let mut c = lean_base();
             c.name = format!("bind_{alabel}_{dlabel}");
@@ -768,7 +796,18 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.epoch_aging = 0.05; // the covered lean point (capacity-bound oUmx = 0)
         c
     };
-    for (llabel, lpu) in [("L0", 0.0), ("L1", 1.0), ("L2", 2.0), ("L4", 4.0)] {
+    // Denser latency grid (hardening): {0,1,2,3,4,6} epochs maps the benefit *curve*
+    // (s0 deep_und − s4 deep_und), not two endpoints — so the sign's robustness and the
+    // rise/saturate shape are visible, not asserted. The smallest non-trivial lag (L1)
+    // is the floor-of-plausible read; L6 is the deep-saturation tail.
+    for (llabel, lpu) in [
+        ("L0", 0.0),
+        ("L1", 1.0),
+        ("L2", 2.0),
+        ("L3", 3.0),
+        ("L4", 4.0),
+        ("L6", 6.0),
+    ] {
         for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
             let mut c = lag_base();
             c.name = format!("lag_{llabel}_{dlabel}");
@@ -777,6 +816,29 @@ pub fn build_scenarios() -> Vec<SimConfig> {
             c.bond_dur_age_scale = dscale;
             out.push(c);
         }
+    }
+    // Duration-LEVEL sensitivity (hardening — the constant-vs-servo input). The lag_*
+    // block compares only flat (s0) vs one age-scaled level (s4); it shows the benefit
+    // EXISTS but not how sensitive it is to getting the LEVEL right. At a fixed mid
+    // latency (L2), sweep `bond_dur_age_scale ∈ {0,1,2,4,8}` and read whether serving
+    // coverage / oscillation improves MONOTONICALLY and SATURATES (⇒ any reasonable
+    // genesis constant captures most of the benefit, so "age-scaled-constant" is robust
+    // and the servo's governance surface is unjustified) or is SHARP/non-monotone (⇒ the
+    // level matters, favoring the post-testnet-tunable servo). This is the magnitude
+    // residue's decision-relevant slice: sign is known; this maps how much the level costs.
+    for (slabel, dscale) in [
+        ("d0", 0.0),
+        ("d1", 1.0),
+        ("d2", 2.0),
+        ("d4", 4.0),
+        ("d8", 8.0),
+    ] {
+        let mut c = lag_base();
+        c.name = format!("lagscale_{slabel}");
+        c.axis = "duration_level_sens".into();
+        c.fetch_latency_per_unit = 2.0;
+        c.bond_dur_age_scale = dscale;
+        out.push(c);
     }
     // Bandwidth-bound variant: at a fixed latency, throttle fresh fetches to 1/epoch so
     // backfill cannot keep pace with churn — the regime most likely to surface a real

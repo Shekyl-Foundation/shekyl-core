@@ -60,7 +60,18 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("          abandonment is benign rotation unless this is > 0 — discriminates only at lean).");
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6}",
+        "  deep_und is the FINAL-epoch committed deep under (snapshot); cDeepU is its WINDOWED"
+    );
+    eprintln!("  MEAN (steady-state read — use this, not the snapshot: the bind_* 'cost' was a");
+    eprintln!(
+        "  final-epoch artifact). sDeepU/sOUmx = SERVING (seated-replica) deep-under mean / oldest-"
+    );
+    eprintln!(
+        "  under max (L10 retrieval view; = committed when fetch_latency=0). sOUmx is the timing benefit."
+    );
+    eprintln!();
+    eprintln!(
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6}",
         "scenario",
         "axis",
         "bond",
@@ -82,6 +93,9 @@ fn print_summary(results: &[ScenarioResult]) {
         "wB4",
         "oChrn",
         "oUmx",
+        "cDeepU",
+        "sDeepU",
+        "sOUmx",
     );
 
     for r in results {
@@ -91,7 +105,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -116,6 +130,9 @@ fn print_summary(results: &[ScenarioResult]) {
             },
             r.oldest_churn,
             r.oldest_under_max,
+            r.committed_deep_under,
+            r.serving_deep_under,
+            r.serving_oldest_under_max,
         );
     }
 
