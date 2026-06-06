@@ -7,6 +7,7 @@
 //! product — to keep runtime bounded while exercising each axis.
 
 use crate::agent::{run_epoch, AgentParams};
+use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
@@ -187,6 +188,25 @@ pub struct SimConfig {
     /// (1–6) model jurisdiction/ASN/implementation clustering.
     pub retr_n_domains: usize,
 
+    /// **Proof-of-archival / free-rider audit (L14).** When on, the sim scores the
+    /// non-productive (oversight-only) challenge traffic needed to keep free-riding
+    /// unprofitable, *crediting real reads as proofs*. Surfaces that oversight collapses
+    /// onto the cold/irreplaceable tail. Off ⇒ inert, byte-identical.
+    pub audit_model: bool,
+    /// Per-epoch real-read probability of the *hottest* shard (age 0). Reads decay with
+    /// age at `read_decay` toward `read_cold`.
+    pub read_hot: f64,
+    /// Read-rate decay with normalized age (`read_hot · exp(−read_decay · age)`).
+    pub read_decay: f64,
+    /// Long-tail read floor — the per-epoch read probability the oldest shards approach
+    /// (even ancient data is occasionally fetched).
+    pub read_cold: f64,
+    /// Free-rider per-epoch benefit (saved flow cost), normalized to the slash unit.
+    pub freeride_benefit: f64,
+    /// Free-rider penalty if caught (slashed bond), in the same unit as `freeride_benefit`.
+    /// Deterrence threshold `a* = freeride_benefit / freeride_penalty`.
+    pub freeride_penalty: f64,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -295,6 +315,20 @@ pub struct ScenarioResult {
     /// independence — `r_target_deep` read off the availability target rather than
     /// stipulated. `0` outside the retrieval model.
     pub r_target_avail: f64,
+    /// **Naive audit cadence** (L14): the per-shard challenge probability `a*` deterrence
+    /// requires when *every* shard is challenged uniformly (no read credit). `0` outside
+    /// the audit model.
+    pub audit_oversight_naive: f64,
+    /// **Credited audit cadence** (L14): mean per-shard challenge rate when real reads are
+    /// credited as proofs — hot shards self-prove, so this is `≪ audit_oversight_naive`.
+    pub audit_oversight_credited: f64,
+    /// **Deep share of oversight** (L14): fraction of the credited challenge traffic that
+    /// lands on deep shards — ≈1 means the non-productive traffic is confined to the cold
+    /// tail (hot shards are proven by their reads).
+    pub audit_deep_share: f64,
+    /// **Oldest-band audit cadence** (L14): the challenge rate the single oldest (coldest,
+    /// most-irreplaceable) shard needs — the worst oversight point (P3 tail).
+    pub audit_oldest_cadence: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -754,6 +788,46 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L14 proof-of-archival audit: the non-productive (oversight-only) challenge traffic
+    // needed to keep free-riding unprofitable, computed over the final age distribution
+    // (steady in steady state). `a*` is the per-shard audit probability deterrence
+    // requires; the NAIVE policy challenges every shard at `a*` (ignoring reads); the
+    // CREDITED policy credits each shard's real-read probability and only tops up the
+    // shortfall — so hot, frequently-read shards need ~0 challenge and the oversight lands
+    // on the cold tail. `audit_deep_share` is the fraction of credited oversight on deep
+    // shards; `audit_oldest_cadence` is the worst (oldest-band) challenge rate (P3 — the
+    // most-irreplaceable, least-read shards carry the highest oversight cadence).
+    let (audit_oversight_naive, audit_oversight_credited, audit_deep_share, audit_oldest_cadence) =
+        if cfg.audit_model {
+            let a_star = deterrence_threshold(cfg.freeride_benefit, cfg.freeride_penalty);
+            let n = world.shards.len().max(1);
+            let max_age = world.shards.iter().map(|s| s.age).fold(0.0_f64, f64::max);
+            let mut credited_sum = 0.0_f64;
+            let mut deep_credited = 0.0_f64;
+            for sh in &world.shards {
+                let p = read_prob(sh.age, cfg.read_hot, cfg.read_decay, cfg.read_cold);
+                let c = challenge_needed(p, a_star);
+                credited_sum += c;
+                if sh.age >= cfg.deep_threshold {
+                    deep_credited += c;
+                }
+            }
+            let credited_mean = credited_sum / n as f64;
+            let deep_share = if credited_sum > 0.0 {
+                deep_credited / credited_sum
+            } else {
+                0.0
+            };
+            // Oldest-band cadence: the challenge rate the single oldest shard needs — the
+            // worst oversight point (least-read, most-irreplaceable; the P3 tail).
+            let oldest = challenge_needed(
+                read_prob(max_age, cfg.read_hot, cfg.read_decay, cfg.read_cold),
+                a_star,
+            );
+            (a_star, credited_mean, deep_share, oldest)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
     // L12 bootstrap aggregates, taken over the WHOLE run (the cold-start transient is at
     // the *start*, not in the steady-state window): the worst deep retrieval gap with and
     // without the foundation floor, and the peak bonded-archiver count. `bonded_active_peak`
@@ -822,6 +896,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         retr_under_deep,
         retr_avail_deep,
         r_target_avail,
+        audit_oversight_naive,
+        audit_oversight_credited,
+        audit_deep_share,
+        audit_oldest_cadence,
         claims: SubClaims {
             covered,
             spread,
@@ -927,6 +1005,16 @@ fn baseline() -> SimConfig {
         retr_uptime: 0.9,
         retr_avail_target: 0.999,
         retr_n_domains: 0,
+        // L14 proof-of-archival audit: off by default (inert, byte-identical). The audit
+        // scenarios opt in. Defaults: hot shards read often (0.6/epoch) decaying to a 1%
+        // cold floor; free-rider saves 10% of the slash per epoch, slashed in full if
+        // caught ⇒ deterrence threshold a* = 0.1.
+        audit_model: false,
+        read_hot: 0.6,
+        read_decay: 4.0,
+        read_cold: 0.01,
+        freeride_benefit: 0.1,
+        freeride_penalty: 1.0,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -1853,6 +1941,60 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = format!("l15_uptime_{label}");
         c.axis = "l15_uptime".into();
         c.retr_uptime = u;
+        out.push(c);
+    }
+
+    // --- L14 (proof-of-archival / free-rider economics): minimize the non-productive
+    // (oversight-only) traffic. Reward is for *provable* archival; the free-rider claims a
+    // shard without storing it. What deters this is the per-epoch audit probability `a*`
+    // (caught ⇒ slashed): abstain iff `a* · penalty ≥ benefit`, so `a* = benefit/penalty`.
+    // The L14×L15 spec's lever: a successful content-bound **retrieval IS a proof**, so
+    // every real read audits its shard for free. Explicit PoR challenges are then only the
+    // top-up the cold (unread) tail needs to reach `a*`. These scenarios run on the same
+    // healthy covered substrate and quantify how much oversight traffic the read-credit
+    // saves and *where* the residual lands.
+    let l14_base = || {
+        let mut c = l15_base();
+        c.retrieval_model = false; // L14 is the audit layer; retrieval columns off here
+        c.audit_model = true;
+        c
+    };
+    // (L14a) CREDITED vs NAIVE: the headline. `auN` is the naive cadence (challenge every
+    // shard at `a*`); `auC` is the credited mean (reads self-prove the hot shards). The
+    // result: `auC ≪ auN`, and `auDp ≈ 1` — the oversight traffic is confined to the cold
+    // deep tail, hot shards proven for free by their reads.
+    {
+        let mut c = l14_base();
+        c.name = "l14_credited".into();
+        c.axis = "l14_audit".into();
+        out.push(c);
+    }
+    // (L14b) PENALTY lever: a heavier slash lowers the deterrence threshold `a*`
+    // (`benefit/penalty`), so *less* oversight is needed. Sweep penalty 0.5/1/2/4 ⇒ `a*`
+    // 0.2/0.1/0.05/0.025. The cheapest oversight comes from a credible slash, not a high
+    // challenge cadence — the bond/penalty is the primary deterrent, challenges the top-up.
+    for (label, pen) in [("p05", 0.5_f64), ("p1", 1.0), ("p2", 2.0), ("p4", 4.0)] {
+        let mut c = l14_base();
+        c.name = format!("l14_penalty_{label}");
+        c.axis = "l14_penalty".into();
+        c.freeride_penalty = pen;
+        out.push(c);
+    }
+    // (L14c) READ-RATE lever: the more the cold tail is actually read, the less explicit
+    // challenge it needs. Sweep the cold read floor 0.001/0.01/0.05/0.1 ⇒ as it approaches
+    // `a*=0.1` the oldest-band cadence `auOld` falls toward 0 (reads alone deter). Shows the
+    // non-productive traffic is bounded by *demand* on the cold tail — popular history is
+    // self-policing; only the truly-unread deep shards carry oversight (P3 again).
+    for (label, cold) in [
+        ("c0001", 0.001_f64),
+        ("c001", 0.01),
+        ("c005", 0.05),
+        ("c01", 0.1),
+    ] {
+        let mut c = l14_base();
+        c.name = format!("l14_read_{label}");
+        c.axis = "l14_readrate".into();
+        c.read_cold = cold;
         out.push(c);
     }
 
