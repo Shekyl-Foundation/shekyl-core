@@ -1957,6 +1957,11 @@ The stipulated `r_target_deep = 6` silently assumes `u ≳ 0.85`. Below that the
 `R≈6`). So `R_target` should be *read off* the stated SLA `(u, A*)` rather than asserted as a
 constant.
 
+**Sim note (soundness pass).** The `A*=0.999` three-nines bar used here is a **stress probe**,
+not the ratified service SLA — see §*Soundness pass* step 0. The spec's reward basis is
+retention, not instantaneous retrieval (`V3_STAKER_ARCHIVAL.md` §*The reward curve*); L15
+findings are **conditional on which SLA is pinned** for each retrieval class.
+
 **Disposition.** Gate-4/5 must (a) state the retrieval SLA `(u, A*)` and derive `R_target`
 from it (the L16 onion path depresses `u`, which raises the derived `R_target` — the two
 layers compose), and (b) add a **diversity floor co-located with the coverage floor**: a deep
@@ -2037,13 +2042,112 @@ a covered deep set fails its SLA from transport alone above `L=0`, derived `R_ta
 3→7 across the band, and neither duration backstop nor replica floor repairs depressed `u` —
 transport is a first-class retrieval input compositing with L15 diversity.
 
-## Soundness pass — deferred security and architecture conditions
+## Soundness pass — ordering, SLA pin, and deferred conditions
 
-The iteration-3 sim validates economics **conditional** on the conditions below. Discharging
-them is security-pass / gate-6 work, not further coverage sim. Two items are named; the second
-is the only one that can still push back on load-bearing architecture.
+The iteration-3 sim validates **retention/durability economics** (L1–L13, shapes settled)
+**conditional** on the security and architecture pins below. L14–L16 scored retrieval using a
+**provisional CDN-style bar** (`A*=0.999`, low-latency instantaneous availability) as a stress
+probe — not because that bar is the service promise. The soundness pass **starts upstream of
+L15**: pin what the service owes per retrieval class, then decide whether L15's
+diversity-under-privacy tension is a load-bearing wall or an artifact of the wrong SLA.
 
-### L14 — read-credit must be per-holder, never shard-global
+### Architectural decomposition (L16 orthogonality)
+
+L16's identity checks (`l16_L6_s0` ≡ `l16_L6_s4`; `l16_L6_floor` ≡ `l16_L6`) prove:
+
+- **Coverage** (`deep_und`, `R`, foundation floor) and **retrieval uptime** (`u_eff`, `rUDp`)
+  live in **different layers** — coverage can be perfect while retrieval fails totally.
+- **No staking-economics lever moves serve-rate under rendezvous** — duration deters voluntary
+  drops (L10 seating timing); replica floor adds capacity (P4); neither raises `u_eff`.
+- The **instantaneous retrieval SLA is not a staking-economics problem** — it is
+  **transport-layer + SLA-definition** work.
+
+| Layer | Scope | Status |
+|---|---|---|
+| Retention / durability economics | L1–L13 (+ P1–P4) | Shapes settled |
+| Retrieval SLA definition | Per-class service promise | **Step 0 — pin first** |
+| Retrieval under pinned SLA | L15 re-run + L16 transport | Steps 1–2 |
+| Contained crypto / counting | L14 crediting, nullifiers, firewall | Step 3 |
+
+### Step 0 — pin the SLA per retrieval class (before L15)
+
+**Spec anchor.** `docs/V3_STAKER_ARCHIVAL.md` already states: **reward retention, not
+retrieval** (work = proven retention, not query volume); query latency is a **routing-quality
+signal**, not the reward basis (§*Verification*); single-region is acceptable because reward is
+retention-based (`STAKER_ARCHIVAL_SIM.md` §*Resolved — review sign-off* #4).
+
+**Two retrieval classes (hypothesis to ratify).**
+
+| Class | Examples | Tolerance | SLA shape |
+|---|---|---|---|
+| Historical / audit query | Old-state reconstruction; dispute backstop; rare wallet reads | High — hours OK | **Durability + eventual retrievability** |
+| Archiver seeding / backfill | New holder fetching deep shard to start holding (L12 race) | Low — L10 timing channel | **Bounded seeding latency** |
+
+One three-nines-instantaneous bar fits neither — it is a CDN SLA on a retention service. If
+step 0 confirms this split, **L15's wall may dissolve** for the historical class:
+**durability-diversity** (all replicas permanently lost is improbable) is privacy-compatible
+where **availability-diversity** (enough domains simultaneously up) is not. SLA "relaxation"
+may be the **correct** SLA, not an escape route — and foundation-as-perpetual-diversity-anchor
+is needed only if the protocol insists on instantaneous availability it does not owe.
+
+**Transport split.** User historical queries → pure rendezvous OK under durability SLA. Archiver
+seeding (both ends pseudonymous) → where **non-linking bandwidth relaxation** lives — a smaller
+firewall question than clearnet on the user-query path.
+
+### Soundness pass ordering
+
+| Step | Work |
+|---|---|
+| **0** | Pin SLA per retrieval class; justify or retire three-nines-instantaneous globally |
+| **1** | Re-run L15/L16 under pinned SLA — durability metrics vs bounded seeding latency |
+| **2** | Seeding-path transport relaxation (contained firewall pass) |
+| **3** | L14 per-holder crediting; `(P,shard)` nullifiers; firewall crypto |
+
+### Step 1 result — durability SLA rescore (L15d / L16d)
+
+**Instrument.** `durability_model` in `shekyl-staking-sim` scores **permanent retention**
+`1 − (1−s)^d` per deep shard, with per-domain **retention survival** `s = 0.999` (bond-backed
+loss probability, not momentary serve uptime) and target `D* = 0.999`. Distinct domains `d`
+count **committed** holders (`World::replication` — all `holdings`, including in-flight fetches),
+not seated replicas; transport does not depress `s`. Columns: `dUDp` (deep frac under `D*`),
+`dAvl` (deep-set mean durability), `dTgtR` (derived `R_target` under independence).
+
+**Derived redundancy collapses.** At `(s=0.999, D*=0.999)` independence needs `dTgtR = 1`
+(vs `rTgtA = 3` at `(u=0.9, A*=0.999)`). The three-nines *availability* bar implied triple
+redundancy at 90 % uptime; the three-nines *durability* bar at 99.9 % per-domain survival
+needs only one independent domain when `R ≥ 6` deep replicas are seated.
+
+**L15d diversity — wall shrinks for the historical class.**
+
+| Scenario | Availability (`rUDp`) | Durability (`dUDp`) | Notes |
+|---|---|---|---|
+| `l15_corr_d3` / `l15d_corr_d3` | 0.202 | **0.000** | Same covered deep set; availability fails, durability passes |
+| `l15_corr_d1` / `l15d_corr_d1` | 1.000 | **0.000** | Total availability failure; durability at knife-edge (`dAvl ≈ 0.999`) |
+| `l15d_corr_d2` / `d6` | — | 0.000 | All pass at `s=0.999` |
+| `l15d_surv_s99` (`d=2`) | — | **0.020** | Binds only when survival drops to 0.99 with ≤2 domains |
+
+**L16d transport orthogonality — confirmed.**
+
+| Scenario | `rUDp` | `trU` | `dUDp` | `dAvl` |
+|---|---|---|---|---|
+| `l16_regime_L0` / `l16d_regime_L0` | 0.000 | 0.900 | 0.000 | 1.000 |
+| `l16_regime_L6` / `l16d_regime_L6` | **1.000** | 0.634 | **0.000** | 1.000 |
+| `l16d_vs_avail_L6` (both models) | 1.000 | 0.634 | **0.000** | 1.000 |
+| `l16_L4_d3` / `l16d_L4_d3` | 1.000 | 0.703 | **0.000** | 1.000 |
+
+`dUDp` is **flat at 0** across the full `L0–L6` transport band while `rUDp` climbs to 1.0
+and `rTgtA` rises 3→7 — the L16 orthogonality decomposition holds under the pinned SLA:
+transport depresses **instantaneous availability**, not **bond-backed retention**.
+
+**Disposition.** Step 0's two-class split is **supported by the rescore**: the L15
+diversity-under-privacy tension is a **load-bearing wall only for the seeding / instantaneous
+availability class** (steps 2–3), not for historical/audit durability. The remaining durability
+bind is marginal (`d=1` at `s=0.999`, or `s≤0.99` with ≤2 domains) — architecture-level
+diversity still matters at the tail, but the sim no longer shows a covered deep set failing
+`D*` under realistic correlation when `R ≥ 6`. Seeding-path bounded latency (step 2) inherits
+the full L15+L16 availability composition unchanged.
+
+### Step 3 — L14 read-credit must be per-holder, never shard-global
 
 Retrieval-as-proof (§*L14×L15*) is sound iff credited reads **reduce challenge burden only for
 the holder that served them**, and only when the reader verified the response against the leaf
@@ -2059,27 +2163,16 @@ privacy-optimal penalty that pushes the bond past the co-location-feasible point
 challenge-channel privacy at the cost of entry. Soundness pass should check that full-bond
 slash at the credible penalty still hits an acceptable `a*` at the L11-feasible bond.
 
-### L15 — diversity under location-hiding
+### Step 1 context — L15 diversity under location-hiding (conditional on step 0)
 
-L15's diversity floor needs ≥3 failure domains per deep shard at three-nines, but a failure
-domain is jurisdiction/operator/ISP correlation — and the firewalled pseudonym `P` exists so
-network location **cannot** be observed or linked. You cannot verify, incentivize, or steer
-domain diversity using a property cryptographically committed to hiding.
+**If step 0 retains instantaneous availability globally**, L15's diversity floor at three-nines
+needs ≥3 failure domains — but domains are location/operator/ISP correlation and `P` hides
+location. Pick among: (1) correlation-inferred diversity; (2) relaxed instantaneous target;
+(3) foundation as perpetual diversity anchor (sharper than P4).
 
-Escape routes (each has a cost; soundness pass picks one):
-
-1. **Correlation-inferred diversity** — reward uncorrelated availability from failure-correlation
-   patterns over time (privacy-preserving on location, but an availability-fingerprint metadata
-   channel).
-2. **Honestly relaxed availability target** — accept a lower `A*` or a diversity-free SLA.
-3. **Foundation as diversity anchor** — guaranteed diversity only from known-diverse foundation
-   nodes. This is sharper than P4's capacity backstop: if the anonymous market cannot be steered
-   into ≥3 domains, the foundation becomes **perpetually load-bearing for domain-independence**,
-   not just transient capacity — the trustless terminal subsidy buys replicas without buying the
-   independence the SLA needs.
-
-This tension feeds back into privacy claims and the decentralization story; it is the first
-stone to turn after L16.
+**If step 0 pins durability+eventual for historical/audit reads**, this wall applies only to
+the **seeding class** (step 2) and **routing-quality** (secondary market), not the retention
+reward basis — durability-diversity replaces availability-diversity for the primary promise.
 
 ### P3 disposition — floor-tilt ≠ duration age-scaling
 

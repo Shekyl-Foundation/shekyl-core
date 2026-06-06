@@ -106,6 +106,11 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  depresses u and stipulating r_target_deep=6 silently assumed clearnet u. 0 outside L16."
     );
+    eprintln!("  dUDp = DURABILITY deep frac under D* (1-(1-s)^d < D*); dAvl = deep-set mean");
+    eprintln!("  retention survival; dTgtR = DERIVED R_target from (s,D*). s is per-domain bond-");
+    eprintln!(
+        "  backed survival (not transport-depressed). L15d/L16d rescore; 0/1 outside durability model."
+    );
     eprintln!("  auN = NAIVE audit cadence (challenge every shard at a*); auC = CREDITED cadence");
     eprintln!("  (real reads self-prove → auC<<auN); auDp = deep share of oversight (~1 = traffic");
     eprintln!(
@@ -113,7 +118,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -150,6 +155,9 @@ fn print_summary(results: &[ScenarioResult]) {
         "rAvl",
         "rTgtA",
         "trU",
+        "dUDp",
+        "dAvl",
+        "dTgtR",
         "auN",
         "auC",
         "auDp",
@@ -163,7 +171,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -203,6 +211,9 @@ fn print_summary(results: &[ScenarioResult]) {
             r.retr_avail_deep,
             r.r_target_avail as usize,
             r.transport_u_eff,
+            r.dur_under_deep,
+            r.dur_avail_deep,
+            r.r_target_dur as usize,
             r.audit_oversight_naive,
             r.audit_oversight_credited,
             r.audit_deep_share,

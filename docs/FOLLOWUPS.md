@@ -7486,8 +7486,39 @@ one place to confirm each item's relationship to the wallet stack.
   staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
   ledger item L16 + §*Transport coupling* + §*L16*; `docs/design/V3_STAKER_ARCHIVAL.md`.
 
+- **Soundness pass step 0: pin retrieval SLA per class (gate 4–6;
+  soundness pass — upstream of L15).** L15/L16 used `A*=0.999` as a
+  stress probe; the spec's reward basis is **retention, not retrieval**
+  (`V3_STAKER_ARCHIVAL.md` §*The reward curve*). Before treating L15
+  diversity-under-privacy as a load-bearing wall, pin what the service
+  owes per retrieval class: **(A) historical/audit queries** →
+  durability + eventual retrievability (hours-tolerant); **(B) archiver
+  seeding/backfill** → bounded latency (L12 growth↔entry). One
+  three-nines-instantaneous bar fits neither. If (A) is pinned,
+  durability-diversity may be privacy-compatible where
+  availability-diversity is not — the wall may dissolve rather than
+  require escape routes. L16 orthogonality: no staking lever moves
+  `u_eff`; retrieval SLA is transport + definition, not economics.
+
+  *Ordering:* step 0 → re-run L15 under pinned SLA (step 1) → seeding-
+  path transport relaxation (step 2) → L14/nullifiers/firewall (step 3).
+  *Target:* gate 4–6 soundness pass, **before** L15 wall hardening.
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*.
+
+- **Archiver seeding-path transport relaxation (gate 6 / firewall;
+  soundness pass step 2).** L16 closes the Tor thread: user historical
+  queries can stay pure rendezvous under a durability SLA; the
+  **archiver-to-archiver seeding path** (both ends pseudonymous, not
+  external querier) is where bandwidth-buying relaxation that does not
+  link `P` may live — smaller, contained firewall question than clearnet
+  on the user-query path. Sequenced after step 0 SLA pin.
+
+  *Target:* gate 6 transport pass, after step 0. *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass* step 2;
+  `docs/ANONYMITY_NETWORKS.md` §*Transport for the staker-archival path*.
+
 - **L14 read-credit soundness: per-(holder, shard), never shard-global
-  (gate 4 / consensus crypto; soundness pass).** The iteration-3 sim
+  (gate 4 / consensus crypto; soundness pass step 3).** The iteration-3 sim
   validated retrieval-as-proof economics **conditional** on read-credit
   being unforgeable. Soundness requires crediting only **reader-verified,
   successful serves** that reduce **that holder's** challenge burden —
@@ -7497,28 +7528,25 @@ one place to confirm each item's relationship to the wallet stack.
   traffic must still leave an acceptable `a*` at the L11-feasible bond
   (penalty couples to bond/APR denominator).
 
-  *Target:* gate 4 soundness pass, before genesis challenge-cadence pin.
+  *Target:* gate 4 soundness pass step 3, before genesis challenge-cadence pin.
   *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
-  (L14), §*L14×L15*, ledger L14.
+  step 3, §*L14×L15*, ledger L14.
 
 - **L15 diversity under location-hiding (gate 4–6 / architecture;
-  soundness pass — load-bearing).** A three-nines retrieval SLA needs
-  ≥3 failure domains per deep shard, but failure domains are
-  location/operator/ISP correlation and the firewalled pseudonym `P`
-  exists so network location cannot be observed or linked — diversity
-  cannot be verified or steered using a property committed to hiding.
-  Soundness pass must pick among: (1) correlation-inferred diversity
-  (privacy-preserving on location, availability-fingerprint metadata
-  cost); (2) honestly relaxed `A*` / diversity-free SLA; (3) foundation
-  as perpetual diversity anchor (sharper than P4 — trustless terminal
-  subsidy buys capacity without buying domain-independence). This is
-  the only iteration-3 item that can still move load-bearing walls;
-  resolution feeds privacy claims and decentralization story.
+  soundness pass step 1 — conditional on step 0).** Under an
+  **instantaneous availability SLA** (the L15/L16 probe bar), ≥3 failure
+  domains per deep shard at three-nines collides with location-hiding —
+  diversity cannot be steered using a property committed to hiding. Pick
+  among: (1) correlation-inferred diversity; (2) SLA change (see step
+  0 — may be correct shape, not escape); (3) foundation as perpetual
+  diversity anchor (sharper than P4). **If step 0 pins durability+
+  eventual for historical/audit reads**, this wall applies only to the
+  seeding class and routing-quality secondary market — durability-
+  diversity may fit the privacy budget.
 
-  *Target:* gate 4–6 soundness pass, sequenced with transport (L16
-  shows transport+diversity compose worse than either alone).
+  *Target:* gate 4–6 soundness pass step 1, **after** step 0 SLA pin.
   *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
-  (L15), §*L15*, §*L16* finding 4.
+  steps 0–1, §*L15*, §*L16*.
 
 - **Permanent fee-era backstop must be a trustless terminal subsidy,
   not the foundation floor (gate 7 / consensus monetary policy;

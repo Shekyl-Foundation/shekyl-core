@@ -15,7 +15,9 @@ use crate::model::{r_target, Actor, Rng, Shard, World};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
-use crate::retrieval::{r_target_for_availability, serving_availability};
+use crate::retrieval::{
+    r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
+};
 use crate::reward::{evaluate, RewardParams};
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
@@ -189,6 +191,16 @@ pub struct SimConfig {
     /// (1–6) model jurisdiction/ASN/implementation clustering.
     pub retr_n_domains: usize,
 
+    /// **Durability SLA (soundness pass step 1).** When on, scores permanent retention
+    /// `1 − (1−s)^d` over deep shards against `dur_target`, using per-domain survival
+    /// `dur_survival` — **not** transport-depressed uptime. Off ⇒ inert, byte-identical.
+    pub durability_model: bool,
+    /// Per-domain retention survival `s` (probability a domain does not suffer total
+    /// permanent loss of all its replicas). High (e.g. 0.999) for bond-backed retention.
+    pub dur_survival: f64,
+    /// Target durability `D*` the deep set must clear (e.g. `0.999`).
+    pub dur_target: f64,
+
     /// **Proof-of-archival / free-rider audit (L14).** When on, the sim scores the
     /// non-productive (oversight-only) challenge traffic needed to keep free-riding
     /// unprofitable, *crediting real reads as proofs*. Surfaces that oversight collapses
@@ -341,6 +353,13 @@ pub struct ScenarioResult {
     /// **Transport-depressed uptime** (L16): the effective `u` used in retrieval scoring
     /// when `transport_model` couples latency to the SLA. `0` outside L16.
     pub transport_u_eff: f64,
+    /// **Durability under-SLA deep fraction**: windowed-mean fraction of deep shards whose
+    /// realized durability `1 − (1−s)^d` falls below `dur_target`. `0` outside durability model.
+    pub dur_under_deep: f64,
+    /// **Deep-set mean durability** (windowed mean). `1.0` outside durability model.
+    pub dur_avail_deep: f64,
+    /// **Derived deep redundancy for durability** under independence — `R_target` from `(s, D*)`.
+    pub r_target_dur: f64,
     /// **Naive audit cadence** (L14): the per-shard challenge probability `a*` deterrence
     /// requires when *every* shard is challenged uniformly (no read credit). `0` outside
     /// the audit model.
@@ -508,6 +527,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // the deep-set mean availability. Inert (empty/zero) when `!retrieval_model`.
     let mut series_retr_under_deep = Vec::with_capacity(cfg.epochs);
     let mut series_retr_avail_deep = Vec::with_capacity(cfg.epochs);
+    // Durability SLA: permanent retention `1 − (1−s)^d` — inert when `!durability_model`.
+    let mut series_dur_under_deep = Vec::with_capacity(cfg.epochs);
+    let mut series_dur_avail_deep = Vec::with_capacity(cfg.epochs);
     // L11 emergent participation: active count and bonded-active count per epoch. When
     // `!endogenous` these stay flat at the full population (legacy population is fixed).
     let mut series_active = Vec::with_capacity(cfg.epochs);
@@ -668,6 +690,34 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         } else {
             series_retr_under_deep.push(0.0);
             series_retr_avail_deep.push(1.0);
+        }
+
+        // Durability SLA: `s` is per-domain retention survival — never transport-depressed.
+        if cfg.durability_model {
+            let s = cfg.dur_survival;
+            let dur = serving_durability(&world, s, cfg.retr_n_domains);
+            let mut dn = 0usize;
+            let mut under = 0usize;
+            let mut sum = 0.0_f64;
+            #[allow(clippy::needless_range_loop)]
+            for sidx in 0..world.shards.len() {
+                if world.shards[sidx].age >= cfg.deep_threshold {
+                    dn += 1;
+                    sum += dur[sidx];
+                    if dur[sidx] < cfg.dur_target {
+                        under += 1;
+                    }
+                }
+            }
+            series_dur_under_deep.push(if dn > 0 {
+                under as f64 / dn as f64
+            } else {
+                0.0
+            });
+            series_dur_avail_deep.push(if dn > 0 { sum / dn as f64 } else { 1.0 });
+        } else {
+            series_dur_under_deep.push(0.0);
+            series_dur_avail_deep.push(1.0);
         }
 
         // L12 bootstrap deep coverage: serving deep under-target with and without the
@@ -856,6 +906,23 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         0.0
     };
     let transport_u_eff = if cfg.transport_model { retr_u } else { 0.0 };
+    let dud_window = &series_dur_under_deep[series_dur_under_deep.len() - w..];
+    let dur_under_deep = if w > 0 {
+        dud_window.iter().sum::<f64>() / w as f64
+    } else {
+        0.0
+    };
+    let dad_window = &series_dur_avail_deep[series_dur_avail_deep.len() - w..];
+    let dur_avail_deep = if w > 0 {
+        dad_window.iter().sum::<f64>() / w as f64
+    } else {
+        1.0
+    };
+    let r_target_dur = if cfg.durability_model {
+        r_target_for_durability(cfg.dur_survival, cfg.dur_target) as f64
+    } else {
+        0.0
+    };
     // L14 proof-of-archival audit: the non-productive (oversight-only) challenge traffic
     // needed to keep free-riding unprofitable, computed over the final age distribution
     // (steady in steady state). `a*` is the per-shard audit probability deterrence
@@ -974,6 +1041,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         retr_avail_deep,
         r_target_avail,
         transport_u_eff,
+        dur_under_deep,
+        dur_avail_deep,
+        r_target_dur,
         audit_oversight_naive,
         audit_oversight_credited,
         audit_deep_share,
@@ -1083,6 +1153,9 @@ fn baseline() -> SimConfig {
         retr_uptime: 0.9,
         retr_avail_target: 0.999,
         retr_n_domains: 0,
+        durability_model: false,
+        dur_survival: 0.999,
+        dur_target: 0.999,
         // L14 proof-of-archival audit: off by default (inert, byte-identical). The audit
         // scenarios opt in. Defaults: hot shards read often (0.6/epoch) decaying to a 1%
         // cold floor; free-rider saves 10% of the slash per epoch, slashed in full if
@@ -2203,6 +2276,91 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.fetch_latency_per_unit = 6.0;
         c.floor_replicas = 6;
         c.floor_decay_pop = 200.0; // persist through the run (~80 archivers)
+        out.push(c);
+    }
+
+    // --- L15d / L16d: durability SLA rescore (soundness pass step 1). Permanent retention
+    // `1 − (1−s)^d` with per-domain survival `s=0.999` (bond-backed retention, not
+    // momentary uptime) and target `D*=0.999`. Transport does not depress `s`. Mirrors
+    // the L15/L16 availability probes for side-by-side comparison.
+    let l15d_base = || {
+        let mut c = l11_base();
+        c.init_active_frac = 0.0;
+        c.reservation_lo = 0.01;
+        c.reservation_hi = 0.01;
+        c.durability_model = true;
+        c.retrieval_model = false;
+        c.transport_model = false;
+        c.dur_survival = 0.999;
+        c.dur_target = 0.999;
+        c.retr_n_domains = 0;
+        c.epochs = 120;
+        c.churn_window = 40;
+        c.epoch_aging = 0.05;
+        c
+    };
+    {
+        let mut c = l15d_base();
+        c.name = "l15d_indep".into();
+        c.axis = "l15d_domains".into();
+        out.push(c);
+    }
+    for (label, nd) in [("d6", 6_usize), ("d3", 3), ("d2", 2), ("d1", 1)] {
+        let mut c = l15d_base();
+        c.name = format!("l15d_corr_{label}");
+        c.axis = "l15d_domains".into();
+        c.retr_n_domains = nd;
+        out.push(c);
+    }
+    // Survival sensitivity: lower `s` should bind only at extreme correlation.
+    for (label, s) in [("s99", 0.99_f64), ("s999", 0.999), ("s9999", 0.9999)] {
+        let mut c = l15d_base();
+        c.name = format!("l15d_surv_{label}");
+        c.axis = "l15d_survival".into();
+        c.dur_survival = s;
+        c.retr_n_domains = 2; // the availability probe's painful case
+        out.push(c);
+    }
+    let l16d_base = || {
+        let mut c = l15d_base();
+        c.transport_model = true;
+        c.transport_u_base = 0.9;
+        c.transport_u_k = 0.07;
+        c.retr_n_domains = 0;
+        c
+    };
+    for (llabel, lpu) in [
+        ("L0", 0.0),
+        ("L1", 1.0),
+        ("L2", 2.0),
+        ("L3", 3.0),
+        ("L4", 4.0),
+        ("L6", 6.0),
+    ] {
+        let mut c = l16d_base();
+        c.name = format!("l16d_regime_{llabel}");
+        c.axis = "l16d_transport_regime".into();
+        c.fetch_latency_per_unit = lpu;
+        out.push(c);
+    }
+    {
+        let mut c = l16d_base();
+        c.name = "l16d_L4_d3".into();
+        c.axis = "l16d_transport_diversity".into();
+        c.fetch_latency_per_unit = 4.0;
+        c.retr_n_domains = 3;
+        out.push(c);
+    }
+    // Side-by-side: same run scores BOTH availability and durability — transport binds
+    // availability (`rUDp`) but not durability (`dUDp`).
+    {
+        let mut c = l16d_base();
+        c.name = "l16d_vs_avail_L6".into();
+        c.axis = "l15d_vs_avail".into();
+        c.retrieval_model = true;
+        c.retr_avail_target = 0.999;
+        c.fetch_latency_per_unit = 6.0;
+        c.retr_n_domains = 3;
         out.push(c);
     }
 

@@ -19,6 +19,11 @@
 //! shard's holders actually delivers — so the sim can show a fully *covered* deep set
 //! (`R ≥ R_target`) that still fails its retrieval SLA because its holders cluster into
 //! too few domains. Gated by `retrieval_model`; inert (and byte-identical) otherwise.
+//!
+//! **Durability SLA (soundness pass step 1).** The same domain-bucketing formula scores
+//! *permanent retention* when `s` is per-domain **survival** (bond-backed retention —
+//! all replicas in a domain permanently lost) rather than momentary serve uptime `u`.
+//! Transport depression (L16) applies to availability only, not durability.
 
 use crate::model::World;
 
@@ -87,6 +92,52 @@ pub fn serving_availability(world: &World, u: f64, n_domains: usize) -> Vec<f64>
         *av = 1.0 - q.powi(distinct as i32);
     }
     avail
+}
+
+/// Realized **durability** — probability at least one failure domain still holds a copy
+/// (permanent-loss / eventual-retrievability model). Uses the same `1 − (1−s)^d` formula
+/// as [`serving_availability`], but `s` is per-domain **retention survival** (not
+/// momentary serve uptime, and not transport-depressed), and `d` counts distinct domains
+/// among **committed** holders (`World::replication` / all `holdings`, including in-flight
+/// fetches). Retention is bond-backed storage, not instantaneous reachability.
+pub fn serving_durability(world: &World, s: f64, n_domains: usize) -> Vec<f64> {
+    let n_shard = world.shards.len();
+    let q = 1.0 - s;
+    let mut dur = vec![0.0_f64; n_shard];
+
+    if n_domains == 0 {
+        let committed = world.replication();
+        for (idx, d) in dur.iter_mut().enumerate() {
+            *d = 1.0 - q.powi(committed[idx] as i32);
+        }
+        return dur;
+    }
+
+    let n_actor = world.actors.len();
+    let mut seen = vec![false; n_domains];
+    for (sidx, d_out) in dur.iter_mut().enumerate() {
+        for dom in seen.iter_mut() {
+            *dom = false;
+        }
+        let mut distinct = 0usize;
+        for a in 0..n_actor {
+            if world.holdings[a][sidx] {
+                let dom = a % n_domains;
+                if !seen[dom] {
+                    seen[dom] = true;
+                    distinct += 1;
+                }
+            }
+        }
+        *d_out = 1.0 - q.powi(distinct as i32);
+    }
+    dur
+}
+
+/// Smallest `R` with durability `1 − (1−s)^R ≥ D*` under independence (alias of
+/// [`r_target_for_availability`] — same inversion, different parameter semantics).
+pub fn r_target_for_durability(s: f64, d_star: f64) -> usize {
+    r_target_for_availability(s, d_star)
 }
 
 #[cfg(test)]
