@@ -371,6 +371,7 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 

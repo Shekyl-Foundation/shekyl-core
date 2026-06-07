@@ -81,11 +81,13 @@ use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
 use crate::{
+    attribution::{apply_receive_attributions, collect_label_residue},
     engine::{
         local_ledger::LocalLedger,
         traits::{DaemonEngine, LedgerEngine},
         Engine, EngineSignerKind, RefreshError,
     },
+    payment_request_flag::cooperative_payment_requests_enabled,
     scan::{ScanResult, StakeEvent},
 };
 
@@ -197,6 +199,8 @@ impl<
         // `OutputHandle`. The map is `Hash`-keyed because lookup
         // ordering is not required.
         let detection_residue = collect_detection_residue(&result);
+        let label_residue = collect_label_residue(&result.new_transfers);
+        let cooperative = cooperative_payment_requests_enabled(&self.prefs);
 
         let mut guard = self.ledger.write();
         let state = &mut *guard;
@@ -219,6 +223,13 @@ impl<
             &mut state.ledger.ledger,
             self.merge_view_secret.as_canonical_bytes(),
             &detection_residue,
+            &inserted,
+        );
+        apply_receive_attributions(
+            &mut state.ledger.bookkeeping.payment_requests,
+            &mut state.ledger.ledger,
+            cooperative,
+            &label_residue,
             &inserted,
         );
         Ok(())

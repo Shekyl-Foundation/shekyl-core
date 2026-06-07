@@ -185,6 +185,7 @@ pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
 pub mod output_selector;
+pub mod payment_requests;
 pub mod pending;
 pub mod refresh;
 pub(crate) mod scan_floor;

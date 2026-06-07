@@ -13,17 +13,21 @@
 //! - Unstake transactions (spending matured staked outputs)
 //! - Combined claim-and-unstake workflow
 
+pub mod attribution;
 pub mod claim_builder;
 pub mod consensus_constants;
 pub mod engine;
 pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
+pub mod outbound_label;
+pub mod payment_request_flag;
 pub mod scan;
 pub mod workflow;
 
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
+pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
     DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,
@@ -35,6 +39,7 @@ pub use engine::{
     ViewMaterial,
 };
 pub use error::EngineCoreError;
+pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 pub use workflow::ClaimAndUnstakePlan;
 
