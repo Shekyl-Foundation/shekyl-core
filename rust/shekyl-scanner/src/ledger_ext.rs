@@ -74,7 +74,6 @@ impl TransferDetailsExt for TransferDetails {
             key: output.key(),
             key_offset: output.key_offset(),
             commitment: output.commitment().clone(),
-            subaddress: output.subaddress(),
             payment_id: output.payment_id(),
             spent: false,
             spent_height: None,
