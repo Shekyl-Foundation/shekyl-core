@@ -60,6 +60,50 @@ pub fn is_sentinel_plaintext(plaintext: &[u8; 8]) -> bool {
     *plaintext == SENTINEL_PLAINTEXT
 }
 
+/// Classification of a decrypted 8-byte label plaintext block (§5.7.11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelPlaintextKind {
+    Sentinel,
+    Request(u64),
+    Unknown([u8; 8]),
+}
+
+/// Classify decrypted label plaintext per §5.7.11.
+#[must_use]
+pub fn classify_label_plaintext(plaintext: &[u8; 8]) -> LabelPlaintextKind {
+    if is_sentinel_plaintext(plaintext) {
+        return LabelPlaintextKind::Sentinel;
+    }
+    if plaintext[0] == LABEL_WIRE_VERSION && plaintext[1] == LABEL_KIND_REQUEST {
+        let mut rid_le = [0u8; 8];
+        rid_le[..6].copy_from_slice(&plaintext[2..8]);
+        let rid = u64::from_le_bytes(rid_le);
+        if rid == 0 {
+            return LabelPlaintextKind::Unknown(*plaintext);
+        }
+        return LabelPlaintextKind::Request(rid);
+    }
+    LabelPlaintextKind::Unknown(*plaintext)
+}
+
+/// Build the 8-byte REQUEST plaintext for cooperative send (§5.7.11).
+///
+/// Returns `Err` if `rid == 0` or the encoding would collide with sentinel.
+pub fn encode_request_plaintext(rid: u64) -> Option<[u8; 8]> {
+    if rid == 0 {
+        return None;
+    }
+    let mut pt = [0u8; 8];
+    pt[0] = LABEL_WIRE_VERSION;
+    pt[1] = LABEL_KIND_REQUEST;
+    let le = rid.to_le_bytes();
+    pt[2..8].copy_from_slice(&le[..6]);
+    if pt == SENTINEL_PLAINTEXT {
+        return None;
+    }
+    Some(pt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +114,16 @@ mod tests {
         let enc = encrypt_label_plaintext(&SENTINEL_PLAINTEXT, &k);
         let pt = decrypt_label_plaintext(&enc, &k);
         assert!(is_sentinel_plaintext(&pt));
+    }
+
+    #[test]
+    fn request_plaintext_roundtrip() {
+        let rid = 0x0012_3456_789A_BC_u64;
+        let pt = encode_request_plaintext(rid).unwrap();
+        assert_eq!(
+            classify_label_plaintext(&pt),
+            LabelPlaintextKind::Request(rid)
+        );
+        assert!(!is_sentinel_plaintext(&pt));
     }
 }

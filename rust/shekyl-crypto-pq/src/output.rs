@@ -198,6 +198,30 @@ pub fn construct_output(
     amount: u64,
     output_index: u64,
 ) -> Result<OutputData, CryptoError> {
+    construct_output_with_label_plaintext(
+        tx_key_secret,
+        x25519_pk,
+        ml_kem_ek,
+        spend_key,
+        amount,
+        output_index,
+        &sentinel_plaintext(),
+    )
+}
+
+/// Like [`construct_output`] but encrypts the supplied 8-byte label plaintext.
+///
+/// Cooperative sends use [`crate::label::encode_request_plaintext`] when the
+/// payment-request product flag is enabled; launch default passes sentinel.
+pub fn construct_output_with_label_plaintext(
+    tx_key_secret: &[u8; 32],
+    x25519_pk: &[u8; 32],
+    ml_kem_ek: &[u8],
+    spend_key: &[u8; 32],
+    amount: u64,
+    output_index: u64,
+    label_plaintext: &[u8; 8],
+) -> Result<OutputData, CryptoError> {
     // --- Input validation ---
 
     let b_point = CompressedEdwardsY(*spend_key)
@@ -302,10 +326,9 @@ pub fn construct_output(
         enc_amount[i] = amount_le[i] ^ secrets.k_amount[i];
     }
 
-    // --- Label encryption (sentinel-only at V3.0 launch) ---
+    // --- Label encryption ---
 
-    let label_pt = sentinel_plaintext();
-    let enc_label = encrypt_label_plaintext(&label_pt, &secrets.k_label);
+    let enc_label = encrypt_label_plaintext(label_plaintext, &secrets.k_label);
 
     // --- PQC keypair ---
 
