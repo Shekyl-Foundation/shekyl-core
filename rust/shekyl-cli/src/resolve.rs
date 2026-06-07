@@ -73,6 +73,14 @@ pub enum ResolvedCommand {
         dest: String,
         priority: Option<u32>,
     },
+    RequestNew {
+        amount: u64,
+        label: String,
+    },
+    RequestsList,
+    HistoryIncomingUnattributed {
+        account_index: u32,
+    },
 
     // -- Staking --
     Stake {
@@ -302,6 +310,29 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
             } else {
                 ResolvedCommand::Unknown {
                     cmd: "show_transfer: need <txid>".to_string(),
+                }
+            }
+        }
+        "request" if args.first().copied() == Some("new") => {
+            let rest: Vec<&str> = args.iter().skip(1).copied().collect();
+            if rest.len() >= 2 {
+                let amount = crate::commands::parse_amount(rest[0]).unwrap_or(0);
+                let label = rest[1..].join(" ");
+                ResolvedCommand::RequestNew { amount, label }
+            } else {
+                ResolvedCommand::Unknown {
+                    cmd: "request new: need <amount> <label>".to_string(),
+                }
+            }
+        }
+        "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList,
+        "history" if args.first().copied() == Some("incoming") => {
+            let unattributed = args.iter().any(|a| *a == "--unattributed");
+            if unattributed {
+                ResolvedCommand::HistoryIncomingUnattributed { account_index }
+            } else {
+                ResolvedCommand::Unknown {
+                    cmd: "history incoming: use --unattributed (FA-8 stub)".to_string(),
                 }
             }
         }
