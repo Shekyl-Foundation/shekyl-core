@@ -15,38 +15,15 @@
 //! surface ([`KeyEngine`]) is unchanged — Stage 2 swaps the dispatcher, not the
 //! method signatures.
 //!
-//! # Two-projection handle (§2.4 / §3.1)
+//! # Public projection handle (§2.4 / §3.1)
 //!
-//! The handle-resolved methods ([`KeyEngine::account_public_address`],
-//! [`KeyEngine::derive_subaddress`]) do not round-trip the actor. They are
-//! served from two construction-time projections held by the handle:
+//! [`KeyEngine::account_public_address`] does not round-trip the actor. It is
+//! served from a construction-time [`KeyPublicProjection`] held by the handle:
+//! `Clone + Debug` because it carries only public address material.
 //!
-//! - [`KeyPublicProjection`] — `Clone + Debug` *because* it is public-only:
-//!   the account public address (for the `&`-returning
-//!   `account_public_address`) and the bare account `spend_pk`/`view_pk` (for
-//!   the **primary** audit-subaddress branch, which returns them verbatim).
-//! - [`AuditSubaddressSecret`] — secret-bearing, non-`Clone`, `Zeroizing`,
-//!   wipe-on-drop, no `Debug` (the [`ViewMaterial`](super::view_material::ViewMaterial)
-//!   discipline). It carries the view secret scalar `a` and the base spend
-//!   point `D`, which the **non-primary** audit branch (`idx >= 1`) feeds to
-//!   [`subaddress_keys`]. Non-primary audit derivation is *secret-touching*
-//!   (the `m_i = H(domain || a_le || idx_le)` subaddress scalar is keyed by the
-//!   view secret), so it cannot be served from public material alone — the
-//!   reason the projection split is load-bearing, not cosmetic.
-//!
-//! Both projections are `Arc`-shared so [`KeyEngineHandle`] stays `Clone`; the
-//! secret allocation is wiped when the last handle clone drops.
-//!
-//! **Registry drops on the handle path.** Stage-1 `LocalKeys::derive_subaddress`
-//! also inserts the derived subaddress into a reverse-lookup registry under a
-//! write lock. The handle-resolved path deliberately does **not** maintain a
-//! registry: the actor owns the registry, and the registry only feeds
-//! [`KeyEngine::try_claim_output`], which is cold in Stage 2 (zero production
-//! callers, §3.5). Handle-side audit derivation is therefore a side-effect-free
-//! read of the secret projection — an accepted Stage-2 narrowing, not a
-//! regression on any live path. The deeper "subaddress mechanism under PQC"
-//! question this surfaces is filed as a dedicated design round in
-//! `docs/FOLLOWUPS.md` and is **out of scope** here.
+//! FA-2 removed subaddress derivation from the `KeyEngine` trait surface;
+//! [`KeyEngine::try_claim_output`] claims only when the recovered spend key
+//! matches the wallet's primary `AllKeysBlob::spend_pk`.
 //!
 //! # Fail-stop, not supervised (§4.5)
 //!
@@ -71,13 +48,10 @@
 //!
 //! [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`]: ../../../../../docs/design/STAGE_2_KEY_ENGINE_ACTOR.md
 //! [`AllKeysBlob`]: shekyl_crypto_pq::account::AllKeysBlob
-//! [`subaddress_keys`]: shekyl_crypto_pq::subaddress::subaddress_keys
 
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint, Scalar};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
@@ -86,17 +60,15 @@ use kameo::message::{Context, Message};
 
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::handle::derive_output_handle;
-use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
+use shekyl_crypto_pq::keys::SpendPublicKey;
 use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
-use shekyl_crypto_pq::subaddress::subaddress_keys;
-use shekyl_engine_state::SubaddressIndex;
 use shekyl_oxide::generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
 use super::traits::key::{
     AccountPublicAddress, KeyEngine, OutputClaim, OutputClaimResult, OutputDetectionInput,
-    SubaddressFor, SubaddressKeyPair, SubaddressPurpose, TxSignatures, TxToSign,
+    TxSignatures, TxToSign,
 };
 
 // ---------------------------------------------------------------------------
@@ -107,42 +79,13 @@ use super::traits::key::{
 /// the actor-dispatched [`KeyEngine`] operations ([`ClaimOutput`],
 /// [`SignTransaction`]).
 ///
-/// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s internal state, with
-/// the `RwLock` removed: the actor's single-threaded message loop provides the
-/// serialization the lock used to, so the registry is a plain `HashMap` mutated
-/// behind `&mut self`. In Stage 2 the registry is never mutated by a message
-/// (subaddress registration happens on the handle path, which intentionally
-/// drops it — see the module docstring); it is pre-populated with the primary
-/// entry at [`Actor::on_start`] and only read by the cold
-/// [`ClaimOutput`] handler.
+/// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s owned key material.
+/// The actor's single-threaded message loop serializes access to `keys`.
 #[allow(dead_code)] // Stage 2 wires the handle into Engine in a later step; today: tests only.
 pub(crate) struct KeyActor {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop`, wiped when the
     /// actor task ends (and explicitly in `on_stop` as defense-in-depth).
     keys: AllKeysBlob,
-
-    /// View scalar `a`, pre-computed from `keys.view_sk` (canonical bytes are
-    /// reduced mod the Ed25519 order). `Zeroizing` so the cached copy wipes on
-    /// drop alongside the blob's own wipe path.
-    view_scalar: Zeroizing<Scalar>,
-
-    /// Base spend point `B = b*G`, decompressed from `keys.spend_pk`. Public
-    /// material; no zeroize discipline required.
-    spend_public: EdwardsPoint,
-
-    /// Reverse-lookup table `B' -> SubaddressIndex`. Pre-populated with the
-    /// primary entry; only read by [`ClaimOutput`]. See the module docstring
-    /// for why the handle path does not feed this in Stage 2.
-    subaddress_registry: HashMap<SpendPublicKey, SubaddressIndex>,
-}
-
-impl KeyActor {
-    /// Reverse-lookup helper mirroring
-    /// [`LocalKeys::lookup_subaddress`](super::local_keys::LocalKeys), minus the
-    /// `RwLock` read — the actor's message loop already serializes access.
-    fn lookup_subaddress(&self, recovered_spend: &SpendPublicKey) -> Option<SubaddressIndex> {
-        self.subaddress_registry.get(recovered_spend).copied()
-    }
 }
 
 impl Actor for KeyActor {
@@ -150,34 +93,8 @@ impl Actor for KeyActor {
     type Error = Infallible;
 
     /// Build the actor from the moved-in [`AllKeysBlob`].
-    ///
-    /// Pre-computes the view scalar and base spend point and pre-registers the
-    /// primary subaddress, exactly as
-    /// [`LocalKeys::from_keys_blob`](super::local_keys::LocalKeys) does.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `keys.spend_pk` does not decompress — wallet-state corruption,
-    /// which is a fail-stop event per §4.1 (a panic in `on_start` stops the
-    /// actor before it serves any message; the same `.expect()` discipline
-    /// `LocalKeys` uses for the identical invariant).
     async fn on_start(keys: AllKeysBlob, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *keys.view_sk.as_canonical_bytes(),
-        ));
-        let spend_public = CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
-            .decompress()
-            .expect("AllKeysBlob::spend_pk decompresses (rederive_account guarantees canonicity)");
-
-        let mut subaddress_registry = HashMap::new();
-        subaddress_registry.insert(keys.spend_pk, SubaddressIndex::PRIMARY);
-
-        Ok(Self {
-            keys,
-            view_scalar,
-            spend_public,
-            subaddress_registry,
-        })
+        Ok(Self { keys })
     }
 
     /// Fail-stop on panic. This is the kameo default behavior, overridden
@@ -241,8 +158,7 @@ impl Message<ClaimOutput> for KeyActor {
     /// verbatim against actor-owned state. The crypto body is intentionally
     /// duplicated rather than factored into a shared free function so
     /// `LocalKeys` survives as an equivalence oracle for the Stage-2 tests
-    /// (§5.2 test 1/3); the bodies diverge only in registry access (`&self`
-    /// field vs `RwLock` read).
+    /// (§5.2 test 1/3).
     async fn handle(
         &mut self,
         msg: ClaimOutput,
@@ -270,12 +186,12 @@ impl Message<ClaimOutput> for KeyActor {
             return Ok(OutputClaimResult::NotMine);
         };
 
-        // Stage 2: subaddress lookup via recovered spend key `B'`. A miss means
-        // the recovered key matches no derived subaddress (the wallet only
-        // claims outputs sent to subaddresses it has derived).
+        // Stage 2: primary-account check via recovered spend key `B'`.
+        // FA-2: claim only when `B'` matches the wallet's primary spend
+        // public key (`AllKeysBlob::spend_pk`).
         let recovered_spend_pk =
             SpendPublicKey::from_canonical_bytes(recovered.recovered_spend_key);
-        if self.lookup_subaddress(&recovered_spend_pk).is_none() {
+        if recovered_spend_pk != self.keys.spend_pk {
             return Ok(OutputClaimResult::NotMine);
         }
 
@@ -334,52 +250,16 @@ impl Message<SignTransaction> for KeyActor {
 // Handle projections
 // ---------------------------------------------------------------------------
 
-/// Public-only projection held by [`KeyEngineHandle`] for the handle-resolved
-/// methods. `Clone + Debug` is sound precisely because it carries no secret
-/// bytes (the contract is enforced syntactically by this being a dedicated
-/// type, not a bare field).
-///
-/// Field set is pinned by what the **primary** audit branch and
-/// `account_public_address` read; the non-primary audit branch is *not* served
-/// from here (it is secret-touching — see [`AuditSubaddressSecret`]).
+/// Public-only projection held by [`KeyEngineHandle`] for
+/// [`KeyEngine::account_public_address`]. `Clone + Debug` is sound because
+/// it carries no secret bytes.
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // read by the handle; today exercised by tests only.
 pub(crate) struct KeyPublicProjection {
     /// Cached account-level public address material; the source of the
     /// `&`-return from [`KeyEngine::account_public_address`].
     account_public_address: AccountPublicAddress,
-    /// Bare account spend public key `D` — returned verbatim for primary audit.
-    spend_pk: SpendPublicKey,
-    /// Bare account view public key — returned verbatim for primary audit.
-    view_pk: ViewPublicKey,
 }
-
-/// Secret-bearing projection held by [`KeyEngineHandle`] solely to serve
-/// **non-primary** audit-subaddress derivation (`idx >= 1`), which is
-/// secret-touching (§2.4).
-///
-/// Deliberately a distinct type from
-/// [`ViewMaterial`](super::view_material::ViewMaterial) and the (later-landing)
-/// merge view-secret projection, so the type system forbids the "it's just a
-/// view secret, I'll clone/reuse it" mistake. Non-`Clone`, no `Debug`, wipe-on-
-/// drop — the `ViewMaterial` discipline.
-#[derive(Zeroize)]
-#[allow(dead_code)] // read by the handle; today exercised by tests only.
-pub(crate) struct AuditSubaddressSecret {
-    /// View secret scalar `a` — the secret input to [`subaddress_keys`].
-    view_scalar: Zeroizing<Scalar>,
-    /// Base spend point `D`. Public material; wiped on drop as defense in depth
-    /// (the `curve25519-dalek/zeroize` feature provides the impl).
-    spend_public: EdwardsPoint,
-}
-
-impl Drop for AuditSubaddressSecret {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-
-impl ZeroizeOnDrop for AuditSubaddressSecret {}
 
 /// Construction-time view-secret projection for the **merge post-pass**
 /// (§6 option 6-i). `Engine::apply_scan_result` (`merge.rs`) must derive the
@@ -395,7 +275,7 @@ impl ZeroizeOnDrop for AuditSubaddressSecret {}
 /// bytes the handle-derivation needs — narrower than
 /// [`ViewMaterial`](super::view_material::ViewMaterial) (a five-field
 /// view-and-spend bundle for refresh scanning) and distinct from it and from
-/// [`AuditSubaddressSecret`], so the type system forbids the "it's just a view
+/// [`KeyPublicProjection`], so the type system forbids the "it's just a view
 /// secret, I'll clone/reuse it" mistake. Non-`Clone`, no `Debug`, wipe-on-drop.
 #[derive(Zeroize)]
 #[allow(dead_code)] // read by `Engine::apply_scan_result`; today exercised by tests only.
@@ -434,25 +314,23 @@ impl ZeroizeOnDrop for HandleDerivationViewSecret {}
 // ---------------------------------------------------------------------------
 
 /// `Clone` handle the orchestrator holds in place of an inline `K: KeyEngine`
-/// field. Wraps the actor's [`ActorRef`] plus the two construction-time
-/// projections (§3.1). Implements the same `pub(crate) trait` [`KeyEngine`]
+/// field. Wraps the actor's [`ActorRef`] plus the construction-time public
+/// projection (§3.1). Implements the same `pub(crate) trait` [`KeyEngine`]
 /// that [`LocalKeys`](super::local_keys::LocalKeys) implements, so the swap is
 /// transparent to the trait's callers.
 ///
 /// **Capability object.** Holding a `KeyEngineHandle` *is* the authority to
-/// query the key actor (`account_public_address`, `derive_subaddress`,
-/// `try_claim_output` as a per-input ownership oracle). It is `pub(crate)` and
-/// never exported to the RPC tier; that confinement is the control (§3.2 / §7
-/// T9), made a compile-time guarantee by the visibility bound.
+/// query the key actor (`account_public_address`, `try_claim_output` as a
+/// per-input ownership oracle). It is `pub(crate)` and never exported to the
+/// RPC tier; that confinement is the control (§3.2 / §7 T9), made a compile-
+/// time guarantee by the visibility bound.
 #[derive(Clone)]
 #[allow(dead_code)] // constructed once Engine wiring lands; today: tests only.
 pub(crate) struct KeyEngineHandle {
     /// Strong reference to the key actor's mailbox. `Clone + Send + Sync`.
     actor: ActorRef<KeyActor>,
-    /// Public-only projection (account address + primary audit keys).
+    /// Public-only projection (account address).
     public: Arc<KeyPublicProjection>,
-    /// Secret projection for non-primary audit derivation (§2.4).
-    audit_secret: Arc<AuditSubaddressSecret>,
 }
 
 impl KeyEngineHandle {
@@ -480,12 +358,6 @@ impl KeyEngineHandle {
     ///   (`#[tokio::test]` / run inside a runtime) so a missing-runtime caller
     ///   fails loudly at the call site rather than via `kameo`'s lower-level
     ///   "no reactor running" panic.
-    /// - Panics if `keys.spend_pk` does not decompress (wallet-state corruption);
-    ///   the same fail-closed `.expect()` discipline as
-    ///   [`LocalKeys::from_keys_blob`](super::local_keys::LocalKeys) and
-    ///   [`KeyActor::on_start`]. The decompression is performed once here for the
-    ///   audit projection and once in `on_start` for the actor; both share the
-    ///   invariant.
     #[allow(dead_code)] // Stage 2 wires this into Engine in a later step; today: tests only.
     pub(crate) fn spawn(keys: AllKeysBlob) -> Self {
         assert!(
@@ -497,25 +369,12 @@ impl KeyEngineHandle {
              in one). See STAGE_2_KEY_ENGINE_ACTOR.md §4.2."
         );
 
-        // Derive projections from `&keys` BEFORE moving it into the actor.
+        // Derive the public projection from `&keys` BEFORE moving it into the actor.
         let public = Arc::new(KeyPublicProjection {
             account_public_address: AccountPublicAddress {
                 pqc_public_key: keys.pqc_public_key.to_vec(),
                 classical_address_bytes: keys.classical_address_bytes.to_vec(),
             },
-            spend_pk: keys.spend_pk,
-            view_pk: keys.view_pk,
-        });
-
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *keys.view_sk.as_canonical_bytes(),
-        ));
-        let spend_public = CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
-            .decompress()
-            .expect("AllKeysBlob::spend_pk decompresses (rederive_account guarantees canonicity)");
-        let audit_secret = Arc::new(AuditSubaddressSecret {
-            view_scalar,
-            spend_public,
         });
 
         // Ambient runtime asserted above; `KeyActor::spawn` (kameo) schedules the
@@ -524,11 +383,7 @@ impl KeyEngineHandle {
         // construction property).
         let actor = KeyActor::spawn(keys);
 
-        Self {
-            actor,
-            public,
-            audit_secret,
-        }
+        Self { actor, public }
     }
 }
 
@@ -555,47 +410,6 @@ impl KeyEngine for KeyEngineHandle {
 
     fn account_public_address(&self) -> &AccountPublicAddress {
         &self.public.account_public_address
-    }
-
-    fn derive_subaddress(
-        &self,
-        idx: SubaddressIndex,
-        purpose: SubaddressPurpose,
-    ) -> Result<SubaddressFor, Self::Error> {
-        match purpose {
-            SubaddressPurpose::Audit => {
-                // PRIMARY returns the bare account keys verbatim (consistent
-                // with the encoded `classical_address_bytes`); `idx >= 1`
-                // follows the per-index derivation `D + m_i*G`, which is
-                // secret-touching and served from the secret projection (§2.4).
-                let (spend_pk, view_pk) = if idx.is_primary() {
-                    (self.public.spend_pk, self.public.view_pk)
-                } else {
-                    let (spend_point, view_point) = subaddress_keys(
-                        &self.audit_secret.view_scalar,
-                        &self.audit_secret.spend_public,
-                        &idx.to_canonical_bytes(),
-                    );
-                    (
-                        SpendPublicKey::from_canonical_bytes(spend_point.compress().to_bytes()),
-                        ViewPublicKey::from_canonical_bytes(view_point.compress().to_bytes()),
-                    )
-                };
-
-                // No registry mutation on the handle path (§2.4): the actor owns
-                // the registry, which only feeds the cold `try_claim_output`.
-
-                Ok(SubaddressFor::Audit(SubaddressKeyPair {
-                    spend_pk,
-                    view_pk,
-                }))
-            }
-            // `Recipient` (and any future recipient-shaped variant) needs
-            // per-subaddress hybrid KEM keygen, not yet implemented. Mirrors
-            // `LocalKeys`. The broader "subaddress mechanism under PQC"
-            // question is a FOLLOWUPS design round.
-            _ => Err(KeyEngineError::RecipientSubaddressKemKeygenNotImplemented),
-        }
     }
 
     async fn try_claim_output(
@@ -824,7 +638,6 @@ mod tests {
     fn zeroize_on_drop_contract() {
         fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<AllKeysBlob>();
-        assert_zeroize_on_drop::<AuditSubaddressSecret>();
         // Finding 4: the `try_claim_output` reply carries the decrypted amount
         // (a secret) plus per-output privacy-linkable identifiers across the
         // actor channel. The wipe-on-drop contract is what makes a
@@ -832,31 +645,14 @@ mod tests {
         assert_zeroize_on_drop::<OutputClaim>();
     }
 
-    // §5.2 test 3 — Handle-resolved methods resolve *after the actor is stopped*
-    // (no actor interaction). Covers `account_public_address`, primary +
-    // non-primary `derive_subaddress(Audit)`, and the `Recipient` stub. The
-    // non-primary branch is the secret-touching Option-(a) path (§2.4); its
-    // output is pinned byte-equal to the `LocalKeys` oracle.
+    // §5.2 test 3 — `account_public_address` resolves after the actor is stopped
+    // (no actor interaction; served from the public projection).
     #[tokio::test]
-    async fn handle_resolved_methods_resolve_after_stop() {
+    async fn account_public_address_resolves_after_stop() {
         let handle = KeyEngineHandle::spawn(make_blob(TEST_SEED));
         let oracle = LocalKeys::from_test_seed(TEST_SEED);
-        let non_primary = SubaddressIndex::new(1);
-
-        // Capture oracle outputs while everything is live.
         let oracle_addr = oracle.account_public_address().clone();
-        let oracle_primary = audit_pair(
-            oracle
-                .derive_subaddress(SubaddressIndex::PRIMARY, SubaddressPurpose::Audit)
-                .expect("oracle primary audit"),
-        );
-        let oracle_sub = audit_pair(
-            oracle
-                .derive_subaddress(non_primary, SubaddressPurpose::Audit)
-                .expect("oracle non-primary audit"),
-        );
 
-        // Stop the actor; the handle-resolved methods must still work.
         handle
             .actor
             .stop_gracefully()
@@ -865,42 +661,12 @@ mod tests {
         handle.actor.wait_for_shutdown().await;
         assert!(!handle.actor.is_alive(), "actor is stopped");
 
-        // account_public_address — served from the public projection, no `ask`.
         let addr = handle.account_public_address();
         assert_eq!(addr.pqc_public_key, oracle_addr.pqc_public_key);
         assert_eq!(
             addr.classical_address_bytes,
             oracle_addr.classical_address_bytes
         );
-
-        // Primary audit — bare account keys, served from the public projection.
-        let primary = audit_pair(
-            handle
-                .derive_subaddress(SubaddressIndex::PRIMARY, SubaddressPurpose::Audit)
-                .expect("handle primary audit resolves post-stop"),
-        );
-        assert_eq!(primary, oracle_primary, "primary audit matches LocalKeys");
-
-        // Non-primary audit — secret-touching, served from AuditSubaddressSecret.
-        let sub = audit_pair(
-            handle
-                .derive_subaddress(non_primary, SubaddressPurpose::Audit)
-                .expect("handle non-primary audit resolves post-stop"),
-        );
-        assert_eq!(sub, oracle_sub, "non-primary audit matches LocalKeys");
-        assert_ne!(
-            sub, primary,
-            "non-primary subaddress is a distinct key pair from primary"
-        );
-
-        // Recipient — the unimplemented stub (FOLLOWUPS design round).
-        let err = handle
-            .derive_subaddress(SubaddressIndex::PRIMARY, SubaddressPurpose::Recipient)
-            .expect_err("Recipient subaddress is a stub");
-        assert!(matches!(
-            err,
-            KeyEngineError::RecipientSubaddressKemKeygenNotImplemented
-        ));
     }
 
     /// Build an empty [`TxToSign`]. `sign_transaction` ignores the transaction
@@ -924,14 +690,6 @@ mod tests {
                 fee_with_change: 0,
                 dust_threshold: 0,
             },
-        }
-    }
-
-    /// Extract the `(spend_pk, view_pk)` pair from an audit subaddress result.
-    fn audit_pair(sub: SubaddressFor) -> (SpendPublicKey, ViewPublicKey) {
-        match sub {
-            SubaddressFor::Audit(pair) => (pair.spend_pk, pair.view_pk),
-            other => panic!("expected SubaddressFor::Audit, got {other:?}"),
         }
     }
 

@@ -67,12 +67,9 @@
 //! [`HybridCiphertext`]: shekyl_crypto_pq::kem::HybridCiphertext
 //! [`TransferDetails`]: shekyl_engine_state::TransferDetails
 
-use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::handle::OutputHandle;
-use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
+use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
-use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
-use shekyl_engine_state::SubaddressIndex;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -89,14 +86,6 @@ use crate::engine::error::KeyEngineError;
 /// `u8` return type (FA-6 ML-KEM-keyed pre-filter). A future widening migration
 /// would bump this constant and `HKDF_SALT_VIEW_TAG_PREFILTER`'s `-v1` together.
 pub(crate) const VIEW_TAG_BYTES: usize = 1;
-
-// --- Address aliases -------------------------------------------------------
-
-/// Re-export of the workspace's parsed structured address type for use
-/// at the trait surface. Closes the §3.3 Sub-bundle B "open question:
-/// `Address` type provenance" with the existing
-/// [`shekyl_address::ShekylAddress`] type.
-pub(crate) type Address = ShekylAddress;
 
 // --- Trait-surface message shapes (§3.3 Sub-bundle B) ----------------------
 
@@ -264,91 +253,6 @@ impl std::fmt::Debug for OutputClaim {
             .field("amount_atomic_units", &"[REDACTED]")
             .finish()
     }
-}
-
-// --- Subaddress derivation message shapes ----------------------------------
-
-/// Purpose argument to [`KeyEngine::derive_subaddress`].
-///
-/// Selects which [`SubaddressFor`] variant the trait method returns.
-/// New purposes accrete additively in V3.x (e.g., `PqcRecipient` for
-/// hybrid-augmented audit subaddresses); the `#[non_exhaustive]`
-/// annotation gives existing call sites a compile-time signal when
-/// new variants land.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) enum SubaddressPurpose {
-    /// Recipient context: encoded address + KEM public key for senders
-    /// to encapsulate against. Used by payment-URI / QR-code
-    /// generation paths.
-    Recipient,
-    /// Audit context: canonical spend / view public-key pair. Used by
-    /// export / backup / inspection paths.
-    Audit,
-}
-
-/// Discriminated return type from [`KeyEngine::derive_subaddress`].
-///
-/// Each variant pairs with a [`SubaddressPurpose`] variant; the
-/// `#[non_exhaustive]` annotation accretes additively with
-/// `SubaddressPurpose`.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) enum SubaddressFor {
-    Recipient(RecipientSubaddress),
-    Audit(SubaddressKeyPair),
-}
-
-/// Recipient-context subaddress payload.
-///
-/// Returned by `derive_subaddress(idx, SubaddressPurpose::Recipient)`.
-/// Carries everything a sender needs to encapsulate to this
-/// subaddress: the encoded address (for display / UI / parsing at
-/// recipient input) and the hybrid KEM public key (for hybrid
-/// encapsulation at transaction-build time).
-///
-/// **Per-subaddress derivation.** Both components of `kem_pk` are
-/// bound to `(view_secret, subaddress_index)` per
-/// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3. Carrying a wallet-level
-/// ML-KEM PK in the encoded subaddress would make any two encodings
-/// from the same wallet trivially linkable via direct byte
-/// comparison; per-subaddress derivation is rule-forced by
-/// `00-mission.mdc`'s priority hierarchy.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) struct RecipientSubaddress {
-    /// Encoded address. Parsed structured form so the type system
-    /// catches encoding errors at compile time.
-    pub encoded: Address,
-    /// The hybrid KEM public key (X25519 + ML-KEM-768) the sender
-    /// encapsulates against. Public; not zeroized.
-    pub kem_pk: HybridKemPublicKey,
-}
-
-/// Audit-context subaddress payload.
-///
-/// Returned by `derive_subaddress(idx, SubaddressPurpose::Audit)`.
-/// Carries the canonical classical spend / view public-key pair for
-/// the subaddress index; used by export / backup paths.
-///
-/// **Today's classical-only shape.** Per `30-cryptography.mdc`'s
-/// hybrid-by-default rule, a future V3.x shape may extend the audit
-/// payload with the hybrid KEM PK (mirroring
-/// [`RecipientSubaddress::kem_pk`]). The extension lands as an
-/// additional field on `SubaddressKeyPair` (or, if the audit
-/// payload's V3.x shape diverges further, as a new variant on
-/// [`SubaddressFor`] + [`SubaddressPurpose`]); the `#[non_exhaustive]`
-/// annotation on the enums absorbs the additive variant without
-/// breaking existing call sites.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) struct SubaddressKeyPair {
-    pub spend_pk: SpendPublicKey,
-    pub view_pk: ViewPublicKey,
 }
 
 // --- Sign-transaction message shapes ---------------------------------------
@@ -609,10 +513,7 @@ pub(crate) enum TxOutputContext {
         amount: u64,
     },
     /// Change-to-self intent (no amount on the message).
-    Change {
-        #[zeroize(skip)]
-        subaddress_index: SubaddressIndex,
-    },
+    Change,
 }
 
 impl std::fmt::Debug for TxOutputContext {
@@ -623,12 +524,7 @@ impl std::fmt::Debug for TxOutputContext {
                 .field("dest", &"[REDACTED]")
                 .field("amount", &"[REDACTED]")
                 .finish(),
-            Self::Change {
-                subaddress_index, ..
-            } => f
-                .debug_struct("Change")
-                .field("subaddress_index", subaddress_index)
-                .finish(),
+            Self::Change => f.debug_struct("Change").finish(),
         }
     }
 }
@@ -738,58 +634,6 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// lock.
     fn account_public_address(&self) -> &AccountPublicAddress;
 
-    /// Derive a subaddress for a specific purpose.
-    ///
-    /// `purpose = SubaddressPurpose::Recipient` returns
-    /// `SubaddressFor::Recipient(RecipientSubaddress { encoded, kem_pk })`
-    /// (encoded address + hybrid KEM PK for senders to encapsulate
-    /// against; used by payment-URI / QR-code generation paths).
-    ///
-    /// `purpose = SubaddressPurpose::Audit` returns
-    /// `SubaddressFor::Audit(SubaddressKeyPair { spend_pk, view_pk })`
-    /// (canonical classical spend / view PK pair; used by export /
-    /// backup / inspection paths).
-    ///
-    /// # Recipient purpose — derivation cost
-    ///
-    /// The X25519 component of `kem_pk` derives via the existing
-    /// classical Edwards-curve subaddress-derivation machinery
-    /// (cheap; scalar arithmetic). The ML-KEM-768 component derives via
-    /// deterministic keygen seeded by
-    /// `HKDF-Expand(view_secret, SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT
-    /// || subaddress_index_le_bytes)` per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 / §3.3 Sub-bundle A.
-    /// Total cost is dominated by ML-KEM-768 KeyGen (~50 µs on
-    /// commodity hardware). **Audit purpose** has the same
-    /// X25519-derivation cost as Recipient and skips the ML-KEM
-    /// keygen path entirely.
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** (synchronous compute, no side effect).
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes.** Deterministic in `(view_secret, subaddress_index,
-    /// purpose)`; repeated calls produce equivalent
-    /// `SubaddressFor` values.
-    ///
-    /// # Panics
-    ///
-    /// The Stage 1 `LocalKeys` implementor panics on `RwLock`
-    /// poisoning — the `Audit` path takes
-    /// `self.state.write().expect("LocalKeys lock not poisoned")` to
-    /// register the derived subaddress in the reverse-lookup
-    /// registry. Sync infallible-on-poison by design, matching
-    /// [`LedgerEngine`](super::ledger::LedgerEngine)'s `RwLock`
-    /// disposition: poisoning indicates an upstream invariant
-    /// violation, not a recoverable error.
-    fn derive_subaddress(
-        &self,
-        idx: SubaddressIndex,
-        purpose: SubaddressPurpose,
-    ) -> Result<SubaddressFor, Self::Error>;
-
     /// Workflow: try to claim an on-chain output for this wallet.
     ///
     /// Bundles X25519 view-tag pre-filter + hybrid decap + HKDF
@@ -846,11 +690,7 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// # Panics
     ///
-    /// The Stage 1 `LocalKeys` implementor panics on `RwLock`
-    /// poisoning via the `lookup_subaddress` helper
-    /// (`self.state.read().expect("LocalKeys lock not poisoned")`),
-    /// reached on the subaddress-registry lookup after a successful
-    /// recover. Sync infallible-on-poison by design. Cryptographic
+    /// Cryptographic
     /// rejections (X25519 view-tag pre-filter miss, hybrid-decap
     /// failure, post-decap validity check) are **not** panics — they
     /// map to `OutputClaimResult::NotMine` per the claim contract
