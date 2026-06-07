@@ -347,9 +347,9 @@ fn map_output_selector_error(err: &OutputSelectorError) -> SendError {
     }
 }
 
-fn map_fee_estimator_error(_err: &FeeEstimatorError) -> SendError {
+fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
     SendError::Io(IoError::Daemon {
-        detail: "fee estimation unavailable".to_string(),
+        detail: err.to_string(),
     })
 }
 
