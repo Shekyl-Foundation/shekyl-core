@@ -238,7 +238,8 @@ failed retention challenge on **any** sampled shard:
    re-activates through the normal registration path.
 
 Re-bonding is the only resume path; there is no partial bonded state for
-`CompleteTree`. **`N_active`** (typically 3–5 live seeds) is sized so **one**
+`CompleteTree`. **`N_active = 3`** at genesis pin (see
+`docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §9.1) is sized so **one**
 failed sample knocks **one whole seat** out of the durability floor until
 re-bond — margin is **challenge-failure absorption**, not only geographic
 diversity.

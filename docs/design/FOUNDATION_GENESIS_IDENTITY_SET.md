@@ -73,8 +73,8 @@ for market archivers), **once per `P`**, not per shard. **Floor it; do not tune.
 | Resume | Replace shard bond | **Re-post full nominal bond** + registration |
 
 Re-bonding is the only resume path. One failed sample removes **one whole
-seed** from the floor until re-bond — size **`N_active`** (typically 3–5) for
-**seat-loss margin**, not only geographic diversity.
+seed** from the floor until re-bond — **`N_active = 3`** (§9.1) for **seat-loss
+margin**, not only geographic diversity.
 
 ### 3.3 Backing stake
 
@@ -161,49 +161,49 @@ Same authority pattern as `config/consensus_constants.json` /
 ```
 
 **Reserve encoding (genesis size optimization).** Hybrid `P` pubkeys are
-multi-kB each. **Active** slots commit **full** `P_pubkey` wire bytes at
-genesis. **Reserve** slots commit **`P_pubkey_commitment = H(full_pubkey)`**
-(32 bytes) only; the full pubkey is **revealed and verified against the
-commitment at activation** (registration / first serve). Reserves stay
-committed and auditable; disclosure moves from genesis to activation — a
-defensible transparency trade that decouples reserve generosity from genesis
-blob size.
+**1996 bytes** each (`HybridPublicKey::to_canonical_bytes()` in
+`shekyl-crypto-pq`). **Active** slots commit **full** `P_pubkey` wire bytes at
+genesis. **Reserve** slots commit **`P_pubkey_commitment`** only (32 bytes):
+
+```text
+P_pubkey_commitment = cSHAKE256(
+  customization = "shekyl/foundation-p-pubkey-v1",
+  input         = canonical_pubkey_bytes
+)[0..32]
+```
+
+Same cSHAKE discipline as `StakeId` (`PHASE_2B_STAKE_LIFECYCLE.md` §3.3.3).
+The full pubkey is **revealed and verified against the commitment at
+activation** (registration / first serve).
 
 | Field | Consensus-critical | Notes |
 |---|---|---|
 | `version` | yes | Layout version; fork on incompatible change. |
-| `bond_floor_atomic` | yes | Must equal `ARCHIVAL_BOND_FLOOR`. |
-| `P_pubkey_wire_version` | yes | Must match frozen hybrid archival pubkey encoding. |
+| `bond_floor_atomic` | yes | Must equal gate-4-pinned `ARCHIVAL_BOND_FLOOR` (§9.3). **No guessed value in mainnet genesis.** |
+| `P_pubkey_wire_version` | yes | Must equal `HYBRID_KEY_VERSION` (`1` today). Layout §9.1. |
 | `identities[].index` | yes | Stable slot; rotation burns slot. |
 | `status_at_genesis` | yes | `active` vs `reserve`. |
 | `identities[].P_pubkey` | active only | Full hybrid wire bytes. |
-| `identities[].P_pubkey_commitment` | reserve only | `H(P_pubkey)`; mutually exclusive with `P_pubkey` in same row. |
+| `identities[].P_pubkey_commitment` | reserve only | cSHAKE commitment (§5.1); mutually exclusive with `P_pubkey` in same row. |
 | `endpoint_hint` | no | Operational fetch hint. |
 
-### 5.2 Over-enumeration ratio
+### 5.2 Over-enumeration ratio (pinned)
 
-- **`N_active`:** managed-N complete replicas (typically 3–5) — sized for
-  **whole-seat loss on one failed challenge** per `CompleteTree` slash chain.
-- **`N_total`:** generous reserves; **not** genesis-size-limited thanks to
-  hash commitments (§5.1).
+- **`N_active`:** **3** — whole-seat loss margin (§3.2) + L15 domain floor.
+- **`N_total`:** **12** (9 reserves); hash commitments (§5.1) keep genesis small.
 - **Cap:** non-binding; exhaustion ⇒ key-management crisis / fork refresh.
 
-### 5.3 Identity table (placeholders)
+### 5.3 Identity table
 
-| Index | Status | Active: `P_pubkey` / Reserve: commitment | Endpoint |
-|---:|---|---|---|
-| 0 | active | `TBD` | `TBD` |
-| 1 | active | `TBD` | `TBD` |
-| 2 | active | `TBD` | `TBD` |
-| 3 | reserve | `TBD` | — |
-| … | reserve | `TBD` | — |
+See **§9.5** for the full 12-slot structure (`PENDING` until key ceremony).
 
 **Authoring checklist:**
 
-1. Freeze `P_pubkey_wire_version` against PQC hybrid encoding spec.
-2. Generate cold `P` keypairs; full bytes for actives, hash-only for reserves.
-3. Set `bond_floor_atomic` at gate-4 pin.
-4. Counsel sign-off after data-scope pin reflected in disclosure + FAQ.
+1. Confirm `P_pubkey_wire_version = 1` still matches `HYBRID_KEY_VERSION`.
+2. Complete gate-4 iteration-2 fine bond sweep → set `bond_floor_atomic` (§9.3).
+3. Run P key ceremony → replace `PENDING` in §9.5.
+4. Counsel sign-off on disclosure + FAQ (data scope pinned).
+5. Ops publish `endpoint_hint` (optional in genesis blob).
 
 ---
 
@@ -237,3 +237,97 @@ blob size.
 - `docs/design/CURVE_TREE_CLIENT.md` §7.6
 
 **Implementation gate:** `ArchivalEngine` (Stage 5, V3.x).
+
+---
+
+## 9. Genesis authoring workbook — TBD disposition
+
+Tracks every genesis-block TBD: resolved pins, blockers, and closing artifact.
+
+### 9.1 Resolved (pin now)
+
+| Item | Pin | Source |
+|---|---|---|
+| **`N_active`** | **3** | L15 retrieval floor + `CompleteTree` whole-seat slash margin |
+| **`N_total`** | **12** | 4× over-enumeration (9 cold reserves) |
+| **`P_pubkey_wire_version`** | **1** | `shekyl_crypto_pq::signature::HYBRID_KEY_VERSION` |
+| **`P` canonical encoding** | `HybridPublicKey::to_canonical_bytes()` | Scheme id `HYBRID_SCHEME_ID_ED25519_ML_DSA_65` (`1`); **1996 bytes** — not a `ShekylAddress` |
+| **Reserve commitment** | cSHAKE `"shekyl/foundation-p-pubkey-v1"` | §5.1 |
+| **`good_standing`** | Bonded **and** not post-slash unbonded **and** no failed challenge for current challenge epoch | Failed challenge ⇒ whole-bond slash ⇒ out of `durability_count` |
+| **Endpoint hint shape** | `https://<host>/archival/v1/` (ops) | Non-consensus; may be empty at genesis |
+
+### 9.2 Gate-4 fine sweep — **closed (sim pin)**
+
+| Item | Pin | Notes |
+|---|---|---|
+| **`bond_rate*` (sim)** | **`0.75`** | Highest rate in `{0.50, 0.75}` triple intersection (lean + whale spread + P1 coloc). Run 2026-06-07; `STAKER_ARCHIVAL_SIM.md` §*Gate 4 iteration-2*. |
+| **`ARCHIVAL_BOND_FLOOR` (atomic)** | **Open** | Map `bond_rate* = 0.75` → `archival_bond_floor_atomic` per §9.3 (mainnet joint endowment calibration). |
+| **`bond_floor_atomic` in genesis JSON** | **Open** | Blocked on atomic mapping step above. |
+| **Challenge epoch length** | **Open** | L14 soundness pass step 3; `good_standing` references cadence. |
+
+**Coarse envelope (iteration 1) — unchanged context:**
+
+| Sim `bond_rate` | Role |
+|---|---|
+| **0.5** (low) | Coarse sweep lower bound |
+| **2.0** (mid) | Baseline + lean attractor (`bondA ≈ 76` at ρ≈0.02) |
+| **8.0** (high) | **Fails** L8 min-form (`dS/dN ≈ 0.83`) — upper bound, not a candidate |
+
+Flat bond **magnitude** is resolved (L4); duration axis is separate (L9).
+
+### 9.3 Sim → chain mapping (execute at gate-4 close)
+
+Sim `bond_rate` is **dimensionless** (`shekyl-staking-sim` `AgentParams.bond_rate`).
+
+**At gate-4 close:**
+
+1. Pin sim **`bond_rate* = 0.75`** (gate-4 fine sweep, 2026-06-07).
+2. Calibrate **`BOND_UNIT_ATOMIC`** so min-form seating at `0.75` matches
+   the chain floor under documented mainnet storage×capital assumptions (L8).
+3. Set **`ARCHIVAL_BOND_FLOOR = BOND_UNIT_ATOMIC`** (one per-shard floor =
+   foundation nominal bond = market minimum; flat magnitude L4).
+4. Emit `archival_bond_floor_atomic` via `config/consensus_constants.json` /
+   `cmake/generate_consensus_constants.py`.
+
+**Atomic unit basis:** `ATOMIC_UNITS_PER_SKL = 10⁹` (`shekyl-units`) — not
+`GENESIS_TRANSPARENCY.md`'s legacy 10¹² example; reconcile that doc before
+authoring if it still disagrees.
+
+Until step 4 lands, **do not** ship a guessed `bond_floor_atomic`.
+
+### 9.4 Blocked on key ceremony (operational)
+
+| Item | Blocker | Closes when |
+|---|---|---|
+| Active `P_pubkey` (×3) | Cold-key generation | Ceremony fills indices 0–2 |
+| Reserve commitments (×9) | Hash of cold reserve pubkeys | Ceremony fills indices 3–11 |
+| `endpoint_hint` per active slot | Seed-node deployment | Ops (`shekyl-dev` plan) |
+
+### 9.5 Identity table (structure pinned — material `PENDING`)
+
+| Index | Status | `P_pubkey` (1996 B hex) | `P_pubkey_commitment` (32 B hex) | `endpoint_hint` |
+|---:|---|---|---|---|
+| 0 | active | `PENDING` | — | `PENDING` |
+| 1 | active | `PENDING` | — | `PENDING` |
+| 2 | active | `PENDING` | — | `PENDING` |
+| 3 | reserve | — | `PENDING` | — |
+| 4 | reserve | — | `PENDING` | — |
+| 5 | reserve | — | `PENDING` | — |
+| 6 | reserve | — | `PENDING` | — |
+| 7 | reserve | — | `PENDING` | — |
+| 8 | reserve | — | `PENDING` | — |
+| 9 | reserve | — | `PENDING` | — |
+| 10 | reserve | — | `PENDING` | — |
+| 11 | reserve | — | `PENDING` | — |
+
+**Row rules:** exactly one of `P_pubkey` or `P_pubkey_commitment`; active ⇒
+full pubkey; reserve ⇒ commitment only.
+
+### 9.6 Sequencing
+
+1. ~~Gate-4 iteration-2 fine bond sweep → `bond_rate* = 0.75`.~~ **Done (2026-06-07).**
+2. Map `bond_rate*` → `archival_bond_floor_atomic` (§9.3).
+3. P key ceremony → §9.5 material.
+4. Counsel lock on disclosure + FAQ.
+5. Genesis authoring → emit `foundation_archival_identities` blob.
+6. Ops → public fetch URLs (`endpoint_hint`).

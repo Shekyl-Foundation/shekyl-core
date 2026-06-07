@@ -443,11 +443,9 @@ caveat.
 Each layers onto iteration 1's coverage model; each has the gate it discharges and
 the metric it needs. Specified when iteration 1 closes.
 
-- **Iteration 2 — fine bond-rate window (gate 4).** *Fine* sweep of `bond rate`
-  within the coarse band iteration 1 leaves open; find the precise sub-band that is
-  simultaneously Sybil-deterring, deep-history-guaranteeing, and not
-  storage-rich-excluding. (Iteration 1's coarse 3-point sweep already establishes
-  whether the window is plausibly non-empty; iteration 2 sharpens it.)
+- **Iteration 2 — fine bond-rate window (gate 4).** **Built and run (2026-06-07).**
+  Fine sweep `gate4_fine_*` at the L11 lean equilibrium; sim pin `bond_rate* = 0.75`.
+  See §*Gate 4 iteration-2 — fine bond-rate window*.
 - **Iteration 3 — Σwork servo supply-safety (gate 1).** Grow the population under
   the servo; confirm `Σreward ≤ budget` and characterize per-staker reward
   compression as population grows. (This and gate 7 may run in the macro
@@ -883,6 +881,60 @@ are a stress test; in the real design every archiver is co-located *by construct
 the real form of L8 is **ratio-matching**: the deep shard's storage:bond requirement ratio
 must sit inside the population's storage:capital endowment-ratio distribution, or
 ratio-mismatched actors seat deep inefficiently.)
+
+### Gate 4 iteration-2 — fine bond-rate window (2026-06-07)
+
+**Status: built and run.** Scenarios: `gate4_fine_*` (lean L11 fill, ρ=0.02, `g=2`,
+flat magnitude), `gate4_fine_*_whale` (Sybil spread cross), `gate4_coloc_*` (P1
+polarized endowment, ρ=0.015). Twenty rates from **0.50–7.50** step 0.25 inside the
+coarse `(0.5, 8)` band. Run:
+
+```bash
+cd rust && cargo run -p shekyl-staking-sim --release -- --axis=gate4_fine \
+  > gate4_fine.json 2> gate4_fine_summary.txt
+```
+
+**Pass criteria for the sim pin:** at the lean equilibrium, simultaneously (a) min-form
+`dS/dN ≥ 1`, (b) `deep_frac_under < 0.10`, (c) `seating_feasible`, (d) with whale present
+**actor-level spread** (`gini_actor < 0.6`, `max_actor_share < 0.20`), and (e) co-location-
+binding endowment duplicate passes (a)+(b).
+
+**Findings.**
+
+1. **The window is non-empty but narrow and sits below the coarse “mid” (2.0), not at it.**
+   Lean deep coverage holds with ample min-form headroom for `bond_rate ∈ [0.50, 2.00]`
+   (`dS/dN` 3.76–5.89, `deep_und = 0`). Deep coverage breaks above **2.25** as the
+   emergent archiver count thins (`bondA` 79→48).
+
+2. **The binding upper bound is whale spread (actor Gini), not min-form seating.** From
+   **1.00** upward, `gate4_fine_*_whale` fails spread (`gini_actor` 0.61–0.82) even while
+   min-form stays ≫1 on the no-whale lean runs. At **0.75**, whale spread passes
+   (`gini_actor ≈ 0.58`, `max_actor_share ≈ 0.011`); at **1.00** it fails.
+
+3. **Co-location-binding duplicate confirms the low band.** Under polarized endowment
+   (P1), `dS/dN ≥ 1` with `deep_und = 0` holds through **2.00**; deep starves from **2.25**
+   (`deep_und` 0.08–1.0). The triple intersection (lean + whale spread + coloc) is
+   **`{0.50, 0.75}` only**.
+
+4. **Sim pin (dimensionless `bond_rate*`): `0.75`.** Highest rate in the feasible triple
+   intersection — maximizes Sybil headroom within the live band. **Not 2.0:** iteration-1’s
+   coarse mid is the L11 attractor *at that rate*, but gate-4’s joint test (spread under
+   whale) caps the *consensus floor* lower. Atomic mapping (`ARCHIVAL_BOND_FLOOR` in
+   `10⁹` units) remains a separate calibration step per
+   `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3.
+
+| `bond_rate` | lean `dS/dN` / `deep_und` | whale spread | coloc `dS/dN` / `deep_und` | in band |
+|---:|---|---|---|:---:|
+| 0.50 | 5.89 / 0.000 | pass | 3.43 / 0.000 | ✓ |
+| 0.75 | 5.89 / 0.000 | pass | 2.37 / 0.000 | **pin** |
+| 1.00 | 5.53 / 0.000 | **fail** (gini 0.61) | 2.01 / 0.000 | |
+| 2.00 | 3.76 / 0.000 | fail | 1.31 / 0.067 | lean only |
+| 2.25 | 3.41 / 0.592 | fail | 1.13 / 0.083 | |
+| 7.50 | 2.35 / 1.000 | fail | 0.77 / 1.000 | |
+
+**Disposition:** gate-4 iteration-2 **closes the numeric sim pin** at `bond_rate* = 0.75`.
+Reopen only if the spread threshold, whale endowment, or mainnet joint storage×capital
+calibration shifts the triple intersection.
 
 ### L9 — bond duration
 
@@ -2193,7 +2245,7 @@ where a decision is provisional.
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|
 | L1 | **`g(age)` value** (gate 4 / near-term pin) | `g` doesn't just clear deep — it **relocates the crux**: the unavoidable finite-provisioning residual sits on the **oldest tail at `g=1`**, the **shoulder at `g≈2`**, and **inverts (oldest over-covered, hot starving) at `g≥4`**. The shoulder (youngest deep shards, just aged out of hot, still partly replicated, *least* irreplaceable) is strictly less harmful than the tail (oldest, most irreplaceable, no recency backstop). | **Decided (target restated), leaning `g≈2`.** The goal is **not** "eliminate the residual" (impossible under reallocation at finite provisioning) but **"seat the residual on the least-critical band"** — i.e. choose `g` so coverage matches `R_target(age)`: highest-`R_target` oldest shards best-covered, shortfall on the shoulder. `g≈2` is that regime, not a lucky midpoint. `g` is genesis-fixed: pin for the *thick steady state*. Reopen if the thick-state sweep moves the shoulder-seating `g`. |
-| L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → min-form `dS/dN=0.83` → deep starves; the binding condition is the **co-located min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋) ≥ Σ_deep R_target` (L8), **not** distinct-actor count (slack at 80≥6). | **Decided (constraint form):** gate-4's upper bound is a **durability** constraint stated as min-form `dS/dN ≥ 1` over the expected *joint* storage×capital distribution — not a fairness limit. Fine sweep pins the rate that is simultaneously Sybil-deterring and min-form `dS/dN ≥ 1`. |
+| L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → min-form `dS/dN=0.83` → deep starves; the binding condition is the **co-located min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋) ≥ Σ_deep R_target` (L8), **not** distinct-actor count (slack at 80≥6). **Fine sweep (2026-06-07):** at the L11 lean equilibrium the **live upper bound is whale spread** (actor Gini), not min-form — spread fails from `bond_rate ≥ 1.00` while `dS/dN ≫ 1`. Triple-feasible band `{0.50, 0.75}`; **sim pin `bond_rate* = 0.75`**. | **Decided (numeric pin):** `bond_rate* = 0.75` (dimensionless sim units). Atomic `ARCHIVAL_BOND_FLOOR` maps per `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3. Reopen if spread threshold, whale model, or mainnet endowment calibration moves the intersection. |
 | L3 | **Empty-window definition** (gate 4) | The L8 min-form **unifies** what looked like two axes: `min(capital-leg, storage-leg)` is a single co-located number that binds on whichever leg is scarcer. `bond_high` binds on capital (min-form `0.83`); `pop_thin` binds on storage (min-form `0.39`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies min-form `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. The capital and storage axes are not separate tests — they are the two legs of the one min-form, and gate 5's provisioning sets the storage leg (L8 re-entangles gates 4 and 5). |
 | L4 | **Flat vs age-scaled bond *magnitude*** (gate 4) | Sim evidence: the mean-preserving tilt is a weak, mildly regressive lever that fights the premium (1c). The **decisive** argument is durability survival arithmetic: for irreplaceable data redundancy dominates per-holder reliability — `N=3,p=0.99 → ~1−10⁻⁶` vs `N=20,p=0.9 → ~1−10⁻²⁰`; the number of *distinct holders* swamps per-holder commitment for "does the data survive at all." So the oldest shards want the **most distinct holders → the most accessible (flat/low) bond**, never scaled up. Age-scaling magnitude raises the bond exactly where the widest pool is needed, and **flips the binding constraint** from the tractable aggregate-slot `dS/dN` (distinct-actor slack 80≥6) to the intractable **tail-distinct-actor** concentration (#4 aimed at the worst place). | **Resolved: flat magnitude.** The same evidence that gave the clean `dS/dN` condition (L2) *is* the argument for flat — age-scaling trades a tractable capacity constraint for an intractable tail-concentration one. Attraction onto old shards lives on the **reward** (`g·scarcity`, L1): reward attracts, flat bond keeps-accessible, no collision. The commitment-horizon instinct behind "age-scale it" is real but belongs in **duration, not magnitude** (L9). **Reversion:** reopen only if a gate-4 requirement needs stronger slashable commitment on the oldest *that duration (L9) cannot carry*. |
 | L8 | **co-location: the min-form seating metric** (gate 4↔5 re-entanglement) | `bscale_s0` (flat) has *aggregate* `dS/dN=3.24` yet `deep_und=0.75`: capital sits with storage-poor capital-rich actors and storage with bond-constrained capital-poor archivers, so deep — needing *both* on the *same* actor — falls in the gap. The **min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋)/Σ_deep R_target` reads **0.86<1**, predicting the starvation the aggregate masked. The **(bond × shard-size) pair sweep** confirms the joint lever: low-bond-alone (0.97/0.65) and small-shard-alone (0.91/0.47) each starve; the *pair* clears deep to 0, coinciding with the min-form crossing 1. | **Decided (metric swapped + gates re-entangled):** the seating metric is now the co-located min-form (implemented; the reported `dS/dN`). Gates 4 and 5 **cannot close independently** — the binding quantity is the count of co-located non-whale actors per deep shard, a joint function of bond (gate-4 capital leg) and shard size (gate-5 storage leg). Two levers grow the pool, tuned **together**: **low-flat bond** (recruits storage-rich) + **finer deep-shard granularity** (recruits capital-rich). Real-design form: **ratio-matching** (deep shard's storage:bond ratio inside the population's storage:capital distribution). |
