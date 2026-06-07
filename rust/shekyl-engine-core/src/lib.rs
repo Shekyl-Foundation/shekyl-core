@@ -14,6 +14,7 @@
 //! - Combined claim-and-unstake workflow
 
 pub mod claim_builder;
+pub mod consensus_constants;
 pub mod engine;
 pub mod error;
 #[cfg(feature = "multisig")]
@@ -22,6 +23,7 @@ pub mod scan;
 pub mod workflow;
 
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
+pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
     DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,

@@ -200,7 +200,7 @@ See **§9.5** for the full 12-slot structure (`PENDING` until key ceremony).
 **Authoring checklist:**
 
 1. Confirm `P_pubkey_wire_version = 1` still matches `HYBRID_KEY_VERSION`.
-2. Complete gate-4 iteration-2 fine bond sweep → set `bond_floor_atomic` (§9.3).
+2. ~~Complete gate-4 iteration-2 fine bond sweep → set `bond_floor_atomic` (§9.3).~~ **Done** — use `750_000_000` from `config/consensus_constants.json`.
 3. Run P key ceremony → replace `PENDING` in §9.5.
 4. Counsel sign-off on disclosure + FAQ (data scope pinned).
 5. Ops publish `endpoint_hint` (optional in genesis blob).
@@ -261,8 +261,8 @@ Tracks every genesis-block TBD: resolved pins, blockers, and closing artifact.
 | Item | Pin | Notes |
 |---|---|---|
 | **`bond_rate*` (sim)** | **`0.75`** | Highest rate in `{0.50, 0.75}` triple intersection (lean + whale spread + P1 coloc). Run 2026-06-07; `STAKER_ARCHIVAL_SIM.md` §*Gate 4 iteration-2*. |
-| **`ARCHIVAL_BOND_FLOOR` (atomic)** | **Open** | Map `bond_rate* = 0.75` → `archival_bond_floor_atomic` per §9.3 (mainnet joint endowment calibration). |
-| **`bond_floor_atomic` in genesis JSON** | **Open** | Blocked on atomic mapping step above. |
+| **`ARCHIVAL_BOND_FLOOR` (atomic)** | **`750_000_000`** | `0.75 SKL`; §9.3 calibration (`bond_rate* × COIN`). |
+| **`bond_floor_atomic` in genesis JSON** | **Ready** | Must match `config/consensus_constants.json` at authoring time. |
 | **Challenge epoch length** | **Open** | L14 soundness pass step 3; `good_standing` references cadence. |
 
 **Coarse envelope (iteration 1) — unchanged context:**
@@ -275,25 +275,35 @@ Tracks every genesis-block TBD: resolved pins, blockers, and closing artifact.
 
 Flat bond **magnitude** is resolved (L4); duration axis is separate (L9).
 
-### 9.3 Sim → chain mapping (execute at gate-4 close)
+### 9.3 Sim → chain mapping — **closed (2026-06-07)**
 
 Sim `bond_rate` is **dimensionless** (`shekyl-staking-sim` `AgentParams.bond_rate`).
 
-**At gate-4 close:**
+**Calibration (normative):**
 
-1. Pin sim **`bond_rate* = 0.75`** (gate-4 fine sweep, 2026-06-07).
-2. Calibrate **`BOND_UNIT_ATOMIC`** so min-form seating at `0.75` matches
-   the chain floor under documented mainnet storage×capital assumptions (L8).
-3. Set **`ARCHIVAL_BOND_FLOOR = BOND_UNIT_ATOMIC`** (one per-shard floor =
-   foundation nominal bond = market minimum; flat magnitude L4).
-4. Emit `archival_bond_floor_atomic` via `config/consensus_constants.json` /
-   `cmake/generate_consensus_constants.py`.
+1. **Sim pin:** `bond_rate* = 0.75` (gate-4 fine sweep, §9.2).
+2. **Capital scale anchor:** one sim `Agent.capital` unit ≡ **1 display SKL**
+   (`COIN = 10⁹` atomic per `config/economics_params.json` / `shekyl-units`).
+   Sim capital is liquid bond-posting capacity, not a consensus minimum stake
+   (the chain has none).
+3. **Reference co-located endowment (L8 min-form check):** baseline
+   storage-rich `{C = 20, S = 22 shard-units}`; at `bond_rate* = 0.75` the
+   actor contributes `min(⌊20/0.75⌋, 22) = 22` deep seats (storage-bound).
+   With `ARCHIVAL_BOND_FLOOR = 750_000_000` atomic, an actor holding 20 SKL
+   reproduces the same arithmetic.
+4. **Formula:** `ARCHIVAL_BOND_FLOOR = bond_rate* × COIN = 750_000_000` atomic
+   (**0.75 SKL** per per-shard floor; foundation `CompleteTree` posts **one**
+   nominal bond at this floor).
+5. **Emit:** `archival_bond_floor_atomic` in `config/consensus_constants.json`
+   / `cmake/generate_consensus_constants.py` / `rust/shekyl-engine-core/build.rs`.
+
+**Reopen if:** mainnet joint storage×capital survey shifts the reference profile;
+whale-spread threshold or endowment model moves the sim triple intersection;
+or `COIN` / display precision changes.
 
 **Atomic unit basis:** `ATOMIC_UNITS_PER_SKL = 10⁹` (`shekyl-units`) — not
 `GENESIS_TRANSPARENCY.md`'s legacy 10¹² example; reconcile that doc before
 authoring if it still disagrees.
-
-Until step 4 lands, **do not** ship a guessed `bond_floor_atomic`.
 
 ### 9.4 Blocked on key ceremony (operational)
 
@@ -326,7 +336,7 @@ full pubkey; reserve ⇒ commitment only.
 ### 9.6 Sequencing
 
 1. ~~Gate-4 iteration-2 fine bond sweep → `bond_rate* = 0.75`.~~ **Done (2026-06-07).**
-2. Map `bond_rate*` → `archival_bond_floor_atomic` (§9.3).
+2. ~~Map `bond_rate*` → `archival_bond_floor_atomic` (§9.3).~~ **Done (2026-06-07).**
 3. P key ceremony → §9.5 material.
 4. Counsel lock on disclosure + FAQ.
 5. Genesis authoring → emit `foundation_archival_identities` blob.

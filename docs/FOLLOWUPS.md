@@ -7519,12 +7519,12 @@ one place to confirm each item's relationship to the wallet stack.
   `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §3.
 
 - **`ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic`
-  (gate 4 iteration-2; pre-genesis).** **Sim pin closed:** `bond_rate* = 0.75`
-  (2026-06-07 fine sweep; triple intersection lean + whale spread + P1 coloc).
-  **Atomic mapping open:** `archival_bond_floor_atomic` per
-  `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3 (`ATOMIC_UNITS_PER_SKL = 10⁹`).
-  Reversion: reopen sim pin if spread threshold, whale model, or mainnet endowment
-  calibration shifts the intersection.
+  (gate 4 iteration-2; pre-genesis).** **Closed (2026-06-07).** Sim pin
+  `bond_rate* = 0.75`; atomic floor `750_000_000` (`0.75 SKL`) via
+  `config/consensus_constants.json` per
+  `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3 (1 sim capital unit ≡ 1 SKL).
+  Reversion: reopen if spread threshold, whale model, or mainnet endowment
+  calibration shifts the intersection or the capital-scale anchor.
 
   *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Gate 4 iteration-2*;
   `gate4_fine_*` scenarios in `shekyl-staking-sim`.

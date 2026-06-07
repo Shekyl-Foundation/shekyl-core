@@ -10,5 +10,8 @@
   "daa_target_seconds": 120,
   "daa_ftl_seconds": 540,
   "daa_mtp_window": 11,
-  "daa_genesis_difficulty": 100
+  "daa_genesis_difficulty": 100,
+
+  "_comment_archival": "Per-shard archival retention bond floor (ARCHIVAL_BOND_FLOOR). Calibrated from bond_rate* = 0.75 per docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md §9.3 (1 sim capital unit ≡ 1 SKL). Foundation CompleteTree holders post one nominal bond at this floor.",
+  "archival_bond_floor_atomic": 750000000
 }

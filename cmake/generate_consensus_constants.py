@@ -44,6 +44,8 @@ KEYS_INTEGER = {
     "daa_ftl_seconds": "u64",
     "daa_mtp_window": "u64",
     "daa_genesis_difficulty": "u64",
+    # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
+    "archival_bond_floor_atomic": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -163,6 +165,14 @@ def main() -> int:
     {emit("daa_mtp_window")}
 #define SHEKYL_DAA_GENESIS_DIFFICULTY \
     {emit("daa_genesis_difficulty")}
+
+// Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
+// alongside the FCMP/DAA constants because genesis foundation identities and
+// market archiver registration consume the same cross-language authority.
+// Rust mirror: rust/shekyl-engine-core/build.rs. Until the C++ archival
+// registry lands, this macro has no C++ consumer.
+#define SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC \
+    {emit("archival_bond_floor_atomic")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0
