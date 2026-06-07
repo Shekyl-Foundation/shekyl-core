@@ -36,21 +36,18 @@ Accounts and addresses:
   account show                        List accounts (default marked with *)
   account default <N>                 Set session default account
   account new [label]                 Create a new account
-  address [--subaddr-index N]         Show address
-  address new [label]                 Create a new subaddress
+  address                             Show primary address
   balance [--account N]               Show balance (unlocked, locked)
 
 Transfers:
   transfer <amount> <address>         Send SKL to an address
     [--account N] [--priority N]      (optional flags)
-    [--subaddr-indices N,M,...]       Source subaddresses
     [--do-not-relay]                  Create but don't broadcast (offline use)
     [--no-confirm]                    Skip confirmation (non-TTY only)
   transfers [--account N]             Show recent transactions
   show_transfer <txid>                Show details for a transaction
   sweep_all <address>                 Sweep all outputs to address
     [--account N] [--priority N]      (explicit --account required)
-    [--subaddr-indices N,M,...]       Source subaddresses
 
 Staking:
   stake <amount> [tier]               Stake SKL
@@ -92,9 +89,7 @@ Meta:
   exit / quit                         Exit shekyl-cli
 
 Global flags (use with any command):
-  --account N                         Override session default account
-  --subaddr-index N                   Specific subaddress
-  --subaddr-indices N,M,...           Multiple source subaddresses";
+  --account N                         Override session default account";
 
 pub fn repl(
     ctx: EngineContext,
@@ -276,17 +271,10 @@ pub fn repl(
                     }
                     ResolvedCommand::SweepAll {
                         account_index,
-                        subaddr_indices,
                         dest,
                         priority,
                     } => {
-                        transfers::cmd_sweep_all(
-                            &ctx,
-                            account_index,
-                            &subaddr_indices,
-                            &dest,
-                            priority,
-                        );
+                        transfers::cmd_sweep_all(&ctx, account_index, &dest, priority);
                     }
 
                     // Staking

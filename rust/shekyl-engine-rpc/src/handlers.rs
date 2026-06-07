@@ -329,8 +329,5 @@ fn transfer_to_json(td: &shekyl_scanner::TransferDetails) -> Value {
         "stake_lock_until": td.stake_lock_until,
         "frozen": td.frozen,
         "global_index": td.global_output_index,
-        "subaddr_index": td.subaddress.map(|s| {
-            serde_json::json!({ "index": s.get() })
-        }),
     })
 }

@@ -108,7 +108,6 @@ pub fn cmd_show_transfer(ctx: &EngineContext, txid: &str) {
 pub fn cmd_sweep_all(
     ctx: &EngineContext,
     account_index: u32,
-    subaddr_indices: &[u32],
     dest: &str,
     priority: Option<u32>,
 ) {
@@ -163,9 +162,6 @@ pub fn cmd_sweep_all(
         "address": dest,
         "account_index": account_index,
     });
-    if !subaddr_indices.is_empty() {
-        params["subaddr_indices"] = serde_json::json!(subaddr_indices);
-    }
     if let Some(p) = priority {
         params["priority"] = serde_json::json!(p);
     }

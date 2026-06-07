@@ -1259,7 +1259,7 @@ mod tests {
                 // Fresh ledger: no transfers, no tx_meta, no bookkeeping.
                 assert!(ledger.ledger.transfers.is_empty());
                 assert!(ledger.tx_meta.tx_keys.is_empty());
-                assert!(ledger.bookkeeping.subaddress_labels.per_index.is_empty());
+                assert!(ledger.bookkeeping.primary_label.is_none());
                 assert!(!ledger.sync_state.scan_completed);
             }
             OpenOutcome::StateLoaded(_) => panic!("expected StateLost for missing .wallet"),
