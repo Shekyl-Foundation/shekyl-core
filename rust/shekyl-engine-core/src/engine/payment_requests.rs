@@ -39,10 +39,7 @@ impl<
     > Engine<S, D, LocalLedger, E, R, P>
 {
     /// Persist a new pending payment request and return its opaque id.
-    pub fn create_payment_request(
-        &self,
-        req: NewPaymentRequest,
-    ) -> Result<PaymentRequestId, &'static str> {
+    pub fn create_payment_request(&self, req: NewPaymentRequest) -> PaymentRequestId {
         let id = PaymentRequestId::new_random();
         let pr = PaymentRequest {
             id,
@@ -56,7 +53,7 @@ impl<
         };
         let mut guard = self.ledger.write();
         guard.ledger.bookkeeping.payment_requests.push(pr);
-        Ok(id)
+        id
     }
 
     /// List payment requests matching `filter`.

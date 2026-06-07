@@ -3459,24 +3459,27 @@ pub unsafe extern "C" fn shekyl_construct_output(
 
     use shekyl_crypto_pq::output::construct_output;
     match construct_output(&tx_key, &x_pk, ek, &sk, amount, output_index) {
-        Ok(out) => ShekylOutputData {
-            output_key: out.output_key,
-            commitment: out.commitment,
-            enc_amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-            enc_label: out.enc_label,
-            label_tag: out.label_tag,
-            view_tag_prefilter: out.view_tag_prefilter,
-            kem_ciphertext_x25519: out.kem_ciphertext_x25519,
-            kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
-            pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),
-            h_pqc: out.h_pqc,
-            y: out.y,
-            z: out.z,
-            k_amount: out.k_amount,
-            success: true,
-            // out drops here — ZeroizeOnDrop wipes y, z, k_amount
-        },
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
         Err(_) => fail,
     }
 }
@@ -3542,23 +3545,27 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
         output_index,
         &label_pt,
     ) {
-        Ok(out) => ShekylOutputData {
-            output_key: out.output_key,
-            commitment: out.commitment,
-            enc_amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-            enc_label: out.enc_label,
-            label_tag: out.label_tag,
-            view_tag_prefilter: out.view_tag_prefilter,
-            kem_ciphertext_x25519: out.kem_ciphertext_x25519,
-            kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
-            pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),
-            h_pqc: out.h_pqc,
-            y: out.y,
-            z: out.z,
-            k_amount: out.k_amount,
-            success: true,
-        },
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
         Err(_) => fail,
     }
 }

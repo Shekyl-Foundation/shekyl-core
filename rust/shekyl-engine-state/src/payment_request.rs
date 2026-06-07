@@ -48,8 +48,7 @@ impl PaymentRequestId {
                 return Self(id);
             }
         }
-        // astronomically unlikely after four draws; pin minimal non-zero u48.
-        Self(1)
+        panic!("PaymentRequestId CSPRNG failed to draw non-zero u48 after 4 attempts");
     }
 
     /// Raw `u64` for URI / wire encoding (u48 LE in label plaintext).

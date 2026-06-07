@@ -316,9 +316,14 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
             if rest.len() >= 2 {
-                let amount = crate::commands::parse_amount(rest[0]).unwrap_or(0);
-                let label = rest[1..].join(" ");
-                ResolvedCommand::RequestNew { amount, label }
+                if let Some(amount) = crate::commands::parse_amount(rest[0]) {
+                    let label = rest[1..].join(" ");
+                    ResolvedCommand::RequestNew { amount, label }
+                } else {
+                    ResolvedCommand::Unknown {
+                        cmd: format!("request new: invalid amount {:?}", rest[0]),
+                    }
+                }
             } else {
                 ResolvedCommand::Unknown {
                     cmd: "request new: need <amount> <label>".to_string(),

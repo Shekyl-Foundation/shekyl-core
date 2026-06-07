@@ -99,10 +99,7 @@ pub fn match_inbound_attribution(
                 if req.amount_atomic != amount_atomic {
                     continue;
                 }
-                if !matches!(
-                    req.state,
-                    PaymentRequestState::Pending | PaymentRequestState::Expired
-                ) {
+                if req.state != PaymentRequestState::Pending {
                     continue;
                 }
                 if match_idx.is_some() {
@@ -178,5 +175,16 @@ mod tests {
         let mut reqs = vec![sample_request(rid, 1)];
         let attr = match_inbound_attribution(false, &pt, 1, 0, [0u8; 32], 0, &mut reqs);
         assert_eq!(attr, ReceiveAttribution::Unattributed);
+    }
+
+    #[test]
+    fn expired_request_is_not_re_matched() {
+        let rid = 42;
+        let pt = encode_request_plaintext(rid).unwrap();
+        let mut reqs = vec![sample_request(rid, 100)];
+        reqs[0].state = PaymentRequestState::Expired;
+        let attr = match_inbound_attribution(true, &pt, 100, 10, [3u8; 32], 0, &mut reqs);
+        assert!(matches!(attr, ReceiveAttribution::LabelUnknown { .. }));
+        assert_eq!(reqs[0].state, PaymentRequestState::Expired);
     }
 }
