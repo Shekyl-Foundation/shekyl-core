@@ -31,6 +31,8 @@
 #include <unordered_set>
 #include <random>
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -48,6 +50,44 @@ using namespace epee;
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "fcmp/rctSigs.h"
+
+namespace {
+
+bool cooperative_payment_requests_enabled()
+{
+  const char* v = std::getenv("SHEKYL_COOPERATIVE_PAYMENT_REQUESTS");
+  if (!v)
+    return false;
+  return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+         std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0;
+}
+
+ShekylOutputData construct_output_for_destination(
+    const crypto::secret_key& tx_key,
+    const uint8_t* pk_x25519,
+    const uint8_t* pk_ml_kem,
+    size_t pk_ml_kem_len,
+    const crypto::public_key& spend_key,
+    uint64_t amount,
+    uint64_t output_index,
+    const std::string& original_uri)
+{
+  uint8_t label_pt[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  const bool cooperative = cooperative_payment_requests_enabled();
+  if (!original_uri.empty() && original_uri.compare(0, 7, "shekyl:") == 0)
+    (void)shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), cooperative, label_pt);
+  return shekyl_construct_output_labeled(
+      reinterpret_cast<const uint8_t*>(&tx_key),
+      pk_x25519,
+      pk_ml_kem,
+      pk_ml_kem_len,
+      reinterpret_cast<const uint8_t*>(&spend_key),
+      amount,
+      output_index,
+      label_pt);
+}
+
+} // namespace
 
 using namespace crypto;
 
@@ -468,11 +508,12 @@ namespace cryptonote
         const uint8_t* pk_ml_kem = dst_entr.addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
         const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
-        ShekylOutputData od = shekyl_construct_output(
-          reinterpret_cast<const uint8_t*>(&tx_key),
+        ShekylOutputData od = construct_output_for_destination(
+          tx_key,
           pk_x25519, pk_ml_kem, pk_ml_kem_len,
-          reinterpret_cast<const uint8_t*>(&dst_entr.addr.m_spend_public_key),
-          dst_entr.amount, static_cast<uint64_t>(output_index));
+          dst_entr.addr.m_spend_public_key,
+          dst_entr.amount, static_cast<uint64_t>(output_index),
+          dst_entr.original);
         CHECK_AND_ASSERT_MES(od.success, false,
           "shekyl_construct_output failed for output " << output_index);
 
