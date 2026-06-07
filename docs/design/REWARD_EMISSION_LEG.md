@@ -1,8 +1,9 @@
 # Reward emission leg — consensus specification (genesis)
 
 **Status:** Design spec — **structural core** for [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
-§2.4 close-condition **(i)**. **Not genesis-sealed:** the **Σwork denominator mechanic**
-(§4.3) is an open structural fork (joint with gate 1 supply-safety). **Admission wire**
+§2.4 close-condition **(i)**. **Pinned:** `Curve`∘servo composition (§4.0 form **C**).
+**Not genesis-sealed:** §4.5 denominator scope sealed at gate 1 (leading: all-recorded lagged).
+**Admission wire**
 leans ordinary transfer ≥ `MIN` with **no `C_stake`** (§7.2–§7.4; gate 4/7 reopen).
 Implementation is gated on Layer 2 keystone validation (`STAKER_ARCHIVAL_SIM.md` §*Layer 2*)
 and gate 2 retention-proof bytes.
@@ -44,19 +45,39 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 
 | Layer | Scope | Gate |
 |-------|--------|------|
-| **1 — Consensus structural core** | This doc: public `work_P` recompute, membership-only ≥`MIN` backing, state dedup, consensus-applied rate → mint. Bond/slash is gate 4 (spec elsewhere — do not duplicate). **Open:** Σwork denominator (§4.3). **Owed crypto:** `FcmpMembershipOnly::verify`. | Must be right pre-genesis. |
-| **2 — Economic keystone** | Three-channel reward shape validated in `shekyl-staking-sim` (not generic “work-based”). Spread graze vs windowed mean (2026-06-07); deep↔spread via `g(age)` calibration at `bond_rate* = 0.75`; gate 7 fee-era + admission re-pricing; per-reward byte aggregate (calc, not agent sim). | Shape reopen if keystone fails. |
+| **1 — Consensus structural core** | This doc: public `work_P` recompute, membership-only ≥`MIN` backing, state dedup, form-**C** mint (§4.0). Bond/slash is gate 4 (spec elsewhere — do not duplicate). **Leading:** all-recorded lagged `Σwork` (§4.5; gate 1 seal). **Owed crypto:** `FcmpMembershipOnly::verify`. | Must be right pre-genesis. |
+| **2 — Economic keystone** | Form **C** validated; spread windowing passes **thinly** at `bond_rate* = 0.75` (~0.001–0.007 margin; whale window **worsens** 0.581→0.594). Active constraint: `g(age)` deep↔spread calibration against **whale-trend**, not benign mean. Gate 7; byte aggregate (ii). | Shape reopen if keystone fails. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor, bond-funding decorrelation. Wallet FSM: delete claim machinery; ordinary-transfer admission + reward reception + bond slash. | Load-bearing for privacy. |
-| **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. **Gated on Layer 2** — full rebase round is premature while the keystone is open. | Corpus consistency. |
+| **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. Keystone holds (thin); rebase no longer blocked on shape reopen — still coordinate with Layer 2 `g(age)` calibration. | Corpus consistency. |
 
 **2026-06-07 Layer 2 discipline gate (spread windowing):** `sprdW` = mean `gini_actor` + peak
 `max_actor_share` over `churn_window` (L9 lesson). Full sweep **266** scenarios: snapshot
-**138**/266 vs windowed **139**/266 pass spread; **one** flip (`gate4_coloc_5.50`, far above
-`bond_rate*`). At **`bond_rate* = 0.75`**: snapshot grazes (`gini_act ≈ 0.600`), windowed
-**passes** (`giniW ≈ 0.593–0.599`); at **1.00** both fail (`≈ 0.626`). **Verdict:** spread
-graze at the pin survives the windowed read; failures above 1.00 and at thin-budget lean
-(`l11_bud_b50`, `gini ≈ 0.84`) are **real concentration**, not snapshot artifacts. **Keystone
-holds** at the pinned operating point → Layer 2 is **calibration**, not shape reopen.
+**138**/266 vs windowed **139**/266 pass spread; **zero** snap-pass→win-fail flips; **one**
+snap-fail→win-pass (`gate4_coloc_5.50`, far above pin). At **`bond_rate* = 0.75`**: benign
+rows `giniW ≈ 0.593–0.599` (snapshot grazes at **0.600**); at **1.00** both fail (`≈ 0.626`);
+thin lean `l11_bud_b50` fails both at `≈ 0.84`. **Verdict:** keystone **holds** — Layer 2 is
+**calibration, not shape reopen** — but the margin is a **hair**, not a plateau.
+
+**Thin-margin read (carry into calibration, not file as closed):**
+
+1. **Edge of feasible pocket.** `gate4_coloc_0.75` windowed **0.599** against threshold **0.600**
+   — a parameter nudge loses spread. Bond **1.00** fails both reads; thin purse fails badly.
+   Room at the pin: **~0.001–0.007** on `giniW`.
+2. **Whale is the binding scenario under windowing.** `gate4_fine_0.75_whale`: snapshot
+   **0.581** → windowed **0.594** (windowing **worsened** concentration). Benign means improved
+   or held; adversarial trend eats the margin. **`g(age)` calibration for deep coverage must be
+   checked against whale-window trend**, not the benign mean alone — the deep↔spread entanglement
+   is the **active Layer-2 constraint**.
+
+**Sim ↔ spec coherence (load-bearing):** Track 1’s windowing verdict transfers to this spec
+only if `shekyl-staking-sim` uses form **C** with **Σ capped** in the denominator. **Verified
+(2026-06-07):** `reward.rs` sets `sum_capped = Σ_a capped[a]` where `capped[a] =
+Curve(work_a)` (plateau-cap), then `price = budget / sum_capped` and `reward_a = price ·
+capped[a]` — i.e. `budget·capped_P/Σcapped`, **not** `budget·work_P/Σwork_raw`. The spec sync
+corrected prose drift; the sim predates the explicit §4.0 pin but was already aligned. Form **C**
+is anti-concentration at the budget layer (capped whale share redistributes via the rate); if
+anything, it should **widen** margin vs a miscomposed servo — the reported thin margin is real,
+not a sim/spec mismatch artifact.
 
 ---
 
@@ -103,16 +124,43 @@ as retired claim drip).
 
 ## 4. Economics — three-channel reward stack (verifier-side)
 
-The reward is **not** generic “budget × work / Σwork.” It is the **specific three-channel
-stack** exercised in `shekyl-staking-sim` (`reward.rs`) and
+### 4.0 Genesis pin — `Curve` ∘ servo composition (E-1)
+
+Three expressions appeared across authoritative docs; **one** is genesis-pinned. The
+wrong orderings have different monetary consequences — this is not housekeeping.
+
+| Form | Expression | Verdict |
+|------|------------|---------|
+| **A — post-servo cap (rejected)** | `raw_P = budget·work_P/Σwork_raw` then `reward_P = Curve(raw_P)` | **Rejected.** When any cap binds, `Σ_P raw_P = budget` but `Σ_P Curve(raw_P) < budget` — **budget strands** with no pinned disposition (burn? roll? redistribute?). Anti-concentration is implicit at best. |
+| **B — servo only (rejected)** | `reward_P = budget·work_P/Σwork_raw` (no `Curve`) | **Rejected.** Per-staker aggregate unbounded; V3 gate-list item 1’s servo without the plateau-cap. |
+| **C — cap in numerator, normalize (pinned)** | `reward_P = budget·Curve(work_P)/Σ_{P'} Curve(work_{P'})` | **Genesis pin.** `Σ_P reward_P = budget` whenever `Σ Curve > 0`. A capped whale’s foregone share flows **proportionally** to other market archivers via the rate — the redistribution V3’s “leaves *S* scarce for someone else” prose describes, as a **budget** property not only coverage. |
+
+**Notation below:** `capped_P(E) := Curve(work_P(E))` and `Σwork(E) := Σ_{P'∈Market} capped_{P'}(E)`.
+Then `reward_P(E) = budget(E)·capped_P(E)/Σwork(E)` (integer floor per payout; rounding
+disposition pinned at gate 1).
+
+**Reversion clause:** A **deflationary** cap that **burns** the residual
+(`Σ Curve < Σ raw` ⇒ unminted budget destroyed) is a deliberate gate-1/7 monetary policy —
+not the default. It must be chosen explicitly; it must not fall out of an unstated
+composition.
+
+**Sim coherence:** `shekyl-staking-sim` (`reward.rs`) implements form **C** with denominator
+`Σ_a Curve(work_a)` — confirmed at `reward.rs` (`sum_capped` / `price = budget/sum_capped`).
+Spread sub-claims (`sprdW`, 2026-06-07) are evaluated under this composition; see §1.1
+coherence verification.
+
+### 4.1 Stack (channels 1–3)
+
+The reward is **not** generic “budget × work / Σwork.” It is the pinned three-channel
+stack (form **C** above), aligned with
 [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*reward curve*:
 
 ```text
 scarcity(s,E)  = (1 / R_market(s,E)) · g(age(s))     // channel 1: self-diluting scarcity
 work_P(E)      = Σ_{s ∈ held(P,E)} scarcity(s,E) · proven_retention(P,s,E)
 capped_P(E)    = Curve(work_P(E))                     // channel 2: concave plateau-cap (per P)
-Σwork(E)       = Σ_{P'} capped_{P'}(E)                // channel 3: competitive-share denominator
-reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud on vin
+Σwork(E)       = Σ_{P'∈Market} capped_{P'}(E)         // channel 3: market-only denominator (§4.2)
+reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud on vin; Σ = budget
 ```
 
 **Channel 1 — scarcity.** `R_market` is the public replication count; holding a shard
@@ -125,9 +173,10 @@ retrieval volume.
 `cap` parameter). Marginal credited work above the plateau is zero unless the operator
 opens another pseudonym — which carries gate-6 firewall cost, not a free Sybil split.
 
-**Channel 3 — competitive share.** `budget(E)` from gate 1; each `P` receives
-`budget · capped_P / Σwork`. Adding work raises `Σwork` and dilutes everyone (including
-self) — the servo share channel.
+**Channel 3 — competitive share.** `budget(E)` from gate 1; each market `P` receives
+`budget · capped_P / Σwork`. Adding credited work raises `Σwork` and dilutes everyone
+(including self). When one `P` hits the plateau, others’ shares rise — explicit
+anti-concentration at the budget layer (form **C**).
 
 **Inflation posture (8c):** Verifiers recompute all three channels; any mismatch between
 `reward_P(E)` and minted outputs is a **consensus error visible to all verifiers**.
@@ -135,37 +184,73 @@ self) — the servo share channel.
 **Hints:** The vin may carry `budget`, `Σwork`, or intermediate values as **hints** for
 light clients; full nodes recompute authoritatively.
 
-### 4.1 Sim validation (done — not a to-do)
+### 4.2 Market-only denominator — foundation excluded (E-2)
 
-`shekyl-staking-sim` implements this stack end-to-end. Economics re-simulation is
-**complete** for Layer 2 keystone questions: `g(age)` clearing deep, lean equilibrium
-(L11), `bond_rate* = 0.75` spread pin, co-location binding (P1), fee-era spiral (L13).
-See [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) adjustment ledger — not a pending
-“re-run economics” item.
+`Σwork(E)` sums **market archivers only** (`P' ∈ Market`). The foundation holds the
+complete tree but is **reward-invisible** (gate 5) and excluded from `market_R`; the
+servo denominator inherits the same exclusion — extending the two-count discipline
+([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) consumer table) to the
+**denominator explicitly**.
 
-### 4.2 `WorkClaimVector` maps to channel 1
+If foundation work entered `Σwork`, it would dilute every market archiver’s share while
+earning nothing — a silent tax. **Genesis pin:** foundation `P` ids (if any on-chain
+bond record) do not contribute to `Σwork`.
+
+**Bootstrap consequence (form C):** With few market archivers, `Σwork` is small but ≥
+`Curve(positive work) > 0`, so the first market archiver with positive work earns
+`≈ budget` (bounded, not a raw-share blow-up). Whether early-epoch full-budget payout
+wants a gate-5 **budget ramp** is a separate call; denominator scope is not.
+
+### 4.3 `WorkClaimVector` maps to channel 1
 
 §5.4 carries per-shard `scarcity_milli` (fixed-point `(1/R)·g(age) × 1000`) and
 `proven_retention` so verifiers recompute `work_P(E)` before applying `Curve`.
 
-### 4.3 Open structural fork — `Σwork(E)` denominator timing
+**Fixed-point pin:** `scarcity_milli = floor((1/R)·g(age) · 1000)` (integer, zero
+tolerance at verify). Effective **R ceiling:** for `g(age) ≥ 1`, `R > 1000·g(age)` rounds
+scarcity to zero — a dead zone where the `1/R` signal vanishes at high replication. Genesis
+pin: **3 decimal places** suffice while `R_market` stays within protocol replication
+bounds (deep `R_target` ≪ 1000); reopen if gate 3/5 permits `R` large enough to zero
+most shards’ scarcity under this scale.
 
-The competitive-share line uses a **global denominator** for epoch `E`. An epoch’s
-`Σwork(E)` is not knowable until **all** qualifying emissions for `E` are processed
-(late emitters, batching, reorgs). This is the **same decision** as gate-1 supply-safety,
-not a separate economics knob.
+### 4.4 `Σwork` accumulator — maintained state (minor pin)
 
-**Disposition (open — pick one before genesis seal):**
+`Σwork(E)` is **not** recomputed from scratch on every emission vin (which would re-walk
+the full archiver ledger per tx). Consensus maintains a **per-settlement-epoch
+accumulator**:
 
-| Option | Mechanism | Tradeoff |
-|--------|-----------|----------|
-| **Lagged denominator** | `Σwork(E)` computed from **finalized** archival state at end of settlement epoch `E` (or `E−1` for emissions in `E+1`); emissions in epoch `E` cite the lagged total | Simple; late movers get deterministic share; boundary rules must be explicit |
-| **Two-phase settlement** | Phase A: provisional accrual; Phase B: finalization pass when epoch closes adjusts mint | Exact share; more consensus state and reorg surface |
-| **Capped provisional + true-up** | Mint to provisional `Σwork` with bounded true-up in `E+1` | Middle ground; needs inflation bound proof |
+```text
+Σwork_acc(E)  finalized at epoch E close from continuous recording
+              (each market P's capped_P(E) updated as challenge/retention state settles)
+```
 
-This spec **does not** choose among them. Gate 1 implementation must pin the choice and
-document reorg behavior. Until pinned, §5.4 `reward_amount_plain` semantics assume the
-verifier applies the **same** denominator rule as gate 1 (no wallet-local `Σwork`).
+Emission vins **read** the finalized (or lagged — §4.5) accumulator; they do not
+author it. Late emitters after close use the gate-1 boundary rule.
+
+### 4.5 Denominator scope and finalization (gate 1 — leading disposition)
+
+The open fork is **not** “Σwork unknowable until all emitters claim.” §5.4 and the archival
+DB record `work_P(E)` **continuously**; at settlement-epoch `E` close, `capped_P(E) =
+Curve(work_P(E))` is computable for **every** market `P` with recorded work, claimed or not.
+The real fork is **denominator scope**:
+
+| Scope | Mechanism | Tradeoff |
+|-------|-----------|----------|
+| **All-recorded (leading)** | End-of-`E` finalization sweep: compute each market `P`'s `capped_P(E)` from DB state; store `Σwork(E) = Σ_{P'∈Market} capped_{P'}(E)`. Emissions in **`E+1`** (or later within claim window) cite this **lagged** stored total. Deterministic; reuses the per-epoch sweep §4.4 requires. | A `P` that did work but **never claims** (offline) or **forfeits claim** (§6.5 slash after earn) still contributes `capped_P` to the denominator → claimers slightly **diluted**; that share goes **unminted**. Conservative, supply-safe, no over-issuance. |
+| **Claimed-only (rejected default)** | `Σwork` sums only emitting `P` in this block/epoch | Full budget to claimers, but denominator depends on **who emits when** → two-phase / provisional+true-up machinery, reorg surface, inflation-bound proofs. |
+
+**Leading disposition:** **all-recorded, lagged one epoch** — collapses the old “timing” table
+to one deterministic path plus an accepted monetary consequence (unminted dilution share).
+
+**E-3 coupling (genesis pin):** When a `P` is slashed or forfeits **future** claim, its
+**already-recorded** `capped_P(E)` for closed epochs **remains in** `Σwork(E)` for that
+epoch. Removing it on slash would make the denominator depend on slash-event ordering
+(non-deterministic at epoch close). **Accept dilution** over dynamic denominator surgery.
+
+Gate 1 implementation must pin boundary height (emissions for `E` cite `Σwork(E)` finalized
+at close of `E`; batching in `E+1` uses the same stored value). Reorg: revert finalization
+and accumulator with epoch disconnect. Until gate-1 lands, §5.4 `reward_amount_plain` uses the
+same rule (no wallet-local `Σwork`).
 
 ---
 
@@ -316,16 +401,40 @@ If no `ArchivalBondRecord` exists for `P`:
 4. Apply dedup for claimed epochs in this vin.
 
 Subsequent emissions require `holdings` **compatible** with stored record (no silent
-portfolio swap without bond update flow).
+portfolio swap without bond update flow). **Dependency (consume, not define):** holdings
+mutation — how `P` picks up or drops a shard and re-bonds — is the **gate-4 bond update /
+holdings-mutation flow**; this leg reads the result from `ArchivalBondRecord.holdings`
+and does not specify the mutation wire.
 
-### 6.5 Good standing
+### 6.5 Good standing — per-epoch eligibility (E-3)
 
-Emission for epoch `E` is rejected unless, for every shard in `work_claim(E)`:
+**Genesis pin:** Eligibility for epoch `E` in a batched vin is evaluated **per epoch at
+epoch close**, not by current `good_standing` gating the entire batch.
+
+For each `E` in `settlement_epochs`, emission is rejected unless, for every shard in
+`work_claim(E)`:
 
 - `P` held the shard through `E` per archival state, and
-- Most recent challenge for `(P,s)` before `E` boundary **passed** (exact grace window
-  pinned at gate 4), and
-- `good_standing == true` (no unbonded/slash posture).
+- The challenge for `(P,s)` relevant to `E` **passed** (grace window pinned at gate 4), and
+- `good_through(E) == true` — `P` was not slash-invalidated **before the end** of
+  settlement epoch `E` (slash timestamp / height recorded in bond state).
+
+**Slash after honest service does not forfeit earned epochs.** A `P` that served epochs
+`E₁…Eₖ` honestly, then fails a later challenge and is slashed, may still claim
+`E₁…Eₖ` in one batched emission **provided** `good_through(Eᵢ)` held for each claimed
+epoch. Slash blocks **future** epochs and new service; it does not retroactively void
+epochs already earned under per-epoch rules.
+
+**Denominator interaction (§4.5):** A slashed `P` that **never claims** earned epochs still
+left its `capped_P(E)` in the all-recorded `Σwork(E)` at epoch close — honest claimers were
+slightly diluted; that portion of `budget` was unminted. Determinism over “remove on slash.”
+
+**Batching vs forfeiture (§3):** The default batch (up to 15 epochs) is compatible with
+this pin — operators are **not** forced to claim frequently to avoid losing honest work
+to a later slash. Frequent single-epoch claims remain test-mode (timing tell).
+
+**Current posture** (`good_standing` on the bond record) still gates **new** emission
+attempts for epochs **after** slash and bond re-establishment flows (gate 4).
 
 ---
 
@@ -384,12 +493,18 @@ reward emission is the first consumer.
 **Independence:** Backing outputs are **main-tree** leaves, not staking-subtree (3C
 deleted).
 
-### 7.3 Within-`P` privacy (DDH)
+### 7.3 Backing proofs and linkability (E-4)
 
-Membership-only backing does **not** publish key images, but repeated emissions still
-must not link backing outputs across epochs by reusing the same leaf opening in a
-correlatable way. Wallet **should** rotate backing UTXOs on `P` where practical (gate 6
-hygiene); consensus does not enforce rotation.
+**Consensus does not require backing-output rotation.** `FcmpMembershipOnly` is
+zero-knowledge over the FCMP++ anonymity set: repeated membership proofs of the same
+leaf do **not** publish a key image and are **not** linkable by the proof statement
+alone.
+
+**Gate-6 hygiene (optional, named threats only):** Wallet policy may rotate backing
+UTXOs for **non-proof** correlation — timing, amount clustering, mempool metadata,
+fee-input linkage — per the gate-6 firewall spec. Those are operational threats, not
+consensus lemmas; they must be named there. This leg does not impose rotation as a
+verify rule.
 
 ### 7.4 Optional `ADMISSION_MIN` amount proof
 
@@ -412,8 +527,8 @@ If admission principal is dropped (close-condition iii / bonds-only sink), remov
 Between emissions, `P` may spend admission outputs while still listed as serving. The
 verifier **does not** re-check full retention on every block. Safety relies on:
 
-> Challenge failure at any time → bond slash (gate 4) → `good_standing` false → future
-> emission rejected until re-bond.
+> Challenge failure at any time → bond slash (gate 4) → `good_standing` false → **future**
+> epochs ineligible; **past** epochs with `good_through(E)` remain claimable (§6.5).
 
 Document in threat model §7 retool; this spec states the **consensus dependency** on
 slash hooks.
@@ -490,7 +605,7 @@ admission** ≥ `MIN` to `P`, off-chain announce-before-anchor, reward reception
 amounts), bond post/slash reaction.
 
 1. Gate 6: announce `P` + present backing off-chain; ensure recognized before first emission.
-2. Wait until settlement epoch `E` closes (or batch unclaimed `E…`); apply §4.3 denominator rule.
+2. Wait until settlement epoch `E` closes (or batch unclaimed `E…`); apply §4.5 accumulator rule.
 3. Read public challenge state → build `work_claim` (channel 1).
 4. Locally compute `capped_P` and expected `reward_P(E)` via `Curve` + gate-1 `Σwork`.
 5. Select ordinary backing UTXOs on `P`; build `MembershipOnlyBacking`.
@@ -501,7 +616,7 @@ amounts), bond post/slash reaction.
 
 ## 12. Implementation checklist (pre-code)
 
-- [ ] **Pin §4.3** `Σwork` denominator mechanic (joint gate-1 design).
+- [ ] **Seal §4.5** at gate 1: all-recorded lagged `Σwork(E)` + slash/forfeit stays in denominator.
 - [ ] Add `SETTLEMENT_EPOCH_BLOCKS`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` to
       `config/consensus_constants.json` + generators.
 - [ ] C++ / Rust vin deserializer for `txin_archival_reward_emission`.
@@ -531,7 +646,16 @@ amounts), bond post/slash reaction.
 **2026-06-06:** Initial reward-emission leg spec — PHASE_2B §2.4 close-condition (i)
 structural core.
 
-**2026-06-07:** Sync to three-channel reward stack + sim-validated economics; §4.3
-`Σwork` denominator fork open (joint gate 1); ordinary-transfer admission (no `C_stake`);
+**2026-06-07:** Sync to three-channel reward stack + sim-validated economics; §4.5
+accumulator timing fork open (joint gate 1); ordinary-transfer admission (no `C_stake`);
 four-layer sequencing; spread windowing discipline gate (keystone holds at `bond_rate*`);
 P announce-before-anchor.
+
+**2026-06-07 (E-1–E-4):** Pin form **C** `Curve`∘servo composition (§4.0); reject
+post-servo cap and servo-only; market-only `Σwork` (§4.2); per-epoch `good_through(E)`
+(§6.5); drop consensus backing-rotation rule (§7.3); `Σwork` accumulator (§4.4);
+`scarcity_milli` scale pin (§4.3); gate-4 holdings-mutation dependency (§6.4).
+
+**2026-06-07 (analysis pass):** Thin-margin spread calibration (§1.1; whale-window binding);
+sim↔spec coherence verified (`reward.rs` Σ capped); §4.5 reframed as denominator **scope**
+(all-recorded lagged leading; claimed-only rejected); E-3 slash stays in denominator.

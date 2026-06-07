@@ -1,8 +1,10 @@
 //! Reward computation: the model under test.
 //!
 //! `work_P = Σ_{shards held} (1/R(shard)) · g(age(shard))` (age-weighted scarcity),
-//! then a per-pseudonym **banded plateau-cap** on work, then the competitive-share
-//! **`Σwork` servo** `reward_P = budget · capped_work_P / Σ capped_work`.
+//! then a per-pseudonym **banded plateau-cap** `Curve(work_P)` on work, then the
+//! competitive-share servo (REWARD_EMISSION_LEG.md §4.0 form C):
+//! `reward_P = budget · Curve(work_P) / Σ Curve(work_{P'})` — cap in numerator;
+//! Σ reward = budget; not `Curve(budget·work/Σwork)` (strands budget when cap binds).
 //!
 //! Three dilution channels, all present (the agent's marginal-reward calculation in
 //! `agent.rs` must see all three, per the spec's competitive-share correction):
@@ -116,6 +118,8 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         pseudonyms[a] = m;
     }
 
+    // Denominator is Σ Curve(work), not Σ raw work — form C (REWARD_EMISSION_LEG.md §4.0).
+    // Coherence check: spread/windowing verdicts transfer to spec only via this sum.
     let sum_capped: f64 = capped.iter().sum();
     let price = if sum_capped > 0.0 {
         p.budget / sum_capped
@@ -123,7 +127,7 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         0.0
     };
 
-    // Realized token reward = servo share = price · capped_work (= budget·capped/Σcapped).
+    // Realized token reward = price · capped_work (= budget·capped/Σcapped); Σ rewards = budget.
     let rewards: Vec<f64> = capped.iter().map(|&c| price * c).collect();
 
     RewardEval {

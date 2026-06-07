@@ -899,10 +899,12 @@ as everywhere else in the privacy design. Three layers must hold:
   coverage, so a capped staker declining shard *S* simply leaves *S* scarce, paying
   more, for someone else. The two compose into "every shard covered, spread across
   many holders, none holding everything."
-- **Shape: concave-to-plateau, and banded — for provability, not economics.** The
-  reward is `Curve(Σ_shards scarcity(shard) · proven_retention(P, shard))`. Every
-  input is **public** (P's challenge-pass record, public replication counts, public
-  curve parameters), so `Curve` is recomputed by verifiers. A smooth log/sqrt is a
+- **Shape: concave-to-plateau, and banded — for provability, not economics.** Per-shard
+  scarcity composes into `work_P = Σ scarcity·proven_retention`; the **genesis-pinned**
+  payout is `reward_P = budget · Curve(work_P) / Σ_{P'∈Market} Curve(work_{P'})` (cap in
+  the **numerator**, normalize by summed capped work — **not** `Curve(budget·work/Σwork)`,
+  which strands budget when caps bind). See [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
+  §4.0. Every input is **public**, so `Curve` and `Σwork` are recomputed by verifiers. A smooth log/sqrt is a
   bad choice (transcendental-in-circuit if ever proven; awkward to recompute
   deterministically across implementations); a **piecewise-linear banded curve** is
   right — a few work-bands with monotonically decreasing marginal rates, top band
@@ -960,9 +962,13 @@ and a fresh soundness pass before it ships:
 
 1. **Σwork supply-safety servo (does not come free — but is differencing-clean).**
    Today `ρ_e = budget_e/band_sum_e` guarantees `Σreward ≤ budget_e` *by
-   construction*; a per-staker plateau-cap bounds only per-staker reward, so the
-   aggregate is unbounded against budget. The servo is **forced, re-based from
-   `band_sum` onto `Σwork`**: `reward_P = budget · work_P / Σwork`. This concedes the
+   construction*; a per-staker plateau-cap alone bounds only per-staker *work credit*,
+   not payout, unless composed correctly with the servo. The genesis-pinned composition
+   is **`reward_P = budget · Curve(work_P) / Σ_{P'∈Market} Curve(work_{P'})`** — cap in
+   the numerator, market-only denominator (`Σwork` = sum of capped work; foundation
+   excluded per two-count table). This distributes the **full** `budget` when any market
+   archiver has positive credited work; a capped whale’s foregone share flows to others.
+   (Rejected: `Curve(budget·work/Σwork)` — strands budget when caps bind.) This concedes the
    earlier "locally computable" claim — a P's reward needs the public aggregate. But
    **the §14 differencing leak does *not* transfer:** `band_sum` leaked because it
    aggregated *confidential* amounts, so its deltas exposed hidden components.

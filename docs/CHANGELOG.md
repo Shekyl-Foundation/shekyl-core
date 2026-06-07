@@ -9,11 +9,23 @@
   `ALL` sub-claim uses windowed spread (L9 lesson). Keystone holds at
   `bond_rate* = 0.75` (graze survives); fails at ≥1.00 on both reads.
 
+- **docs: Spread thin-margin + §4.5 scope reframe (2026-06-07).**
+  `REWARD_EMISSION_LEG.md` §1.1: sprdW passes thinly (~0.001–0.007); whale window
+  worsens (0.581→0.594); sim↔spec coherence (`reward.rs` Σ capped). §4.5: denominator
+  scope (all-recorded lagged leading); E-3 slash stays in denominator. STAKER_ARCHIVAL_SIM
+  L1×L2 entanglement.
+
+- **docs: Reward-emission E-1–E-4 pins (2026-06-07).**
+  [`REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §4.0: genesis form **C**
+  `budget·Curve(work)/Σ Curve(work)` (reject post-servo cap); market-only `Σwork`;
+  per-epoch `good_through(E)`; drop consensus backing rotation; `Σwork` accumulator.
+  V3 gate-list + reward-curve prose reconciled.
+
 - **docs: Reward-emission leg spec — Layer 1 structural core (2026-06-06/07).**
   [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md):
-  three-channel reward stack (`scarcity → Curve plateau-cap → Σwork share`);
-  open §4.3 `Σwork` denominator fork (joint gate 1); ordinary-transfer admission
-  (no `C_stake`); four-layer sequencing; spread windowing verdict in §1.1.
+  three-channel reward stack; open §4.5 accumulator timing (joint gate 1);
+  ordinary-transfer admission (no `C_stake`); four-layer sequencing; spread
+  windowing verdict in §1.1.
 
 - **docs: Transfer-shaped admission as leading genesis staking form (2026-06).**
   Elevates §2.4 in `PHASE_2B_STAKE_LIFECYCLE.md`: principal↔`P` as ordinary FCMP++

@@ -18,7 +18,7 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — reward-emission leg: REWARD_EMISSION_LEG.md Layer 1 (open: Σwork denominator §4.3). Layer 2 keystone holds at bond_rate* (sprdW 2026-06-07). Remaining: FcmpMembershipOnly, gate 6, gate 7, byte aggregate (ii), doc rebase (iv)."
+    content: "Phase 2b design — reward-emission leg: REWARD_EMISSION_LEG.md (§4.0 form C; §4.5 all-recorded lagged leading). Spread sprdW thin margin — g(age) vs whale-window (L1×L2). Sim coherence verified. Remaining: gate 1 seal §4.5, FcmpMembershipOnly, gate 6/7, byte aggregate (ii), doc rebase (iv)."
     status: in_progress
   - id: phase2b_gate6_p_registration
     content: "Phase 2b design — gate 6: off-chain backing, HKDF P sub-wallet, firewall (network/timing/output/bond-funding), decorrelated unstake drain. No N_arch tag."
