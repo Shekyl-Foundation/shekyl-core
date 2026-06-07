@@ -46,7 +46,10 @@ pub(crate) fn apply_receive_attributions(
             continue;
         };
         let key = (td.tx_hash, td.internal_output_index);
-        let label_pt = residue.get(&key).copied().unwrap_or([0xFF; 8]);
+        let label_pt = residue
+            .get(&key)
+            .copied()
+            .unwrap_or_else(shekyl_crypto_pq::label::sentinel_plaintext);
         let attribution = match_inbound_attribution(
             cooperative_enabled,
             &label_pt,

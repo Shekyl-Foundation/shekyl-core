@@ -37,8 +37,14 @@ impl PaymentRequestId {
     ///
     /// Draws six bytes (u48 LE), retrying until a non-reserved value is drawn.
     pub fn new_random() -> Self {
+        const MAX_ATTEMPTS: u32 = 64;
         let mut buf = [0u8; 6];
+        let mut attempts = 0u32;
         loop {
+            attempts += 1;
+            if attempts > MAX_ATTEMPTS {
+                panic!("PaymentRequestId CSPRNG exhausted after {MAX_ATTEMPTS} attempts");
+            }
             if getrandom::getrandom(&mut buf).is_err() {
                 continue;
             }

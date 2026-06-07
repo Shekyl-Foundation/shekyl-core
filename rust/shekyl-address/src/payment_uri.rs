@@ -22,7 +22,7 @@ pub const fn rid_fits_wire(rid: u64) -> bool {
 /// Parsed cooperative payment URI (query parameters are optional except address).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaymentUri {
-    /// Bech32m-encoded primary address (may include `shekyl1` / segment separator).
+    /// Address string from the URI path (format not validated at parse time).
     pub address: String,
     pub amount_atomic: Option<u64>,
     pub label: Option<String>,
