@@ -251,7 +251,12 @@ pub struct SimConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct SubClaims {
     pub covered: bool,
+    /// Snapshot spread (final epoch): `gini_actor < 0.6 && max_actor_share < 0.20`.
     pub spread: bool,
+    /// Windowed spread (steady-state read): mean `gini_actor` and max `max_actor_share`
+    /// over the churn window — the L9 lesson applied to spread (snapshot can graze/fail
+    /// while the windowed mean passes, or vice versa).
+    pub spread_windowed: bool,
     pub deep_history: bool,
     pub churn_stable: bool,
     pub all_pass: bool,
@@ -375,6 +380,10 @@ pub struct ScenarioResult {
     /// **Oldest-band audit cadence** (L14): the challenge rate the single oldest (coldest,
     /// most-irreplaceable) shard needs — the worst oversight point (P3 tail).
     pub audit_oldest_cadence: f64,
+    /// Actor Gini, windowed mean over the churn window (steady-state spread read).
+    pub gini_actor_window: f64,
+    /// Max single-actor share, peak over the churn window (conservative spread read).
+    pub max_actor_share_window: f64,
     pub claims: SubClaims,
     /// Compact time series for the four headline quantities (per epoch).
     pub series_frac_under: Vec<f64>,
@@ -505,6 +514,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut series_frac_under = Vec::with_capacity(cfg.epochs);
     let mut series_deep_frac_under = Vec::with_capacity(cfg.epochs);
     let mut series_gini_actor = Vec::with_capacity(cfg.epochs);
+    let mut series_max_actor_share = Vec::with_capacity(cfg.epochs);
     let mut series_changes = Vec::with_capacity(cfg.epochs);
 
     let mut last_eval = evaluate(&world, &rp, price);
@@ -639,6 +649,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         series_frac_under.push(last_metrics.frac_under_target);
         series_deep_frac_under.push(last_metrics.deep_frac_under_target);
         series_gini_actor.push(last_metrics.gini_actor);
+        series_max_actor_share.push(last_metrics.max_actor_share);
         series_changes.push(changes);
         series_old_under.push(
             last_metrics
@@ -1006,13 +1017,28 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .copied()
         .fold(0.0_f64, f64::max);
 
+    // Spread: snapshot (final epoch) vs windowed steady-state read (L9 lesson).
+    let gini_window = &series_gini_actor[series_gini_actor.len().saturating_sub(w)..];
+    let gini_actor_window = if w > 0 {
+        gini_window.iter().sum::<f64>() / w as f64
+    } else {
+        last_metrics.gini_actor
+    };
+    let mas_window = &series_max_actor_share[series_max_actor_share.len().saturating_sub(w)..];
+    let max_actor_share_window = if w > 0 {
+        mas_window.iter().copied().fold(0.0_f64, f64::max)
+    } else {
+        last_metrics.max_actor_share
+    };
+
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
     let covered = last_metrics.frac_under_target < 0.05 && last_metrics.min_r >= 1;
     let spread = last_metrics.gini_actor < 0.6 && last_metrics.max_actor_share < 0.20;
+    let spread_windowed = gini_actor_window < 0.6 && max_actor_share_window < 0.20;
     let deep_history = last_metrics.deep_frac_under_target < 0.10;
     let churn_stable = churn < 0.05;
-    let all_pass = covered && spread && deep_history && churn_stable;
+    let all_pass = covered && spread_windowed && deep_history && churn_stable;
 
     ScenarioResult {
         name: cfg.name.clone(),
@@ -1049,9 +1075,12 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         audit_oversight_credited,
         audit_deep_share,
         audit_oldest_cadence,
+        gini_actor_window,
+        max_actor_share_window,
         claims: SubClaims {
             covered,
             spread,
+            spread_windowed,
             deep_history,
             churn_stable,
             all_pass,

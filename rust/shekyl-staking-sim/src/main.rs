@@ -39,7 +39,9 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("Model: docs/design/V3_STAKER_ARCHIVAL.md; plan: docs/design/STAKER_ARCHIVAL_SIM.md");
     eprintln!();
     eprintln!("Sub-claims (stated thresholds): covered = frac_under_target<0.05 & min_R>=1;");
-    eprintln!("  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, the whale test);");
+    eprintln!("  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, final-epoch SNAPSHOT);");
+    eprintln!("  sprdW = same thresholds on WINDOWED read (mean gini, peak max_share over churn_window);");
+    eprintln!("  ALL uses sprdW not sprd (L9 lesson: steady-state read is the discipline gate).");
     eprintln!("  deep_history = deep_frac_under_target<0.10; churn_stable = churn<0.05.");
     eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
     eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
@@ -121,7 +123,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -132,8 +134,11 @@ fn print_summary(results: &[ScenarioResult]) {
         "deep_und",
         "gini_act",
         "churn",
+        "giniW",
+        "mxSW",
         "cov",
         "sprd",
+        "sprdW",
         "deep",
         "chrn",
         "ALL",
@@ -174,7 +179,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -185,8 +190,11 @@ fn print_summary(results: &[ScenarioResult]) {
             m.deep_frac_under_target,
             m.gini_actor,
             r.churn,
+            r.gini_actor_window,
+            r.max_actor_share_window,
             yn(r.claims.covered),
             yn(r.claims.spread),
+            yn(r.claims.spread_windowed),
             yn(r.claims.deep_history),
             yn(r.claims.churn_stable),
             yn(r.claims.all_pass),
