@@ -47,6 +47,7 @@ pub enum PaymentUriError {
 }
 
 fn percent_encode_component(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
@@ -54,8 +55,9 @@ fn percent_encode_component(s: &str) -> String {
                 out.push(b as char);
             }
             _ => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "%{b:02X}");
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0x0f) as usize] as char);
             }
         }
     }
