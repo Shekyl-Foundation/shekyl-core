@@ -244,17 +244,45 @@ estimates; the wallet should consume them, not invent them.
 
 ### Subaddress hierarchy: flat, no account level
 
-The subaddress index space is flat: `SubaddressIndex(u32)`. There is
-no account level. The RPC contract surfaces subaddresses as `{"index":
-u32, "label": Option<String>}`, not `{"account": u32, "index": u32}`.
+**Superseded 2026-06-07 (FA-7).** End-state 5 in
+[`docs/design/SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md) §5.7
+(closed R2-F2, 2026-05-31) replaces this decision. V3.0 ships **one primary
+address per account**; no `SubaddressIndex` user-facing surface; no
+`create_subaddress`. Invoice attribution uses **payment requests** +
+mandatory wire `enc_label` (5-T substrate). Optional seed-derived
+multi-account (T2) is P3, not V3.0. See the 2026-06-07 entry below and
+[`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
+(cross-cutting decisions, Phase 1–2c).
 
-**Why drop the account level?** Most users use one account; the
-two-level hierarchy is wallet2 baggage from the era before
-subaddresses existed. Exchanges that need stronger isolation than
-"subaddresses share keys" use multiple wallet files (which have
-independent keys), which is genuinely stronger isolation than
-account-level subaddresses ever provided. Locking the flat shape now
-keeps the JSON contract simple for the next decade.
+---
+
+### Receive addressing: End-state 5 — one primary, payment requests (2026-06-07)
+
+**Decision.** One reusable primary address per account at V3.0. No
+subaddresses. Merchants create **payment requests** (`PaymentRequest` in
+`BookkeepingBlock`) and share `shekyl:<primary>?amount=&label=&expiry=`
+URIs. Inbound transfers gain `ReceiveAttribution` (Tier 1–4 per
+`R2_F2_WALKTHROUGH.md`). Wire `enc_label` is always present (FA-11);
+sentinel-only wallets default to Tier-4 unattributed on the label axis
+until the product flag enables meaningful REQUEST tags.
+
+**Supersedes.** "Subaddress hierarchy: flat, no account level" (above) and
+the Phase 1–2 `create_subaddress` / flat-`SubaddressIndex` plan in
+`WALLET_REWRITE_PLAN.md`.
+
+**Alternatives considered.** Flat subaddress namespace (prior plan);
+per-subaddress KEM (Option B in `SUBADDRESS_UNDER_PQC.md` §4); Monero-style
+subaddress registry + `derive_subaddress` (End-state 1 — rejected).
+
+**Rationale.** ML-KEM has no ECDH-style homomorphism; per-subaddress KEM
+implies O(N) scan. Account-level KEM + classical subaddress diversity
+shares one `ml_kem_ek` across indices (address-byte linkability). End-state
+5 deletes subaddress machinery entirely; on-chain privacy stays at the
+output layer; J2/J3 moves off-chain to payment requests. Pit-of-success UX:
+"reuse is private — paste anywhere" (§5.7.8).
+
+**Links.** `SUBADDRESS_UNDER_PQC.md` §5.7.7, §5.7.9; FA-2 (delete impl),
+FA-8 (payment-request persistence + reconcile).
 
 ### `RefreshHandle`: cancel-on-drop RAII, one-at-a-time, scanner checkpoints between blocks
 
