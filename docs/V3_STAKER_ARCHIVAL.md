@@ -767,10 +767,11 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
   cadence (prove backing, **no** key image in spent set). **No published
   reward-dedup tag** — `N_arch = x·G_arch` is **rejected** (stake-keyed tags
   collide under shared admission stake and do not dedup epochs). **Double-claim
-  prevention** = per-`P` **claimed-epoch bitmap** on the bond record (same
-  `EpochSet` class as [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
-  §3.3.2), reorg-reverted with `pop_block`. **`ν = H(P, shard)`** (gate 3) stays
-  separate — counting only.
+  prevention** = per-`P` **claimed-settlement-epoch set** on the bond record
+  (`check_and_set(E)` semantics; sparse absolute epochs — see
+  [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6), reorg-reverted
+  with `pop_block`. **`ν = H(P, shard)`** (gate 3) stays separate — counting only.
+  **Wire + verifier:** [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md).
 - **Intra-epoch unbacked window:** between emissions (~one settlement epoch),
   backing is not re-verified on-chain; `P` may spend admission principal after a
   payout. This is safe **only because challenge failure slashes bond** regardless

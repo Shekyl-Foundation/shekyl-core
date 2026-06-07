@@ -125,12 +125,13 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 
 | # | Condition | Disposition |
 |---|-----------|-------------|
-| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | Opens reward-emission leg spec next; confirms crypto bill is membership-only control only |
+| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — wire + verifier contract |
 | (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii) |
 | (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | Bonds-only vs soft MIN transfer; not "optional resilience" |
 
-**Next design artifact:** reward-emission leg wire (state-based dedup baked in) —
-confirm nothing still forces a published tag.
+**Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (2026-06-06).
+Close-condition (i) wire + verifier contract. Remaining before Stage 3: implement
+membership-only verify, bond DB, KATs; close (ii)–(iii).
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -461,7 +462,7 @@ are archival-internal (interface only).
 | Item | Gate / anchor | Notes |
 |------|---------------|-------|
 | **Admission principal** | **Open — Round 4 + gate 7** | Soft MIN transfer to `P` vs bonds-only; **re-prices locked supply** — not optional |
-| **Reward emission wire** | **Next spec** (close-condition i) | Membership-only backing + public work payload + mint; epoch dedup on bond record |
+| **Reward emission wire** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** | Membership-only backing + public work payload + mint; epoch dedup on bond record |
 | **Off-chain backing presentation** | Gate 6 | Peers see backing before first on-chain emission |
 | **Per-shard bond lifecycle + slash hook** | Gate 4 (**pinned**); intra-epoch honesty anchor | Slash independent of admission spend |
 | **Reward receipt + unstake drain** | Gate 6 | Stealth outputs; **decorrelated** principal return |
@@ -536,8 +537,9 @@ wallet §5 forward-rebuild adapts.
 **Retired for genesis:** 3C subtree; §6.4 claim wire; `G_S` / `G_arch` / `N_arch`
 emission tags; cleartext stake/claim C++ paths.
 
-**Open before Stage 3:** §2.4 close-conditions (i)–(iii); reward-emission byte wire;
-`P` HKDF domain; `Σwork` hook (gate 1).
+**Open before Stage 3:** §2.4 close-conditions **(ii)–(iii)**; reward-emission
+**implementation** per [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md); `P` HKDF
+domain (gate 6); `Σwork` hook (gate 1).
 
 ### 2.4 Transfer-shaped admission (leading genesis form)
 
@@ -612,8 +614,8 @@ image; reward leg does not.
 See revision note 2026-06 — conditions (i) reward-emission spec with state dedup,
 (ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing.
 
-**Next:** open **reward-emission leg** design with state-based dedup; verify nothing
-still forces a published tag.
+**Spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md). Implementation + (ii) sim
++ (iii) admission principal remain before Stage 3.
 
 ---
 
@@ -2554,8 +2556,8 @@ status block:
    multi-`P` is hygiene-only.
 
 **Genesis Round 3 closure:** F-ARCHIVAL gate-list + **§2.4 close-conditions (i)–(iii)** +
-gate 6 to soundness-pass depth (Tier 1 step 3). Not F0 bucketing. **Next spec:**
-reward-emission leg with state-based dedup.
+gate 6 to soundness-pass depth (Tier 1 step 3). Not F0 bucketing. **(i) spec:**
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md).
 
 ##### F-INFLATION — split T8 on the **retired** entitlement substrate (historical wargame record)
 

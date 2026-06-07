@@ -2249,8 +2249,9 @@ where a decision is provisional.
 ratification requires three sim/design close-conditions at **equal severity**: **(ii)**
 per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence; **(iii)**
 admission-principal decision with **gate 7** locked-supply re-pricing when bonds become
-the sole sink. Iteration 5 below is the gate-7 instrument; add a dedicated sweep for
-**(ii)** when the reward-emission wire pins cadence.
+the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned:**
+`SETTLEMENT_EPOCH_BLOCKS = 10_000`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` per
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §3 — add proof-size sweep axis next.
 
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|

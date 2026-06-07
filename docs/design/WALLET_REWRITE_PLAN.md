@@ -18,8 +18,8 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — reward-emission leg: membership-only control, bond-record EpochSet dedup, public work payload, mint to P stealth. Confirm no published tag forces remain."
-    status: pending
+    content: "Phase 2b design — reward-emission leg: docs/design/REWARD_EMISSION_LEG.md (close-condition i). Remaining: implement membership-only verify, bond DB, KATs; sim (ii); admission (iii)."
+    status: completed
   - id: phase2b_gate6_p_registration
     content: "Phase 2b design — gate 6: off-chain backing, HKDF P sub-wallet, firewall (network/timing/output/bond-funding), decorrelated unstake drain. No N_arch tag."
     status: pending

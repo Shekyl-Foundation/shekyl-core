@@ -4,6 +4,14 @@
 
 ### Changed
 
+- **docs: Reward-emission leg spec — PHASE_2B close-condition (i) (2026-06-06).**
+  New [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md):
+  `txin_archival_reward_emission` wire, public work + loud mint, membership-only
+  backing (no key image), bond-record `check_and_set(E)` dedup (sparse absolute
+  settlement epochs — not published `N_arch`/`N_S`), registration fusion, reorg
+  rules, explicit rejection of claim/entitlement surfaces. Cross-refs in
+  `PHASE_2B_STAKE_LIFECYCLE.md`, `V3_STAKER_ARCHIVAL.md`, `STAKER_ARCHIVAL_SIM.md`.
+
 - **docs: Transfer-shaped admission as leading genesis staking form (2026-06).**
   Elevates §2.4 in `PHASE_2B_STAKE_LIFECYCLE.md`: principal↔`P` as ordinary FCMP++
   main-tree transfers; bond + reward emission as the two irreducible special
