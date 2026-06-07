@@ -907,11 +907,23 @@ mod tests {
     /// entirely (Stage-2 stub), so the empty shape suffices to exercise the
     /// dispatch + error path.
     fn dummy_tx_to_sign() -> TxToSign {
-        use crate::engine::traits::key::FcmpPlusPlusContext;
+        use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective};
+        use shekyl_tx_builder::TreeContext;
         TxToSign {
             inputs: Vec::new(),
             outputs: Vec::new(),
-            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+            fcmp_plus_plus_context: FcmpPlusPlusContext {
+                tree: TreeContext {
+                    reference_block: [0; 32],
+                    tree_root: [0; 32],
+                    tree_depth: 1,
+                },
+            },
+            fee: FeeDirective {
+                fee_no_change: 0,
+                fee_with_change: 0,
+                dust_threshold: 0,
+            },
         }
     }
 

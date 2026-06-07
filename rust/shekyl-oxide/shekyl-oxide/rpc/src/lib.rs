@@ -28,6 +28,9 @@ use shekyl_oxide::{
 //   /src/wallet/wallet2.cpp#L121
 const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 
+/// Phase 2a canonical dust threshold (§3.10.2).
+pub mod tx_fee;
+
 // Monero errors if more than 100 is requested unless using a non-restricted RPC
 // https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
 //   /src/rpc/core_rpc_server.cpp#L75

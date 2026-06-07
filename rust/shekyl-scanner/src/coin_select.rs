@@ -9,6 +9,7 @@
 //! fewer metadata fingerprints are preferred together to reduce on-chain
 //! clustering of the wallet's activity.
 
+use shekyl_rpc::{tx_fee, FeeRate};
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;
@@ -64,11 +65,14 @@ pub struct SelectionCriteria {
 
 impl Default for SelectionCriteria {
     fn default() -> Self {
+        // Reference economy rate for default criteria; callers with a live
+        // fee snapshot should set `dust_threshold` via `tx_fee::dust_threshold(&rate)`.
+        let reference_rate = FeeRate::new(1, 1).expect("reference fee rate is non-zero");
         SelectionCriteria {
             target_amount: AtomicUnits::ZERO,
             min_inputs: 1,
             max_inputs: 16,
-            dust_threshold: AtomicUnits::from_raw(1_000_000), // 0.001 SKL
+            dust_threshold: AtomicUnits::from_raw(tx_fee::dust_threshold(&reference_rate)),
         }
     }
 }

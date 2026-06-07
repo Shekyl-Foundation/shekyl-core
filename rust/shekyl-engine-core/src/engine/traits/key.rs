@@ -73,6 +73,7 @@ use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_engine_state::SubaddressIndex;
+use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -374,8 +375,8 @@ pub(crate) struct SubaddressKeyPair {
 /// - [`Self::source_ciphertext`] is the on-chain hybrid X25519 +
 ///   ML-KEM-768 ciphertext the scanner detected for the output;
 ///   ciphertexts are public.
-/// - [`Self::output_index`] is the output's position within its
-///   transaction; public.
+/// - `output_index` is **not** carried: it is recovered in-actor from
+///   [`Self::handle`] alongside `combined_ss` (refinement C, §3.9).
 ///
 /// The bundle of derived per-input secrets is computed inside the
 /// implementor's [`KeyEngine::sign_transaction`] body — it never
@@ -402,19 +403,19 @@ pub(crate) struct TxInputSigningContext {
     /// workflow-internal handle table.
     pub handle: OutputHandle,
     /// On-chain hybrid X25519 + ML-KEM-768 ciphertext for this input.
-    /// Re-decapped inside the implementor (via
-    /// [`recover_combined_ss`]) to reconstruct the combined shared
-    /// secret without crossing the trait boundary.
-    ///
-    /// Public on-chain data; not secret.
-    ///
-    /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
     pub source_ciphertext: HybridCiphertext,
-    /// Output position within the containing transaction. Binds the
-    /// engine-internal PQC key derivation to a specific output
-    /// (matches `SpendInput::output_index` in `shekyl-tx-builder`).
-    /// Public on-chain data.
-    pub output_index: u64,
+    /// Compressed output public key (on-chain).
+    pub output_key: [u8; 32],
+    /// Pedersen commitment (on-chain).
+    pub commitment: [u8; 32],
+    /// PQC leaf hash `H(pqc_pk)` for this output.
+    pub h_pqc: [u8; 32],
+    /// Sibling leaf chunk for FCMP++ membership proof.
+    pub leaf_chunk: Vec<LeafEntry>,
+    /// Selene (C1) branch layers, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios (C2) branch layers, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
 }
 
 // CLIPPY: future-proofed for PR 5's potential re-acquisition of secret-bearing
@@ -427,7 +428,12 @@ impl std::fmt::Debug for TxInputSigningContext {
         f.debug_struct("TxInputSigningContext")
             .field("handle", &self.handle)
             .field("source_ciphertext", &self.source_ciphertext)
-            .field("output_index", &self.output_index)
+            .field("output_key", &"[REDACTED]")
+            .field("commitment", &"[REDACTED]")
+            .field("h_pqc", &"[REDACTED]")
+            .field("leaf_chunk", &format!("{} entries", self.leaf_chunk.len()))
+            .field("c1_layers", &format!("{} layers", self.c1_layers.len()))
+            .field("c2_layers", &format!("{} layers", self.c2_layers.len()))
             .finish()
     }
 }
@@ -545,12 +551,12 @@ impl std::fmt::Debug for SourceSecretsBundle {
 pub(crate) struct TxToSign {
     /// Per-input signing context (one entry per spend input).
     pub inputs: Vec<TxInputSigningContext>,
-    /// Per-output context (commitment, amount-blinding factor,
-    /// destination subaddress kem_pk). Pinned in PR 5.
+    /// Per-output context (payments + optional change intent).
     pub outputs: Vec<TxOutputContext>,
-    /// FCMP++ transaction-level context (reference block, anchor
-    /// data, etc.). Pinned in PR 5.
+    /// FCMP++ transaction-level tree snapshot (C1).
     pub fcmp_plus_plus_context: FcmpPlusPlusContext,
+    /// Fee variant directive (F4/F8, §3.9).
+    pub fee: FeeDirective,
 }
 
 // CLIPPY: `inputs` redacts as a whole at the top level — defence in
@@ -568,21 +574,72 @@ impl std::fmt::Debug for TxToSign {
             .field("inputs", &"[REDACTED]")
             .field("outputs", &self.outputs)
             .field("fcmp_plus_plus_context", &self.fcmp_plus_plus_context)
+            .field("fee", &self.fee)
             .finish()
     }
 }
 
-/// Per-output signing context. **Forward declaration; pinned in PR 5
-/// (`PendingTxEngine`).**
+/// Recipient destination placeholder (2c fills KEM construction).
 #[derive(Debug)]
 #[non_exhaustive]
-pub(crate) struct TxOutputContext {}
+pub(crate) struct OutputDestination {
+    /// Canonical encoded recipient address from the build request.
+    #[allow(dead_code)] // 2a-3 recipient output construction reads this.
+    pub address: String,
+}
 
-/// FCMP++ transaction-level signing context. **Forward declaration;
-/// pinned in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
+/// Public fee variant directive (§3.9). All fields are network-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub(crate) struct FcmpPlusPlusContext {}
+pub(crate) struct FeeDirective {
+    pub fee_no_change: u64,
+    pub fee_with_change: u64,
+    pub dust_threshold: u64,
+}
+
+/// Per-output signing context (§3.9). Deliberately **not** `Clone`.
+#[derive(ZeroizeOnDrop)]
+#[non_exhaustive]
+pub(crate) enum TxOutputContext {
+    /// User payment. `amount` is the only confidential field.
+    Payment {
+        #[zeroize(skip)]
+        #[allow(dead_code)] // 2a-3 recipient output construction reads `dest.address`.
+        dest: OutputDestination,
+        amount: u64,
+    },
+    /// Change-to-self intent (no amount on the message).
+    Change {
+        #[zeroize(skip)]
+        subaddress_index: SubaddressIndex,
+    },
+}
+
+impl std::fmt::Debug for TxOutputContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Payment { .. } => f
+                .debug_struct("Payment")
+                .field("dest", &"[REDACTED]")
+                .field("amount", &"[REDACTED]")
+                .finish(),
+            Self::Change {
+                subaddress_index, ..
+            } => f
+                .debug_struct("Change")
+                .field("subaddress_index", subaddress_index)
+                .finish(),
+        }
+    }
+}
+
+/// FCMP++ transaction-level signing context (one tree per tx, C1).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub(crate) struct FcmpPlusPlusContext {
+    #[allow(dead_code)] // 2a-3 `sign_transaction` consumes `tree`.
+    pub tree: TreeContext,
+}
 
 /// Output of [`KeyEngine::sign_transaction`].
 ///
@@ -974,24 +1031,25 @@ mod tests {
     }
 
     #[test]
-    fn tx_input_signing_context_debug_renders_public_fields() {
-        // Post-M3b: `TxInputSigningContext` carries only public on-chain
-        // material. The manual `Debug` impl renders all three fields
-        // verbatim; secret-byte sentinels MUST NOT appear (because the
-        // type does not own any secret-bearing fields).
+    fn tx_input_signing_context_debug_redacts_on_chain_material() {
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
             source_ciphertext: sentinel_ciphertext(),
-            output_index: 7,
+            output_key: [0x44; 32],
+            commitment: [0x55; 32],
+            h_pqc: [0x66; 32],
+            leaf_chunk: Vec::new(),
+            c1_layers: Vec::new(),
+            c2_layers: Vec::new(),
         };
         let rendered = format!("{ctx:?}");
         assert!(
-            rendered.contains("output_index: 7"),
-            "output_index missing: {rendered}"
-        );
-        assert!(
             rendered.contains("source_ciphertext"),
             "source_ciphertext label missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "on-chain material must be redacted as [REDACTED]: {rendered}"
         );
         assert_all_sentinels_redacted(&rendered);
     }
@@ -1004,25 +1062,37 @@ mod tests {
         // Rationale: PR 5 may re-acquire secret-bearing fields on
         // the per-input shape; pre-establishing the redaction
         // discipline is cheaper than re-establishing it later.
+        use shekyl_tx_builder::TreeContext;
+
         let tx = TxToSign {
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
                 source_ciphertext: sentinel_ciphertext(),
-                output_index: 7,
+                output_key: [0x44; 32],
+                commitment: [0x55; 32],
+                h_pqc: [0x66; 32],
+                leaf_chunk: Vec::new(),
+                c1_layers: Vec::new(),
+                c2_layers: Vec::new(),
             }],
             outputs: vec![],
-            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+            fcmp_plus_plus_context: FcmpPlusPlusContext {
+                tree: TreeContext {
+                    reference_block: [0; 32],
+                    tree_root: [0; 32],
+                    tree_depth: 1,
+                },
+            },
+            fee: FeeDirective {
+                fee_no_change: 0,
+                fee_with_change: 0,
+                dust_threshold: 0,
+            },
         };
         let rendered = format!("{tx:?}");
         assert!(
             rendered.contains("[REDACTED]"),
             "TxToSign must redact inputs, rendered = {rendered}"
-        );
-        // The blanket redaction also hides the public output_index
-        // value carried inside `inputs`; this is intentional.
-        assert!(
-            !rendered.contains("output_index: 7"),
-            "blanket redaction must hide nested fields: {rendered}"
         );
     }
 }

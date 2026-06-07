@@ -57,6 +57,8 @@ use shekyl_units::AtomicUnits;
 
 use super::error::FeeEstimatorError;
 use super::refresh::LedgerSnapshot;
+use super::traits::FeeEstimates;
+use super::tx_fee_model::{converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight};
 
 /// Caller-supplied fee preference for the
 /// `PendingTxEngine::build` pipeline.
@@ -111,6 +113,11 @@ pub enum FeePriority {
 ///   selector's `SelectedOutputs::indices.len()`). Used to
 ///   size the projected transaction's inputs contribution
 ///   to the fee calculation.
+/// - `output_count`: projected output count for this fee
+///   variant (`N` payments or `N+1` with change intent).
+/// - `fee_snapshot`: atomic §3.3 `FeeEstimates` fetched once
+///   per build; the sync estimator reads rates from here.
+/// - `tree_depth`: FCMP++ tree depth for weight prediction.
 ///
 /// The estimator does not need access to the recipient
 /// addresses, output amounts, or any per-recipient
@@ -131,6 +138,12 @@ pub struct FeeEstimationContext<'a> {
     /// by estimators that size the fee against the projected
     /// transaction shape.
     pub input_count: usize,
+    /// Projected output count for this fee variant.
+    pub output_count: usize,
+    /// Single-RPC fee snapshot for the build (§3.3 / PF1).
+    pub fee_snapshot: FeeEstimates,
+    /// Tree depth for structural weight prediction.
+    pub tree_depth: u8,
 }
 
 /// Trait isolating fee-estimation strategy from the
@@ -230,15 +243,15 @@ impl FeeEstimator for DaemonFeeEstimator {
 
     fn estimate_fee(
         &self,
-        _priority: FeePriority,
-        _context: &FeeEstimationContext<'_>,
+        priority: FeePriority,
+        context: &FeeEstimationContext<'_>,
     ) -> Result<AtomicUnits, FeeEstimatorError> {
-        // Phase 1 stub: returns STUB_FEE_ATOMIC_UNITS
-        // verbatim. Matches the pre-PR-5
-        // `build_pending_tx_in_state` body's `let fee =
-        // STUB_FEE_ATOMIC_UNITS;` line. Phase 2a wires daemon
-        // `get_fee_estimates` against `_priority` and `_context`.
-        Ok(super::pending::STUB_FEE_ATOMIC_UNITS)
+        let rate = fee_rate_for_priority(priority, &context.fee_snapshot)?;
+        let n_in = context.input_count.max(1);
+        let n_out = context.output_count.max(1);
+        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, context.tree_depth, 0));
+        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, seed);
+        Ok(AtomicUnits::from_raw(fee))
     }
 }
 
@@ -250,11 +263,12 @@ mod tests {
     //! Coverage scope (per `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
     //! §7.X C4γ):
     //!
-    //! - `daemon_fee_estimator_phase1_stub_returns_constant`
-    //!   — regression: any priority + context yields
-    //!   [`STUB_FEE_ATOMIC_UNITS`](super::super::pending::STUB_FEE_ATOMIC_UNITS).
+    //! - `daemon_fee_estimator_returns_positive_fee_from_snapshot`
+    //!   — regression: structural estimator yields a positive fee
+    //!   from a fixed §3.3 snapshot.
     use super::*;
-    use crate::engine::pending::STUB_FEE_ATOMIC_UNITS;
+    use crate::engine::traits::FeeEstimates;
+    use shekyl_rpc::FeeRate;
     use std::num::NonZeroU64;
 
     fn dummy_context() -> LedgerSnapshot {
@@ -277,16 +291,27 @@ mod tests {
         LedgerSnapshot::from_ledger(&block)
     }
 
+    fn test_fee_snapshot() -> FeeEstimates {
+        FeeEstimates {
+            economy: FeeRate::new(1, 1).expect("economy fee rate is non-zero"),
+            standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
+            priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
+            quantization_mask: 1,
+        }
+    }
+
     #[test]
-    fn daemon_fee_estimator_phase1_stub_returns_constant() {
+    fn daemon_fee_estimator_returns_positive_fee_from_snapshot() {
         let ledger = dummy_context();
+        let snapshot = test_fee_snapshot();
         let context = FeeEstimationContext {
             ledger: &ledger,
             recipient_count: 1,
             input_count: 1,
+            output_count: 2,
+            fee_snapshot: snapshot,
+            tree_depth: 1,
         };
-        // Phase 1 stub invariant: returns STUB_FEE_ATOMIC_UNITS
-        // for every priority variant.
         for priority in [
             FeePriority::Economy,
             FeePriority::Standard,
@@ -295,10 +320,10 @@ mod tests {
         ] {
             let fee = DaemonFeeEstimator
                 .estimate_fee(priority, &context)
-                .expect("Phase 1 stub returns Ok unconditionally");
-            assert_eq!(
-                fee, STUB_FEE_ATOMIC_UNITS,
-                "Phase 1 stub returns STUB_FEE_ATOMIC_UNITS regardless of priority"
+                .expect("estimator returns Ok for valid snapshot");
+            assert!(
+                fee > AtomicUnits::ZERO,
+                "priority {priority:?} yields a positive fee"
             );
         }
     }
