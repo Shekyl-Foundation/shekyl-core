@@ -1135,12 +1135,17 @@ sustainability is unaffected by the recalibration.
   `58407f565`). **FA-2 subaddress deletion**
   ([#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)):
   End-state 5 scanner, bookkeeping v3, ledger v5, `WALLET_LEDGER_FORMAT_VERSION`
-  5 — open PR, lands on `dev` before FA-8. **FA-8 payment requests + reconcile**
-  ([#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)): stacked on
-  FA-2, lands after #112 merges. **Does not
+  5 — open PR, lands on `dev` before FA-8. **FA-8 payment requests +
+  cooperative attribution**
+  ([#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)): bookkeeping
+  v4, ledger v6, `ReceiveAttribution`, inbound merge matching, `shekyl-address`
+  URI parse, outbound `construct_output_labeled` + C++ send-path hook; product
+  flag `operational.cooperative_payment_requests` / env
+  `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` (default off) — stacked on FA-2, lands
+  after #112 merges. **Does not
   block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
   (Phase 2c / 4b, not cleanup):** Rust cooperative outbound in `build_pending_tx`;
-  `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry;
+  `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry enforcement;
   `shekyl-wallet-rpc` methods (not C++ `wallet2_ffi`); GUI reconcile. See
   `WALLET_REWRITE_PLAN.md` End-state 5 sequencing table.
 

@@ -4,6 +4,19 @@
 
 ### Added
 
+- **wallet: FA-8 — payment requests + cooperative attribution (V3.0
+  substrate).** `PaymentRequest` / `ReceiveAttribution` types;
+  `BookkeepingBlock` v4 (`payment_requests`); `TransferDetails.receive_attribution`;
+  ledger block v6 / `WALLET_LEDGER_FORMAT_VERSION` 6 (paired
+  `wallet_ledger.snap`). Inbound: after scan merge, classify
+  decrypted label (sentinel vs REQUEST) and match open requests when
+  `operational.cooperative_payment_requests` or env
+  `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS=1` (default off). Outbound:
+  `shekyl-address` payment URI parse/format; `construct_output_with_label_plaintext`;
+  C++ send path echoes REQUEST via `shekyl_construct_output_labeled` when
+  destination `original` is a `shekyl:…?rid=` URI. CLI stubs: `request new`,
+  `requests list`, `history incoming --unattributed`.
+
 - **archival: timing cluster pinned + reorg/retention split (2026-06-07).**
   [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md): `W=26`,
   `RETENTION_HORIZON_BLOCKS=420_000`, `ARCHIVAL_REORG_DEPTH_BLOCKS=720`,
