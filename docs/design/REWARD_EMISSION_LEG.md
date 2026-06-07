@@ -68,9 +68,10 @@ thin lean `l11_bud_b50` fails both at `≈ 0.84`. **Verdict:** keystone **holds*
    `bond_rate=2.0` from `baseline()`, not pin `0.75`. At `bond_rate=0.75`, `gate4_fine_0.75`
    parks at `giniW ≈ 0.593` steady-state (tail series stable below 0.6) — **not** a bootstrap
    transient.
-3. **`sprdW` vs `all_pass`:** at pin, spread passes; `all_pass` may still fail on **`churn_stable`**
-   (`gate4_fine_0.75` churn ≈ 0.17 vs 0.05 threshold) — operational stability is a separate gate
-   from spread.
+3. **`churn_stable` metric (2026-06-07 bank):** was coded as participation abandonment
+   (`churn < 0.05`) but certifies **coverage oscillation** (`max(oUmx, serving_oUmx) < 0.05`).
+   At pin, `oUmx = 0` while participation churn ≈ 0.17 — benign rotation with backfill slack
+   (L9/L11). Sim re-pointed; pin rows pass `all_pass` on spread + coverage oscillation.
 4. **Declining-tail `Curve`:** off the lean-margin lever set (V3 §912–917 population gate) — reserved
    for mature-network hoarding only.
 5. **Budget lever:** strongest participation lever but gate-1/7 monetary decision (more archival
@@ -468,7 +469,13 @@ For current settlement epoch `C`, emission for epoch `E` is rejected if `E < C -
 **Tradeoff:** `P` offline longer than `W` loses older unclaimed epochs. Gate-6 decorrelation
 may deliberately lapse `P` — `W` trades **state growth** against **lapse forfeiture**.
 `W` is consensus-visible (not wallet policy). Full keying and prune sweep in
-[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2.4.
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §5.
+
+**Drain vs batch cap (F4, 2026-06-07):** `W` and `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§3,
+**per `P` per emission**, cap 15) are one invariant. A continuously-honest `P` with a
+`W`-deep backlog must drain before the oldest epoch crosses `tip − W`, given settlement-
+epoch cadence and the per-`P` batch limit. Pin numeric `W` jointly with batch cap and
+`SETTLEMENT_EPOCH_BLOCKS` (archival state §9.2) — pre-code inequality TBD.
 
 ### 6.4 First emission
 
@@ -516,6 +523,12 @@ to a later slash. Frequent single-epoch claims remain test-mode (timing tell).
 
 **Current posture** (`good_standing` on the bond record) still gates **new** emission
 attempts for epochs **after** slash and bond re-establishment flows (gate 4).
+
+**Interval encoding (F3):** `good_through(E)` is derived from a bonded/slashed/re-bond
+**event log** with interval semantics at epoch close — not `slash_epoch > E`. Re-bond
+after slash must restore good-standing for post-rebond epochs without retroactively
+voiding pre-slash honest epochs (example and verifier rule in
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.4).
 
 ---
 

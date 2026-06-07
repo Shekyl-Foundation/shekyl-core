@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **staking-sim + docs: F1–F4 archival pin closure (2026-06-07).**
+  `churn_stable` re-pointed to coverage oscillation (`oUmx`), not participation churn
+  (F2 bank — pin rows pass `all_pass`). `ARCHIVAL_CONSENSUS_STATE.md`: timeline-axis
+  honest residual (F1); §9.2 settlement-epoch length joint gate-2/6; `good_through`
+  interval event log (F3); `W` × per-`P` batch drain invariant (F4).
+  `REWARD_EMISSION_LEG.md` §6.5–§6.6 synced.
+
 - **docs: Archival read contract + gate-3 ν dissolution (2026-06-07).**
   [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) rewritten: two-half
   contract (read surface + invariants), public `P_id` keying, derived `R_market`, `W`

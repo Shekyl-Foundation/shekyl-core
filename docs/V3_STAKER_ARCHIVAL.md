@@ -1041,10 +1041,13 @@ and a fresh soundness pass before it ships:
 **Honest residual.** An opted-in staker has a **long-lived public pseudonymous
 profile** — shard-set, longevity, performance — *by function*, and the count of
 pseudonyms approximates the count of active stakes (an aggregate, like `band_sum`,
-already in the accepted-leak column). No individual is deanonymized if the firewall
-holds across all four layers (crypto + network + timing + output), but "firewalled
-pseudonym" is a **discipline maintained over the pseudonym's whole life**, not a
-property set once. Cross-pseudonym intersection is the residual class to name: a
+already in the accepted-leak column). Gate-3 ν dissolution and public `P_id` ledger
+keying add **per-epoch retention timeline** resolution at settlement-epoch granularity
+(see [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2, §9.2) —
+distinct from the holdings-axis shard-set profile. No individual is deanonymized if
+the firewall holds across all four layers (crypto + network + timing + output), but
+"firewalled pseudonym" is a **discipline maintained over the pseudonym's whole life**,
+not a property set once. Cross-pseudonym intersection is the residual class to name: a
 person may run multiple Ps, and if those Ps share network/timing/output fingerprints
 they re-merge into one profile — the firewall hygiene must hold *per pseudonym*.
 (Note the keystone *relaxes* the Sybil concern here: because per-shard bonds, not

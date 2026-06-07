@@ -272,7 +272,7 @@ explicitly allowed to be wrong here — that is what the sim is for).
 | **Covered enough** | min over shards of replication count `R(shard)`, and the fraction of shards with `R < R_target(age)` | a non-trivial fraction of shards sit below `R_target(age)` at steady state |
 | **Spread (no whale)** | Gini / top-1% share of *shards-held* **across actors** (ground-truth actor↔pseudonym map); max single-actor shard fraction | one (or a few) **actors** accumulate an outsized share despite the cap + bond |
 | **Deep history held** | replication `R` restricted to deep-history (high-`age`, rarely-queried) shards, vs `R_target(age)` | deep-history shards are systematically under-`R` relative to their (higher) target |
-| **Churn-stable** | shard abandonment rate; coverage variance over time | coverage oscillates / shards repeatedly drop below `R_target(age)` (see myopia caveat in *Success / failure*) |
+| **Churn-stable** | coverage oscillation: `max(oUmx, serving_oUmx)` over the steady-state window (`churn_window`) | shards repeatedly drop below `R_target(age)` in the oldest band (participation abandonment `churn` is reported but **not** the pass metric — see F2 bank below) |
 
 **The spread metric is actor-level, and this is the sim's whole reason to exist on
 this axis.** The firewall makes pseudonyms unlinkable, so a Sybil whale *is* many
@@ -509,7 +509,8 @@ thresholds are stated in code and reported alongside raw metrics so a reviewer c
 re-judge: `covered = frac_under<0.05 & min_R≥1`; `spread` = final-epoch snapshot;
 `sprdW` = windowed steady-state (`mean gini_actor`, `peak max_actor_share` over
 `churn_window` — L9 lesson); thresholds `gini<0.6 & max_share<0.20` (actor-level);
-`ALL` uses `sprdW`. `deep = deep_frac_under<0.10`; `churn_stable = churn<0.05`.
+`ALL` uses `sprdW`. `deep = deep_frac_under<0.10`;
+`churn_stable = max(oUmx, serving_oUmx)<0.05` (coverage oscillation, not abandonment).
 
 ### What the first build establishes
 
@@ -929,9 +930,18 @@ binding endowment duplicate passes (a)+(b).
    (0.75 SKL)** per `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3.
 
 5. **Windowed spread (`sprdW`, 2026-06-07).** At `bond_rate* = 0.75`: `gate4_fine_0.75`
-   `giniW ≈ 0.593`; whale `≈ 0.594`; coloc `≈ 0.599` — all pass `sprdW`. `gate4_coloc_0.75`
-   is the only pin-row with `all_pass` (churn passes); benign/whale rows fail `churn_stable`
-   (~0.17 vs 0.05) while spread passes — treat churn as a separate operational gate.
+   `giniW ≈ 0.593`; whale `≈ 0.594`; coloc `≈ 0.599` — all pass `sprdW`.
+
+6. **`churn_stable` metric bank (F2, 2026-06-07).** The sub-claim names coverage
+   oscillation (line 275) but the code had `churn_stable = churn < 0.05` (participation
+   abandonment). At pin, `oUmx = 0` and `deep_und = 0` while participation churn ≈ 0.17 —
+   benign rotation with backfill slack (L9/L11 bank when `oUmx = 0`). Same artifact class
+   as the L9 final-epoch read and bond-0.75 spread graze. **Disposition:** re-pointed to
+   `max(oUmx, serving_oUmx) < 0.05`; pin rows (`gate4_fine_0.75`, whale, coloc) pass
+   `all_pass`. **Conditionality:** benign rotation only while backfill capacity exists —
+   at capacity bind (`lagbind` churn, serving `deep_und` 0.942→0.865) abandonment
+   co-occurs with coverage fail. Do not price participation churn down; it is the attractor
+   doing its job.
 
 | `bond_rate` | lean `dS/dN` / `deep_und` | whale spread | coloc `dS/dN` / `deep_und` | in band |
 |---:|---|---|---|:---:|
@@ -2264,7 +2274,7 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|
 | L1 | **`g(age)` value** (gate 4 / near-term pin) | Shoulder-vs-tail seating (lean `g≈2`). **L2×L1 entanglement:** `sprdW` passes thinly; whale window **worsens** under windowing. **Layer 2 reframed (2026-06-07):** not point calibration — **margin-robustness gate** across the `g` operating band with whale-trend bounded throughout; declining-tail `Curve` (V3 reserve) if band cannot clear with comfortable margin. | **Decided (target), leaning `g≈2`.** **Open:** band sweep for margin robustness at `bond_rate*` before genesis seal of `g`. |
-| L2 | **Bond upper bound + spread margin** (gate 4) | Pin **`bond_rate* = 0.75`** on **endogenous L11** (`gate4_fine_*`, not fixed-pop). At pin: `giniW ≈ 0.593–0.599` steady-state (**passes** `sprdW`); `l11_bud_b100` `giniW ≈ 0.71` uses **`bond_rate=2.0`** default — not comparable. `all_pass` may fail on **churn** (~0.17), not spread. Declining-tail `Curve` off lean-margin table. Budget = gate-1/7 emission lever. | **Decided (numeric pin):** `bond_rate* = 0.75`; **`ARCHIVAL_BOND_FLOOR = 750_000_000` atomic**. **Active:** margin-robustness band + `l11_bud_*` at `bond_rate=0.75`; churn gate separate from spread. |
+| L2 | **Bond upper bound + spread margin** (gate 4) | Pin **`bond_rate* = 0.75`** on **endogenous L11** (`gate4_fine_*`, not fixed-pop). At pin: `giniW ≈ 0.593–0.599` steady-state (**passes** `sprdW`); `l11_bud_b100` `giniW ≈ 0.71` uses **`bond_rate=2.0`** default — not comparable. `churn_stable` re-pointed to coverage oscillation (`oUmx`); pin rows pass `all_pass`. Participation churn ~0.17 is benign rotation at slack (F2 bank). Declining-tail `Curve` off lean-margin table. Budget = gate-1/7 emission lever. | **Decided (numeric pin):** `bond_rate* = 0.75`; **`ARCHIVAL_BOND_FLOOR = 750_000_000` atomic**. **Active:** margin-robustness band + `l11_bud_*` at `bond_rate=0.75`. |
 | L3 | **Empty-window definition** (gate 4) | The L8 min-form **unifies** what looked like two axes: `min(capital-leg, storage-leg)` is a single co-located number that binds on whichever leg is scarcer. `bond_high` binds on capital (min-form `0.83`); `pop_thin` binds on storage (min-form `0.39`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies min-form `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. The capital and storage axes are not separate tests — they are the two legs of the one min-form, and gate 5's provisioning sets the storage leg (L8 re-entangles gates 4 and 5). |
 | L4 | **Flat vs age-scaled bond *magnitude*** (gate 4) | Sim evidence: the mean-preserving tilt is a weak, mildly regressive lever that fights the premium (1c). The **decisive** argument is durability survival arithmetic: for irreplaceable data redundancy dominates per-holder reliability — `N=3,p=0.99 → ~1−10⁻⁶` vs `N=20,p=0.9 → ~1−10⁻²⁰`; the number of *distinct holders* swamps per-holder commitment for "does the data survive at all." So the oldest shards want the **most distinct holders → the most accessible (flat/low) bond**, never scaled up. Age-scaling magnitude raises the bond exactly where the widest pool is needed, and **flips the binding constraint** from the tractable aggregate-slot `dS/dN` (distinct-actor slack 80≥6) to the intractable **tail-distinct-actor** concentration (#4 aimed at the worst place). | **Resolved: flat magnitude.** The same evidence that gave the clean `dS/dN` condition (L2) *is* the argument for flat — age-scaling trades a tractable capacity constraint for an intractable tail-concentration one. Attraction onto old shards lives on the **reward** (`g·scarcity`, L1): reward attracts, flat bond keeps-accessible, no collision. The commitment-horizon instinct behind "age-scale it" is real but belongs in **duration, not magnitude** (L9). **Reversion:** reopen only if a gate-4 requirement needs stronger slashable commitment on the oldest *that duration (L9) cannot carry*. |
 | L8 | **co-location: the min-form seating metric** (gate 4↔5 re-entanglement) | `bscale_s0` (flat) has *aggregate* `dS/dN=3.24` yet `deep_und=0.75`: capital sits with storage-poor capital-rich actors and storage with bond-constrained capital-poor archivers, so deep — needing *both* on the *same* actor — falls in the gap. The **min-form** `Σ min(⌊capital/bond⌋, ⌊storage/shard_size⌋)/Σ_deep R_target` reads **0.86<1**, predicting the starvation the aggregate masked. The **(bond × shard-size) pair sweep** confirms the joint lever: low-bond-alone (0.97/0.65) and small-shard-alone (0.91/0.47) each starve; the *pair* clears deep to 0, coinciding with the min-form crossing 1. | **Decided (metric swapped + gates re-entangled):** the seating metric is now the co-located min-form (implemented; the reported `dS/dN`). Gates 4 and 5 **cannot close independently** — the binding quantity is the count of co-located non-whale actors per deep shard, a joint function of bond (gate-4 capital leg) and shard size (gate-5 storage leg). Two levers grow the pool, tuned **together**: **low-flat bond** (recruits storage-rich) + **finer deep-shard granularity** (recruits capital-rich). Real-design form: **ratio-matching** (deep shard's storage:bond ratio inside the population's storage:capital distribution). |

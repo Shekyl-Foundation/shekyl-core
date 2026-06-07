@@ -65,6 +65,19 @@ is a **different symbol** (foundation-inclusive observability/SLA) and does not 
 **Disposition:** Delete `ν = H(P, shard)` from the genesis crypto bill. Re-spec
 `market_R` / `R_market` as the derived ledger count (§3.3). Wallet does **not** mint ν.
 
+**Honest residual — two axes (F1, 2026-06-07).** Dropping ν improves honesty on the
+**holdings** axis with no new exposure beyond the V3 honest residual (shard-set profile).
+On the **timeline** axis, ν's only job was hiding per-`P` counts while leaving
+per-`(P, shard, E)` attribution hidden. Keying the retention ledger by public `P_id`
+(§3.1) makes the per-`P`, per-shard, per-epoch retention record **publicly attributable**
+at **settlement-epoch resolution**. The residual concedes a public performance profile;
+what changes is temporal resolution — one bit per epoch per held shard. Under L14
+(retrieval-as-proof), on-chain proof submission largely disappears; the ledger bit at
+epoch granularity becomes the **primary public liveness signal**, with resolution set
+entirely by settlement-epoch length. Rotation (gate 6) is the named decorrelation tool
+against E-4 timing linkage; fine-grained per-epoch retention timelines are behavioral
+fingerprints (shard-set adjacency across `P_old` → `P_new` rotation). See §9.2.
+
 **Reversion clause:** Reopen only if a **production consumer** emerges that requires
 hidden-`P` counting **and** form C is simultaneously rejected — i.e. a full reward-shape
 reopen, not a gate-3 patch.
@@ -133,8 +146,18 @@ Per-shard bond posture, `holdings` descriptor, and data to derive **`good_throug
 per settlement epoch. Gate 4 owns slash/unbond mutations; emission reads the result.
 
 **Genesis pin (read requirement):** `good_through(P, E)` must be **derivable at epoch
-close** from bond state (slash event log or equivalent) — not merely a current
-`good_standing` flag. See emission leg §6.5 (E-3).
+close** from bond state — not merely a current `good_standing` flag. See emission leg
+§6.5 (E-3).
+
+**Encoding (F3, 2026-06-07):** **Bonded/slashed event log with interval semantics**
+evaluated at `E`-close — **not** a scalar `slash_epoch` cutoff (`slash_epoch > E` is
+wrong). Re-bond is a first-class lifecycle event (CompleteTree resume; market "replace
+shard bond"); good-standing is an **interval set**, not a monotone cutoff. Example:
+good in `[0,10]`, slashed at `11`, re-bonded at `20` — `good_through(25)` must be true
+while `good_through(8)` stays true (E-3: slash at `11` does not retroactively void
+honestly-earned epochs in `[0,10]`). Verifier at close: `good_through(P,E) ⇔` no slash
+event with `epoch ≤ E` falls in a bad-standing interval that covers `E`, per the
+logged bond/slash/re-bond timeline.
 
 ### 3.5 `Σwork` accumulator (emission leg §4.4)
 
@@ -197,6 +220,20 @@ growth** against **firewall lapse discipline**.
 **Open pin:** numeric `W` and `REORG_HORIZON` jointly with finalization boundary (§4
 invariant 2 + emission §4.5 + §8).
 
+**Drain vs forfeiture (F4, 2026-06-07):** `W` forfeits epochs older than `tip − W`. If
+claims drain at a bounded batch rate, a continuously-honest `P` with a backlog must
+drain it before the oldest entry crosses the horizon. Emission leg §3 pins
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` as **per-`P` per emission** (max epochs in
+one vin). Joint invariant (value pin deferred with `W`):
+
+```text
+∀ P continuously honest: drainable_epochs_per_wall_clock ≥ epochs_accruing_per_wall_clock
+  while backlog_depth ≤ W
+```
+
+Couple numeric `W`, batch cap, and settlement-epoch length (§9.2 cadence) in one
+pre-code check — not three independent constants.
+
 **State cost (gate-2 "irony," now bounded):**
 
 ```text
@@ -247,17 +284,39 @@ integration tests, 8c verifier hookup.
 
 ---
 
-## 9. Implementation checklist (pre-code)
+## 9. Open pins (pre-code)
+
+### 9.1 Implementation checklist
 
 - [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
 - [ ] Pin `ShardId` + retention-ledger key `(P_id, shard_id, E)` + epoch indexing.
 - [ ] Pin `R_market` snapshot at epoch close (count with `retention ∧ good_through`).
-- [ ] Pin `good_through` encoding on `ArchivalBondRecord` (slash-event log or equivalent).
-- [ ] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics.
+- [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
+      semantics** at `E`-close (§3.4; not scalar `slash_epoch`).
+- [ ] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics + **drain-vs-forfeiture**
+      joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
 - [ ] Pin `Σwork(E)` finalization (sweep vs incremental) + reorg revert order (emission §8).
 - [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.
 - [ ] Retention-proof construction bytes (8c) — may follow interface pin.
 - [ ] KAT: emission recompute against fixture ledger state.
+
+### 9.2 Settlement-epoch length — joint gate 2 / gate 6 (F1)
+
+**Promotion (2026-06-07):** `SETTLEMENT_EPOCH_BLOCKS` (emission leg §3; inherited
+10_000 blocks) is no longer only a gate-2 challenge-cadence knob. It is a **joint
+gate-2 / gate-6 parameter**:
+
+| Finer epochs | Coarser epochs |
+|--------------|----------------|
+| Faster reward settlement | Slower reward settlement |
+| Finer public retention timeline (E-4 fingerprint risk) | Blurs per-epoch liveness fingerprint (rotation-favorable) |
+
+L14 retrieval-as-proof makes the on-chain retention bit the primary public liveness
+signal; epoch length sets that signal's resolution. **Defer numeric pin** until the
+joint decision with `W`, `REORG_HORIZON`, and finalization boundary (§9.1) — coarser
+`E` may trade acceptable forfeiture/lapse headroom against firewall decorrelation.
+Record disposition here before choosing the constant; gate-6 firewall spec owns the
+threat-model argument, this doc owns the consensus read-surface coupling.
 
 ---
 
@@ -278,3 +337,6 @@ integration tests, 8c verifier hookup.
 - **2026-06-07 (contract pin):** Gate-3 ν dissolution; two-half contract (read surface +
   invariants); public `P_id` keying; derived `R_market`; `good_through` read requirement;
   prune horizon `max(W, REORG_HORIZON)`.
+- **2026-06-07 (F1–F4 pins):** Timeline-axis honest residual (§2); §9.2 epoch-length
+  joint gate-2/6; `good_through` interval event log (§3.4); `W` × per-`P` batch drain
+  invariant (§5).

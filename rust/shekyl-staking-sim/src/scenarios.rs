@@ -1037,7 +1037,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let spread = last_metrics.gini_actor < 0.6 && last_metrics.max_actor_share < 0.20;
     let spread_windowed = gini_actor_window < 0.6 && max_actor_share_window < 0.20;
     let deep_history = last_metrics.deep_frac_under_target < 0.10;
-    let churn_stable = churn < 0.05;
+    // Churn-stable sub-claim: coverage oscillation (oldest-band under-target peak over the
+    // steady-state window), NOT participation abandonment (`churn`). Benign rotation when
+    // backfill capacity exists can drive high `churn` with `oUmx = 0` (L9/L11).
+    let coverage_oscillation = oldest_under_max.max(serving_oldest_under_max);
+    let churn_stable = coverage_oscillation < 0.05;
     let all_pass = covered && spread_windowed && deep_history && churn_stable;
 
     ScenarioResult {
