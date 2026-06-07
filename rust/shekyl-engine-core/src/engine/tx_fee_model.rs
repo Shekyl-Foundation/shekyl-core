@@ -79,13 +79,23 @@ pub(crate) fn fee_rate_for_priority(
                     reason: "custom feerate or mask is zero",
                 }
             })?;
-            if custom.calculate_fee_from_weight(1) < floor.calculate_fee_from_weight(1) {
+            let floor_one = tx_fee::try_fee_from_weight(&floor, 1).ok_or(
+                FeeEstimatorError::DaemonResponseInvalid {
+                    reason: "economy feerate overflowed fee arithmetic",
+                },
+            )?;
+            let custom_one = tx_fee::try_fee_from_weight(&custom, 1).ok_or(
+                FeeEstimatorError::DaemonResponseInvalid {
+                    reason: "custom feerate overflowed fee arithmetic",
+                },
+            )?;
+            if custom_one < floor_one {
                 return Err(FeeEstimatorError::DaemonResponseInvalid {
                     reason: "custom feerate below economy floor",
                 });
             }
-            let ceiling_fee = floor.calculate_fee_from_weight(1).saturating_mul(100);
-            if custom.calculate_fee_from_weight(1) > ceiling_fee {
+            let ceiling_fee = floor_one.saturating_mul(100);
+            if custom_one > ceiling_fee {
                 return Err(FeeEstimatorError::DaemonResponseInvalid {
                     reason: "custom feerate above sanity ceiling",
                 });
@@ -95,10 +105,10 @@ pub(crate) fn fee_rate_for_priority(
     }
 }
 
-/// Quantized fee from structural weight.
+/// Quantized fee from structural weight (non-panicking on daemon-derived rates).
 #[must_use]
 pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
-    rate.calculate_fee_from_weight(weight)
+    tx_fee::fee_from_weight(rate, weight)
 }
 
 /// Two-pass fee fixpoint for one output-count variant (§3.3 / §3.10.1).
