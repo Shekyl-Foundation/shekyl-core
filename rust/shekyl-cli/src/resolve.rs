@@ -697,7 +697,10 @@ mod tests {
 
     #[test]
     fn test_removed_subaddr_flags_rejected() {
-        for line in ["balance --subaddr-index 0", "transfers --subaddr-indices 0:1"] {
+        for line in [
+            "balance --subaddr-index 0",
+            "transfers --subaddr-indices 0:1",
+        ] {
             match parse(line, &session()) {
                 ResolvedCommand::Unknown { cmd } => {
                     assert!(cmd.contains("removed flag"));
