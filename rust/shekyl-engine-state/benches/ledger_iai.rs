@@ -53,6 +53,7 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         eligible_height: height + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 

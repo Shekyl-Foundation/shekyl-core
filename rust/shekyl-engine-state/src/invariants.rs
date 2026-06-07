@@ -358,6 +358,7 @@ mod tests {
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
         }
     }
 
