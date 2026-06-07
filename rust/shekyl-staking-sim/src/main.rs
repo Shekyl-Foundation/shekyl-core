@@ -10,6 +10,9 @@
 //! - a human-readable summary table + an interpretation header to **stderr**,
 //!
 //! matching the `shekyl-economics-sim` stdout/stderr convention.
+//!
+//! Optional filter: `--axis=<prefix>` runs only scenarios whose `axis` field starts with
+//! the prefix (e.g. `--axis=gate4_fine` for the iteration-2 bond window sweep).
 
 mod agent;
 mod audit;
@@ -32,7 +35,7 @@ fn yn(b: bool) -> &'static str {
 }
 
 fn print_summary(results: &[ScenarioResult]) {
-    eprintln!("shekyl-staking-sim — iteration 1 (coverage dynamics)");
+    eprintln!("shekyl-staking-sim — staker-archival coverage (see STAKER_ARCHIVAL_SIM.md)");
     eprintln!("Model: docs/design/V3_STAKER_ARCHIVAL.md; plan: docs/design/STAKER_ARCHIVAL_SIM.md");
     eprintln!();
     eprintln!("Sub-claims (stated thresholds): covered = frac_under_target<0.05 & min_R>=1;");
@@ -230,7 +233,32 @@ fn print_summary(results: &[ScenarioResult]) {
 }
 
 fn main() {
-    let cfgs = build_scenarios();
+    let axis_filter = std::env::args().find_map(|a| a.strip_prefix("--axis=").map(str::to_string));
+
+    let cfgs: Vec<_> = build_scenarios()
+        .into_iter()
+        .filter(|c| {
+            axis_filter
+                .as_ref()
+                .is_none_or(|prefix| c.axis.starts_with(prefix))
+        })
+        .collect();
+
+    if cfgs.is_empty() {
+        eprintln!(
+            "shekyl-staking-sim: no scenarios matched{}",
+            axis_filter
+                .as_ref()
+                .map(|p| format!(" --axis={p}"))
+                .unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+
+    if let Some(ref prefix) = axis_filter {
+        eprintln!("shekyl-staking-sim: running {} scenario(s) with axis prefix `{prefix}`", cfgs.len());
+    }
+
     let results: Vec<ScenarioResult> = cfgs.iter().map(run_sim).collect();
 
     match serde_json::to_string_pretty(&results) {

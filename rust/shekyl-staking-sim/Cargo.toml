@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Agent-based staker-archival coverage simulation (docs/design/STAKER_ARCHIVAL_SIM.md, iteration 1)"
+description = "Agent-based staker-archival coverage simulation (docs/design/STAKER_ARCHIVAL_SIM.md; gate4 fine sweep + L8–L16)"
 
 # NOTE: this crate intentionally does NOT set `[lints] workspace = true`.
 # Like `shekyl-economics-sim`, it is a numeric simulation harness (not

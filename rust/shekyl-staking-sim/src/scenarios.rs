@@ -1,4 +1,5 @@
-//! Scenario construction, the epoch loop, and the iteration-1 sweep set.
+//! Scenario construction, the epoch loop, and the curated sweep set (iteration 1
+//! coverage axes, L8–L16 model refinements, P1–P4 hardening, gate-4 fine bond window).
 //!
 //! Sweeps (per the spec): coarse bond rate (low/mid/high), age-weight `g(age)`
 //! including the `g=1` baseline, population thickness, endowment mix + whale, curve
@@ -2362,6 +2363,57 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.fetch_latency_per_unit = 6.0;
         c.retr_n_domains = 3;
         out.push(c);
+    }
+
+    // --- Gate 4 iteration-2: fine bond-rate window at the L11 lean equilibrium.
+    // Coarse iteration-1 bracketed (0.5, 2.0, 8.0); this sharpens the live band inside
+    // (0.5, 8) under flat magnitude (L4), g=2 (L1), endogenous fill at ρ=0.02. Pass
+    // criteria for the pin: min-form `dS/dN ≥ 1`, deep_history, and (whale cross) spread.
+    // A co-location-binding duplicate (P1 polarized endowment, ρ=0.015) verifies the pin
+    // is not a loose-pool artifact. ---
+    let gate4_fine_base = || {
+        let mut c = l11_base();
+        c.init_active_frac = 0.0;
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        c.age_weight = 2.0;
+        c.bond_age_scale = 0.0;
+        c
+    };
+    let gate4_fine_coloc_base = || {
+        let mut c = gate4_fine_base();
+        c.frac_storage_rich = 0.5;
+        c.storage_rich_storage = 22;
+        c.storage_rich_capital = 8.0;
+        c.capital_rich_storage = 3;
+        c.capital_rich_capital = 100.0;
+        c.reservation_lo = 0.015;
+        c.reservation_hi = 0.015;
+        c
+    };
+    for rate in [
+        0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 4.0, 4.5, 5.0,
+        5.5, 6.0, 6.5, 7.0, 7.5,
+    ] {
+        let label = format!("{rate:.2}");
+        let mut c = gate4_fine_base();
+        c.name = format!("gate4_fine_{label}");
+        c.axis = "gate4_fine".into();
+        c.bond_rate = rate;
+        out.push(c);
+
+        let mut cw = gate4_fine_base();
+        cw.name = format!("gate4_fine_{label}_whale");
+        cw.axis = "gate4_fine_whale".into();
+        cw.bond_rate = rate;
+        cw.whale = true;
+        out.push(cw);
+
+        let mut cc = gate4_fine_coloc_base();
+        cc.name = format!("gate4_coloc_{label}");
+        cc.axis = "gate4_fine_coloc".into();
+        cc.bond_rate = rate;
+        out.push(cc);
     }
 
     out
