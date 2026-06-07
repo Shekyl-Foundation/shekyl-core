@@ -7504,27 +7504,27 @@ one place to confirm each item's relationship to the wallet stack.
 
   *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*.
 
+- **Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed
+  (spec).** Pure **over-enumeration** at genesis — reserve slots activated
+  through normal staking/serving; no cross-authorizing master. Reversion:
+  per-root subkey lineage only if rotation frequency forces it; cross-
+  minting master **never**. *Reference:* `V3_STAKER_ARCHIVAL.md` §*Key
+  rotation — over-enumeration*.
+
+- **Foundation bond posture (gate 4–6; pre-genesis).** **Closed (spec).**
+  **Nominal uniform bond** — `ARCHIVAL_BOND_FLOOR` × 1 per active genesis
+  `P` (not zero; not per-shard rows for complete tree); standard slash
+  path, no skip-slash branch. *Reference:* `V3_STAKER_ARCHIVAL.md`
+  §*Accountability*; `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §3.
+
 - **Foundation genesis-enumeration — legal / regulatory disclosure
-  (gate 4–6; pre-genesis).** The SLA pin commits to an **immutable
-  on-chain foundation-privileged identity set** (auditable complete-
-  tree archivers, excluded from `market_R`, no reward slice). Design
-  posture: permanent-but-benign-and-verifiable (no extraction path).
-  **Requires legal review before genesis** — same class of disclosure
-  as stating durability security includes the foundation; hidden-then-
-  discovered centralization is worse than disclosed backstop.
+  (gate 4–6; pre-genesis).** Draft:
+  `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`. Public narrative:
+  `docs/PUBLIC_NARRATIVE_FAQ.md` §*Archival*. **Requires counsel review
+  before genesis.**
 
   *Target:* before genesis. *Reference:* `V3_STAKER_ARCHIVAL.md`
   §*Service promise* (user-facing promise, genesis-enumerated set).
-
-- **Foundation archiver key rotation (gate 4–6; pre-genesis).**
-  Genesis-enumerated identity set is immutable; operational keys must
-  rotate over multi-decade horizon. **Pin at genesis:** (a) master
-  identities authorizing rotating operational subkeys, or (b) over-
-  enumeration with cold reserve slots. Post-genesis discovery is not
-  acceptable.
-
-  *Target:* before genesis identity set seals. *Reference:*
-  `V3_STAKER_ARCHIVAL.md` §*Key rotation*.
 
 - **Archiver seeding-path transport relaxation (gate 6 / firewall;
   soundness pass step 2).** L16 closes the Tor thread: user historical

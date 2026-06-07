@@ -109,8 +109,8 @@ trustlessness.
 on a disclosed foundation backstop is a **strategic/regulatory fact**, not
 only FAQ prose. Hidden-then-discovered centralization is worse than
 disclosed-transparent backstop. **Legal review before genesis** is
-required (see `docs/FOLLOWUPS.md` — foundation genesis-enumeration
-disclosure).
+required — draft in `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`;
+user-facing summary in `docs/PUBLIC_NARRATIVE_FAQ.md`.
 
 ### Engineering taxonomy (two classes — only one is a user promise)
 
@@ -164,14 +164,38 @@ service rendezvous for the fetch leg). They provide:
   L12 **decaying** floor — see gate-list item 5 amendment below).
 
 **Accountability.** Foundation archivers are **registered and
-challengeable like everyone else** — same slash path, public challenge
-record. Bond size is a **policy dial** (nominal-plus-reputational vs
-full per-shard economic); **uniform across the genesis set**. For a known
-entity whose public challenge failure is existential, reputational skin
-is the binding deterrent; full bonds buy little reputation does not
-already, at real operational cost. **Reversion:** reopen full economic
-bond only if challenge deterrence on foundation archivers needs skin
-beyond public reputational failure.
+challengeable** — public challenge pass/fail is the accountability
+mechanism. They are **fully excluded from archival reward claims** (no
+reward path exists). Reputational failure on a public challenge is the
+binding deterrent for a known entity; the slash amount is not the
+economic lever.
+
+**Nominal uniform bond (pinned — not zero).** Each **active** genesis
+foundation identity posts **one** retention bond at **`ARCHIVAL_BOND_FLOOR`**
+(the same minimum valid per-shard bond floor pinned at gate 4), **once per
+archival pseudonym `P`**, not per shard. This is **not** skin-in-the-game
+economics — it is the price of keeping the foundation on the **single
+uniform holding + challenge + slash path**. Zero bond would require a
+`foundation → skip slash` branch in consensus-critical slash code;
+rejected. On failed challenge the **standard slash path runs** and removes
+a nominal amount the foundation does not care about; there is no special
+case.
+
+**Holdings wire (complete tree without state bloat).** Foundation seeds
+register **`CompleteTree`** on the general `HoldingsDescriptor` (one
+sentinel = holder of all shards), **not** O(shards) per-shard bond rows.
+See `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4. **`market_R`**
+exclusion means foundation identities do not mint per-shard nullifiers;
+**`durability_count`** counts each active complete-tree genesis slot for
+every shard by rule.
+
+**Reversion (bonding — ordered):**
+
+1. **Now:** nominal **`ARCHIVAL_BOND_FLOOR` × 1** per active genesis `P`,
+   uniform across the set; standard slash path.
+2. **Never:** zero bond with skip-slash branch.
+3. **Never:** per-shard bond rows for foundation complete-tree (state-bloat
+   path to a foundation-only holding type).
 
 **Reward economics — fully outside the formula.** Foundation archivers
 draw **no slice** of the market reward pot and do **not** enter scarcity
@@ -182,6 +206,12 @@ exclusion (out of denominator but earning on nominal stake) is rejected —
 it buys a foundation-earnings line item with no benefit.
 
 ### Genesis-enumerated foundation identity set (immutable)
+
+**Consensus block:** `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md`
+(schema, placeholder table, bond floor, `HoldingsDescriptor` / `CompleteTree`
+pin). Wallet **payment addresses are not enumerated** — only archival
+pseudonym **`P` pubkeys** (V3.0 payment-address shape is pinned separately;
+FA-1 single static address backs stake off this block).
 
 The privileged set is **enumerated in genesis** — maximally transparent,
 undeniable, auditable. Membership confers:
@@ -196,26 +226,42 @@ same trust class as hard-coded seed discovery keys, not a hidden flag.
 seeds, protocol privilege remains; vestigial-but-benign is acceptable
 because privilege is non-extractive and verifiable.
 
-#### Key rotation (pin before genesis seals the set)
+#### Key rotation — over-enumeration (pinned at genesis)
 
 Immutability of the enumerated set does **not** mean operational keys
-never rotate — compromise, hardware lifecycle, and handoff require it
-over a multi-decade horizon. A lost or compromised genesis identity
-cannot be cleanly retired if the list is a flat immutable pubkey list
-(lingers excluded from `market_R`, failing challenges — detectable but
-not revocable).
+never rotate — compromise, hardware lifecycle, and handoff require it over
+a multi-decade horizon. A compromised operational identity **lingers**
+as a benign ghost (excluded from `market_R`, failing public challenges,
+observably dead) — detectable, not revocable without a fork.
 
-**Pin one resolution at genesis** (both are cheap now, unfixable later):
+**Pinned resolution: pure over-enumeration.** Genesis lists **more
+identities than initially operated** (several times the live count; cap
+non-binding over the chain's life). Reserve slots are cold keys; rotation
+**activates a reserve** by that identity beginning to stake and serve
+through the normal path — **no authorization chain, no delegation
+verification, no new consensus primitive.** Pubkeys in genesis are nearly
+free; reserve keys use the same cold-custody discipline as release-signing
+material.
 
-1. **Master + operational subkeys** — enumerate small **master**
-   identities at genesis; operational archiver keys rotate under master
-   authorization; **`market_R` / durability exclusion** keyed on
-   "authorized by a genesis master," not on ephemeral operational keys.
-2. **Over-enumeration** — list more identities than initially operated;
-   reserve slots are cold rotation targets; operational keys swap into
-   reserved slots without consensus change.
+**Why not master + operational subkeys.** A cross-authorizing master
+reintroduces mutable membership and a systemic tail: master compromise
+mints arbitrarily many `market_R`-excluded, `durability_count`-included
+identities — durability credit without backing — with no clean revocation
+short of fork. Over-enumeration's worst case is bounded and recoverable:
+one compromised slot burns one reserve activation.
 
-Discovering the need post-genesis is not acceptable.
+**Reversion (explicit, ordered):**
+
+1. **Now:** pure over-enumeration.
+2. **If rotation frequency makes slot-burning impractical:** per-root
+   subkey hybrid — each genesis identity authorizes **only its own**
+   subkey lineage (cold root / warm leaf); **never** a cross-minting
+   master.
+3. **Never:** cross-authorizing master.
+
+Hitting the enumeration cap after pathological rotation frequency is a
+key-management crisis; a fork to refresh the foundation set decades out
+is an acceptable governance checkpoint, not a design failure.
 
 ### Replication count — `market_R` vs `durability_count` (disambiguate before code)
 
@@ -242,8 +288,13 @@ two-implementations trap in a new costume):
 | Decentralization observability ("market vs floor") | **Both**, reported separately | Edge #2 — loud not silent |
 | Local pruning / "safe to drop local copy?" | **`durability_count`** (or explicit policy) | Must not assume `market_R` alone suffices |
 | Challenge / retention-proof accounting | **Per-holder**; aggregation for display uses context-appropriate count | Never shard-global read credit (L14) |
+| **Reachability / "up now" (L15/L16)** | **Not a protocol count** | **Sim evaluation only** (`shekyl-staking-sim` `serving_availability`, `u_eff`). Production: holder discovery (try-list) + public foundation seed reliability — no third `R`-like symbol. If routing-quality scoring ships, it is **per-holder latency/performance**, not a shard-level reachable-now count. Seeding SLO source-availability is an **operational** metric (ops dashboards), not consensus state. |
 
 Implementations must not expose a bare `R` without naming which count.
+**Verification (2026-06):** `market_R` and `durability_count` are spec
+pins pre-`ArchivalEngine`; no production Rust/C++ site computes L15/L16
+reachability aggregates — the two-count table is complete for protocol
+code paths today.
 
 ### Maintenance SLO (archiver class — not user promise)
 
@@ -695,6 +746,16 @@ This **de-overloads the lock parameter**: the eligibility lock can stay small (t
 monetary supply-sink knob you want small), while the **per-shard bonds** are the
 anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
 **two separate parameters** instead of one pulled two ways.
+
+**Holdings descriptor (wire pin — pre-`ArchivalEngine`).** Registration carries
+`HoldingsDescriptor`: either **`ShardSetCompact`** (partial portfolio) or
+**`CompleteTree`** (one sentinel = all shards). Market archivers use compact
+shard sets plus per-shard bond accounting (`total bond = shards × rate`) and
+per-`(P, shard)` nullifiers for **`market_R`**. Genesis foundation identities
+use **`CompleteTree`** plus **one nominal bond per `P`**
+(`ARCHIVAL_BOND_FLOOR`, not O(shards) rows); they are excluded from `market_R`
+nullifier minting but included in **`durability_count`** for every shard.
+Full block: `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4.
 
 **The honest correction this forces.** "Pay for work, not wealth" was wrong, and
 the per-shard bond is why: **capital re-enters, proportional to work.** The reframe
@@ -1263,6 +1324,8 @@ the dot-version, not the existence of the mechanism.
   (`staker_pool_share`, `staker_emission_share`, lock tiers,
   Component 3 governance)
 - `docs/ANONYMITY_NETWORKS.md` — existing Tor/I2P infrastructure
+- `docs/PUBLIC_NARRATIVE_FAQ.md` — user/partner archival promise (2026-06)
+- `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — legal disclosure draft
 - `docs/SEED_NODE_DEPLOYMENT.md` — foundation `--no-prune` archival
   policy
 - `docs/STAKER_REWARD_DISBURSEMENT.md` — existing reward distribution

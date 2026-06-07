@@ -2086,9 +2086,13 @@ commitments* (2026-06). Summary:
 - **Step 1 (L15d/L16d)** validated: historical class passes on covered set; L15 wall
   localizes to seeding/instantaneous path.
 
-**Remaining pre-genesis (lifecycle, not soundness):** foundation key-rotation shape
-(master+subkey vs over-enumeration); legal review of immutable on-chain privilege set;
-nominal vs full foundation bond policy (uniform across set).
+**Remaining pre-genesis (lifecycle, not soundness):** counsel review of
+`docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`; operational provisioning
+of over-enumerated identity set and reserve custody.
+
+**Closed (2026-06):** key rotation → pure over-enumeration (reversion: per-root
+subkey only; never cross-authorizing master); foundation bond default → none
+(full uniform per-shard only if policy posts bonds).
 
 ### Soundness pass ordering
 
