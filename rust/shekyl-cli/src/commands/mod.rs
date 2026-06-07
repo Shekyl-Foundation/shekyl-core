@@ -37,6 +37,7 @@ Accounts and addresses:
   account default <N>                 Set session default account
   account new [label]                 Create a new account
   address                             Show primary address
+  address new [label]                 Alias for account new
   balance [--account N]               Show balance (unlocked, locked)
 
 Transfers:
