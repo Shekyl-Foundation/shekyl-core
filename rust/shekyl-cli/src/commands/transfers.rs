@@ -105,12 +105,7 @@ pub fn cmd_show_transfer(ctx: &EngineContext, txid: &str) {
     }
 }
 
-pub fn cmd_sweep_all(
-    ctx: &EngineContext,
-    account_index: u32,
-    dest: &str,
-    priority: Option<u32>,
-) {
+pub fn cmd_sweep_all(ctx: &EngineContext, account_index: u32, dest: &str, priority: Option<u32>) {
     if !super::require_open(ctx) {
         return;
     }
