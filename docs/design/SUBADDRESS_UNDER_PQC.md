@@ -1862,7 +1862,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-4 | `POST_QUANTUM_CRYPTOGRAPHY.md` / user docs | **Reusable-address privacy** product principle (R2-F1); drop subaddress-per-invoice narrative; T2 disclosure if multi-account |
 | FA-5 | `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 / §8.2 | **Delete** `AuditSubaddressSecret` disposition — moot under End-state 5 |
 | FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Spec revised** — §3.1 wire inventory; `view_tag_prefilter`; §8 initial-sync gate; impl after §11; **FA-6b** multisig hints |
-| FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | Amend: drop flat `SubaddressIndex` / `create_subaddress`; add payment requests + optional seed-derived accounts; reconcile payment-ID rejection with URI labels (§5.7.2) |
+| FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | **Landed on `dev` 2026-06-07** — End-state 5 binding; drop `create_subaddress`; payment requests + URI labels (§5.7.2) |
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | Threat-model / user docs (`POST_QUANTUM_CRYPTOGRAPHY.md` or new `docs/THREAT_MODEL_WALLET.md` §) | **In progress.** Propagate §4.6–§4.8, **R2-F9** (§5.7.12): pit-of-success vs adversary; marketing split; address substitution; dust non-oracle; **T6 ↔ phishing harvest** framing; liveness + label-injection hygiene |
 | FA-10 | Foundation pin (`POST_QUANTUM_CRYPTOGRAPHY.md` or `THREAT_MODEL_WALLET.md`) | **Adopted §6.4 (2026-05-31).** Propagate pin prose in Round-4 sweep; wargaming after 1–4 |
@@ -1877,8 +1877,8 @@ V4 removes hybrid KEM from addresses entirely.
 | **0 — Pre-flight / substrate** | **Closed** | Confirmed scanner–trait–STAGE_1 §3.1.3 incoherence; live model = account hybrid KEM + classical `B'`. Provisional End-state 1. Findings: R0-F1..F5. |
 | **1 — Challenge pricing & priority** | **Closed** | End-state 4 dominated by 1 (R1-F1 inverts PQ premise; R1-F3 misattribution). **R1-F5 layer separation:** T1 is output-layer, not subaddress-layer; subaddresses serve J1/J2/J3. Option A fails J1 (R1-F2). T2 pin deferred to Round 2. View-tag (T6) elevated to same impossibility shape as R1-F2 (§4.4). Per-subaddress isolation counterexamples negative (R1-F6). |
 | **2 — Usability + End-state 5 + T2 pin** | **Closed** (R2-F2 + R2-F9) | **R2-F1** product principle. **End-state 5 minimal** **shipped decision.** **§4.6 T2 PINNED.** **R2-F2** + **R2-F9** closed 2026-05-31. **T6** → FA-6/FA-9. |
-| **3 — Spec closure** | **In progress** | R2-F8 synthesis §5.7.10; foundation pin §6.4; enc_label wire; delete subaddress types; account KDF deferred P3. |
-| **4 — Closure + forward propagation** | Pending | Amend STAGE_1 §3.1.3; checklist for impl PR. |
+| **3 — Spec closure** | **In progress** | R2-F8 synthesis §5.7.10; foundation pin §6.4; enc_label wire (FA-11); FA-2/FA-8 impl PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113); account KDF deferred P3. |
+| **4 — Closure + forward propagation** | Pending | FA-9 threat-model sweep; FA-6 after §11; Round-4 adversarial record. STAGE_1 §3.1.3 banner landed (FA-7). |
 
 ### Round 0 findings log
 
@@ -1930,17 +1930,17 @@ mandatory for J1 only when counterparty collusion is in scope.
 
 From `docs/FOLLOWUPS.md`, checked at **design closure** (after Round 4):
 
-- [ ] (a) End-states priced — §5
-- [ ] (b) Binding priority named — §6.1
-- [ ] (c) Scanner and address format coherent — §6.2
-- [ ] (d) Subaddress stub **removed** / End-state 5 disposition pinned — §6.3
+- [x] (a) End-states priced — §5
+- [x] (b) Binding priority named — §6.1
+- [x] (c) Scanner and address format coherent — §6.2 (FA-2 PR #112)
+- [x] (d) End-state 5 disposition pinned — §6.3; subaddress stub removal in FA-2 PR #112
 - [x] (e) R2-F2: §5.7.9 walkthroughs (a)–(d) + S1–S6 signed off —
   `docs/design/R2_F2_WALKTHROUGH.md` §6 (2026-05-31)
 - [x] (e′) R2-F9: address-knowledge / phishing pin — §5.7.12 (2026-05-31)
 - [x] (f) R2-F8: §6.4 **5-T adopted**; §5.7.11 logical tags; sentinel-only launch
 - [x] (g) FA-11: RCT + HKDF + verifier + KATs for `enc_label`
-- [ ] Adversarial record 4–6 rounds — §10
-- [ ] Documentation: amend STAGE_1 §3.1.3, FOLLOWUPS item closed, relevant spec docs (§9)
+- [ ] Adversarial record 4–6 rounds — §10 (Rounds 0–2 closed; 3 in progress; 4 pending FA-9/FA-6)
+- [x] Documentation: STAGE_1 §3.1.3 superseded banner (FA-7); `WALLET_REWRITE_PLAN` End-state 5 (FA-7); FOLLOWUPS + §9 table updated 2026-06-07. **Remaining:** cooperative UX sequencing in Phase 2c/4b docs as those phases land.
 
 **Explicitly out of scope for this doc series:** Stage 2 actor code changes;
 consensus changes; wallet file migration (pre-genesis: `rm -rf ~/.shekyl`).

@@ -1617,7 +1617,7 @@ synthetic vectors satisfy that seam without the client existing yet.
 
 | Gate | Relation to 2a |
 |------|----------------|
-| Subaddress / End-state 5 | **Does not block** 2a single-recipient transfer to a parsed `Address`; blocks Recipient-subaddress KEM stub and payment-request UX (2c) |
+| Subaddress / End-state 5 | **Does not block** 2a single-recipient transfer to a parsed `Address` or 2a-3 encode (sentinel `enc_label` only). FA-2/FA-8 land independently via PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113). Cooperative REQUEST label echo on send + payment-request Wallet/RPC UX are **Phase 2c / 4b** — see `WALLET_REWRITE_PLAN.md` sequencing table. |
 | **Curve-tree client (§3.0.4)** | **Does not block** 2a (2a uses a synthetic locally-computed path); **gates real-root mainnet sends** together with Phase 6. Bulk-leaf RPC (§3.0.3) is its first deliverable + a `SHEKYLD_PREREQUISITES.md` KAT |
 | Phase 2b / Stage 3 | **Parallel design only** — no `StakeEngine` code required. **Note:** stake lifecycle has the *same* curve-tree-path privacy constraint (§3.0.1) and the *same* root-staleness exposure (§3.6 `ProofStale`); the curve-tree client is a shared prerequisite, not a 2A-only one |
 | Stage 4 actor migrations | **After** 2a — daemon actor swap must not block 2a in-process `DaemonClient` |

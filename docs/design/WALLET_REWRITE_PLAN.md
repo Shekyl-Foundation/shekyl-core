@@ -15,7 +15,7 @@ todos:
     content: "Phase 2b (SUBSTANTIVE — not 'thin wrappers'): StakeInstance as first-class persisted type in WalletLedger with explicit StakeState enum (PendingBroadcast / Unconfirmed / Locked / Accruing / Claimable / Unstaking / FullyUnstaked); refresh-time reconciliation in apply_scan_result advances state based on scanned heights vs lock+accrual rules; user-facing methods Wallet::stakes(filter), Wallet::claimable_rewards, Wallet::stake/claim/unstake (each returns PendingTx, not finalized tx); plus balance + history + tx-by-id queries. Largest single sub-phase by scope; budget accordingly"
     status: pending
   - id: phase2_ops_addresses_proofs
-    content: "Phase 2c: primary_address/create_subaddress/list_addresses; tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors"
+    content: "Phase 2c (End-state 5): primary_address; create_payment_request / list_payment_requests / match_transfer_to_request; cooperative enc_label outbound when paying a payment URI (product flag, operational.cooperative_payment_requests); tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors. Engine substrate lands FA-8 (PR #113) before Wallet orchestrator methods. Does not block Phase 2a (2a-3 uses sentinel enc_label only)."
     status: pending
   - id: phase2_ops_cold_wallet
     content: "Phase 2d: air-gapped flow as UnsignedTxBundle/SignedTxBundle (Phase 1 binding decision) — Wallet::export_unsigned, Wallet::sign_unsigned (offline-only), Wallet::submit_signed (network-only, refuses unknown bundle hash); wallet2's four-call export_outputs/import_outputs/export_key_images/import_key_images dance is NOT ported"
@@ -24,7 +24,7 @@ todos:
     content: "Phase 3a: shekyl-cli binary scaffold under Shape B (CLI is always a thin client to shekyl-wallet-rpc; one-shot commands self-host an in-process rpc) — clap subcommands + rustyline REPL; open/status/balance/address"
     status: pending
   - id: phase3_cli_commands
-    content: "Phase 3b: shekyl-cli command set — transfer/stake/unstake/claim/history/tx/refresh/proofs/sign/verify/change_password/export_view_key/export_unsigned/submit_signed; confirmation prompts for sends (CLI-side, not RPC-side)"
+    content: "Phase 3b: shekyl-cli command set — transfer/stake/unstake/claim/history/tx/refresh/proofs/sign/verify/change_password/export_view_key/export_unsigned/submit_signed; request new / requests list / history incoming --unattributed (require Phase 2c Wallet API + Phase 4a in-process rpc — stubs until wired); confirmation prompts for sends (CLI-side, not RPC-side)"
     status: pending
   - id: phase4_rpc_scaffold
     content: "Phase 4a: shekyl-wallet-rpc binary scaffold — axum + tower JSON-RPC; HTTP basic auth + UDS auth path (UDS recommended default); tenant isolation type; in-process spawn entry point in lib.rs for Shape B CLI to consume"
@@ -410,6 +410,18 @@ Each operation is a method on `Wallet` with a focused signature. No mode flags; 
 
   `StakeInstance` is a first-class persisted type in `WalletLedger`. Refresh-time reconciliation: `apply_scan_result` (per Decision 3) advances each `StakeInstance.state` based on the scanned blocks' height vs each stake's lock periods and accrual rules. The wallet exposes `Wallet::stakes(filter)`, `Wallet::claimable_rewards() -> AtomicUnits`, `Wallet::stake(amount, tier) -> PendingTx`, `Wallet::claim(stake_id) -> PendingTx`, `Wallet::unstake(stake_id) -> PendingTx`. The build/claim/unstake methods enter the state machine; they do not return a finalized tx. **Phase 2b is the largest single sub-phase by scope** — implementing the state machine, refresh-time reconciliation, persistence in `WalletLedger`, and the user-facing query/build methods. Plan budget accordingly; "thin wrappers" was the wrong framing.
 - **Receive / addresses (Phase 2c — End-state 5):** `Wallet::primary_address()`, `Wallet::create_payment_request(req) -> PaymentRequestId`, `Wallet::list_payment_requests(filter)`, `Wallet::match_transfer_to_request(transfer_id, request_id)` (or equivalent reconcile API). Incoming history exposes `ReceiveAttribution` tiers per [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7.9. **No** `create_subaddress`. Meaningful request labels + merchant reconcile UX ship behind a product flag at V3.0 launch; sentinel-only wallets produce Tier-4 unattributed receive on the label axis (wire `enc_label` slot is always present per §6.4). Integrated addresses do not exist (Phase 1 decision).
+
+**End-state 5 implementation sequencing (doc pin, 2026-06-07).** Foundation (types, scanner, inbound merge) lands in the FA stack before the wallet rewrite surfaces it. **Does not block Phase 2a-3.**
+
+| Work | Where it lands | Notes |
+|------|----------------|-------|
+| FA-7 plan amendment | `dev` | End-state 5 binding in this doc |
+| FA-2 subaddress deletion | PR [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) → `dev` | Scanner + schema; merge before FA-8 |
+| FA-8 engine substrate | PR [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113) → `dev` | `PaymentRequest`, attribution merge, URI parse; flag default off |
+| Cooperative outbound (`enc_label` echo on send) | **Phase 2c** (with `OutputDestination`) | **Not** 2a-3 — 2a ships sentinel labels only (`PHASE_2A_SEND_PATH.md` §3.7.2) |
+| `Wallet::create_payment_request` / reconcile API | **Phase 2c** | Orchestrator wraps engine already in FA-8 |
+| `shekyl-wallet-rpc` payment-request methods | **Phase 4b** | Rust CLI supersedes C++ `wallet2_ffi`; do not wire C++ prefs |
+| Legacy C++ cooperative send hook | Until Phase 5 delete | Env-only bridge in `cryptonote_tx_utils`; not the product path |
 - **History:** `Wallet::transfers(filter) -> impl Iterator<&TransferDetails>`. Filter on direction/state/account/since-height.
 - **Balance:** `Wallet::balance() -> Balance { unlocked, locked, pending }`. Computed from `WalletLedger`.
 - **Proofs:** `Wallet::tx_proof(txid, dest) -> TxProof`, `Wallet::reserve_proof(amount) -> ReserveProof`. Delegate to [shekyl-proofs](rust/shekyl-proofs/).

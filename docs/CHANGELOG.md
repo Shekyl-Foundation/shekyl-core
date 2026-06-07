@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **docs: End-state 5 sequencing + checklist cleanup (2026-06-07).** Pins
+  implementation land order in `WALLET_REWRITE_PLAN.md` (YAML todos, Phase 2c
+  sequencing table: FA stack → 2c outbound/Wallet API → 4b RPC; 2a-3 not blocked).
+  Updates `SUBADDRESS_UNDER_PQC.md` §9–§11 (FA-7 landed, FA-2/FA-8 PR refs).
+  `PHASE_2A_SEND_PATH.md` §6 gate table + `FOLLOWUPS.md` subaddress-round status.
+
 - **docs: FA-7 — End-state 5 supersedes flat-subaddress wallet plan.** Amends
   `docs/design/WALLET_REWRITE_PLAN.md` (cross-cutting decisions, Phase 1–2c,
   CLI/RPC method lists) to match End-state 5 in
