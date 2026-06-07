@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **docs: PHASE_2B FSM retool disposition P2B-1–6 (2026-06-07).**
+  [`PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) — master key
+  `P_canonical_id`; dedup inversion; state collapse; reorg re-read; §3 supersession banner.
+  Emission §6.3: reject LMDB DUPSORT dup-keys option.
+
+- **docs: Gate 6 Round 1 — `P` hybrid derivation draft (2026-06-07).**
+  [`ARCHIVAL_FIREWALL_GATE6.md`](design/ARCHIVAL_FIREWALL_GATE6.md) §9: archival HKDF
+  labels, `p_slot`, account-level ML-DSA, `P_canonical_id`, dual-scan contract, V4
+  reversion clauses. Builds on Round 0 scaffold.
+
+- **docs: Gate 6 firewall design scaffold (2026-06-07).**
+  [`ARCHIVAL_FIREWALL_GATE6.md`](design/ARCHIVAL_FIREWALL_GATE6.md) — Round 0: four
+  firewall layers + bond-funding, `P` lifecycle, invariants, adversarial round plan;
+  couplings to epoch-length (F1), L16 transport, E-4 rotation threat.
+
 ### Changed
 
 - **staking-sim + docs: F1–F4 archival pin closure (2026-06-07).**

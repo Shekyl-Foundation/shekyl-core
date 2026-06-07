@@ -430,9 +430,20 @@ check_and_set(E): bool
 ```
 
 **Encoding (genesis pin):** Per-`P` **sparse set of absolute settlement-epoch indices**
-`E`. Implementation may use LMDB dup-keys `(P_id, E)`, a roaring bitmap, or append-only
-log — consensus-visible semantics only; **not** the retired 2-byte **relative** `u16`
-mask from tier-bounded stake claims.
+`E`. Consensus-visible semantics only; **not** the retired 2-byte **relative** `u16`
+mask from tier-bounded stake claims. **Concrete encoding deferred until `W` is pinned**
+([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-3; joint with F1/F4).
+
+**Rejected encoding options (pre-genesis):**
+
+- **LMDB `MDB_DUPSORT` dup-keys `(P_id, E)`** — collides with Shekyl composite-key
+  discipline ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md): no DUPSORT on Shekyl-native tables).
+  Use composite key `P_canonical_id ‖ BE(E)` or equivalent without DUPSORT.
+- **Roaring bitmap** — defer unless `W` proves large enough to justify dependency
+  ([`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)).
+
+**Candidate shapes (post-`W`):** sorted epoch list pruned to `E ≥ tip − W`; or fixed bitmap
+over the `(tip − W, tip]` window when `W` is small.
 
 **Why not reuse the u16 relative mask:** Stake claims were bounded to ≤15 epochs over
 a **tier lock window**. Archival `P` accrues settlement epochs **without a tier lock
@@ -733,6 +744,7 @@ amounts), bond post/slash reaction.
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics + `P` model |
 | [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | **Critical path** — gate 2/3 schema + `W` |
+| [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
 

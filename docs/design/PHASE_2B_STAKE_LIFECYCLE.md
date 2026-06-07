@@ -64,7 +64,8 @@ written against the **intermediate confidential-claim model** (2026-06-02 princi
 redesign + entitlement superstructure). Retool order: **§2 + §2.3 first** (this
 pass), then **gate 6 (`P` registration + firewall)** — fixes secret material and
 threat model everything downstream depends on — then §3 FSM, §7 threat model, §4–§6
-protocol.
+protocol. **Gate-6 design doc:** [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md)
+(Round 1 draft — §9 `P` hybrid derivation pinned 2026-06-07).
 
 Genesis staking = **transfer-shaped admission + archival service under firewalled
 `P`**. One reward stream: work scored on `P`'s public history, funded via `Σwork`
@@ -573,7 +574,9 @@ on-chain.
 3. **Threshold proof** (optional) — controlled value `≥ ADMISSION_MIN` if admission
    principal retained for economics.
 4. **No published dedup tag** — double-claim prevention is
-   `bond.claimed_epochs.check_and_set(E)` (§3.3.2 `EpochSet` class, relocated).
+   `bond.claimed_settlement_epochs.check_and_set(E)` on the consensus bond record
+   (encoding: [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6.3;
+   FSM retool: [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-2/3).
 
 **Not owed:** ClaimLinkability, `N_arch = x·G_arch`, or any stake-keyed emission
 tag. **`R_market`** is ledger-derived (gate 3 dissolved).
@@ -623,10 +626,19 @@ Schema pin + (ii) sim + (iii) admission principal remain before Stage 3 emission
 
 ## 3. StakeState FSM (pinned draft for Round 1–2 review)
 
+> **⚠ SUPERSEDED PENDING RETOOL (2026-06-07).** §3–§5.2 below are **claim-era** FSM text —
+> output-keyed `StakeId`, nullifier-derived `claimed_epochs`, tier-lock yield states. They
+> **contradict** rebased §2.4 and [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6.
+> Authoritative retool disposition:
+> [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) (P2B-1–6). **Do not implement §3
+> as written.** P2B-1 master finding: wallet primary key → `P_canonical_id`.
+
 ### 3.1 States
 
 States are unchanged in shape from the prior draft; **fields change** to carry
 confidential material and the claimed-epoch set instead of a watermark.
+
+*(Stale — see retool doc P2B-4.)*
 
 ```rust
 /// Wallet-observed stake lifecycle. Distinct from on-chain `TransferDetails::staked`

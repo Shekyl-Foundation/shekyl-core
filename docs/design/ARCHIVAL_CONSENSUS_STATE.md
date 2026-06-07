@@ -273,8 +273,8 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 
 | Workstream | Status |
 |------------|--------|
-| **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet` |
-| **Gate 6 firewall** | Load-bearing privacy |
+| **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet`; retool disposition [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) |
+| **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
 | **Numeric `W`** | Shape pinned; value open |
@@ -326,8 +326,10 @@ threat-model argument, this doc owns the consensus read-surface coupling.
 |-----|----------------|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumer; owns `Σwork` arithmetic and dedup |
 | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet FSM; gate 2 registration shape |
+| [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | §3–§7 retool disposition (P2B-1–6) |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; two-count table; honest residual |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
+| [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 
 ---
 

@@ -2139,7 +2139,7 @@ L16's identity checks (`l16_L6_s0` ≡ `l16_L6_s4`; `l16_L6_floor` ≡ `l16_L6`)
 | Retention / durability economics | L1–L13 (+ P1–P4) | Shapes settled |
 | Retrieval SLA definition | Per-class service promise | **Step 0 — pinned** (`V3_STAKER_ARCHIVAL.md` §*Service promise*) |
 | Retrieval under pinned SLA | L15 re-run + L16 transport | Step 1 closed (L15d/L16d); step 2 reduced scope |
-| Contained crypto / counting | L14 crediting, archival read contract, firewall | Step 3 |
+| Contained crypto / counting | L14 crediting, archival read contract, firewall | Step 3 — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) |
 | Genesis lifecycle pins | Key rotation, `market_R`/`durability_count`, legal disclosure | **Pre-genesis — see spec §*Service promise*** |
 
 ### Step 0 — pin the SLA per retrieval class (before L15)

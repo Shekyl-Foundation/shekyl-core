@@ -18,11 +18,11 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — Layer 1 emission spec closed. Next: ARCHIVAL_CONSENSUS_STATE.md (gate 2/3 schema + MAX_CLAIM_AGE_W). Parallel: FSM retool, gate 6. Layer 2: margin-robustness band (not point giniW). Remaining: FcmpMembershipOnly, gate 7, byte aggregate (ii)."
+    content: "Phase 2b design — Layer 1 emission spec closed. ARCHIVAL_CONSENSUS_STATE.md in progress. Parallel: FSM retool. Layer 2: margin-robustness band (not point giniW). Remaining: FcmpMembershipOnly, gate 7, byte aggregate (ii)."
     status: in_progress
   - id: phase2b_gate6_p_registration
-    content: "Phase 2b design — gate 6: off-chain backing, HKDF P sub-wallet, firewall (network/timing/output/bond-funding), decorrelated unstake drain. No N_arch tag."
-    status: pending
+    content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain."
+    status: in_progress
   - id: phase2b_stage3_stake_engine
     content: "Phase 2b implementation — Stage 3: StakeEngine, ordinary principal↔P transfers, reward emission, bond lifecycle, Σwork path. Gated on §2.4 closure. entitlement.rs / 3C / cleartext stake-claim deletion targets."
     status: pending
