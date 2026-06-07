@@ -11,9 +11,8 @@
 //!
 //! # Wire format
 //!
-//! Postcard (`serde`-compatible binary format). Every key-sorted
-//! container is a [`BTreeMap`] rather than a `HashMap` so that repeat
-//! serialization of the same logical value produces the same bytes.
+//! Postcard (`serde`-compatible binary format). Field order is fixed by
+//! the struct layout; there are no map-typed fields after FA-2.
 //!
 //! # FA-2 (End-state 5)
 //!

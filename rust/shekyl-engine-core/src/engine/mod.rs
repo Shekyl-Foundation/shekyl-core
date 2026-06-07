@@ -385,8 +385,8 @@ pub struct Engine<
     /// The aggregate carries:
     ///
     /// - The [`shekyl_engine_state::WalletLedger`] — scanner-derived
-    ///   transfers, bookkeeping (primary label, address
-    ///   book, account tags), tx metadata (`tx_keys`, scanned pool
+    ///   transfers, bookkeeping (primary label and address book), tx
+    ///   metadata (`tx_keys`, scanned pool
     ///   txs), and the sync-state block. **Reservations do not live
     ///   here** — see [`local_pending_tx`](crate::engine::local_pending_tx)
     ///   below (reservations live in `LocalPendingTx`, not in the ledger).

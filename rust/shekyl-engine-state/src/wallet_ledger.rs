@@ -97,8 +97,7 @@ pub struct WalletLedger {
     /// Scanner-derived on-chain ledger: transfers, tip, reorg window.
     pub ledger: LedgerBlock,
 
-    /// User-facing UX state: primary label, address
-    /// book, account tags.
+    /// User-facing UX state: primary label and address book.
     pub bookkeeping: BookkeepingBlock,
 
     /// Per-tx side channel: tx secret keys, notes, attributes, pool

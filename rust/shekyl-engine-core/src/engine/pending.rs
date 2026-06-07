@@ -26,9 +26,9 @@
 //! again on next open"; that is exactly what runtime-only tracking
 //! gives us, with no reconciliation path.
 //!
-//! `BOOKKEEPING_BLOCK_VERSION` is therefore unchanged by this commit;
-//! the bookkeeping block's scope stays "primary label, address
-//! address book."
+//! Pending reservations are runtime-only; they are not persisted in
+//! [`BookkeepingBlock`](shekyl_engine_state::BookkeepingBlock). After FA-2
+//! (End-state 5), bookkeeping holds only the primary label and address book.
 //!
 //! # State machine
 //!

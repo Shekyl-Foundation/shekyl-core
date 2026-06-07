@@ -462,8 +462,8 @@ pub enum BuildErrorKind {
 /// Phase 0f recursive-trust-boundary projection per PR 4 §5.4.8 #4:
 /// the diagnostic stream's trust boundary is in-process only, but
 /// the projection still avoids exposing fingerprintable / linkable
-/// material. Recipient addresses and amounts
-/// filter are not projected (correlation-attack surface for any
+/// material. Recipient addresses and amounts are not projected
+/// (correlation-attack surface for any
 /// future intra-process consumer). The projection exposes:
 ///
 /// - `recipient_count` — the number of distinct
