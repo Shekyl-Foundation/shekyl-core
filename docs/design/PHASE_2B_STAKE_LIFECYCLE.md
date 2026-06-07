@@ -1,12 +1,26 @@
 # Phase 2b — stake lifecycle (design)
 
-**Status:** Re-based onto the **confidential staking** consensus redesign
-(design session 2026-06-02). This is a **substrate-level reopen**: the model the
-prior draft mirrored (cleartext staked amounts, public `staked_output_index`,
-monotonic claim watermark, pool-denominator yield) is being replaced by committed
-amounts, membership-unlinkable claims, per-epoch nullifiers, and a band-servo'd
-public rate. **Upstream consensus Round 1 closed** (2026-06-02 — [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14); wallet Round 1 design pins landed (§6.4, R0-D8). No Stage 3
-implementation until Round 3 closes per
+**Status:** Genesis staking substrate is **pay-for-service archival rebasing +
+firewalled pseudonym `P`** ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
+§*Pay-for-service rebasing*; F-ARCHIVAL resolution in §7.5.3). Pre-genesis there
+is **one** ship target — not a confidential-yield stack built now and replaced at
+genesis. The **reserve-DLEQ entitlement / `tier_num` claim path**
+(`CONFIDENTIAL_STAKING.md` §6.4 claim wire + `rust/shekyl-staking/`
+`entitlement.rs` / `tiers.rs` / `rewards.rs`) is **deletion target**, not
+interim implementation.
+
+This document still records the **2026-06-02 confidential-principal redesign**
+(committed stake amounts, membership proofs, FCMP++ spend/unstake path, wallet
+opening discipline §3.3.1) because that machinery **survives** rebasing: principal
+lock, `C_stake`, stealth payouts, `KeyEngine` boundaries. What rebasing **replaces**
+is the **reward identity and economics**: tier-scaled confidential entitlement →
+**work-scored payment under `P`** (publicly computable from archival history;
+existential inflation item → loud 8c retention-proof unforgeability, not silent 8a).
+
+Wallet Rounds 0–2 pins (FSM, persistence, §4.7 actor protocol, §5 reconciliation,
+§6 API, §8.6 `rate_at_epoch` → **`Σwork` servo** on rebased substrate) remain
+load-bearing where not explicitly superseded below. No Stage 3 implementation until
+**Round 3 closes on the rebased substrate** per
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §7.
 
 **Process discipline:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -46,8 +60,11 @@ and applied throughout:
 5. **The nullifier set is reorg-state.** On reorg, claimed epochs un-claim; the
    wallet mirror must rewind the claimed-epoch set, not a watermark.
 
-The economics (servo, `ρ_cap`, band granularity, circuit relation) live **upstream**
-in the confidential-staking consensus design — see §2.3 and §11. This document
+The **principal-lock and commitment** economics live upstream in
+[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) (servo pins, band granularity
+for the **pre-rebase** claim model). The **genesis reward servo** is rebased onto
+`Σwork` ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) gate-list item 1;
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)). This document
 mirrors that truth and owns only the wallet lifecycle.
 
 ---
@@ -1649,10 +1666,14 @@ point-equality link, no Priority-2 finding). A first clean close was recorded 20
 then **re-gated the same day by the dual-wargamer synthesis in §7.5.3**, which surfaced a new
 top finding **F0** (the claim's effective anonymity set is the `{tier × creation-window}`
 cohort, confirmed at source, which reframes T1/T2/T3 into one structural problem and can
-approach a cohort of one at cold start). **Round 3 design closure is therefore re-gated on
-F0's cross-track disposition** (§7.5.3); the other residuals (FOLLOWUPS V3.1, the remaining
-cross-track asks, Stage-3 pins) are unaffected and carry reopening triggers. Stage 3 *merge*
-remains gated on the confidential-consensus dependency (§8.0), independent of this round.
+approach a cohort of one at cold start). **Historical note (2026-06-05):** closure was
+re-gated on F0 bucketing on the **confidential-entitlement claim wire**. **Superseded
+(2026-06):** F-ARCHIVAL pay-for-service rebasing retires that wire for genesis; F0
+bucketing is **not** the Round 3 closure item on the rebased substrate (see §7.5.3
+*F0 disposition on the rebased substrate*). The other residuals (FOLLOWUPS V3.1,
+Stage-3 pins on principal/unstake path) carry reopening triggers where still
+load-bearing. Stage 3 *merge* remains gated on §8.0 (rebased substrate + Tier 1
+soundness), not on F0 bucketing.
 
 #### 7.5.3 Round 3 synthesis (dual-wargamer adversarial pass, 2026-06-05)
 
@@ -2288,14 +2309,35 @@ cross-pseudonym intersection (one person, multiple Ps) re-merges profiles if net
 hygiene fails per-pseudonym. The keystone makes this a *privacy* hygiene concern, not a *security* one
 (multiple Ps buy no bond savings, so running many is not itself an attack).
 
-**Scope.** This **replaces** the confidential-yield subsystem (reserve-DLEQ entitlement,
-bounded-remainder, `tier_num·amount`; `CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/`
-`entitlement.rs`/`tiers.rs`/`rewards.rs`) rather than extending it — a large audit-surface deletion,
-which is the point. `CONFIDENTIAL_STAKING.md` is **not** edited to match until gate 4 (tier) and gate 1
-(normalizer) settle. Tracked in `FOLLOWUPS.md`; nutshell: **staking is the opt-in to archival because
-staking = archiving.**
+**Scope — genesis binding (2026-06).** This **replaces** the confidential-yield subsystem
+(reserve-DLEQ entitlement, bounded-remainder, `tier_num·amount`; `rust/shekyl-staking/`
+`entitlement.rs`/`tiers.rs`/`rewards.rs`) rather than extending it — a large audit-surface
+deletion, which is the point. **Pre-genesis discipline:** implement **once** against this
+substrate; do **not** land Stage 3 on the entitlement claim path and plan a post-genesis
+migration. `CONFIDENTIAL_STAKING.md` is edited **surgically** — retain principal
+lock / `C_stake` / unstake membership machinery; **delete or never implement** the
+claim-entitlement wire (`txin_stake_claim_v2` tier/`h_bind` reward path) in favor of
+the `P`-mediated pay-for-archival reward surface. Sim gate 4 (bond rate) and gate 1
+(`Σwork` normalizer) pins are **closed or in flight**; Tier 1 crypto soundness
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) step 3) gates consensus-real
+implementation. Nutshell: **staking is the opt-in to archival because staking =
+archiving**; **`P` is the primary reward identity.**
 
-##### F-INFLATION — split T8: entitlement soundness **and** band-declaration binding are co-equal
+##### F0 disposition on the rebased substrate (supersedes bucketing gate for genesis)
+
+The §7.5.3 **F0** finding (claim anonymity set = `{tier × creation_height}` cohort on
+the **confidential-entitlement claim wire**) was load-bearing **on the substrate being
+replaced**. Pay-for-service rebasing **removes `tier` from the reward path** (per-shard
+retention bonds replace the staker-wide tier oracle) and moves long-lived identity to
+**`P`** (firewalled pseudonym — public shard-set / performance under `P`, stake/claim
+principal hidden behind membership proof + firewall). F0's **cleartext claim-cohort
+bucketing decision** (`CONFIDENTIAL_STAKING.md` §14.4 item-9) is therefore **not the
+genesis Round 3 closure item**; it remains in the record as analysis of the retired
+claim wire. **Genesis Round 3 closure** instead ratifies the F-ARCHIVAL gate-list
+(§7.5.3 / `V3_STAKER_ARCHIVAL.md`) and pins wallet/engine shapes against **`P` +
+per-shard bonds + `Σwork`**, with Tier 1 soundness pass step 3 as the crypto gate.
+
+##### F-INFLATION — split T8 on the **retired** entitlement substrate (historical wargame record)
 
 Silent inflation is the existential class — the two worst bugs in privacy-crypto history are
 both invisible-inflation (**Zcash's BCTV14 counterfeiting flaw**, patched in secret; **Monero's
@@ -2408,70 +2450,78 @@ cross-track FOLLOWUP under F0; it does **not** gate Phase 2B or Round 3 closure.
 ##### Synthesis closure status
 
 The synthesis **confirms** the §7.5 wargame's dispositions except where sharpened above, and
-surfaces **F0 as the round's top finding**. The merged-list **#2 (the §6.4 reveal-vs-ZK
-check) is now resolved at source** (2026-06-05): `(tier, creation_height)` are **cleartext
-wire fields** (§6.4.8) — revealed-by-design and load-bearing for inflation-safety (§6.4.3) —
-so F0's *factual* question is closed. The **baseline-budget calibration** (2026-06-05) then
-**de-escalates the remaining decision**: F0 is the **same category** of cost the project
-already accepted (staking is the exposed overlay; the spend path is untouched; the core promise
-is intact), and the only properties that **exceed** the accepted budget are **scale-resistance**
-(the `{tier × exact-height}` cohort does not dilute with growth) and **targeted-cascade**.
-**Cleartext `creation` bucketing (option 2) is the recommended v1 disposition** because it
-attacks exactly those — it restores dilution-with-growth, bringing the cost back toward the
-membership-shaped baseline; the residual within-tier within-bucket cohort **probably sits inside
-the accepted budget**. **De-tiering is deferred V-future** (reject-now-with-reopening-criterion:
-a high-value-target threat model on the within-tier residual). So the remaining **consensus
-policy decision shrinks** to: *ratify creation-bucketing + pick the width `W`* (the cohort ⇄
-lock-shift dial), and record the accept-exact-vs-bucket choice — **not** an open three-way
-"perfect-privacy-vs-hole." Closure stays **re-gated on that (now much smaller) F0 bucketing
-decision**; the `{tier × bucket}` k-anonymity gate and V4 hiding remain available but are not
-the v1 ask, and the §14 `band_sum` floor does **not** substitute (different leak). New forward
-actions: F0 wallet **claim**-cohort-warning + the F0 consensus
-bucketing/width decision; the T1/T4/T14 FOLLOWUP gains circuit-hygiene + Dandelion++-equivalence
-acceptance criteria; T10/G12 gains the epoch-count accept-vs-pad decision; T5 gains the
-constant-time claim-build Stage-3 pin; T9 gains the advisory-claimability wallet pin; **A5**
-adds the mass-unstaking simulation (cross-track to economics). Ranked priority to chase, with
-#2 now resolved and **T7 elevated by F0**: **(1) the soundness tier — entitlement +
-band-declaration soundness (8a/8b — existential, unverified, top rigor — do not wave through
-on mechanism-presence) *and* T7 DDH/`G_S`-NUMS-independence (now the sole on-chain protection
-for within-cohort claim unlinkability, ranked adjacent)**, **(2) the F0 cohort decision, now
-de-escalated by the baseline-budget calibration — ratify cleartext creation-bucketing
-(recommended v1; restores scale-dilution to the accepted budget) + pick width `W`; de-tiering
-deferred V-future; band floor ≠ claim-cohort floor)**, **(3) network circuit-hygiene re-scoped
-to "don't let the network undo DDH" +
-query-leak + induced-duplicate (cohort linkage is now chain-owned, not network-fixable)**,
-**(4) the A5 mass-unstaking simulation**, **(5) reorg property tests + `AtomicUnits`-boundary
-tests (the agreed correctness closure where silent user loss would otherwise hide).**
+surfaces **F0 as the round's top finding on the then-current confidential-entitlement
+substrate** (2026-06-05). **Genesis substrate update (2026-06):** F-ARCHIVAL pay-for-service
+rebasing **supersedes F0 as a Round 3 closure gate** — tier leaves the reward path, identity
+moves to **`P`**, entitlement claims are not shipped. The wargame record (F0 analysis,
+8a/8b inflation split, T7/`G_S` on the claim wire) remains **audit history** for the retired
+path; do not implement against it.
+
+**Round 3 closure on the rebased substrate** ratifies the F-ARCHIVAL gate-list (§7.5.3 /
+`V3_STAKER_ARCHIVAL.md`) and pins Stage 3 against:
+
+1. **Tier 1 crypto soundness** — `P` registration/backing, `ν = H(P, shard)` counting, L14
+   crediting, retention-proof unforgeability (loud 8c); [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
+   soundness pass step 3.
+2. **`Σwork` supply servo** — gate 1; replaces `band_sum`-differencing normalizer on the
+   reward path.
+3. **Per-shard retention bonds** — gate 4 pin closed (`ARCHIVAL_BOND_FLOOR`); calibration
+   record in sim.
+4. **Firewall stack** — network / timing / stealth payout for `P` (privacy is identity
+   isolation, not hidden reward amounts).
+5. **Principal-path carry-forward** — committed `C_stake`, unstake membership spend, wallet
+   §3.3.1 opening discipline, §5 nullifier rebuild **where still applicable** on the rebased
+   payout path (exact claim-tx shape is a Round 4 pin, not the retired `txin_stake_claim_v2`
+   entitlement wire).
+
+Residual forward actions that **still apply** on the rebased substrate: T5 constant-time
+secret-touching crypto; T9 advisory daemon claimability (adapted to `P`/challenge state);
+A5 mass-unstaking / `Σwork` shock sim; reorg + `AtomicUnits` boundary tests. **Retired with
+the entitlement path:** F0 bucketing, 8a/8b entitlement circuit, tier on claim wire.
 
 ---
 
 ## 8. Forward actions and reversion clauses
 
-### 8.0 Confidential-consensus dependency (Stage 3 merge gate)
+### 8.0 Genesis substrate dependency (Stage 3 merge gate)
 
-**Stage 3 merge to `dev` is blocked** until this document's **Round 3** closes
-(threat-model + wider-substrate audit). **Upstream consensus Round 1 is closed**
-(2026-06-02): wire sketch (`txin_stake_claim_v2`), servo + `ρ_cap` pins, §6.4
-**(A)** reserve-DLEQ + bounded remainder; **(C)** closed on **3C** (2026-06-04). Byte-exact
-serialization, staking-subtree 5-scalar leaf / `h_bind` KATs, entitlement vectors are
-upstream Round 2 gates; implementation against the cleartext HF17 model is forbidden.
+**Stage 3 merge to `dev` is blocked** until this document's **Round 3** closes on the
+**rebased substrate** (F-ARCHIVAL gate-list ratified; Tier 1 soundness pass step 3
+specified) and Rounds 4–5 complete per §9.
 
-**The reorg/`pop_block` nullifier-set revert is part of this gate, not a separate one.**
-The wallet does no reversal — §5 rebuilds `claimed_epochs` forward from canonical chain
-state and relies on daemon reorg correctness exactly as the spend path relies on
-spent-key-image revert. The daemon's `pop_block` reversal
-([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §11) is inherited-architecture
-consensus code, unimplemented together with the rest of the confidential mechanism and
-gated together — not a §5-specific dependency.
+**Ship target (one substrate, pre-genesis):**
 
-**Parallel work allowed (design + isolated spikes):** Rounds 2–6 on this document,
-trait sketches, FSM tests against mocks, opening re-derivation spikes (§4.2) — provided
-spikes do not land cleartext `staked_output_index` / watermark paths on `dev`. Feature-branch
-consensus implementation tracks upstream Round 2+; wallet Stage 3 lands after
-**Round 3 closure here** (not upstream Round 1 alone).
+| Layer | Genesis disposition | Deletion / never-ship |
+|-------|---------------------|----------------------|
+| Principal lock + `C_stake` | Retain from confidential principal redesign | Cleartext `staked_output_index`, watermark |
+| Unstake / spend | FCMP++ membership path (§7.5.1 T11 resolved) | — |
+| Reward identity | Firewalled **`P`** + membership backing | Public `entity_id` lookup |
+| Reward economics | `Σwork` servo, per-shard bonds, loud 8c retention | Reserve-DLEQ entitlement, `tier_num` claim wire |
+| Wallet secrets | §3.3.1 `(amount, z)` re-derived, never sealed | Sealed opening region |
 
-**Reopen/track (Round 2+):** byte-exact claim/stake wire; `STAKE_CLAIM_GS.json`;
-[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §13 Round 2 rows. Economics
+**Do not implement** `txin_stake_claim_v2` entitlement claims, `entitlement.rs` prove
+paths, or F0 bucketing as Stage 3 work — that is the **retired** confidential-yield
+subsystem. Existing `shekyl-staking` entitlement code is **exploratory / deletion
+target** until rebased reward modules replace it.
+
+**Upstream carry-forward:** principal commitment + range proof pins from
+[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14 (servo history, `ρ_cap`
+where still load-bearing on non-reward surfaces). **Upstream superseded for genesis
+reward path:** §6.4 **(A)** entitlement + **(C)** claim `h_bind` tier multiplier wire.
+
+**The reorg/`pop_block` nullifier-set revert** applies to **whatever nullifier set
+the rebased payout path uses** (claim epochs on the retired wire; challenge/retention
+state under `P` on the rebased wire). Wallet §5 forward-rebuild discipline carries
+forward; exact fields are a Round 4 pin on the rebased wire.
+
+**Parallel work allowed (design + isolated spikes):** Rounds 4–6, trait sketches,
+FSM tests against mocks, opening re-derivation spikes (§4.2), archival Tier 1 crypto
+spec — provided spikes do not land the **entitlement claim path** on `dev`. Wallet
+Stage 3 lands after **Round 3–5 closure on the rebased substrate**.
+
+**Reopen/track:** rebased reward/challenge wire (replaces byte-exact entitlement
+claim wire); `P`/`G_arch` KATs; [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
+soundness pass step 3. Economics
 and crypto Round 1 pins are in upstream §14 — do not re-litigate without §14 reopen
 criteria.
 
@@ -2637,8 +2687,9 @@ The underlying `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`)
 deleted by this — it is repurposed as `rate_at_epoch`'s internal `ρ_e`-derivation input
 (internal state, not a public trait method).
 
-**Stage-3 grep-retire / delete enumeration** (the code action; design is essentially
-complete — closure re-gated on F0 per §7.5.3 — code lands with Stage 3):
+**Stage-3 grep-retire / delete enumeration** (the code action; `pool_weighted_total`
+design pin complete — code lands with Stage 3 on the rebased substrate; add
+`entitlement.rs` / claim-wire paths to the delete list per §8.0):
 
 - `rust/.../traits/economics.rs` — remove `fn pool_weighted_total(&self) -> u128;` + rustdoc.
 - `rust/.../local_economics.rs` — remove the impl (`:166`) + module-doc bullet (`:21`).
@@ -2649,6 +2700,8 @@ complete — closure re-gated on F0 per §7.5.3 — code lands with Stage 3):
   `:11/:33/:42/:86` doc references.
 - `rust/.../mod.rs` (`:521`), `lifecycle.rs` (`:750`) — update the `pool_weighted_total`
   shared-state comments to `rate_at_epoch`.
+- `rust/shekyl-staking/src/entitlement*` — **delete or replace** with rebased `P`/`Σwork`
+  reward modules; do not extend for genesis (§8.0).
 
 **Boundaries-doc amendment (landed alongside this pin):**
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7 "Ownership" — drop
@@ -2711,7 +2764,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
 **Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; §5 reconciliation is fully wallet-design signed off** — it does **no reversal**, rebuilding `claimed_epochs` forward from the canonical post-reorg chain and relying on daemon reorg correctness exactly as the spend path relies on spent-key-image revert (baseline daemon correctness, not a §5-specific dependency). **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; §5 reconciliation is wallet-design signed off (Rounds 1–2).** It does no reversal — forward-rebuild only (clarified 2026-06-05); daemon reorg correctness is assumed as for spent key images, not a §5-specific carry. No further wallet design work blocks Round 3. **§0.1 pre-flight re-verify trio closed (2026-06-05):** §2 trait-binding, the §1.5 three-condition test, and the surface-amendment re-confirmed against the §0.10 secret-ownership shift (the actor's only secret state is in-memory `(amount, z)`, re-derived on hydration, never sealed; fail-stop isolation holds because the secret is reconstructable, not authoritative-at-rest). §2.7 / §3.3 were discharged by the §8.6 landing (`rate_at_epoch` is a §3.3.6 pure-read, no `.await`-ordering obligation); §8.3 lens row clean. **One residual fixed:** boundaries-doc §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" — an 8th dead pool-denominator reference the literal-name `pool_weighted_total` sweep missed — corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield = `rate_at_epoch` × own weight). |
-| **3** | **Executed + synthesized (2026-06-05, §7.5/§7.5.3) — closure re-gated on F0** | Threat-model exhaustion (§7) + §6 wider-substrate audit, **executed** against history (Monero / Zcash / Grin-MimbleWimble / PoS-DeFi), then pressure-tested by a **dual-wargamer adversarial synthesis** (§7.5.3) adding adversary **A5** (economic/rational) and surfacing **top finding F0**: the claim's effective anonymity set is the **`{tier × creation_height}` cohort** (`tier` u8 + `creation_height` u64 are **cleartext wire fields** — §6.4.8; verifier recomputes `h_bind` + multiplier from them — §6.4.3) — **not** the staking subtree, reframing T1/T2/T3 into one structural variable and making claim↔claim linkage **deterministic exact-match** (cold-start cohort → 1). F0 **re-opens** `CONFIDENTIAL_STAKING.md` §14.4 item-9 and **re-gates closure** on its cross-track disposition. **Reveal-vs-ZK resolved at source 2026-06-05:** `tier`/`creation_height` are **cleartext wire fields** (§6.4.8) — revealed-by-design, load-bearing for inflation-safety (§6.4.3, the 3C-over-3A "no new primitive" win) — so claim↔claim linkage is **deterministic exact-match**, and the gating item is now the **`{tier × creation_height}` claim-cohort-floor-vs-explicit-accept** decision (distinct from, and **not** closed by, the §14 `band_sum` floor — two separate leaks). Inflation T8 **split** into 8a entitlement-soundness + 8b band-declaration binding (co-equal). Sharpenings: T9 induced-duplicate, T1/T4/T14 circuit-hygiene, T13 three-knives, T10/G12 stake-age leak, T3 whale/differencing, T5 constant-time + view-key-resident residual, T7 NUMS, T6 §11 atomicity load-bearing. All §7.4 **T1–T9** + **G1–G10** items dispositioned, **plus** privacy-crypto-survey additions **T10–T14** (claim-tx-type/staker-set distinguishability — Zcash shielded-set; stake↔unstake commitment linkage — MimbleWimble; one-time-key collision — Monero burning-bug; remote-node query-pattern leak — Monero malicious-remote-node; whole-lifecycle broadcast-origin) and **G11–G13** (proof-soundness/inflation — Zcash 2018 / Monero 2017; wallet/tx-construction fingerprint — Monero wallet2; claim front-running/censorship MEV). Janus (subaddress linkage) confirmed **N/A** under FA-1. Dispositions per rule 21; residuals (§7.5.2): **7 FOLLOWUPS (V3.1)**, **2 cross-track asks** (T3 cohort floor, T10 L4-for-V4), **5 Stage-3 load-bearing pins**, **1 priority-reject (G10)**, **3 N/A**. Load-bearing findings (§7.5.1): (1) inflation = worst class → wallet non-masking (T8/G11, priority-1); (2) **T11 stake↔unstake commitment linkage — investigated and resolved** (the candidate gating finding under the first close); (3) bulk-fetch-only nullifier scan (T13); (4) staking publicly observable as a class, v1-accepted / V4-L4-hidden (T10). **T11 was resolved at source (§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend appending a fresh output — `CONFIDENTIAL_STAKING.md` §6.3/§6.4.3/§7 — so the literal `C_stake` is never re-published; no point-equality link, no Priority-2 finding). A first clean close was recorded 2026-06-05, then re-gated the same day by the §7.5.3 synthesis on top finding F0;** all other residuals carry reopening triggers and do not block wallet design. (Nullifier-reorg is a wallet-side forward-rebuild property — T6 — not a cross-track dep; daemon reorg correctness is assumed as for spent key images.) Stage 3 *merge* remains gated on the §8.0 confidential-consensus dependency, independent of this round. |
+| **3** | **Wargame executed (2026-06-05); closure re-based on F-ARCHIVAL substrate (2026-06)** | Threat-model exhaustion (§7) + §6 wider-substrate audit **executed**; dual-wargamer synthesis (§7.5.3) surfaced **F0** on the **then-current confidential-entitlement claim wire** (top finding: `{tier × creation_height}` cohort linkage). **F-ARCHIVAL pay-for-service rebasing supersedes F0 as genesis closure gate:** tier oracle and entitlement claim wire are **retired**; reward identity = **`P`**; inflation existential → **loud 8c** retention unforgeability. Wargame dispositions (T1–T14, G1–G13, A5, 8a/8b split) remain **audit record** for the retired path. **Open for Round 3 close:** ratify F-ARCHIVAL gate-list (§7.5.3); complete Tier 1 soundness pass step 3 spec; pin rebased Stage 3 wire (replaces `txin_stake_claim_v2` entitlement). Carry-forward pins: T5 constant-time; T11 unstake resolved; T13 bulk-fetch; firewall stack for `P`. **Not genesis gates:** F0 bucketing, 8a entitlement circuit, implementing `entitlement.rs` on `dev`. Stage 3 merge gated on §8.0 rebased substrate + Rounds 4–5. |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
 | **6** | Open | External critique buffer (optional) |
@@ -2741,16 +2794,18 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **Dual-wargamer synthesis executed (2026-06-05, §7.5.3).** Confirmed/sharpened the §7.5 dispositions, added adversary **A5** (economic/rational), split inflation **T8 → 8a entitlement-soundness + 8b band-declaration binding**, and surfaced **top finding F0** (the claim anonymity set is the `{tier × creation-window}` cohort — confirmed at source).
 - [x] **F0 reveal-vs-ZK resolved at source (2026-06-05, §7.5.3 / §6.4).** `tier` (u8) and `creation_height` (u64) are **cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8); the verifier recomputes `h_bind` and the multiplier from them (§6.4.3). Revealed-by-design and **load-bearing for inflation-safety** (single revealed `tier` excludes tier-forgery; the 3C-over-3A "no new primitive" win) — hiding them re-opens 3C-vs-3A, so L4 is V4 co-design, not a v1 bolt-on. Claim↔claim linkage is therefore **deterministic exact-match**, cohort `→ 1` at cold start.
 - [x] **F0 baseline-budget calibration (2026-06-05, §7.5.3).** Priced F0 against the staking-exposure budget the project accepted *before* confidential staking: F0 is the **same category** of cost (staking is the exposed overlay; spend path untouched; core promise intact), exceeding baseline only in **scale-resistance** (block-granular `{tier × exact-height}` cohort does not dilute with growth — a steady-state, not just cold-start, thinness) and **targeted-cascade**. Marginal delta over the realistic already-linkable counterfactual (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor — **most penalizing the privacy-conscious staker**. **De-escalates the decision.**
-- [ ] **Round 3 design closure — RE-GATED on F0, now de-escalated to a bucketing-shaped decision (2026-06-05).** F0 re-opens `CONFIDENTIAL_STAKING.md` §14.4 item-9; with the reveal resolved *and* the budget calibration done, the remaining **consensus policy decision shrinks** to: **ratify cleartext `creation`-bucketing (recommended v1 — restores scale-dilution to the accepted budget; hard rule: round creation UP) + pick width `W`**, and record the accept-exact-vs-bucket choice. The `{tier × bucket}` k-anonymity gate and V4 in-circuit hiding remain available but are **not** the v1 ask; **de-tiering is deferred V-future** (reject-now-with-reopening-criterion: a high-value-target threat model on the within-tier within-bucket residual); the §14 `band_sum` floor does **not** substitute (separate leak). All *other* residuals carry reopening triggers (7 FOLLOWUPS V3.1 + F0 wallet claim-cohort-warning + A5 mass-unstaking sim; cross-track asks; Stage-3 pins incl. constant-time claim-build; 1 priority-reject; 3 N/A) and do not block wallet design. Stage 3 *merge* remains gated on the §8.0 confidential-consensus dependency, independent of this round.
+- [ ] **Round 3 design closure — rebased substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified in this doc + `V3_STAKER_ARCHIVAL.md`; **(2)** Tier 1 soundness pass step 3 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)) — four crypto primitives specified; **(3)** explicit record that entitlement claim path / F0 bucketing are **not** genesis ship targets. **Superseded:** F0 cleartext creation-bucketing as Round 3 gate (analysis retained in §7.5.3 for the retired wire). Residuals: FOLLOWUPS V3.1 where still load-bearing on principal/`P` firewall; A5 `Σwork` shock sim; Stage-3 pins (T5 constant-time, T13 bulk-fetch). Stage 3 merge gated on §8.0 + Rounds 4–5.
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))
 
 - [ ] `StakeEngine` + `StakeEngineHandle` + `StakeActor` (`kameo`), fail-stop, re-derived (never-sealed) openings
-- [ ] FSM transition tests in isolation (incl. nullifier-reorg un-claim)
-- [ ] `StakeEvent` (confidential variants) wired through refresh → ledger → stake actor
-- [ ] Exact-yield computation from the public rate schedule (no pool denominator)
-- [ ] `is_active_staker` message exposed
+- [ ] FSM transition tests in isolation (incl. reorg rebuild on rebased payout state)
+- [ ] `StakeEvent` + archival registration/challenge events wired through refresh → ledger → stake actor
+- [ ] **`P` lifecycle** — HKDF-derived keypair, membership backing proof, periodic re-proof, firewall hygiene
+- [ ] Reward computation from **public `P` work history** + `Σwork` servo (not entitlement / `tier_num`)
+- [ ] `is_active_staker` via membership proof (not public `entity_id`)
 - [ ] Cross-engine ordering per §5.3
+- [ ] **Do not land** reserve-DLEQ entitlement prove/verify or `txin_stake_claim_v2` tier claim wire
 
 ---
 
@@ -2758,8 +2813,10 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 
 | Doc | Use |
 |-----|-----|
-| [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) | Upstream; §6.4.3 **(C) 3C** (subtree + `h_bind`); §6.4.1 **(A)**; §9 multiplier; `N_S` (§8.5) |
-| [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md) | **Superseded** by the confidential redesign for the reward/claim mechanism; retained for history until the successor lands |
+| [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | **Genesis reward substrate** — pay-for-service rebasing, `P`, per-shard bonds, `Σwork` servo |
+| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Economics sim + soundness pass (Tier 1 gate) |
+| [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) | Principal lock / `C_stake` / unstake membership carry-forward; **§6.4 (A) entitlement claim wire retired** for genesis |
+| [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md) | **Superseded** — history only |
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) | Phase 2b planning + Stage 3 rows |
 | [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) | Phase 2b scope |
 | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) | §2.7, §3.3, §10.5.1, §8.3, §10.6.1 |

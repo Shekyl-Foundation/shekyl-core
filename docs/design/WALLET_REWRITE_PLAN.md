@@ -12,7 +12,13 @@ todos:
     content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3)"
     status: pending
   - id: phase2_ops_stake_history
-    content: "Phase 2b (SUBSTANTIVE — not 'thin wrappers'): StakeInstance as first-class persisted type in WalletLedger with explicit StakeState enum (PendingBroadcast / Unconfirmed / Locked / Accruing / Claimable / Unstaking / FullyUnstaked); refresh-time reconciliation in apply_scan_result advances state based on scanned heights vs lock+accrual rules; user-facing methods Wallet::stakes(filter), Wallet::claimable_rewards, Wallet::stake/claim/unstake (each returns PendingTx, not finalized tx); plus balance + history + tx-by-id queries. Largest single sub-phase by scope; budget accordingly"
+    content: "Phase 2b (SUBSTANTIVE): close PHASE_2B_STAKE_LIFECYCLE.md rounds 3–5 on the rebased genesis substrate (pay-for-service + firewalled P) → Stage 3 StakeEngine → wallet orchestrator. One ship target — do not implement entitlement claim path. Tier 1 archival crypto soundness is the same genesis gate, not a separate later cutover."
+    status: pending
+  - id: phase2b_round3_rebased
+    content: "Phase 2b gate — Round 3 closure: ratify F-ARCHIVAL gate-list + Tier 1 soundness pass step 3 (STAKER_ARCHIVAL_SIM.md). F0 bucketing on retired entitlement claim wire is superseded. Blocks Stage 3 merge, not 2a send path."
+    status: pending
+  - id: phase2b_stage3_stake_engine
+    content: "Phase 2b implementation — Stage 3: StakeEngine + StakeActor (kameo), P lifecycle, archival challenge/retention path, Σwork reward, membership is_active_staker. Gated on Round 3–5 on rebased substrate. entitlement.rs / txin_stake_claim_v2 tier path is deletion target — do not ship."
     status: pending
   - id: phase2_ops_addresses_proofs
     content: "Phase 2c (End-state 5): primary_address; create_payment_request / list_payment_requests / match_transfer_to_request; cooperative enc_label outbound when paying a payment URI (product flag, operational.cooperative_payment_requests); tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors. Engine substrate lands FA-8 (PR #113) before Wallet orchestrator methods. Does not block Phase 2a (2a-3 uses sentinel enc_label only)."
@@ -377,6 +383,131 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 
 ## Phase 2 — Core operations
 
+### Phase 2b critical path — one genesis substrate (`P` + pay-for-archival)
+
+Pre-genesis discipline: **one ship target at genesis** — pay-for-service archival
+rebasing with firewalled pseudonym **`P`** as the primary reward identity
+([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing*;
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) status block). **Do not**
+implement the reserve-DLEQ **entitlement claim path** (`txin_stake_claim_v2` tier wire,
+`rust/shekyl-staking/entitlement.rs`) and plan to rip it out later. That code is
+**deletion target / exploratory only** until rebased reward modules exist.
+
+**What "parallel" means here:** concurrent **design and implementation workstreams**
+on the **same** genesis system (wallet `StakeEngine`, archival Tier 1 crypto spec,
+sim pins, genesis blob) — **not** two economic substrates.
+
+Policy-layer pins (foundation floor, nominal bond, SLA, data scope A/B/C, gate 4
+`ARCHIVAL_BOND_FLOOR`) are largely **closed in spec**. What gates Stage 3 is **Tier 1
+crypto soundness** (four primitives) + Round 3–5 closure on the rebased substrate.
+
+**Discipline:** verify against `dev` before treating any row as build vs finish
+(`rg`, `cargo test -p <crate>`, design-doc §0 audits).
+
+#### Genesis substrate — single table
+
+| Layer | Ship at genesis | Retired / never-ship |
+|-------|-----------------|----------------------|
+| Principal | Committed `C_stake`, lock/unstake FCMP++ path (Rounds 0–2 pins) | Cleartext stake index, watermark |
+| Reward identity | **`P`** + membership backing + firewall | Public `entity_id`; F0 claim cohort on tier wire |
+| Reward economics | `Σwork` servo, per-shard bonds, loud 8c retention | Reserve-DLEQ entitlement, `tier_num` claims |
+| Wallet secrets | §3.3.1 `(amount, z)` re-derived, never sealed | Sealed opening region |
+| Engine split | `StakeEngine` owns stake + `P` lifecycle; `ArchivalEngine` (Stage 5) for query/challenge serving | Entitlement prove path on `dev` |
+
+| Workstream | Plan home | Blocks 2a / 2c / 2d? |
+|------------|-----------|----------------------|
+| **Phase 2b — stake + `P` + rebased reward** | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | **No** (2a send independent) |
+| **Tier 1 crypto + genesis structure** | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) step 3; [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) | **Yes for Stage 3** — same substrate, not a later cutover |
+| **Tier 3 economics pins** | Sim ledger L2+; `ARCHIVAL_BOND_FLOOR_ATOMIC` landed | Feeds consensus constants; gate 1 `Σwork` still open |
+
+#### Archival tiers (reference — same genesis gate)
+
+| Tier | What | Status (2026-06) | Blocks Stage 3? |
+|------|------|------------------|-----------------|
+| **1 — Crypto soundness** | `ν = H(P, shard)`, L14 crediting, `P`/`N_arch`, registration proof, retention 8c | **Open — design** | **Yes** |
+| **2 — Consensus structure** | Genesis identity block, `HoldingsDescriptor`, set-B shards | Mostly pinned in spec | Partially (wire shapes) |
+| **3 — Economics → params** | Gate 4 bond floor **closed**; gate 1 `Σwork` | Mixed | Gate 1 for reward servo |
+| **4 — Ops / transport** | Arti, firewall ops, UI | Defer post-genesis | No |
+
+**Verified code state (spot-check on `dev`):**
+
+- `StakeEngine` — **not present** (design-only).
+- `shekyl-staking` `entitlement.rs` — **do not extend for genesis**; deletion target.
+- `P` / retention / registration crypto — **not in production Rust**; sim + spec only.
+- `ARCHIVAL_BOND_FLOOR_ATOMIC` — **landed** (`config/consensus_constants.json`).
+
+#### Phase 2b wallet program — what we build
+
+Ship the **wallet stake surface** on **`StakeEngine`** implementing the **rebased**
+substrate. Authoritative shapes: [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
+§3–§6 (FSM, persistence, reconciliation, API) **where not superseded** by rebasing pins.
+Historical `StakeState` sketch below — follow the design doc, not the sketch.
+
+**Design round status** (design doc §9):
+
+| Round | Status | Wallet-rewrite implication |
+|-------|--------|---------------------------|
+| 0–2 | **Closed** | Principal FSM, persistence, §4.7, §5, §6 — carry forward |
+| 3 | **Wargame done; close on rebased substrate** | Ratify F-ARCHIVAL gate-list + Tier 1 soundness step 3. **F0 bucketing superseded.** |
+| 4 | Open | Rebased wire: `P`, challenges, payout; trait signatures; persistence |
+| 5 | Open | Stage 3 PR map |
+| Stage 3 | **Blocked** on Round 3–5 + Tier 1 spec | `StakeEngine` + `P` + `Σwork` reward — **not** entitlement claims |
+
+**Build sequence:**
+
+```mermaid
+flowchart TD
+  subgraph design [Phase 2b design]
+    R3["Round 3: F-ARCHIVAL gate-list + Tier 1 soundness"]
+    R4["Round 4: rebased binding pins"]
+    R5["Round 5: Stage 3 PR map"]
+  end
+  subgraph stage3 [Stage 3]
+    SE["StakeEngine + P lifecycle"]
+    SCAN["Scanner: stake + archival events"]
+    ECON["Σwork reward path"]
+  end
+  subgraph wallet [Wallet Phase 2b]
+    LEDGER["StakeInstance persist"]
+    MERGE["apply_scan_result"]
+    API["stake / register P / payout / unstake"]
+  end
+  R3 --> R4 --> R5 --> SE
+  SE --> SCAN --> ECON
+  SE --> LEDGER --> MERGE --> API
+```
+
+1. **Close Round 3** on rebased substrate (not F0 bucketing). Does not block 2a.
+2. **Rounds 4–5** — rebased pins + Stage 3 PR enumeration.
+3. **Stage 3** — `stake_engine.rs`, `P` registration/re-proof, rebased payout path.
+4. **Wallet orchestrator** — §3.3.1 openings, §5 reconciliation adapted to rebased
+   chain events; expose §6-shaped API (exact method names may shift in Round 4).
+
+**Phase 2b PR shape (after Stage 3):** (2b-1) ledger + `StakeId`; (2b-2) reorg;
+(2b-3) query API; (2b-4) stake/unstake/`P`/payout through engines. ≤ ~10 files per PR.
+
+#### What not to do in Phase 2b
+
+- Do **not** implement `txin_stake_claim_v2` entitlement claims or extend
+  `entitlement.rs` as the genesis reward path.
+- Do **not** close Round 3 on F0 bucketing — that gate applied to the **retired** wire.
+- Do **not** treat archival Tier 1 as "Stage 5 only, stake can ship first" — Tier 1
+  spec **gates** Stage 3 on the rebased substrate.
+- Do **not** port wallet2 stake tracking; chain-driven FSM via scan + `StakeEngine`.
+- Do **not** use `pool_weighted_total` — retired.
+
+#### Cross-reference — wallet phases vs genesis staking
+
+| Wallet phase | Interaction |
+|--------------|-------------|
+| 2a send | Independent |
+| **2b stake** | **Genesis `P` + rebased reward** — not a pre-archival interim |
+| 2c / 2d | Independent |
+| 4b RPC stake methods | After 2b orchestrator |
+| Stage 5 `ArchivalEngine` | Query/challenge **serving** surface; registration backing still flows through `StakeEngine` at genesis |
+
+---
+
 **Phase 2a implementation spec:** [`docs/design/PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
 (Round 0, 2026-05-31) — PR sequence 2a-1…2a-4, definition of done, daemon/sign/build
 wiring against the landed `LocalPendingTx` / `KeyActor` substrate.
@@ -385,30 +516,7 @@ Each operation is a method on `Wallet` with a focused signature. No mode flags; 
 
 - **Refresh / scan:** `Wallet::refresh()` drives `shekyl-scanner`. Returns `RefreshSummary { blocks_scanned, transfers_added, reorg_height }`. Async; cancellable. Implements the brief-write-lock pattern from the cross-cutting locks (read snapshot → release → scan → brief write to merge → release).
 - **Send (three-method lifecycle):** `Wallet::build_pending_tx(req: TxRequest) -> PendingTx`, `Wallet::submit_pending_tx(handle) -> TxHash`, `Wallet::discard_pending_tx(handle) -> ()`. `PendingTx` carries `built_at_height: u64`; submit verifies wallet tip is `>= built_at_height` with no reorg below. `TxRequest` is `{ dest: Address, amount: AtomicUnits, priority: FeePriority }`. **No `payment_id` field.** Fee priority is `Economy | Standard | Priority | Custom(NonZeroU64)`; the named buckets are resolved to feerate via a `get_fee_estimates` daemon call at build time, not via hardcoded multipliers. **The build/submit/discard methods on `Wallet` orchestrate against `PendingTxEngine`** per [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](STAGE_1_PR_5_PENDING_TX_ENGINE.md): the engine owns the per-output lock set and the per-reservation `consumer_held` / `in_flight` collection-state lifecycle; the orchestrator translates `TxRequest` into the `build` call and exposes the `submit` / `discard` results back to the binary-layer caller. Output selection delegates to `OutputSelector` (Phase 0i; `Wallet2GreedySelector` V3.0 default); fee estimation to `FeeEstimator` (Phase 0j; `DaemonRecommendationEstimator` V3.0 default with `ExplicitFeeEstimator` alternative). Daemon-rejection / daemon-ambiguous / snapshot-invalidated outcomes surface through the engine's `SubmitError { TerminalErrorKind | AmbiguousErrorKind | SnapshotInvalidated | ... }` enum (segment-2h reshape).
-- **Stake / unstake / claim (Phase 2b — substantive scope, not "thin wrappers"):** A stake has a multi-step asynchronous lifecycle driven by chain progress, not by wallet operations: built-but-not-broadcast → broadcast-unconfirmed → confirmed-locked → accruing → claimable → unstaking → fully-unstaked. Wallet2 had no first-class concept for this; the wallet was a pure tx builder and the user tracked state mentally. Shekyl V3 makes the state machine explicit. Concrete shape:
-
-  ```rust
-  pub struct StakeInstance {
-      pub txid: TxHash,
-      pub amount: AtomicUnits,
-      pub tier: StakeTier,
-      pub state: StakeState,
-      pub accrued_rewards: AtomicUnits,
-      pub next_claim_height: Option<u64>,
-  }
-
-  pub enum StakeState {
-      PendingBroadcast,
-      Unconfirmed { broadcast_at: u64 },
-      Locked { confirmed_at: u64, unlocks_at: u64 },
-      Accruing { since: u64 },
-      Claimable { since: u64, expires_at: Option<u64> },
-      Unstaking { initiated_at: u64, completes_at: u64 },
-      FullyUnstaked,
-  }
-  ```
-
-  `StakeInstance` is a first-class persisted type in `WalletLedger`. Refresh-time reconciliation: `apply_scan_result` (per Decision 3) advances each `StakeInstance.state` based on the scanned blocks' height vs each stake's lock periods and accrual rules. The wallet exposes `Wallet::stakes(filter)`, `Wallet::claimable_rewards() -> AtomicUnits`, `Wallet::stake(amount, tier) -> PendingTx`, `Wallet::claim(stake_id) -> PendingTx`, `Wallet::unstake(stake_id) -> PendingTx`. The build/claim/unstake methods enter the state machine; they do not return a finalized tx. **Phase 2b is the largest single sub-phase by scope** — implementing the state machine, refresh-time reconciliation, persistence in `WalletLedger`, and the user-facing query/build methods. Plan budget accordingly; "thin wrappers" was the wrong framing.
+- **Stake / unstake / archival reward (Phase 2b — substantive scope):** Chain-driven lifecycle on the **rebased genesis substrate** (`P` + pay-for-archival), not wallet2 bookkeeping and **not** the retired entitlement claim wire. **Authoritative spec:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§6. `StakeInstance` persists public fields per Round 4 rebased pins; opening `(amount, z)` in-memory only (§3.3.1). Refresh via stake + archival events + `StakeEngine`; orchestrator exposes stakes, reward under `P`, stake / unstake / registration / payout paths. **Stage 3 before orchestrator** (§Phase 2b critical path). Multiple PRs after Stage 3.
 - **Receive / addresses (Phase 2c — End-state 5):** `Wallet::primary_address()`, `Wallet::create_payment_request(req) -> PaymentRequestId`, `Wallet::list_payment_requests(filter)`, `Wallet::match_transfer_to_request(transfer_id, request_id)` (or equivalent reconcile API). Incoming history exposes `ReceiveAttribution` tiers per [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7.9. **No** `create_subaddress`. Meaningful request labels + merchant reconcile UX ship behind a product flag at V3.0 launch; sentinel-only wallets produce Tier-4 unattributed receive on the label axis (wire `enc_label` slot is always present per §6.4). Integrated addresses do not exist (Phase 1 decision).
 
 **End-state 5 implementation sequencing (doc pin, 2026-06-07).** Foundation (types, scanner, inbound merge) lands in the FA stack before the wallet rewrite surfaces it. **Does not block Phase 2a-3.**
@@ -616,3 +724,4 @@ Cross-references that need to land after some upstream PR merges, formatting tou
 - Does not un-pin or re-fork monero-oxide. That's a separate plan; this plan only verifies the vendored tree is current for what the wallet stack consumes.
 - Does not complete PQC-FROST multisig. The Rust wallet API is shaped to support it; the implementation lands in V3.1.
 - Does not address `tx_pool.cpp` / `blockchain_db.cpp` LMDB transactional wrapper redesign (the Dandelion-class lesson). That's filed in [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) under "Legacy C++ → Rust rewrite scope" as its own future plan.
+- Does not implement full **ArchivalEngine query-serving (Stage 5)** or genesis blob **authoring ceremony** in the wallet rewrite alone. **Does** require Tier 1 crypto spec + `P` lifecycle in Stage 3 `StakeEngine` — genesis staking and archival reward identity are **one substrate** (§Phase 2b critical path), not a build-then-replace sequence.
