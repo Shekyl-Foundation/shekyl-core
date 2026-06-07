@@ -49,6 +49,15 @@
   Updates `SUBADDRESS_UNDER_PQC.md` §9–§11 (FA-7 landed, FA-2/FA-8 PR refs).
   `PHASE_2A_SEND_PATH.md` §6 gate table + `FOLLOWUPS.md` subaddress-round status.
 
+- **wallet: FA-2 — subaddress deletion (End-state 5).** Per
+  `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.4 / §6.2: scanner claims
+  outputs when recovered spend key matches the account primary spend key;
+  removed `KeyEngine::derive_subaddress`, subaddress registry/labels from
+  `BookkeepingBlock` (version 3), `TransferDetails::subaddress` (ledger
+  block version 5), `TxRequest::from_subaddress`, and
+  `TxOutputContext::Change` subaddress index. Closes FA-2 item in
+  `docs/FOLLOWUPS.md` subaddress round.
+
 - **docs: FA-7 — End-state 5 supersedes flat-subaddress wallet plan.** Amends
   `docs/design/WALLET_REWRITE_PLAN.md` (cross-cutting decisions, Phase 1–2c,
   CLI/RPC method lists) to match End-state 5 in
