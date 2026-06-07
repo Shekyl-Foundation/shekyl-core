@@ -1,9 +1,11 @@
 # Reward emission leg — consensus specification (genesis)
 
-**Status:** Design spec — closes [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
-§2.4 close-condition **(i)**. Implementation is gated on Tier 1 soundness step 3
-(`STAKER_ARCHIVAL_SIM.md`) and gate 2 retention-proof wire (challenge material
-referenced here; proof bytes pinned at gate 2).
+**Status:** Design spec — **structural core** for [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
+§2.4 close-condition **(i)**. **Not genesis-sealed:** the **Σwork denominator mechanic**
+(§4.3) is an open structural fork (joint with gate 1 supply-safety). **Admission wire**
+leans ordinary transfer ≥ `MIN` with **no `C_stake`** (§7.2–§7.4; gate 4/7 reopen).
+Implementation is gated on Layer 2 keystone validation (`STAKER_ARCHIVAL_SIM.md` §*Layer 2*)
+and gate 2 retention-proof bytes.
 
 **Scope:** The **consensus-special reward emission transaction leg** for pay-for-service
 archival under firewalled pseudonym **`P`**. This document is the byte-layout and
@@ -36,6 +38,26 @@ rebasing*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4;
 Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) and **(iii)**
 (admission principal + gate 7) are **not** closed here; §10 names the hooks.
 
+### 1.1 Design sequencing (four layers, gated)
+
+Work is **not** parallel-equal. Lower layers gate higher ones.
+
+| Layer | Scope | Gate |
+|-------|--------|------|
+| **1 — Consensus structural core** | This doc: public `work_P` recompute, membership-only ≥`MIN` backing, state dedup, consensus-applied rate → mint. Bond/slash is gate 4 (spec elsewhere — do not duplicate). **Open:** Σwork denominator (§4.3). **Owed crypto:** `FcmpMembershipOnly::verify`. | Must be right pre-genesis. |
+| **2 — Economic keystone** | Three-channel reward shape validated in `shekyl-staking-sim` (not generic “work-based”). Spread graze vs windowed mean (2026-06-07); deep↔spread via `g(age)` calibration at `bond_rate* = 0.75`; gate 7 fee-era + admission re-pricing; per-reward byte aggregate (calc, not agent sim). | Shape reopen if keystone fails. |
+| **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor, bond-funding decorrelation. Wallet FSM: delete claim machinery; ordinary-transfer admission + reward reception + bond slash. | Load-bearing for privacy. |
+| **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. **Gated on Layer 2** — full rebase round is premature while the keystone is open. | Corpus consistency. |
+
+**2026-06-07 Layer 2 discipline gate (spread windowing):** `sprdW` = mean `gini_actor` + peak
+`max_actor_share` over `churn_window` (L9 lesson). Full sweep **266** scenarios: snapshot
+**138**/266 vs windowed **139**/266 pass spread; **one** flip (`gate4_coloc_5.50`, far above
+`bond_rate*`). At **`bond_rate* = 0.75`**: snapshot grazes (`gini_act ≈ 0.600`), windowed
+**passes** (`giniW ≈ 0.593–0.599`); at **1.00** both fail (`≈ 0.626`). **Verdict:** spread
+graze at the pin survives the windowed read; failures above 1.00 and at thin-budget lean
+(`l11_bud_b50`, `gini ≈ 0.84`) are **real concentration**, not snapshot artifacts. **Keystone
+holds** at the pinned operating point → Layer 2 is **calibration**, not shape reopen.
+
 ---
 
 ## 2. Design principles
@@ -52,7 +74,9 @@ Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) and **
    always requires key images per input).
 4. **Registration fusion.** The **first** valid emission for `P` **creates** the on-chain
    bond record (holdings + bond posture + empty dedup set). There is no separate
-   on-chain registration transaction; off-chain backing precedes first emission (gate 6).
+   on-chain registration transaction. **Gate 6 requires** `P` to be a **recognized,
+   backed archiver** (off-chain announce + backing presentation) **before** the first
+   on-chain anchor — “first reward anchors” understates the precondition.
 5. **Bond is the intra-epoch honesty anchor.** Between settlement-epoch emissions,
    admission principal may be spent; backing is not re-verified every block. Challenge
    failure slashes **bond** regardless of admission UTXO state (§7.5).
@@ -77,32 +101,71 @@ as retired claim drip).
 
 ---
 
-## 4. Economics — verifier-side reward computation
+## 4. Economics — three-channel reward stack (verifier-side)
 
-For each settlement epoch `E` claimed in the vin:
+The reward is **not** generic “budget × work / Σwork.” It is the **specific three-channel
+stack** exercised in `shekyl-staking-sim` (`reward.rs`) and
+[`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*reward curve*:
 
 ```text
-work_P(E)  = Σ_{s ∈ held(P,E)} scarcity(s,E) · proven_retention(P,s,E)
-Σwork(E)   = Σ_{P'} work_{P'}(E)   // public aggregate from consensus archival state
-budget(E)  = archival_budget(E)    // gate 1 servo input; public schedule
-raw(E)     = budget(E) · work_P(E) / Σwork(E)   // integer division; floor toward zero
-reward(E)  = Curve(raw(E))         // piecewise-linear banded plateau-cap; public parameters
+scarcity(s,E)  = (1 / R_market(s,E)) · g(age(s))     // channel 1: self-diluting scarcity
+work_P(E)      = Σ_{s ∈ held(P,E)} scarcity(s,E) · proven_retention(P,s,E)
+capped_P(E)    = Curve(work_P(E))                     // channel 2: concave plateau-cap (per P)
+Σwork(E)       = Σ_{P'} capped_{P'}(E)                // channel 3: competitive-share denominator
+reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud on vin
 ```
 
-- **`held(P,E)`** — shards `P` held and was **good-standing** for epoch `E` per bond
-  record + retention state (gate 4 / gate 2).
-- **`proven_retention`** — challenge-pass bit(s) in consensus archival state, not
-  retrieval volume ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*reward curve*).
-- **`scarcity(s,E)`** — public function of `market_R(s,E)` and shard age `g(age)` (gate 3
-  counting uses `ν = H(P, shard)` separately; scarcity uses public `R`).
-- **`Curve`** — concave-to-plateau; parameters are consensus constants (same class as
-  retired decade-log bands — exact breakpoints pinned at gate 1 implementation).
+**Channel 1 — scarcity.** `R_market` is the public replication count; holding a shard
+raises `R` and dilutes its own `1/R`. `g(age) = 1 + age_weight·age` (public shard
+property) is the privacy-clean deep-history premium replacing retired tier weighting.
+`proven_retention` is the challenge-pass bit from consensus archival state (gate 2), not
+retrieval volume.
 
-**Inflation posture (8c):** Any mismatch between recomputed `reward(E)` and minted outputs
-is a **consensus error visible to all verifiers** — not a silent ZK soundness break.
+**Channel 2 — `Curve`.** Per-`P` concave-to-plateau cap on credited work (the sim’s
+`cap` parameter). Marginal credited work above the plateau is zero unless the operator
+opens another pseudonym — which carries gate-6 firewall cost, not a free Sybil split.
 
-**Σwork servo:** The prover **must not** supply `Σwork` or `budget` as authoritative;
-the vin may include them only as **hints** for light-client checks. Full nodes recompute.
+**Channel 3 — competitive share.** `budget(E)` from gate 1; each `P` receives
+`budget · capped_P / Σwork`. Adding work raises `Σwork` and dilutes everyone (including
+self) — the servo share channel.
+
+**Inflation posture (8c):** Verifiers recompute all three channels; any mismatch between
+`reward_P(E)` and minted outputs is a **consensus error visible to all verifiers**.
+
+**Hints:** The vin may carry `budget`, `Σwork`, or intermediate values as **hints** for
+light clients; full nodes recompute authoritatively.
+
+### 4.1 Sim validation (done — not a to-do)
+
+`shekyl-staking-sim` implements this stack end-to-end. Economics re-simulation is
+**complete** for Layer 2 keystone questions: `g(age)` clearing deep, lean equilibrium
+(L11), `bond_rate* = 0.75` spread pin, co-location binding (P1), fee-era spiral (L13).
+See [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) adjustment ledger — not a pending
+“re-run economics” item.
+
+### 4.2 `WorkClaimVector` maps to channel 1
+
+§5.4 carries per-shard `scarcity_milli` (fixed-point `(1/R)·g(age) × 1000`) and
+`proven_retention` so verifiers recompute `work_P(E)` before applying `Curve`.
+
+### 4.3 Open structural fork — `Σwork(E)` denominator timing
+
+The competitive-share line uses a **global denominator** for epoch `E`. An epoch’s
+`Σwork(E)` is not knowable until **all** qualifying emissions for `E` are processed
+(late emitters, batching, reorgs). This is the **same decision** as gate-1 supply-safety,
+not a separate economics knob.
+
+**Disposition (open — pick one before genesis seal):**
+
+| Option | Mechanism | Tradeoff |
+|--------|-----------|----------|
+| **Lagged denominator** | `Σwork(E)` computed from **finalized** archival state at end of settlement epoch `E` (or `E−1` for emissions in `E+1`); emissions in epoch `E` cite the lagged total | Simple; late movers get deterministic share; boundary rules must be explicit |
+| **Two-phase settlement** | Phase A: provisional accrual; Phase B: finalization pass when epoch closes adjusts mint | Exact share; more consensus state and reorg surface |
+| **Capped provisional + true-up** | Mint to provisional `Σwork` with bounded true-up in `E+1` | Middle ground; needs inflation bound proof |
+
+This spec **does not** choose among them. Gate 1 implementation must pin the choice and
+document reorg behavior. Until pinned, §5.4 `reward_amount_plain` semantics assume the
+verifier applies the **same** denominator rule as gate 1 (no wallet-local `Σwork`).
 
 ---
 
@@ -130,7 +193,7 @@ ArchivalRewardEmissionVin {
   settlement_epochs:  u64[MAX],            // 1 ≤ MAX ≤ 15, strictly increasing, unique
   work_claim:         WorkClaimVector,     // per-epoch public work breakdown (§5.4)
   backing:            MembershipOnlyBacking, // FCMP++ membership, NO key image (§7)
-  admission_proof:    OptionalThresholdProof, // §7.4; present iff ADMISSION_MIN policy on
+  admission_proof:    OptionalAmountProof,     // §7.4; ordinary-transfer ≥ MIN only if policy on
 }
 ```
 
@@ -176,7 +239,7 @@ it.
   epoch list) carried in the vin **and** reflected in output amounts such that:
 
 ```text
-Σ vout.amount_plain == Σ_{E ∈ settlement_epochs} reward(E)
+Σ vout.amount_plain == Σ_{E ∈ settlement_epochs} reward_P(E)
 ```
 
 Pedersen commitments still serialize for RCT balance, but **emission mint is not
@@ -278,7 +341,7 @@ Apply in order; fail-fast:
 3. **Dedup** — for each `E`, `claimed_settlement_epochs.check_and_set(E)` (atomic with
    block connect).
 4. **Archival work** — recompute `work_P(E)` from state; compare to `work_claim`.
-5. **Economics** — recompute `reward(E)`; compare to `reward_amount_plain` and vout sum.
+5. **Economics** — recompute three-channel `reward_P(E)` (§4); compare to `reward_amount_plain` and vout sum.
 6. **Membership-only backing** — §7.2.
 7. **Admission threshold** — §7.4 if enabled.
 8. **FCMP++ balance** — ordinary RCT balance equation including mint; fee inputs use
@@ -287,20 +350,31 @@ Apply in order; fail-fast:
 On `pop_block`, reverse **3** (revert dedup bits) and bond mutations from **4–6** in
 block disconnect order (§8).
 
-### 7.2 Membership-only backing
+### 7.2 Membership-only backing (ordinary transfer, not `C_stake`)
 
-**Statement:** Prover knows opening for one or more outputs on the **current main-chain
-FCMP++ root** that collectively satisfy the backing predicate:
+**Leading disposition (gate 4/7 reopen):** admission is an **ordinary FCMP++ transfer ≥
+`ADMISSION_MIN_ATOMIC`** to `P`’s stealth address on the **main tree**. There is **no
+`C_stake` / confidential admission opening** on the genesis path unless gate 4/7 reopens
+with a demonstrated monetary reason to keep the admission stake confidential.
+
+**Statement:** Prover knows opening for one or more **ordinary** outputs on the current
+main-chain FCMP++ root that collectively satisfy:
 
 ```text
 backing_ok(P, roots) :=
-  Σ backing_outputs.amount ≥ ADMISSION_MIN_ATOMIC   // if admission policy active
-  ∧ each output is spendable by P's key material
-  ∧ membership valid under FcmpPlusPlus at reference block
+  Σ backing_outputs.amount ≥ ADMISSION_MIN_ATOMIC   // if admission policy active (gate 7)
+  ∧ each output is spendable by P's key material (ordinary transfer to P)
+  ∧ membership valid under FcmpMembershipOnly at reference block
 ```
 
-When admission principal is **not** consensus-required (gate 7 / Round 4 option), replace
-threshold with **bond-only** posture: `bonded_total_atomic ≥ bond_required(holdings)`.
+When admission principal is **not** consensus-required (gate 7 bonds-only sink), the
+membership proof may attest **bond posture only**: `bonded_total_atomic ≥
+bond_required(holdings)` without a separate admission UTXO threshold.
+
+**Unspent-proof wall:** The transfer-shaped admission model plus the unspent-proof
+discipline lean **away** from settled-retained confidential principal machinery.
+Pedersen commitments and range proofs on the admission path survive **only** if a named
+gate 4/7 reopen supplies a monetary reason for confidential admission amounts.
 
 **Verify API (new):** `FcmpMembershipOnly::verify(input, witness, reference_root)` —
 proves spend authority **without** producing a key image consumed by the spent set.
@@ -317,16 +391,21 @@ must not link backing outputs across epochs by reusing the same leaf opening in 
 correlatable way. Wallet **should** rotate backing UTXOs on `P` where practical (gate 6
 hygiene); consensus does not enforce rotation.
 
-### 7.4 Optional `ADMISSION_MIN` threshold proof
+### 7.4 Optional `ADMISSION_MIN` amount proof
 
-If economics pins an admission minimum transfer to `P`:
+If gate 7 pins an admission minimum **ordinary transfer** to `P`:
 
-- Vin includes Bulletproof+ (or FCMP++-compatible) proof that backing outputs sum to ≥
-  `ADMISSION_MIN_ATOMIC`.
-- This is **economics-only** — not an unspent-enforcement on those outputs (soft
-  admission per §2.4).
+- Vin includes a **public** sum check or amount proof that backing outputs total ≥
+  `ADMISSION_MIN_ATOMIC` (loud amounts align with §2 loud-reward discipline).
+- This is **economics-only** — not unspent-enforcement on those outputs (soft admission
+  per §2.4). Outputs may be spent after first emission; bond slash is the intra-epoch
+  honesty anchor (§7.5).
 
-If admission principal is dropped (close-condition iii), remove this field entirely.
+If admission principal is dropped (close-condition iii / bonds-only sink), remove
+`admission_proof` and the `ADMISSION_MIN` branch of `backing_ok`.
+
+**Wallet FSM implication:** Stage 3 manages **ordinary-transfer admission** to `P`, not
+`C_stake` openings or claim-pending state. See §11.
 
 ### 7.5 Intra-epoch unbacked window (explicit safety lemma)
 
@@ -401,28 +480,37 @@ open for gate 7. Emission verification branches on whether admission is load-bea
 
 ## 11. Wallet / `StakeEngine` build flow (informative)
 
-Not consensus — orients Stage 3:
+Not consensus — orients Stage 3 (Layer 3 FSM retool):
 
-1. Wait until settlement epoch `E` closes (or batch unclaimed `E…`).
-2. Read public challenge state → build `work_claim`.
-3. Locally compute expected `reward(E)` from daemon archival index + public `Σwork`.
-4. Select backing outputs on `P`; build `MembershipOnlyBacking`.
-5. Assemble `txin_archival_reward_emission` + fee `txin_to_key` + stealth vouts.
-6. Broadcast; on confirm, wallet marks epochs claimed (no `claim_pending_epochs` /
-   `PrepareClaimBuild` — retired FSM).
+**Delete:** `claim_pending_epochs`, `PrepareClaimBuild`, claim-staleness, entitlement
+rescan, `C_stake` admission openings.
+
+**Add:** `P` lifecycle (HKDF derivation, multi-`P` hygiene), **ordinary-transfer
+admission** ≥ `MIN` to `P`, off-chain announce-before-anchor, reward reception (loud
+amounts), bond post/slash reaction.
+
+1. Gate 6: announce `P` + present backing off-chain; ensure recognized before first emission.
+2. Wait until settlement epoch `E` closes (or batch unclaimed `E…`); apply §4.3 denominator rule.
+3. Read public challenge state → build `work_claim` (channel 1).
+4. Locally compute `capped_P` and expected `reward_P(E)` via `Curve` + gate-1 `Σwork`.
+5. Select ordinary backing UTXOs on `P`; build `MembershipOnlyBacking`.
+6. Assemble `txin_archival_reward_emission` + fee `txin_to_key` + stealth vouts.
+7. Broadcast; on confirm, wallet marks epochs claimed in local bond mirror.
 
 ---
 
 ## 12. Implementation checklist (pre-code)
 
+- [ ] **Pin §4.3** `Σwork` denominator mechanic (joint gate-1 design).
 - [ ] Add `SETTLEMENT_EPOCH_BLOCKS`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` to
       `config/consensus_constants.json` + generators.
 - [ ] C++ / Rust vin deserializer for `txin_archival_reward_emission`.
 - [ ] `ArchivalBondRecord` LMDB table + `pop_block` revert.
-- [ ] `FcmpMembershipOnly::verify` in `shekyl-oxide` FCMP++ crate.
-- [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim` paths.
+- [ ] **`FcmpMembershipOnly::verify`** in `shekyl-oxide` FCMP++ crate (line-441 gap).
+- [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim`, `C_stake` admission paths.
 - [ ] KAT vectors: minimal valid emission + double-claim reject + work mismatch reject.
 - [ ] Update `AUDIT_SCOPE.md` §staking — entitlement out, emission in.
+- [ ] Layer 2 remaining: gate-7 admission re-pricing sweep; per-reward byte aggregate (§10.1).
 
 ---
 
@@ -440,7 +528,10 @@ Not consensus — orients Stage 3:
 
 ## Revision note
 
-**2026-06-06:** Initial reward-emission leg spec — closes PHASE_2B §2.4 close-condition
-(i): state-based dedup on bond record, membership-only backing, public work + mint,
-registration fusion, explicit rejection of published dedup tags and confidential claim
-surfaces.
+**2026-06-06:** Initial reward-emission leg spec — PHASE_2B §2.4 close-condition (i)
+structural core.
+
+**2026-06-07:** Sync to three-channel reward stack + sim-validated economics; §4.3
+`Σwork` denominator fork open (joint gate 1); ordinary-transfer admission (no `C_stake`);
+four-layer sequencing; spread windowing discipline gate (keystone holds at `bond_rate*`);
+P announce-before-anchor.

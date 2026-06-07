@@ -4,13 +4,16 @@
 
 ### Changed
 
-- **docs: Reward-emission leg spec — PHASE_2B close-condition (i) (2026-06-06).**
-  New [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md):
-  `txin_archival_reward_emission` wire, public work + loud mint, membership-only
-  backing (no key image), bond-record `check_and_set(E)` dedup (sparse absolute
-  settlement epochs — not published `N_arch`/`N_S`), registration fusion, reorg
-  rules, explicit rejection of claim/entitlement surfaces. Cross-refs in
-  `PHASE_2B_STAKE_LIFECYCLE.md`, `V3_STAKER_ARCHIVAL.md`, `STAKER_ARCHIVAL_SIM.md`.
+- **staking-sim: windowed spread discipline gate (`sprdW`) (2026-06-07).**
+  `shekyl-staking-sim` reports `gini_actor_window` / `max_actor_share_window`;
+  `ALL` sub-claim uses windowed spread (L9 lesson). Keystone holds at
+  `bond_rate* = 0.75` (graze survives); fails at ≥1.00 on both reads.
+
+- **docs: Reward-emission leg spec — Layer 1 structural core (2026-06-06/07).**
+  [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md):
+  three-channel reward stack (`scarcity → Curve plateau-cap → Σwork share`);
+  open §4.3 `Σwork` denominator fork (joint gate 1); ordinary-transfer admission
+  (no `C_stake`); four-layer sequencing; spread windowing verdict in §1.1.
 
 - **docs: Transfer-shaped admission as leading genesis staking form (2026-06).**
   Elevates §2.4 in `PHASE_2B_STAKE_LIFECYCLE.md`: principal↔`P` as ordinary FCMP++
