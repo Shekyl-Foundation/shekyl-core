@@ -1166,6 +1166,13 @@ in vendored proof-system surfaces.
 
 ### 3.1.3 Per-subaddress `kem_pk` derivation is rule-forced, not stylistic
 
+> **Superseded for V3.0 product surface (2026-06-07, FA-7 / End-state 5).**
+> End-state 5 in [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7
+> deletes `derive_subaddress`, `RecipientSubaddress`, and per-subaddress KEM
+> (FA-2). Account-level hybrid KEM + primary address only. This section
+> remains as the Stage 1 PR 3 design-trajectory record; do **not** implement
+> `derive_subaddress_kem_keypair` or `derive_subaddress(_, Recipient)`.
+
 Round 3's adversarial pass (A2) probed whether `RecipientSubaddress`
 must carry a per-subaddress `kem_pk: HybridKemPublicKey` for
 V3.0, or whether the trait could ship without per-subaddress ML-KEM

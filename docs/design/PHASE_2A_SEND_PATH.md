@@ -1397,7 +1397,10 @@ The concrete surface deltas, now that W and D are pinned:
 - **`InsufficientFunds { shortfall }`** is the sole pre-prove early return
   (`KeyEngineError`, §3.9 / §7) — defensive (input locked/spent between select and
   sign), not the normal re-selection driver (§3.8.5).
-- **Change subaddress index** = primary / `SubaddressIndex(0)` for 2a
+- **Change output context** = unit `Change` variant (no subaddress index) for
+  2a-3 after FA-2; until FA-2 lands, `SubaddressIndex(0)` is **interim**
+  plumbing only — see [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md)
+  §5.7 / FA-2 delete list. End-state 5 does not block 2a sends.
   (`TxOutputContext::Change`, §3.9). The richer change-destination policy is a
   rewrite-plan item, not 2a.
 - **Optional low-fee floor:** none in 2a. `dust()` + `K_DUST` express the boundary;

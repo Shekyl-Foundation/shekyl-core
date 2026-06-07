@@ -1130,8 +1130,9 @@ sustainability is unaffected by the recalibration.
   per-output wire inventory must be **verified**, not tag-only). **Active
   parallel:** FA-9 threat-model propagation; FA-6 implementation after spec
   §11 sign-off; **FA-6b** multisig `view_tag_hints` audit (§3.2, separate from
-  account-path T6 closure). **Remaining:** Round 4 doc sweep; FA-2 subaddress
-  deletion impl PR; FA-7 `WALLET_REWRITE_PLAN` amendment.
+  account-path T6 closure). **Remaining:** FA-2 subaddress deletion impl PR;
+  FA-8 payment requests + reconcile (FA-7 `WALLET_REWRITE_PLAN` amendment
+  **landed** 2026-06-07).
 
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of

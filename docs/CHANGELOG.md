@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **docs: FA-7 — End-state 5 supersedes flat-subaddress wallet plan.** Amends
+  `docs/design/WALLET_REWRITE_PLAN.md` (cross-cutting decisions, Phase 1–2c,
+  CLI/RPC method lists) to match End-state 5 in
+  `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7: one primary address per account,
+  no `create_subaddress` at V3.0; payment requests + `enc_label` for invoice
+  attribution. Supersession entry in `docs/V3_WALLET_DECISION_LOG.md`;
+  `PHASE_2A_SEND_PATH.md` §3.10.3 interim `SubaddressIndex` note;
+  `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 superseded banner. Closes FA-7 item in
+  `docs/FOLLOWUPS.md` subaddress round.
+
 ### Added
 
 - **wallet: Phase 2a-1 — daemon fee-snapshot + broadcast primitives.** Implements
