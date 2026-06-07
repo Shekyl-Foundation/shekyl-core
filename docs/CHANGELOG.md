@@ -4,6 +4,11 @@
 
 ### Added
 
+- **docs: Gate 4 join-Market + bond-post wire (2026-06-07).**
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) — join-Market seam (lag-forced
+  distinct from paying mint); `txin_archival_bond_post` sketch; `E_join` pin; reorg.
+  Emission §6.4/§8, PHASE_2B §2.4, archival state `Market`, gate-6 lifecycle amended.
+
 - **docs: PHASE_2B FSM retool disposition P2B-1–6 (2026-06-07).**
   [`PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) — master key
   `P_canonical_id`; dedup inversion; state collapse; reorg re-read; §3 supersession banner.

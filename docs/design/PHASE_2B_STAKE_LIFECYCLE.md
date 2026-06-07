@@ -554,8 +554,9 @@ Authoritative staking **shape** for genesis. Full pin history: revision note
 | Leg | Tx shape | Consensus role |
 |-----|----------|----------------|
 | Stake-in | Ordinary FCMP++ transfer (principal → `P`) | Value move; privacy = base RingCT |
-| Bond post / slash | Gate 4 consensus object | **Maintained anchor** — slashable collateral |
-| Reward emission | **Special** — mint + membership-only backing + work payload | Authorize payout; epoch dedup on bond record |
+| join-Market / re-bond | `txin_archival_bond_post` (gate 4) | **Creates/updates** bond record; `E_join`; Market entry |
+| Bond slash | Gate 4 consensus mutation | Unbond; `good_standing` interval log |
+| Reward emission | **Special** — mint + membership-only backing + work payload | Paying claim only; record must exist; dedup on bond record |
 | Reward sweep / principal return | Ordinary FCMP++ transfer (`P` → principal or fresh stealth) | Decorrelated drains — no lump correlation beacon |
 | Terminal unstake | Ordinary FCMP++ spend(s) draining `P` | SAL key image only here |
 
@@ -591,10 +592,11 @@ explicitly — it is why soft admission + bond is sound.
 
 #### Registration without a registration tx
 
-`P` must present backing to peers **before** earning (off-chain). The **first reward
-emission** creates/updates the on-chain bond record (holdings, claimed-epoch state).
-Fusion removes a discrete registration transaction; it does **not** remove the
-registration **event**.
+`P` must present backing to peers **before** serving (off-chain). **join-Market**
+(`txin_archival_bond_post`) creates the on-chain bond record (holdings, empty dedup,
+`E_join`) — **before** the first **paying** reward emission (§4.5 lag;
+[`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Fusion removes a discrete
+*registration transaction type*; it does **not** remove the registration **event**.
 
 #### §6.4.4 reopening (rule 21)
 

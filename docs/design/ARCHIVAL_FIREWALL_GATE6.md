@@ -150,17 +150,19 @@ drain; change-output handling on bond-funding transfers.
 **Goal:** Posting per-shard bonds does not become a **principal→`P` correlation channel**
 (lump funding from a fresh principal output immediately before first emission).
 
-**Open disposition (PHASE_2B §2.4):** **fund-from-earnings ramp** vs lump initial bond
-vs mixed — wallet hygiene spec, not consensus rule. Consensus sees bond sufficiency;
-**how** `P` acquired bond collateral is off-chain observability the firewall must address.
+**Open disposition (joint with gate 4 join-Market):** **fund-from-earnings ramp** vs lump
+initial bond vs mixed — wallet hygiene spec, not consensus rule. Consensus sees bond
+sufficiency at join-Market; **how** `P` acquired collateral and **when** join-Market
+fires relative to principal activity is observability the firewall must address
+([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §6).
 
 ---
 
 ## 3. `P` lifecycle — events gate 6 must cover
 
 ```text
-[seed] → derive P → announce/backing (off-chain) → serve + challenges
-       → first emission (on-chain anchor) → ongoing emissions / bond updates
+[seed] → derive P → announce/backing (off-chain) → join-Market (on-chain bond anchor)
+       → serve + challenges → paying emissions → bond updates / slash / re-bond
        → optional rotation P_old → P_new → lapse / decorrelation
        → terminal drain → retire P
 ```
@@ -168,16 +170,17 @@ vs mixed — wallet hygiene spec, not consensus rule. Consensus sees bond suffic
 | Phase | Consensus-visible? | Gate-6 load-bearing |
 |-------|-------------------|---------------------|
 | HKDF derive `P` | No | Independent material; scan isolation |
-| Off-chain announce + backing presentation | Peers see | Backing before first emission; no principal metadata |
-| First emission | Yes (bond record create) | Timing decoupled from principal stake-in |
+| Off-chain announce + backing presentation | Peers see | Backing before join-Market; no principal metadata |
+| **join-Market** | Yes (bond record create, `E_join`) | **Standing timing event** — defang via §2.3/§2.5; cannot hide in mint |
+| First **paying** emission | Yes (mint + dedup) | Decorrelate from principal funding |
 | Ongoing service | Yes (retention bits, holdings) | Network path; epoch-timeline fingerprint |
 | Rotation | Yes (new `P_id`, holdings transfer) | Decorrelate timeline + shard-set adjacency |
 | Deliberate lapse > `W` | Yes (forfeiture) | Acceptable decorrelation cost |
-| Unstake drain | Yes (transfer) | Output decorrelation |
+| Terminal drain | Yes (transfer) | Output decorrelation |
 
-**Registration fusion (unchanged):** No separate on-chain registration tx. Off-chain
-peer-visible backing **precedes** first emission; first emission **anchors** bond +
-claimed-epoch state ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6.4).
+**Registration fusion:** No separate *registration tx type*; **join-Market** is the
+on-chain anchor ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Off-chain backing
+**precedes** join; first **paying** emission follows by ≥ one settlement-epoch lag.
 
 **Two rotation concepts (do not conflate — see
 [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1):**

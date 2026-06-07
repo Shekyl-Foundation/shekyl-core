@@ -130,9 +130,11 @@ R_market(shard_id, E) =
 - **One consensus value** per `(shard, E)` — identical for every claimer.
 - **Pinned measure:** count at **epoch close** with `retention ∧ good_through` — not
   time-weighted over `E` (rejected: buys little, costs determinism).
-- **`Market` membership:** market archivers with `ShardSetCompact` holdings. Foundation
-  `CompleteTree` identities are **excluded** from `R_market` and `Σwork` (E-2) — they
-  do not accrue market scarcity rows on this path.
+- **`Market` membership:** `P_id` with an `ArchivalBondRecord` from **join-Market**
+  ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)); counted for epoch `E` only when
+  `E ≥ E_join = join_settlement_epoch`. **No retention bits before join** — gate-2 does not
+  write `(P,s,E)` for unbonded `P`. Foundation `CompleteTree` identities are **excluded**
+  from `R_market` and `Σwork` (E-2).
 - **Materialization:** may be stored per `(shard_id, E)` at epoch close or computed on
   read from the ledger; semantics are fixed either way.
 
@@ -274,6 +276,7 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | Workstream | Status |
 |------------|--------|
 | **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet`; retool disposition [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) |
+| **Gate 4 join-Market** | **Active** — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) Round 0 |
 | **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
@@ -329,6 +332,7 @@ threat-model argument, this doc owns the consensus read-surface coupling.
 | [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | §3–§7 retool disposition (P2B-1–6) |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; two-count table; honest residual |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
+| [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Gate 4 — join-Market, bond-post wire |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 
 ---

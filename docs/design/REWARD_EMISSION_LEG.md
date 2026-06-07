@@ -148,12 +148,14 @@ gate 6 firewall rigor; V3 form **C** reconciliation.
    on the **main FCMP++ tree** without inserting `x·Hp(O)` into the spent key-image
    set. This is a **strict subtraction** from today's `FcmpPlusPlus::verify` (which
    always requires key images per input).
-4. **Registration fusion.** The **first** valid emission for `P` **creates** the on-chain
-   bond record (holdings + bond posture + empty dedup set). There is no separate
-   on-chain registration transaction. **Gate 6 requires** `P` to be a **recognized,
-   backed archiver** (off-chain announce + backing presentation) **before** the first
-   on-chain anchor — “first reward anchors” understates the precondition.
-5. **Bond is the intra-epoch honesty anchor.** Between settlement-epoch emissions,
+4. **Registration fusion.** **join-Market** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md))
+   creates the on-chain bond record (holdings + bond posture + empty dedup set) via
+   `txin_archival_bond_post` — **before** the first **paying** emission (§4.5 lag).
+   There is no separate *registration transaction type* in the retired stake sense.
+   **Gate 6 requires** off-chain announce + backing **before** join-Market.
+5. **Bond posture vs mint.** Bond create/update/slash/re-bond is gate 4; reward mint +
+   dedup is this leg only — never bundled as “first emission creates everything.”
+6. **Bond is the intra-epoch honesty anchor.** Between settlement-epoch emissions,
    admission principal may be spent; backing is not re-verified every block. Challenge
    failure slashes **bond** regardless of admission UTXO state (§7.5).
 
@@ -414,8 +416,10 @@ ArchivalBondRecord {
   holdings:                 HoldingsDescriptor,
   bonded_total_atomic:      u64,       // gate 4 accounting
   good_standing:            bool,
-  first_emission_height:    u64,       // anchor for registration fusion
-  claimed_settlement_epochs: ClaimedEpochSet,  // §6.3
+  join_market_height:        u64,       // gate 4 JoinMarket block
+  join_settlement_epoch:     u64,       // E_join — Market counting from here
+  first_paying_emission_height: Option<u64>,  // set on first mint vin
+  claimed_settlement_epochs: ClaimedEpochSet,  // §6.3; empty at join
   // gate 4 extensions (slash hooks, per-shard bond breakdown) colocated in same record
 }
 ```
@@ -488,22 +492,27 @@ may deliberately lapse `P` — `W` trades **state growth** against **lapse forfe
 epoch cadence and the per-`P` batch limit. Pin numeric `W` jointly with batch cap and
 `SETTLEMENT_EPOCH_BLOCKS` (archival state §9.2) — pre-code inequality TBD.
 
-### 6.4 First emission
+### 6.4 join-Market (gate 4 — not this vin)
 
-If no `ArchivalBondRecord` exists for `P`:
+Bond record **creation** is **`txin_archival_bond_post` / `JoinMarket`**
+([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2–§3). This leg **does not**
+create records. Precondition for any paying emission: record exists with
+`join_settlement_epoch = E_join` stamped; gate-2 retention bits only for `E ≥ E_join`.
 
-1. Verify off-chain backing policy is out of consensus scope but **gate 6** requires
-   wallet/daemon to have presented backing before building this tx.
-2. Create record from vin `holdings` + gate-4 bond requirements (`bonded_total_atomic ≥
-   bond_floor(holdings)`).
-3. Set `first_emission_height = current_height`.
-4. Apply dedup for claimed epochs in this vin.
+### 6.4.1 First and subsequent paying emissions
 
-Subsequent emissions require `holdings` **compatible** with stored record (no silent
-portfolio swap without bond update flow). **Dependency (consume, not define):** holdings
-mutation — how `P` picks up or drops a shard and re-bonds — is the **gate-4 bond update /
-holdings-mutation flow**; this leg reads the result from `ArchivalBondRecord.holdings`
-and does not specify the mutation wire.
+**Requires** existing `ArchivalBondRecord` for `P_canonical_id`. Reject if missing
+(operator must join-Market first).
+
+1. Verify `holdings` compatible with stored record (no silent portfolio swap without
+   gate-4 `HoldingsUpdate` / re-bond flow).
+2. For each claimed epoch `E`: require `E ≥ E_join`; `good_through(E)`; dedup; lagged
+   `Σwork(E)` read (§4.5).
+3. On first paying emission: set `first_paying_emission_height = current_height` if `None`.
+4. Apply `claimed_settlement_epochs.check_and_set(E)` for each epoch in vin.
+
+**Dependency (consume, not define):** slash, re-bond, holdings mutation — gate 4 bond-post
+vin; this leg reads resulting `ArchivalBondRecord` fields only.
 
 ### 6.5 Good standing — per-epoch eligibility (E-3)
 
@@ -550,8 +559,8 @@ voiding pre-slash honest epochs (example and verifier rule in
 Apply in order; fail-fast:
 
 1. **Structural** — tx type, vin counts, epoch list monotone unique, `|epochs| ≤ 15`.
-2. **Bond posture** — record exists or first-emission path valid; bond sufficiency; holdings
-   match.
+2. **Bond posture** — record **exists** (join-Market already done); holdings match;
+   `E ≥ E_join` for all claimed epochs.
 3. **Dedup** — for each `E`, `claimed_settlement_epochs.check_and_set(E)` (atomic with
    block connect).
 4. **Archival work** — recompute `work_P(E)` from state; compare to `work_claim`.
@@ -646,13 +655,15 @@ On block disconnect at height `H`:
 
 1. For each `txin_archival_reward_emission` in the block, for each epoch `E` claimed,
    remove `E` from `bond.claimed_settlement_epochs` for that `P`.
-2. Revert bond record creation if this block contained `P`'s **first** emission (delete
-   record iff no prior emission at lower height — track `first_emission_height == H`).
-3. Revert minted amounts from monetary supply accounting (same path as coinbase undo).
-4. Re-run forward on reconnect.
+2. Revert minted amounts from monetary supply accounting (same path as coinbase undo).
+3. Re-run forward on reconnect.
 
-Wallet forward-rebuild ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §5)
-mirrors: rescan emission vins, rebuild claimed-epoch set from chain.
+**Bond record creation revert** is gate 4: delete record on **join-Market** block
+disconnect (`join_market_height == H`) — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §5.
+Paying-emission disconnect reverts dedup only (step 1); does not delete the record.
+
+Wallet ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-5): re-fetch bond record;
+refresh claimed-epoch cache; `Bonded` → `AdmissionPending` on join-Market revert.
 
 ---
 
