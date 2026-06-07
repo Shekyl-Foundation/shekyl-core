@@ -17,7 +17,6 @@ use shekyl_units::AtomicUnits;
 use crate::{
     payment_id::PaymentId,
     serde_helpers::{commitment_bytes, edwards_point_bytes, scalar_bytes},
-    subaddress::SubaddressIndex,
 };
 
 /// Outputs must mature this many blocks before the daemon inserts them into
@@ -95,7 +94,6 @@ pub struct TransferDetails {
     pub key_offset: Scalar,
     #[serde(with = "commitment_bytes")]
     pub commitment: Commitment,
-    pub subaddress: Option<SubaddressIndex>,
     pub payment_id: Option<PaymentId>,
 
     // ── Spend tracking ──
@@ -257,7 +255,6 @@ struct TransferDetailsSchema {
     key_offset: Vec<u8>,
     // Commitment via `commitment_bytes` — 32-byte mask || 8-byte LE amount.
     commitment: Vec<u8>,
-    subaddress: Option<crate::subaddress::SubaddressIndex>,
     payment_id: Option<crate::payment_id::PaymentId>,
     spent: bool,
     spent_height: Option<u64>,
@@ -360,7 +357,6 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000),
-            subaddress: Some(SubaddressIndex::new(1)),
             payment_id: None,
             spent: false,
             spent_height: None,

@@ -47,9 +47,7 @@ pub mod transfer;
 pub mod tx_meta_block;
 pub mod wallet_ledger;
 
-pub use bookkeeping_block::{
-    AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
-};
+pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
 pub use error::WalletLedgerError;
 pub use ledger_block::{
     BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,

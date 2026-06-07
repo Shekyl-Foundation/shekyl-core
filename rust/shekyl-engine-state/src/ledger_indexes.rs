@@ -506,7 +506,6 @@ mod tests {
     use super::*;
     use crate::{
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
-        subaddress::SubaddressIndex,
         transfer::SPENDABLE_AGE,
     };
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
@@ -525,7 +524,6 @@ mod tests {
             key: ED25519_BASEPOINT_POINT * Scalar::from(u64::from(seed) + 1),
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed).saturating_add(1))),
             payment_id: None,
             spent: false,
             spent_height: None,

@@ -48,7 +48,7 @@
 use serde::{Deserialize, Serialize};
 use shekyl_units::AtomicUnits;
 
-use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::TransferDetails};
+use crate::{error::WalletLedgerError, transfer::TransferDetails};
 
 /// Schema version of the ledger block.
 ///
@@ -63,15 +63,12 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 /// - Version `2` was the pre-M3b shape: each `TransferDetails`
 ///   persisted `combined_shared_secret`, `ho`, `y`, `z`, `k_amount`
 ///   inline as the canonical re-derivation source.
-/// - Version `3` (this version) adds
-///   `TransferDetails::source_ciphertext` and
-///   `TransferDetails::output_handle`, the M3b deterministic-handle
-///   pathway's persisted state. The pre-M3b secret-bearing fields
-///   remain alongside the new fields transitionally; M3c's
-///   `TxInputSigningContext` swap (per
-///   `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.3) flips the source of truth
-///   to the new fields, and M3d/M3e remove the legacy fields,
-///   triggering further version bumps each time.
+/// - Version `3` adds `TransferDetails::source_ciphertext` and
+///   `TransferDetails::output_handle` (M3b deterministic-handle pathway).
+/// - Version `4` removes the M3a–M3c per-output secret fields from
+///   `TransferDetails` (M3d).
+/// - Version `5` (this version) removes `TransferDetails::subaddress`
+///   per FA-2 End-state 5 (`SUBADDRESS_UNDER_PQC.md` §5.7.4).
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -79,7 +76,7 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 4;
+pub const LEDGER_BLOCK_VERSION: u32 = 5;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -316,8 +313,7 @@ impl LedgerBlock {
             .collect()
     }
 
-    /// Get spendable outputs with optional subaddress / amount
-    /// filters.
+    /// Get spendable outputs with an optional minimum-amount filter.
     ///
     /// Only returns outputs where `current_height >= eligible_height`
     /// — the daemon has no curve-tree path for immature outputs, so
@@ -325,7 +321,6 @@ impl LedgerBlock {
     pub fn spendable_outputs(
         &self,
         current_height: u64,
-        subaddress: Option<SubaddressIndex>,
         min_amount: Option<AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
@@ -334,11 +329,6 @@ impl LedgerBlock {
             .filter(|(_, td)| {
                 if !td.is_spendable(current_height) {
                     return false;
-                }
-                if let Some(sub) = subaddress {
-                    if td.subaddress != Some(sub) {
-                        return false;
-                    }
                 }
                 if let Some(min) = min_amount {
                     if td.amount() < min {
@@ -420,7 +410,7 @@ mod tests {
     use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
     use shekyl_oxide::primitives::Commitment;
 
-    use crate::{payment_id::PaymentId, subaddress::SubaddressIndex, transfer::SPENDABLE_AGE};
+    use crate::{payment_id::PaymentId, transfer::SPENDABLE_AGE};
 
     fn sample_transfer(seed: u8) -> TransferDetails {
         let tx_hash = [seed; 32];
@@ -433,7 +423,6 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed))),
             payment_id: Some(PaymentId([seed; 8])),
             spent: false,
             spent_height: None,
