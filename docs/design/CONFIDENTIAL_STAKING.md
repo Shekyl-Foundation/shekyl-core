@@ -1,15 +1,21 @@
 # Confidential staking — consensus & economics design
 
-**Status:** **Round 1 closed** (2026-06-02) on economics and **(B)**. **(C)** **closed on 3C**
-(2026-06-04, §6.4.3) — staking subtree + 5-scalar `h_bind` (tier+creation), window arithmetic;
-Decisions 1 (`H_t`) & 2 (historical root) superseded. **(A)** collapsed to reserve-DLEQ class
-+ bounded remainder (§6.4.1). Round 2: byte wire, KATs, tree/leaf implementation.
-This is the **upstream consensus/economics truth** that
-[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.3 mirrors. It
-**supersedes the reward/claim mechanism** of
-[`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md) (proportional
-pool-division, cleartext amounts, public `staked_output_index`, monotonic watermark),
-which is retained for history until this lands.
+**Status:** **Genesis reward path superseded (2026-06).** Leading genesis staking is
+**transfer-shaped admission** ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
+§2.4): main-tree transfers principal ↔ `P`, reward emission with membership-only
+backing, bond-record epoch dedup — **not** this document's §6.4 claim wire or Decision
+**3C** staking subtree. **Do not implement** 3C / `txin_stake_claim_v2` / entitlement
+for genesis.
+
+**Historical — confidential-claim design (archived for audit trail):** Round 1 closed
+(2026-06-02) on economics and **(B)**. **(C)** closed on 3C (2026-06-04, §6.4.3).
+**(A)** collapsed to reserve-DLEQ + bounded remainder (§6.4.1). §6.4.4 rejected
+re-stake-in-claim-tx; §6.4.4 reopening is valid for transfer-shaped admission per
+rule 21 (reasons 1–3 were confidential-substrate only).
+
+This doc **supersedes** cleartext [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+for history. Principal/unstake membership pins may still inform optional admission
+transfer discipline where not superseded by §2.4.
 
 **Process discipline:** [`26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Binding constraint:** [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) priority-1

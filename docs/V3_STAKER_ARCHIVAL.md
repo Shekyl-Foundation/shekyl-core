@@ -743,34 +743,45 @@ cryptographically, network-, timing-, and output-isolated from the
 spend/claim/principal identity, whose unavoidable public surface leaks nothing past
 "some pseudonym holds these shards."
 
-**Replace the direct `entity_id` binding with membership-proof registration — the
-claim primitive in persistent shape.** Today `StakeEngine::is_active_staker(entity_id)
--> bool` is a direct, linkable lookup that ties archival to the stake. Replace it:
+**Transfer-shaped admission (leading genesis form — see
+[`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4).**
+Replace `StakeEngine::is_active_staker(entity_id)` with firewalled **`P`** keyed off
+the **bond record** (gate 4), not a linkable stake lookup.
 
-- At registration, the archival pseudonym **P** proves *"some active stake backs
-  me"* via an FCMP++ membership proof against the active-stake root — **not** a named
-  `entity_id`.
-- A per-stake **archival nullifier `N_arch = x·G_arch`** over a NUMS base
-  **independent of both `Hp(O)`** (spend image) **and `G_S`** (claim nullifier).
-  The nullifier does double duty: **Sybil-resistance** (one stake → one archival
-  identity, so a single bond cannot farm parallel reward streams) and **uniqueness
-  without revealing which stake**.
-- **P is an independent keypair, HKDF-derived from the wallet seed** exactly like
-  the multi-account independent keypairs — *not* an algebraic offset of the stake
-  key, so there is no cross-derivable link.
-- **Eligibility-over-time is a periodic liveness re-proof** against the *current*
-  active-stake root, folded into the challenge cadence. It lapses automatically when
-  the backing stake unstakes (leaf gone → proof fails), with no re-linkage: all of
-  P's proofs share `N_arch` and are all P anyway.
+**Two irreducible consensus-special surfaces:** per-shard **bond** (slashable,
+consensus-tracked) and **reward emission** (mint authorized by public work +
+membership-only backing). Stake-in (principal → `P`) and unstake-out (`P` →
+principal) are **ordinary FCMP++ main-tree transfers** — firewall = base privacy.
 
-Net on-chain: **P ↔ shard-set ↔ performance is public under the pseudonym; which
-stake backs it, that stake's tier/creation/amount, and the person's
-claim/spend/principal identity are all hidden behind a membership proof.** This is
-almost entirely re-composition — membership proof + DDH-independent nullifier +
-HKDF key — so it is low-new-primitive in the project's sense. The one genuinely new
-element is the **persistent-pseudonym lifecycle** (register once, live long,
-re-prove liveness), and it **extends the T7 DDH requirement to a third independent
-base `{Hp(O), G_S, G_arch}`** that must be mutually independent.
+- **`P` is an independent keypair, HKDF-derived from the wallet seed** — not an
+  algebraic offset of the principal key; dual scan (principal + `P`).
+- **Admission principal (optional economics):** soft transfer of `≥ ADMISSION_MIN` to
+  `P` on the main tree — **not** consensus unspent enforcement; Decision **3C**
+  staking subtree is **not** shipped for genesis.
+- **Off-chain backing before first reward:** `P` must be a known, serving, backed
+  archiver **before** earning — peers present/observe backing off-chain; otherwise
+  spam or ignored challenges. The **first on-chain reward emission** anchors bond
+  state (holdings + claimed-epoch bitmap) — there is **no** separate registration
+  transaction; fusion removes the tx, not the event.
+- **Reward emission crypto:** FCMP++ **membership-only control** at settlement-epoch
+  cadence (prove backing, **no** key image in spent set). **No published
+  reward-dedup tag** — `N_arch = x·G_arch` is **rejected** (stake-keyed tags
+  collide under shared admission stake and do not dedup epochs). **Double-claim
+  prevention** = per-`P` **claimed-epoch bitmap** on the bond record (same
+  `EpochSet` class as [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
+  §3.3.2), reorg-reverted with `pop_block`. **`ν = H(P, shard)`** (gate 3) stays
+  separate — counting only.
+- **Intra-epoch unbacked window:** between emissions (~one settlement epoch),
+  backing is not re-verified on-chain; `P` may spend admission principal after a
+  payout. This is safe **only because challenge failure slashes bond** regardless
+  of admission state — **bond, not stake-tree, is the maintained anchor.**
+- **Sybil-resistance** lives in **per-shard bonds** (total bond = shards × rate),
+  not `P`-uniqueness or a published archival nullifier.
+
+Net on-chain: **P ↔ shard-set ↔ performance is public; principal link is hidden by
+transfer privacy + gate 6 firewall.** Crypto novelty on the reward leg is
+**membership-only control** (subtraction from today's verify) — not
+ClaimLinkability / non-spending SAL sibling — when dedup is state-based.
 
 ### Tier-neutral shard pricing — breaking the tier oracle
 
@@ -859,13 +870,14 @@ as everywhere else in the privacy design. Three layers must hold:
   circuit/IP and undoes the crypto. The query side is already mandated Tor/I2P;
   this extends the same discipline to P's own operations, and cover-traffic remains
   the right post-V3 strengthening.
-- **Timing.** Because the model is ~one P per stake, a P registering right after a
-  stake tx pairs them. Decouple registration timing from stake creation with a
-  randomized delay/window so the pairing is ambiguous.
-- **Output.** P's reward (via the Path C burn-redirect funding, which correctly
-  avoids a per-query fee stream) lands in a **stealth output P controls** and must
-  not be consolidated back into the stake/spend wallet linkably — standard
-  unlinkable-output hygiene applied to archival yield.
+- **Timing.** Stake-in (principal → `P`) and first emission pair if immediate.
+  Decouple with a randomized delay/window so the pairing is ambiguous.
+- **Output.** Rewards land in **stealth outputs `P` controls**; **decorrelated
+  drains** on unstake-out (no lump sweep when a public `P` goes quiet). No
+  linkable consolidation back to principal.
+- **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
+  funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
+  bond in wallet hygiene.
 
 ### The reward curve — retention, scarcity, banded plateau-cap
 
@@ -921,10 +933,10 @@ confidential-staking threads:
 - **F-INFLATION 8a (confidential-reward soundness) transforms into a *loud* 8c.**
   With reward computed over public quantities there is no hidden amount in the
   entitlement: no `M·amount`, no bounded-remainder, no confidential reward range
-  proof. Anyone recomputes P's payout from public archival history; the claim
-  collapses to "I am P, P is backed by some active stake (membership + `N_arch`),
-  here is my publicly-computed reward, mint it to a stealth output." The only ZK left
-  on the reward path is **membership/backing + the stealth payout**. The existential
+  proof.   Anyone recomputes P's payout from public archival history; reward emission is
+  "I am P (bond record), here is publicly-computed work, membership-only backing
+  proves control, mint to stealth output; epoch *E* deduped on bond state." The only
+  ZK left on the reward path is **membership-only control + stealth payout**. The existential
   soundness item does not vanish — it **moves to retention-proof unforgeability (the
   new 8c)** — but it moves from *silent* (confidential, undetectable) to *loud*
   (public, recomputable, detectable). Turning silent inflation into detectable
@@ -999,21 +1011,17 @@ and a fresh soundness pass before it ships:
    **privacy-decided**: flat per-active-bonded-**market**-shard (not
    amount-scaled — resurrects F0); foundation-overlapped; sunset on the
    **subsidy**, not on the floor.
-6. **`P` backing-and-firewall design (unbuilt; uniqueness no longer load-bearing).**
-   No `N_arch`/`G_arch`/pseudonym primitive exists in code or design today; the
-   persistent-pseudonym lifecycle is the remaining design-to-do and the crux the
-   privacy reframe rests on. The keystone **relaxes** it: one-P-per-stake uniqueness
-   is no longer load-bearing for Sybil-resistance (the per-shard bonds carry that),
-   and replication-Sybil is self-defeating anyway (faking replication lowers your own
-   `1/R` scarcity reward). So `P` needs **unlinkability + backing-proof, not
-   uniqueness** — a simpler primitive than the earlier one-P-per-stake nullifier.
-7. **Economic simulation re-priced for capital-collateralizes-work (the foundational
-   gate).** This is not tuning a curve — it is re-pricing *what staking is*: from
-   capital that multiplies yield to capital that collateralizes service. Locked
-   principal decouples from reward (work-heavy small holders out-earn idle large
-   holders), so the locked-supply assumptions the V3 economy sims baked in must be
-   re-priced, and the bond-rate calibration (item 4) is a sim output, not an armchair
-   number. Until the sim blesses the re-pricing, the rebasing is not consensus-real. The
+6. **`P` backing-and-firewall design (unbuilt; transfer-shaped — §2.4).**
+   Off-chain backing presentation + first reward emission on-chain anchor;
+   membership-only control on emission; **reward dedup on bond-record epoch bitmap**
+   (no `N_arch` published tag). Bonds carry Sybil-resistance; `P` needs
+   **unlinkability + firewall**, not uniqueness. Bond-funding hygiene (principal→`P`
+   lump vs earnings ramp) is a residual correlation channel.
+7. **Economic simulation re-priced (gate 7 — foundational; couples to §2.4 (iii)).**
+   If admission principal goes soft or away, **bond-locked supply is the sole sink** —
+   re-price macro `stake_ratio` / circulating-supply at the same severity as
+   per-reward proof aggregate. Bond-rate calibration (item 4) is a sim output. Until
+   the sim blesses the re-pricing, the rebasing is not consensus-real. The
    sim is specified (spec-first, pre-code) in
    [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md); iteration 1 isolates
    **coverage dynamics** (does `1/R` + plateau-cap + per-shard bonds actually produce

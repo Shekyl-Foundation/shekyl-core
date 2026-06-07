@@ -993,8 +993,18 @@ previously in the mempool) pay the full verification cost.
 
 ## 15. Staking and FCMP++
 
-Staked outputs (`txout_to_staked_key`) live in a **separate staking subtree** with a
-**160-byte / 5-scalar** leaf (Decision 3C —
+**Genesis disposition (2026-06 — transfer-shaped admission).** The leading genesis
+staking form ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4)
+does **not** ship Decision **3C** below. Admission principal lives on the **main tree**
+as ordinary FCMP++ transfers (principal ↔ HKDF-derived **`P`** sub-wallet); only
+**bond** (gate 4) and **reward emission** are consensus-special. Cleartext
+`txout_to_staked_key` and the separate staking subtree are **deletion targets** for
+genesis — the subtree was **docs-only**, never implemented in production Rust/C++.
+
+**Historical — Decision 3C (confidential-claim path; not genesis):**
+
+Staked outputs (`txout_to_staked_key`) were designed to live in a **separate staking
+subtree** with a **160-byte / 5-scalar** leaf (Decision 3C —
 [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3). The **main tree**
 (all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged.
 

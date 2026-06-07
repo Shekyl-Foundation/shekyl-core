@@ -1,71 +1,157 @@
 # Phase 2b — stake lifecycle (design)
 
 **Status:** Genesis staking substrate is **pay-for-service archival rebasing +
-firewalled pseudonym `P`** ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
-§*Pay-for-service rebasing*; F-ARCHIVAL resolution in §7.5.3). Pre-genesis there
-is **one** ship target — not a confidential-yield stack built now and replaced at
-genesis. The **reserve-DLEQ entitlement / `tier_num` claim path**
-(`CONFIDENTIAL_STAKING.md` §6.4 claim wire + `rust/shekyl-staking/`
-`entitlement.rs` / `tiers.rs` / `rewards.rs`) is **deletion target**, not
-interim implementation.
+firewalled pseudonym `P`**, in the **transfer-shaped admission** form (§2.4 —
+leading genesis shape). Pre-genesis there is **one** ship target — not a
+confidential-yield stack built now and replaced at genesis. The **reserve-DLEQ
+entitlement / `tier_num` claim path** (`CONFIDENTIAL_STAKING.md` §6.4 claim wire
++ `rust/shekyl-staking/` `entitlement.rs` / `tiers.rs` / `rewards.rs`) is
+**deletion target**, not interim implementation. Decision **3C** (staking subtree,
+`h_bind`, 5-scalar leaf) is **docs-only** — un-building planned work, not ripping
+out shipped code.
 
 This document still records the **2026-06-02 confidential-principal redesign**
 (committed stake amounts, membership proofs, FCMP++ spend/unstake path, wallet
 opening discipline §3.3.1) because that machinery **survives** rebasing: principal
-lock, `C_stake`, stealth payouts, `KeyEngine` boundaries. What rebasing **replaces**
-is the **reward identity and economics**: tier-scaled confidential entitlement →
-**work-scored payment under `P`** (publicly computable from archival history;
-existential inflation item → loud 8c retention-proof unforgeability, not silent 8a).
+lock, `C_stake`, stealth payouts, `KeyEngine` boundaries. What rebasing **replaces** is the **confidential-reward superstructure** (entitlement
+claims, `tier_num`, `band_sum` servo, exact-yield-from-secret-weight) — see §2.1
+*Carry-over / delete*.
 
-Wallet Rounds 0–2 pins (FSM, persistence, §4.7 actor protocol, §5 reconciliation,
-§6 API, §8.6 `rate_at_epoch` → **`Σwork` servo** on rebased substrate) remain
-load-bearing where not explicitly superseded below. No Stage 3 implementation until
-**Round 3 closes on the rebased substrate** per
+**Identity — three-way split (do not collapse to "P solves F0"):**
+
+1. **The pay-for-service model dissolves F0** — not mitigated. F0 was the
+   confidential claim wire leaking `(tier, creation_height)` into a `{tier ×
+   creation-window}` cohort. Work-based reward removes `tier_num` from the reward
+   path (per-shard bonds replace the staker tier); there is no confidential claim
+   left to leak. F0's substrate is **deleted**.
+2. **`P` addresses a different problem** archival creates — archival cannot be
+   unlinkable like a claim (reachability + persistence + challengeability require a
+   stable holder). The goal flips from **anonymity** (hide the actor — what
+   confidential staking attempted and F0 defeated) to **firewalled pseudonymity**
+   (`P` is public by function; `P`↔principal is hidden).
+3. **The firewall is conditional, unbuilt, and is the privacy work** — network /
+   timing / output / membership-proof hygiene maintained over `P`'s whole life
+   (gate 6; Tier 1 soundness). Failure mode: long-lived correlation of `P`'s
+   public activity against the principal, plus cross-pseudonym intersection. Bonds
+   — not `P`-uniqueness — carry Sybil-resistance, so multi-`P` is privacy hygiene,
+   not security. **Do not under-budget gate 6** because the model "solves identity."
+
+Wallet Rounds 0–2 pins (FSM skeleton, persistence discipline, §4.7 actor shape,
+§5 reorg forward-rebuild, §6 API *intent*) remain load-bearing **where §2 says
+retain** — but §3–§7 body text below §2 is still **claim-centric** until retooled;
+§2 is authoritative for rebased scope. No Stage 3 until **Round 3 closes on the
+rebased substrate** (gate-list + gate 6 to soundness depth) per
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §7.
 
 **Process discipline:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (Round 0 = pre-flight / R0-D#; adversarial rounds 1–6 before code).
 
 **Binding constraint when arbitrating:** [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc)
-priority-1 (security), then priority-2 (privacy). Under the confidential redesign
-the wallet now holds **commitment-opening secrets** for its own stakes; the prior
-"stakes are public ledger facts" posture no longer holds (see §0.10, §4, §7).
-Stake principal commitments, lock boundaries, the per-epoch nullifier set, and the
-public rate schedule are **consensus-load-bearing**; wallet-side display must not
-invent economics the chain did not authorize.
+priority-1 (security), then priority-2 (privacy). Post-rebase, priority-2 on the
+reward path is **firewall discipline**, not hidden reward amounts. Principal
+commitment shape, `P` registration, per-shard bond lifecycle, and reorg atomicity
+on registration/counting nullifiers are **consensus-load-bearing**; wallet display
+must not invent economics the chain did not authorize.
 
 ---
 
-## Revision note (what changed and why)
+## Revision note
 
-This rewrite threads one decision through every section: **staking moves from
-cleartext-claim to confidential-claim.** The wallet consequences, stated once here
-and applied throughout:
+### 2026-06 — pay-for-service rebasing (authoritative for scope)
 
-1. **Staked amount is committed, not public.** The chain stores `C_stake = z·G + amount·H`
-   + range proof; the wallet knows its own `(amount, z)` (`amount` on `H`, `z` on `G` —
-   upstream §2 notation; witness `a` is pseudo-out blinding only, not principal) and must
-   protect them as secrets. `StakeInstance` is no longer secret-free.
-2. **Claims are membership-unlinkable.** There is no public `staked_output_index`
-   and no monotonic watermark. Double-claim prevention is a **per-settlement-epoch
-   nullifier**; the wallet tracks *which epochs it has claimed* via its own
-   nullifiers, not a chain-published index.
-3. **Yield is exact and wallet-local.** Reward = `ρ_e (public) × own_weight ×
-   accrued_epochs`. No pool denominator, no dependence on a daemon-reported
-   `total_weighted_stake`. The `EconomicsEngine::pool_weighted_total()` consumption
-   is replaced by the public rate schedule.
-4. **A coarse public band rides each stake** for the governance/burn signal and as
-   the rate denominator (servo). The wallet declares its band at stake time
-   (range-proven to its commitment).
-5. **The nullifier set is reorg-state.** On reorg, claimed epochs un-claim; the
-   wallet mirror must rewind the claimed-epoch set, not a watermark.
+**§2 is the authoritative scope statement** for genesis. §3–§7 below are still
+written against the **intermediate confidential-claim model** (2026-06-02 principal
+redesign + entitlement superstructure). Retool order: **§2 + §2.3 first** (this
+pass), then **gate 6 (`P` registration + firewall)** — fixes secret material and
+threat model everything downstream depends on — then §3 FSM, §7 threat model, §4–§6
+protocol.
 
-The **principal-lock and commitment** economics live upstream in
-[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) (servo pins, band granularity
-for the **pre-rebase** claim model). The **genesis reward servo** is rebased onto
-`Σwork` ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) gate-list item 1;
-[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)). This document
-mirrors that truth and owns only the wallet lifecycle.
+Genesis staking = **transfer-shaped admission + archival service under firewalled
+`P`**. One reward stream: work scored on `P`'s public history, funded via `Σwork`
+servo, paid to stealth outputs `P` controls. Not: build entitlement claims, then
+replace.
+
+### 2026-06 — transfer-shaped admission (leading genesis form)
+
+Elevates §2.4 as the **leading genesis staking shape** (Round 3–4 ratification
+pending three close-conditions below). Supersedes discrete on-chain registration +
+`txin_stake_claim_v2` + Decision **3C** staking subtree for genesis. **Codebase
+grounding:** 3C/`h_bind`/5-scalar leaf exist in design docs only; live C++ is
+cleartext `txout_to_staked_key` + `txin_stake_claim` — pivot deletes planned work
+and retires two legacy paths, not a built subtree.
+
+**Two irreducible consensus-special surfaces:** (1) **per-shard bond** (gate 4 —
+slashable, consensus-tracked); (2) **reward emission** (mint authorized by public
+work + backing). Everything else — principal→`P` stake-in, `P`→principal unstake
+drain, reward sweeps — is **ordinary `RCTTypeFcmpPlusPlusPqc` transfer**, firewalled
+by base FCMP++ privacy.
+
+**Reward-leg crypto (substantive pin):** no published backing/reward-dedup tag on
+the emission. `N_arch = x·G_arch` conflated two jobs (backing consistency vs
+per-epoch double-claim); both are wrong for the fused model — stake-keyed tags
+collide under shared admission stake and do not dedup epochs. **Reward dedup** =
+per-`P` **claimed-epoch bitmap** on the bond record (gate 4 keys state by `P`),
+reusing the `EpochSet` relative-bitmask machinery (§3.3.2) with §5.2/§11
+reorg-revert atomicity. Claim epoch *E* ⟺ check-and-set bit *E*. **`ν = H(P, shard)`**
+(gate 3 counting) stays a **separate** primitive — do not fold into reward dedup.
+Consequence: the reward leg owes **membership-only control** (prove spend authority,
+**omit** key image from spent set) — a **subtraction** from today's verify path —
+not a tag-producing ClaimLinkability / non-spending SAL sibling.
+
+**Registration fusion:** eliminates the **on-chain registration tx**, not
+registration. Before the first reward emission, `P` must be a known, serving,
+backed archiver — **off-chain peer-presented backing** (otherwise peers won't
+challenge or get spammed). First on-chain reward emission **anchors** bond +
+claimed-epoch state; it does not replace prior peer-visible backing.
+
+**Soft admission + intra-epoch window:** between settlement-epoch emissions (~14
+days at default cadence), backing is not re-verified on-chain; `P` may spend
+admission principal after a payout and serve **unbacked** until the next emission.
+This is acceptable **only because the bond** enforces honesty in that window —
+challenge failure slashes bond regardless of admission state. **Bond, not
+stake-tree, is the maintained anchor.**
+
+**Admission principal — gate 7 reopen:** dropping or softening the admission lock is
+not a footnote ("monetary sink weakens") — it **re-prices** the V3 economy when
+bond-locked supply becomes the **sole** locked-supply sink. Flag explicitly to
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) iteration 5 / gate 7 at the
+same severity as per-reward aggregate sizing.
+
+**Bond-funding firewall (residual):** bond is now `P`'s central collateral; lump
+principal→`P` bond funding is a correlation channel — weigh **fund-from-earnings
+ramp** vs lump initial bond in gate 6 / wallet hygiene.
+
+**Round 3–4 close-conditions (ratify before Stage 3):**
+
+| # | Condition | Disposition |
+|---|-----------|-------------|
+| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | Opens reward-emission leg spec next; confirms crypto bill is membership-only control only |
+| (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii) |
+| (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | Bonds-only vs soft MIN transfer; not "optional resilience" |
+
+**Next design artifact:** reward-emission leg wire (state-based dedup baked in) —
+confirm nothing still forces a published tag.
+
+### 2026-06-02 — confidential principal redesign (partial carry-over)
+
+Superseded for **reward path**; retained for **principal machinery**:
+
+1. **Staked principal is committed, not cleartext-public** — `C_stake` Pedersen +
+   range proof (exact wire shape **open** under rebasing — §2.1 *Open: principal
+   role*).
+2. **Unstake is FCMP++ membership spend** — SAL key image `x·Hp(O)`; no stake↔unstake
+   point-equality link (T11 resolved).
+3. **No public `staked_output_index` / watermark** — membership + nullifiers.
+4. **Wallet opening discipline** — `(amount, z)` re-derived, never sealed (§3.3.1),
+   pending refinement if principal wire simplifies.
+
+**Deleted with rebasing** (dead code, not adapted): confidential claim wire
+(`txin_stake_claim_v2`, tier/`h_bind` reward path); entitlement stack
+(reserve-DLEQ, bounded-remainder, `entitlement.rs`); tier machinery; exact-yield
+from secret weight × public rate; `band` + `band_sum` servo on the reward path.
+Claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch` / `N_arch`) **do not** ship;
+reward dedup is bond-record epoch bitmap (§2.4); `ν = H(P, shard)` (gate 3 counting)
+unchanged.
 
 ---
 
@@ -332,78 +418,202 @@ the consensus design, not here.
 
 ## 2. Scope
 
+Phase 2b owns the **wallet staking form** on the **transfer-shaped admission**
+substrate (§2.4) — not the whole archival system, but **more than principal FSM
+alone**: gate 6 (`P` lifecycle + firewall + off-chain backing) is unbuilt archival
+crypto that **is** the staking identity surface (replaces
+`is_active_staker(entity_id)`). Sort gates by whether they pin the staking form or
+are archival-internal (interface only).
+
 ### 2.1 In scope
 
-- `StakeState` FSM and transition rules (§3)
-- `StakeInstance` identity, **secret opening material**, persistence, and linkage to
-  `TransferDetails` (§3–§4)
-- `StakeEvent` vocabulary + `LedgerEngine` merge protocol (§4)
-- Wallet-side **nullifier tracking** (claimed-epoch set) and **exact yield**
-  computation from the public rate schedule (§3–§4)
-- **Band declaration** at stake build time (§6)
-- Refresh reconciliation ordering, including **nullifier-reorg rewind** (§5)
-- Orchestrator user API: `Wallet::stakes`, `claimable_rewards`, `stake` / `claim` /
-  `unstake` → `PendingTx` (§6)
-- `StakeEngine` trait + `kameo` actor protocol (§4.6–§4.7)
-- Threat model + diagnostic projections (§7)
-- Stage 3 implementation DoD pointer (§10)
+#### Carry-over — retain (crypto foundation + lifecycle)
 
-### 2.2 Out of scope
+| Piece | Role post-rebase (§2.4) |
+|-------|-------------------------|
+| Principal→`P` stake-in / `P`→principal unstake-out | Ordinary FCMP++ main-tree transfers; firewall = base privacy |
+| Terminal unstake spend | Full SAL + `x·Hp(O)` **only** when draining `P`→principal (decorrelated, not lump sweep) |
+| `P` HKDF sub-wallet | Independent keypair from seed; dual scan (principal + `P`) |
+| FCMP++ membership + **membership-only control** on reward leg | Backing at emission; **no** key image; **no** published dedup tag |
+| Per-`P` claimed-epoch bitmap on bond record | Reward double-claim dedup (`EpochSet` class, §3.3.2 — relocated to bond state) |
+| `ν = H(P, shard)` | Gate 3 counting — **unchanged**, separate from reward dedup |
+| Reorg / `pop_block` atomicity (§5.2 / §11) | Bond record + claimed-epoch bitmap revert with block |
+| Adversarial method + firewall hygiene | Gate 6 — network / timing / output / **bond-funding** |
+| `StakeState` FSM skeleton (§3 — **re-spec pending**) | Retool off claim-centric states |
 
-| Item | Disposition |
-|------|-------------|
-| **Confidential consensus rules** (commitment/range-proof on staked outputs, ZK claim relation, nullifier set, band range proof, servo'd rate, `ρ_cap`) | **Upstream** — owned by the confidential staking consensus design (§2.3, §11). Phase 2b **mirrors**, does not define. |
-| `ArchivalEngine` | Stage 5; only `is_active_staker` query is forward-compatible |
-| Multisig stake/claim ceremony | V3.1 — FOLLOWUPS |
-| Subaddress indices in stake/recipient model | **Rejected** for V3.0 (FA-1) |
-| Persisting the runtime rate/band cache in the wallet file | **Deferred** — reopen if rescan refill cost fails UX budget (§8.1) |
-| Wallet RPC / CLI commands | Phase 3+ |
+#### Delete — dead code, not adapted
 
-> **Reversal of the prior draft's §2.2 line.** The prior draft scoped consensus
-> changes out and assumed "existing HF17 staking; wallet mirrors." Confidential
-> staking **is** a consensus change. Phase 2b still does not *define* consensus
-> here, but it now **depends on** the confidential consensus and must not be
-> implemented against the cleartext model (doing so would build a wallet for a
-> consensus shape that will not ship — a transitional state that cannot exist in a
-> genesis launch).
+| Piece | Why gone |
+|-------|----------|
+| `txin_stake_claim_v2` + cleartext `txin_stake_claim` | No entitlement / cleartext claim reward path |
+| `entitlement.rs` / `tiers.rs` / `rewards.rs` | Reserve-DLEQ superstructure |
+| Decision **3C** staking subtree, `h_bind`, 5-scalar leaf | **Docs-only** — never ship for genesis (§2.4) |
+| `txout_to_staked_key` cleartext stake outputs | Retire C++ legacy; genesis uses main-tree stealth |
+| Staker-wide **tier** machinery | Per-shard retention **bonds** (gate 4) |
+| F0 `{tier × creation}` substrate | Deleted with claim wire |
+| `band` + `band_sum` on reward path | `Σwork` servo (gate 1) |
+| `N_{i,S} = x·G_S`, `G_arch`, **`N_arch` published tag** | Reward dedup → bond-record epoch bitmap; no stake-keyed emission tag |
+| On-chain **registration tx** as separate type | Fused into first reward emission + off-chain backing |
+| ClaimLinkability / non-spending SAL **sibling** for reward | Membership-only control suffices when dedup is state-based |
 
-### 2.3 Upstream consensus dependency (mirror only)
+#### Staking-form — 2b must ground (not defer)
 
-Phase 2b inherits the following from the confidential staking consensus design.
-These are **proposed Round 1 pins** from the 2026-06-02 session and are owned by the
-consensus/economics doc; values here are *for wallet planning* and track upstream.
+| Item | Gate / anchor | Notes |
+|------|---------------|-------|
+| **Admission principal** | **Open — Round 4 + gate 7** | Soft MIN transfer to `P` vs bonds-only; **re-prices locked supply** — not optional |
+| **Reward emission wire** | **Next spec** (close-condition i) | Membership-only backing + public work payload + mint; epoch dedup on bond record |
+| **Off-chain backing presentation** | Gate 6 | Peers see backing before first on-chain emission |
+| **Per-shard bond lifecycle + slash hook** | Gate 4 (**pinned**); intra-epoch honesty anchor | Slash independent of admission spend |
+| **Reward receipt + unstake drain** | Gate 6 | Stealth outputs; **decorrelated** principal return |
+| **Firewall hooks** | Gate 6 | Separate circuits; stake↔`P` timing decoupling; bond-funding hygiene |
+| **Per-reward proof aggregate** | Sim (close-condition ii) | `N_P` × settlement-epoch cadence |
+| `StakeEngine` + orchestrator API | Round 4 | stake-in / bond / emit-reward / drain / unstake |
+| Threat model | §7 (after reward-emission spec) | Soft admission window explicit; bond-as-anchor |
+| Stage 3 DoD | §10 | Blocked on §2.4 close-conditions |
 
-- **Confidential staked output:** `C_stake = z·G + amount·H` (same Pedersen convention
-  as [`proof.rs`](../../rust/shekyl-fcmp/src/proof.rs) / upstream §2 notation table) +
-  range proof; **tier public**; **coarse band public** (range-proven to `C_stake`).
-- **Reward model:** public per-rate-epoch rate `ρ_e`; reward `= ρ_e × weight ×
-  active_blocks`; **no pool division, no aggregate `TWS` in the reward path.**
-- **Rate calibration (servo):** `ρ_e = min( budget_e / band_sum , ρ_cap )`, where
-  `band_sum` is the windowed coarse band aggregate (the public staking aggregate)
-  and `ρ_cap = budget / TWS_max` is the supply-safety backstop. The servo recovers
-  proportional economics confidentially; the cap guarantees no over-emission
-  regardless of band error or manipulation.
-- **Epochs (global boundaries):** **rate-epoch = 1,000 blocks** (`ρ_e` step;
-  ~1.4 days; 262,800-block year ⇒ 262.8 rate-epochs/yr). **Settlement-epoch =
-  10,000 blocks** — the nullifier granularity. A claim batches up to
-  `MAX_EPOCHS_PER_CLAIM` settlement-epochs per tx (`= 1` recovers strict
-  one-epoch-per-tx); `MAX_CLAIM_RANGE`-as-block-span is retired.
-- **Nullifiers:** one per `(stake, settlement-epoch)`,
-  `N_{i,S} = x_i · G_S` (`G_S` public per `S`; distinct from principal key image
-  `x·Hp(O)`); replaces the public index + watermark; filed in a **stake-claim nullifier
-  set** (not spent key images); **reorg-state** (consensus pop must revert it; wallet
-  mirror in §5.2).
-- **Nullifier counts per tier (full drain):** tier-1 (1,000 blk) → 1–2; tier-2
-  (25,000) → ≤3; tier-3 (150,000) → ≤15.
-- **Band:** 4–6 decade-log-spaced; geometric-midpoint weight in `band_sum`; coarse
-  by design (cohort-size caveat at cold start).
+**Discipline:** for each staking interface, ask whether **exactly one** archival-internal
+decision is load-bearing on it; pull only that decision forward. Most plausible pinch:
+**retention-proof shape (gate 2)** constraining what `P` commits to before first emission.
 
-Open upstream items the wallet must track (do not implement against until pinned):
-byte-exact claim wire; **staking-subtree** path tracking + 5-scalar leaf / `h_bind` KATs;
-cross-tree stake/unstake handling; Round 2 FSM bindings. **Closed:** economics §14;
-**`G_S`/(B)**; **(C)** on **3C** (subtree + `h_bind`, window arithmetic; §6.4.3); **(A)**
-reserve-DLEQ + bounded remainder. Still tracked: **claims after principal spent** (§7,
-R0-D6) — survives 3C (append-only subtree leaf).
+#### Identity (precise — not "P solves F0")
+
+See status block. **F0 dissolved by model deletion.** **`P` + firewall** address
+archival's public-holder problem. Budget **gate 6** as the unbuilt privacy work.
+
+### 2.2 Out of scope (archival-internal — interface only)
+
+2b **interfaces** to these; does not internalize construction/serving unless a row
+in §2.1 *Staking-form* pulls it forward.
+
+| Item | 2b needs | Owner |
+|------|----------|-------|
+| Set-B shard definition / challenge cadence | Slash-hook + first-emission commitment surface | Consensus + Stage 5 |
+| Retention-proof construction | What failure triggers bond slash | Archival verifier; **may** bind off-chain backing statement |
+| Transport (Tor/Arti, seed fast-fetch) | Firewall **hooks** only | Tier 4 / ops |
+| Foundation floor sizing | Policy constant | Gate 5 / genesis workbook |
+| `Σwork` servo + `R` counting/pricing internals | Wallet **mints `ν`, receives reward**; does not compute `R` | Gate 1 / economics upstream |
+| `ArchivalEngine` query serving | Stage 5 | Registration backing still via `StakeEngine` at genesis |
+| Multisig stake ceremony | V3.1 — FOLLOWUPS | |
+| Subaddress indices in stake model | **Rejected** V3.0 (FA-1) | |
+| Wallet RPC / CLI commands | Phase 3+ | |
+
+**Explicitly out — do not implement on `dev`:** entitlement prove/verify; F0 bucketing
+on the retired claim wire; extending `band_sum` reward servo in wallet code.
+
+### 2.3 Upstream mirror (rebased genesis substrate)
+
+Authoritative economics/identity spec:
+[`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing*;
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) soundness pass + gate ledger.
+Principal carry-forward pins still in [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+where not superseded below.
+
+**Principal (§2.4 — admission wire open):**
+
+- Stake-in: principal → **`P`** stealth outputs on **main tree** (ordinary FCMP++
+  transfer); optional `≥ ADMISSION_MIN` economics-only lock — **not** consensus
+  unspent enforcement.
+- Unstake: `P` drains to principal via **decorrelated** FCMP++ spends (SAL key images
+  at terminal leg only).
+
+**Reward (rebased — replaces confidential claim model):**
+
+- **One stream:** `reward_P = budget · work_P / Σwork` (gate 1); bonds at
+  `ARCHIVAL_BOND_FLOOR` (gate 4 **pinned**).
+- **Emission:** consensus-special leg — membership-only backing + public work +
+  mint to `P` stealth output(s); **no** `txin_stake_claim`.
+- **Dedup:** per-`P` claimed-epoch bitmap on **bond record** — not a published tag.
+- **First emission:** on-chain anchor after **off-chain** peer-presented backing.
+- **Inflation:** loud **8c** retention-proof unforgeability.
+
+**Counting (unchanged):**
+
+- `ν = H(P, shard)` — gate 3; separate from reward epoch dedup.
+
+**Reorg:** bond record + claimed-epoch bitmap revert with `pop_block` (§11);
+wallet §5 forward-rebuild adapts.
+
+**Retired for genesis:** 3C subtree; §6.4 claim wire; `G_S` / `G_arch` / `N_arch`
+emission tags; cleartext stake/claim C++ paths.
+
+**Open before Stage 3:** §2.4 close-conditions (i)–(iii); reward-emission byte wire;
+`P` HKDF domain; `Σwork` hook (gate 1).
+
+### 2.4 Transfer-shaped admission (leading genesis form)
+
+Authoritative staking **shape** for genesis. Full pin history: revision note
+2026-06 above; adversarial decomposition in design session 2026-06.
+
+#### Tx legs
+
+| Leg | Tx shape | Consensus role |
+|-----|----------|----------------|
+| Stake-in | Ordinary FCMP++ transfer (principal → `P`) | Value move; privacy = base RingCT |
+| Bond post / slash | Gate 4 consensus object | **Maintained anchor** — slashable collateral |
+| Reward emission | **Special** — mint + membership-only backing + work payload | Authorize payout; epoch dedup on bond record |
+| Reward sweep / principal return | Ordinary FCMP++ transfer (`P` → principal or fresh stealth) | Decorrelated drains — no lump correlation beacon |
+| Terminal unstake | Ordinary FCMP++ spend(s) draining `P` | SAL key image only here |
+
+#### Two irreducible special surfaces
+
+Only **bond** and **reward emission** require consensus-marked state or mint
+authorization. Stake-in and unstake-out are indistinguishable from normal transfers
+on-chain.
+
+#### Reward leg — crypto bill
+
+1. **FCMP++ membership** against main-tree root at emission time.
+2. **Membership-only control** — prove knowledge of spend secret **without**
+   publishing `x·Hp(O)` (subtraction from `FcmpPlusPlus::verify` — gap today at
+   `shekyl-oxide/.../fcmp/fcmp++/src/lib.rs`).
+3. **Threshold proof** (optional) — controlled value `≥ ADMISSION_MIN` if admission
+   principal retained for economics.
+4. **No published dedup tag** — double-claim prevention is
+   `bond.claimed_epochs.check_and_set(E)` (§3.3.2 `EpochSet` class, relocated).
+
+**Not owed:** ClaimLinkability, `N_arch = x·G_arch`, or any stake-keyed emission
+tag. **`ν = H(P, shard)`** remains gate 3 only.
+
+#### Soft admission and the intra-epoch window
+
+Backing is verified at **settlement-epoch cadence**, not every block. Between
+emissions, `P` may spend admission principal; service may be **unbacked** for up to
+~one epoch. **Load-bearing safety argument:** challenge failures slash **bond**
+regardless of whether admission outputs remain unspent. Spec must state this
+explicitly — it is why soft admission + bond is sound.
+
+#### Registration without a registration tx
+
+`P` must present backing to peers **before** earning (off-chain). The **first reward
+emission** creates/updates the on-chain bond record (holdings, claimed-epoch state).
+Fusion removes a discrete registration transaction; it does **not** remove the
+registration **event**.
+
+#### §6.4.4 reopening (rule 21)
+
+`CONFIDENTIAL_STAKING.md` §6.4.4 rejected "claim as ordinary FCMP spend + **re-stake
+in same tx**." Reasons 1–3 were confidential-substrate (tier inherit, accrual window,
+claim/unstake collapse). This shape does **not** re-stake in the claim tx; stake-in
+and unstake-out are separate transfer legs. Reopening is valid. §6.4.5 discipline
+(spend-authority binding, nullifier separation) holds: terminal unstake publishes key
+image; reward leg does not.
+
+#### Codebase pivot cost
+
+| Asset | Disposition |
+|-------|-------------|
+| 3C / `h_bind` / 5-scalar leaf | Design docs only — delete from genesis plan |
+| `entitlement.rs`, claim wire | Deletion target |
+| `txout_to_staked_key`, `txin_stake_claim` (C++) | Retire — cleartext legacy |
+| `FcmpPlusPlus::verify` membership-only branch | **Build** — smaller than ClaimLinkability sibling |
+
+#### Round 3–4 ratification gates
+
+See revision note 2026-06 — conditions (i) reward-emission spec with state dedup,
+(ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing.
+
+**Next:** open **reward-emission leg** design with state-based dedup; verify nothing
+still forces a published tag.
 
 ---
 
@@ -2289,13 +2499,15 @@ gate 1), not locally — but *public, not local,* is what kills silent inflation
 5. **Bootstrap shape (months 0–6) — overlapped, flat, sunset** — not a cliff if the foundation floor
    **overlaps** (foundation stays full-archival, sheds only as staker coverage is demonstrated); the
    subsidy is **flat per-active-bonded-shard** (privacy-clean; amount-scaled resurrects F0).
-6. **`P` backing-and-firewall design (unbuilt; uniqueness relaxed)** — no `N_arch`/`G_arch`/pseudonym
-   primitive exists; the persistent-pseudonym lifecycle is the design-to-do. The keystone relaxes it:
-   `P` needs unlinkability + backing-proof, **not** uniqueness (bonds carry Sybil-resistance;
-   replication-Sybil is self-defeating).
-7. **Economic sim re-priced for capital-collateralizes-work (the foundational gate)** — not a curve
-   tune but a re-pricing of what staking *is*; locked-supply assumptions baked into the V3 economy sims
-   must be re-priced, and the bond-rate (gate 4) is a sim output. The strongest pre-genesis argument:
+6. **`P` backing-and-firewall design (unbuilt; uniqueness relaxed)** — transfer-shaped
+   admission (§2.4): off-chain backing presentation + first reward emission on-chain anchor;
+   reward dedup on bond-record epoch bitmap (**no** `N_arch` published tag); membership-only
+   control on emission. Bonds carry Sybil-resistance; multi-`P` is privacy hygiene only.
+7. **Economic sim re-priced for capital-collateralizes-work (gate 7 — foundational)** —
+   **couples to admission-principal decision (§2.4 close-condition iii):** if admission lock
+   goes soft or away, **bond-locked supply is the sole sink** — re-price `stake_ratio` /
+   circulating-supply assumptions in macro sim, not a footnote. Bond-rate (gate 4) is a sim
+   output. The strongest pre-genesis argument:
    capital-bonded yield has no justification in the fee-only era (it is the rent the mission forbids,
    the one part that cannot re-justify itself once the subsidy ends), so this is a **genesis-class**
    decision, not a deferrable refinement. The sim is specified (spec-first, pre-code) in
@@ -2321,21 +2533,29 @@ the `P`-mediated pay-for-archival reward surface. Sim gate 4 (bond rate) and gat
 (`Σwork` normalizer) pins are **closed or in flight**; Tier 1 crypto soundness
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) step 3) gates consensus-real
 implementation. Nutshell: **staking is the opt-in to archival because staking =
-archiving**; **`P` is the primary reward identity.**
+archiving**. Reward is accounted under public **`P`**; **privacy on the reward path
+is gate 6 firewall discipline** — not "P solves F0" (F0's substrate is deleted).
 
 ##### F0 disposition on the rebased substrate (supersedes bucketing gate for genesis)
 
-The §7.5.3 **F0** finding (claim anonymity set = `{tier × creation_height}` cohort on
-the **confidential-entitlement claim wire**) was load-bearing **on the substrate being
-replaced**. Pay-for-service rebasing **removes `tier` from the reward path** (per-shard
-retention bonds replace the staker-wide tier oracle) and moves long-lived identity to
-**`P`** (firewalled pseudonym — public shard-set / performance under `P`, stake/claim
-principal hidden behind membership proof + firewall). F0's **cleartext claim-cohort
-bucketing decision** (`CONFIDENTIAL_STAKING.md` §14.4 item-9) is therefore **not the
-genesis Round 3 closure item**; it remains in the record as analysis of the retired
-claim wire. **Genesis Round 3 closure** instead ratifies the F-ARCHIVAL gate-list
-(§7.5.3 / `V3_STAKER_ARCHIVAL.md`) and pins wallet/engine shapes against **`P` +
-per-shard bonds + `Σwork`**, with Tier 1 soundness pass step 3 as the crypto gate.
+**Do not read this as "P solves F0."** Three mechanisms — see §2.1 *Identity* and
+status block:
+
+1. **F0 dissolved by model deletion.** F0 was structural leakage on the confidential
+   claim wire (`tier`, `creation_height` → `{tier × creation-window}` cohort). Work-based
+   reward removes `tier_num`; per-shard bonds replace the tier oracle; the claim wire
+   is **not shipped**. F0 is not mitigated — its substrate is gone. Bucketing
+   (`CONFIDENTIAL_STAKING.md` §14.4 item-9) is **moot** for genesis.
+2. **`P` addresses archival's problem, not F0's.** Archival requires a stable,
+   reachable holder; privacy becomes **firewalled pseudonymity** (public `P`, hidden
+   principal link) — a threat **substitution**, not F0 closure.
+3. **Gate 6 firewall is the unbuilt privacy work** — long-lived `P` profile +
+   cross-pseudonym intersection if hygiene slips; bonds carry Sybil-resistance so
+   multi-`P` is hygiene-only.
+
+**Genesis Round 3 closure:** F-ARCHIVAL gate-list + **§2.4 close-conditions (i)–(iii)** +
+gate 6 to soundness-pass depth (Tier 1 step 3). Not F0 bucketing. **Next spec:**
+reward-emission leg with state-based dedup.
 
 ##### F-INFLATION — split T8 on the **retired** entitlement substrate (historical wargame record)
 
@@ -2467,8 +2687,8 @@ path; do not implement against it.
    reward path.
 3. **Per-shard retention bonds** — gate 4 pin closed (`ARCHIVAL_BOND_FLOOR`); calibration
    record in sim.
-4. **Firewall stack** — network / timing / stealth payout for `P` (privacy is identity
-   isolation, not hidden reward amounts).
+4. **Gate 6 firewall stack** — network / timing / stealth payout for `P` (**the**
+   unbuilt priority-2 work; privacy = firewall discipline, not hidden amounts).
 5. **Principal-path carry-forward** — committed `C_stake`, unstake membership spend, wallet
    §3.3.1 opening discipline, §5 nullifier rebuild **where still applicable** on the rebased
    payout path (exact claim-tx shape is a Round 4 pin, not the retired `txin_stake_claim_v2`
@@ -2764,7 +2984,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
 **Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; §5 reconciliation is fully wallet-design signed off** — it does **no reversal**, rebuilding `claimed_epochs` forward from the canonical post-reorg chain and relying on daemon reorg correctness exactly as the spend path relies on spent-key-image revert (baseline daemon correctness, not a §5-specific dependency). **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; §5 reconciliation is wallet-design signed off (Rounds 1–2).** It does no reversal — forward-rebuild only (clarified 2026-06-05); daemon reorg correctness is assumed as for spent key images, not a §5-specific carry. No further wallet design work blocks Round 3. **§0.1 pre-flight re-verify trio closed (2026-06-05):** §2 trait-binding, the §1.5 three-condition test, and the surface-amendment re-confirmed against the §0.10 secret-ownership shift (the actor's only secret state is in-memory `(amount, z)`, re-derived on hydration, never sealed; fail-stop isolation holds because the secret is reconstructable, not authoritative-at-rest). §2.7 / §3.3 were discharged by the §8.6 landing (`rate_at_epoch` is a §3.3.6 pure-read, no `.await`-ordering obligation); §8.3 lens row clean. **One residual fixed:** boundaries-doc §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" — an 8th dead pool-denominator reference the literal-name `pool_weighted_total` sweep missed — corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield = `rate_at_epoch` × own weight). |
-| **3** | **Wargame executed (2026-06-05); closure re-based on F-ARCHIVAL substrate (2026-06)** | Threat-model exhaustion (§7) + §6 wider-substrate audit **executed**; dual-wargamer synthesis (§7.5.3) surfaced **F0** on the **then-current confidential-entitlement claim wire** (top finding: `{tier × creation_height}` cohort linkage). **F-ARCHIVAL pay-for-service rebasing supersedes F0 as genesis closure gate:** tier oracle and entitlement claim wire are **retired**; reward identity = **`P`**; inflation existential → **loud 8c** retention unforgeability. Wargame dispositions (T1–T14, G1–G13, A5, 8a/8b split) remain **audit record** for the retired path. **Open for Round 3 close:** ratify F-ARCHIVAL gate-list (§7.5.3); complete Tier 1 soundness pass step 3 spec; pin rebased Stage 3 wire (replaces `txin_stake_claim_v2` entitlement). Carry-forward pins: T5 constant-time; T11 unstake resolved; T13 bulk-fetch; firewall stack for `P`. **Not genesis gates:** F0 bucketing, 8a entitlement circuit, implementing `entitlement.rs` on `dev`. Stage 3 merge gated on §8.0 rebased substrate + Rounds 4–5. |
+| **3** | **Wargame executed (2026-06-05); transfer-shaped form elevated (2026-06)** | §7 wargame + §7.5.3 (F0 **dissolved**). **§2.4 leading genesis shape.** **Open for Round 3–4 ratification:** §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + **gate 7** re-pricing; gate 6 soundness; Tier 1 step 3. **Next spec:** reward-emission leg. Retool: §2.4 → reward wire → gate 6 → §3–§7. **Not genesis:** F0 bucketing, 8a, 3C subtree, `entitlement.rs`. |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
 | **6** | Open | External critique buffer (optional) |
@@ -2794,16 +3014,16 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **Dual-wargamer synthesis executed (2026-06-05, §7.5.3).** Confirmed/sharpened the §7.5 dispositions, added adversary **A5** (economic/rational), split inflation **T8 → 8a entitlement-soundness + 8b band-declaration binding**, and surfaced **top finding F0** (the claim anonymity set is the `{tier × creation-window}` cohort — confirmed at source).
 - [x] **F0 reveal-vs-ZK resolved at source (2026-06-05, §7.5.3 / §6.4).** `tier` (u8) and `creation_height` (u64) are **cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8); the verifier recomputes `h_bind` and the multiplier from them (§6.4.3). Revealed-by-design and **load-bearing for inflation-safety** (single revealed `tier` excludes tier-forgery; the 3C-over-3A "no new primitive" win) — hiding them re-opens 3C-vs-3A, so L4 is V4 co-design, not a v1 bolt-on. Claim↔claim linkage is therefore **deterministic exact-match**, cohort `→ 1` at cold start.
 - [x] **F0 baseline-budget calibration (2026-06-05, §7.5.3).** Priced F0 against the staking-exposure budget the project accepted *before* confidential staking: F0 is the **same category** of cost (staking is the exposed overlay; spend path untouched; core promise intact), exceeding baseline only in **scale-resistance** (block-granular `{tier × exact-height}` cohort does not dilute with growth — a steady-state, not just cold-start, thinness) and **targeted-cascade**. Marginal delta over the realistic already-linkable counterfactual (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor — **most penalizing the privacy-conscious staker**. **De-escalates the decision.**
-- [ ] **Round 3 design closure — rebased substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified in this doc + `V3_STAKER_ARCHIVAL.md`; **(2)** Tier 1 soundness pass step 3 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)) — four crypto primitives specified; **(3)** explicit record that entitlement claim path / F0 bucketing are **not** genesis ship targets. **Superseded:** F0 cleartext creation-bucketing as Round 3 gate (analysis retained in §7.5.3 for the retired wire). Residuals: FOLLOWUPS V3.1 where still load-bearing on principal/`P` firewall; A5 `Σwork` shock sim; Stage-3 pins (T5 constant-time, T13 bulk-fetch). Stage 3 merge gated on §8.0 + Rounds 4–5.
+- [ ] **Round 3–4 design closure — transfer-shaped substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified; **(2)** §2.4 close-conditions (i)–(iii) — reward-emission spec (state dedup, no published tag), per-reward aggregate sim, admission principal + gate 7 re-pricing; **(3)** Tier 1 soundness step 3; **(4)** entitlement / 3C / F0 bucketing explicitly **not** genesis. **Next:** reward-emission leg spec. Stage 3 gated on closure + Rounds 4–5.
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))
 
 - [ ] `StakeEngine` + `StakeEngineHandle` + `StakeActor` (`kameo`), fail-stop, re-derived (never-sealed) openings
 - [ ] FSM transition tests in isolation (incl. reorg rebuild on rebased payout state)
-- [ ] `StakeEvent` + archival registration/challenge events wired through refresh → ledger → stake actor
-- [ ] **`P` lifecycle** — HKDF-derived keypair, membership backing proof, periodic re-proof, firewall hygiene
+- [ ] `StakeEvent` + archival challenge events wired through refresh → ledger → stake actor
+- [ ] **`P` lifecycle** — HKDF sub-wallet; off-chain backing; reward emission (membership-only control); bond-record epoch dedup; firewall + bond-funding hygiene
 - [ ] Reward computation from **public `P` work history** + `Σwork` servo (not entitlement / `tier_num`)
-- [ ] `is_active_staker` via membership proof (not public `entity_id`)
+- [ ] `is_active_staker` via bond good-standing + work record (not public `entity_id`)
 - [ ] Cross-engine ordering per §5.3
 - [ ] **Do not land** reserve-DLEQ entitlement prove/verify or `txin_stake_claim_v2` tier claim wire
 

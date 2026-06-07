@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **docs: Transfer-shaped admission as leading genesis staking form (2026-06).**
+  Elevates §2.4 in `PHASE_2B_STAKE_LIFECYCLE.md`: principal↔`P` as ordinary FCMP++
+  main-tree transfers; bond + reward emission as the two irreducible special
+  surfaces; reward dedup via per-`P` claimed-epoch bitmap on bond record (no
+  `N_arch` tag); membership-only control on emission (not ClaimLinkability);
+  off-chain backing before first reward; intra-epoch window covered by bond slash;
+  gate 7 reopen if admission principal drops. Mirrors in `V3_STAKER_ARCHIVAL.md`,
+  `WALLET_REWRITE_PLAN.md`, `FCMP_PLUS_PLUS.md` §15 (3C not genesis),
+  `CONFIDENTIAL_STAKING.md` status, `STAKER_ARCHIVAL_SIM.md` gate 7 coupling.
+  Round 3–4 close-conditions (i)–(iii); next spec: reward-emission leg.
+
 - **docs: End-state 5 sequencing + checklist cleanup (2026-06-07).** Pins
   implementation land order in `WALLET_REWRITE_PLAN.md` (YAML todos, Phase 2c
   sequencing table: FA stack → 2c outbound/Wallet API → 4b RPC; 2a-3 not blocked).

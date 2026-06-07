@@ -455,8 +455,11 @@ the metric it needs. Specified when iteration 1 closes.
   zero-coverage instant; confirm the flat per-bonded-shard subsidy is coverage-
   sufficient and privacy-clean.
 - **Iteration 5 — locked-supply re-pricing (gate 7, the foundational macro gate).**
-  Does locked supply collapse toward `eligibility_min × population` once principal
-  stops multiplying reward, and what does that do to the V3 economy assumptions?
+  **Couples to transfer-shaped admission (§2.4 close-condition iii):** if admission
+  principal goes soft or away, **bond-locked supply is the sole sink** — re-price
+  `stake_ratio` / circulating-supply assumptions in macro sim at the **same severity**
+  as per-reward proof aggregate (close-condition ii). Does locked supply collapse
+  toward `bond_rate × shards × population` once principal lock no longer contributes?
   Macro; couples to `shekyl-economics-sim`.
 
 ## Build decision — confirmed: separate `shekyl-staking-sim` crate
@@ -2240,6 +2243,14 @@ imply, so the eventual gate-4/gate-5 work starts from the sim's evidence rather 
 blank page. Each item names the **evidence** (sim finding), the **disposition**
 (decided / open), and the **reversion criterion** per `21-reversion-clause-discipline.mdc`
 where a decision is provisional.
+
+**Genesis staking shape (2026-06).** Leading form is **transfer-shaped admission**
+([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4). Round 3–4
+ratification requires three sim/design close-conditions at **equal severity**: **(ii)**
+per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence; **(iii)**
+admission-principal decision with **gate 7** locked-supply re-pricing when bonds become
+the sole sink. Iteration 5 below is the gate-7 instrument; add a dedicated sweep for
+**(ii)** when the reward-emission wire pins cadence.
 
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|
