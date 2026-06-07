@@ -64,8 +64,7 @@ fn main() {
             config_path.display()
         )
     });
-    let archival_bond_floor =
-        get_u64(&map, "archival_bond_floor_atomic", &config_path);
+    let archival_bond_floor = get_u64(&map, "archival_bond_floor_atomic", &config_path);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_generated.rs");

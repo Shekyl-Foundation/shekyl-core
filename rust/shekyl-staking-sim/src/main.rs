@@ -256,7 +256,10 @@ fn main() {
     }
 
     if let Some(ref prefix) = axis_filter {
-        eprintln!("shekyl-staking-sim: running {} scenario(s) with axis prefix `{prefix}`", cfgs.len());
+        eprintln!(
+            "shekyl-staking-sim: running {} scenario(s) with axis prefix `{prefix}`",
+            cfgs.len()
+        );
     }
 
     let results: Vec<ScenarioResult> = cfgs.iter().map(run_sim).collect();
