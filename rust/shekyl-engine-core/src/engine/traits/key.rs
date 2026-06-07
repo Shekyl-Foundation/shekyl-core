@@ -618,9 +618,9 @@ pub(crate) enum TxOutputContext {
 impl std::fmt::Debug for TxOutputContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Payment { dest, .. } => f
+            Self::Payment { .. } => f
                 .debug_struct("Payment")
-                .field("dest", dest)
+                .field("dest", &"[REDACTED]")
                 .field("amount", &"[REDACTED]")
                 .finish(),
             Self::Change {
@@ -1049,7 +1049,7 @@ mod tests {
         );
         assert!(
             rendered.contains("[REDACTED]"),
-            "on-chain material redacted: {rendered}"
+            "on-chain material must be redacted as [REDACTED]: {rendered}"
         );
         assert_all_sentinels_redacted(&rendered);
     }

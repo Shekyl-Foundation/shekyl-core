@@ -27,5 +27,14 @@ pub const MARGINAL_INPUT_WEIGHT: usize = 32 + 32 + 3385 + 8;
 /// Canonical predicate: `amount < dust_threshold(rate)`.
 #[must_use]
 pub fn dust_threshold(rate: &FeeRate) -> u64 {
-    K_DUST * rate.calculate_fee_from_weight(MARGINAL_INPUT_WEIGHT)
+    let weight = u64::try_from(MARGINAL_INPUT_WEIGHT).unwrap_or(u64::MAX);
+    let fee = rate
+        .per_weight
+        .checked_mul(weight)
+        .and_then(|fee| {
+            let aligned = fee.div_ceil(rate.mask);
+            aligned.checked_mul(rate.mask)
+        })
+        .unwrap_or(u64::MAX);
+    K_DUST.saturating_mul(fee)
 }

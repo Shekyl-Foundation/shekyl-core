@@ -635,6 +635,28 @@ where
         let fee = estimate(selected.indices.len(), payment_count + 1)
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
+        let required = total_amount.checked_add(fee).ok_or_else(|| {
+            fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::InvalidRecipient {
+                    reason: "amount + final fee overflowed u64",
+                },
+            )
+        })?;
+        if selected.total_covered < required {
+            let err = SendError::InsufficientFunds {
+                needed: required.to_raw(),
+                available: selected.total_covered.to_raw(),
+            };
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::BuildFailed {
+                    kind: BuildErrorKind::InsufficientFunds,
+                },
+            );
+            return Err(err);
+        }
+
         let fee_directive =
             build_fee_directive(&rate, selected.indices.len(), payment_count, tree_depth);
 
