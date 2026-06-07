@@ -136,7 +136,8 @@ pub enum ReceiveAttribution {
     /// No cooperative label echo (sentinel or feature off).
     #[default]
     Unattributed,
-    /// Cooperative `REQUEST` tag matched exactly one open request.
+    /// Cooperative `REQUEST` tag matched exactly one request (`Pending` or
+    /// `Expired` per `SUBADDRESS_UNDER_PQC.md` §5.7.9 — UI warns on expired).
     Matched(PaymentRequestId),
     /// Label echoed but no unambiguous request match.
     LabelUnknown { echoed_label_hash: [u8; 32] },

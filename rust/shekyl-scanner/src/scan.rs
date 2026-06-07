@@ -141,8 +141,7 @@ pub struct RecoveredWalletOutput {
     /// One-byte amount tag carried alongside `enc_amount`. Public.
     #[zeroize(skip)]
     pub(crate) amount_tag: u8,
-    /// Decrypted label plaintext (sentinel when no cooperative tag).
-    #[zeroize(skip)]
+    /// Decrypted label plaintext (sentinel or cooperative `REQUEST` tag).
     pub(crate) label_plaintext: [u8; 8],
 }
 
@@ -154,6 +153,7 @@ impl Zeroize for RecoveredWalletOutput {
         self.z.zeroize();
         self.k_amount.zeroize();
         self.combined_shared_secret.zeroize();
+        self.label_plaintext.zeroize();
         // `self.key_image`, `self.amount`, `self.source_ciphertext`,
         // `self.view_tag`, `self.enc_amount`, `self.amount_tag` are
         // public on-chain data, not secret — they deliberately skip
