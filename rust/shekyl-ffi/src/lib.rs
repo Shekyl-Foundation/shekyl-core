@@ -3587,6 +3587,14 @@ pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
     if uri.is_null() || out_plaintext.is_null() {
         return -4;
     }
+    use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
+    if !cooperative_enabled {
+        let pt = sentinel_plaintext();
+        unsafe {
+            std::ptr::copy_nonoverlapping(pt.as_ptr(), out_plaintext, 8);
+        }
+        return 0;
+    }
     let cstr = unsafe { std::ffi::CStr::from_ptr(uri) };
     let Ok(uri_str) = cstr.to_str() else {
         return -3;
@@ -3595,15 +3603,10 @@ pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
         Ok(p) => p,
         Err(_) => return -3,
     };
-    use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
-    let pt = if cooperative_enabled {
-        parsed
-            .rid
-            .and_then(encode_request_plaintext)
-            .unwrap_or_else(sentinel_plaintext)
-    } else {
-        sentinel_plaintext()
-    };
+    let pt = parsed
+        .rid
+        .and_then(encode_request_plaintext)
+        .unwrap_or_else(sentinel_plaintext);
     unsafe {
         std::ptr::copy_nonoverlapping(pt.as_ptr(), out_plaintext, 8);
     }

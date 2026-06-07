@@ -35,24 +35,23 @@ impl PaymentRequestId {
 
     /// Generate a new opaque id from the OS CSPRNG.
     ///
-    /// Draws six bytes (u48 LE), retrying until a non-reserved value is drawn.
+    /// Draws six bytes (u48 LE), retrying up to 64 times when the draw is
+    /// reserved (`rid == 0`). OS RNG failure aborts immediately.
     pub fn new_random() -> Self {
-        const MAX_ATTEMPTS: u32 = 64;
+        const MAX_RESERVED_RETRIES: u32 = 64;
         let mut buf = [0u8; 6];
-        let mut attempts = 0u32;
+        let mut reserved_retries = 0u32;
         loop {
-            attempts += 1;
-            if attempts > MAX_ATTEMPTS {
-                panic!("PaymentRequestId CSPRNG exhausted after {MAX_ATTEMPTS} attempts");
-            }
-            if getrandom::getrandom(&mut buf).is_err() {
-                continue;
-            }
+            getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
             let mut le = [0u8; 8];
             le[..6].copy_from_slice(&buf);
             let id = u64::from_le_bytes(le);
             if Self::rid_fits_wire(id) {
                 return Self(id);
+            }
+            reserved_retries += 1;
+            if reserved_retries >= MAX_RESERVED_RETRIES {
+                panic!("PaymentRequestId: reserved rid=0 drawn {MAX_RESERVED_RETRIES} times");
             }
         }
     }
