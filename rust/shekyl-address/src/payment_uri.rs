@@ -86,9 +86,6 @@ fn percent_decode_component(s: &str) -> Result<String, PaymentUriError> {
             let lo = hex_nibble(bytes[i + 2])?;
             out.push((hi << 4) | lo);
             i += 3;
-        } else if bytes[i] == b'+' {
-            out.push(b' ');
-            i += 1;
         } else {
             out.push(bytes[i]);
             i += 1;
@@ -244,5 +241,12 @@ mod tests {
         let p = parse_payment_uri(&uri).unwrap();
         assert_eq!(p.label.as_deref(), Some("INV&42=1"));
         assert_eq!(p.rid, Some(7));
+    }
+
+    #[test]
+    fn label_plus_is_literal_not_space() {
+        let uri = format_payment_uri("shekyl1test", None, Some("A+B"), Some(3), None);
+        let p = parse_payment_uri(&uri).unwrap();
+        assert_eq!(p.label.as_deref(), Some("A+B"));
     }
 }

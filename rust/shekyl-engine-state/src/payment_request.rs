@@ -35,12 +35,13 @@ impl PaymentRequestId {
 
     /// Generate a new opaque id from the OS CSPRNG.
     ///
-    /// Draws six bytes (u48 LE); retries up to four times if the draw is `0`
-    /// (reserved).
+    /// Draws six bytes (u48 LE), retrying until a non-reserved value is drawn.
     pub fn new_random() -> Self {
         let mut buf = [0u8; 6];
-        for _ in 0..4 {
-            getrandom::getrandom(&mut buf).expect("OS CSPRNG");
+        loop {
+            if getrandom::getrandom(&mut buf).is_err() {
+                continue;
+            }
             let mut le = [0u8; 8];
             le[..6].copy_from_slice(&buf);
             let id = u64::from_le_bytes(le);
@@ -48,7 +49,6 @@ impl PaymentRequestId {
                 return Self(id);
             }
         }
-        panic!("PaymentRequestId CSPRNG failed to draw non-zero u48 after 4 attempts");
     }
 
     /// Raw `u64` for URI / wire encoding (u48 LE in label plaintext).
