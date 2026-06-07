@@ -54,7 +54,8 @@
   outputs when recovered spend key matches the account primary spend key;
   removed `KeyEngine::derive_subaddress`, subaddress registry/labels from
   `BookkeepingBlock` (version 3), `TransferDetails::subaddress` (ledger
-  block version 5), `TxRequest::from_subaddress`, and
+  block version 5), `WALLET_LEDGER_FORMAT_VERSION` 4→5 (paired
+  `wallet_ledger.snap`), `TxRequest::from_subaddress`, and
   `TxOutputContext::Change` subaddress index. Closes FA-2 item in
   `docs/FOLLOWUPS.md` subaddress round.
 

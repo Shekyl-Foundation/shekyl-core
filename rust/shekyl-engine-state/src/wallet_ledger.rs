@@ -64,7 +64,12 @@ use crate::{
 /// optional non-secret fields — `source_ciphertext: Option<HybridCiphertext>`
 /// and `output_handle: Option<OutputHandle>` — to support the M3b
 /// orchestrator-side handle population pass; pre-M3b records carry
-/// `None` in both. Each per-block bump (`LEDGER_BLOCK_VERSION`,
+/// `None` in both. Version `4` is the M3d
+/// `TransferDetails` secret-field removal shape (paired with
+/// `LEDGER_BLOCK_VERSION` 4). Version `5` is FA-2 End-state 5:
+/// `BOOKKEEPING_BLOCK_VERSION` 3 (subaddress registry removed) and
+/// `LEDGER_BLOCK_VERSION` 5 (`TransferDetails::subaddress` removed).
+/// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
 /// the on-disk bundle *bytes* themselves shift whenever any nested
@@ -75,7 +80,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 4;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 5;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
