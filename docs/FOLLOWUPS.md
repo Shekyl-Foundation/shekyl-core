@@ -1130,8 +1130,9 @@ sustainability is unaffected by the recalibration.
   per-output wire inventory must be **verified**, not tag-only). **Active
   parallel:** FA-9 threat-model propagation; FA-6 implementation after spec
   §11 sign-off; **FA-6b** multisig `view_tag_hints` audit (§3.2, separate from
-  account-path T6 closure). **FA-7 landed on `dev` 2026-06-07** (PR #111
-  superseded by direct `dev` commits). **FA-2 subaddress deletion**
+  account-path T6 closure). **FA-7** (End-state 5 wallet plan; PR #111
+  closed without merge — content on `dev` as direct commits, e.g.
+  `58407f565`). **FA-2 subaddress deletion**
   ([#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)):
   End-state 5 scanner, bookkeeping v3, ledger v5, `WALLET_LEDGER_FORMAT_VERSION`
   5 — open PR, lands on `dev` before FA-8. **FA-8 payment requests + reconcile**

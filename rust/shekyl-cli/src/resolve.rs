@@ -187,6 +187,10 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
     let cmd = tokens[0];
     let args = &tokens[1..];
 
+    if let Some(msg) = reject_removed_subaddr_flags(args) {
+        return ResolvedCommand::Unknown { cmd: msg };
+    }
+
     // Extract --account N from args, returning (account_index, remaining_args)
     let (account_index, args) = extract_account(args, session.default_account);
     match cmd {
@@ -552,6 +556,19 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
 // Flag extraction helpers
 // ---------------------------------------------------------------------------
 
+/// Reject removed FA-2 subaddress CLI flags instead of silently ignoring them.
+fn reject_removed_subaddr_flags(args: &[&str]) -> Option<String> {
+    const REMOVED: &[&str] = &["--subaddr-index", "--subaddr-indices"];
+    for arg in args {
+        if REMOVED.contains(arg) {
+            return Some(format!(
+                "removed flag {arg}: subaddresses were deleted; use account-level addresses only"
+            ));
+        }
+    }
+    None
+}
+
 /// Extract `--account N` from args, returning (resolved index, remaining args).
 fn extract_account<'a>(args: &[&'a str], default: u32) -> (u32, Vec<&'a str>) {
     let mut account = default;
@@ -675,6 +692,18 @@ mod tests {
         match parse("foobar", &session()) {
             ResolvedCommand::Unknown { cmd } => assert_eq!(cmd, "foobar"),
             other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_removed_subaddr_flags_rejected() {
+        for line in ["balance --subaddr-index 0", "transfers --subaddr-indices 0:1"] {
+            match parse(line, &session()) {
+                ResolvedCommand::Unknown { cmd } => {
+                    assert!(cmd.contains("removed flag"));
+                }
+                other => panic!("expected Unknown for {line:?}, got {other:?}"),
+            }
         }
     }
 }
