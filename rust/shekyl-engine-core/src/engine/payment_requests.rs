@@ -40,7 +40,20 @@ impl<
 {
     /// Persist a new pending payment request and return its opaque id.
     pub fn create_payment_request(&self, req: NewPaymentRequest) -> PaymentRequestId {
-        let id = PaymentRequestId::new_random();
+        const MAX_ID_COLLISION_RETRIES: u32 = 64;
+        let mut guard = self.ledger.write();
+        let requests = &guard.ledger.bookkeeping.payment_requests;
+        let mut collisions = 0u32;
+        let id = loop {
+            let candidate = PaymentRequestId::new_random();
+            if requests.iter().all(|r| r.id != candidate) {
+                break candidate;
+            }
+            collisions += 1;
+            if collisions >= MAX_ID_COLLISION_RETRIES {
+                panic!("PaymentRequestId: exhausted collision retries");
+            }
+        };
         let pr = PaymentRequest {
             id,
             label: LocalLabel::from_owned(req.label),
@@ -51,7 +64,6 @@ impl<
             matched_tx_hash: None,
             matched_output_index: None,
         };
-        let mut guard = self.ledger.write();
         guard.ledger.bookkeeping.payment_requests.push(pr);
         id
     }
