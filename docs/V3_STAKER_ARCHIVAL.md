@@ -1263,6 +1263,12 @@ surface; gossip is more BitTorrent-faithful but less guaranteed.
 **Challenge-response interval.** Per-block (excessive). Per-epoch
 matched to claim windows (probably right). Per-claim-window for stakers
 making active claims; longer interval for purely-passive archival.
+**Consensus pin (2026-06-07):** `MAX_CLAIM_AGE_W` bounds unclaimable
+epochs and prunes reward-accounting state (`ClaimedEpochSet`, retention
+rows, `Σwork` history) — see
+[`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2.4;
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6.6. Trades
+state growth against lapse-forfeiture (gate-6 decorrelation).
 
 **Price curve shape.** Naive 1/R (diminishing returns, may give weak
 redundancy). 1/R² (sharper redundancy preference). Threshold function

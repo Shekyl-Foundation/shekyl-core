@@ -9,6 +9,11 @@
   `ALL` sub-claim uses windowed spread (L9 lesson). Keystone holds at
   `bond_rate* = 0.75` (graze survives); fails at ≥1.00 on both reads.
 
+- **docs: Archival consensus state critical path (2026-06-07).**
+  New [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) — gate 2/3
+  schema, `MAX_CLAIM_AGE_W`, interface vs 8c deferral. `REWARD_EMISSION_LEG.md` Layer 1
+  closed; §4.5 collapsed; §1.2 forward path; Layer 2 margin-robustness gate; FSM unblocked.
+
 - **docs: Spread thin-margin + §4.5 scope reframe (2026-06-07).**
   `REWARD_EMISSION_LEG.md` §1.1: sprdW passes thinly (~0.001–0.007); whale window
   worsens (0.581→0.594); sim↔spec coherence (`reward.rs` Σ capped). §4.5: denominator

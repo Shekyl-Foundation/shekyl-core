@@ -18,7 +18,7 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — reward-emission leg: REWARD_EMISSION_LEG.md (§4.0 form C; §4.5 all-recorded lagged leading). Spread sprdW thin margin — g(age) vs whale-window (L1×L2). Sim coherence verified. Remaining: gate 1 seal §4.5, FcmpMembershipOnly, gate 6/7, byte aggregate (ii), doc rebase (iv)."
+    content: "Phase 2b design — Layer 1 emission spec closed. Next: ARCHIVAL_CONSENSUS_STATE.md (gate 2/3 schema + MAX_CLAIM_AGE_W). Parallel: FSM retool, gate 6. Layer 2: margin-robustness band (not point giniW). Remaining: FcmpMembershipOnly, gate 7, byte aggregate (ii)."
     status: in_progress
   - id: phase2b_gate6_p_registration
     content: "Phase 2b design — gate 6: off-chain backing, HKDF P sub-wallet, firewall (network/timing/output/bond-funding), decorrelated unstake drain. No N_arch tag."
@@ -404,9 +404,10 @@ retooled.
    not anonymity.
 3. **Gate 6 firewall is the unbuilt privacy work** — budget it; no production code yet.
 
-**Retool order (design doc):** §2.4 transfer-shaped form (landed) → **reward-emission
-leg spec** (state dedup) → gate 6 firewall → admission principal + gate 7 → §3 FSM /
-§7 threat model.
+**Retool order (2026-06-07):** §2.4 transfer-shaped form (landed) → **reward-emission
+leg spec** (Layer 1 closed) → **`ARCHIVAL_CONSENSUS_STATE.md`** (gate 2/3 schema + `W`;
+blocks emission **implementation**) → gate 6 firewall ∥ §3 FSM retool (unblocked) →
+admission principal + gate 7 → §7 threat model.
 
 **Scope cut:** 2b owns the **staking form**, not the whole archival system — but
 **gate 6 is staking form** (replaces `is_active_staker(entity_id)`). Archival-internal
@@ -442,7 +443,7 @@ gates: **gate 6 soundness** + Round 3–5 on rebased substrate + principal-wire 
 
 | Tier | What | Status (2026-06) | Blocks Stage 3? |
 |------|------|------------------|-----------------|
-| **1 — Crypto soundness** | `ν = H(P, shard)`, L14 crediting, **reward emission + membership-only control**, gate 6 firewall, retention 8c | **Open — no code** | **Yes — reward wire + gate 6** |
+| **1 — Crypto soundness** | `ν = H(P, shard)`, L14 crediting, **reward emission + membership-only control**, gate 6 firewall, retention 8c | Emission **spec** closed; **schema** open ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)) | **Yes — schema + gate 6** |
 | **2 — Consensus structure** | Genesis identity block, `HoldingsDescriptor`, set-B shards | Mostly pinned in spec | Partially (wire shapes) |
 | **3 — Economics → params** | Gate 4 bond floor **closed**; gate 1 `Σwork` | Mixed | Gate 1 for reward servo |
 | **4 — Ops / transport** | Arti, firewall ops, UI | Defer post-genesis | No |
@@ -467,10 +468,10 @@ gate 6 lands. Historical `StakeState` sketch below is **obsolete**.
 | Round | Status | Wallet-rewrite implication |
 |-------|--------|---------------------------|
 | 0–2 | **Closed** | Principal FSM, persistence, §4.7, §5, §6 — carry forward |
-| 3 | **Wargame done; transfer-shaped elevated** | F-ARCHIVAL gate-list + **§2.4 close-conditions (i)–(iii)**. F0 dissolved. **Next:** reward-emission spec. |
-| 4 | Open | Reward-emission byte wire; gate 6 firewall; admission principal + **gate 7** re-pricing |
+| 3 | **Wargame done; transfer-shaped elevated** | F-ARCHIVAL gate-list + **§2.4 (i)** closed at spec layer. **Next:** archival consensus state schema. |
+| 4 | Open | Gate 2/3 schema + `W`; gate 6 firewall ∥ FSM retool; admission + **gate 7** |
 | 5 | Open | Stage 3 PR map |
-| Stage 3 | **Blocked** on Round 3–5 + Tier 1 spec | `StakeEngine` + `P` + `Σwork` reward — **not** entitlement claims |
+| Stage 3 | **Blocked** on archival-state schema + gate 6 | `StakeEngine` + `P` + emission — **not** entitlement claims |
 
 **Build sequence:**
 

@@ -125,13 +125,14 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 
 | # | Condition | Disposition |
 |---|-----------|-------------|
-| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — wire + verifier contract |
+| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — Layer 1 **closed** at spec; implement blocked on [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) |
 | (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii) |
 | (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | Bonds-only vs soft MIN transfer; not "optional resilience" |
 
-**Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (2026-06-06).
-Close-condition (i) wire + verifier contract. Remaining before Stage 3: implement
-membership-only verify, bond DB, KATs; close (ii)–(iii).
+**Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) — Layer 1
+closed (2026-06-07). **Next:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+(gate 2/3 schema + `MAX_CLAIM_AGE_W`). FSM retool (§3–§7) **unblocked** in parallel.
+Remaining: implement after schema; close (ii)–(iii).
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -537,9 +538,8 @@ wallet §5 forward-rebuild adapts.
 **Retired for genesis:** 3C subtree; §6.4 claim wire; `G_S` / `G_arch` / `N_arch`
 emission tags; cleartext stake/claim C++ paths.
 
-**Open before Stage 3:** §2.4 close-conditions **(ii)–(iii)**; reward-emission
-**implementation** per [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md); `P` HKDF
-domain (gate 6); `Σwork` hook (gate 1).
+**Open before Stage 3:** archival consensus state schema; §2.4 **(ii)–(iii)**;
+reward-emission **implementation** (after schema); `P` HKDF (gate 6); `Σwork` hook (gate 1).
 
 ### 2.4 Transfer-shaped admission (leading genesis form)
 
@@ -614,8 +614,8 @@ image; reward leg does not.
 See revision note 2026-06 — conditions (i) reward-emission spec with state dedup,
 (ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing.
 
-**Spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md). Implementation + (ii) sim
-+ (iii) admission principal remain before Stage 3.
+**Spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) + [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md).
+Schema pin + (ii) sim + (iii) admission principal remain before Stage 3 emission code.
 
 ---
 

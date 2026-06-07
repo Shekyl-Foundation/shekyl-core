@@ -1,12 +1,12 @@
 # Reward emission leg — consensus specification (genesis)
 
-**Status:** Design spec — **structural core** for [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
-§2.4 close-condition **(i)**. **Pinned:** `Curve`∘servo composition (§4.0 form **C**).
-**Not genesis-sealed:** §4.5 denominator scope sealed at gate 1 (leading: all-recorded lagged).
-**Admission wire**
-leans ordinary transfer ≥ `MIN` with **no `C_stake`** (§7.2–§7.4; gate 4/7 reopen).
-Implementation is gated on Layer 2 keystone validation (`STAKER_ARCHIVAL_SIM.md` §*Layer 2*)
-and gate 2 retention-proof bytes.
+**Status:** Design spec — **Layer 1 structural core closed** for
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 close-condition **(i)**.
+**Pinned:** form **C** (§4.0); state dedup (§6); lagged §4.4 read (§4.5 collapsed).
+**Un-implementable until:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+(gate 2/3 schema + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
+**Admission wire:** ordinary transfer ≥ `MIN`, **no `C_stake`** (§7.2–§7.4; gate 7 reopen).
+**Layer 2:** margin-robustness gate on spread (§1.2), not point calibration at one `giniW` reading.
 
 **Scope:** The **consensus-special reward emission transaction leg** for pay-for-service
 archival under firewalled pseudonym **`P`**. This document is the byte-layout and
@@ -15,8 +15,9 @@ entitlement circuit, `N_S = x·G_S`, published `N_arch`) for genesis.
 
 **Out of scope here (separate specs):** gate 6 off-chain backing presentation; gate 4
 bond post/slash object wire (except fields this leg reads/writes); gate 1 `Σwork`
-budget schedule source; gate 2 retention-proof construction bytes; wallet FSM
-(`PHASE_2B` §3 — retooled after this lands).
+budget schedule source; gate 2 retention-proof **construction** bytes (interface in
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)); wallet FSM (`PHASE_2B`
+§3 — **unblocked**, retool in parallel).
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service
 rebasing*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4;
@@ -45,10 +46,10 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 
 | Layer | Scope | Gate |
 |-------|--------|------|
-| **1 — Consensus structural core** | This doc: public `work_P` recompute, membership-only ≥`MIN` backing, state dedup, form-**C** mint (§4.0). Bond/slash is gate 4 (spec elsewhere — do not duplicate). **Leading:** all-recorded lagged `Σwork` (§4.5; gate 1 seal). **Owed crypto:** `FcmpMembershipOnly::verify`. | Must be right pre-genesis. |
-| **2 — Economic keystone** | Form **C** validated; spread windowing passes **thinly** at `bond_rate* = 0.75` (~0.001–0.007 margin; whale window **worsens** 0.581→0.594). Active constraint: `g(age)` deep↔spread calibration against **whale-trend**, not benign mean. Gate 7; byte aggregate (ii). | Shape reopen if keystone fails. |
-| **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor, bond-funding decorrelation. Wallet FSM: delete claim machinery; ordinary-transfer admission + reward reception + bond slash. | Load-bearing for privacy. |
-| **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. Keystone holds (thin); rebase no longer blocked on shape reopen — still coordinate with Layer 2 `g(age)` calibration. | Corpus consistency. |
+| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema. |
+| **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7; byte aggregate (ii). | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
+| **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
+| **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
 
 **2026-06-07 Layer 2 discipline gate (spread windowing):** `sprdW` = mean `gini_actor` + peak
 `max_actor_share` over `churn_window` (L9 lesson). Full sweep **266** scenarios: snapshot
@@ -78,6 +79,41 @@ corrected prose drift; the sim predates the explicit §4.0 pin but was already a
 is anti-concentration at the budget layer (capped whale share redistributes via the rate); if
 anything, it should **widen** margin vs a miscomposed servo — the reported thin margin is real,
 not a sim/spec mismatch artifact.
+
+### 1.2 Forward path — four consequences of pinning Layer 1
+
+Nothing to re-litigate on form **C** or `sprdW` verdict. Pinning the emission leg
+changes what is next:
+
+1. **Gate 2/3 archival-state schema is the critical path.** Loud 8c recompute reads
+   `proven_retention`, `shard_id`, `R_market` from consensus state this doc does not
+   define (§5.4). The leg is fully specified **at its layer** and **un-implementable**
+   until [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) pins the
+   interface. 8c **soundness** (proof construction) may defer; the **read contract**
+   cannot.
+
+2. **§4.5 is smaller than its old three-row table.** §4.4 already commits the
+   all-recorded accumulator finalized at epoch close. §4.5 is only **lagged read** of
+   that table + boundary/reorg rules (§4.5). Claimed-only / two-phase options are
+   **named reopen**, not a live architectural fork.
+
+3. **Unbounded reward-accounting state needs `MAX_CLAIM_AGE_W`.** `ClaimedEpochSet`,
+   per-`(P, shard, E)` retention, and per-epoch `Σwork` accrete without bound — the
+   gate-2 "irony" (archival accounting in replicated state) made concrete. Pin
+   consensus-visible `W`: epochs older than `W` unclaimable; state prunes; tradeoff
+   with gate-6 deliberate `P` lapse. See archival-state doc §2.4.
+
+4. **Thin spread margin is genesis-seal robustness risk.** Reframe Layer 2 from
+   "find the `g(age)` that passes" to **margin-robustness across the operating band**
+   with whale-trend bounded throughout. If the band cannot clear with comfortable
+   margin, the declining-tail `Curve` reserve (V3) widens the pocket — do not seal
+   `bond 0.75` + `g` on a single `giniW = 0.599` model reading.
+
+**Genuinely unblocked:** §3–§7 FSM retool (principal form, reward-reception state);
+gate 6 firewall rigor; V3 form **C** reconciliation.
+
+**Single next move:** pin [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+— gates implementability and carries remaining Tier-1 crypto interface (8c home).
 
 ---
 
@@ -224,33 +260,32 @@ accumulator**:
               (each market P's capped_P(E) updated as challenge/retention state settles)
 ```
 
-Emission vins **read** the finalized (or lagged — §4.5) accumulator; they do not
-author it. Late emitters after close use the gate-1 boundary rule.
+Emission vins **read** the finalized accumulator; they do not author it.
 
-### 4.5 Denominator scope and finalization (gate 1 — leading disposition)
+### 4.5 Lagged read, boundaries, reorg (genesis pin)
 
-The open fork is **not** “Σwork unknowable until all emitters claim.” §5.4 and the archival
-DB record `work_P(E)` **continuously**; at settlement-epoch `E` close, `capped_P(E) =
-Curve(work_P(E))` is computable for **every** market `P` with recorded work, claimed or not.
-The real fork is **denominator scope**:
+§4.4 **is** the all-recorded mechanism: at settlement-epoch `E` close, finalize
+`Σwork(E) = Σ_{P'∈Market} capped_{P'}(E)` from DB state for every market `P` with
+recorded work, claimed or not. §4.5 adds only **how emissions cite it**:
 
-| Scope | Mechanism | Tradeoff |
-|-------|-----------|----------|
-| **All-recorded (leading)** | End-of-`E` finalization sweep: compute each market `P`'s `capped_P(E)` from DB state; store `Σwork(E) = Σ_{P'∈Market} capped_{P'}(E)`. Emissions in **`E+1`** (or later within claim window) cite this **lagged** stored total. Deterministic; reuses the per-epoch sweep §4.4 requires. | A `P` that did work but **never claims** (offline) or **forfeits claim** (§6.5 slash after earn) still contributes `capped_P` to the denominator → claimers slightly **diluted**; that share goes **unminted**. Conservative, supply-safe, no over-issuance. |
-| **Claimed-only (rejected default)** | `Σwork` sums only emitting `P` in this block/epoch | Full budget to claimers, but denominator depends on **who emits when** → two-phase / provisional+true-up machinery, reorg surface, inflation-bound proofs. |
+**Lagged read:** Emissions for earned epoch `E` cite `Σwork(E)` stored at **close of
+`E`**, typically in settlement epoch **`E+1`** or later within **`MAX_CLAIM_AGE_W`**
+(§6.6). Batching up to 15 epochs in one vin uses the per-epoch stored totals for each
+`E` claimed.
 
-**Leading disposition:** **all-recorded, lagged one epoch** — collapses the old “timing” table
-to one deterministic path plus an accepted monetary consequence (unminted dilution share).
+**Monetary consequence (accepted):** Offline or forfeiting `P` still contributed
+`capped_P(E)` at close → claimers slightly diluted; that share **unminted** (supply-safe).
 
-**E-3 coupling (genesis pin):** When a `P` is slashed or forfeits **future** claim, its
-**already-recorded** `capped_P(E)` for closed epochs **remains in** `Σwork(E)` for that
-epoch. Removing it on slash would make the denominator depend on slash-event ordering
-(non-deterministic at epoch close). **Accept dilution** over dynamic denominator surgery.
+**E-3 coupling:** Slashed `P`'s recorded `capped_P(E)` **stays in** `Σwork(E)` for that
+epoch — determinism over slash-order-dependent denominator surgery.
 
-Gate 1 implementation must pin boundary height (emissions for `E` cite `Σwork(E)` finalized
-at close of `E`; batching in `E+1` uses the same stored value). Reorg: revert finalization
-and accumulator with epoch disconnect. Until gate-1 lands, §5.4 `reward_amount_plain` uses the
-same rule (no wallet-local `Σwork`).
+**Boundary rules (gate 1 seal — small):** Late emitters after epoch close use the same
+stored `Σwork(E)`; no wallet-local recompute. Reorg: revert finalization and accumulator
+with epoch disconnect ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2.3).
+
+**Named reopen (not carried as live fork):** **Claimed-only** denominator — full budget
+to claimers, but requires two-phase / provisional+true-up machinery and inflation-bound
+proofs. Reopen only with explicit spec for that machinery; §4.4 does not implement it.
 
 ---
 
@@ -313,9 +348,10 @@ ShardWorkEntry {
 implied work (within fixed-point tolerance **zero** — integers only at consensus). Mismatch
 → `invalid_emission_work`.
 
-**Gate 2 pin (deferred):** `shard_id` encoding and challenge-record keying are owned by
-the retention-proof spec; this leg **consumes** the consensus challenge ledger, not defines
-it.
+**Gate 2/3 (interface deferred to archival-state spec):** `shard_id` encoding,
+challenge-record keying, and `R_market` at `E` are pinned in
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md). This leg **consumes** that
+ledger; retention-proof **construction** bytes may trail the interface pin.
 
 ### 5.5 Vout layout
 
@@ -388,6 +424,33 @@ retired claim path only.
 **Reopen criterion:** If consensus proves an upper bound on simultaneous unclaimed
 epochs per `P` ≤ 16 at all times, a relative mask may return; until then, absolute sparse
 set is genesis.
+
+**Growth bound:** Without a claim-age window the set grows without bound. §6.6 pins
+`MAX_CLAIM_AGE_W` and prune semantics jointly with gate-2 retention state.
+
+### 6.6 `MAX_CLAIM_AGE_W` — claim-age window (genesis pin — open constant)
+
+**Problem:** State dedup as absolute sparse sets plus per-`(P, shard, E)` retention
+and per-epoch `Σwork` accumulators accrete forever — archival reward accounting in
+replicated consensus state with no prune rule.
+
+**Pin (shape; constant value open until archival-state doc lands):**
+
+```text
+MAX_CLAIM_AGE_W : u64    // settlement epochs; consensus constant
+```
+
+For current settlement epoch `C`, emission for epoch `E` is rejected if `E < C - W`
+(unclaimable — forfeited). Effects:
+
+- `ClaimedEpochSet` semantics bounded in practice (verify rejects ancient `E`).
+- Finalized `Σwork(E)` for `E < C - W` droppable from hot consensus tables.
+- Per-`(P, shard, E)` retention rows reclaimable after `W`.
+
+**Tradeoff:** `P` offline longer than `W` loses older unclaimed epochs. Gate-6 decorrelation
+may deliberately lapse `P` — `W` trades **state growth** against **lapse forfeiture**.
+`W` is consensus-visible (not wallet policy). Full keying and prune sweep in
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2.4.
 
 ### 6.4 First emission
 
@@ -616,7 +679,9 @@ amounts), bond post/slash reaction.
 
 ## 12. Implementation checklist (pre-code)
 
-- [ ] **Seal §4.5** at gate 1: all-recorded lagged `Σwork(E)` + slash/forfeit stays in denominator.
+- [ ] **Pin gate 2/3 archival-state schema** — [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (blocks all emission implementation).
+- [ ] Pin `MAX_CLAIM_AGE_W` + prune rules (joint with schema).
+- [ ] Seal §4.5 boundary/reorg at gate 1 (lagged §4.4 read; slash stays in denominator).
 - [ ] Add `SETTLEMENT_EPOCH_BLOCKS`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` to
       `config/consensus_constants.json` + generators.
 - [ ] C++ / Rust vin deserializer for `txin_archival_reward_emission`.
@@ -636,7 +701,8 @@ amounts), bond post/slash reaction.
 | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 | Parent shape |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics + `P` model |
 | [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
-| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | (ii) sweep after this doc |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | **Critical path** — gate 2/3 schema + `W` |
+| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
 
 ---
@@ -659,3 +725,8 @@ post-servo cap and servo-only; market-only `Σwork` (§4.2); per-epoch `good_thr
 **2026-06-07 (analysis pass):** Thin-margin spread calibration (§1.1; whale-window binding);
 sim↔spec coherence verified (`reward.rs` Σ capped); §4.5 reframed as denominator **scope**
 (all-recorded lagged leading; claimed-only rejected); E-3 slash stays in denominator.
+
+**2026-06-07 (forward path):** Layer 1 closed at spec layer; §1.2 four consequences;
+§4.5 collapsed to lagged §4.4 read + boundaries; §6.6 `MAX_CLAIM_AGE_W`; Layer 2 →
+margin-robustness gate; [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) as
+single next move; FSM retool unblocked.
