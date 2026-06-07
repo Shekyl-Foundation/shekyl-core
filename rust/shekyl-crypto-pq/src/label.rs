@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn request_plaintext_roundtrip() {
-        let rid = 0x0012_3456_789A_BC_u64;
+        let rid = 0x0000_1234_5678_9ABC_u64;
         let pt = encode_request_plaintext(rid).unwrap();
         assert_eq!(
             classify_label_plaintext(&pt),

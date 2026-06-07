@@ -327,7 +327,7 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         }
         "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList,
         "history" if args.first().copied() == Some("incoming") => {
-            let unattributed = args.iter().any(|a| *a == "--unattributed");
+            let unattributed = args.contains(&"--unattributed");
             if unattributed {
                 ResolvedCommand::HistoryIncomingUnattributed { account_index }
             } else {
