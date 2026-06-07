@@ -1,8 +1,8 @@
 # Shekyl public narrative and FAQ
 
 **Status:** living document. Archival service-promise section ratified with
-`docs/V3_STAKER_ARCHIVAL.md` §*Service promise* (2026-06). Broader
-positioning draws from V3 economics; update when those surfaces change.
+`docs/V3_STAKER_ARCHIVAL.md` §*Service promise* (2026-06). **Data scope pin**
+(sets A/B/C) added 2026-06 — counsel lock gates on §*Archival data scope*.
 
 Legal/regulatory framing for foundation archival lives in
 `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — counsel review required
@@ -40,16 +40,30 @@ This is what users and integrators should expect when fetching **historical**
 chain state (old blocks, curve-tree paths, dispute backstop material). It is **not**
 a CDN or cloud-storage SLA.
 
+**What we store (plain language).** Shekyl separates three things:
+
+1. **Your wallet's scanned outputs** — kept on your device once synced (not
+   the foundation's job).
+2. **Deep proof history** — full curve-tree segment data archivers are
+   challenged on (needed for old reference-block proofs).
+3. **Canonical block and transaction history** — needed to rescan, audit, and
+   reconstruct history from seed.
+
+The foundation complete archive holds **(2) and (3) in full**. The permanent
+retention promise applies to **both**, not to proof-tree structure alone.
+
 ### What we guarantee
 
-**Permanent retention.** Deep history is never deleted. If data existed on the
-canonical chain, it remains retrievable from the network's archival layer. This
-is a hard guarantee, not a probability.
+**Permanent retention.** Deep proof history **and** canonical block/transaction
+history are never deleted. If data existed on the canonical chain, the network's
+archival layer retains the material needed for rescan, audit, and dispute
+backstop — not merely curve-tree commitments. This is a hard guarantee, not a
+probability.
 
 **Never gone — auditable.** Foundation seed archivers listed in genesis hold a
-**complete copy** of the archival tree at **known, public** endpoints. Anyone
-can verify they serve the full archive. You do not have to trust anonymous
-peers alone for the question "does the data still exist?"
+**complete deep archival copy plus canonical block history** at **known, public**
+endpoints. Anyone can verify they serve the full archive. You do not have to trust
+anonymous peers alone for the question "does the data still exist?"
 
 ### What we do not guarantee
 
@@ -70,9 +84,13 @@ that no trusted party exists.
 
 ### Will my old transaction history disappear?
 
-No. Shekyl commits to **permanent retention** of canonical chain history needed
-for wallets, auditors, and dispute resolution. The foundation operates complete
-archives you can audit; market archivers add redundancy on top.
+No — **provided canonical block history remains retrievable** for rescan and
+your wallet has synced (or can rescan) outputs. Shekyl commits to **permanent
+retention** of deep proof history **and** canonical blocks/transactions, not
+curve-tree structure alone. The foundation operates complete archives you can
+audit; market archivers add redundancy on top. Restoring from seed still
+requires fetching **block history** from the archival layer; proof-tree data
+alone is not enough.
 
 ### How fast will a deep historical fetch be?
 
@@ -84,10 +102,11 @@ not milliseconds**, for rare deep history — and for success, not for a deadlin
 ### Is this "centralized storage"?
 
 Partially, and we say so on purpose. Genesis enumerates foundation archiver
-identities that hold a complete tree — auditable, challenge-tested, excluded from
-market reward economics. That is **foundation-as-feature**: a transparent backstop,
-not a hidden admin key. Decentralization means the **market layer growing beyond
-that floor**, observable on-chain, not pretending the floor does not exist.
+identities that hold a complete deep archive (**proof history + block history**)
+— auditable, challenge-tested, outside market reward economics. That is
+**foundation-as-feature**: a transparent backstop, not a hidden admin key.
+Decentralization means the **market layer growing beyond that floor**, observable
+on-chain, not pretending the floor does not exist.
 
 ### Do foundation archivers earn staking rewards for holding everything?
 
@@ -100,9 +119,10 @@ durability and auditability.
 
 Yes — a **nominal minimum bond** per active foundation identity, uniform across
 the genesis set. This is not economic skin-in-the-game (they earn no market
-reward); it keeps them on the **same challenge and slash path** as everyone else
-without a special consensus exception. The amount is floored at the protocol
-minimum, not tuned for market signal.
+reward); it keeps them on the **same challenge and slash path** as everyone else.
+A failed challenge **slashes the whole nominal bond** and removes that seed from
+the durability floor until it re-bonds — one failed check can take a whole seed
+offline temporarily, which is why several active seeds are operated in parallel.
 
 ### What happens if market archivers thin out?
 
@@ -142,8 +162,8 @@ from the foundation floor (no reward extraction there).
 ## Short boilerplate (website / deck)
 
 Shekyl is privacy-preserving digital cash with hybrid post-quantum cryptography
-from genesis. Deep chain history is **permanently retained** with an **auditable
-foundation complete archive** and a market of stakers adding decentralized
-redundancy. Historical retrieval is **best-effort over private transport**, not
-instant cloud delivery — honest about what the protocol promises and what it
-does not.
+from genesis. Deep chain history — **proof substrate and canonical blocks** — is
+**permanently retained** with an **auditable foundation complete archive** and a
+market of stakers adding decentralized redundancy. Historical retrieval is
+**best-effort over private transport**, not instant cloud delivery — honest about
+what the protocol promises and what it does not.

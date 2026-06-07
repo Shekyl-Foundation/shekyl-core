@@ -7513,18 +7513,24 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **Foundation bond posture (gate 4–6; pre-genesis).** **Closed (spec).**
   **Nominal uniform bond** — `ARCHIVAL_BOND_FLOOR` × 1 per active genesis
-  `P` (not zero; not per-shard rows for complete tree); standard slash
-  path, no skip-slash branch. *Reference:* `V3_STAKER_ARCHIVAL.md`
-  §*Accountability*; `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §3.
+  `P`; **whole-bond slash → unbond → `durability_count` removal** until
+  re-bond (no fractional/no-op slash). *Reference:* `V3_STAKER_ARCHIVAL.md`
+  §*Accountability* / *CompleteTree slash semantics*;
+  `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §3.
+
+- **Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed
+  (spec).** Deep shard substrate (B), block/tx corpus (C), wallet-minimum
+  (A); user promise and challenges mapped. Gates counsel/FAQ lock.
+  *Reference:* `V3_STAKER_ARCHIVAL.md` §*Archival data scope*.
 
 - **Foundation genesis-enumeration — legal / regulatory disclosure
   (gate 4–6; pre-genesis).** Draft:
   `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`. Public narrative:
   `docs/PUBLIC_NARRATIVE_FAQ.md` §*Archival*. **Requires counsel review
-  before genesis.**
+  before genesis** — unblocked on data-scope pin (above).
 
   *Target:* before genesis. *Reference:* `V3_STAKER_ARCHIVAL.md`
-  §*Service promise* (user-facing promise, genesis-enumerated set).
+  §*Service promise*; `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md`.
 
 - **Archiver seeding-path transport relaxation (gate 6 / firewall;
   soundness pass step 2).** L16 closes the Tor thread: user historical

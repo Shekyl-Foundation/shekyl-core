@@ -122,6 +122,47 @@ user-facing summary in `docs/PUBLIC_NARRATIVE_FAQ.md`.
 The seeding SLO lives in the maintenance / archiver section below, not
 in user-facing materials.
 
+### Archival data scope (design pin — gates legal, FAQ, and challenges)
+
+Three **distinct** data sets appear in archival discourse; conflating them
+makes user-facing retention claims unverifiable. This pin names each set,
+who retains it, what challenges verify, and what each promise depends on.
+Cross-ref: `docs/design/CURVE_TREE_CLIENT.md` §7.6 (one schema, footprint
+varies).
+
+| Set | Contents (normative) | Typical holder | Challenge verifies |
+|---|---|---|---|
+| **A — Wallet-minimum** | Sub-root frontiers (`R_k`), **owned-output chunks** (once scanned), active (unpruned) frontier segment — enough to forward-sync and assemble **your** spend paths | Every syncing wallet / lean node | **Not** archiver retention challenges |
+| **B — Deep archival shard** | Full CT **segment leaves** per shard plus per-shard **canonical auxiliary** (headers, transactions, and per-height tree roots in the shard's position range) needed to construct **FCMP++ historical reference proofs** (Merkle path from a random leaf position to **`R_k`**) | Market archivers (subset of shards); foundation **`CompleteTree`** (all shards) | **Yes** — retention-proof challenges sample shard *s* and verify path to `R_k` from held material |
+| **C — Full canonical block corpus** | Complete canonical **blocks and transactions** for chain history — output discovery, amount decryption context, rescan from seed, audit trail | Foundation complete archive; full nodes may retain; market archivers hold **C for their shard ranges** as part of shard auxiliary | Indirectly — pruning safety and wallet rescan depend on **C** being retrievable somewhere durable |
+
+**What "complete tree" means.** Foundation and archiver **`CompleteTree`**
+registrations commit to **all of B across all shards** (the deep archival
+substrate), **not** "curve-tree structure alone." The curve tree is
+commitments and proof paths (set **B**); it is **not** interchangeable with
+**C** (full blocks/txs) or **A** (your wallet's already-scanned outputs).
+
+**User-facing promise mapping (load-bearing):**
+
+| Claim | Depends on |
+|---|---|
+| **Permanent retention** (hard) | **B + C** for all canonical history — deep proof substrate **and** block/tx corpus needed for rescan, audit, and dispute backstop |
+| **"Your old transaction history won't disappear"** | **C** retrievable for rescan + wallet persistence of **A** after scan; **B** for spending with old reference blocks / deep proofs — **not** satisfied by **B alone** (proof-state-only archive cannot reconstruct full wallet history from seed) |
+| **Auditable foundation floor** | Foundation **`CompleteTree`** holds **B + C** in full; public fetch + challenge pass/fail on **B** |
+
+**Normal nodes vs archivers.** A non-staker wallet retains **A** only and
+**prunes** deep segment leaves to `R_k`. Archivers retain **B** (and the
+shard-scoped **C** auxiliary their challenges and serving require). The
+foundation floor retains **B + C** completely. Market redundancy (set **B**
+and shard-local **C** above the floor) is the decentralization trajectory;
+the floor is the disclosed durability anchor for **B + C**.
+
+**Legal / FAQ inheritance.** User-facing copy must **not** say "complete
+archival tree" when meaning "everything needed to restore your wallet from
+seed" unless **C** is included — say **complete deep archival substrate plus
+canonical block history**, or cite this table. Counsel and
+`docs/PUBLIC_NARRATIVE_FAQ.md` lock only after this pin.
+
 ### Durability guarantee — foundation floor + market redundancy
 
 **Public anchor (foundation).** The durability number users and operators
@@ -139,14 +180,15 @@ Decentralization means **the market grows to dwarf the floor** — not that
 the foundation withdraws. There is **no sunset** that de-privileges
 foundation seed archivers: that would reintroduce mutable governance
 ("who triggers sunset?") and gap risk if the market lags. The privilege
-is **permanent but benign**: genesis-enumerated identities excluded from
-market reward math (below), real challenges, public pass/fail — no
-economic extraction path.
+is **permanent but benign**: genesis enumeration grants **`CompleteTree`
+durability credit** only; no market reward; real challenges, public
+pass/fail — no economic extraction path.
 
 #### Foundation complete-tree seeds (first subsection — the guarantee's base)
 
 Foundation **seed nodes are seeds of the tree, not just of discovery:**
-each holds a **complete** archival copy from genesis, at **known**
+each holds **complete sets B + C** (deep archival substrate and canonical
+block history; §*Archival data scope*) from genesis, at **known**
 locations (Tor-client fetch to public addresses — not six-hop hidden-
 service rendezvous for the fetch leg). They provide:
 
@@ -177,17 +219,37 @@ archival pseudonym `P`**, not per shard. This is **not** skin-in-the-game
 economics — it is the price of keeping the foundation on the **single
 uniform holding + challenge + slash path**. Zero bond would require a
 `foundation → skip slash` branch in consensus-critical slash code;
-rejected. On failed challenge the **standard slash path runs** and removes
-a nominal amount the foundation does not care about; there is no special
-case.
+rejected. On failed challenge the **standard slash path runs** — see
+**`CompleteTree` slash semantics** below — removing the nominal bond and
+**unbonding** the `P` until it re-posts.
+
+**`CompleteTree` slash semantics (consensus chain — same code path, explicit
+post-slash state).** A market holder with `ShardSetCompact` failing shard *s*
+loses **that shard's bond** and remains bonded on other shards. A
+**`CompleteTree`** holder has **one** nominal bond for the entire tree; a
+failed retention challenge on **any** sampled shard:
+
+1. **Slashes the whole bond** (`ARCHIVAL_BOND_FLOOR` in full — not
+   `FLOOR/shards`, which would be a no-op slash and **skip-slash in disguise**;
+   rejected explicitly).
+2. **Clears the bonded holding** — `P` is **unbonded** (the state zero-bond
+   was designed to avoid).
+3. **Removes `P` from `durability_count`** until it **re-posts bond** and
+   re-activates through the normal registration path.
+
+Re-bonding is the only resume path; there is no partial bonded state for
+`CompleteTree`. **`N_active`** (typically 3–5 live seeds) is sized so **one**
+failed sample knocks **one whole seat** out of the durability floor until
+re-bond — margin is **challenge-failure absorption**, not only geographic
+diversity.
 
 **Holdings wire (complete tree without state bloat).** Foundation seeds
 register **`CompleteTree`** on the general `HoldingsDescriptor` (one
 sentinel = holder of all shards), **not** O(shards) per-shard bond rows.
 See `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4. **`market_R`**
-exclusion means foundation identities do not mint per-shard nullifiers;
-**`durability_count`** counts each active complete-tree genesis slot for
-every shard by rule.
+does not count `CompleteTree` holders (no per-shard nullifiers minted).
+**`durability_count`** counts each **bonded-and-good-standing** genesis
+`CompleteTree` slot for every shard — see replication table below.
 
 **Reversion (bonding — ordered):**
 
@@ -214,11 +276,18 @@ pseudonym **`P` pubkeys** (V3.0 payment-address shape is pinned separately;
 FA-1 single static address backs stake off this block).
 
 The privileged set is **enumerated in genesis** — maximally transparent,
-undeniable, auditable. Membership confers:
+undeniable, auditable. Membership confers **one** distinctive protocol
+consequence (see replication table): genesis enumeration is required for a
+**`CompleteTree`** holder to count in **`durability_count`** for all shards.
+All other properties (`CompleteTree` descriptor, nominal bond, reward
+exclusion, challenge path) follow from the **general** archival model — any
+`CompleteTree` registrant gets them; only durability credit for the full tree
+requires genesis membership.
 
-- Inclusion in **`durability_count`** (below) and challenge path.
-- **Exclusion** from **`market_R`** and all reward / scarcity / servo
-  inputs.
+- **`durability_count`** credit for **`CompleteTree`** (all shards) — **genesis
+  slot only**, when bonded-and-good-standing.
+- Challenge path — **general** (any bonded archiver).
+- **`market_R`** — **not** a membership check; see descriptor rule below.
 
 This is the concrete form of "our security includes the foundation" —
 same trust class as hard-coded seed discovery keys, not a hidden flag.
@@ -230,9 +299,9 @@ because privilege is non-extractive and verifiable.
 
 Immutability of the enumerated set does **not** mean operational keys
 never rotate — compromise, hardware lifecycle, and handoff require it over
-a multi-decade horizon. A compromised operational identity **lingers**
-as a benign ghost (excluded from `market_R`, failing public challenges,
-observably dead) — detectable, not revocable without a fork.
+a multi-decade horizon. A compromised operational identity **lingers** as a benign ghost (failing
+public challenges, **unbonded after slash**, absent from `durability_count`
+until re-bond) — detectable, not revocable without a fork.
 
 **Pinned resolution: pure over-enumeration.** Genesis lists **more
 identities than initially operated** (several times the live count; cap
@@ -270,10 +339,16 @@ a silent bug farm: reward paths that accidentally use `durability_count`
 re-introduce foundation crowd-out; availability or pruning checks that
 use `market_R` under-count and behave incorrectly.
 
-| Symbol | Definition | Foundation replicas |
+| Symbol | Definition | Foundation / `CompleteTree` |
 |---|---|---|
-| **`market_R(shard)`** | Distinct **market** archivers holding shard *s* | **Excluded** |
-| **`durability_count(shard)`** | Distinct archivers holding shard *s* (all layers) | **Included** |
+| **`market_R(shard)`** | Distinct per-shard nullifiers `ν = H(P, shard)` for **`ShardSetCompact`** holders that include *s* | **`CompleteTree` holders mint no per-shard nullifiers → absent from count automatically** (no genesis-membership branch on this path) |
+| **`durability_count(shard)`** | Distinct **bonded-and-good-standing** archivers covering *s* | **`CompleteTree` + genesis-enumerated active slot → covers every shard**; market **`ShardSetCompact`** holders cover *s* iff set includes *s* |
+
+**Good standing:** bonded retention commitment posted; not **unbonded** after
+slash; most recent challenged sample for the holder passed (or within grace
+per challenge cadence — exact window pinned at gate 4). A compromised ghost
+that keeps failing challenges is **unbonded or not good-standing** and **does
+not** inflate `durability_count`.
 
 **Every consumer must declare which count it reads** (spec-first; the
 two-implementations trap in a new costume):
@@ -749,13 +824,15 @@ anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
 
 **Holdings descriptor (wire pin — pre-`ArchivalEngine`).** Registration carries
 `HoldingsDescriptor`: either **`ShardSetCompact`** (partial portfolio) or
-**`CompleteTree`** (one sentinel = all shards). Market archivers use compact
-shard sets plus per-shard bond accounting (`total bond = shards × rate`) and
-per-`(P, shard)` nullifiers for **`market_R`**. Genesis foundation identities
-use **`CompleteTree`** plus **one nominal bond per `P`**
-(`ARCHIVAL_BOND_FLOOR`, not O(shards) rows); they are excluded from `market_R`
-nullifier minting but included in **`durability_count`** for every shard.
-Full block: `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4.
+**`CompleteTree`** (one sentinel = all shards). **`market_R`** counts minted
+per-`(P, shard)` nullifiers — **`ShardSetCompact`** holders mint one per held
+shard; **`CompleteTree`** holders mint **none**, so they never appear in
+`market_R` **without any foundation flag on the pricing path**. Market archivers
+use per-shard bond accounting (`total bond = shards × rate`). Genesis
+foundation identities use **`CompleteTree`** plus **one nominal bond per `P`**
+(`ARCHIVAL_BOND_FLOOR`); **`durability_count`** for all shards requires
+**genesis enumeration** in addition. Full block:
+`docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4–§6.
 
 **The honest correction this forces.** "Pay for work, not wealth" was wrong, and
 the per-shard bond is why: **capital re-enters, proportional to work.** The reframe
