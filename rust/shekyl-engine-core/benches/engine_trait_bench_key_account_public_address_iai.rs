@@ -76,7 +76,7 @@
 //! residual boundary cost at ~5–10 instructions instead of dominating
 //! the measurement. `LocalKeys` is substantially larger than 64 bytes
 //! (carries an `AllKeysBlob` plus state-shaped fields and a
-//! subaddress-registry `RwLock`); `Box<LocalKeys>` moves only the
+//! state-shaped fields); `Box<LocalKeys>` moves only the
 //! pointer.
 //!
 //! # Naming alignment

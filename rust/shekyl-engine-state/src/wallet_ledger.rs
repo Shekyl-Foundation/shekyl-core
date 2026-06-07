@@ -56,10 +56,11 @@ use crate::{
 
 /// Bundle-level `format_version`.
 ///
-/// V3.0 ships `3`. Version `1` (pre-flat-namespace) carried a
-/// two-field `SubaddressIndex { account, address }`, a separate
-/// `SubaddressLabels::primary` slot, and an `account_tags` map inside
-/// `BookkeepingBlock`. Version `2` flattened those structures.
+/// V3.0 ships `3`. Version `1` (pre-flat-namespace) carried a two-level
+/// subaddress index in transfer records and extra bookkeeping maps (a
+/// dedicated primary-label slot, per-index labels, and account-level tags).
+/// Version `2` flattened the index representation and dropped the
+/// account-level tag map.
 /// Version `3` extends [`crate::transfer::TransferDetails`] with two
 /// optional non-secret fields — `source_ciphertext: Option<HybridCiphertext>`
 /// and `output_handle: Option<OutputHandle>` — to support the M3b

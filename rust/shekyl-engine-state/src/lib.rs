@@ -10,7 +10,7 @@
 //! This crate owns the types that make up the persistent wallet ledger and the
 //! live-mutating runtime state used by the scanner:
 //!
-//! - [`SubaddressIndex`] — `(account, address)` tuple, `(0, 0)` reserved for primary.
+//! - [`SubaddressIndex`] — flat `u32` index; `0` is the primary address.
 //! - [`PaymentId`] — 8-byte encrypted payment ID (Shekyl V3 rejects the legacy
 //!   unencrypted form at parse time).
 //! - [`FcmpPrecomputedPath`] — daemon-provided FCMP++ curve-tree path attached to a transfer.

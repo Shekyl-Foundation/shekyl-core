@@ -10,8 +10,7 @@
 //! `.wallet` side of the two-file wallet envelope (commits 2d–2g):
 //!
 //! * [`LedgerBlock`] — this module: on-chain-derived scanner state.
-//! * `BookkeepingBlock` (2e) — subaddress registry, labels, address book,
-//!   account tags.
+//! * `BookkeepingBlock` (2e) — primary label and external address book.
 //! * `TxMetaBlock` (2f) — per-transaction keys, notes, attributes, and
 //!   the scanned-pool cache.
 //! * `SyncStateBlock` (2g) — unconfirmed / confirmed tx tracking plus

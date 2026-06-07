@@ -564,7 +564,7 @@ const LOCAL_KEYS_BENCH_SEED: [u8; 32] = {
 ///
 /// `LocalKeys` is significantly larger than the §4.2 64-byte
 /// cutoff (the type carries an `AllKeysBlob` plus state-shaped
-/// fields and a subaddress-registry `RwLock`). The
+/// fields). The
 /// `Box<LocalKeys>` shape moves only an 8-byte pointer across the
 /// bench-function boundary, matching the established discipline
 /// for the engine-trait bench family.
