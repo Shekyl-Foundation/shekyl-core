@@ -75,7 +75,13 @@ ShekylOutputData construct_output_for_destination(
   uint8_t label_pt[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   const bool cooperative = cooperative_payment_requests_enabled();
   if (!original_uri.empty() && original_uri.compare(0, 7, "shekyl:") == 0)
-    (void)shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), cooperative, label_pt);
+  {
+    const int32_t label_rc = shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), cooperative, label_pt);
+    if (label_rc == -3)
+      LOG_PRINT_L1("cooperative payment URI parse failed; using sentinel enc_label for output");
+    else if (label_rc != 0)
+      LOG_PRINT_L1("shekyl_label_plaintext_for_payment_uri failed (rc=" << label_rc << "); using sentinel enc_label");
+  }
   return shekyl_construct_output_labeled(
       reinterpret_cast<const uint8_t*>(&tx_key),
       pk_x25519,

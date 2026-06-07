@@ -20,23 +20,35 @@ use crate::local_label::LocalLabel;
 )]
 pub struct PaymentRequestId(pub u64);
 
+/// Maximum `rid` encodable in the 6-byte REQUEST plaintext field (u48 LE).
+pub const PAYMENT_REQUEST_RID_U48_MAX: u64 = (1u64 << 48) - 1;
+
 impl PaymentRequestId {
     /// Reserved invalid value; must not appear on wire or in URIs.
     pub const INVALID: PaymentRequestId = PaymentRequestId(0);
 
+    /// True when `rid` is non-zero and fits the on-wire u48 LE encoding.
+    #[must_use]
+    pub const fn rid_fits_wire(rid: u64) -> bool {
+        rid != 0 && rid <= PAYMENT_REQUEST_RID_U48_MAX
+    }
+
     /// Generate a new opaque id from the OS CSPRNG.
     ///
-    /// Retries once if the draw is `0` (reserved).
+    /// Draws six bytes (u48 LE); retries up to four times if the draw is `0`
+    /// (reserved).
     pub fn new_random() -> Self {
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; 6];
         for _ in 0..4 {
             getrandom::getrandom(&mut buf).expect("OS CSPRNG");
-            let id = u64::from_le_bytes(buf);
-            if id != 0 {
+            let mut le = [0u8; 8];
+            le[..6].copy_from_slice(&buf);
+            let id = u64::from_le_bytes(le);
+            if Self::rid_fits_wire(id) {
                 return Self(id);
             }
         }
-        // astronomically unlikely after four draws; pin non-zero.
+        // astronomically unlikely after four draws; pin minimal non-zero u48.
         Self(1)
     }
 
@@ -136,14 +148,16 @@ mod tests {
     #[test]
     fn payment_request_id_never_zero_from_random() {
         for _ in 0..32 {
-            assert_ne!(PaymentRequestId::new_random(), PaymentRequestId::INVALID);
+            let id = PaymentRequestId::new_random();
+            assert_ne!(id, PaymentRequestId::INVALID);
+            assert!(PaymentRequestId::rid_fits_wire(id.as_u64()));
         }
     }
 
     #[test]
     fn payment_request_postcard_roundtrip() {
         let req = PaymentRequest {
-            id: PaymentRequestId(0xA5A5_A5A5_1234_5678),
+            id: PaymentRequestId(0x0000_1234_5678_9ABC),
             label: LocalLabel::from_str("INV-2026-0042"),
             amount_atomic: 150_000_000_000,
             created_at: 100,

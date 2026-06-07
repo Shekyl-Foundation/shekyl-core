@@ -9,6 +9,16 @@
 
 use thiserror::Error;
 
+/// Maximum `rid` query parameter (u48 LE on wire). Keep in sync with
+/// `shekyl_engine_state::PAYMENT_REQUEST_RID_U48_MAX`.
+const RID_U48_MAX: u64 = (1u64 << 48) - 1;
+
+/// True when `rid` is non-zero and fits the on-wire u48 LE encoding.
+#[must_use]
+pub const fn rid_fits_wire(rid: u64) -> bool {
+    rid != 0 && rid <= RID_U48_MAX
+}
+
 /// Parsed cooperative payment URI (query parameters are optional except address).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaymentUri {
@@ -32,6 +42,57 @@ pub enum PaymentUriError {
     InvalidRid,
     #[error("invalid expiry")]
     InvalidExpiry,
+    #[error("invalid percent-encoding in query value")]
+    InvalidEncoding,
+}
+
+fn percent_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
+fn hex_nibble(b: u8) -> Result<u8, PaymentUriError> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(PaymentUriError::InvalidEncoding),
+    }
+}
+
+fn percent_decode_component(s: &str) -> Result<String, PaymentUriError> {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(PaymentUriError::InvalidEncoding);
+            }
+            let hi = hex_nibble(bytes[i + 1])?;
+            let lo = hex_nibble(bytes[i + 2])?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| PaymentUriError::InvalidEncoding)
 }
 
 /// Parse `shekyl:<address>?amount=&label=&rid=&expiry=`.
@@ -76,13 +137,13 @@ pub fn parse_payment_uri(uri: &str) -> Result<PaymentUri, PaymentUriError> {
                     );
                 }
                 "label" if !value.is_empty() => {
-                    label = Some(value.to_string());
+                    label = Some(percent_decode_component(value)?);
                 }
                 "rid" => {
                     let parsed = value
                         .parse::<u64>()
                         .map_err(|_| PaymentUriError::InvalidRid)?;
-                    if parsed == 0 {
+                    if !rid_fits_wire(parsed) {
                         return Err(PaymentUriError::InvalidRid);
                     }
                     rid = Some(parsed);
@@ -122,9 +183,9 @@ pub fn format_payment_uri(
         params.push(format!("amount={a}"));
     }
     if let Some(l) = label.filter(|s| !s.is_empty()) {
-        params.push(format!("label={l}"));
+        params.push(format!("label={}", percent_encode_component(l)));
     }
-    if let Some(r) = rid {
+    if let Some(r) = rid.filter(|&r| rid_fits_wire(r)) {
         params.push(format!("rid={r}"));
     }
     if let Some(e) = expiry {
@@ -166,5 +227,20 @@ mod tests {
         let p = parse_payment_uri(&uri).unwrap();
         assert_eq!(p.rid, Some(42));
         assert_eq!(p.amount_atomic, Some(100));
+    }
+
+    #[test]
+    fn parse_rejects_rid_above_u48() {
+        let too_large = RID_U48_MAX + 1;
+        let err = parse_payment_uri(&format!("shekyl:addr?rid={too_large}")).unwrap_err();
+        assert_eq!(err, PaymentUriError::InvalidRid);
+    }
+
+    #[test]
+    fn label_percent_encoding_roundtrip() {
+        let uri = format_payment_uri("shekyl1test", None, Some("INV&42=1"), Some(7), None);
+        let p = parse_payment_uri(&uri).unwrap();
+        assert_eq!(p.label.as_deref(), Some("INV&42=1"));
+        assert_eq!(p.rid, Some(7));
     }
 }

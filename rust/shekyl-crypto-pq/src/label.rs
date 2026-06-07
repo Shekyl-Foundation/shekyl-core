@@ -86,11 +86,16 @@ pub fn classify_label_plaintext(plaintext: &[u8; 8]) -> LabelPlaintextKind {
     LabelPlaintextKind::Unknown(*plaintext)
 }
 
+/// Maximum `rid` encodable in bytes `[2..7]` (u48 LE). Keep in sync with
+/// `shekyl_engine_state::PAYMENT_REQUEST_RID_U48_MAX`.
+pub const REQUEST_RID_U48_MAX: u64 = (1u64 << 48) - 1;
+
 /// Build the 8-byte REQUEST plaintext for cooperative send (§5.7.11).
 ///
-/// Returns `Err` if `rid == 0` or the encoding would collide with sentinel.
+/// Returns `None` if `rid` is `0`, exceeds u48, or the encoding would collide
+/// with sentinel.
 pub fn encode_request_plaintext(rid: u64) -> Option<[u8; 8]> {
-    if rid == 0 {
+    if rid == 0 || rid > REQUEST_RID_U48_MAX {
         return None;
     }
     let mut pt = [0u8; 8];
@@ -125,5 +130,11 @@ mod tests {
             LabelPlaintextKind::Request(rid)
         );
         assert!(!is_sentinel_plaintext(&pt));
+    }
+
+    #[test]
+    fn request_plaintext_rejects_rid_above_u48() {
+        assert!(encode_request_plaintext(REQUEST_RID_U48_MAX).is_some());
+        assert!(encode_request_plaintext(REQUEST_RID_U48_MAX + 1).is_none());
     }
 }
