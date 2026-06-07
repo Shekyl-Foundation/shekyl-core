@@ -2065,34 +2065,30 @@ L16's identity checks (`l16_L6_s0` ≡ `l16_L6_s4`; `l16_L6_floor` ≡ `l16_L6`)
 | Layer | Scope | Status |
 |---|---|---|
 | Retention / durability economics | L1–L13 (+ P1–P4) | Shapes settled |
-| Retrieval SLA definition | Per-class service promise | **Step 0 — pin first** |
-| Retrieval under pinned SLA | L15 re-run + L16 transport | Steps 1–2 |
+| Retrieval SLA definition | Per-class service promise | **Step 0 — pinned** (`V3_STAKER_ARCHIVAL.md` §*Service promise*) |
+| Retrieval under pinned SLA | L15 re-run + L16 transport | Step 1 closed (L15d/L16d); step 2 reduced scope |
 | Contained crypto / counting | L14 crediting, nullifiers, firewall | Step 3 |
+| Genesis lifecycle pins | Key rotation, `market_R`/`durability_count`, legal disclosure | **Pre-genesis — see spec §*Service promise*** |
 
 ### Step 0 — pin the SLA per retrieval class (before L15)
 
-**Spec anchor.** `docs/V3_STAKER_ARCHIVAL.md` already states: **reward retention, not
-retrieval** (work = proven retention, not query volume); query latency is a **routing-quality
-signal**, not the reward basis (§*Verification*); single-region is acceptable because reward is
-retention-based (`STAKER_ARCHIVAL_SIM.md` §*Resolved — review sign-off* #4).
+**Status: pinned** in `docs/V3_STAKER_ARCHIVAL.md` §*Service promise — genesis-pinned
+commitments* (2026-06). Summary:
 
-**Two retrieval classes (hypothesis to ratify).**
+- **User promise:** permanent retention (hard) + best-effort latency (soft, unbounded);
+  auditable foundation complete-tree; not CDN availability.
+- **Engineering only:** archiver seeding/backfill SLO — not user-facing.
+- **Durability anchor:** foundation managed-N complete archive (public number), market
+  additive — not market `D*=0.999`.
+- **Foundation:** permanent complete-tree seeds; **no decaying L12 floor**; fully
+  outside reward formula; genesis-enumerated identity set; **`market_R` ≠
+  `durability_count`** enumerated per consumer.
+- **Step 1 (L15d/L16d)** validated: historical class passes on covered set; L15 wall
+  localizes to seeding/instantaneous path.
 
-| Class | Examples | Tolerance | SLA shape |
-|---|---|---|---|
-| Historical / audit query | Old-state reconstruction; dispute backstop; rare wallet reads | High — hours OK | **Durability + eventual retrievability** |
-| Archiver seeding / backfill | New holder fetching deep shard to start holding (L12 race) | Low — L10 timing channel | **Bounded seeding latency** |
-
-One three-nines-instantaneous bar fits neither — it is a CDN SLA on a retention service. If
-step 0 confirms this split, **L15's wall may dissolve** for the historical class:
-**durability-diversity** (all replicas permanently lost is improbable) is privacy-compatible
-where **availability-diversity** (enough domains simultaneously up) is not. SLA "relaxation"
-may be the **correct** SLA, not an escape route — and foundation-as-perpetual-diversity-anchor
-is needed only if the protocol insists on instantaneous availability it does not owe.
-
-**Transport split.** User historical queries → pure rendezvous OK under durability SLA. Archiver
-seeding (both ends pseudonymous) → where **non-linking bandwidth relaxation** lives — a smaller
-firewall question than clearnet on the user-query path.
+**Remaining pre-genesis (lifecycle, not soundness):** foundation key-rotation shape
+(master+subkey vs over-enumeration); legal review of immutable on-chain privilege set;
+nominal vs full foundation bond policy (uniform across set).
 
 ### Soundness pass ordering
 
@@ -2139,13 +2135,13 @@ needs only one independent domain when `R ≥ 6` deep replicas are seated.
 and `rTgtA` rises 3→7 — the L16 orthogonality decomposition holds under the pinned SLA:
 transport depresses **instantaneous availability**, not **bond-backed retention**.
 
-**Disposition.** Step 0's two-class split is **supported by the rescore**: the L15
-diversity-under-privacy tension is a **load-bearing wall only for the seeding / instantaneous
-availability class** (steps 2–3), not for historical/audit durability. The remaining durability
-bind is marginal (`d=1` at `s=0.999`, or `s≤0.99` with ≤2 domains) — architecture-level
-diversity still matters at the tail, but the sim no longer shows a covered deep set failing
-`D*` under realistic correlation when `R ≥ 6`. Seeding-path bounded latency (step 2) inherits
-the full L15+L16 availability composition unchanged.
+**Disposition.** Step 0's two-class split is **pinned and supported by the rescore** (see
+`V3_STAKER_ARCHIVAL.md` §*Service promise*): the L15 diversity-under-privacy tension is a
+**load-bearing wall only for the seeding / instantaneous availability class** (steps 2–3), not
+for historical/audit durability. The remaining anonymous-layer durability bind is marginal
+(`d=1` at `s=0.999`, or `s≤0.99` with ≤2 domains) — the **public promise** rests on the
+foundation complete-tree floor, not market `D*`. Seeding-path bounded latency (step 2) is
+reduced in scope when archivers fetch from public foundation complete copies.
 
 ### Step 3 — L14 read-credit must be per-holder, never shard-global
 

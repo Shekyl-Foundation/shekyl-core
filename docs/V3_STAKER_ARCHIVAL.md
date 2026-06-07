@@ -75,6 +75,186 @@ class, paid from related sources, without being conflated.
 
 ---
 
+## Service promise — genesis-pinned commitments
+
+This section is a **set of commitments**, not a description. The sim
+(`docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*) validated market
+retention economics **conditional** on these pins. Step 1 (L15d/L16d
+durability rescore) is closed; **step 0 closes when this section ships.**
+Several pins are **cheap at genesis, unfixable after** — key rotation,
+replication-count semantics, and the on-chain foundation identity set.
+
+### User-facing promise (one class)
+
+**Permanent retention (hard guarantee).** Deep history is never deleted.
+The chain retains irreplaceable state forever; this is not probabilistic
+and is not expressed as a market-layer `D*` target.
+
+**Best-effort retrieval latency (soft expectation).** Historical reads
+may succeed over anonymizing transport; latency is **typical, not
+guaranteed, and not real-time.** L16 proved that a latency bound over
+rendezvous cannot be kept while location-hiding holds — so the product
+does **not** promise CDN-style instantaneous availability for user
+queries. Do not conflate the hard and soft legs under one word like
+"eventual."
+
+**Never gone, auditable.** The durability promise is **checkable, not
+trust-me:** genesis foundation seed archivers are **public** endpoints
+serving a **complete tree**; anyone can verify they hold and serve the
+full archive. Frame this honestly as **auditable foundation-backed
+durability with a decentralization trajectory** — not oversold
+trustlessness.
+
+**Disclosure posture.** Stating publicly that durability security rests
+on a disclosed foundation backstop is a **strategic/regulatory fact**, not
+only FAQ prose. Hidden-then-discovered centralization is worse than
+disclosed-transparent backstop. **Legal review before genesis** is
+required (see `docs/FOLLOWUPS.md` — foundation genesis-enumeration
+disclosure).
+
+### Engineering taxonomy (two classes — only one is a user promise)
+
+| Class | Actor | Bindingness | SLA shape |
+|---|---|---|---|
+| **Historical / audit retrieval** | Wallet users, auditors, dispute backstop | **User-facing promise** | Permanent retention + best-effort latency (above) |
+| **Archiver seeding / backfill** | Market archivers entering or replenishing holdings | **Internal maintenance SLO** | Bounded seeding latency; governs whether the market layer sustains — **not** promised to end users |
+
+The seeding SLO lives in the maintenance / archiver section below, not
+in user-facing materials.
+
+### Durability guarantee — foundation floor + market redundancy
+
+**Public anchor (foundation).** The durability number users and operators
+should cite is the foundation's **managed complete archive**: *N*
+replica-complete trees across diverse providers and jurisdictions,
+actively maintained and restorable — the same shape as any serious
+managed archive (many nines), **not** the market sim's internal
+`D*=0.999` target. Quoting `0.999` publicly on irreplaceable data is
+both alarming and wrong: it anchors the promise on the unobservable
+anonymous layer.
+
+**Additive market layer.** Market archivers provide **decentralization
+and redundancy above the floor**, not the floor the promise rests on.
+Decentralization means **the market grows to dwarf the floor** — not that
+the foundation withdraws. There is **no sunset** that de-privileges
+foundation seed archivers: that would reintroduce mutable governance
+("who triggers sunset?") and gap risk if the market lags. The privilege
+is **permanent but benign**: genesis-enumerated identities excluded from
+market reward math (below), real challenges, public pass/fail — no
+economic extraction path.
+
+#### Foundation complete-tree seeds (first subsection — the guarantee's base)
+
+Foundation **seed nodes are seeds of the tree, not just of discovery:**
+each holds a **complete** archival copy from genesis, at **known**
+locations (Tor-client fetch to public addresses — not six-hop hidden-
+service rendezvous for the fetch leg). They provide:
+
+- **Durability floor** — observable, placement-controlled correlated-loss
+  tail (you choose providers/jurisdictions; location-hiding does not
+  apply here).
+- **Bootstrap source** — real complete tree before any market archiver
+  seats (L12 cold-start closes against a source, not a synthetic decay
+  alone).
+- **Fast seeding source** — new archivers backfill from public complete
+  copies; onion rendezvous remains for **serving anonymous queriers**, not
+  for fetching from a public foundation source (soundness pass step 2
+  scope shrinks accordingly).
+- **Fee-era backstop** — always present when the market thins (replaces
+  L12 **decaying** floor — see gate-list item 5 amendment below).
+
+**Accountability.** Foundation archivers are **registered and
+challengeable like everyone else** — same slash path, public challenge
+record. Bond size is a **policy dial** (nominal-plus-reputational vs
+full per-shard economic); **uniform across the genesis set**. For a known
+entity whose public challenge failure is existential, reputational skin
+is the binding deterrent; full bonds buy little reputation does not
+already, at real operational cost. **Reversion:** reopen full economic
+bond only if challenge deterrence on foundation archivers needs skin
+beyond public reputational failure.
+
+**Reward economics — fully outside the formula.** Foundation archivers
+draw **no slice** of the market reward pot and do **not** enter scarcity
+denominators. The entire pot flows to the market; the foundation is a
+pure reputational durability floor (counted for durability and audit,
+present in the challenge path, **invisible to all reward math**). Partial
+exclusion (out of denominator but earning on nominal stake) is rejected —
+it buys a foundation-earnings line item with no benefit.
+
+### Genesis-enumerated foundation identity set (immutable)
+
+The privileged set is **enumerated in genesis** — maximally transparent,
+undeniable, auditable. Membership confers:
+
+- Inclusion in **`durability_count`** (below) and challenge path.
+- **Exclusion** from **`market_R`** and all reward / scarcity / servo
+  inputs.
+
+This is the concrete form of "our security includes the foundation" —
+same trust class as hard-coded seed discovery keys, not a hidden flag.
+**Irreversible without fork:** even if the market eventually dwarfs the
+seeds, protocol privilege remains; vestigial-but-benign is acceptable
+because privilege is non-extractive and verifiable.
+
+#### Key rotation (pin before genesis seals the set)
+
+Immutability of the enumerated set does **not** mean operational keys
+never rotate — compromise, hardware lifecycle, and handoff require it
+over a multi-decade horizon. A lost or compromised genesis identity
+cannot be cleanly retired if the list is a flat immutable pubkey list
+(lingers excluded from `market_R`, failing challenges — detectable but
+not revocable).
+
+**Pin one resolution at genesis** (both are cheap now, unfixable later):
+
+1. **Master + operational subkeys** — enumerate small **master**
+   identities at genesis; operational archiver keys rotate under master
+   authorization; **`market_R` / durability exclusion** keyed on
+   "authorized by a genesis master," not on ephemeral operational keys.
+2. **Over-enumeration** — list more identities than initially operated;
+   reserve slots are cold rotation targets; operational keys swap into
+   reserved slots without consensus change.
+
+Discovering the need post-genesis is not acceptable.
+
+### Replication count — `market_R` vs `durability_count` (disambiguate before code)
+
+**`R` now names two different quantities.** Using one symbol for both is
+a silent bug farm: reward paths that accidentally use `durability_count`
+re-introduce foundation crowd-out; availability or pruning checks that
+use `market_R` under-count and behave incorrectly.
+
+| Symbol | Definition | Foundation replicas |
+|---|---|---|
+| **`market_R(shard)`** | Distinct **market** archivers holding shard *s* | **Excluded** |
+| **`durability_count(shard)`** | Distinct archivers holding shard *s* (all layers) | **Included** |
+
+**Every consumer must declare which count it reads** (spec-first; the
+two-implementations trap in a new costume):
+
+| Consumer | Count | Notes |
+|---|---|---|
+| Scarcity pricing `∝ 1/R` | **`market_R`** | BitTorrent market signal |
+| Per-shard reward / `Curve(Σ work)` inputs tied to scarcity | **`market_R`** | Foundation earns nothing |
+| `Σwork` supply servo denominators | **`market_R`-derived work only** | Foundation invisible |
+| Coverage / `R_target` obligation for **market** archivers | **`market_R`** | Foundation is extra floor |
+| Durability SLA / audit / "is the complete tree held?" | **`durability_count`** | Includes foundation |
+| Decentralization observability ("market vs floor") | **Both**, reported separately | Edge #2 — loud not silent |
+| Local pruning / "safe to drop local copy?" | **`durability_count`** (or explicit policy) | Must not assume `market_R` alone suffices |
+| Challenge / retention-proof accounting | **Per-holder**; aggregation for display uses context-appropriate count | Never shard-global read credit (L14) |
+
+Implementations must not expose a bare `R` without naming which count.
+
+### Maintenance SLO (archiver class — not user promise)
+
+Archivers seeding or backfilling deep shards should meet a **bounded
+seeding latency** internal target (L10 timing channel). User historical
+queries do not inherit that bound. Transport for seeding may differ from
+user query transport (soundness pass step 2 — largely reduced if fetch
+is from public foundation complete copies).
+
+---
+
 ## The mechanism
 
 ### BitTorrent-style scarcity-priced commons coverage
@@ -90,11 +270,12 @@ protocol itself**, not a separate service layer. The staking software
 *is* the archival client. There's no "run an archival node alongside your
 wallet"; if you stake, you archive.
 
-Reward per shard is **inversely proportional to current replication
-count**. A shard held by 1 staker pays the maximum per-byte rate; a shard
-held by 5 stakers splits a smaller pool. Rare shards pay more than common
-shards. Stakers actively hunting for under-served shards earn more than
-stakers piling onto popular ones.
+Reward per shard is **inversely proportional to current market
+replication count** (`market_R`; see §*Service promise* — foundation
+replicas excluded). A shard held by 1 market archiver pays the maximum
+per-byte rate; a shard held by 5 market archivers splits a smaller pool.
+Rare shards pay more than common shards. Stakers actively hunting for
+under-served shards earn more than stakers piling onto popular ones.
 
 This is the BitTorrent insight applied to chain archival: distributed
 coverage emerges from individual rational decisions when the price signal
@@ -324,7 +505,8 @@ would be the inherited "easier to count if public" convenience. The pattern is
 not exotic — data availability is a public good answerable by anyone holding the
 shard; only *reward eligibility* needs identity, and that can be proven privately,
 exactly as claims are. **The hard part is private replication counting:** scarcity
-pricing needs a per-shard distinct-holder count (reward ∝ `1/R`), and counting
+pricing needs a per-shard distinct-**market**-holder count (reward ∝ `1/market_R`;
+see §*Service promise* — `durability_count` is a different symbol), and counting
 holders *without identifying them* (private set cardinality / proof-of-distinct-
 holders) is the non-trivial primitive public binding gets for free. That is the
 cost a private design must solve, and it does not move the presumption.
@@ -646,10 +828,10 @@ and a fresh soundness pass before it ships:
    tree state outgrows retention, putting the archival *reward accounting* into
    replicated state is the irony to weigh — but loud-and-bounded beats
    silent-and-existential.
-3. **Per-shard-nullifier counting primitive (replication count public, holders
-   private).** Scarcity pricing drives the *whole* reward, so a credible per-shard
-   distinct-holder count `R` is load-bearing — but a public `R` does **not** force
-   public binding. Per-`(P, shard)` nullifiers `ν = H(P_key, shard)` make `R` the
+3. **Per-shard-nullifier counting primitive (`market_R` public, holders
+   private).** Scarcity pricing drives the *whole* market reward, so a
+   credible per-shard distinct-**market**-holder count `market_R` is
+   load-bearing — but a public count does **not** force public binding.    Per-`(P, shard)` nullifiers `ν = H(P_key, shard)` make `market_R` the
    count of distinct `ν` for a shard (publicly countable), with `P` hidden by
    preimage resistance. The count is solvable while binding stays private; this adds
    a **nullifier domain** (real crypto growth) and leaves **portfolio exposure at
@@ -667,13 +849,17 @@ and a fresh soundness pass before it ships:
    guarantee, low enough not to exclude capital-poor-storage-rich archivers — a
    sim-and-design bind, not a knob set by eye. (This supersedes the earlier
    tier-decision / longevity-pricing framing of this gate.)
-5. **Bootstrap shape (months 0–6) — overlapped, flat, sunset.** Not a cliff if the
-   **foundation floor overlaps**: foundation stays full-archival and sheds only as
-   staker coverage is *demonstrated*, so there is no zero-coverage instant. The
-   subsidy shape must be **privacy-decided, not just sunset-dated**: a **flat
-   per-active-bonded-shard** subsidy is privacy-clean; an amount-scaled one
-   resurrects F0 for the bootstrap window. So bootstrap reward = **flat,
-   per-bonded-shard, foundation-overlapped, sunset**.
+5. **Bootstrap shape — permanent foundation floor, market overlapped.**
+   **Supersedes** the earlier "foundation sheds as staker coverage is
+   demonstrated" bootstrap model. Foundation seed archivers hold a
+   **permanent, complete-tree, reward-invisible** floor (§*Service
+   promise*): bootstrap, fee-era backstop, seeding source, and
+   durability anchor in one mechanism — **no `decay_pop` withdrawal.**
+   Decentralization is market redundancy **above** the floor, not
+   foundation withdrawal. The bootstrap **subsidy** shape remains
+   **privacy-decided**: flat per-active-bonded-**market**-shard (not
+   amount-scaled — resurrects F0); foundation-overlapped; sunset on the
+   **subsidy**, not on the floor.
 6. **`P` backing-and-firewall design (unbuilt; uniqueness no longer load-bearing).**
    No `N_arch`/`G_arch`/pseudonym primitive exists in code or design today; the
    persistent-pseudonym lifecycle is the remaining design-to-do and the crux the
@@ -946,11 +1132,14 @@ ship default; cover-traffic protocols are post-V3-ship. The exact
 integration with existing `ANONYMITY_NETWORKS.md` infrastructure needs
 design.
 
-**Foundation-node integration.** Foundation `--no-prune` nodes are the
-floor. How do they signal "I'm covering shards X, Y, Z so the staker
-market can de-prioritize them"? Or do they just always serve and let
-the market self-organize? The latter is simpler; the former is more
-economically efficient. Needs design.
+**Foundation-node integration.** Foundation seed archivers are
+genesis-enumerated complete-tree holders (§*Service promise*). They
+serve publicly auditable complete archives, participate in challenges,
+and are **fully excluded from market reward math**. The market self-
+organizes on `market_R`; `durability_count` observability reports how
+much redundancy exists above the foundation floor. No "signal shards X,Y,Z
+so the market de-prioritizes" protocol is required — the economic split
+already prices as if the foundation is not there.
 
 ---
 

@@ -7487,23 +7487,44 @@ one place to confirm each item's relationship to the wallet stack.
   ledger item L16 + §*Transport coupling* + §*L16*; `docs/design/V3_STAKER_ARCHIVAL.md`.
 
 - **Soundness pass step 0: pin retrieval SLA per class (gate 4–6;
-  soundness pass — upstream of L15).** L15/L16 used `A*=0.999` as a
-  stress probe; the spec's reward basis is **retention, not retrieval**
-  (`V3_STAKER_ARCHIVAL.md` §*The reward curve*). Before treating L15
-  diversity-under-privacy as a load-bearing wall, pin what the service
-  owes per retrieval class: **(A) historical/audit queries** →
-  durability + eventual retrievability (hours-tolerant); **(B) archiver
-  seeding/backfill** → bounded latency (L12 growth↔entry). One
-  three-nines-instantaneous bar fits neither. If (A) is pinned,
-  durability-diversity may be privacy-compatible where
-  availability-diversity is not — the wall may dissolve rather than
-  require escape routes. L16 orthogonality: no staking lever moves
-  `u_eff`; retrieval SLA is transport + definition, not economics.
+  soundness pass — upstream of L15).** **Closed (spec).** Pinned in
+  `docs/V3_STAKER_ARCHIVAL.md` §*Service promise — genesis-pinned
+  commitments* (2026-06): hard permanent retention + soft best-effort
+  latency; foundation complete-tree as public durability anchor; market
+  additive; `market_R` vs `durability_count`; foundation fully outside
+  reward formula; permanent floor (no L12 decay). L15d/L16d rescore
+  (`docs/design/STAKER_ARCHIVAL_SIM.md` §*Step 1 result*) validated
+  the split.
 
-  *Ordering:* step 0 → re-run L15 under pinned SLA (step 1) → seeding-
-  path transport relaxation (step 2) → L14/nullifiers/firewall (step 3).
-  *Target:* gate 4–6 soundness pass, **before** L15 wall hardening.
+  *Remaining pre-genesis lifecycle (not soundness):* foundation key-
+  rotation shape (master+subkey vs over-enumeration — **pin before
+  genesis seals identity set**); legal review of immutable genesis
+  foundation-enumeration disclosure; uniform nominal vs full foundation
+  bond policy.
+
   *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*.
+
+- **Foundation genesis-enumeration — legal / regulatory disclosure
+  (gate 4–6; pre-genesis).** The SLA pin commits to an **immutable
+  on-chain foundation-privileged identity set** (auditable complete-
+  tree archivers, excluded from `market_R`, no reward slice). Design
+  posture: permanent-but-benign-and-verifiable (no extraction path).
+  **Requires legal review before genesis** — same class of disclosure
+  as stating durability security includes the foundation; hidden-then-
+  discovered centralization is worse than disclosed backstop.
+
+  *Target:* before genesis. *Reference:* `V3_STAKER_ARCHIVAL.md`
+  §*Service promise* (user-facing promise, genesis-enumerated set).
+
+- **Foundation archiver key rotation (gate 4–6; pre-genesis).**
+  Genesis-enumerated identity set is immutable; operational keys must
+  rotate over multi-decade horizon. **Pin at genesis:** (a) master
+  identities authorizing rotating operational subkeys, or (b) over-
+  enumeration with cold reserve slots. Post-genesis discovery is not
+  acceptable.
+
+  *Target:* before genesis identity set seals. *Reference:*
+  `V3_STAKER_ARCHIVAL.md` §*Key rotation*.
 
 - **Archiver seeding-path transport relaxation (gate 6 / firewall;
   soundness pass step 2).** L16 closes the Tor thread: user historical
@@ -7533,20 +7554,12 @@ one place to confirm each item's relationship to the wallet stack.
   step 3, §*L14×L15*, ledger L14.
 
 - **L15 diversity under location-hiding (gate 4–6 / architecture;
-  soundness pass step 1 — conditional on step 0).** Under an
-  **instantaneous availability SLA** (the L15/L16 probe bar), ≥3 failure
-  domains per deep shard at three-nines collides with location-hiding —
-  diversity cannot be steered using a property committed to hiding. Pick
-  among: (1) correlation-inferred diversity; (2) SLA change (see step
-  0 — may be correct shape, not escape); (3) foundation as perpetual
-  diversity anchor (sharper than P4). **If step 0 pins durability+
-  eventual for historical/audit reads**, this wall applies only to the
-  seeding class and routing-quality secondary market — durability-
-  diversity may fit the privacy budget.
-
-  *Target:* gate 4–6 soundness pass step 1, **after** step 0 SLA pin.
-  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
-  steps 0–1, §*L15*, §*L16*.
+  soundness pass step 1 — conditional on step 0).** **Historical/audit
+  class: closed** — L15d rescore + SLA pin; wall shrinks to foundation
+  observable floor + market tail. **Seeding/instantaneous class:**
+  still load-bearing under rendezvous (L16); bounded seeding SLO and
+  optional archiver-to-archiver transport (step 2 — reduced if fetch
+  from public foundation complete copies).
 
 - **Permanent fee-era backstop must be a trustless terminal subsidy,
   not the foundation floor (gate 7 / consensus monetary policy;
@@ -7554,13 +7567,15 @@ one place to confirm each item's relationship to the wallet stack.
   §*L13*) shows the fee-era death spiral is dampable *conditional on*
   (a) a smoothed trust signal and (b) an adequate fee-market ceiling
   (~115); below the ceiling the adaptive servo saturates (graceful
-  loud failure) and the **foundation floor re-engages** to catch
-  coverage (`bDUf 0.425`). Chained, these create a structural hazard:
-  **if the fee market never clears ~115 — the live existential
-  fee-era question, not a corner — the foundation floor stops being a
-  transient damper and becomes a *permanent load-bearing party*,
-  silently reintroducing the trusted party a
-  privacy/decentralization-maximalist chain exists to avoid.** The
+  loud failure) and the **permanent foundation complete-tree floor**
+  catches coverage (L13 `bDUf` read — re-engagement is tautological
+  when the floor no longer decays). Chained, these create a structural
+  hazard: **if the fee market never clears ~115 — the live existential
+  fee-era question, not a corner — reliance on the foundation floor
+  stops being a transient bootstrap artifact and becomes sustained
+  foundation-centrism** — a **decentralization failure**, not data
+  loss (SLA pin: durability rests on foundation; terminal subsidy
+  funds market redundancy above the floor).
   P2 hardening sharpens the stakes: the death spiral has a
   *second, level-driven leg* (fiat flow cost ÷ token price) that a
   token-denominated servo damps only partially even at 2× ceiling, so
