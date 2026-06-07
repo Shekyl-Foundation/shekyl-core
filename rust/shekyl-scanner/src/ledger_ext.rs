@@ -100,7 +100,7 @@ impl TransferDetailsExt for TransferDetails {
             // were removed in the schema migration; `source_ciphertext`
             // and `output_handle` are the only inputs the engine needs
             // to re-derive the spend material at signing time. Other
-            // Other `Option`-valued fields on `TransferDetails`
+            // `Option`-valued fields on `TransferDetails`
             // (`payment_id`, `spent_height`, `key_image`,
             // `fcmp_precomputed_path`) exist for unrelated reasons and
             // are unaffected by this construction site.

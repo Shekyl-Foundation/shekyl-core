@@ -56,7 +56,8 @@ use crate::{
 
 /// Bundle-level `format_version`.
 ///
-/// V3.0 ships `3`. Version `1` (pre-flat-namespace) carried a two-level
+/// At V3.0 genesis the bundle shipped as version `3`; FA-2 ships
+/// [`WALLET_LEDGER_FORMAT_VERSION`] `5`. Version `1` (pre-flat-namespace) carried a two-level
 /// subaddress index in transfer records and extra bookkeeping maps (a
 /// dedicated primary-label slot, per-index labels, and account-level tags).
 /// Version `2` flattened the index representation and dropped the

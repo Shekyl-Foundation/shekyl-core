@@ -75,8 +75,7 @@
 //! boundary moves only pointer-sized data, keeping iai-callgrind's
 //! residual boundary cost at ~5–10 instructions instead of dominating
 //! the measurement. `LocalKeys` is substantially larger than 64 bytes
-//! (carries an `AllKeysBlob` plus state-shaped fields and a
-//! state-shaped fields); `Box<LocalKeys>` moves only the
+//! (carries an `AllKeysBlob` plus state-shaped fields); `Box<LocalKeys>` moves only the
 //! pointer.
 //!
 //! # Naming alignment
