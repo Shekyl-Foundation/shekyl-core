@@ -95,8 +95,9 @@ Their holdings increase **`durability_count`** and decentralization margin but a
 
 ### 3.5 Replication counts (implementation discipline)
 
-- **`market_R`:** counts per-shard nullifiers from **`ShardSetCompact`** holders
-  only — **`CompleteTree`** holders absent automatically (no genesis branch).
+- **`market_R`:** derived ledger count for **`Market`** archivers with
+  `ShardSetCompact` holdings — **`CompleteTree`** / foundation excluded by
+  membership ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.3).
 - **`durability_count`:** includes **bonded-and-good-standing** holders; genesis
   **`CompleteTree`** slots count for all shards; drops on slash → unbond until
   re-bond.
@@ -111,8 +112,8 @@ Their holdings increase **`durability_count`** and decentralization margin but a
 
 Foundation archivers:
 
-- Do **not** receive market archival reward (`CompleteTree` participates in no
-  `market_R` / nullifier path).
+- Do **not** receive market archival reward (`CompleteTree` excluded from `Market`
+  / `market_R` path).
 - Do **not** enter `Σwork` servo inputs.
 - **Do** participate in retention challenges on **set B** (public pass/fail).
 

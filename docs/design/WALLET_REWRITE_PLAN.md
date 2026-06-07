@@ -443,7 +443,7 @@ gates: **gate 6 soundness** + Round 3–5 on rebased substrate + principal-wire 
 
 | Tier | What | Status (2026-06) | Blocks Stage 3? |
 |------|------|------------------|-----------------|
-| **1 — Crypto soundness** | `ν = H(P, shard)`, L14 crediting, **reward emission + membership-only control**, gate 6 firewall, retention 8c | Emission **spec** closed; **schema** open ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)) | **Yes — schema + gate 6** |
+| **1 — Crypto soundness** | Archival read contract (gate 3 ν dissolved), L14 crediting, **reward emission + membership-only control**, gate 6 firewall, retention 8c | Emission **spec** closed; contract **pinned**, implementation open ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)) | **Yes — schema impl + gate 6** |
 | **2 — Consensus structure** | Genesis identity block, `HoldingsDescriptor`, set-B shards | Mostly pinned in spec | Partially (wire shapes) |
 | **3 — Economics → params** | Gate 4 bond floor **closed**; gate 1 `Σwork` | Mixed | Gate 1 for reward servo |
 | **4 — Ops / transport** | Arti, firewall ops, UI | Defer post-genesis | No |

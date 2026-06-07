@@ -2571,8 +2571,9 @@ sustainability is unaffected by the recalibration.
   **Gate-list before consensus-real** (full text in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service
   rebasing*): (1) **`Σwork` servo** — supply-safe **and** differencing-clean (its inputs are public, so
   the `band_sum`-differencing leak does *not* transfer); (2) retention-proof soundness + per-P/per-shard
-  **consensus state-cost** (8a → loud 8c); (3) **per-shard-nullifier counting** `ν = H(P_key,shard)`
-  (public `R`, private `P`); (4) **per-shard retention bond replacing tier** (keystone — collapses the
+  **consensus state-cost** (8a → loud 8c); (3) **`R_market` derived ledger count** (gate 3 ν
+  **dissolved** 2026-06-07 — see [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+  §2); (4) **per-shard retention bond replacing tier** (keystone — collapses the
   old tier-decision + Sybil-overloaded-lock gates; residual = bond-rate calibration); (5) bootstrap
   shape = **flat per-bonded-shard, foundation-overlapped, sunset**; (6) **`P` backing+firewall** unbuilt
   (uniqueness relaxed); (7) **economic sim re-priced** for capital-collateralizes-work (the foundational

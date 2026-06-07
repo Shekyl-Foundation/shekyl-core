@@ -4,7 +4,8 @@
 [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 close-condition **(i)**.
 **Pinned:** form **C** (§4.0); state dedup (§6); lagged §4.4 read (§4.5 collapsed).
 **Un-implementable until:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
-(gate 2/3 schema + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
+(archival read contract + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
+**Gate 3 dissolved (2026-06-07):** no `ν` primitive; `R_market` derived from retention ledger.
 **Admission wire:** ordinary transfer ≥ `MIN`, **no `C_stake`** (§7.2–§7.4; gate 7 reopen).
 **Layer 2:** margin-robustness gate on spread (§1.2), not point calibration at one `giniW` reading.
 
@@ -46,7 +47,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 
 | Layer | Scope | Gate |
 |-------|--------|------|
-| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema. |
+| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) implementation (contract pinned). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema impl. |
 | **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7; byte aggregate (ii). | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
@@ -58,6 +59,23 @@ snap-fail→win-pass (`gate4_coloc_5.50`, far above pin). At **`bond_rate* = 0.7
 rows `giniW ≈ 0.593–0.599` (snapshot grazes at **0.600**); at **1.00** both fail (`≈ 0.626`);
 thin lean `l11_bud_b50` fails both at `≈ 0.84`. **Verdict:** keystone **holds** — Layer 2 is
 **calibration, not shape reopen** — but the margin is a **hair**, not a plateau.
+
+**Sim reconciliation (2026-06-07 — load-bearing for calibration reads):**
+
+1. **`gate4_fine_*` is endogenous L11** (`l11_base()`, `init_active_frac=0`, `ρ=0.02`) — not
+   fixed-pop. The keystone pin scenarios are the right family for spread at genesis economics.
+2. **`l11_bud_b100` `giniW ≈ 0.71` is not a conflicting attractor** — that sweep uses default
+   `bond_rate=2.0` from `baseline()`, not pin `0.75`. At `bond_rate=0.75`, `gate4_fine_0.75`
+   parks at `giniW ≈ 0.593` steady-state (tail series stable below 0.6) — **not** a bootstrap
+   transient.
+3. **`sprdW` vs `all_pass`:** at pin, spread passes; `all_pass` may still fail on **`churn_stable`**
+   (`gate4_fine_0.75` churn ≈ 0.17 vs 0.05 threshold) — operational stability is a separate gate
+   from spread.
+4. **Declining-tail `Curve`:** off the lean-margin lever set (V3 §912–917 population gate) — reserved
+   for mature-network hoarding only.
+5. **Budget lever:** strongest participation lever but gate-1/7 monetary decision (more archival
+   emission). At pin bond `0.75`, spread may clear at `budget=100`; budget sweeps at `bond_rate=0.75`
+   still needed for margin headroom and coverage/churn — not to fix a failing 0.71 attractor.
 
 **Thin-margin read (carry into calibration, not file as closed):**
 
@@ -85,12 +103,12 @@ not a sim/spec mismatch artifact.
 Nothing to re-litigate on form **C** or `sprdW` verdict. Pinning the emission leg
 changes what is next:
 
-1. **Gate 2/3 archival-state schema is the critical path.** Loud 8c recompute reads
-   `proven_retention`, `shard_id`, `R_market` from consensus state this doc does not
-   define (§5.4). The leg is fully specified **at its layer** and **un-implementable**
-   until [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) pins the
-   interface. 8c **soundness** (proof construction) may defer; the **read contract**
-   cannot.
+1. **Archival consensus read contract is the critical path.** Loud 8c recompute reads
+   retention ledger, shard registry, derived `R_market`, and bond-record `good_through`
+   from state this doc does not define (§5.4). The leg is fully specified **at its layer**
+   and **un-implementable** until [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+   is implemented. Gate 3 **ν dissolved** — `R_market` is ledger-derived. 8c **soundness**
+   (proof construction) may defer; the **read contract** cannot.
 
 2. **§4.5 is smaller than its old three-row table.** §4.4 already commits the
    all-recorded accumulator finalized at epoch close. §4.5 is only **lagged read** of

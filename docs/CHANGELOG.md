@@ -4,6 +4,14 @@
 
 ### Changed
 
+- **docs: Archival read contract + gate-3 ν dissolution (2026-06-07).**
+  [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) rewritten: two-half
+  contract (read surface + invariants), public `P_id` keying, derived `R_market`, `W`
+  prune horizon. Gate-3 `ν = H(P, shard)` **dropped** (incompatible with form C). Corpus
+  sync: `V3_STAKER_ARCHIVAL.md`, `PHASE_2B_STAKE_LIFECYCLE.md`, foundation docs,
+  `REWARD_EMISSION_LEG.md` §1.1 sim reconciliation (`gate4_fine` endogenous; `l11_bud`
+  bond-rate caveat; churn vs spread).
+
 - **staking-sim: windowed spread discipline gate (`sprdW`) (2026-06-07).**
   `shekyl-staking-sim` reports `gini_actor_window` / `max_actor_share_window`;
   `ALL` sub-claim uses windowed spread (L9 lesson). Keystone holds at
@@ -211,9 +219,8 @@
   leaked because it aggregated *confidential* amounts; `Σwork` sums *continuously-public*
   numbers (challenge-responses, replication counts), so differencing reveals nothing not
   already on P's public record (supply-safe **and** strictly better than `band_sum` on
-  privacy); (2) public `R` does **not** force public binding — per-`(P,shard)` nullifiers
-  `ν = H(P_key, shard)` make `R` the count of distinct `ν` (public) with `P` hidden by
-  preimage resistance. **8a → loud 8c:** the existential item moves to retention-proof
+  privacy); (2) ~~public `R` via ν-hiding~~ **superseded 2026-06-07:** gate 3 dissolved —
+  `R_market` is ledger-derived; form C makes holdings consensus-public. **8a → loud 8c:** the existential item moves to retention-proof
   unforgeability, *detectable* not silent. **`P` simplified:** needs unlinkability +
   backing-proof, **not** uniqueness (bonds carry Sybil; replication-Sybil is self-defeating).
   **Bootstrap:** flat per-active-bonded-shard, **foundation-overlapped** (no zero-coverage
@@ -222,7 +229,8 @@
   so this is not a deferrable refinement — the corrected **foundational gate** is the economic
   sim re-priced for capital-collateralizing-work, not curve-tuning. **Corrected gate-list:**
   (1) `Σwork` servo (supply-safe + differencing-clean); (2) retention-proof soundness + state
-  cost (8a → loud 8c); (3) per-shard-nullifier counting; (4) **per-shard retention bond
+  cost (8a → loud 8c); (3) ~~per-shard-nullifier counting~~ derived `R_market` (2026-06-07);
+  (4) **per-shard retention bond
   replacing tier** (keystone; residual = bond-rate calibration); (5) bootstrap = flat
   per-bonded-shard, overlapped, sunset; (6) `P` backing+firewall (unbuilt; uniqueness relaxed);
   (7) **economic sim re-priced** (the foundational gate). **Next step — the sim, spec-first:**

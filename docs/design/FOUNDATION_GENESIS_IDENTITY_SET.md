@@ -36,9 +36,9 @@ redesign.
 
 | Property | Mechanism | Genesis membership test? |
 |---|---|---|
-| Absent from **`market_R`** | **`CompleteTree`** mints **no** per-shard nullifiers; `market_R` counts nullifiers | **No** — descriptor-only |
+| Absent from **`market_R`** | **`CompleteTree`** excluded from **`Market`**; `market_R` is ledger-derived count | **No** — membership rule |
 | Nominal **`CompleteTree`** bond path, uniform slash | General registration + `ARCHIVAL_BOND_FLOOR` once per `P` | **No** |
-| Excluded from market reward / **`Σwork`** | No nullifiers → no market scarcity participation | **No** |
+| Excluded from market reward / **`Σwork`** | Not in `Market` → no market scarcity participation | **No** |
 | **`durability_count` for all shards** | **`CompleteTree` + bonded-and-good-standing** | **Yes — only if genesis-enumerated active slot** |
 
 Foundation archivers are special in **exactly one** consensus check: **genesis
@@ -105,11 +105,12 @@ HoldingsDescriptor ::= ShardSetCompact(shard_set)
                      | CompleteTree
 ```
 
-- **`ShardSetCompact`** — bounded compact shard set; mints `ν = H(P, shard)`
-  per held shard for **`market_R`**; bond = `ARCHIVAL_BOND_FLOOR × |set|`.
+- **`ShardSetCompact`** — bounded compact shard set; market archivers accrue
+  per-`(P, shard, E)` retention rows for **`market_R`** derivation; bond =
+  `ARCHIVAL_BOND_FLOOR × |set|`.
 - **`CompleteTree`** — one sentinel = all shards (sets **B + C** per data-scope
-  pin); **no** per-shard nullifiers; nominal bond once per `P` for foundation
-  genesis slots.
+  pin); excluded from **`Market`** / `market_R`; nominal bond once per `P` for
+  foundation genesis slots.
 
 **`durability_count(s)` includes `P` iff:**
 
@@ -221,7 +222,7 @@ See **§9.5** for the full 12-slot structure (`PENDING` until key ceremony).
 
 | Consumer | `CompleteTree` foundation behavior |
 |---|---|
-| `market_R` | **Absent** (no nullifiers minted) — no genesis branch |
+| `market_R` | **Absent** (`Market` membership excludes foundation) |
 | `durability_count` | **In** when genesis slot + bonded + good-standing |
 | Reward / `Σwork` | **Out** (no market participation) |
 | Slash | Whole bond → unbond → count removal |

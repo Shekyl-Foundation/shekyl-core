@@ -248,7 +248,7 @@ diversity.
 register **`CompleteTree`** on the general `HoldingsDescriptor` (one
 sentinel = holder of all shards), **not** O(shards) per-shard bond rows.
 See `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4. **`market_R`**
-does not count `CompleteTree` holders (no per-shard nullifiers minted).
+does not count `CompleteTree` holders (`Market` membership excludes foundation).
 **`durability_count`** counts each **bonded-and-good-standing** genesis
 `CompleteTree` slot for every shard — see replication table below.
 
@@ -342,7 +342,7 @@ use `market_R` under-count and behave incorrectly.
 
 | Symbol | Definition | Foundation / `CompleteTree` |
 |---|---|---|
-| **`market_R(shard)`** | Distinct per-shard nullifiers `ν = H(P, shard)` for **`ShardSetCompact`** holders that include *s* | **`CompleteTree` holders mint no per-shard nullifiers → absent from count automatically** (no genesis-membership branch on this path) |
+| **`market_R(shard, E)`** | At epoch close: count of **market** archivers `P` with `retention_bit(P,s,E) ∧ good_through(P,E)` — **derived** from the retention ledger keyed by public `P_id` ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §3.3). **No** `ν = H(P, shard)` primitive — incompatible with form **C** per-`P` cap grouping. | **`CompleteTree` / foundation excluded from `Market`** — absent from count by membership rule, not a nullifier shortcut |
 | **`durability_count(shard)`** | Distinct **bonded-and-good-standing** archivers covering *s* | **`CompleteTree` + genesis-enumerated active slot → covers every shard**; market **`ShardSetCompact`** holders cover *s* iff set includes *s* |
 
 **Good standing:** bonded retention commitment posted; not **unbonded** after
@@ -770,8 +770,9 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
   prevention** = per-`P` **claimed-settlement-epoch set** on the bond record
   (`check_and_set(E)` semantics; sparse absolute epochs — see
   [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6), reorg-reverted
-  with `pop_block`. **`ν = H(P, shard)`** (gate 3) stays separate — counting only.
-  **Wire + verifier:** [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md).
+  with `pop_block`. **`R_market`** is a **derived ledger count** (gate 3 dissolved —
+  no `ν` primitive; see [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+  §2). **Wire + verifier:** [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md).
 - **Intra-epoch unbacked window:** between emissions (~one settlement epoch),
   backing is not re-verified on-chain; `P` may spend admission principal after a
   payout. This is safe **only because challenge failure slashes bond** regardless
@@ -837,10 +838,11 @@ anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
 
 **Holdings descriptor (wire pin — pre-`ArchivalEngine`).** Registration carries
 `HoldingsDescriptor`: either **`ShardSetCompact`** (partial portfolio) or
-**`CompleteTree`** (one sentinel = all shards). **`market_R`** counts minted
-per-`(P, shard)` nullifiers — **`ShardSetCompact`** holders mint one per held
-shard; **`CompleteTree`** holders mint **none**, so they never appear in
-`market_R` **without any foundation flag on the pricing path**. Market archivers
+**`CompleteTree`** (one sentinel = all shards). **`market_R`** is the **derived
+ledger count** at epoch close ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+§3.3) — **`ShardSetCompact`** market holders with `retention ∧ good_through`;
+**`CompleteTree`** / foundation identities are **excluded from `Market`**, so they
+never appear in `market_R` **without any foundation flag on the pricing path**. Market archivers
 use per-shard bond accounting (`total bond = shards × rate`). Genesis
 foundation identities use **`CompleteTree`** plus **one nominal bond per `P`**
 (`ARCHIVAL_BOND_FLOOR`); **`durability_count`** for all shards requires
@@ -986,15 +988,16 @@ and a fresh soundness pass before it ships:
    tree state outgrows retention, putting the archival *reward accounting* into
    replicated state is the irony to weigh — but loud-and-bounded beats
    silent-and-existential.
-3. **Per-shard-nullifier counting primitive (`market_R` public, holders
-   private).** Scarcity pricing drives the *whole* market reward, so a
-   credible per-shard distinct-**market**-holder count `market_R` is
-   load-bearing — but a public count does **not** force public binding.    Per-`(P, shard)` nullifiers `ν = H(P_key, shard)` make `market_R` the
-   count of distinct `ν` for a shard (publicly countable), with `P` hidden by
-   preimage resistance. The count is solvable while binding stays private; this adds
-   a **nullifier domain** (real crypto growth) and leaves **portfolio exposure at
-   claim** (P aggregates its shards to be paid) as the residual — which is the
-   keystone's problem (item 4), not a counting problem.
+3. **`R_market` derived ledger count (gate 3 dissolved — no `ν`).** Scarcity
+   pricing drives the whole market reward, so a credible per-shard distinct-**market**-
+   holder count is load-bearing. Under form **C**, per-`P` `Curve` grouping makes
+   holdings **consensus-public**; the prior `ν = H(P_key, shard)` primitive promised
+   hidden-`P` counting but is **incompatible** with the adopted reward shape (same
+   dissolution as `N_arch`). **`market_R(s,E)`** is the count of market archivers with
+   `retention ∧ good_through` at epoch close — derived from the retention ledger keyed
+   by public `P_id`. Privacy that remains is **P ↔ principal** (gate 6), not
+   P-holdings hiding. See [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+   §2–§3.
 4. **Per-shard retention bond replacing tier (the keystone — collapses old G-D/G-E).**
    Deep-history retention needs a commitment to *future* retention; demonstrated
    longevity (a past signal) cannot provide it. A **slashable per-shard retention

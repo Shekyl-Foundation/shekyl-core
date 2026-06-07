@@ -92,8 +92,9 @@ per-epoch double-claim); both are wrong for the fused model — stake-keyed tags
 collide under shared admission stake and do not dedup epochs. **Reward dedup** =
 per-`P` **claimed-epoch bitmap** on the bond record (gate 4 keys state by `P`),
 reusing the `EpochSet` relative-bitmask machinery (§3.3.2) with §5.2/§11
-reorg-revert atomicity. Claim epoch *E* ⟺ check-and-set bit *E*. **`ν = H(P, shard)`**
-(gate 3 counting) stays a **separate** primitive — do not fold into reward dedup.
+reorg-revert atomicity. Claim epoch *E* ⟺ check-and-set bit *E*. **`R_market`** is a
+**derived ledger count** (gate 3 dissolved — no `ν` primitive; see
+[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2).
 Consequence: the reward leg owes **membership-only control** (prove spend authority,
 **omit** key image from spent set) — a **subtraction** from today's verify path —
 not a tag-producing ClaimLinkability / non-spending SAL sibling.
@@ -125,14 +126,15 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 
 | # | Condition | Disposition |
 |---|-----------|-------------|
-| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — Layer 1 **closed** at spec; implement blocked on [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) |
+| (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — Layer 1 **closed** at spec; implement blocked on [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (contract **pinned**; gate 3 ν dissolved) |
 | (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii) |
 | (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | Bonds-only vs soft MIN transfer; not "optional resilience" |
 
 **Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) — Layer 1
-closed (2026-06-07). **Next:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
-(gate 2/3 schema + `MAX_CLAIM_AGE_W`). FSM retool (§3–§7) **unblocked** in parallel.
-Remaining: implement after schema; close (ii)–(iii).
+closed (2026-06-07). **Archival read contract:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+**pinned** (gate 3 ν dissolved; `MAX_CLAIM_AGE_W` shape pinned). FSM retool (§3–§7)
+**unblocked** in parallel. **Next:** implement schema + pin numeric `W` / `REORG_HORIZON`;
+close (ii)–(iii).
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -152,8 +154,8 @@ Superseded for **reward path**; retained for **principal machinery**:
 (reserve-DLEQ, bounded-remainder, `entitlement.rs`); tier machinery; exact-yield
 from secret weight × public rate; `band` + `band_sum` servo on the reward path.
 Claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch` / `N_arch`) **do not** ship;
-reward dedup is bond-record epoch bitmap (§2.4); `ν = H(P, shard)` (gate 3 counting)
-unchanged.
+reward dedup is bond-record epoch bitmap (§2.4); `R_market` derived from retention
+ledger (no wallet-minted ν).
 
 ---
 
@@ -438,7 +440,7 @@ are archival-internal (interface only).
 | `P` HKDF sub-wallet | Independent keypair from seed; dual scan (principal + `P`) |
 | FCMP++ membership + **membership-only control** on reward leg | Backing at emission; **no** key image; **no** published dedup tag |
 | Per-`P` claimed-epoch bitmap on bond record | Reward double-claim dedup (`EpochSet` class, §3.3.2 — relocated to bond state) |
-| `ν = H(P, shard)` | Gate 3 counting — **unchanged**, separate from reward dedup |
+| `R_market` derived count | Ledger-derived at epoch close — **no** `ν` primitive (gate 3 dissolved) |
 | Reorg / `pop_block` atomicity (§5.2 / §11) | Bond record + claimed-epoch bitmap revert with block |
 | Adversarial method + firewall hygiene | Gate 6 — network / timing / output / **bond-funding** |
 | `StakeState` FSM skeleton (§3 — **re-spec pending**) | Retool off claim-centric states |
@@ -493,7 +495,7 @@ in §2.1 *Staking-form* pulls it forward.
 | Retention-proof construction | What failure triggers bond slash | Archival verifier; **may** bind off-chain backing statement |
 | Transport (Tor/Arti, seed fast-fetch) | Firewall **hooks** only | Tier 4 / ops |
 | Foundation floor sizing | Policy constant | Gate 5 / genesis workbook |
-| `Σwork` servo + `R` counting/pricing internals | Wallet **mints `ν`, receives reward**; does not compute `R` | Gate 1 / economics upstream |
+| `Σwork` servo + `R` counting/pricing internals | Wallet **receives reward**; does not compute `R` or mint counting tags | Gate 1 / economics upstream |
 | `ArchivalEngine` query serving | Stage 5 | Registration backing still via `StakeEngine` at genesis |
 | Multisig stake ceremony | V3.1 — FOLLOWUPS | |
 | Subaddress indices in stake model | **Rejected** V3.0 (FA-1) | |
@@ -530,7 +532,7 @@ where not superseded below.
 
 **Counting (unchanged):**
 
-- `ν = H(P, shard)` — gate 3; separate from reward epoch dedup.
+- `R_market` — derived ledger count; no `ν` primitive.
 
 **Reorg:** bond record + claimed-epoch bitmap revert with `pop_block` (§11);
 wallet §5 forward-rebuild adapts.
@@ -574,7 +576,7 @@ on-chain.
    `bond.claimed_epochs.check_and_set(E)` (§3.3.2 `EpochSet` class, relocated).
 
 **Not owed:** ClaimLinkability, `N_arch = x·G_arch`, or any stake-keyed emission
-tag. **`ν = H(P, shard)`** remains gate 3 only.
+tag. **`R_market`** is ledger-derived (gate 3 dissolved).
 
 #### Soft admission and the intra-epoch window
 
@@ -2373,9 +2375,10 @@ replication counting:** scarcity pricing needs a per-shard replication count (re
 counting distinct holders *without identifying them* (private set cardinality / proof-of-distinct-
 holders) is the non-trivial primitive public binding gets for free. That tension is *why* public is
 tempting and is the thing a private design must solve; it does not change the presumption, but it is
-the cost to weigh. **Resolved in the resolution subsection below:** per-`(P,shard)` nullifiers
-`ν = H(P_key, shard)` make `R` the count of distinct `ν` (publicly countable) with `P` hidden by
-preimage resistance — the count is solvable while binding stays private (gate 3).
+the cost to weigh. **Superseded (2026-06-07):** form **C** makes per-`P` holdings
+consensus-public; gate 3 dissolved — `R_market` is a derived ledger count, not ν-hiding
+([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2). Privacy is gate 6
+(P ↔ principal), not P-holdings hiding.
 
 **Organizing principle — graceful degradation.** A user who shares should disclose *what they chose*
 — "I stake, here's cool art" — and not have it silently cascade into tier, claim history, and
@@ -2489,10 +2492,10 @@ gate 1), not locally — but *public, not local,* is what kills silent inflation
 2. **Retention-proof soundness + state cost (8a → loud 8c)** — reward is "loud" only if every node
    recomputes every P's challenge-pass + replication record → per-P/per-shard retention state **in
    consensus**; the existential item is now **retention-proof unforgeability**, detectable not silent.
-3. **Per-shard-nullifier counting primitive** — public `R` does **not** force public binding:
-   per-`(P,shard)` nullifiers `ν = H(P_key, shard)` make `R` the count of distinct `ν` (public) with
-   `P` hidden by preimage resistance. Adds a nullifier domain; leaves portfolio-exposure-at-claim as
-   the residual (the keystone's problem, gate 4).
+3. **`R_market` derived ledger count (gate 3 dissolved)** — count at epoch close from
+   retention ledger keyed by public `P_id`; no `ν` primitive. Holdings are consensus-public
+   under form **C**; privacy is gate 6 (P ↔ principal). See
+   [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2–§3.
 4. **Per-shard retention bond replacing tier (keystone — collapses old G-D/G-E)** — slashable
    per-shard collateral gives the *future*-retention commitment longevity could not; kills the staker
    tier (→ F0 + oracle close); makes Sybil-splitting worthless (`total bond = shards × rate`); flips
@@ -2682,7 +2685,8 @@ path; do not implement against it.
 **Round 3 closure on the rebased substrate** ratifies the F-ARCHIVAL gate-list (§7.5.3 /
 `V3_STAKER_ARCHIVAL.md`) and pins Stage 3 against:
 
-1. **Tier 1 crypto soundness** — `P` registration/backing, `ν = H(P, shard)` counting, L14
+1. **Tier 1 crypto soundness** — `P` registration/backing, archival-state contract
+   ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md); gate 3 dissolved), L14
    crediting, retention-proof unforgeability (loud 8c); [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
    soundness pass step 3.
 2. **`Σwork` supply servo** — gate 1; replaces `band_sum`-differencing normalizer on the

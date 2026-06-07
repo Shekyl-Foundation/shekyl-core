@@ -1,187 +1,280 @@
-# Archival consensus state — gate 2 / gate 3 schema (genesis)
+# Archival consensus state — emission read contract (genesis)
 
-**Status:** **Next move** — gating spec. The reward-emission leg
+**Status:** **Gating spec — contract pinned (2026-06-07).** The reward-emission leg
 ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)) is structurally closed at Layer 1
-but **un-implementable** until this schema is pinned. Tier-1 **8c retention-proof
-unforgeability** (construction bytes) may still defer relative to Phase 2b wallet work;
-the **consensus interface** — what state emission reads, how it is keyed, how it
-prunes — **cannot**.
+but **un-implementable** until this schema is **implemented**. Tier-1 **8c
+retention-proof unforgeability** (construction bytes) may still defer relative to Phase 2b
+wallet work; the **consensus interface** — what state emission reads, how it is keyed,
+how it prunes — **cannot**.
 
-**Scope:** Consensus LMDB (or equivalent) tables and keying for:
-
-1. **Gate 2** — per-`(P, shard, E)` retention / challenge outcome (`proven_retention`).
-2. **Gate 3** — `R_market(shard, E)` replication counts; `shard_id` identity.
-3. **Growth bounds** — `MAX_CLAIM_AGE_W` and pruning of reward-accounting state.
-4. **§4.4 accumulator** — per-epoch `Σwork(E)` finalized at epoch close (interface
-   only; arithmetic owned by emission leg §4.0).
+**Scope:** Consensus LMDB (or equivalent) tables, keying, invariants, and growth bounds
+for everything the emission leg **consumes** (does not write except `ClaimedEpochSet`
+mutations and first-emission bond-record creation per emission leg §6).
 
 **Out of scope here:** retention-proof **construction** wire (prover bytes); gate 6
-off-chain firewall; gate 4 bond post/slash wire; wallet FSM ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§7 retool).
+off-chain firewall; gate 4 bond post/slash **wire** (except fields this contract reads);
+wallet FSM ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§7 retool).
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service
-rebasing*, loud 8c; [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.4, §6.
+rebasing*, loud 8c; [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4–§6.
 
 ---
 
 ## 1. Why this is the critical path
 
-Pinning the emission leg promoted gate-2/gate-3 archival state onto the **critical
-path**. Loud 8c recompute in §5.4 **consumes** consensus archival state it does not
-define:
+Pinning the emission leg promoted archival consensus state onto the **critical path**.
+Loud 8c recompute in emission §5.4 **consumes** state this doc defines:
 
-| Emission read | Owner | Deferred in emission leg |
-|---------------|-------|---------------------------|
-| `proven_retention(P, shard, E)` | Gate 2 challenge ledger | §5.4 — "consumes, not defines" |
-| `shard_id` keying | Gate 2 shard registry | Same |
-| `R_market(shard, E)` for scarcity | Gate 3 counting | §4.3 `scarcity_milli` recompute |
-| `Σwork(E)` finalized total | §4.4 accumulator | Lagged read rule §4.5 |
+| Emission read | Source in this contract |
+|---------------|-------------------------|
+| `proven_retention(P, shard, E)` | Retention ledger (gate 2) |
+| `shard_id`, `g(age)` inputs | Shard registry (gate 2) |
+| `R_market(shard, E)` | Derived view (§3.3) — **not** a separate ν table |
+| `holdings`, `good_through(P, E)` | `ArchivalBondRecord` (gate 4) |
+| `Σwork(E)` | §4.4 accumulator (emission-owned state; inputs from above) |
 
-**Distinction that matters:** 8c **soundness** (proof unforgeability, verifier
-construction) can defer relative to 2b implementation sequencing. The **interface**
-(table names, key tuples, epoch indexing, prune rules) cannot — nothing downstream
-(vin deserializer, `work_P` recompute, wallet FSM) is implementable without it.
-
-This schema is simultaneously:
-
-- The emission leg's **missing input**,
-- The home of the last open Tier-1 **crypto soundness** item (8c), and
-- Where **`MAX_CLAIM_AGE_W`** and per-`(P, shard, E)` layout are decided **together**.
-
----
-
-## 2. State surfaces (to pin at genesis)
-
-### 2.1 Gate 2 — retention / challenge ledger
-
-**Semantic:** For each market archiver `P`, shard `s`, settlement epoch `E`:
-
-```text
-proven_retention(P, s, E) : bool
-```
-
-Set when the challenge for `(P, s)` relevant to `E` **passed** (grace window per gate 4).
-Emission §6.5 `good_through(E)` is orthogonal (slash); retention is per-shard challenge
-outcome.
-
-**Must pin:**
-
-- `ShardId` encoding and stable `shard_id` assignment (set-B shard registry).
-- Challenge-record **key**: e.g. `(P_canonical_id, shard_id, settlement_epoch)` or
-  height-bounded variant — one choice, no wallet-local interpretation.
-- When the bit flips (challenge close vs epoch close ordering).
-- **Prune rule** joint with §2.4 `W` (below).
-
-**8c deferral boundary:** This section pins **what** verifiers read at recompute time.
-The **proof object** that authorizes flipping the bit is a separate deliverable; the
+**8c deferral boundary:** This doc pins **what** verifiers read at recompute time. The
+**proof object** that authorizes flipping a retention bit is a separate deliverable; the
 interface must not change when construction lands.
 
-### 2.2 Gate 3 — `R_market` and counting
+---
 
-**Semantic:** Active replica count per shard at epoch boundary for scarcity:
+## 2. Gate 3 dissolution — `ν` primitive dropped
 
-```text
-R_market(shard, E) : u32   // ≥ 1 when shard exists in market
-```
+**Finding (2026-06-07):** Form **C** applies `Curve` per `P` (channel 2). Computing
+`capped_P(E)` requires summing a given `P`'s shards, then capping. The accumulator
+`Σ_{P'} capped_{P'}(E)` requires that grouping for **every** market `P`. Anything
+consensus computes is public. Per-`P` holdings are therefore **consensus-public by
+construction** — which the honest residual (V3 §1038–1046) already concedes
+("long-lived public pseudonymous profile — shard-set").
 
-`ν = H(P, shard)` counting primitive stays **separate** from reward epoch dedup
-(`ClaimedEpochSet` on bond record).
+The prior gate-3 primitive `ν = H(P_seckey, shard)` existed to count `R_market` without
+revealing which `P` holds a shard. **That privacy goal is incompatible with form C:**
+you cannot group a `P`'s shards to cap them while hiding that they belong to one `P`.
+`R_market(s,E)` collapses to a **plain count** over the public retention ledger keyed by
+public `P_id`.
 
-**Must pin:**
+**Same dissolution pattern as `N_arch`:** a privacy-preserving primitive carried from the
+hidden model, made redundant by the firewall-not-hide model. **Privacy that remains:**
+`P` ↔ principal (gate 6 firewall), **not** `P`-holdings hiding.
 
-- Whether `R` is snapshot at epoch close or block-height keyed.
-- Interaction with holdings descriptor (only shards in `P`'s portfolio accrue work).
+**Consumer check:** No reward-path consumer needs a hidden-`P` count. `durability_count`
+is a **different symbol** (foundation-inclusive observability/SLA) and does not require
+ν either.
 
-### 2.3 §4.4 — `Σwork` accumulator (interface)
+**Disposition:** Delete `ν = H(P, shard)` from the genesis crypto bill. Re-spec
+`market_R` / `R_market` as the derived ledger count (§3.3). Wallet does **not** mint ν.
 
-§4.4 already commits: per-settlement-epoch accumulator **finalized at epoch close**
-from continuous recording of each market `P`'s `capped_P(E)`.
-
-§4.5 collapses to: emissions in `E+1` (within claim window) **read** the stored
-`Σwork(E)` from this table — lagged one epoch, all-recorded denominator. Remaining
-genesis-seal work: **boundary rules** (late emitters after close, batching cap 15) and
-**reorg** (revert finalization with epoch disconnect). See emission leg §4.5.
-
-**Rejected default (named reopen only):** claimed-only denominator → two-phase /
-provisional+true-up machinery. Reopen only if all-recorded dilution is unacceptable
-*and* inflation-bound proofs for claimed-only are specified.
-
-### 2.4 `MAX_CLAIM_AGE_W` — bounded reward-accounting state
-
-**Gap exposed by pinned state dedup:** Archival reward-accounting state **grows
-unbounded** without a claim-age window:
-
-| Structure | Growth without `W` |
-|-----------|-------------------|
-| `ClaimedEpochSet` per `P` | Absolute sparse set, all-time |
-| Per-`(P, shard, E)` retention | One row per served epoch |
-| Per-epoch `Σwork(E)` | One row per settlement epoch forever |
-
-V3 flags this loosely (§1264, "claim windows probably right"); the emission leg had no
-`W` until this pin.
-
-**Genesis pin (proposed shape):**
-
-```text
-MAX_CLAIM_AGE_W : u64   // in settlement-epoch units
-```
-
-Epochs with `E < current_epoch - W` are **unclaimable**. Effects:
-
-- `ClaimedEpochSet` need only retain epochs ≥ `current - W` (or full history with
-  reject-at-verify for old `E`).
-- Settled `Σwork(E)` rows with `E < current - W` **droppable** from hot state (archive
-  or delete per ops policy; consensus need not serve ancient claims).
-- Old per-`(P, shard, E)` retention rows **reclaimable** after `W`.
-
-**Tradeoff (consensus-visible):** A `P` offline longer than `W` **forfeits** unclaimed
-epochs older than the window. Gate-6 hygiene may have `P` **deliberately lapse** for
-decorrelation — `W` trades **consensus-state growth** against **lapse-forfeiture**.
-`W` is not wallet policy; it is a consensus constant (like `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`).
-
-**Interaction:** `W` ≥ practical batch size (15) but tight enough to bound LMDB;
-sim sweep for operator pain vs state size is Layer 2 / ops input, not a substitute for
-pinning `W`.
+**Reversion clause:** Reopen only if a **production consumer** emerges that requires
+hidden-`P` counting **and** form C is simultaneously rejected — i.e. a full reward-shape
+reopen, not a gate-3 patch.
 
 ---
 
-## 3. Parallel work (not blocked on this doc landing)
+## 3. Read surface — what the emission leg consumes
 
-| Workstream | Status after emission Layer 1 pin |
-|------------|-----------------------------------|
-| **§3–§7 FSM retool** | Unblocked — principal form decided (ordinary transfer ≥ `MIN`, no `C_stake`); reward reception defined; `EpochSet` → absolute sparse set on bond record; reorg reverts bitmap |
-| **Gate 6 firewall** | Load-bearing privacy — invariant rigor + FAQ privacy conditionality |
+Keying is **`P_canonical_id`** throughout (emission leg §6.1):
+
+```text
+P_canonical_id = cSHAKE256(
+  customization = "shekyl/archival-p-id-v1",
+  input         = P_pubkey.canonical_bytes()
+)[0..32]
+```
+
+The emission leg **reads** these records; it does **not** define gate-2 challenge
+mechanics or gate-4 slash wire.
+
+### 3.1 Retention ledger (gate 2)
+
+```text
+retention_bit(P_id, shard_id, E) : bool
+```
+
+- Set when the challenge for `(P, shard)` relevant to settlement epoch `E` **passed**
+  (grace window per gate 4).
+- Challenge metadata (which leaf, which block) stays **gate-2-internal** — not in this
+  contract.
+
+### 3.2 Shard registry (gate 2)
+
+```text
+shard_id → { age, boundary/existence }
+```
+
+`g(age)` is a consensus constant the emission leg applies; this contract does not define
+what bytes a shard is (set-B boundary).
+
+### 3.3 `R_market` view — derived, not stored separately
+
+```text
+R_market(shard_id, E) =
+  |{ P_id : retention_bit(P_id, shard_id, E)
+         ∧ good_through(P_id, E)
+         ∧ P_id ∈ Market }|
+```
+
+- **One consensus value** per `(shard, E)` — identical for every claimer.
+- **Pinned measure:** count at **epoch close** with `retention ∧ good_through` — not
+  time-weighted over `E` (rejected: buys little, costs determinism).
+- **`Market` membership:** market archivers with `ShardSetCompact` holdings. Foundation
+  `CompleteTree` identities are **excluded** from `R_market` and `Σwork` (E-2) — they
+  do not accrue market scarcity rows on this path.
+- **Materialization:** may be stored per `(shard_id, E)` at epoch close or computed on
+  read from the ledger; semantics are fixed either way.
+
+### 3.4 Holdings + good-standing (gate 4)
+
+```text
+P_id → ArchivalBondRecord
+```
+
+Per-shard bond posture, `holdings` descriptor, and data to derive **`good_through(P, E)`**
+per settlement epoch. Gate 4 owns slash/unbond mutations; emission reads the result.
+
+**Genesis pin (read requirement):** `good_through(P, E)` must be **derivable at epoch
+close** from bond state (slash event log or equivalent) — not merely a current
+`good_standing` flag. See emission leg §6.5 (E-3).
+
+### 3.5 `Σwork` accumulator (emission leg §4.4)
+
+```text
+Σwork(E) → Σ_{P'∈Market} Curve(work_{P'}(E))
+```
+
+Finalized at settlement epoch `E` **close**. Inputs are the three record families above;
+arithmetic is owned by [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.0.
+
+**Implementation choice (not consensus-visible):** epoch-close sweep **or** incremental
+per-`P` delta when retention settles (re-cap one `P`, apply delta to `Σwork`) — the
+per-`P` cap is nonlinear. Reorg revert order must match the chosen path (§6).
+
+---
+
+## 4. Invariants — gate 2/4 must guarantee
+
+These are the **load-bearing half** of the contract; the read surface is useless without
+them.
+
+1. **Single-valued `R_market(s,E)`** — one consensus value per `(shard, E)`, identical
+   for all `P`. Deriving from the ledger gives this for free; a separate count source
+   would not. Divergence ⇒ claimers compute different scarcity and `Σwork` stops
+   reconciling.
+
+2. **Finalized-and-immutable at E-close** — retention bits and derived `R_market` for
+   `E` are fixed once `E` closes (within the reorg horizon). Per E-3, they are immune to
+   **later** slashes via `good_through(E)` evaluated at close. This boundary is **the
+   same** as emission §4.5's lagged `Σwork` read — pin together, not separately.
+
+3. **Canonical stable `shard_id`** — same shard, same id, for all `P` and all time;
+   otherwise holdings cannot be matched across emissions (§6.4 "compatible holdings").
+
+4. **`good_through(P,E)` derivable at close** — gate-4 slash state exposes a per-epoch
+   good-standing view, not only a current flag (E-3 pin as read requirement).
+
+---
+
+## 5. `MAX_CLAIM_AGE_W` — claim window (genesis constant)
+
+```text
+W = MAX_CLAIM_AGE_W   // settlement epochs; consensus constant (value TBD)
+```
+
+Epochs with `E < tip_epoch − W` are **unclaimable** (forfeited). This is what makes the
+structure **prunable**:
+
+| Structure | Prune after `tip − max(W, REORG_HORIZON)` |
+|-----------|---------------------------------------------|
+| Retention ledger rows | Yes |
+| Derived / stored `R_market` views | Yes |
+| Per-epoch `Σwork(E)` | Yes |
+| Per-`P` `ClaimedEpochSet` entries | Yes (verify rejects ancient `E`) |
+
+**Tradeoff (consensus-visible):** A `P` offline (or deliberately lapsing for gate-6
+decorrelation) longer than `W` **forfeits** older unclaimed epochs. `W` couples **state
+growth** against **firewall lapse discipline**.
+
+**Open pin:** numeric `W` and `REORG_HORIZON` jointly with finalization boundary (§4
+invariant 2 + emission §4.5 + §8).
+
+**State cost (gate-2 "irony," now bounded):**
+
+```text
+replicated_hot_state ≈
+  active_(P,shard)_records × W
+  + per_P ClaimedEpochSet (≤ W entries)
+  + W accumulator values (Σwork)
+```
+
+---
+
+## 6. Gate-2-internal (not in this contract)
+
+- How a retention bit is **earned** (proof-of-retrievability challenge, future-block-hash
+  leaf selection, 8c unforgeability argument).
+- Challenge **cadence** (L14 retrieval-as-proof reduction).
+- Shard **definition** (what bytes/leaves a shard is).
+
+The emission leg consumes **outputs** — bits, counts, ids — and depends on the four
+invariants; it defines none of the mechanisms.
+
+---
+
+## 7. `market_R` vs `durability_count` (unchanged separation)
+
+| Symbol | Definition | Foundation |
+|--------|------------|------------|
+| **`market_R` / `R_market`** | Derived ledger count (§3.3) for **market** archivers | `CompleteTree` **excluded** from `Market` |
+| **`durability_count`** | Bonded-and-good-standing archivers covering *s* | Includes genesis `CompleteTree` when active |
+
+Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
+**`durability_count`** (or explicit policy). Never interchange.
+
+---
+
+## 8. Parallel work
+
+| Workstream | Status |
+|------------|--------|
+| **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet` |
+| **Gate 6 firewall** | Load-bearing privacy |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
-| **V3 §883 / gate-1 form C** | Reconciled |
+| **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
+| **Numeric `W`** | Shape pinned; value open |
 
-**Blocked on this schema:** emission vin implementation, `work_P` consensus recompute,
-`ArchivalBondRecord` integration tests against real challenge state, 8c verifier hookup.
+**Blocked on implementation of this schema:** emission vin, `work_P` recompute, bond-record
+integration tests, 8c verifier hookup.
 
 ---
 
-## 4. Implementation checklist (pre-code)
+## 9. Implementation checklist (pre-code)
 
-- [ ] Pin `ShardId` + challenge-ledger key tuple + epoch indexing.
-- [ ] Pin `R_market(shard, E)` snapshot rule at epoch close.
-- [ ] Pin `MAX_CLAIM_AGE_W` + prune semantics for retention rows and `Σwork` history.
-- [ ] Pin `Σwork(E)` finalization sweep at epoch close (all-recorded; E-3 slash stays in denominator).
-- [ ] Document reorg revert order joint with [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §8.
+- [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
+- [ ] Pin `ShardId` + retention-ledger key `(P_id, shard_id, E)` + epoch indexing.
+- [ ] Pin `R_market` snapshot at epoch close (count with `retention ∧ good_through`).
+- [ ] Pin `good_through` encoding on `ArchivalBondRecord` (slash-event log or equivalent).
+- [ ] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics.
+- [ ] Pin `Σwork(E)` finalization (sweep vs incremental) + reorg revert order (emission §8).
+- [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.
 - [ ] Retention-proof construction bytes (8c) — may follow interface pin.
 - [ ] KAT: emission recompute against fixture ledger state.
 
 ---
 
-## 5. Related documents
+## 10. Related documents
 
 | Doc | Relationship |
 |-----|----------------|
-| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumer of this schema |
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet FSM; gate 2 shape at registration |
-| [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; loud 8c; claim-window intuition §1264 |
-| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness (spread band) |
+| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumer; owns `Σwork` arithmetic and dedup |
+| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet FSM; gate 2 registration shape |
+| [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; two-count table; honest residual |
+| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
 
 ---
 
-## Revision note
+## Revision history
 
-**2026-06-07:** Initial schema gating doc — promoted by emission-leg Layer 1 pin;
-`MAX_CLAIM_AGE_W`; §4.4/§4.5 collapse; interface vs 8c construction deferral.
+- **2026-06-07 (initial):** Schema gating doc; `MAX_CLAIM_AGE_W`; §4.4/§4.5 collapse.
+- **2026-06-07 (contract pin):** Gate-3 ν dissolution; two-half contract (read surface +
+  invariants); public `P_id` keying; derived `R_market`; `good_through` read requirement;
+  prune horizon `max(W, REORG_HORIZON)`.
