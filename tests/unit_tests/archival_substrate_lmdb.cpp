@@ -57,7 +57,8 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   const std::vector<std::pair<uint64_t, uint64_t>> bad = {{5, 6}};
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, 3, shards, bad);
+  db.put_archival_bond_record(p_id, pubkey, 3, shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact,
+    shards, bad);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -76,6 +77,22 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   fixture.db.batch_start();
   EXPECT_FALSE(db.get_archival_bond_hybrid_pubkey(p_id, out_pubkey));
   EXPECT_EQ(db.archival_bond_join_epoch(p_id), std::numeric_limits<uint64_t>::max());
+}
+
+TEST(archival_substrate_lmdb, complete_tree_bond_holds_any_shard)
+{
+  TempLMDB fixture;
+  const crypto::hash p_id = make_hash(0x44);
+  const std::vector<uint8_t> pubkey = {0x05, 0x06};
+
+  BlockchainDB& db = fixture.db;
+  db.put_archival_bond_record(p_id, pubkey, 1, shekyl::db::ArchivalBondValue::kHoldingsCompleteTree,
+    {}, {});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, 0));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 999, 0));
 }
 
 TEST(archival_substrate_lmdb, shard_registry_roundtrip)

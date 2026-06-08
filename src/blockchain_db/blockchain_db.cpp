@@ -247,7 +247,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         throw std::runtime_error("FATAL: settlement epoch blocks is zero");
       const uint64_t join_epoch = block_height / seb;
       put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
-        bond.holdings.shard_ids);
+        static_cast<uint8_t>(bond.holdings.kind), bond.holdings.shard_ids);
       const uint64_t bonded_total = get_total_bonded_atomic();
       if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
         throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
@@ -1362,7 +1362,7 @@ bool BlockchainDB::get_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
-  const std::vector<uint64_t>& /*held_shard_ids*/,
+  uint8_t /*holdings_kind*/, const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
 {
 }

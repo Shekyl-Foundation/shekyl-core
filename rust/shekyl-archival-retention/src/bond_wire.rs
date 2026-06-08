@@ -83,6 +83,7 @@ pub enum WireError {
     ShardListForbiddenForCompleteTree,
     InvalidPostKind(u8),
     InvalidHoldingsKind(u8),
+    TrailingBytes,
 }
 
 impl fmt::Display for WireError {
@@ -101,6 +102,7 @@ impl fmt::Display for WireError {
             }
             Self::InvalidPostKind(v) => write!(f, "invalid bond post_kind {v}"),
             Self::InvalidHoldingsKind(v) => write!(f, "invalid holdings kind {v}"),
+            Self::TrailingBytes => write!(f, "trailing bytes after bond-post payload"),
         }
     }
 }
@@ -218,7 +220,7 @@ impl ArchivalBondPostVin {
         let bonded_total_atomic = read_varint(r)?;
         let bond_credit = read_varint(r)?;
         let bond_debit = read_varint(r)?;
-        Ok(Self {
+        let vin = Self {
             hybrid_public_key,
             p_canonical_id,
             post_kind,
@@ -229,7 +231,16 @@ impl ArchivalBondPostVin {
             bonded_total_atomic,
             bond_credit,
             bond_debit,
-        })
+        };
+        crate::wire::ensure_payload_fully_consumed(r).map_err(|e| match e {
+            crate::wire::WireError::TrailingBytes => WireError::TrailingBytes,
+            crate::wire::WireError::Io(err) => WireError::Io(err),
+            _ => WireError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected wire error during bond-post parse",
+            )),
+        })?;
+        Ok(vin)
     }
 
     pub fn read<R: Read>(r: &mut R) -> Result<Self, WireError> {

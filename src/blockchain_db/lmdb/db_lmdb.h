@@ -473,7 +473,7 @@ private:
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
-    const std::vector<uint64_t>& held_shard_ids,
+    uint8_t holdings_kind, const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
   virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,

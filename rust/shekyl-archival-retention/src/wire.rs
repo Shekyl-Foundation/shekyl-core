@@ -72,6 +72,7 @@ pub enum WireError {
     LayerCountExceeded { kind: &'static str, got: usize },
     BranchWidthExceeded { layer: usize, got: usize },
     InvalidHybridSignature(String),
+    TrailingBytes,
 }
 
 impl fmt::Display for WireError {
@@ -86,7 +87,18 @@ impl fmt::Display for WireError {
                 write!(f, "path branch {layer} too wide: {got} scalars")
             }
             Self::InvalidHybridSignature(msg) => write!(f, "invalid hybrid signature: {msg}"),
+            Self::TrailingBytes => write!(f, "trailing bytes after vin payload"),
         }
+    }
+}
+
+/// Reject length-delimited vin payloads that carry bytes outside the canonical field span.
+pub fn ensure_payload_fully_consumed<R: Read>(r: &mut R) -> Result<(), WireError> {
+    let mut extra = [0u8; 1];
+    match r.read_exact(&mut extra) {
+        Ok(()) => Err(WireError::TrailingBytes),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        Err(e) => Err(WireError::Io(e)),
     }
 }
 
@@ -210,7 +222,7 @@ impl ArchivalServeCreditResponse {
         r.read_exact(&mut sig_bytes)?;
         let hybrid_signature = HybridSignature::from_canonical_bytes(&sig_bytes)
             .map_err(|e| WireError::InvalidHybridSignature(e.to_string()))?;
-        Ok(Self {
+        let response = Self {
             p_canonical_id,
             shard_id,
             settlement_epoch,
@@ -222,7 +234,9 @@ impl ArchivalServeCreditResponse {
                 c2_layers,
             },
             hybrid_signature,
-        })
+        };
+        ensure_payload_fully_consumed(r)?;
+        Ok(response)
     }
 
     /// Read a full input including the type tag (must be [`VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE`]).
@@ -302,6 +316,30 @@ mod tests {
             decoded.hybrid_signature.to_canonical_bytes().unwrap(),
             response.hybrid_signature.to_canonical_bytes().unwrap(),
         );
+    }
+
+    #[test]
+    fn read_payload_rejects_trailing_bytes() {
+        let mut bytes = ArchivalServeCreditResponse {
+            p_canonical_id: [0x11; 32],
+            shard_id: 1,
+            settlement_epoch: 2,
+            segment_subroot_rk: [0x22; 32],
+            leaf_index_in_segment: 3,
+            leaf_bytes: [0x33; 128],
+            path: SegmentPathOpening {
+                c1_layers: vec![vec![[0x44; 32]; 4]],
+                c2_layers: vec![vec![[0x55; 32]; 8]],
+            },
+            hybrid_signature: dummy_hybrid_signature(),
+        }
+        .serialize()
+        .expect("serialize");
+        bytes.push(0xFF);
+        bytes.remove(0);
+        let err = ArchivalServeCreditResponse::read_payload(&mut bytes.as_slice())
+            .expect_err("trailing byte");
+        assert!(matches!(err, WireError::TrailingBytes));
     }
 
     #[test]

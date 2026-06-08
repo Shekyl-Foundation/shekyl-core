@@ -5107,15 +5107,27 @@ bool BlockchainLMDB::get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
-  const std::vector<uint64_t>& held_shard_ids,
+  uint8_t holdings_kind, const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
+  if (holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsCompleteTree
+    && !held_shard_ids.empty())
+  {
+    throw std::runtime_error("FATAL: CompleteTree bond record must not carry shard ids");
+  }
+  if (holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact
+    && held_shard_ids.empty())
+  {
+    throw std::runtime_error("FATAL: ShardSetCompact bond record requires shard ids");
+  }
+
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = hybrid_pubkey;
   bond.join_settlement_epoch = join_settlement_epoch;
+  bond.holdings_kind = holdings_kind;
   bond.held_shard_ids = held_shard_ids;
   bond.bad_intervals.reserve(bad_intervals.size());
   for (const auto& iv : bad_intervals)
@@ -5293,18 +5305,30 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     throw std::runtime_error("FATAL: archival slash without bond record");
 
   auto& shards = bond.held_shard_ids;
-  const auto it = std::find(shards.begin(), shards.end(), shard_id);
-  if (it == shards.end())
-    return;
-
-  shards.erase(it);
+  if (bond.is_complete_tree())
+  {
+    bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+    shards.clear();
+    shekyl::db::ArchivalBondValue::BadInterval iv{};
+    iv.start_epoch = settlement_epoch;
+    iv.end_exclusive = std::numeric_limits<uint64_t>::max();
+    bond.bad_intervals.push_back(iv);
+  }
+  else
+  {
+    const auto it = std::find(shards.begin(), shards.end(), shard_id);
+    if (it == shards.end())
+      return;
+    shards.erase(it);
+  }
 
   std::vector<std::pair<uint64_t, uint64_t>> bad;
   bad.reserve(bond.bad_intervals.size());
   for (const auto& iv : bond.bad_intervals)
     bad.emplace_back(iv.start_epoch, iv.end_exclusive);
 
-  put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch, shards, bad);
+  put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
+    bond.holdings_kind, shards, bad);
 
   const uint64_t bonded_total = get_total_bonded_atomic();
   if (slashed_amount > bonded_total)
@@ -5358,11 +5382,38 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
       throw std::runtime_error("FATAL: archival_bond decode failed during slash scan");
 
-    const std::vector<uint64_t> shards = bond.held_shard_ids;
-    for (const uint64_t shard_id : shards)
+    if (bond.is_complete_tree())
     {
-      if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch))
-        apply_archival_slash_one(block_height, seq, p_id, shard_id, settlement_epoch, floor);
+      MDB_cursor* seg_cur = nullptr;
+      int seg_rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &seg_cur);
+      if (seg_rc)
+        throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for slash: ", seg_rc).c_str()));
+
+      MDB_val sk, sv;
+      seg_rc = mdb_cursor_get(seg_cur, &sk, &sv, MDB_FIRST);
+      while (seg_rc == 0)
+      {
+        if (sk.mv_size != 8)
+          throw std::runtime_error("FATAL: archival_shard_segment key size mismatch during slash scan");
+        const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(sk.mv_data));
+        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch))
+        {
+          apply_archival_slash_one(block_height, seq, p_id, shard_id, settlement_epoch, floor);
+          break;
+        }
+        seg_rc = mdb_cursor_get(seg_cur, &sk, &sv, MDB_NEXT);
+      }
+      if (seg_rc != MDB_NOTFOUND)
+        throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error during slash scan: ", seg_rc).c_str()));
+      mdb_cursor_close(seg_cur);
+    }
+    else
+    {
+      for (const uint64_t shard_id : bond.held_shard_ids)
+      {
+        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch))
+          apply_archival_slash_one(block_height, seq, p_id, shard_id, settlement_epoch, floor);
+      }
     }
 
     rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
@@ -5457,8 +5508,24 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     if (!load_archival_bond_value(p_id, bond))
       throw std::runtime_error("FATAL: archival slash revert without bond record");
 
-    if (!bond.holds_shard(entry.shard_id))
+    if (entry.slashed_amount == SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC
+      && bond.held_shard_ids.empty()
+      && !bond.is_complete_tree())
+    {
+      bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
+      bond.bad_intervals.erase(
+        std::remove_if(bond.bad_intervals.begin(), bond.bad_intervals.end(),
+          [&](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
+            return iv.start_epoch <= entry.settlement_epoch
+              && (iv.end_exclusive == std::numeric_limits<uint64_t>::max()
+                || entry.settlement_epoch < iv.end_exclusive);
+          }),
+        bond.bad_intervals.end());
+    }
+    else if (!bond.holds_shard(entry.shard_id))
+    {
       bond.held_shard_ids.push_back(entry.shard_id);
+    }
 
     std::vector<std::pair<uint64_t, uint64_t>> bad;
     bad.reserve(bond.bad_intervals.size());
@@ -5466,7 +5533,7 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
       bad.emplace_back(iv.start_epoch, iv.end_exclusive);
 
     put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
-      bond.held_shard_ids, bad);
+      bond.holdings_kind, bond.held_shard_ids, bad);
 
     const uint64_t bonded_total = get_total_bonded_atomic();
     set_total_bonded_atomic(bonded_total + entry.slashed_amount);

@@ -418,7 +418,7 @@ Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 | LMDB name | `"archival_bond"` |
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
-| Value | versioned `ArchivalBondValue` blob (hybrid pubkey, `E_join`, holdings, bad intervals) |
+| Value | versioned `ArchivalBondValue` blob (hybrid pubkey, `E_join`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals) |
 | Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
 | Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |

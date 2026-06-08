@@ -528,7 +528,10 @@ private:
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 1;
+    static constexpr uint8_t kVersion = 2;
+    static constexpr uint8_t kVersionLegacy = 1;
+    static constexpr uint8_t kHoldingsShardSetCompact = 0;
+    static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
     static constexpr size_t kMaxBadIntervals = 256;
@@ -540,8 +543,15 @@ struct ArchivalBondValue {
 
     std::vector<uint8_t> hybrid_pubkey;
     uint64_t join_settlement_epoch = 0;
+    /// `kHoldingsShardSetCompact` or `kHoldingsCompleteTree` (gate-4 §3.4.1).
+    uint8_t holdings_kind = kHoldingsShardSetCompact;
     std::vector<uint64_t> held_shard_ids;
     std::vector<BadInterval> bad_intervals;
+
+    [[nodiscard]] bool is_complete_tree() const noexcept
+    {
+        return holdings_kind == kHoldingsCompleteTree;
+    }
 
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
@@ -562,6 +572,7 @@ struct ArchivalBondValue {
         out.insert(out.end(), hybrid_pubkey.begin(), hybrid_pubkey.end());
         for (int i = 7; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
+        out.push_back(holdings_kind);
         const uint32_t holdings_count = static_cast<uint32_t>(held_shard_ids.size());
         for (int i = 3; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((holdings_count >> (i * 8)) & 0xFF));
@@ -589,18 +600,34 @@ struct ArchivalBondValue {
             return false;
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
-        if (p[off++] != kVersion)
+        const uint8_t version = p[off++];
+        if (version != kVersion && version != kVersionLegacy)
             return false;
         if (off + 2 > len)
             return false;
         const uint16_t pk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
         off += 2;
-        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 + 4 > len)
+        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 > len)
             return false;
         out.hybrid_pubkey.assign(p + off, p + off + pk_len);
         off += pk_len;
         out.join_settlement_epoch = load_be64(p + off);
         off += 8;
+        if (version == kVersion)
+        {
+            if (off >= len)
+                return false;
+            out.holdings_kind = p[off++];
+            if (out.holdings_kind != kHoldingsShardSetCompact
+                && out.holdings_kind != kHoldingsCompleteTree)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            out.holdings_kind = kHoldingsShardSetCompact;
+        }
         if (off + 4 > len)
             return false;
         const uint32_t holdings_count = static_cast<uint32_t>(
@@ -659,6 +686,8 @@ struct ArchivalBondValue {
 
     [[nodiscard]] bool holds_shard(uint64_t shard_id) const noexcept
     {
+        if (is_complete_tree())
+            return true;
         for (const uint64_t held : held_shard_ids)
         {
             if (held == shard_id)
