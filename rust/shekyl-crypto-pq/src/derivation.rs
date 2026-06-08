@@ -265,6 +265,18 @@ pub fn derive_view_tag_prefilter(ml_kem_ss: &[u8; 32], output_index: u64) -> u8 
     expand_first_byte(&hk, LABEL_VIEW_TAG_PREFILTER, output_index)
 }
 
+/// Pre-FA-6 classical view-tag pre-filter (X25519 ECDH IKM).
+///
+/// **Not** the V3 wire path after FA-6. Retained for §8.5.1 counterfactual
+/// measurement (`fa6_decap_prefilter_gate --path classical`) and §10.1
+/// disposition evidence only.
+pub fn derive_view_tag_x25519_counterfactual(x25519_ss: &[u8; 32], output_index: u64) -> u8 {
+    const SALT: &[u8] = b"shekyl-view-tag-x25519-v1";
+    const LABEL: &[u8] = b"shekyl-view-tag-x25519";
+    let hk = Hkdf::<Sha512>::new(Some(SALT), x25519_ss);
+    expand_first_byte(&hk, LABEL, output_index)
+}
+
 /// Derive the per-output KEM seed from `tx_key` and recipient public keys.
 ///
 /// Returns a 64-byte seed split as:
