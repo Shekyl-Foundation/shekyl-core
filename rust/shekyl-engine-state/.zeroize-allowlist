@@ -30,14 +30,6 @@
 #   .cursor/rules/42-serialization-policy.mdc
 #   docs/MID_REWIRE_HARDENING.md §3.5
 
-# ── bookkeeping_block.rs ──────────────────────────────────────────────
-#
-# Subaddress registry keys its entries by the 32-byte pubkey hash that
-# the address-derivation pipeline emits for a given subaddress. Public
-# by construction — the wallet file's bookkeeping block is the index of
-# how pubkey-hash → (major, minor) subaddress index. No secret.
-rust/shekyl-engine-state/src/bookkeeping_block.rs|pub subaddress_registry: BTreeMap<[u8; 32], SubaddressIndex>
-
 # ── ledger_block.rs ───────────────────────────────────────────────────
 #
 # Blockchain tip hash is the 32-byte block hash the wallet last saw.

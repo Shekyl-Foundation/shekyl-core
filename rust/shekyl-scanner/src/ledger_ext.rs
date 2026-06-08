@@ -74,7 +74,6 @@ impl TransferDetailsExt for TransferDetails {
             key: output.key(),
             key_offset: output.key_offset(),
             commitment: output.commitment().clone(),
-            subaddress: output.subaddress(),
             payment_id: output.payment_id(),
             spent: false,
             spent_height: None,
@@ -101,8 +100,8 @@ impl TransferDetailsExt for TransferDetails {
             // were removed in the schema migration; `source_ciphertext`
             // and `output_handle` are the only inputs the engine needs
             // to re-derive the spend material at signing time. Other
-            // `Option`-valued fields on `TransferDetails` (`subaddress`,
-            // `payment_id`, `spent_height`, `key_image`,
+            // `Option`-valued fields on `TransferDetails`
+            // (`payment_id`, `spent_height`, `key_image`,
             // `fcmp_precomputed_path`) exist for unrelated reasons and
             // are unaffected by this construction site.
             source_ciphertext: None,

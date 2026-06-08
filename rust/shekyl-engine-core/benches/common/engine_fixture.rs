@@ -213,7 +213,6 @@ use shekyl_engine_core::__bench_internals::engine_local_ledger_for_bench;
 #[cfg(feature = "bench-internals")]
 use shekyl_engine_state::{
     payment_id::PaymentId,
-    subaddress::SubaddressIndex,
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
@@ -565,7 +564,7 @@ const LOCAL_KEYS_BENCH_SEED: [u8; 32] = {
 ///
 /// `LocalKeys` is significantly larger than the §4.2 64-byte
 /// cutoff (the type carries an `AllKeysBlob` plus state-shaped
-/// fields and a subaddress-registry `RwLock`). The
+/// fields). The
 /// `Box<LocalKeys>` shape moves only an 8-byte pointer across the
 /// bench-function boundary, matching the established discipline
 /// for the engine-trait bench family.
@@ -640,7 +639,6 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
-        subaddress: Some(SubaddressIndex::new((seed & 0xffff_ffff) as u32)),
         payment_id: Some(PaymentId([lo; 8])),
         spent: false,
         spent_height: None,

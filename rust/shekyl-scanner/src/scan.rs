@@ -11,10 +11,8 @@
 //! 1. Parse `tx_extra` for PQC KEM ciphertext (tag 0x06)
 //! 2. ML-KEM decap + FA-6 pre-filter tag compare (every output; rejects non-mine)
 //! 3. X25519 ECDH + HKDF + recovery via `scan_output_recover_with_ml_kem_dk` on match
-//! 4. Subaddress lookup via recovered spend key `B' = O - ho*G - y*T`
+//! 4. Primary-account claim via recovered spend key `B' = O - ho*G - y*T`
 //! 5. Key image computation via native Rust (no FFI)
-
-use std::collections::HashMap;
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -33,7 +31,7 @@ use shekyl_crypto_pq::{
 use shekyl_generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 
-use crate::{extra::Extra, output::*, GuaranteedViewPair, SubaddressIndex, ViewPair};
+use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
 
 const X25519_CT_BYTES: usize = 32;
 const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
@@ -353,17 +351,14 @@ impl std::fmt::Debug for ScanOutcome {
 struct InternalScanner {
     pair: ViewPair,
     spend_secret: Zeroizing<[u8; 32]>,
-    subaddresses: HashMap<CompressedPoint, Option<SubaddressIndex>>,
+    primary_spend_compressed: CompressedPoint,
 }
 
 impl Zeroize for InternalScanner {
     fn zeroize(&mut self) {
         self.pair.zeroize();
         self.spend_secret.zeroize();
-        for (mut key, mut value) in self.subaddresses.drain() {
-            key.zeroize();
-            value.zeroize();
-        }
+        self.primary_spend_compressed.zeroize();
     }
 }
 impl Drop for InternalScanner {
@@ -375,19 +370,11 @@ impl ZeroizeOnDrop for InternalScanner {}
 
 impl InternalScanner {
     fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        let mut subaddresses = HashMap::new();
-        subaddresses.insert(pair.spend().compress().into(), None);
         Self {
+            primary_spend_compressed: pair.spend().compress().into(),
             pair,
             spend_secret,
-            subaddresses,
         }
-    }
-
-    fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        let (spend, _) = self.pair.subaddress_keys(subaddress);
-        self.subaddresses
-            .insert(spend.compress().into(), Some(subaddress));
     }
 
     fn scan_transaction_with_cancel(
@@ -531,13 +518,12 @@ impl InternalScanner {
                 continue;
             };
 
-            // --- Subaddress lookup via recovered spend key B' ---
+            // --- Primary-account claim via recovered spend key B' ---
             let recovered_b_compressed: CompressedPoint =
                 CompressedPoint(recovered.recovered_spend_key);
-            let Some(subaddress) = self.subaddresses.get(&recovered_b_compressed) else {
+            if recovered_b_compressed != self.primary_spend_compressed {
                 continue;
-            };
-            let subaddress = *subaddress;
+            }
 
             let amount = recovered.amount;
             let commitment = Commitment::new(
@@ -586,7 +572,6 @@ impl InternalScanner {
                 },
                 metadata: Metadata {
                     additional_timelock: tx.prefix().additional_timelock,
-                    subaddress,
                     payment_id: decrypted_payment_id,
                     arbitrary_data: extra.arbitrary_data(),
                 },
@@ -773,11 +758,6 @@ impl Scanner {
         Self(InternalScanner::new(pair, spend_secret))
     }
 
-    /// Register a subaddress to scan for.
-    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        self.0.register_subaddress(subaddress)
-    }
-
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         self.0.scan(block)
@@ -843,11 +823,6 @@ impl GuaranteedScanner {
     /// Create a GuaranteedScanner from a GuaranteedViewPair and spend secret.
     pub fn new(pair: GuaranteedViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
         Self(InternalScanner::new(pair.0, spend_secret))
-    }
-
-    /// Register a subaddress to scan for.
-    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        self.0.register_subaddress(subaddress)
     }
 
     /// Scan a block for outputs belonging to this wallet.

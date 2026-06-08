@@ -3621,7 +3621,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
 ///
 /// Unlike `shekyl_scan_output`, this function does NOT take a `spend_key`
 /// parameter. Instead, it returns the recovered spend key so the caller
-/// can look it up in a subaddress table.
+/// can compare against the account primary spend public key (FA-2).
 ///
 /// # Safety
 /// - Same pointer requirements as `shekyl_scan_output`.

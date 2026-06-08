@@ -39,8 +39,12 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("Model: docs/design/V3_STAKER_ARCHIVAL.md; plan: docs/design/STAKER_ARCHIVAL_SIM.md");
     eprintln!();
     eprintln!("Sub-claims (stated thresholds): covered = frac_under_target<0.05 & min_R>=1;");
-    eprintln!("  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, final-epoch SNAPSHOT);");
-    eprintln!("  sprdW = same thresholds on WINDOWED read (mean gini, peak max_share over churn_window);");
+    eprintln!(
+        "  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, final-epoch SNAPSHOT);"
+    );
+    eprintln!(
+        "  sprdW = same thresholds on WINDOWED read (mean gini, peak max_share over churn_window);"
+    );
     eprintln!("  ALL uses sprdW not sprd (L9 lesson: steady-state read is the discipline gate).");
     eprintln!("  deep_history = deep_frac_under_target<0.10;");
     eprintln!("  churn_stable = max(oUmx, serving_oUmx)<0.05 (coverage oscillation, NOT abandonment churn).");

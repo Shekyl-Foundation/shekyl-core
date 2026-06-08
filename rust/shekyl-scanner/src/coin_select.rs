@@ -31,11 +31,6 @@ pub fn relatedness(a: &TransferDetails, b: &TransferDetails) -> u32 {
         score += 5;
     }
 
-    // Same subaddress links outputs to the same logical wallet
-    if a.subaddress.is_some() && a.subaddress == b.subaddress {
-        score += 3;
-    }
-
     // Both staked at same tier hints at same staking decision
     if a.staked && b.staked && a.stake_tier == b.stake_tier {
         score += 2;

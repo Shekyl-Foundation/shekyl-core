@@ -6,21 +6,13 @@
 
 //! Subaddress derivation primitives.
 //!
-//! This module is the canonical home for **all** Shekyl subaddress
-//! derivation. Today it contains the classical Edwards-curve component
-//! ([`subaddress_derivation_scalar`], [`subaddress_keys`]); per
-//! `STAGE_1_PR_3_KEY_ENGINE.md` §6.4 / §3.1.3, the per-subaddress hybrid KEM
-//! keypair derivation (X25519 + ML-KEM-768) lands alongside as
-//! `derive_subaddress_kem_keypair` once its underlying infrastructure
-//! materializes (the missing infrastructure that Commit 4b stubs at
-//! `KeyEngine::derive_subaddress(_, Recipient)`).
+//! Classical Edwards-curve subaddress derivation primitives retained for
+//! signing math (`subaddress_derivation_scalar` in
+//! `LocalKeys::derive_source_secrets_bundle`) and unit-test KATs.
 //!
-//! The two components together form Shekyl's complete subaddress identity:
-//! the classical Edwards points are the spend/view-side identity;
-//! the hybrid KEM keypair is the receiver-side identity for FCMP++ output
-//! detection. Co-locating them in one module makes the namespace's growth
-//! trajectory visible to future readers — "everything subaddress-related"
-//! lives here.
+//! FA-2 (End-state 5, `SUBADDRESS_UNDER_PQC.md` §5.7.4) deleted wallet
+//! subaddress machinery (registry, `derive_subaddress`, per-index receive
+//! UX). Payment requests (FA-8) replace subaddress-based receive identity.
 //!
 //! ## "Classical Edwards-curve", not "classical-Monero"
 //!
@@ -43,15 +35,9 @@
 //! `shekyl_scanner::ViewPair` (a state-bearing wallet-credentials object),
 //! which routed every caller through a wallet-state intermediate.
 //!
-//! Per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a, the primitives are relocated
-//! here so `KeyEngine` implementors (in particular
-//! `shekyl_engine_core::engine::local_keys::LocalKeys`) call them directly
-//! with byte/point inputs — the path from trait surface to cryptographic
-//! primitive is stateless end-to-end. `ViewPair::subaddress_keys` is
-//! preserved as a thin call-through to [`subaddress_keys`] for backward
-//! compatibility with existing scanner code; the previously-internal
-//! `subaddress_derivation` method was deleted (no live caller after the
-//! relocation, per `15-deletion-and-debt.mdc`).
+//! `LocalKeys::derive_source_secrets_bundle` calls
+//! [`subaddress_derivation_scalar`] with `SubaddressIndex::PRIMARY` for
+//! account-level outputs post FA-2.
 //!
 //! ## Genesis lock
 //!
@@ -79,9 +65,6 @@
 //! derivation `(D + m_0*G, a*(D + m_0*G))`. Senders paying "the wallet"
 //! target the base spend key `D` packed into
 //! `AllKeysBlob::classical_address_bytes` by [`crate::account::rederive_account`].
-//! `KeyEngine::derive_subaddress` enforces this contract by special-casing
-//! `SubaddressIndex::PRIMARY` and returning the base account keys directly;
-//! `subaddress_keys` is the per-index derivation primitive for `idx >= 1`.
 //! See [`subaddress_keys`]'s "The primary address is *not* this derivation"
 //! section and `shekyl_engine_state::SubaddressIndex`'s "Primary special
 //! case" section for the cross-cutting rationale.

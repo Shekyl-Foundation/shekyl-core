@@ -1130,15 +1130,19 @@ sustainability is unaffected by the recalibration.
   per-output wire inventory must be **verified**, not tag-only). **Active
   parallel:** FA-9 threat-model propagation; FA-6 implementation after spec
   §11 sign-off; **FA-6b** multisig `view_tag_hints` audit (§3.2, separate from
-  account-path T6 closure). **FA-7 landed on `dev` 2026-06-07.** **Impl PRs
-  (merge 1→2→3):** [#111](https://github.com/Shekyl-Foundation/shekyl-core/pull/111)
-  docs (on `dev`), [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)
-  FA-2 deletion, [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)
-  FA-8 engine substrate. **Does not block Phase 2a-3** (sentinel `enc_label` only).
-  **Post-merge product gaps (Phase 2c / 4b, not cleanup):** Rust cooperative
-  outbound in `build_pending_tx`; `Wallet::match_transfer_to_request`; attribution
-  tiers 2–4 + expiry; `shekyl-wallet-rpc` methods (not C++ `wallet2_ffi`); GUI
-  reconcile. See `WALLET_REWRITE_PLAN.md` End-state 5 sequencing table.
+  account-path T6 closure). **FA-7** (End-state 5 wallet plan; PR #111
+  closed without merge — content on `dev` as direct commits, e.g.
+  `58407f565`). **FA-2 subaddress deletion**
+  ([#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)):
+  End-state 5 scanner, bookkeeping v3, ledger v5, `WALLET_LEDGER_FORMAT_VERSION`
+  5 — open PR, lands on `dev` before FA-8. **FA-8 payment requests + reconcile**
+  ([#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)): stacked on
+  FA-2, lands after #112 merges. **Does not
+  block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
+  (Phase 2c / 4b, not cleanup):** Rust cooperative outbound in `build_pending_tx`;
+  `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry;
+  `shekyl-wallet-rpc` methods (not C++ `wallet2_ffi`); GUI reconcile. See
+  `WALLET_REWRITE_PLAN.md` End-state 5 sequencing table.
 
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of

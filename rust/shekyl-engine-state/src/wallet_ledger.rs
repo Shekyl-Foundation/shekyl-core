@@ -56,15 +56,22 @@ use crate::{
 
 /// Bundle-level `format_version`.
 ///
-/// V3.0 ships `3`. Version `1` (pre-flat-namespace) carried a
-/// two-field `SubaddressIndex { account, address }`, a separate
-/// `SubaddressLabels::primary` slot, and an `account_tags` map inside
-/// `BookkeepingBlock`. Version `2` flattened those structures.
+/// At V3.0 genesis the bundle shipped as version `3`; FA-2 ships
+/// [`WALLET_LEDGER_FORMAT_VERSION`] `5`. Version `1` (pre-flat-namespace) carried a two-level
+/// subaddress index in transfer records and extra bookkeeping maps (a
+/// dedicated primary-label slot, per-index labels, and account-level tags).
+/// Version `2` flattened the index representation and dropped the
+/// account-level tag map.
 /// Version `3` extends [`crate::transfer::TransferDetails`] with two
 /// optional non-secret fields — `source_ciphertext: Option<HybridCiphertext>`
 /// and `output_handle: Option<OutputHandle>` — to support the M3b
 /// orchestrator-side handle population pass; pre-M3b records carry
-/// `None` in both. Each per-block bump (`LEDGER_BLOCK_VERSION`,
+/// `None` in both. Version `4` is the M3d
+/// `TransferDetails` secret-field removal shape (paired with
+/// `LEDGER_BLOCK_VERSION` 4). Version `5` is FA-2 End-state 5:
+/// `BOOKKEEPING_BLOCK_VERSION` 3 (subaddress registry removed) and
+/// `LEDGER_BLOCK_VERSION` 5 (`TransferDetails::subaddress` removed).
+/// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
 /// the on-disk bundle *bytes* themselves shift whenever any nested
@@ -75,7 +82,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 4;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 5;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -97,8 +104,7 @@ pub struct WalletLedger {
     /// Scanner-derived on-chain ledger: transfers, tip, reorg window.
     pub ledger: LedgerBlock,
 
-    /// User-facing UX state: subaddress registry, labels, address
-    /// book, account tags.
+    /// User-facing UX state: primary label and address book.
     pub bookkeeping: BookkeepingBlock,
 
     /// Per-tx side channel: tx secret keys, notes, attributes, pool

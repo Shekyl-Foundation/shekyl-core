@@ -520,7 +520,7 @@ where
             let tip_hash = ledger.block_hash_at(synced).copied();
             let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
             let candidates: Vec<OutputCandidate> = ledger
-                .spendable_outputs(synced, request.from_subaddress, None)
+                .spendable_outputs(synced, None)
                 .into_iter()
                 .filter(|(idx, _)| !locked.contains(idx))
                 .map(|(idx, td)| OutputCandidate {
@@ -1222,7 +1222,6 @@ mod tests {
                 amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
-            from_subaddress: None,
         }
     }
 

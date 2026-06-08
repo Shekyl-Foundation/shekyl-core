@@ -249,7 +249,6 @@ mod tests {
                 amount_atomic_units: shekyl_units::AtomicUnits::from_raw(1),
             }],
             priority: FeePriority::Standard,
-            from_subaddress: None,
         }
     }
 

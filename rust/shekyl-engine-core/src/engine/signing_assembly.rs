@@ -11,7 +11,7 @@
 //! path per §3.0.5 supplies structural placeholders for 2a-2 plumbing.
 
 use curve25519_dalek::EdwardsPoint;
-use shekyl_engine_state::{SubaddressIndex, TransferDetails};
+use shekyl_engine_state::TransferDetails;
 use shekyl_generators::biased_hash_to_point;
 use shekyl_oxide::primitives::Commitment;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
@@ -61,9 +61,7 @@ pub(crate) fn assemble_tx_to_sign(
             amount: recipient.amount_atomic_units.to_raw(),
         });
     }
-    outputs.push(TxOutputContext::Change {
-        subaddress_index: SubaddressIndex::PRIMARY,
-    });
+    outputs.push(TxOutputContext::Change);
 
     Ok(TxToSign {
         inputs,

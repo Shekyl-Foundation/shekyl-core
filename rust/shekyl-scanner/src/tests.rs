@@ -58,7 +58,6 @@ pub(crate) mod staking {
             },
             metadata: Metadata {
                 additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -690,13 +689,13 @@ pub(crate) mod staking {
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
 
-        let spendable = ledger.spendable_outputs(105, None, None);
+        let spendable = ledger.spendable_outputs(105, None);
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ledger.spendable_outputs(110, None, None);
+        let spendable = ledger.spendable_outputs(110, None);
         assert_eq!(
             spendable.len(),
             1,
@@ -851,7 +850,6 @@ mod ledger_proptest {
             },
             metadata: Metadata {
                 additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -1048,7 +1046,6 @@ mod sync_bookkeeping {
                 },
                 metadata: Metadata {
                     additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                    subaddress: None,
                     payment_id: None,
                     arbitrary_data: vec![],
                 },

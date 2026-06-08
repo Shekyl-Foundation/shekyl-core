@@ -347,7 +347,7 @@ pub struct Engine<
     /// `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). No `&AllKeysBlob` is
     /// reachable from the orchestrator after `assemble`: secret-touching key
     /// operations route through the actor's message protocol; public reads
-    /// (`account_public_address`, audit `derive_subaddress`) resolve from the
+    /// (`account_public_address`) resolve from the
     /// handle's construction-time projections. The blob is wiped when the last
     /// handle clone drops (which stops the actor — `KeyActor::on_stop` plus
     /// `AllKeysBlob`'s own `ZeroizeOnDrop`).
@@ -385,8 +385,8 @@ pub struct Engine<
     /// The aggregate carries:
     ///
     /// - The [`shekyl_engine_state::WalletLedger`] — scanner-derived
-    ///   transfers, bookkeeping (subaddress registry, labels, address
-    ///   book, account tags), tx metadata (`tx_keys`, scanned pool
+    ///   transfers, bookkeeping (primary label and address book), tx
+    ///   metadata (`tx_keys`, scanned pool
     ///   txs), and the sync-state block. **Reservations do not live
     ///   here** — see [`local_pending_tx`](crate::engine::local_pending_tx)
     ///   below (reservations live in `LocalPendingTx`, not in the ledger).

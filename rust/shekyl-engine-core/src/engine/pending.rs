@@ -26,9 +26,9 @@
 //! again on next open"; that is exactly what runtime-only tracking
 //! gives us, with no reconciliation path.
 //!
-//! `BOOKKEEPING_BLOCK_VERSION` is therefore unchanged by this commit;
-//! the bookkeeping block's scope stays "subaddress registry, labels,
-//! address book."
+//! Pending reservations are runtime-only; they are not persisted in
+//! [`BookkeepingBlock`](shekyl_engine_state::BookkeepingBlock). After FA-2
+//! (End-state 5), bookkeeping holds only the primary label and address book.
 //!
 //! # State machine
 //!
@@ -90,7 +90,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
-use shekyl_engine_state::SubaddressIndex;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
 use shekyl_units::AtomicUnits;
@@ -212,9 +211,6 @@ pub struct TxRequest {
     pub recipients: Vec<TxRecipient>,
     /// Fee tier; Phase 1 ignores and uses [`STUB_FEE_ATOMIC_UNITS`].
     pub priority: FeePriority,
-    /// Optional source-subaddress filter. When `Some`, only outputs
-    /// owned by this subaddress are eligible for selection.
-    pub from_subaddress: Option<SubaddressIndex>,
 }
 
 /// Display-friendly recipient summary stored alongside the
@@ -567,7 +563,7 @@ pub(crate) fn build_pending_tx_in_state(
         .collect();
 
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
-        .spendable_outputs(synced, request.from_subaddress, None)
+        .spendable_outputs(synced, None)
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))
@@ -880,7 +876,6 @@ mod tests {
                 amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
-            from_subaddress: None,
         }
     }
 
@@ -994,7 +989,6 @@ mod tests {
         let req = TxRequest {
             recipients: Vec::new(),
             priority: FeePriority::Economy,
-            from_subaddress: None,
         };
         let err =
             build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap_err();
@@ -1291,7 +1285,6 @@ mod tests {
                 amount_atomic_units: AtomicUnits::from_raw(1_000),
             }],
             priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
-            from_subaddress: None,
         };
         let pending =
             build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();

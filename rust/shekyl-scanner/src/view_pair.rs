@@ -12,9 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
 
-use shekyl_crypto_pq::{kem::MlKemDecapsKey, subaddress as crypto_subaddress};
-
-use crate::SubaddressIndex;
+use shekyl_crypto_pq::kem::MlKemDecapsKey;
 
 /// An error while working with a ViewPair.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
@@ -109,20 +107,6 @@ impl ViewPair {
     /// Parsed ML-KEM decapsulation key (reuse across outputs in a scan).
     pub(crate) fn parsed_ml_kem_dk(&self) -> &MlKemDecapsKey {
         &self.parsed_ml_kem_dk
-    }
-
-    /// Public `(spend, view)` point pair for a subaddress.
-    ///
-    /// Thin call-through to
-    /// [`shekyl_crypto_pq::subaddress::subaddress_keys`], the canonical home
-    /// for Shekyl's classical Edwards-curve subaddress derivation per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a. The cryptographic spec
-    /// (genesis-locked domain tag, scalar/index encoding) lives with the
-    /// primitive; this method only adapts the typed [`SubaddressIndex`]
-    /// argument to the canonical-bytes shape via
-    /// [`SubaddressIndex::to_canonical_bytes`].
-    pub(crate) fn subaddress_keys(&self, index: SubaddressIndex) -> (EdwardsPoint, EdwardsPoint) {
-        crypto_subaddress::subaddress_keys(&self.view, &self.spend, &index.to_canonical_bytes())
     }
 }
 

@@ -39,7 +39,6 @@
 //! |--------------------------------------|---------------------------------------------------------------------------------------|
 //! | `tip-height-not-below-transfer`      | `ledger.tip.synced_height >= max(ledger.transfers[*].block_height)`                   |
 //! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfers, pool, or pending) |
-//! | `subaddress-registry-dense`          | Per-account minor indices in `bookkeeping.subaddress_registry` are gap-free           |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
 //!
@@ -52,14 +51,13 @@
 //! commit-3.2 benchmark — far below the Argon2id cost already paid on
 //! the open path, and not a concern for any `crypto_bench_*` threshold.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 use shekyl_crypto_pq::key_image::KeyImage;
 
 use crate::{
-    bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
-    sync_state_block::SyncStateBlock, transfer::TransferDetails, tx_meta_block::TxMetaBlock,
-    wallet_ledger::WalletLedger,
+    error::WalletLedgerError, ledger_block::LedgerBlock, sync_state_block::SyncStateBlock,
+    transfer::TransferDetails, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
 };
 
 /// Stable machine-readable name for invariant I-1.
@@ -69,12 +67,9 @@ pub const INV_TIP_NOT_BELOW_TRANSFER: &str = "tip-height-not-below-transfer";
 pub const INV_TX_KEYS_NO_ORPHANS: &str = "tx-keys-no-orphans";
 
 /// Stable machine-readable name for invariant I-3.
-pub const INV_SUBADDRESS_REGISTRY_DENSE: &str = "subaddress-registry-dense";
-
-/// Stable machine-readable name for invariant I-4.
 pub const INV_REORG_TRAIL_MONOTONIC: &str = "reorg-trail-monotonic";
 
-/// Stable machine-readable name for invariant I-5.
+/// Stable machine-readable name for invariant I-4.
 pub const INV_SPENT_STATE_CONSISTENT: &str = "spent-state-consistent";
 
 impl WalletLedger {
@@ -89,7 +84,6 @@ impl WalletLedger {
     pub fn check_invariants(&self) -> Result<(), WalletLedgerError> {
         check_tip_not_below_transfer(&self.ledger)?;
         check_tx_keys_no_orphans(&self.ledger, &self.tx_meta, &self.sync_state)?;
-        check_subaddress_registry_dense(&self.bookkeeping)?;
         check_reorg_trail_monotonic(&self.ledger)?;
         check_spent_state_consistent(&self.ledger)?;
         Ok(())
@@ -205,69 +199,7 @@ fn check_tx_keys_no_orphans(
     Ok(())
 }
 
-/// I-3. The set of indices that appears in
-/// `bookkeeping.subaddress_registry` must be contiguous — no gaps
-/// between the observed minimum and maximum. Shekyl's subaddress
-/// generation walks the index axis monotonically and never deletes a
-/// prior entry; a hole is therefore evidence that either a registry
-/// entry was lost after generation (corruption) or two processes
-/// raced on the same registry (bug we have not yet written, but
-/// would like the check to catch on sight).
-///
-/// The check permits the observed minimum to be anything: a wallet
-/// that has only ever generated subaddresses beyond the lookahead
-/// window may legitimately start its registry at a non-zero index.
-/// What cannot happen under normal generation is a hole *inside* the
-/// observed range.
-fn check_subaddress_registry_dense(
-    bookkeeping: &BookkeepingBlock,
-) -> Result<(), WalletLedgerError> {
-    if bookkeeping.subaddress_registry.is_empty() {
-        return Ok(());
-    }
-
-    let indices: BTreeSet<u32> = bookkeeping
-        .subaddress_registry
-        .values()
-        .map(crate::subaddress::SubaddressIndex::get)
-        .collect();
-
-    let Some(&min) = indices.iter().next() else {
-        return Ok(());
-    };
-    let Some(&max) = indices.iter().next_back() else {
-        return Ok(());
-    };
-    let expected_len = u64::from(max - min) + 1;
-    if (indices.len() as u64) != expected_len {
-        // Find the first gap so the diagnostic is pointed. Walk
-        // the sorted set in lockstep with the expected sequence
-        // `min, min+1, …`; the first mismatch is the hole.
-        let mut expected = min;
-        let gap = indices
-            .iter()
-            .find_map(|&n| {
-                if n == expected {
-                    expected = expected.saturating_add(1);
-                    None
-                } else {
-                    Some(expected)
-                }
-            })
-            .unwrap_or(min);
-        return Err(invariant_error(
-            INV_SUBADDRESS_REGISTRY_DENSE,
-            format!(
-                "subaddress registry is not dense in [{min}, {max}]; \
-                 missing index {gap} (observed {count} of expected {expected_len})",
-                count = indices.len()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// I-4. The reorg-detection window is a rolling `(height, hash)`
+/// I-3. The reorg-detection window is a rolling `(height, hash)`
 /// tail the scanner keeps just behind the tip. Two invariants are
 /// bundled here because they fail the same way (the window is
 /// corrupt, whatever the cause): strict ascending order on height
@@ -312,7 +244,7 @@ fn check_reorg_trail_monotonic(ledger: &LedgerBlock) -> Result<(), WalletLedgerE
     Ok(())
 }
 
-/// I-5. Spend-tracking fields on [`TransferDetails`] are three
+/// I-4. Spend-tracking fields on [`TransferDetails`] are three
 /// independent `Option<…>` + `bool` slots, but the valid shapes form
 /// a small closed set:
 ///
@@ -394,7 +326,6 @@ mod tests {
     use crate::{
         bookkeeping_block::BookkeepingBlock,
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
-        subaddress::SubaddressIndex,
         sync_state_block::SyncStateBlock,
         transfer::{TransferDetails, SPENDABLE_AGE},
         tx_meta_block::{ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys},
@@ -414,7 +345,6 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed).saturating_add(1))),
             payment_id: None,
             spent: false,
             spent_height: None,
@@ -554,55 +484,6 @@ mod tests {
             SyncStateBlock::empty(),
         );
         w.check_invariants().expect("pool ref satisfies I-2");
-    }
-
-    #[test]
-    fn sparse_subaddress_registry_is_refused() {
-        // Indices {1, 2, 4} — missing `3` inside the range.
-        let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(1));
-        registry.insert([2u8; 32], SubaddressIndex::new(2));
-        registry.insert([4u8; 32], SubaddressIndex::new(4));
-        let bookkeeping = BookkeepingBlock {
-            block_version: BookkeepingBlock::empty().block_version,
-            subaddress_registry: registry,
-            ..Default::default()
-        };
-        let w = WalletLedger::new(
-            LedgerBlock::empty(),
-            bookkeeping,
-            TxMetaBlock::empty(),
-            SyncStateBlock::empty(),
-        );
-        assert_invariant(
-            w.check_invariants().unwrap_err(),
-            INV_SUBADDRESS_REGISTRY_DENSE,
-        );
-    }
-
-    #[test]
-    fn dense_subaddress_registry_is_accepted() {
-        // Indices {1, 2, 3, 4, 5} — gap-free across the observed range.
-        // The primary index (0) is permitted as a registry entry but is
-        // not required to be present.
-        let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(1));
-        registry.insert([2u8; 32], SubaddressIndex::new(2));
-        registry.insert([3u8; 32], SubaddressIndex::new(3));
-        registry.insert([4u8; 32], SubaddressIndex::new(4));
-        registry.insert([5u8; 32], SubaddressIndex::new(5));
-        let bookkeeping = BookkeepingBlock {
-            block_version: BookkeepingBlock::empty().block_version,
-            subaddress_registry: registry,
-            ..Default::default()
-        };
-        let w = WalletLedger::new(
-            LedgerBlock::empty(),
-            bookkeeping,
-            TxMetaBlock::empty(),
-            SyncStateBlock::empty(),
-        );
-        w.check_invariants().expect("dense registry satisfies I-3");
     }
 
     #[test]

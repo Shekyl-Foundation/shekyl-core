@@ -10,7 +10,8 @@
 //! This crate owns the types that make up the persistent wallet ledger and the
 //! live-mutating runtime state used by the scanner:
 //!
-//! - [`SubaddressIndex`] — `(account, address)` tuple, `(0, 0)` reserved for primary.
+//! - [`SubaddressIndex`] — flat `u32` derivation index (`0` = primary); retained
+//!   for address-derivation helpers, not persisted in the FA-2+ ledger bundle.
 //! - [`PaymentId`] — 8-byte encrypted payment ID (Shekyl V3 rejects the legacy
 //!   unencrypted form at parse time).
 //! - [`FcmpPrecomputedPath`] — daemon-provided FCMP++ curve-tree path attached to a transfer.
@@ -47,9 +48,7 @@ pub mod transfer;
 pub mod tx_meta_block;
 pub mod wallet_ledger;
 
-pub use bookkeeping_block::{
-    AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
-};
+pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
 pub use error::WalletLedgerError;
 pub use ledger_block::{
     BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,

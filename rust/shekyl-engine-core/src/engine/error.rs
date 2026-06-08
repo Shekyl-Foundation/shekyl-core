@@ -593,27 +593,6 @@ pub(crate) enum KeyEngineError {
     )]
     SignTransactionTraitSurfaceIncomplete,
 
-    /// [`KeyEngine::derive_subaddress`](super::traits::key::KeyEngine::derive_subaddress)
-    /// with [`SubaddressPurpose::Recipient`](super::traits::key::SubaddressPurpose::Recipient)
-    /// requires per-subaddress hybrid KEM keypair derivation
-    /// (X25519 + ML-KEM-768 keyed by `(view_secret, subaddress_idx)`),
-    /// which is **not yet implemented** in `shekyl-crypto-pq`. The
-    /// account-level KEM keypair derivation
-    /// (`shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`) does
-    /// not parameterize over a subaddress index. Per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 / §6.4, the
-    /// per-subaddress derivation lands alongside the relocated
-    /// classical Edwards-curve primitives in
-    /// `shekyl_crypto_pq::subaddress` as
-    /// `derive_subaddress_kem_keypair` once its infrastructure
-    /// exists; until then,
-    /// [`LocalKeys::derive_subaddress`](super::local_keys::LocalKeys::derive_subaddress)
-    /// with `Recipient` purpose returns this variant.
-    #[error(
-        "recipient-context subaddress derivation requires per-subaddress hybrid KEM keygen (shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair, not yet implemented)"
-    )]
-    RecipientSubaddressKemKeygenNotImplemented,
-
     /// The deterministic-handle re-decap path (`LocalKeys::derive_source_secrets_bundle`,
     /// Layer 2 of M3b D1 per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2)
     /// failed to recover `combined_ss` from the persisted

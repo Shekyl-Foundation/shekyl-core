@@ -45,7 +45,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         key,
         key_offset: Scalar::ZERO,
         commitment: Commitment::new(Scalar::ONE, 1_000 + seed),
-        subaddress: None,
         payment_id: None,
         spent: (seed & 0x7) == 0,
         spent_height: None,

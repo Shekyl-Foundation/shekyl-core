@@ -214,23 +214,6 @@
                     }
                   },
                   {
-                    "name": "subaddress",
-                    "ty": {
-                      "name": "Option<T>",
-                      "ty": {
-                        "Option": {
-                          "name": "SubaddressIndex",
-                          "ty": {
-                            "NewtypeStruct": {
-                              "name": "u32",
-                              "ty": "U32"
-                            }
-                          }
-                        }
-                      }
-                    }
-                  },
-                  {
                     "name": "payment_id",
                     "ty": {
                       "name": "Option<T>",

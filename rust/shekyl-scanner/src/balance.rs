@@ -98,7 +98,6 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ZERO,
             commitment: Commitment::new(Scalar::ZERO, amount),
-            subaddress: None,
             payment_id: None,
             spent: false,
             spent_height: None,
