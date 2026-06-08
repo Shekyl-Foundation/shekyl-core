@@ -64,6 +64,18 @@ inline uint64_t load_be64(const uint8_t* in) noexcept
     return v;
 }
 
+inline void store_be32(uint8_t* out, uint32_t v) noexcept
+{
+    for (int i = 3; i >= 0; --i) { out[i] = static_cast<uint8_t>(v); v >>= 8; }
+}
+
+inline uint32_t load_be32(const uint8_t* in) noexcept
+{
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) { v = (v << 8) | in[i]; }
+    return v;
+}
+
 // ─── Strong identifiers ────────────────────────────────────────────────────
 //
 // Each Tag creates a distinct type. Passing OutputIndex where TreePosition
@@ -116,6 +128,8 @@ static constexpr size_t kDrainValueSize      = 136; // maturity[8] || leaf[128]
 static constexpr size_t kBlockPendingKeySize = 16;  // BE(block_height) || BE(output_index)
 static constexpr size_t kBlockPendingValSize = 8;   // maturity[8]
 static constexpr size_t kArchivalServeCreditKeySize = 48; // P_id[32] || BE(shard) || BE(epoch)
+static constexpr size_t kArchivalSlashLogKeySize = 12;    // BE(block_height) || BE(seq)
+static constexpr uint32_t kArchivalSlashLogEpochMarkerSeq = 0xFFFFFFFFu;
 static constexpr size_t kArchivalBondKeySize = 32;        // P_id[32]
 static constexpr size_t kArchivalShardKeySize = 8;        // BE(shard_id)
 static constexpr size_t kArchivalShardLeafKeySize = 16;   // BE(shard_id) || BE(leaf_index)
@@ -385,6 +399,71 @@ public:
 
 private:
     std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
+};
+
+// ─── ArchivalSlashLogKey / ArchivalSlashRevertValue ───────────────────────
+//
+// Per-block journal for gate-4 slash revert on `pop_block` (gate-2 §8).
+
+class ArchivalSlashLogKey {
+public:
+    ArchivalSlashLogKey(uint64_t block_height, uint32_t seq) noexcept
+    {
+        store_be64(bytes_.data(), block_height);
+        store_be32(bytes_.data() + 8, seq);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalSlashLogKeySize> bytes_{};
+};
+
+struct ArchivalSlashRevertValue {
+    static constexpr uint8_t kVersion = 1;
+    static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8;
+
+    uint8_t p_id[32]{};
+    uint64_t shard_id = 0;
+    uint64_t settlement_epoch = 0;
+    uint64_t slashed_amount = 0;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        std::vector<uint8_t> out(kEncodedSize);
+        out[0] = kVersion;
+        std::memcpy(out.data() + 1, p_id, 32);
+        for (int i = 7; i >= 0; --i)
+            out[1 + 32 + (7 - i)] = static_cast<uint8_t>((shard_id >> (i * 8)) & 0xFF);
+        for (int i = 7; i >= 0; --i)
+            out[1 + 32 + 8 + (7 - i)] = static_cast<uint8_t>((settlement_epoch >> (i * 8)) & 0xFF);
+        for (int i = 7; i >= 0; --i)
+            out[1 + 32 + 16 + (7 - i)] = static_cast<uint8_t>((slashed_amount >> (i * 8)) & 0xFF);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalSlashRevertValue& out)
+    {
+        if (!data || len != kEncodedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        if (p[0] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + 1, 32);
+        out.shard_id = load_be64(p + 33);
+        out.settlement_epoch = load_be64(p + 41);
+        out.slashed_amount = load_be64(p + 49);
+        return true;
+    }
+
+    [[nodiscard]] bool is_epoch_marker() const noexcept
+    {
+        static const uint8_t zero[32] = {};
+        return std::memcmp(p_id, zero, 32) == 0 && slashed_amount == 0;
+    }
 };
 
 // ─── ArchivalBondKey ───────────────────────────────────────────────────────

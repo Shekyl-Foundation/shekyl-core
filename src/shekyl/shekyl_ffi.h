@@ -1747,6 +1747,8 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
 uint64_t shekyl_archival_settlement_epoch_blocks(void);
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_challenge_resolution_blocks(void);
+uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
 uint64_t shekyl_archival_challenge_fire_height(
     uint64_t h_open,

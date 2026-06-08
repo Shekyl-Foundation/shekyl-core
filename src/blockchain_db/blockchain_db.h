@@ -1982,6 +1982,11 @@ public:
   virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
     uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars);
 
+  /// Gate-2 §6 / gate-4 §4.2: slash scheduler at `H_slash_deadline` (LMDB impl).
+  virtual void process_archival_slash_at_height(uint64_t block_height);
+  /// Revert slash journal rows recorded when `block_height` connected.
+  virtual void revert_archival_slashes_at_height(uint64_t block_height);
+
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 
   /**

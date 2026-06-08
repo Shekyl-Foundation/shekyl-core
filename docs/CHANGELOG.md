@@ -10,6 +10,16 @@
   `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
+- **archival: slash scheduler at H_slash_deadline (gate-2 §10 step 4 / gate-4 §4.2).**
+  `process_archival_slash_at_height` on block connect applies per-shard floor slash when
+  `challenge_failed`; updates `total_bonded_atomic` / `total_burned`; journal + `pop_block`
+  revert. FFI: `shekyl_archival_challenge_resolution_blocks`,
+  `shekyl_archival_epoch_slash_deadline_height`. CompleteTree slash deferred.
+
+- **archival: JoinMarket bond-post verify and LMDB connect (gate-4 §3.4.1).**
+  `txin_archival_bond_post` wire (`tag 0x05`), `put_archival_bond_record`, and
+  `total_bonded_atomic` on connect/pop; JoinMarket-only at genesis.
+
 - **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
   `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with
   `put_*` seeding APIs; serve-credit verifier reads bond posture and registry geometry.

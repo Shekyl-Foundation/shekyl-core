@@ -517,7 +517,7 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] **Numeric cluster** — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
       (2026-06-07 pin).
 - [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
-      §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook open.
+      §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
 - [ ] `bond_credit`/`bond_debit` in RCT balance verifier.
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic` (Rebond/Unbond/HoldingsUpdate deferred).

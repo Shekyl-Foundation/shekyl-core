@@ -14,7 +14,7 @@ use std::io::Cursor;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
     verify_leaf_index, verify_segment_path, ArchivalServeCreditResponse, WireError,
-    SETTLEMENT_EPOCH_BLOCKS,
+    CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -73,6 +73,11 @@ pub fn settlement_epoch_close_height(e: u64) -> u64 {
     settlement_epoch_open_height(e.saturating_add(1)).saturating_sub(1)
 }
 
+#[must_use]
+pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
+    settlement_epoch_close_height(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
+}
+
 fn map_verify_error(err: shekyl_archival_retention::VerifyError) -> u8 {
     use shekyl_archival_retention::VerifyError;
     match err {
@@ -123,6 +128,18 @@ pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u6
 #[no_mangle]
 pub extern "C" fn shekyl_archival_epoch_close_height(settlement_epoch: u64) -> u64 {
     settlement_epoch_close_height(settlement_epoch)
+}
+
+/// Slash grace after `H_close` (`CHALLENGE_RESOLUTION_BLOCKS`).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_challenge_resolution_blocks() -> u64 {
+    CHALLENGE_RESOLUTION_BLOCKS
+}
+
+/// Last block before slash may fire for settlement epoch `E` (`H_slash_deadline`).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_epoch_slash_deadline_height(settlement_epoch: u64) -> u64 {
+    settlement_epoch_slash_deadline_height(settlement_epoch)
 }
 
 /// Seal height for epoch open (`H_seal` in gate-2 §3.4).

@@ -468,6 +468,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   m_hardfork->add(blk, prev_height);
 
+  process_archival_slash_at_height(prev_height + 1);
+
   ++num_calls;
 
   return prev_height;
@@ -486,6 +488,7 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // decrements the chain height, so staked-output eligibility checks use the
   // same height that add_block() used when the outputs were inserted.
   const uint64_t removed_block_height = height();
+  revert_archival_slashes_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -1375,6 +1378,14 @@ void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*
 
 void BlockchainDB::put_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
   uint32_t /*leaf_index_in_segment*/, const std::vector<uint8_t>& /*flat_scalars*/)
+{
+}
+
+void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
 {
 }
 
