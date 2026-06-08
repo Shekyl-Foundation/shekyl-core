@@ -83,22 +83,25 @@ impl<
             .collect()
     }
 
-    /// Build a `shekyl:…` URI for sharing a request (address must be supplied).
-    pub fn format_request_uri(
-        &self,
-        address: &str,
-        id: PaymentRequestId,
-        amount_atomic: u64,
-        label: Option<&str>,
-        expiry: Option<u64>,
-    ) -> String {
-        format_payment_uri(
+    /// Build a `shekyl:…` URI for a persisted request (`address` is the payee).
+    ///
+    /// Amount, label, and expiry are taken from bookkeeping so the on-wire `rid`
+    /// cannot drift from the stored request. Returns `None` when `id` is unknown.
+    pub fn format_request_uri(&self, address: &str, id: PaymentRequestId) -> Option<String> {
+        let guard = self.ledger();
+        let req = guard
+            .bookkeeping
+            .payment_requests
+            .iter()
+            .find(|r| r.id == id)?;
+        let label = (!req.label.is_empty()).then(|| req.label.expose().as_str());
+        Some(format_payment_uri(
             address,
-            Some(amount_atomic),
+            Some(req.amount_atomic),
             label,
-            Some(id.as_u64()),
-            expiry,
-        )
+            Some(req.id.as_u64()),
+            req.expiry,
+        ))
     }
 
     /// Parse a cooperative payment URI from user input.
