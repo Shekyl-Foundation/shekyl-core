@@ -15,6 +15,7 @@ members = [
     # year-granular macro `shekyl-economics-sim`. See
     # docs/design/STAKER_ARCHIVAL_SIM.md.
     "shekyl-staking-sim",
+    "shekyl-archival-retention",
     "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",

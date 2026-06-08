@@ -13,6 +13,12 @@
   paired `WALLET_LEDGER_FORMAT_VERSION` 6→7 (`wallet_ledger.snap`).
   Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](design/PRIMARY_CLAIM_DERIVATION_RENAME.md).
 
+- **archival: `shekyl-archival-retention` verify crate (gate-2 §10 step 1).**
+  Challenge leaf index + beacon fire height (`cSHAKE` domain labels per
+  `ARCHIVAL_RETENTION_GATE2.md` §3.3–§3.4); `verify_segment_path` replays
+  `shekyl-fcmp::tree` to `R_k` with Selene leaf-layer chunk scalars; CT-4
+  assembled-path cross-check KAT. Provisional `CHALLENGE_BEACON_SEAL_BLOCKS = 1`.
+
 - **docs: gate-2 Round 1 on-demand serving obligation (2026-06-08).**
   [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) §0 — solved shape:
   affirmative serve-credit per epoch; leaf `ℓ` deterministic, `H_fire` beacon-sealed; no 24/7

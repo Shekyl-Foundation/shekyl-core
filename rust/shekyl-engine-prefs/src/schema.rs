@@ -308,10 +308,10 @@ pub struct RpcPrefs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletPrefs {
-    /// Version byte for the prefs schema. Currently fixed at `1`.
-    /// A future breaking schema change bumps this and adds an
-    /// explicit migration (or refuses to load the old version,
-    /// depending on the kind of change).
+    /// Version byte for the prefs schema. Currently fixed at `2`
+    /// (`subaddress_lookahead` deleted at V3.0). A future breaking
+    /// schema change bumps this and refuses to load older versions
+    /// (pre-genesis: no migration tooling).
     #[serde(default = "default_schema_version")]
     pub schema_version: u8,
 

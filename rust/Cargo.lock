@@ -3645,6 +3645,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-archival-retention"
+version = "3.1.0"
+dependencies = [
+ "serde_json",
+ "sha3",
+ "shekyl-curve-tree",
+ "shekyl-fcmp",
+ "thiserror",
+]
+
+[[package]]
 name = "shekyl-bulletproofs"
 version = "0.1.0"
 dependencies = [

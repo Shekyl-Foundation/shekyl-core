@@ -69,9 +69,11 @@ use shekyl_scanner::{
 
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
-    view_public, spend_public, view_secret,
-    x25519_sk, ml_kem_dk,
-);
+    spend_public,
+    view_scalar,
+    x25519_sk,
+    ml_kem_dk,
+)?;
 let scanner = Scanner::new(view_pair, spend_secret);
 
 // Scan a block (from daemon RPC)

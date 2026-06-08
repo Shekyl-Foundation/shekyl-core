@@ -153,6 +153,7 @@ derives identical `(ℓ, H_fire, R_k)` from consensus-visible state (§3.3–§3
 |----------|-------|------|
 | `CHALLENGES_PER_EPOCH` | **1** | Guaranteed on-demand test per `(P,s,E)` — demand floor (§0) |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) |
+| `CHALLENGE_BEACON_SEAL_BLOCKS` | **1** (provisional) | Blocks after `H_open` before `block_hash(H_seal)` is fixed — `shekyl-archival-retention::CHALLENGE_BEACON_SEAL_BLOCKS` |
 | `CHALLENGE_RESPONSE_BLOCKS` | **TBD (byte pin)** | Blocks after `H_fire` to accept credit; must end before `H_close` |
 
 ### 3.2 Epoch heights (ordering)
@@ -187,7 +188,7 @@ emission read.
 ### 3.4 Fire time (beacon — reachability)
 
 ```text
-H_seal = H_open + CHALLENGE_BEACON_SEAL_BLOCKS    // early in E; genesis pin TBD (≥ 1)
+H_seal = H_open + CHALLENGE_BEACON_SEAL_BLOCKS    // early in E; provisional pin = 1
 span   = H_close − H_seal                         // known once H_seal exists
 H_fire = H_seal + ( uint64(beacon) mod max(span − 1, 1) ) + 1
 
@@ -411,7 +412,7 @@ verifier treats registry as authoritative at `H_anchor`.
 
 - [ ] Byte-exact serialization + domain labels frozen
 - [ ] KAT vectors (single opening per epoch)
-- [ ] `shekyl-archival-retention` verify crate
+- [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
 - [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
 
 ---

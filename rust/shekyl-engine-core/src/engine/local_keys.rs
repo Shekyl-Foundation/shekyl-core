@@ -303,7 +303,7 @@ impl LocalKeys {
 
         let secrets = derive_output_secrets(&combined_ss.0, output_index);
 
-        // Engine-owned per-input spend scalar `x = ho + b + m_i`.
+        // Engine-owned per-input spend scalar `x = ho + b + m₀`.
         // Each intermediate `Scalar` is wrapped in `Zeroizing<…>` so the
         // canonical-byte materializations the operation goes through
         // wipe on drop alongside the bundle's external view of `x`.
@@ -314,11 +314,11 @@ impl LocalKeys {
         let b_scalar: Zeroizing<Scalar> = Zeroizing::new(Scalar::from_bytes_mod_order(
             *self.keys.spend_sk.as_canonical_bytes(),
         ));
-        let m_i: Zeroizing<Scalar> = Zeroizing::new(output_spend_offset_scalar(
+        let m_0: Zeroizing<Scalar> = Zeroizing::new(output_spend_offset_scalar(
             &self.derived.view_scalar,
             &PRIMARY_CLAIM_INDEX_LE,
         ));
-        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar + *m_i);
+        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar + *m_0);
         let spend_key_x = Zeroizing::new(x_scalar.to_bytes());
 
         Ok(SourceSecretsBundle {
@@ -1120,7 +1120,7 @@ mod tests {
     ///
     /// # Relationship to M3b D5
     ///
-    /// `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    /// `derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain`
     /// (M3b D5) and this test pin complementary properties at
     /// adjacent layers — this is intentional layered coverage, not
     /// redundant or asymmetric coverage.
@@ -1128,7 +1128,7 @@ mod tests {
     /// M3b D5 verifies bundle-byte identity (engine bundle ≡ legacy
     /// bundle field-by-field). It does not exercise recovery — its
     /// synthetic outputs are paid to the wallet's bare primary
-    /// spend key, so the bundle's `spend_key_x = ho + b + m_i`
+    /// spend key, so the bundle's `spend_key_x = ho + b + m₀`
     /// cannot recover the on-chain `O = (ho + b)*G + y*T`. The
     /// mismatch is invisible at the byte-identity layer and
     /// irrelevant to what M3b D5 claims.
@@ -1137,10 +1137,9 @@ mod tests {
     /// end through `tx_builder::sign_transaction` and the BP+ /
     /// FCMP++ verifiers. Recovery requires the bundle's spend
     /// scalars to actually open the on-chain output, which forces
-    /// the recipient to be `subaddress_keys(idx)` for *every* idx
-    /// including PRIMARY (see the `recipient_spend_pk` derivation
-    /// below for why M3b D5's bare-`spend_pk` shortcut would not
-    /// work here).
+    /// the recipient to be `D + m₀·G` (primary claim spend point;
+    /// see the `recipient_spend_pk` derivation below for why M3b
+    /// D5's bare-`spend_pk` shortcut would not work here).
     ///
     /// A regression that affects only bundle bytes surfaces in
     /// M3b D5; a regression that affects only the bundle →
