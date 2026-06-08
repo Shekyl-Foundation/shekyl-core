@@ -106,13 +106,14 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         // rejects empty fcmp_pp_proof.
         if (tx.version >= 2)
         {
-            bool is_stake_claim_only = !tx.vin.empty();
+            bool skip_rct_semantics_batch = !tx.vin.empty();
             for (const auto& in : tx.vin)
             {
-                if (!std::holds_alternative<txin_stake_claim>(in))
-                { is_stake_claim_only = false; break; }
+                if (!std::holds_alternative<txin_stake_claim>(in)
+                    && !std::holds_alternative<txin_archival_serve_credit_response>(in))
+                { skip_rct_semantics_batch = false; break; }
             }
-            if (!is_stake_claim_only)
+            if (!skip_rct_semantics_batch)
                 rvv.push_back(&tx.rct_signatures);
         }
     }

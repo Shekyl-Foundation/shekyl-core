@@ -677,12 +677,28 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool check_inputs_types_supported(const transaction& tx)
   {
-    for(const auto& in: tx.vin)
+    bool has_archival = false;
+    bool has_other = false;
+    for (const auto& in : tx.vin)
     {
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(in) || std::holds_alternative<txin_stake_claim>(in), false, "wrong variant type (index "
-        << in.index() << "), expected txin_to_key or txin_stake_claim"
-        << ", in transaction id=" << get_transaction_hash(tx));
-
+      if (std::holds_alternative<txin_gen>(in))
+        continue;
+      if (std::holds_alternative<txin_archival_serve_credit_response>(in))
+        has_archival = true;
+      else if (std::holds_alternative<txin_to_key>(in) || std::holds_alternative<txin_stake_claim>(in))
+        has_other = true;
+      else
+      {
+        MERROR_VER("wrong variant type (index " << in.index() << "), in transaction id="
+          << get_transaction_hash(tx));
+        return false;
+      }
+    }
+    if (has_archival && has_other)
+    {
+      MERROR_VER("archival serve-credit vins cannot mix with spend/claim inputs, tx id="
+        << get_transaction_hash(tx));
+      return false;
     }
     return true;
   }
@@ -717,6 +733,8 @@ namespace cryptonote
       else if (std::holds_alternative<txin_stake_claim>(in))
         amount = std::get<txin_stake_claim>(in).amount;
       else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         continue;
       else
         return false;

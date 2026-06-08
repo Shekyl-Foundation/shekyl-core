@@ -1181,6 +1181,9 @@ namespace cryptonote
      */
     bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc = nullptr) const;
 
+    bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
+      uint64_t current_height) const;
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif
