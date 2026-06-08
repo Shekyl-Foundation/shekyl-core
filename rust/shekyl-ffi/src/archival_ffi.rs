@@ -204,7 +204,8 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     }
 
     let payload = unsafe { std::slice::from_raw_parts(vin_payload_ptr, vin_payload_len) };
-    let response = match ArchivalServeCreditResponse::read_payload(&mut Cursor::new(payload)) {
+    let response = match ArchivalServeCreditResponse::read_payload_exact(&mut Cursor::new(payload))
+    {
         Ok(r) => r,
         Err(e) => return map_wire_error(&e),
     };

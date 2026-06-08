@@ -196,7 +196,10 @@ namespace cryptonote
 
     bool operator==(const archival_leaf_bytes& o) const
     {
-      return memcmp(data, o.data, sizeof(data)) == 0;
+      for (size_t i = 0; i < sizeof(data); ++i)
+        if (data[i] != o.data[i])
+          return false;
+      return true;
     }
   };
 
@@ -304,7 +307,7 @@ namespace cryptonote
       FIELD(leaf_bytes)
       FIELD(path)
       FIELD(hybrid_signature)
-      if (hybrid_signature.size() > config::PQC_MAX_SIGNATURE_BLOB)
+      if (hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
         return false;
     END_SERIALIZE()
   };

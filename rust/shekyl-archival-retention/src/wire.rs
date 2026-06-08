@@ -20,8 +20,9 @@ use sha3::{CShake256, CShake256Core};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_io::{read_byte, read_bytes, read_u32, read_varint, write_varint};
 
-/// Upper bound on hybrid signature canonical encoding (Ed25519 + ML-DSA-65 + header).
-const MAX_HYBRID_SIGNATURE_BYTES: usize = 16_384;
+/// Canonical single [`HybridSignature`] encoding bound; matches
+/// `config::PQC_HYBRID_SINGLE_SIG_LEN` in `cryptonote_config.h` (not multisig blob).
+const MAX_HYBRID_SIGNATURE_BYTES: usize = 3385;
 
 use crate::challenge::SERVE_CREDIT_RESPONSE_CUSTOMIZATION;
 use crate::path::SegmentPathOpening;
@@ -207,7 +208,10 @@ impl ArchivalServeCreditResponse {
         Ok(out)
     }
 
-    /// Deserialize a vin after the type tag has been consumed.
+    /// Deserialize payload fields after the type tag has been consumed.
+    ///
+    /// For transaction streams where more inputs follow, use this alone. For
+    /// length-delimited FFI slices, use [`Self::read_payload_exact`].
     pub fn read_payload<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let p_canonical_id = read_bytes(r)?;
         let shard_id = read_varint(r)?;
@@ -240,6 +244,12 @@ impl ArchivalServeCreditResponse {
             },
             hybrid_signature,
         };
+        Ok(response)
+    }
+
+    /// Length-delimited parse: reject unread trailing bytes (FFI vin payload).
+    pub fn read_payload_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
+        let response = Self::read_payload(r)?;
         ensure_payload_fully_consumed(r)?;
         Ok(response)
     }
@@ -342,7 +352,7 @@ mod tests {
         .expect("serialize");
         bytes.push(0xFF);
         bytes.remove(0);
-        let err = ArchivalServeCreditResponse::read_payload(&mut bytes.as_slice())
+        let err = ArchivalServeCreditResponse::read_payload_exact(&mut bytes.as_slice())
             .expect_err("trailing byte");
         assert!(matches!(err, WireError::TrailingBytes));
     }
