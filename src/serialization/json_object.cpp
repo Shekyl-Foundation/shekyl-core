@@ -675,8 +675,25 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_holdings_de
     throw WRONG_TYPE("json object");
   uint8_t kind_u8 = 0;
   GET_FROM_JSON_OBJECT(val, kind_u8, kind);
+  if (kind_u8 > static_cast<uint8_t>(cryptonote::archival_holdings_kind::CompleteTree))
+    throw WRONG_TYPE("invalid archival_holdings_kind");
   holdings.kind = static_cast<cryptonote::archival_holdings_kind>(kind_u8);
-  GET_FROM_JSON_OBJECT(val, holdings.shard_ids, shard_ids);
+  if (holdings.kind == cryptonote::archival_holdings_kind::ShardSetCompact)
+  {
+    GET_FROM_JSON_OBJECT(val, holdings.shard_ids, shard_ids);
+    if (holdings.shard_ids.size() > config::ARCHIVAL_MAX_HOLDINGS_SHARDS)
+      throw WRONG_TYPE("archival holdings shard_ids exceeds ARCHIVAL_MAX_HOLDINGS_SHARDS");
+  }
+  else
+  {
+    holdings.shard_ids.clear();
+    if (val.HasMember("shard_ids"))
+    {
+      const auto& shards = val["shard_ids"];
+      if (shards.IsArray() && !shards.Empty())
+        throw WRONG_TYPE("CompleteTree holdings must not carry shard_ids");
+    }
+  }
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_bond_post& txin)
