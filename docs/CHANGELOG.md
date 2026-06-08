@@ -4,6 +4,11 @@
 
 ### Added
 
+- **docs: archival corpus fossil sweep (2026-06-08).**
+  [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](design/ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) — superseded-model
+  rationale audit; 8c constructibility test surface §5. Active fossils fixed (SEB-as-F1-lever,
+  lapse-decorrelation, deferred SEB pin).
+
 - **archival: timing cluster pinned + reorg/retention split (2026-06-07).**
   [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md): `W=26`,
   `RETENTION_HORIZON_BLOCKS=420_000`, `ARCHIVAL_REORG_DEPTH_BLOCKS=720`,

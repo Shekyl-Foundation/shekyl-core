@@ -74,9 +74,10 @@ at **settlement-epoch resolution**. The residual concedes a public performance p
 what changes is temporal resolution — one bit per epoch per held shard. Under L14
 (retrieval-as-proof), on-chain proof submission largely disappears; the ledger bit at
 epoch granularity becomes the **primary public liveness signal**, with resolution set
-entirely by settlement-epoch length. Rotation (gate 6) is the named decorrelation tool
-against E-4 timing linkage; fine-grained per-epoch retention timelines are behavioral
-fingerprints (shard-set adjacency across `P_old` → `P_new` rotation). See §9.2.
+entirely by settlement-epoch length. **Portfolio-changing** rotation (gate 6) is the only
+named decorrelation move that can abandon scarce-shard income; cosmetic `P_id` swap without
+storage change does not decorrelate (F1 T-A1). Fine-grained per-epoch retention timelines
+are behavioral fingerprints (shard-set adjacency across rotation). See §9.2.
 
 **Reversion clause:** Reopen only if a **production consumer** emerges that requires
 hidden-`P` counting **and** form C is simultaneously rejected — i.e. a full reward-shape
@@ -214,9 +215,9 @@ structure **prunable**:
 | Per-epoch `Σwork(E)` | Yes |
 | Per-`P` `ClaimedEpochSet` entries | Yes (verify rejects ancient `E`) |
 
-**Tradeoff (consensus-visible):** A `P` offline (or deliberately lapsing for gate-6
-decorrelation) longer than `W` **forfeits** older unclaimed epochs. `W` couples **state
-growth** against **firewall lapse discipline**.
+**Tradeoff (consensus-visible):** A `P` offline (or deliberately lapsing) longer than `W`
+**forfeits** older unclaimed epochs. `W` couples **state growth** against **forfeiture
+economics** (not decorrelation — F1 T-A1).
 
 **Pinned (2026-06-07):** `W = 26`, `RETENTION_HORIZON_BLOCKS = 420_000`,
 `ARCHIVAL_REORG_DEPTH_BLOCKS = 720`, `prune_horizon_epochs = W` —
@@ -316,11 +317,12 @@ gate-2 / gate-6 parameter**:
 | Finer public retention timeline (E-4 fingerprint risk) | Blurs per-epoch liveness fingerprint (rotation-favorable) |
 
 L14 retrieval-as-proof makes the on-chain retention bit the primary public liveness
-signal; epoch length sets that signal's resolution. **Defer numeric pin** until the
-joint decision with `W`, retention horizon, and finalization boundary (§9.1) — coarser
-`E` may trade acceptable forfeiture/lapse headroom against firewall decorrelation.
-Record disposition here before choosing the constant; gate-6 firewall spec owns the
-threat-model argument, this doc owns the consensus read-surface coupling.
+signal; epoch length sets that signal's resolution. **Pinned (2026-06-07):** SEB =
+10_000 jointly with timing cluster ([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)).
+Coarser `E` would blur the liveness fingerprint but is **not** an F1 decorrelation lever
+(T-A1 v2). `W` bounds forfeiture/state, not decorrelation. Gate-6 owns the threat-model
+argument; this doc owns the consensus read-surface coupling. Reopen SEB only on demonstrated
+servo/emission-cadence need + privacy review — not F1 portfolio axis.
 
 ---
 

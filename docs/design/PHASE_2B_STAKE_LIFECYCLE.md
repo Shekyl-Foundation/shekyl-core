@@ -39,8 +39,10 @@ claims, `tier_num`, `band_sum` servo, exact-yield-from-secret-weight) — see §
 Wallet Rounds 0–2 pins (FSM skeleton, persistence discipline, §4.7 actor shape,
 §5 reorg forward-rebuild, §6 API *intent*) remain load-bearing **where §2 says
 retain** — **§3 FSM** and **§7 threat model** are rebased (P2B-3/6, 2026-06-07);
-**§4–§6** body text is still **claim-centric** until retooled. §2 is authoritative
-for rebased scope. No Stage 3 until **Round 3–4 closes on the rebased substrate**
+**§4–§6** body text is still **claim-centric** until retooled — **STRATUM** per
+[`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) §4; implement from
+[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md), not §3.3–§8.5 nullifier paths. §2 is
+authoritative for rebased scope. No Stage 3 until **Round 3–4 closes on the rebased substrate**
 (gate-list + gate 6 to soundness depth + **T-A1** F1 gate) per
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §7.
 
