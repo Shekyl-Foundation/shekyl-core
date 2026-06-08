@@ -248,6 +248,49 @@ enum BondPostKind {
 }
 ```
 
+### 3.4.1 Byte layout (genesis pin)
+
+Vin type tag **`5`** (`txin_archival_bond_post`). Varint discipline matches gate-2 §5.1.1 /
+[`shekyl-io`](../../rust/shekyl-oxide/shekyl-oxide/io). Reference implementation:
+`shekyl-archival-retention::bond_wire`.
+
+```text
+u8                      vin_type = 5
+varint                  hybrid_pubkey_len   (≤ 2048)
+[hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()
+[32]                    p_canonical_id      (hint; verifier recomputes)
+u8                      post_kind           (0=JoinMarket, 1=Rebond, 2=Unbond, 3=HoldingsUpdate)
+u8                      holdings_kind       (0=ShardSetCompact, 1=CompleteTree)
+// if holdings_kind == 0:
+varint                  shard_count         (≤ 4096)
+repeat shard_count:
+  varint                shard_id
+// if holdings_kind == 1: no shard list (sentinel only)
+varint                  bonded_total_atomic
+varint                  bond_credit
+varint                  bond_debit
+```
+
+Hybrid spend authorization uses **transaction-level** `pqc_auths[]` aligned with `vin[]`
+indices (not an on-vin signature blob). Preimage:
+
+```text
+sig_preimage = cSHAKE256(
+  customization = "shekyl/archival-bond-post-v1",
+  input         = tx_prefix_hash
+                  || p_canonical_id
+                  || post_kind_u8
+                  || encode_holdings_descriptor
+                  || bonded_total_atomic_le64
+                  || bond_credit_le64
+                  || bond_debit_le64
+)
+```
+
+`encode_holdings_descriptor` is the on-wire holdings section (`holdings_kind` byte plus
+optional shard-id varint list). On-wire amount fields use varints; preimage uses fixed
+`le64`.
+
 **JoinMarket path:** reject if `ArchivalBondRecord` already exists for `P_canonical_id`;
 `bond_credit == bond_floor(holdings)`; credit `bonded_total_atomic` and `total_bonded_atomic`.
 
@@ -475,7 +518,9 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
       (2026-06-07 pin).
 - [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook open.
-- [ ] C++ / Rust vin type registration; `bond_credit`/`bond_debit` in RCT balance verifier.
+- [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
+- [ ] `bond_credit`/`bond_debit` in RCT balance verifier.
+- [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic` (Rebond/Unbond/HoldingsUpdate deferred).
 - [ ] KAT: join → serve `E_first` → paying emit; conservation-law cross-check fixture.
 
 ### 8.1 `bond_floor(holdings)` (G4-7)

@@ -12,8 +12,9 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, verify_leaf_index, verify_segment_path,
-    ArchivalServeCreditResponse, WireError, SETTLEMENT_EPOCH_BLOCKS,
+    challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
+    verify_leaf_index, verify_segment_path, ArchivalServeCreditResponse, WireError,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -84,6 +85,26 @@ fn map_verify_error(err: shekyl_archival_retention::VerifyError) -> u8 {
 
 fn map_wire_error(_err: WireError) -> u8 {
     SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
+}
+
+/// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
+///
+/// Returns `1` on success and writes 32 bytes to `out_p_id`; `0` on null/short buffer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
+    hybrid_pubkey_ptr: *const u8,
+    hybrid_pubkey_len: usize,
+    out_p_id: *mut u8,
+) -> u8 {
+    if hybrid_pubkey_ptr.is_null() || out_p_id.is_null() || hybrid_pubkey_len == 0 {
+        return 0;
+    }
+    let pubkey = unsafe { std::slice::from_raw_parts(hybrid_pubkey_ptr, hybrid_pubkey_len) };
+    let pid = p_canonical_id_from_hybrid_pubkey(pubkey);
+    unsafe {
+        std::ptr::copy_nonoverlapping(pid.as_ptr(), out_p_id, 32);
+    }
+    1
 }
 
 /// Global settlement-epoch block span (`SETTLEMENT_EPOCH_BLOCKS`).

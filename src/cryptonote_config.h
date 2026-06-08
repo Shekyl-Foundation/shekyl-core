@@ -298,6 +298,7 @@ namespace config
   constexpr size_t ARCHIVAL_LEAF_BYTES = 128;
   constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
   constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
+  constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
 
   namespace testnet
   {

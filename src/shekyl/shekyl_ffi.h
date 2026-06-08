@@ -1738,6 +1738,12 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 
+/// Returns 1 on success; writes 32-byte `P_canonical_id` to `out_p_id`.
+uint8_t shekyl_archival_p_canonical_id_from_pubkey(
+    const uint8_t* hybrid_pubkey_ptr,
+    size_t hybrid_pubkey_len,
+    uint8_t* out_p_id);
+
 uint64_t shekyl_archival_settlement_epoch_blocks(void);
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);

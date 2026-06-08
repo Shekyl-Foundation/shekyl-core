@@ -675,18 +675,32 @@ namespace cryptonote
     return coinbase_in.height;
   }
   //---------------------------------------------------------------
+  uint64_t archival_bond_floor(const archival_holdings_descriptor& holdings)
+  {
+    const uint64_t per_shard = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+    if (holdings.kind == archival_holdings_kind::CompleteTree)
+      return per_shard;
+    return per_shard * holdings.shard_ids.size();
+  }
+
   bool check_inputs_types_supported(const transaction& tx)
   {
-    bool has_archival = false;
-    bool has_other = false;
+    size_t bond_posts = 0;
+    size_t serve_credits = 0;
+    size_t stake_claims = 0;
+    size_t spend_keys = 0;
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_gen>(in))
         continue;
       if (std::holds_alternative<txin_archival_serve_credit_response>(in))
-        has_archival = true;
-      else if (std::holds_alternative<txin_to_key>(in) || std::holds_alternative<txin_stake_claim>(in))
-        has_other = true;
+        ++serve_credits;
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
+        ++bond_posts;
+      else if (std::holds_alternative<txin_stake_claim>(in))
+        ++stake_claims;
+      else if (std::holds_alternative<txin_to_key>(in))
+        ++spend_keys;
       else
       {
         MERROR_VER("wrong variant type (index " << in.index() << "), in transaction id="
@@ -694,9 +708,20 @@ namespace cryptonote
         return false;
       }
     }
-    if (has_archival && has_other)
+    if (serve_credits > 0 && (bond_posts + stake_claims + spend_keys) > 0)
     {
-      MERROR_VER("archival serve-credit vins cannot mix with spend/claim inputs, tx id="
+      MERROR_VER("archival serve-credit vins cannot mix with spend/claim/bond inputs, tx id="
+        << get_transaction_hash(tx));
+      return false;
+    }
+    if (bond_posts > 1)
+    {
+      MERROR_VER("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
+      return false;
+    }
+    if (bond_posts == 1 && (serve_credits + stake_claims) > 0)
+    {
+      MERROR_VER("archival bond-post cannot mix with serve-credit or stake-claim vins, tx id="
         << get_transaction_hash(tx));
       return false;
     }
@@ -735,6 +760,8 @@ namespace cryptonote
       else if (std::holds_alternative<txin_gen>(in))
         continue;
       else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
+        continue;
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
       else
         return false;

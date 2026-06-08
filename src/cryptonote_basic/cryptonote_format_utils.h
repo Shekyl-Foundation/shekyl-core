@@ -126,6 +126,7 @@ namespace cryptonote
   uint64_t get_outs_money_amount(const transaction& tx);
   bool get_output_public_key(const cryptonote::tx_out& out, crypto::public_key& output_public_key);
   std::optional<crypto::view_tag> get_output_view_tag(const cryptonote::tx_out& out);
+  uint64_t archival_bond_floor(const archival_holdings_descriptor& holdings);
   bool check_inputs_types_supported(const transaction& tx);
   bool check_outs_valid(const transaction& tx);
   bool parse_amount(uint64_t& amount, const std::string& str_amount);

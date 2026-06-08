@@ -25,9 +25,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod bond_wire;
 pub mod challenge;
 pub mod constants;
 pub mod error;
+pub mod hash;
+pub mod id;
 pub mod path;
 pub mod wire;
 
@@ -42,6 +45,11 @@ pub use constants::{
 };
 pub use error::VerifyError;
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
+pub use bond_wire::{
+    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor, HoldingsKind,
+    BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
+};
+pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use wire::{
     encode_path, ArchivalServeCreditResponse, WireError, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };

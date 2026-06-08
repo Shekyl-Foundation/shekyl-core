@@ -263,6 +263,25 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, cryptonote::archival_holdings_descriptor &x, const boost::serialization::version_type ver)
+  {
+    a & x.kind;
+    a & x.shard_ids;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_archival_bond_post &x, const boost::serialization::version_type ver)
+  {
+    a & x.hybrid_public_key;
+    a & x.p_canonical_id;
+    a & x.post_kind;
+    a & x.holdings;
+    a & x.bonded_total_atomic;
+    a & x.bond_credit;
+    a & x.bond_debit;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, cryptonote::txin_archival_serve_credit_response &x, const boost::serialization::version_type ver)
   {
     a & x.p_canonical_id;

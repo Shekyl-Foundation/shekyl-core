@@ -7,9 +7,7 @@
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.3–§3.4.
 
 use crate::constants::CHALLENGE_BEACON_SEAL_BLOCKS;
-use sha3::digest::core_api::CoreWrapper;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{CShake256, CShake256Core};
+use crate::hash::cshake256_32;
 
 /// cSHAKE256 customization for leaf index derivation (§3.3).
 pub const CHALLENGE_LEAF_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-leaf-v1";
@@ -19,16 +17,6 @@ pub const CHALLENGE_FIRE_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challeng
 
 /// cSHAKE256 customization for the serve-credit response vin signature preimage (§5.2).
 pub const SERVE_CREDIT_RESPONSE_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-response-v1";
-
-fn cshake256_32(customization: &[u8], input: &[u8]) -> [u8; 32] {
-    let core = CShake256Core::new(customization);
-    let mut hasher: CShake256 = CoreWrapper::from_core(core);
-    hasher.update(input);
-    let mut reader = hasher.finalize_xof();
-    let mut out = [0u8; 32];
-    reader.read(&mut out);
-    out
-}
 
 fn uint64_from_hash(hash: &[u8; 32]) -> u64 {
     let mut le = [0u8; 8];
