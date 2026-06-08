@@ -693,7 +693,9 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_holdings_de
     if (val.HasMember("shard_ids"))
     {
       const auto& shards = val["shard_ids"];
-      if (shards.IsArray() && !shards.Empty())
+      if (!shards.IsArray())
+        throw WRONG_TYPE("CompleteTree holdings shard_ids must be an array when present");
+      if (!shards.Empty())
         throw WRONG_TYPE("CompleteTree holdings must not carry shard_ids");
     }
   }

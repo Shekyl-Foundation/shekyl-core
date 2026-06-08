@@ -58,8 +58,13 @@ impl PartialEq for ArchivalServeCreditResponse {
             && self.leaf_index_in_segment == other.leaf_index_in_segment
             && self.leaf_bytes == other.leaf_bytes
             && self.path == other.path
-            && self.hybrid_signature.to_canonical_bytes().ok().as_deref()
-                == other.hybrid_signature.to_canonical_bytes().ok().as_deref()
+            && match (
+                self.hybrid_signature.to_canonical_bytes(),
+                other.hybrid_signature.to_canonical_bytes(),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            }
     }
 }
 
