@@ -381,7 +381,7 @@ private:
 // ─── ArchivalServeCreditKey ────────────────────────────────────────────────
 //
 // Serve-credit ledger row: affirmative pass for (P_id, shard_id, E).
-// Key existence is the bit; value is empty (gate-2 §3.1).
+// Key existence is the authoritative bit; value is a 1-byte presence flag (gate-2 §3.1).
 
 class ArchivalServeCreditKey {
 public:

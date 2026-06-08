@@ -4998,17 +4998,12 @@ bool BlockchainLMDB::load_archival_bond_value(const crypto::hash& p_id,
 {
   shekyl::db::ArchivalBondKey key(reinterpret_cast<const uint8_t*>(p_id.data));
   MDB_val k = key.as_mdb_val();
-  TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_bond, &k, &v);
+  const int get_result = archival_db_get(m_archival_bond, &k, &v);
   if (get_result == MDB_NOTFOUND)
-  {
-    TXN_POSTFIX_RDONLY();
     return false;
-  }
   if (get_result)
     throw0(DB_ERROR(lmdb_error("Failed to get archival bond record: ", get_result).c_str()));
-  TXN_POSTFIX_RDONLY();
   if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, out))
     throw0(DB_ERROR("Failed to decode archival bond record"));
   return true;

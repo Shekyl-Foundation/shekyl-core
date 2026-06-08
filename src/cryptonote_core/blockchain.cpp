@@ -3666,6 +3666,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   std::vector<std::vector<rct::ctkey>> pubkeys(tx.vin.size());
 
+  // Block connect passes nullptr; steer to stack storage so FCMP++ paths can
+  // always update max reference height without a null check at each write site.
   uint64_t max_used_block_height = 0;
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;

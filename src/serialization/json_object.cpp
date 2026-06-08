@@ -714,8 +714,12 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   if (!val.IsObject())
     throw WRONG_TYPE("json object");
   GET_FROM_JSON_OBJECT(val, txin.hybrid_public_key, hybrid_public_key);
+  if (txin.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
+    throw WRONG_TYPE("archival bond-post hybrid_public_key exceeds single-key bound");
   GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
+  if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))
+    throw WRONG_TYPE("invalid archival_bond_post_kind");
   GET_FROM_JSON_OBJECT(val, txin.holdings, holdings);
   GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);
   GET_FROM_JSON_OBJECT(val, txin.bond_credit, bond_credit);
