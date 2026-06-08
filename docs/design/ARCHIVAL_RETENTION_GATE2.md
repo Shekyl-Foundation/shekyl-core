@@ -454,7 +454,7 @@ verifier treats registry as authoritative at `H_anchor`.
 - [x] `Blockchain::check_archival_serve_credit_input` + pure archival tx path in `check_tx_inputs`
 - [x] LMDB `serve_credit_bit` write/revert (`archival_serve_credit` subdb; `LMDB_SCHEMA.md`)
 - [x] Gate-4 bond posture + shard-registry LMDB reads (`archival_bond`, `archival_shard_segment`, `archival_shard_leaf`)
-- [ ] Gate-4 `txin_archival_bond_post` connect writes bond records (substrate seedable via `put_*` until wire lands)
+- [x] Gate-4 `txin_archival_bond_post` JoinMarket connect writes bond records (`put_archival_bond_record`, `total_bonded_atomic`; Rebond/Unbond deferred)
 
 ---
 

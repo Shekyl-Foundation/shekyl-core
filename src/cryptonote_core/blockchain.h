@@ -1184,6 +1184,8 @@ namespace cryptonote
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
       uint64_t current_height) const;
 
+    bool check_archival_bond_post_input(const txin_archival_bond_post& bond) const;
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif

@@ -236,6 +236,23 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
       set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
     }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+        throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
+      const uint64_t block_height = get_block_height(blk_hash);
+      const uint64_t seb = shekyl_archival_settlement_epoch_blocks();
+      if (seb == 0)
+        throw std::runtime_error("FATAL: settlement epoch blocks is zero");
+      const uint64_t join_epoch = block_height / seb;
+      put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
+        bond.holdings.shard_ids);
+      const uint64_t bonded_total = get_total_bonded_atomic();
+      if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
+        throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
+      set_total_bonded_atomic(bonded_total + bond.bond_credit);
+    }
     else
     {
       LOG_PRINT_L1("Unsupported input type, aborting transaction addition");
@@ -600,6 +617,18 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     {
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
       remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+    }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+      {
+        remove_archival_bond_record(bond.p_canonical_id);
+        const uint64_t bonded_total = get_total_bonded_atomic();
+        if (bond.bond_credit > bonded_total)
+          throw std::runtime_error("FATAL: total_bonded_atomic underflow on bond-post pop");
+        set_total_bonded_atomic(bonded_total - bond.bond_credit);
+      }
     }
   }
 

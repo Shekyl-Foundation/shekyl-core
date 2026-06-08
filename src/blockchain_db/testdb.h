@@ -170,6 +170,8 @@ public:
 
   virtual void set_staker_pool_balance(uint64_t balance) override {}
   virtual uint64_t get_staker_pool_balance() const override { return 0; }
+  virtual void set_total_bonded_atomic(uint64_t balance) override {}
+  virtual uint64_t get_total_bonded_atomic() const override { return 0; }
 
   virtual void set_total_burned(uint64_t amount) override {}
   virtual uint64_t get_total_burned() const override { return 0; }

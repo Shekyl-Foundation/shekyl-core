@@ -459,6 +459,7 @@ The `properties` table (see below) stores these staking-related entries:
 | Key string | Value type | Description |
 |---|---|---|
 | `staker_pool_balance` | `uint64_t` (8 bytes) | Running balance of the staker reward pool. Incremented by emission + fee pool inflow per block (when stakers exist), decremented by successful claims. |
+| `total_bonded_atomic` | `uint64_t` (8 bytes) | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths. |
 | `total_burned` | `uint64_t` (8 bytes) | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns). |
 
 ---
@@ -767,12 +768,13 @@ General key-value store for database-level metadata.
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
 | `"staker_pool_balance"` (no NUL) | `uint64_t` | Running staker reward pool balance |
+| `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global bonded collateral audit scalar (gate-4 §4.5) |
 | `"total_burned"` (no NUL) | `uint64_t` | Cumulative destroyed SHEKYL |
 
 | Property | Value |
 |---|---|
-| Writers | Various — `set_staker_pool_balance`, `set_total_burned`, migration code, pruning code |
-| Readers | Various — `get_staker_pool_balance`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
+| Writers | Various — `set_staker_pool_balance`, `set_total_bonded_atomic`, `set_total_burned`, migration code, pruning code |
+| Readers | Various — `get_staker_pool_balance`, `get_total_bonded_atomic`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
 | Introduced | Genesis (DB v0) |
 
 ---

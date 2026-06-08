@@ -4787,6 +4787,44 @@ void BlockchainLMDB::set_staker_pool_balance(uint64_t balance)
     throw0(DB_ERROR(lmdb_error("Failed to set staker pool balance: ", result).c_str()));
 }
 
+void BlockchainLMDB::set_total_bonded_atomic(uint64_t balance)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  const std::string key = "total_bonded_atomic";
+  MDB_val k = {key.size(), (void *)key.data()};
+  MDB_val v = {sizeof(balance), (void *)&balance};
+  int result = mdb_put(*m_write_txn, m_properties, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to set total bonded atomic: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::get_total_bonded_atomic() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  const std::string key = "total_bonded_atomic";
+  MDB_val k = {key.size(), (void *)key.data()};
+  MDB_val v;
+  auto get_result = mdb_get(m_txn, m_properties, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return 0;
+  }
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to read total bonded atomic: ", get_result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("Bad total bonded atomic size in DB"));
+  uint64_t balance;
+  memcpy(&balance, v.mv_data, sizeof(balance));
+  TXN_POSTFIX_RDONLY();
+  return balance;
+}
+
 uint64_t BlockchainLMDB::get_staker_pool_balance() const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
