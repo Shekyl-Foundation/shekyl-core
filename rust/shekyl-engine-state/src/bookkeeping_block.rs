@@ -26,7 +26,8 @@ use crate::{error::WalletLedgerError, payment_id::PaymentId};
 
 /// Schema version of the bookkeeping block.
 ///
-/// V3.0 ships version `3`. Version `2` carried `subaddress_registry` and
+/// FA-2 ships [`BOOKKEEPING_BLOCK_VERSION`] `3` (subaddress registry
+/// removed). Version `2` carried `subaddress_registry` and
 /// `subaddress_labels`; version `1` carried the pre-flat-namespace
 /// two-field `SubaddressIndex`. Shekyl is pre-genesis — loads that see
 /// any other version refuse rather than migrate.

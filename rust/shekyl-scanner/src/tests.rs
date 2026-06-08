@@ -58,7 +58,6 @@ pub(crate) mod staking {
             },
             metadata: Metadata {
                 additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -851,7 +850,6 @@ mod ledger_proptest {
             },
             metadata: Metadata {
                 additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -1048,7 +1046,6 @@ mod sync_bookkeeping {
                 },
                 metadata: Metadata {
                     additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                    subaddress: None,
                     payment_id: None,
                     arbitrary_data: vec![],
                 },

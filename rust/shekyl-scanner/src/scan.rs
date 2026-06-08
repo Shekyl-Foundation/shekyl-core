@@ -572,7 +572,6 @@ impl InternalScanner {
                 },
                 metadata: Metadata {
                     additional_timelock: tx.prefix().additional_timelock,
-                    subaddress: None,
                     payment_id: decrypted_payment_id,
                     arbitrary_data: extra.arbitrary_data(),
                 },

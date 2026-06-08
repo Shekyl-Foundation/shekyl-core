@@ -561,12 +561,19 @@ fn reject_removed_subaddr_flags(args: &[&str]) -> Option<String> {
     const REMOVED: &[&str] = &["--subaddr-index", "--subaddr-indices"];
     for arg in args {
         if REMOVED.contains(arg) {
-            return Some(format!(
-                "removed flag {arg}: subaddresses were deleted; use account-level addresses only"
-            ));
+            return Some(removed_subaddr_flag_message(arg));
+        }
+        for flag in REMOVED {
+            if let Some(rest) = arg.strip_prefix(&format!("{flag}=")) {
+                return Some(removed_subaddr_flag_message(&format!("{flag}={rest}")));
+            }
         }
     }
     None
+}
+
+fn removed_subaddr_flag_message(flag: &str) -> String {
+    format!("removed flag {flag}: subaddresses were deleted; use account-level addresses only")
 }
 
 /// Extract `--account N` from args, returning (resolved index, remaining args).
@@ -699,6 +706,7 @@ mod tests {
     fn test_removed_subaddr_flags_rejected() {
         for line in [
             "balance --subaddr-index 0",
+            "balance --subaddr-index=0",
             "transfers --subaddr-indices 0:1",
         ] {
             match parse(line, &session()) {
