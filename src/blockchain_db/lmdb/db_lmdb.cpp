@@ -4938,6 +4938,16 @@ void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
     throw0(DB_ERROR(lmdb_error("Failed to remove staker claim watermark: ", result).c_str()));
 }
 
+int BlockchainLMDB::archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const
+{
+  if (m_write_txn)
+    return mdb_get(*m_write_txn, dbi, k, v);
+  TXN_PREFIX_RDONLY();
+  const int rc = mdb_get(m_txn, dbi, k, v);
+  TXN_POSTFIX_RDONLY();
+  return rc;
+}
+
 bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
   uint64_t settlement_epoch) const
 {
@@ -4946,17 +4956,12 @@ bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uin
 
   shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
-  TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_serve_credit, &k, &v);
+  const int get_result = archival_db_get(m_archival_serve_credit, &k, &v);
   if (get_result == MDB_NOTFOUND)
-  {
-    TXN_POSTFIX_RDONLY();
     return false;
-  }
   if (get_result)
     throw0(DB_ERROR(lmdb_error("Failed to get archival serve-credit bit: ", get_result).c_str()));
-  TXN_POSTFIX_RDONLY();
   return true;
 }
 
@@ -5188,11 +5193,13 @@ bool BlockchainLMDB::has_archival_slash_applied(const crypto::hash& p_id, uint64
 
   shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
-  TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_slash_applied, &k, &v);
-  TXN_POSTFIX_RDONLY();
-  return get_result == 0;
+  const int get_result = archival_db_get(m_archival_slash_applied, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+    return false;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival slash-applied bit: ", get_result).c_str()));
+  return true;
 }
 
 void BlockchainLMDB::set_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,

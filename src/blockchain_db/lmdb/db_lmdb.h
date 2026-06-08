@@ -582,6 +582,10 @@ private:
     uint32_t& seq);
 
 private:
+  // Prefer the active write txn when present so uncommitted archival bits are visible
+  // during block connect (slash scheduling, same-block idempotency after prior txs).
+  int archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const;
+
   MDB_env* m_env;
 
   MDB_dbi m_blocks;

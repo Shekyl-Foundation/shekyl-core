@@ -30,8 +30,10 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <algorithm>
+#include <cstring>
 #include <cstdio>
 #include <sstream>
+#include <unordered_set>
 #include <boost/asio/dispatch.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/range/adaptor/reversed.hpp>
@@ -4600,7 +4602,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   LOG_PRINT_L3("Blockchain::" << __func__);
 
   if (bond.hybrid_public_key.empty()
-    || bond.hybrid_public_key.size() > config::PQC_MAX_PUBLIC_KEY_BLOB)
+    || bond.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
   {
     MERROR_VER("Archival bond-post hybrid pubkey out of bounds");
     return false;
@@ -5340,6 +5342,35 @@ leave:
         bvc.m_verifivation_failed = true;
         return_txs_to_pool();
         return false;
+      }
+    }
+  }
+
+  // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
+  // duplicate (P, shard, E) credits across multiple txs in the same block.
+  {
+    std::unordered_set<std::string> block_serve_credits;
+    block_serve_credits.reserve(txs.size());
+    for (const auto& tx_pair : txs)
+    {
+      for (const auto& vin : tx_pair.first.vin)
+      {
+        if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
+          continue;
+        const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        std::string key(48, '\0');
+        memcpy(key.data(), resp.p_canonical_id.data, 32);
+        const uint64_t shard_id = resp.shard_id;
+        const uint64_t settlement_epoch = resp.settlement_epoch;
+        memcpy(key.data() + 32, &shard_id, sizeof(shard_id));
+        memcpy(key.data() + 40, &settlement_epoch, sizeof(settlement_epoch));
+        if (!block_serve_credits.insert(std::move(key)).second)
+        {
+          MERROR_VER("Block " << id << " has duplicate archival serve-credit (P, shard, E)");
+          bvc.m_verifivation_failed = true;
+          return_txs_to_pool();
+          return false;
+        }
       }
     }
   }

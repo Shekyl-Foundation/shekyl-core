@@ -237,7 +237,7 @@ namespace cryptonote
 
   struct archival_holdings_descriptor
   {
-    archival_holdings_kind kind;
+    archival_holdings_kind kind = archival_holdings_kind::ShardSetCompact;
     std::vector<uint64_t> shard_ids;
 
     BEGIN_SERIALIZE_OBJECT()
@@ -270,7 +270,7 @@ namespace cryptonote
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(hybrid_public_key)
-      if (hybrid_public_key.size() > config::PQC_MAX_PUBLIC_KEY_BLOB)
+      if (hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
         return false;
       FIELD(p_canonical_id)
       FIELD(post_kind)

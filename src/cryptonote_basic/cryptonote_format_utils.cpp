@@ -697,7 +697,11 @@ namespace cryptonote
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_gen>(in))
-        continue;
+      {
+        MERROR("txin_gen is not allowed in non-coinbase transactions, tx id="
+          << get_transaction_hash(tx));
+        return false;
+      }
       if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         ++serve_credits;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
