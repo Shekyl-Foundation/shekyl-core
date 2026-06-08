@@ -424,7 +424,7 @@ verifier treats registry as authoritative at `H_anchor`.
 |------|-------------|
 | 1 | `shekyl-archival-retention` crate — `verify_segment_path`, challenge replay, KAT from `shekyl-curve-tree` fixtures |
 | 2 | C++/Rust `txin_archival_serve_credit_response` deserializer + consensus hook |
-| 3 | Connect bit write to archival LMDB tables (substrate reconciliation) — **landed** (`archival_serve_credit` LMDB); bond/registry reads gate on gate-4 |
+| 3 | End-to-end `check_archival_serve_credit_input` integration test (KAT vin + seeded substrate) — **landed** (`archival_serve_credit_integration.cpp`) |
 | 4 | Slash scheduler at `H_slash_deadline` (gate-4 hook) — **landed** (`process_archival_slash_at_height`) |
 | 5 | Gate-6 wallet: construct response + hybrid sign |
 | 6 | Worst-case verify benchmark → confirm no ZK reopen (8c §9.1 criterion 1) |
@@ -456,6 +456,7 @@ verifier treats registry as authoritative at `H_anchor`.
 - [x] Gate-4 bond posture + shard-registry LMDB reads (`archival_bond`, `archival_shard_segment`, `archival_shard_leaf`)
 - [x] Gate-4 `txin_archival_bond_post` JoinMarket connect writes bond records (`put_archival_bond_record`, `total_bonded_atomic`; Rebond/Unbond deferred)
 - [x] Slash scheduler at `H_slash_deadline` (`process_archival_slash_at_height`; gate-2 §6 → gate-4 §4.2; `pop_block` revert)
+- [x] Integration test: seeded bond/registry + KAT vin → `check_archival_serve_credit_input` (`gate2_integration_check_archival_serve_credit_input`; fixture `integration` block)
 
 ---
 

@@ -10,6 +10,11 @@
   `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
+- **archival: serve-credit consensus integration test (gate-2 §10 step 3).**
+  `archival_serve_credit_integration.cpp` seeds in-memory archival substrate from KAT fixture
+  `integration` block (CT-2 opening + epoch-0 challenge geometry) and exercises
+  `Blockchain::check_archival_serve_credit_input` end-to-end; duplicate-bit rejection test.
+
 - **archival: slash scheduler at H_slash_deadline (gate-2 §10 step 4 / gate-4 §4.2).**
   `process_archival_slash_at_height` on block connect applies per-shard floor slash when
   `challenge_failed`; updates `total_bonded_atomic` / `total_burned`; journal + `pop_block`

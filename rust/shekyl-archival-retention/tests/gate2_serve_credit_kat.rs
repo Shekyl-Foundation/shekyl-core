@@ -14,9 +14,13 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, encode_path,
-    verify_leaf_index, verify_segment_path, ArchivalServeCreditResponse, SegmentPathOpening,
+    p_canonical_id_from_hybrid_pubkey, verify_leaf_index, verify_segment_path,
+    ArchivalServeCreditResponse, SegmentPathOpening, SETTLEMENT_EPOCH_BLOCKS,
 };
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+use shekyl_crypto_pq::signature::{
+    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
+};
+use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_curve_tree::{
     BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
     TargetKind, TxLeafInputs,
@@ -89,6 +93,174 @@ fn layers_from_json(v: &Value) -> Vec<Vec<[u8; 32]>> {
                 .collect()
         })
         .collect()
+}
+
+fn settlement_epoch_open_height(settlement_epoch: u64) -> u64 {
+    settlement_epoch.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
+}
+
+fn settlement_epoch_close_height(settlement_epoch: u64) -> u64 {
+    settlement_epoch_open_height(settlement_epoch)
+        .saturating_add(SETTLEMENT_EPOCH_BLOCKS.saturating_sub(1))
+}
+
+fn integration_keypair(
+    pinned_pk_hex: Option<&str>,
+    pinned_sk_hex: Option<&str>,
+) -> (HybridPublicKey, HybridSecretKey) {
+    if let (Some(pk_hex), Some(sk_hex)) = (pinned_pk_hex, pinned_sk_hex) {
+        let pk = HybridPublicKey::from_canonical_bytes(&decode_hex(pk_hex)).expect("integration pk");
+        let sk = HybridSecretKey::from_canonical_bytes(&decode_hex(sk_hex)).expect("integration sk");
+        return (pk, sk);
+    }
+    HybridEd25519MlDsa.keypair_generate().expect("integration keypair")
+}
+
+fn flat_layer_scalars_hex(scalars: &[[u8; 32]]) -> String {
+    encode_hex(&scalars.iter().flat_map(|s| s.iter().copied()).collect::<Vec<_>>())
+}
+
+fn build_integration_from_pinned_wire(
+    wire_hex: &str,
+    bond_hybrid_pubkey_hex: &str,
+    leaf_layer_scalars_hex: &str,
+) -> Value {
+    let wire = decode_hex(wire_hex);
+    assert_eq!(wire[0], VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE);
+    let mut cursor = std::io::Cursor::new(&wire[1..]);
+    let response =
+        ArchivalServeCreditResponse::read_payload(&mut cursor).expect("pinned integration wire");
+
+    let layer_scalars: Vec<[u8; 32]> = decode_hex(leaf_layer_scalars_hex)
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut s = [0u8; 32];
+            s.copy_from_slice(chunk);
+            s
+        })
+        .collect();
+    verify_segment_path(
+        &response.leaf_bytes,
+        &layer_scalars,
+        &response.path,
+        &response.segment_subroot_rk,
+    )
+    .expect("pinned integration path");
+
+    let block_hash_at_seal = [0xABu8; 32];
+    let settlement_epoch = response.settlement_epoch;
+    let h_open = settlement_epoch_open_height(settlement_epoch);
+    let h_close = settlement_epoch_close_height(settlement_epoch);
+    let h_seal = challenge_seal_height(h_open);
+    let h_fire = challenge_fire_height(
+        h_open,
+        h_close,
+        &block_hash_at_seal,
+        &response.p_canonical_id,
+        response.shard_id,
+        settlement_epoch,
+    );
+
+    json!({
+        "label": "ct2_opening_epoch0_consensus_verify",
+        "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
+        "shard_id": response.shard_id,
+        "settlement_epoch": response.settlement_epoch,
+        "segment_leaf_count": 26_000u64,
+        "leaf_index_in_segment": response.leaf_index_in_segment,
+        "freeze_height": h_fire,
+        "h_open": h_open,
+        "h_close": h_close,
+        "h_seal": h_seal,
+        "h_fire": h_fire,
+        "current_height": h_fire.saturating_add(1),
+        "block_hash_at_seal_hex": encode_hex(&block_hash_at_seal),
+        "join_settlement_epoch": 0,
+        "bond_hybrid_pubkey_hex": bond_hybrid_pubkey_hex,
+        "leaf_layer_scalars_hex": leaf_layer_scalars_hex,
+        "wire_hex": wire_hex,
+    })
+}
+
+fn build_integration_substrate(
+    pinned_pk_hex: Option<&str>,
+    pinned_sk_hex: Option<&str>,
+) -> Value {
+    let scheme = HybridEd25519MlDsa;
+    let (hybrid_pk, hybrid_sk) = integration_keypair(pinned_pk_hex, pinned_sk_hex);
+    let hybrid_pk_bytes = hybrid_pk.to_canonical_bytes().expect("pk bytes");
+    let _hybrid_sk_bytes = hybrid_sk.to_canonical_bytes().expect("sk bytes");
+    let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+
+    let (leaf_bytes, rk, path, layer_scalars) = ct2_founder_opening();
+    let shard_id = 42u64;
+    let settlement_epoch = 0u64;
+    let segment_leaf_count = 26_000u64;
+    let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
+
+    let block_hash_at_seal = [0xABu8; 32];
+    let h_open = settlement_epoch_open_height(settlement_epoch);
+    let h_close = settlement_epoch_close_height(settlement_epoch);
+    let h_seal = challenge_seal_height(h_open);
+    let h_fire = challenge_fire_height(
+        h_open,
+        h_close,
+        &block_hash_at_seal,
+        &p_id,
+        shard_id,
+        settlement_epoch,
+    );
+    let current_height = h_fire.saturating_add(1);
+
+    let mut response = ArchivalServeCreditResponse {
+        p_canonical_id: p_id,
+        shard_id,
+        settlement_epoch,
+        segment_subroot_rk: rk,
+        leaf_index_in_segment: leaf_index,
+        leaf_bytes,
+        path,
+        hybrid_signature: kat_hybrid_signature(None),
+    };
+    let preimage = response.signature_preimage();
+    response.hybrid_signature = scheme.sign(&hybrid_sk, &preimage).expect("integration sign");
+
+    verify_leaf_index(
+        response.leaf_index_in_segment,
+        &response.p_canonical_id,
+        response.shard_id,
+        response.settlement_epoch,
+        segment_leaf_count,
+    )
+    .expect("integration leaf index");
+    verify_segment_path(
+        &response.leaf_bytes,
+        &layer_scalars,
+        &response.path,
+        &response.segment_subroot_rk,
+    )
+    .expect("integration path");
+
+    let wire = response.serialize().expect("integration wire");
+  json!({
+        "label": "ct2_opening_epoch0_consensus_verify",
+        "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
+        "shard_id": response.shard_id,
+        "settlement_epoch": response.settlement_epoch,
+        "segment_leaf_count": segment_leaf_count,
+        "leaf_index_in_segment": response.leaf_index_in_segment,
+        "freeze_height": h_fire,
+        "h_open": h_open,
+        "h_close": h_close,
+        "h_seal": h_seal,
+        "h_fire": h_fire,
+        "current_height": current_height,
+        "block_hash_at_seal_hex": encode_hex(&block_hash_at_seal),
+        "join_settlement_epoch": 0,
+        "bond_hybrid_pubkey_hex": encode_hex(&hybrid_pk_bytes),
+        "leaf_layer_scalars_hex": flat_layer_scalars_hex(&layer_scalars),
+        "wire_hex": encode_hex(&wire),
+    })
 }
 
 fn kat_hybrid_signature(
@@ -205,7 +377,11 @@ fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
     scalars
 }
 
-fn build_kat_document(pinned_hybrid_signature_hex: Option<&str>) -> Value {
+fn build_kat_document(
+    pinned_hybrid_signature_hex: Option<&str>,
+    integration_pk_hex: Option<&str>,
+    integration_sk_hex: Option<&str>,
+) -> Value {
     let p_id = [0x42u8; 32];
     let shard_id = 7u64;
     let settlement_epoch = 100u64;
@@ -284,7 +460,8 @@ fn build_kat_document(pinned_hybrid_signature_hex: Option<&str>) -> Value {
             "segment_subroot_rk_hex": encode_hex(&opening_rk),
             "c1_layers": layers_to_json(&opening_path.c1_layers),
             "c2_layers": layers_to_json(&opening_path.c2_layers),
-        }
+        },
+        "integration": build_integration_substrate(integration_pk_hex, integration_sk_hex),
     })
 }
 
@@ -293,15 +470,50 @@ fn build_kat_document(pinned_hybrid_signature_hex: Option<&str>) -> Value {
 fn regenerate_gate2_kat_fixture() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/gate2_serve_credit_kat_v1.json");
-    let pinned_sig = std::fs::read_to_string(&path)
+    let existing: Option<Value> = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v["wire"]["hybrid_signature_hex"]
-                .as_str()
-                .map(str::to_owned)
-        });
-    let doc = build_kat_document(pinned_sig.as_deref());
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let pinned_sig = existing.as_ref().and_then(|v| {
+        v["wire"]["hybrid_signature_hex"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let integration_pk = existing.as_ref().and_then(|v| {
+        v["integration"]["bond_hybrid_pubkey_hex"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let integration_sk = existing.as_ref().and_then(|v| {
+        v["integration"]["bond_hybrid_secret_key_hex"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let integration_wire = existing.as_ref().and_then(|v| {
+        v["integration"]["wire_hex"].as_str().map(str::to_owned)
+    });
+    let integration_scalars = existing.as_ref().and_then(|v| {
+        v["integration"]["leaf_layer_scalars_hex"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let doc = if integration_sk.is_some() {
+        build_kat_document(
+            pinned_sig.as_deref(),
+            integration_pk.as_deref(),
+            integration_sk.as_deref(),
+        )
+    } else if let (Some(wire), Some(pk), Some(scalars)) = (
+        integration_wire.as_deref(),
+        integration_pk.as_deref(),
+        integration_scalars.as_deref(),
+    ) {
+        let mut base = build_kat_document(pinned_sig.as_deref(), None, None);
+        base["integration"] =
+            build_integration_from_pinned_wire(wire, pk, scalars);
+        base
+    } else {
+        build_kat_document(pinned_sig.as_deref(), None, None)
+    };
     std::fs::write(&path, serde_json::to_string_pretty(&doc).expect("json")).expect("write");
     eprintln!("wrote {}", path.display());
 }
@@ -391,4 +603,35 @@ fn gate2_serve_credit_kat_vectors() {
 
     verify_segment_path(&leaf_bytes, &live_layer_scalars, &opening_path, &rk)
         .expect("opening verifies to R_k");
+
+    let integration = &kat["integration"];
+    let integration_wire = decode_hex(integration["wire_hex"].as_str().expect("integration wire"));
+    assert_eq!(integration_wire[0], VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE);
+
+    let mut cursor = std::io::Cursor::new(&integration_wire[1..]);
+    let parsed =
+        ArchivalServeCreditResponse::read_payload(&mut cursor).expect("parse integration wire");
+    let int_pk = HybridPublicKey::from_canonical_bytes(&decode_hex(
+        integration["bond_hybrid_pubkey_hex"]
+            .as_str()
+            .expect("integration pk"),
+    ))
+    .expect("integration pk parse");
+    let int_sig = parsed
+        .hybrid_signature
+        .to_canonical_bytes()
+        .expect("integration sig bytes");
+    let int_sig = HybridSignature::from_canonical_bytes(&int_sig).expect("integration sig parse");
+    assert!(HybridEd25519MlDsa
+        .verify(&int_pk, &parsed.signature_preimage(), &int_sig)
+        .expect("integration hybrid verify"));
+    assert_eq!(
+        challenge_leaf_index(
+            &parsed.p_canonical_id,
+            parsed.shard_id,
+            parsed.settlement_epoch,
+            integration["segment_leaf_count"].as_u64().expect("segment count"),
+        ),
+        parsed.leaf_index_in_segment
+    );
 }
