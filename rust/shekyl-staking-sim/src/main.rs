@@ -343,8 +343,8 @@ fn print_summary(results: &[ScenarioResult]) {
 }
 
 fn print_failure_confirmation_report(axis_filter: Option<&str>) {
-    let results = failure_confirmation::run_all_round1(axis_filter);
-    if results.is_empty() {
+    let report = failure_confirmation::run_full_report(axis_filter);
+    if report.scenarios.is_empty() {
         eprintln!(
             "shekyl-staking-sim: no failure-confirmation scenarios matched{}",
             axis_filter
@@ -355,48 +355,67 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     }
 
     eprintln!("shekyl-staking-sim — L14b failure-confirmation Round-1 (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)");
-    eprintln!("Paired escalate-on-failure vs sliding-window m-of-n on shared L16 outage process.");
-    eprintln!("Columns: volR = escalate/sliding challenge volume; Δslash = escalate−sliding mean slash epoch;");
-    eprintln!("  fsEsc/fsSlide = transient false-slash rate; fsBnd = analytic 1−p; dodgeSlash / gFloor.");
+    eprintln!("Residual-life recheck window (start=assumed quantile, width=w); tail misspec scenarios;");
+    eprintln!("binding check first (absolute block-space), then volR. Nominal 1−p exact only for exponential.");
+    eprintln!(
+        "Binding: vol_frac={:.5} vol_bind={} lat_bind={} — {}",
+        report.binding.volume_fraction_of_block_budget,
+        yn(report.binding.volume_binding),
+        yn(report.binding.latency_binding),
+        report.binding.rationale,
+    );
+    eprintln!("Honest P(slash) vs u (escalate):");
+    for pt in &report.u_sweep {
+        eprintln!(
+            "  u={:.2}  P_slash_esc={:.3}  P_slash_slide={:.3}",
+            pt.uptime_target, pt.escalate_slash_probability, pt.sliding_slash_probability,
+        );
+    }
     eprintln!();
     eprintln!(
-        "{:<28} {:<22} {:>6} {:>7} {:>6} {:>7} {:>6} {:>7} {:>8} | {}",
+        "{:<32} {:>6} {:>6} {:>6} {:>5} {:>5} {:>6} {:>5} | {}",
         "scenario",
-        "axis",
         "volR",
-        "Δslash",
         "fsEsc",
-        "fsSlide",
-        "fsBnd",
-        "dodge",
-        "gFloor",
-        "decision",
+        "tailΔ",
+        "bMin",
+        "gFl",
+        "bind",
+        "FSM?",
+        "gate",
     );
-    for r in &results {
+    for r in &report.scenarios {
         eprintln!(
-            "{:<28} {:<22} {:>6.3} {:>7} {:>6.3} {:>7.3} {:>6.3} {:>7.3} {:>8} | {}",
+            "{:<32} {:>6.3} {:>6.3} {:>6.3} {:>5} {:>5} {:>6} {:>5} | {}",
             r.name,
-            r.axis,
             r.decision.volume_ratio,
-            r.decision.slash_latency_delta_epochs,
             r.transient.escalate_false_slash_rate,
-            r.transient.sliding_false_slash_rate,
-            r.transient.analytic_bound,
-            r.dodge.escalate_slash_rate,
+            r.transient.tail_misspecification_gap,
+            r.params.gaming_floor_baseline_period,
             if r.dodge.gaming_floor_satisfied {
                 "ok"
             } else {
                 "FAIL"
             },
+            if r.decision.volume_binding {
+                "vol"
+            } else {
+                "—"
+            },
+            if r.decision.fsm_justified {
+                "yes"
+            } else {
+                "no"
+            },
             if r.decision.sliding_window_preferred {
                 "slide"
             } else {
-                "review"
+                "fsm?"
             },
         );
     }
 
-    match serde_json::to_string_pretty(&results) {
+    match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing failure-confirmation report: {e}"),
     }

@@ -60,22 +60,27 @@ same discipline as the `retention_bit` → `serve_credit_bit` misnomer fix.
 
 ---
 
-## 4. Parameter derivation (recheck delay)
+## 4. Parameter derivation (recheck window — two knobs)
 
-The recheck delay is **not** a free knob. It is read off the **transient-outage-duration
-distribution** (L16 transport model now; stressnet-measured CDF later):
+The recheck is **not** a single delay knob. After a baseline miss:
 
-```
-delay ~ Quantile_p(outage_duration)     // e.g. p = 0.95
-false_slash_on_genuine_transient ≈ 1 − p   // tail mass beyond that percentile
-```
+| Knob | Role | Sized from |
+|------|------|------------|
+| **Window start** | False-slash vs transient | `Quantile_p(residual_life)` — **not** `Quantile_p(outage_duration)` |
+| **Window width `w`** | Gaming resistance (dodge cost) | `b_min` scales with `w`, not with start offset |
 
-Pick the percentile → pick the false-slash rate on true transients. A genuine blip has
-recovered by the recheck; a durable outage has not.
+**Residual vs full duration.** At miss detection the load-bearing quantity is **remaining
+outage life**, not the marginal outage length. For the exponential (memoryless) case only,
+residual ≡ full duration and `false_slash ≈ 1 − p` at the chosen quantile is **exact by
+construction**. For fat-tailed laws (onion circuit/guard stalls), the inspection paradox makes
+residual life longer than `F_θ`; sizing start from `Quantile_p(F_θ)` on full duration
+**overstates** false-slash robustness. The Round-1 output that survives to stressnet is
+**tail misspecification robustness**: pick start from an assumed residual CDF, measure realized
+false-slash under a range of true tails.
 
-**Sim simplification.** Instead of sweeping a `(cadence, grace, bar)` surface, the core
-question collapses to: **fit a recheck schedule to the outage-duration CDF**, with the CDF as
-the empirical input.
+**Stressnet gating input.** Calibrating `θ` to match steady-state `u_eff` does **not** pin the
+metric — `u_eff` is a scalar; the answer lives in **duration shape and tail**. The measurement
+needed is the **outage-duration CDF** (residual-life CDF derived from it), not uptime alone.
 
 ---
 
@@ -93,8 +98,9 @@ and inflates `R_market`, degrading everyone else's scarcity signal.
 triggers a recheck after each, and ends up forced online for all those windows — gaming costs
 ≈ being available.
 
-**Sim obligation.** Score the **gaming-resistance floor on baseline cadence**, not only
-recheck transient/durable separation.
+**Sim obligation.** Score the **gaming-resistance floor `b_min` on baseline cadence** before
+any volume/latency comparison — it constrains **both** policies, not only the FSM path.
+Deterministic point recheck (zero width) is not modeled; spread `w` is load-bearing.
 
 ---
 
@@ -117,29 +123,36 @@ Escalation adds a **per-`P` confirmation-sequence state machine** — reorg inte
 exactly the part of the system this project is most careful about
 ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) composite-key discipline).
 
-**Decision gate (pre-implementation).** The sim must show the efficiency win over
-sliding-window is **large** before taking on the FSM. Plausible outcome: sliding-window does
-~90% of the job with none of the reorg surface; escalation's edge is only "detect a dead `P` in
-hours instead of one baseline interval" — which may not matter if the foundation durability
-floor is already binding.
+**Decision gate (pre-implementation).** Order of operations:
+
+1. **Pin `b_min`** (gaming floor on baseline cadence + recheck width).
+2. **Ask whether optimized resources bind** — absolute challenge block-space
+   (`N_market × shards_per_P × rate × vin / SEB`) and slash-latency (likely **non-binding**
+   when the foundation durability floor carries deterrence). If neither binds, **no**
+   `volume_ratio` justifies a consensus FSM; sliding-window wins outright.
+3. Only if binding: compare relative escalate vs sliding efficiency above `b_min`.
+
+Plausible outcome: volume and latency are not binding; FSM is unjustified regardless of
+adaptivity appeal.
 
 ---
 
 ## 7. Sim plan (before consensus FSM)
 
-Compare on the same L16 outage-duration input:
+Compare on the same outage process (exponential + fat-tail misspec scenarios):
 
-1. **Escalate-on-failure** — baseline per epoch; on miss, randomized recheck at quantile `p` of
-   outage CDF; slash on recheck miss.
-2. **Sliding-window m-of-n** — fixed baseline cadence; slash when `m` misses in window `n`.
+1. **Escalate-on-failure** — baseline per epoch; on miss, recheck window `[start, start+w]`
+   with `start = Quantile_p(assumed residual life)`, probe uniform in window; slash on probe
+   miss.
+2. **Sliding-window m-of-n** — baseline cadence; slash when `m` misses in window `n`.
 
-Report: total challenge volume, false-slash rate vs `p`, gaming-resistance floor on baseline
-cadence (recheck-surfacing dodge), durable-failure time-to-slash.
+Report: **`P(slash)` vs honest `u` sweep** (not-durably-absent slope); realized false-slash
+and **tail gap** vs nominal `1−p` (exponential-only); `b_min` + width sweep; **binding
+analysis** (analytical block-space); relative `volR` only when binding.
 
-**Round-1 landed (2026-06-08).** `shekyl-staking-sim --failure-confirmation` runs paired
-escalate vs sliding-window on the L16 outage process (`failure_confirmation.rs`). See
-[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L14b* for scenario names and early
-read. Consensus FSM remains gated on Round-1 decision output + reorg/`Unbond` spec.
+**Round-1 landed (2026-06-08, revised).** `shekyl-staking-sim --failure-confirmation` —
+`failure_confirmation.rs`. JSON report includes `binding`, `u_sweep`, and `scenarios`.
+Consensus FSM remains gated on binding check + `b_min` + reorg/`Unbond` spec.
 
 ---
 
@@ -160,3 +173,6 @@ independently of this pin; challenge **scheduling** policy is orthogonal to vin 
 
 - **2026-06-08:** Initial pin — escalate-on-failure + randomized recheck; not-durably-absent
   enforcement claim; outage-CDF quantile → false-slash; sim vs sliding-window decision gate.
+- **2026-06-08 (rev):** Residual-life window start + width `w`; tail-misspec robustness;
+  `b_min` → binding → relative trade decision order; stressnet outage-duration CDF as gating
+  input; `P(slash)` vs `u` sweep.

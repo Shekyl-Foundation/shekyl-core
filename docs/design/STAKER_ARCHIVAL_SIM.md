@@ -1985,39 +1985,40 @@ that a pure read-credit cannot go below) are post-testnet / gate-7 empirics. L14
 
 **Pin:** [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
 
-After a baseline epoch challenge **miss**, consensus may escalate scrutiny with a
-**randomized near-term recheck** (delay from the L16 outage-duration CDF quantile) rather than
-fixed-cadence re-policing of every healthy `P`. This strictly dominates fixed cadence on
-challenge volume and collapses the `(cadence, grace, bar)` sweep to "fit recheck to outage
-CDF."
+After a baseline epoch challenge **miss**, consensus may escalate scrutiny with a **recheck
+window** `[start, start+w]` — `start` from the **assumed residual-life** quantile `p`
+(false-slash knob), `w` the spread width (gaming / dodge-cost knob). Not a single deterministic
+delay: false-slash wants late recheck; gaming wants spread. Nominal `false_slash ≈ 1−p` is
+exact only for exponential (memoryless); fat-tailed true outages inflate realized false-slash
+when start is sized from the wrong law — Round-1 reports **tail misspecification gap**.
 
-**Enforcement claim:** policy certifies **not-durably-absent**, not a reachability SLA —
-mediocre `u` passes most baselines untested by design.
+**Enforcement claim:** policy certifies **not-durably-absent**, not a reachability SLA. The
+quantitative form is **`P(slash)` vs honest `u`** (u-sweep in report), not a single operating
+point at `u_eff ≈ 0.634`. Steady-state `u_eff` does not pin tail shape; stressnet needs the
+**outage-duration CDF**.
 
-**Decision gate:** sim must compare escalate-on-failure vs **sliding-window m-of-n** on
-challenge volume, false-slash vs quantile `p`, and **gaming-resistance floor** on baseline
-cadence (recheck-surfacing dodge) before a per-`P` confirmation FSM lands in consensus.
-Escalation trades faster durable-failure detection for sequence state + reorg surface;
-sliding-window may capture ~90% of the benefit statelessly.
+**Decision gate (ordered):** (1) pin **`b_min`** (gaming floor on baseline + `w`); (2)
+**binding check** — analytical `N_market × shards_per_P × rate × vin / SEB` (per-P sim cannot
+settle absolute volume); slash-latency likely non-binding under the durability floor; (3) only
+if binding: relative `volR` escalate vs sliding-window. If volume and latency do not bind, FSM
+is unjustified regardless of adaptivity.
 
-**Round-1 harness (landed).** `rust/shekyl-staking-sim/src/failure_confirmation.rs` — per-`P`
-epoch micro-sim on a shared L16 exponential outage process (`u_eff` at onion `L=6`). Actor
-classes: honest renewal, single transient outage, not-serving, dodge-serving (recheck-surface).
-Paired policies on identical RNG seeds. Run:
+**Round-1 harness (revised).** `rust/shekyl-staking-sim/src/failure_confirmation.rs` — per-`P`
+epoch micro-sim; exponential + lognormal tail-misspec scenarios. JSON report: `binding`,
+`u_sweep`, `scenarios`. Run:
 
 ```bash
 cargo run -p shekyl-staking-sim --release -- --failure-confirmation
-cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_confirm_quantile
+cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_confirm_tail
 ```
 
-Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`, `l14b_confirm_window_*`,
-`l14b_confirm_gaming_thin`. Report columns: `volR` (escalate/sliding challenge volume on
-honest hosting), transient false-slash (`fsEsc` / `fsSlide` vs analytic `1−p`), dodge
-`forced_online_fraction` + gaming-floor sweep, `Δslash` on not-serving. **Early read:** at
-L16 `u_eff` escalate false-slashes transients far less than sliding-window but issues
-~1.5–1.7× challenge volume on honest renewal; dodge-serving evades slash unless baseline
-cadence forces enough recheck-surface epochs — score the gaming floor before thinning
-baselines for volume.
+Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`,
+`l14b_confirm_tail_assumed_exp_true_lognormal`, `l14b_confirm_width_*`,
+`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Early read:** binding analysis shows
+challenge block-space is a negligible slice of the budget at default parameters → sliding-window
+wins on gate (2); escalate still separates transients better than sliding at L16 `u_eff` when
+gaming floor is met, but that edge does not justify consensus FSM cost without a binding
+resource.
 
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
