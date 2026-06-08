@@ -173,10 +173,10 @@ impl Ta1Recorder {
         }
 
         let mut portfolios: Vec<Vec<usize>> = vec![Vec::new(); world.actors.len()];
-        for (a, portfolio) in portfolios.iter_mut().enumerate().take(world.actors.len()) {
-            for s in 0..world.shards.len() {
-                if self.bits[a][s].last() == Some(&true) {
-                    portfolio.push(s);
+        for (a, actor_bits) in self.bits.iter().enumerate().take(world.actors.len()) {
+            for (s, shard_bits) in actor_bits.iter().enumerate().take(world.shards.len()) {
+                if shard_bits.last() == Some(&true) {
+                    portfolios[a].push(s);
                 }
             }
         }
@@ -227,8 +227,13 @@ impl Ta1Recorder {
         if self.closed_settlements < self.post_lapse_start_epoch {
             return;
         }
-        for (s, bits) in pre.iter().enumerate().take(world.shards.len()) {
-            if world.shards[s].is_deep(self.deep_threshold) && bits.last().copied().unwrap_or(false)
+        for (s, timeline) in pre
+            .iter()
+            .enumerate()
+            .take(world.shards.len().min(pre.len()))
+        {
+            if world.shards[s].is_deep(self.deep_threshold)
+                && timeline.last().copied().unwrap_or(false)
             {
                 world.holdings[actor][s] = true;
                 world.inflight[actor][s] = 0;
