@@ -9,6 +9,7 @@ mod balance;
 mod keys;
 mod lifecycle;
 mod offline;
+mod payment_requests;
 mod proofs;
 mod sign;
 mod staking;
@@ -49,6 +50,11 @@ Transfers:
   show_transfer <txid>                Show details for a transaction
   sweep_all <address>                 Sweep all outputs to address
     [--account N] [--priority N]      (explicit --account required)
+
+Payment requests (FA-8, feature-flagged cooperative path):
+  request new <amount> <label>        Create off-chain payment request (stub)
+  requests list                       List payment requests (stub)
+  history incoming --unattributed     Show unattributed receives (stub)
 
 Staking:
   stake <amount> [tier]               Stake SKL
@@ -259,6 +265,15 @@ pub fn repl(
                     }
                     ResolvedCommand::Transfers { account_index } => {
                         transfers::cmd_transfers(&ctx, account_index);
+                    }
+                    ResolvedCommand::RequestNew { amount, label } => {
+                        payment_requests::cmd_request_new(&ctx, amount, &label);
+                    }
+                    ResolvedCommand::RequestsList => {
+                        payment_requests::cmd_requests_list(&ctx);
+                    }
+                    ResolvedCommand::HistoryIncomingUnattributed { account_index } => {
+                        payment_requests::cmd_history_incoming_unattributed(&ctx, account_index);
                     }
 
                     // Keys

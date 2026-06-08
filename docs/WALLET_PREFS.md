@@ -180,6 +180,7 @@ where no pre-fork output set exists. Per rule
 | `ignore_outputs_below`         | `0`           | Coin-selection cap. |
 | `merge_destinations`           | `false`       | Privacy regression if flipped to `true`; not consensus. |
 | `inactivity_lock_timeout`      | `0` (off, timeout in minutes when non-zero) | Runtime session lock. HMAC catches tampering while locked. |
+| `cooperative_payment_requests` | `false` | FA-8: enable REQUEST label echo on send + rid matching on receive. Override with env `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS=1`. See `SUBADDRESS_UNDER_PQC.md` §5.7.9. |
 
 #### Device (Bucket 4)
 

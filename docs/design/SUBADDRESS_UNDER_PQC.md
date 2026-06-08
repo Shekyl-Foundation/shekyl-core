@@ -948,7 +948,7 @@ pub enum ReceiveAttribution {
     /// Label echoed; matched exactly one open PaymentRequest.
     Matched(PaymentRequestId),
     /// Label echoed but no open request, or ambiguous (two open same amount).
-    LabelUnknown { echoed_label_hash: [u8; 32] }, // store hash for display, not cleartext in logs
+    LabelUnknown { echoed_label_hash: [u8; 32] }, // cSHAKE256 display fingerprint (§5.7.11); not cleartext in logs
     /// User manually linked to a request (or created request retroactively).
     ManualMatch(PaymentRequestId),
     /// Wrong label suspected — user flagged; funds still spendable.

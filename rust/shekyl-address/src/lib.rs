@@ -33,6 +33,7 @@
 pub mod address;
 pub mod multisig_address;
 pub mod network;
+pub mod payment_uri;
 
 pub use address::{
     AddressError, ShekylAddress, ADDRESS_VERSION_V1, CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN,
@@ -43,3 +44,4 @@ pub use multisig_address::{
     MultisigAddressError, MultisigAddressPayload, MULTISIG_ADDRESS_VERSION,
 };
 pub use network::{AddressKind, Network};
+pub use payment_uri::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};

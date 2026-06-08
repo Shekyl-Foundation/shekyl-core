@@ -18,20 +18,21 @@
 //!
 //! Subaddress registry and per-index labels were deleted per
 //! `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.4 / §6.2. Payment requests
-//! (FA-8) will replace subaddress-based receive UX.
+//! (FA-8) replace subaddress-based receive UX.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::WalletLedgerError, payment_id::PaymentId};
+use crate::{error::WalletLedgerError, payment_id::PaymentId, payment_request::PaymentRequest};
 
 /// Schema version of the bookkeeping block.
 ///
-/// FA-2 ships [`BOOKKEEPING_BLOCK_VERSION`] `3` (subaddress registry
-/// removed). Version `2` carried `subaddress_registry` and
+/// FA-8 ships [`BOOKKEEPING_BLOCK_VERSION`] `4` (payment requests).
+/// Version `3` carried `primary_label` and `address_book` only (FA-2
+/// End-state 5). Version `2` carried `subaddress_registry` and
 /// `subaddress_labels`; version `1` carried the pre-flat-namespace
 /// two-field `SubaddressIndex`. Shekyl is pre-genesis — loads that see
 /// any other version refuse rather than migrate.
-pub const BOOKKEEPING_BLOCK_VERSION: u32 = 3;
+pub const BOOKKEEPING_BLOCK_VERSION: u32 = 4;
 
 /// One entry in the external address book — a contact / recurring payee
 /// the user has saved for convenience.
@@ -72,6 +73,10 @@ pub struct BookkeepingBlock {
     /// preserves that order verbatim.
     #[serde(default)]
     pub address_book: Vec<AddressBookEntry>,
+
+    /// Off-chain payment requests (FA-8, `SUBADDRESS_UNDER_PQC.md` §5.7.9).
+    #[serde(default)]
+    pub payment_requests: Vec<PaymentRequest>,
 }
 
 impl BookkeepingBlock {
@@ -91,6 +96,7 @@ impl BookkeepingBlock {
             block_version: BOOKKEEPING_BLOCK_VERSION,
             primary_label,
             address_book,
+            payment_requests: Vec::new(),
         }
     }
 

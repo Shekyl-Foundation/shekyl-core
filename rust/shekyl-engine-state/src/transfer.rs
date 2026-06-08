@@ -16,6 +16,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::{
     payment_id::PaymentId,
+    payment_request::ReceiveAttribution,
     serde_helpers::{commitment_bytes, edwards_point_bytes, scalar_bytes},
 };
 
@@ -172,6 +173,10 @@ pub struct TransferDetails {
     // ── Engine management ──
     pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+
+    /// Receive-side bookkeeping attribution (FA-8, §5.7.9).
+    #[serde(default)]
+    pub receive_attribution: ReceiveAttribution,
 }
 
 impl TransferDetails {
@@ -272,6 +277,7 @@ struct TransferDetailsSchema {
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+    receive_attribution: ReceiveAttribution,
 }
 
 impl postcard_schema::Schema for TransferDetails {
@@ -370,6 +376,7 @@ mod tests {
             eligible_height: 110,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: ReceiveAttribution::default(),
         }
     }
 

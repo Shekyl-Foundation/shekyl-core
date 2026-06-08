@@ -39,6 +39,16 @@ rust/shekyl-engine-state/src/ledger_block.rs|pub tip_hash: Option<[u8; 32]>
 # detect reorgs at scan time. Block hashes are public network state.
 rust/shekyl-engine-state/src/ledger_block.rs|pub blocks: Vec<(u64, [u8; 32])>
 
+# ── payment_request.rs ────────────────────────────────────────────────
+#
+# `matched_tx_hash` is the public on-chain tx id after cooperative
+# attribution matches an inbound payment to a `PaymentRequest`.
+rust/shekyl-engine-state/src/payment_request.rs|pub matched_tx_hash: Option<[u8; 32]>
+# Mirror-struct `PaymentRequestSchema` — compile-only shadow for
+# `postcard_schema::Schema` derivation (same pattern as
+# `TransferDetailsSchema` above).
+rust/shekyl-engine-state/src/payment_request.rs|matched_tx_hash: Option<[u8; 32]>
+
 # ── payment_id.rs ─────────────────────────────────────────────────────
 #
 # Clear payment ID bytes. The on-wire form is XOR-obfuscated against a
