@@ -287,6 +287,37 @@ SegmentPathOpening {
 **Forbidden on this vin:** mint fields; bond_credit/debit; `claimed_settlement_epochs`
 mutation; FCMP++ membership proof (8c feasibility §6.3).
 
+### 5.1.1 Byte layout (genesis pin)
+
+Vin type tag **`4`** (`txin_archival_serve_credit_response`). Varint discipline matches
+[`shekyl-oxide` `Input`](../../rust/shekyl-oxide/shekyl-oxide/src/transaction.rs) /
+`shekyl-io`. Reference implementation: `shekyl-archival-retention::wire`.
+
+```text
+u8                      vin_type = 4
+[32]                    p_canonical_id
+varint                  shard_id
+varint                  settlement_epoch
+[32]                    segment_subroot_rk
+u32_le                  leaf_index_in_segment
+[128]                   leaf_bytes
+varint                  c1_layer_count
+repeat c1_layer_count:
+  varint                c1_branch_scalar_count   (≤ 256)
+  repeat scalar_count:
+    [32]                selene/helios child scalar
+varint                  c2_layer_count
+repeat c2_layer_count:  (same shape as c1 branches)
+varint                  hybrid_signature_len
+[hybrid_signature_len]  HybridSignature::to_canonical_bytes()
+```
+
+`encode(path)` for §5.2 is the concatenation of the **c1** and **c2** branch sections only
+(layer counts + branch bodies), **not** the leading type tag or identity fields.
+
+**Preimage vs wire:** §5.2 uses `shard_id_le64` and `settlement_epoch_le64` (fixed width);
+on-wire fields use varints. Do not substitute wire bytes for preimage fields.
+
 ### 5.2 Signature preimage
 
 ```text
@@ -414,7 +445,7 @@ verifier treats registry as authoritative at `H_anchor`.
 
 **Open (implementation):**
 
-- [ ] Byte-exact serialization + domain labels frozen
+- [x] Byte-exact serialization + domain labels frozen (`shekyl-archival-retention::wire`, §5.1.1)
 - [ ] KAT vectors (single opening per epoch)
 - [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
 - [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)

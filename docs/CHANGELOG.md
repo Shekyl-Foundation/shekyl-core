@@ -11,6 +11,10 @@
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
 
+- **archival: serve-credit response vin wire (gate-2 §5.1.1).**
+  `ArchivalServeCreditResponse` encode/decode (vin tag `4`), `encode(path)` for signature
+  preimage, roundtrip + preimage determinism tests in `shekyl-archival-retention::wire`.
+
 - **crypto-pq / engine: primary claim derivation rename (FA-2 residue).**
   `subaddress` → `output_claim`; `subaddress_derivation_scalar` →
   `output_spend_offset_scalar`; `derive_primary_source_secrets_bundle`
