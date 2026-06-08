@@ -1,0 +1,21 @@
+# FA-6 decap pre-filter gate capture
+# scenario=a
+# scan_path=classical
+# captured_utc=20260608T212446Z
+# host=le7560-1hc5ck3
+# uname=Linux le7560-1hc5ck3 6.12.90+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.90-2 (2026-05-27) x86_64 GNU/Linux
+# rustc=rustc 1.95.0 (59807616e 2026-04-14)
+# rustflags=-C target-cpu=native
+# rustc_host=host: x86_64-unknown-linux-gnu
+#
+fa6_decap_prefilter_gate
+scan_path=classical_x25519_prefilter
+scenario=a
+iterations=2016000
+elapsed_secs=171.312167
+ns_per_output=84976.27
+m_margin=0.2
+t_ceil_secs=45
+t_clean_max_secs=36.000000
+gate_outcome=fail
+spec=FA-6_VIEW_TAG_ML_KEM.md §8.5.1 §8.7
