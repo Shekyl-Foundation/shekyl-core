@@ -49,7 +49,7 @@
 //!
 //! ## `<name>.wallet`
 //!
-//! Contains the state block (transfers, tx keys, subaddresses, address book,
+//! Contains the state block (transfers, tx keys, address book,
 //! UI preferences — whatever the caller passes in as an opaque byte blob).
 //! Rewritten on every auto-save.
 //!

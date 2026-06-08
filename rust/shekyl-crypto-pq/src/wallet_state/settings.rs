@@ -6,7 +6,7 @@
 //! The **settings block** of [`WalletMetadata`](super::WalletMetadata).
 //!
 //! User-facing knobs: scan policy, UX preferences, spending policy,
-//! scan-safety margins, the subaddress lookahead window, hardware-device
+//! scan-safety margins, hardware-device
 //! identity hints, optional originating-address provenance, and the
 //! background-sync configuration.
 //!
@@ -45,9 +45,10 @@ use zeroize::Zeroizing;
 
 use super::primitives::{decode_hex32, encode_hex32, repr_u8_enum, WalletStateError};
 
-/// Schema version of the settings block. V3.0 ships version `1`. Bumped
-/// on any field addition / removal / renaming within this block.
-pub const SETTINGS_BLOCK_VERSION: u32 = 1;
+/// Schema version of the settings block. Primary-claim rename ships version
+/// `2` (`subaddress_lookahead` deleted). Bumped on any field addition /
+/// removal / renaming within this block.
+pub const SETTINGS_BLOCK_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Defaults pinned at the wallet-state layer so this module is
@@ -56,12 +57,6 @@ pub const SETTINGS_BLOCK_VERSION: u32 = 1;
 
 /// Default inactivity-lock timeout in seconds.
 pub const DEFAULT_INACTIVITY_LOCK_TIMEOUT: u32 = 90;
-
-/// Default subaddress lookahead (major axis).
-pub const DEFAULT_SUBADDRESS_LOOKAHEAD_MAJOR: u32 = 50;
-
-/// Default subaddress lookahead (minor axis).
-pub const DEFAULT_SUBADDRESS_LOOKAHEAD_MINOR: u32 = 200;
 
 /// Default maximum reorg depth (in blocks).
 pub const DEFAULT_MAX_REORG_DEPTH: u64 = 100;
@@ -277,32 +272,6 @@ impl Default for ScanSafetySettings {
     }
 }
 
-/// Subaddress lookahead window. Pre-populates lookup tables so receiving
-/// to a never-queried subaddress still matches on scan.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SubaddressLookahead {
-    #[serde(default = "default_lookahead_major")]
-    pub major: u32,
-    #[serde(default = "default_lookahead_minor")]
-    pub minor: u32,
-}
-
-fn default_lookahead_major() -> u32 {
-    DEFAULT_SUBADDRESS_LOOKAHEAD_MAJOR
-}
-fn default_lookahead_minor() -> u32 {
-    DEFAULT_SUBADDRESS_LOOKAHEAD_MINOR
-}
-
-impl Default for SubaddressLookahead {
-    fn default() -> Self {
-        Self {
-            major: default_lookahead_major(),
-            minor: default_lookahead_minor(),
-        }
-    }
-}
-
 /// Non-secret hardware-device identity hints.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DeviceSettings {
@@ -417,8 +386,6 @@ pub struct SettingsBlock {
     #[serde(default)]
     pub scan_safety: ScanSafetySettings,
     #[serde(default)]
-    pub subaddress_lookahead: SubaddressLookahead,
-    #[serde(default)]
     pub device: DeviceSettings,
     #[serde(default)]
     pub original_keys: Option<OriginalKeys>,
@@ -434,7 +401,6 @@ impl Default for SettingsBlock {
             ux: UxPrefs::default(),
             spending: SpendingPrefs::default(),
             scan_safety: ScanSafetySettings::default(),
-            subaddress_lookahead: SubaddressLookahead::default(),
             device: DeviceSettings::default(),
             original_keys: None,
             background_sync: BackgroundSyncConfig::default(),
@@ -480,14 +446,6 @@ mod tests {
         );
         assert_eq!(s.ux.background_mining, BackgroundMiningSetup::NotYetAsked);
         assert_eq!(s.scan_safety.max_reorg_depth, DEFAULT_MAX_REORG_DEPTH);
-        assert_eq!(
-            s.subaddress_lookahead.major,
-            DEFAULT_SUBADDRESS_LOOKAHEAD_MAJOR
-        );
-        assert_eq!(
-            s.subaddress_lookahead.minor,
-            DEFAULT_SUBADDRESS_LOOKAHEAD_MINOR
-        );
         assert_eq!(s.spending.ignore_outputs_above, TOTAL_MONEY_SUPPLY);
         assert_eq!(s.spending.ignore_outputs_below, 0);
         assert!(s.spending.ignore_fractional_outputs);
