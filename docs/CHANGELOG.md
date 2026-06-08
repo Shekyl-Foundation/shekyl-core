@@ -11,6 +11,10 @@
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
 
+- **archival: gate-2 serve-credit KAT fixture (v1).**
+  `tests/fixtures/gate2_serve_credit_kat_v1.json` tripwires challenge replay, wire bytes,
+  signature preimage, and CT-2 founder opening; regen via `regenerate_gate2_kat_fixture`.
+
 - **archival: serve-credit response vin wire (gate-2 §5.1.1).**
   `ArchivalServeCreditResponse` encode/decode (vin tag `4`), `encode(path)` for signature
   preimage, roundtrip + preimage determinism tests in `shekyl-archival-retention::wire`.

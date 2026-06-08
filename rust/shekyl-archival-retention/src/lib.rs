@@ -19,6 +19,9 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
+//!
+//! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
+//! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`).
 
 #![deny(unsafe_code)]
 

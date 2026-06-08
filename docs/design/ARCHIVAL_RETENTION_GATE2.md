@@ -446,7 +446,7 @@ verifier treats registry as authoritative at `H_anchor`.
 **Open (implementation):**
 
 - [x] Byte-exact serialization + domain labels frozen (`shekyl-archival-retention::wire`, §5.1.1)
-- [ ] KAT vectors (single opening per epoch)
+- [x] KAT vectors (`tests/fixtures/gate2_serve_credit_kat_v1.json`, `gate2_serve_credit_kat_vectors`)
 - [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
 - [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
 
