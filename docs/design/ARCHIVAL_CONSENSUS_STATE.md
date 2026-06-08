@@ -302,7 +302,9 @@ integration tests, 8c verifier hookup.
 ### 9.1 Implementation checklist
 
 - [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
-- [ ] Pin `ShardId` + serve-credit-ledger key `(P_id, shard_id, E)` + epoch indexing.
+- [x] Pin serve-credit-ledger key `(P_id, shard_id, E)` — `archival_serve_credit` LMDB
+      (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
+      gate-4-owned.
 - [ ] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
 - [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
       semantics** at `E`-close (§3.4; not scalar `slash_epoch`).

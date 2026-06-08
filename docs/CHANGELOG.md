@@ -10,10 +10,15 @@
   `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
+- **archival: serve-credit consensus hook + LMDB bit (gate-2 §10 steps 2–3).**
+  `shekyl-ffi` `shekyl_archival_verify_serve_credit_vin`; `Blockchain::check_archival_serve_credit_input`
+  and pure archival tx admission in `check_tx_inputs`; `archival_serve_credit` LMDB subdb
+  (`serve_credit_bit` write on connect, revert on `pop_block`). Bond posture and shard-registry
+  reads remain stubbed until gate-4 substrate lands (txs fail at step 2 with explicit log).
+
 - **archival: `txin_archival_serve_credit_response` deserializer (gate-2 §10 step 2).**
   C++ `txin_v` tag `0x04` with path bounds; `shekyl-oxide` `Input::ArchivalServeCreditResponse`
   delegates to `shekyl-archival-retention::wire`; KAT cross-check in C++ and Rust unit tests.
-  Consensus validation hook remains open (vin rejected at mempool/block until hook lands).
 
 - **archival: `serve_credit_bit` rename sweep (gate-2 §11).**
   `retention_bit` / `proven_retention` → `serve_credit_bit` across emission/consensus specs,

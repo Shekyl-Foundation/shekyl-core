@@ -423,8 +423,8 @@ verifier treats registry as authoritative at `H_anchor`.
 | Step | Deliverable |
 |------|-------------|
 | 1 | `shekyl-archival-retention` crate — `verify_segment_path`, challenge replay, KAT from `shekyl-curve-tree` fixtures |
-| 2 | C++/Rust `txin_archival_retention_response` deserializer + consensus hook |
-| 3 | Connect bit write to archival LMDB tables (substrate reconciliation) |
+| 2 | C++/Rust `txin_archival_serve_credit_response` deserializer + consensus hook |
+| 3 | Connect bit write to archival LMDB tables (substrate reconciliation) — **landed** (`archival_serve_credit` LMDB); bond/registry reads gate on gate-4 |
 | 4 | Slash scheduler at `H_deadline` (gate-4 hook) |
 | 5 | Gate-6 wallet: construct response + hybrid sign |
 | 6 | Worst-case verify benchmark → confirm no ZK reopen (8c §9.1 criterion 1) |
@@ -448,9 +448,12 @@ verifier treats registry as authoritative at `H_anchor`.
 - [x] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
 - [x] `txin_archival_serve_credit_response` deserializer (C++ `txin_v` tag 4; `shekyl-oxide` `Input::ArchivalServeCreditResponse`; KAT cross-check)
 
-**Open (consensus hook, step 2 remainder):**
+**Consensus hook (step 2–3):**
 
-- [ ] Archival vin validation in `Blockchain::check_tx_inputs` + LMDB serve-credit bit write
+- [x] `shekyl-ffi` archival verify (`shekyl_archival_verify_serve_credit_vin`; gate-2 §5.3 steps 4–9)
+- [x] `Blockchain::check_archival_serve_credit_input` + pure archival tx path in `check_tx_inputs`
+- [x] LMDB `serve_credit_bit` write/revert (`archival_serve_credit` subdb; `LMDB_SCHEMA.md`)
+- [ ] Gate-4 bond posture + shard-registry LMDB reads (verifier rejects until substrate lands)
 
 ---
 

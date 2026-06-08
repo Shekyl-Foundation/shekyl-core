@@ -393,6 +393,21 @@ Per-staked-output watermark tracking the last claimed height.
 | Readers | `get_staker_claim_watermark` (claim validation: `from_height` must equal watermark) |
 | Introduced | HF1 (Shekyl genesis) |
 
+### `archival_serve_credit`
+
+Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch)` (gate-2 §3.1).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_serve_credit"` |
+| Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
+| Value | `uint8_t` `0x01` (presence flag; key existence is the authoritative bit) |
+| Writers | `set_archival_serve_credit_bit` (on archival vin block connect), `remove_archival_serve_credit_bit` (reorg `pop_block`) |
+| Readers | `has_archival_serve_credit_bit` (idempotency check; derived `R_market` at epoch close) |
+| Encoder | `shekyl::db::ArchivalServeCreditKey` in `blockchain_db/shekyl_types.h` |
+| Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
+
 ### `properties` — Staking keys
 
 The `properties` table (see below) stores these staking-related entries:
@@ -738,20 +753,21 @@ General key-value store for database-level metadata.
 | 14 | `spent_keys` | zerokval | `crypto::key_image` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
 | 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 40 | `INTEGERKEY` |
 | 16 | `staker_claims` | `uint64_t` output_idx | `uint64_t` height | 8 | `INTEGERKEY` |
-| 17 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 18 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 19 | `curve_tree_meta` | string | varies | varies | — |
-| 20 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 21 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 22 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 23 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 24 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 25 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 26 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 27 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 28 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 29 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 30 | `properties` | string | varies | varies | — |
+| 17 | `archival_serve_credit` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
+| 18 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
+| 19 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
+| 20 | `curve_tree_meta` | string | varies | varies | — |
+| 21 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
+| 22 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 23 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 24 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 25 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 26 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 27 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 28 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 29 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 30 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 31 | `properties` | string | varies | varies | — |
 | 31 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
 Total: **31 sub-databases** (30 active + 1 legacy migration stub).
