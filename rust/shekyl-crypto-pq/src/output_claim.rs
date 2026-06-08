@@ -36,9 +36,7 @@
 //! The `-v1` domain-separation suffix is reserved for a future post-genesis
 //! derivation change gated on a hard fork.
 
-use core::ops::Deref;
-
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
+use curve25519_dalek::Scalar;
 use zeroize::Zeroizing;
 
 use shekyl_primitives::keccak256_to_scalar;
@@ -71,30 +69,27 @@ pub fn output_spend_offset_scalar(view_scalar: &Scalar, idx_le_bytes: &[u8; 4]) 
     ))
 }
 
-/// Derive `(spend, view)` points for a given index — **test and recovery
-/// fixtures only**.
-///
-/// Returns `spend = D + m_i * G` and `view = a * spend`. For
-/// `idx_le_bytes = PRIMARY_CLAIM_INDEX_LE` this is `D + m₀*G`, which is
-/// **not** the encoded primary address (`D` alone). E2E signing tests pay
-/// outputs to this derived point so `O = (ho + b + m_i)*G + y*T` recovers.
-///
-/// Not public: V3.0 has no per-index receive-address product surface.
-#[allow(dead_code)] // used by unit tests in this module only
-pub(crate) fn derived_spend_point_for_test(
-    view_scalar: &Zeroizing<Scalar>,
-    spend_public: &EdwardsPoint,
-    idx_le_bytes: &[u8; 4],
-) -> (EdwardsPoint, EdwardsPoint) {
-    let scalar = output_spend_offset_scalar(view_scalar.deref(), idx_le_bytes);
-    let spend = spend_public + (&scalar * ED25519_BASEPOINT_TABLE);
-    let view = view_scalar.deref() * spend;
-    (spend, view)
-}
-
 #[cfg(test)]
 mod tests {
+    use core::ops::Deref;
+
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
+    use zeroize::Zeroizing;
+
     use super::*;
+
+    /// Derive `(spend, view)` for index-sensitivity tests: `D + m_i·G` and
+    /// `a·spend`. Not a product API — V3.0 has no per-index receive surface.
+    fn derived_spend_point_for_test(
+        view_scalar: &Zeroizing<Scalar>,
+        spend_public: &EdwardsPoint,
+        idx_le_bytes: &[u8; 4],
+    ) -> (EdwardsPoint, EdwardsPoint) {
+        let scalar = output_spend_offset_scalar(view_scalar.deref(), idx_le_bytes);
+        let spend = spend_public + (&scalar * ED25519_BASEPOINT_TABLE);
+        let view = view_scalar.deref() * spend;
+        (spend, view)
+    }
 
     #[test]
     fn output_spend_offset_scalar_is_deterministic() {
