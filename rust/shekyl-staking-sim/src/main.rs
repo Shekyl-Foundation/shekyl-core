@@ -13,9 +13,14 @@
 //!
 //! Optional filter: `--axis=<prefix>` runs only scenarios whose `axis` field starts with
 //! the prefix (e.g. `--axis=gate4_fine` for the iteration-2 bond window sweep).
+//!
+//! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
+//! `--failure-confirmation` (L14b Round-1 policy comparator per
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
 
 mod agent;
 mod audit;
+mod failure_confirmation;
 mod fingerprint;
 mod metrics;
 mod model;
@@ -337,6 +342,66 @@ fn print_summary(results: &[ScenarioResult]) {
     }
 }
 
+fn print_failure_confirmation_report(axis_filter: Option<&str>) {
+    let results = failure_confirmation::run_all_round1(axis_filter);
+    if results.is_empty() {
+        eprintln!(
+            "shekyl-staking-sim: no failure-confirmation scenarios matched{}",
+            axis_filter
+                .map(|p| format!(" --axis={p}"))
+                .unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+
+    eprintln!("shekyl-staking-sim — L14b failure-confirmation Round-1 (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)");
+    eprintln!("Paired escalate-on-failure vs sliding-window m-of-n on shared L16 outage process.");
+    eprintln!("Columns: volR = escalate/sliding challenge volume; Δslash = escalate−sliding mean slash epoch;");
+    eprintln!("  fsEsc/fsSlide = transient false-slash rate; fsBnd = analytic 1−p; dodgeSlash / gFloor.");
+    eprintln!();
+    eprintln!(
+        "{:<28} {:<22} {:>6} {:>7} {:>6} {:>7} {:>6} {:>7} {:>8} | {}",
+        "scenario",
+        "axis",
+        "volR",
+        "Δslash",
+        "fsEsc",
+        "fsSlide",
+        "fsBnd",
+        "dodge",
+        "gFloor",
+        "decision",
+    );
+    for r in &results {
+        eprintln!(
+            "{:<28} {:<22} {:>6.3} {:>7} {:>6.3} {:>7.3} {:>6.3} {:>7.3} {:>8} | {}",
+            r.name,
+            r.axis,
+            r.decision.volume_ratio,
+            r.decision.slash_latency_delta_epochs,
+            r.transient.escalate_false_slash_rate,
+            r.transient.sliding_false_slash_rate,
+            r.transient.analytic_bound,
+            r.dodge.escalate_slash_rate,
+            if r.dodge.gaming_floor_satisfied {
+                "ok"
+            } else {
+                "FAIL"
+            },
+            if r.decision.sliding_window_preferred {
+                "slide"
+            } else {
+                "review"
+            },
+        );
+    }
+
+    match serde_json::to_string_pretty(&results) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing failure-confirmation report: {e}"),
+    }
+}
+
 fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
@@ -386,6 +451,11 @@ fn main() {
     }
 
     let axis_filter = std::env::args().find_map(|a| a.strip_prefix("--axis=").map(str::to_string));
+
+    if std::env::args().any(|a| a == "--failure-confirmation") {
+        print_failure_confirmation_report(axis_filter.as_deref());
+        return;
+    }
 
     let cfgs: Vec<_> = build_scenarios()
         .into_iter()

@@ -4,6 +4,12 @@
 
 ### Added
 
+- **staking-sim: L14b failure-confirmation Round-1 comparator (2026-06-08).**
+  `failure_confirmation.rs` + `--failure-confirmation` — paired escalate-on-failure vs
+  sliding-window m-of-n on L16 outage CDF; scenarios `l14b_confirm_*`; reports volume ratio,
+  transient false-slash vs `1−p`, gaming-resistance floor. Per
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §7.
+
 - **docs: archival failure-confirmation policy pin (2026-06-08).**
   [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](design/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) —
   escalate-on-failure with randomized near-term recheck (not exponential backoff);

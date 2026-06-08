@@ -134,9 +134,12 @@ Compare on the same L16 outage-duration input:
 2. **Sliding-window m-of-n** — fixed baseline cadence; slash when `m` misses in window `n`.
 
 Report: total challenge volume, false-slash rate vs `p`, gaming-resistance floor on baseline
-cadence (recheck-surfacing dodge), durable-failure time-to-slash. **Implement in
-`shekyl-staking-sim` only after wire/consensus deserializer path is stable** — does not block
-gate-2 §10 deserializer work.
+cadence (recheck-surfacing dodge), durable-failure time-to-slash.
+
+**Round-1 landed (2026-06-08).** `shekyl-staking-sim --failure-confirmation` runs paired
+escalate vs sliding-window on the L16 outage process (`failure_confirmation.rs`). See
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L14b* for scenario names and early
+read. Consensus FSM remains gated on Round-1 decision output + reorg/`Unbond` spec.
 
 ---
 

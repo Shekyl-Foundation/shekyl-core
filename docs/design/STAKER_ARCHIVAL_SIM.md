@@ -2000,7 +2000,24 @@ cadence (recheck-surfacing dodge) before a per-`P` confirmation FSM lands in con
 Escalation trades faster durable-failure detection for sequence state + reorg surface;
 sliding-window may capture ~90% of the benefit statelessly.
 
-**Not in scope for current gate-2 wire PR** — sim work follows deserializer stability.
+**Round-1 harness (landed).** `rust/shekyl-staking-sim/src/failure_confirmation.rs` — per-`P`
+epoch micro-sim on a shared L16 exponential outage process (`u_eff` at onion `L=6`). Actor
+classes: honest renewal, single transient outage, not-serving, dodge-serving (recheck-surface).
+Paired policies on identical RNG seeds. Run:
+
+```bash
+cargo run -p shekyl-staking-sim --release -- --failure-confirmation
+cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_confirm_quantile
+```
+
+Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`, `l14b_confirm_window_*`,
+`l14b_confirm_gaming_thin`. Report columns: `volR` (escalate/sliding challenge volume on
+honest hosting), transient false-slash (`fsEsc` / `fsSlide` vs analytic `1−p`), dodge
+`forced_online_fraction` + gaming-floor sweep, `Δslash` on not-serving. **Early read:** at
+L16 `u_eff` escalate false-slashes transients far less than sliding-window but issues
+~1.5–1.7× challenge volume on honest renewal; dodge-serving evades slash unless baseline
+cadence forces enough recheck-surface epochs — score the gaming floor before thinning
+baselines for volume.
 
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
