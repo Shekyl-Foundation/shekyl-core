@@ -1707,6 +1707,56 @@ bool shekyl_wallet_save_as(
     uint32_t* out_error);
 
 // ---------------------------------------------------------------------------
+// Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
+// ---------------------------------------------------------------------------
+
+struct shekyl_archival_verify_ctx {
+    uint64_t current_height;
+    uint64_t settlement_epoch;
+    uint8_t block_hash_at_seal[32];
+    uint8_t registry_segment_subroot_rk[32];
+    uint64_t segment_leaf_count;
+    const uint8_t* pqc_pubkey_ptr;
+    size_t pqc_pubkey_len;
+    const uint8_t* leaf_layer_scalars_ptr;
+    size_t leaf_layer_scalar_count;
+};
+
+#define SHEKYL_ARCHIVAL_VERIFY_OK                    0
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR        1
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE              2
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW 3
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING 4
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH  5
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX        6
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK       7
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED  8
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE   9
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY       10
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER        11
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY      12
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
+
+uint64_t shekyl_archival_settlement_epoch_blocks(void);
+uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
+uint64_t shekyl_archival_challenge_fire_height(
+    uint64_t h_open,
+    uint64_t h_close,
+    const uint8_t* block_hash_at_seal,
+    const uint8_t* p_id,
+    uint64_t shard_id,
+    uint64_t settlement_epoch);
+
+/// `vin_payload` is the vin body after the `0x04` type tag.
+uint8_t shekyl_archival_verify_serve_credit_vin(
+    const uint8_t* vin_payload_ptr,
+    size_t vin_payload_len,
+    const struct shekyl_archival_verify_ctx* ctx_ptr);
+
+// ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //
 // Single function: `shekyl_difficulty_lwma1_next`. Wraps the

@@ -38,7 +38,7 @@ pub use challenge::{
 };
 pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
-    CHALLENGE_RESPONSE_BLOCKS,
+    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use error::VerifyError;
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};

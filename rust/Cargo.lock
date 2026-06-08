@@ -4014,6 +4014,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-chacha",
  "shekyl-consensus",
  "shekyl-crypto-hash",

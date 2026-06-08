@@ -1,0 +1,263 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §5.3).
+//!
+//! Wraps `shekyl-archival-retention` for the C++ consensus hook. Bond posture,
+//! shard-registry geometry, and LMDB bit writes stay in the daemon; this module
+//! covers challenge replay, path verify, hybrid signature, and credit-window timing.
+
+use std::io::Cursor;
+
+use shekyl_archival_retention::{
+    challenge_fire_height, challenge_seal_height, verify_leaf_index, verify_segment_path,
+    ArchivalServeCreditResponse, WireError, SETTLEMENT_EPOCH_BLOCKS,
+};
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
+
+/// Success.
+pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
+/// Required pointer was null.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR: u8 = 1;
+/// Vin payload failed structural decode.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE: u8 = 2;
+/// Segment path depth < 2.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW: u8 = 3;
+/// Challenged leaf not present in opening.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING: u8 = 4;
+/// Recomputed sub-root does not match `R_k`.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH: u8 = 5;
+/// `leaf_index_in_segment` does not match epoch challenge index.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX: u8 = 6;
+/// Vin `segment_subroot_rk` does not match registry value in context.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK: u8 = 7;
+/// `current_height` is not past `H_fire`.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED: u8 = 8;
+/// `current_height` is past `H_credit_deadline` (`H_close`).
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE: u8 = 9;
+/// Hybrid signature verification failed.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY: u8 = 10;
+/// Hybrid pubkey or signature blob failed deserialization.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER: u8 = 11;
+/// Registry reports zero segment leaf count.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY: u8 = 12;
+/// `settlement_epoch` in vin disagrees with context epoch.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH: u8 = 13;
+/// Leaf-layer scalar count is not a multiple of four.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE: u8 = 14;
+
+/// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
+#[repr(C)]
+pub struct ShekylArchivalVerifyCtx {
+    pub current_height: u64,
+    pub settlement_epoch: u64,
+    pub block_hash_at_seal: [u8; 32],
+    pub registry_segment_subroot_rk: [u8; 32],
+    pub segment_leaf_count: u64,
+    pub pqc_pubkey_ptr: *const u8,
+    pub pqc_pubkey_len: usize,
+    pub leaf_layer_scalars_ptr: *const u8,
+    pub leaf_layer_scalar_count: usize,
+}
+
+#[must_use]
+pub fn settlement_epoch_open_height(e: u64) -> u64 {
+    e.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
+}
+
+#[must_use]
+pub fn settlement_epoch_close_height(e: u64) -> u64 {
+    settlement_epoch_open_height(e.saturating_add(1)).saturating_sub(1)
+}
+
+fn map_verify_error(err: shekyl_archival_retention::VerifyError) -> u8 {
+    use shekyl_archival_retention::VerifyError;
+    match err {
+        VerifyError::PathTooShallow => SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW,
+        VerifyError::LeafNotInOpening => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING,
+        VerifyError::SubrootMismatch => SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH,
+        VerifyError::LeafIndexMismatch { .. } => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX,
+    }
+}
+
+fn map_wire_error(_err: WireError) -> u8 {
+    SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
+}
+
+/// Global settlement-epoch block span (`SETTLEMENT_EPOCH_BLOCKS`).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
+    SETTLEMENT_EPOCH_BLOCKS
+}
+
+/// First block of settlement epoch `E` (`H_open`).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u64 {
+    settlement_epoch_open_height(settlement_epoch)
+}
+
+/// Last block of settlement epoch `E` (`H_close`, credit deadline).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_epoch_close_height(settlement_epoch: u64) -> u64 {
+    settlement_epoch_close_height(settlement_epoch)
+}
+
+/// Seal height for epoch open (`H_seal` in gate-2 §3.4).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_challenge_seal_height(h_open: u64) -> u64 {
+    challenge_seal_height(h_open)
+}
+
+/// Beacon fire height `H_fire` for `(P, shard, E)` (gate-2 §3.4).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_challenge_fire_height(
+    h_open: u64,
+    h_close: u64,
+    block_hash_at_seal: *const u8,
+    p_id: *const u8,
+    shard_id: u64,
+    settlement_epoch: u64,
+) -> u64 {
+    if block_hash_at_seal.is_null() || p_id.is_null() {
+        return 0;
+    }
+    let seal_hash = unsafe { std::slice::from_raw_parts(block_hash_at_seal, 32) };
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(seal_hash);
+    let pid = unsafe { std::slice::from_raw_parts(p_id, 32) };
+    let mut p = [0u8; 32];
+    p.copy_from_slice(pid);
+    challenge_fire_height(
+        h_open,
+        h_close,
+        &hash,
+        &p,
+        shard_id,
+        settlement_epoch,
+    )
+}
+
+/// Verify vin payload bytes (after the type tag) for steps 4–9 of gate-2 §5.3.
+///
+/// `vin_payload` is the C++ `txin_archival_serve_credit_response` body only
+/// (no leading `0x04` tag). Bond posture, market, and idempotency are C++-side.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
+    vin_payload_ptr: *const u8,
+    vin_payload_len: usize,
+    ctx_ptr: *const ShekylArchivalVerifyCtx,
+) -> u8 {
+    if vin_payload_ptr.is_null() || ctx_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
+    }
+    let ctx = unsafe { &*ctx_ptr };
+    if ctx.segment_leaf_count == 0 {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY;
+    }
+    if ctx.pqc_pubkey_ptr.is_null() || ctx.pqc_pubkey_len == 0 {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
+    }
+    if ctx.leaf_layer_scalars_ptr.is_null() || ctx.leaf_layer_scalar_count == 0 {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
+    }
+    if !ctx.leaf_layer_scalar_count.is_multiple_of(32) {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE;
+    }
+
+    let payload = unsafe { std::slice::from_raw_parts(vin_payload_ptr, vin_payload_len) };
+    let response = match ArchivalServeCreditResponse::read_payload(&mut Cursor::new(payload)) {
+        Ok(r) => r,
+        Err(e) => return map_wire_error(e),
+    };
+
+    if response.settlement_epoch != ctx.settlement_epoch {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH;
+    }
+    if response.segment_subroot_rk != ctx.registry_segment_subroot_rk {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK;
+    }
+
+    if let Err(e) = verify_leaf_index(
+        response.leaf_index_in_segment,
+        &response.p_canonical_id,
+        response.shard_id,
+        response.settlement_epoch,
+        ctx.segment_leaf_count,
+    ) {
+        return map_verify_error(e);
+    }
+
+    let h_open = settlement_epoch_open_height(response.settlement_epoch);
+    let h_close = settlement_epoch_close_height(response.settlement_epoch);
+    let h_fire = challenge_fire_height(
+        h_open,
+        h_close,
+        &ctx.block_hash_at_seal,
+        &response.p_canonical_id,
+        response.shard_id,
+        response.settlement_epoch,
+    );
+
+    if ctx.current_height <= h_fire {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED;
+    }
+    if ctx.current_height > h_close {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE;
+    }
+
+    let scalar_count = ctx.leaf_layer_scalar_count / 32;
+    let mut scalars = Vec::with_capacity(scalar_count);
+    let flat = unsafe {
+        std::slice::from_raw_parts(ctx.leaf_layer_scalars_ptr, ctx.leaf_layer_scalar_count)
+    };
+    for chunk in flat.chunks_exact(32) {
+        let mut s = [0u8; 32];
+        s.copy_from_slice(chunk);
+        scalars.push(s);
+    }
+
+    if let Err(e) = verify_segment_path(
+        &response.leaf_bytes,
+        &scalars,
+        &response.path,
+        &response.segment_subroot_rk,
+    ) {
+        return map_verify_error(e);
+    }
+
+    let preimage = response.signature_preimage();
+    let pubkey = unsafe { std::slice::from_raw_parts(ctx.pqc_pubkey_ptr, ctx.pqc_pubkey_len) };
+    let pk = match HybridPublicKey::from_canonical_bytes(pubkey) {
+        Ok(pk) => pk,
+        Err(_) => return SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER,
+    };
+    if HybridEd25519MlDsa
+        .verify(&pk, &preimage, &response.hybrid_signature)
+        .is_err()
+    {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY;
+    }
+
+    SHEKYL_ARCHIVAL_VERIFY_OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr;
+
+    #[test]
+    fn ffi_constants_match_timing_cluster() {
+        assert_eq!(shekyl_archival_settlement_epoch_blocks(), 10_000);
+        assert_eq!(shekyl_archival_epoch_open_height(100), 1_000_000);
+        assert_eq!(shekyl_archival_epoch_close_height(100), 1_009_999);
+    }
+
+    #[test]
+    fn ffi_rejects_null_context() {
+        let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
+        assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+    }
+}
