@@ -790,6 +790,25 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   populated, the PR is not reviewable — measurement is the gate,
   not optional metadata.
 
+## FA-6 decap pre-filter gate (`fa6_decap_prefilter_throughput_pi4`)
+
+Per [`docs/design/FA-6_VIEW_TAG_ML_KEM.md`](design/FA-6_VIEW_TAG_ML_KEM.md) §8.5.1 /
+§8.7. **UX ceiling gate** (not a Stage 1 frozen-baseline regression row).
+
+| Field | Value |
+|-------|-------|
+| Harness | `rust/shekyl-crypto-pq/src/bin/fa6_decap_prefilter_gate.rs` |
+| Pi capture | `scripts/bench/fa6_pi4_gate.sh smoke\|a\|b` |
+| Reference device | Raspberry Pi 4 Model B, 4 GB, active cooling (§8.2) |
+| Scenario A | 2,016,000 outputs, `T_ceil` = 45 s (clean ≤ 36 s) |
+| Scenario B | 525,960,000 outputs, `T_ceil` = 20 min (clean ≤ 16 min) |
+| `M_margin` | 20% |
+
+**Status (2026-06-07):** harness landed; **Pi capture pending**. Archive each run
+under `docs/benchmarks/fa6_decap_prefilter_pi4_<scenario>_<utc>.txt` and record
+`gate_outcome` here when A/B complete. End-to-end restore bench (§8.5.2) remains
+a separate follow-up.
+
 ## Cross-references
 
 - [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)

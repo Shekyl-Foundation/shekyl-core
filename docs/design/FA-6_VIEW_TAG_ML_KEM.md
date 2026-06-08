@@ -1,8 +1,10 @@
 # FA-6 — PQ-safe view-tag pre-filter (T6 closure)
 
 **Status.** Specification reviewed (2026-06-02): §11 S1–S4, S6–S9 signed; **S5
-ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§8.7 bench gate still pending**
-(merge requires clean / marginal / fail vs S5 ceilings). **Disposition:** adopt at
+ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§3.1 / FA-6b wire locks re-verified
+2026-06-07** (§3.1.1, §5.4.1). **§8.7 outcome pending** — harness landed
+(`fa6_decap_prefilter_gate`, §8.5.1); Pi 4 A/B capture selects pre-written §10
+branch. **Disposition:** adopt at
 V3.0 genesis — re-key the on-wire 1-byte pre-filter from classical
 (`x25519_ss`) to hybrid-leg (`ml_kem_ss`). **Implementation:** separate PR
 after spec review; not bundled with FA-11 (`enc_label` wire) or subaddress
@@ -158,29 +160,27 @@ post-decap (or decap is universal).
 `enc_label`; `output.rs` + `derivation.rs` for `amount_tag`). A single
 classical pre-decap byte left on the wire **defeats** the view-tag re-key.
 
-#### 3.1.1 Code verification record (2026-06-02, `dev` @ PR #100 merge)
+#### 3.1.1 Code verification record (2026-06-07, `dev` post–PR #101)
 
-Audit of account-output scan on `dev` (`ac0a59f6` merge). Confirms
-`label_tag` / `amount_tag` are **not** pre-decap filters (the `label_tag`
-“before decrypt” wording means before XOR-decrypting label **plaintext**,
-after ML-KEM decap and `derive_output_secrets`).
+Re-audit traced each on-wire tag to live derivation + scanner order (not
+table-only). `derive_view_tag_x25519` is **absent** from `rust/`; account path
+uses `derive_view_tag_prefilter` (`derivation.rs`, `output.rs`).
 
 | §3.1 row | Leg | Scanner order (evidence) | T6 disposition |
 |----------|-----|---------------------------|----------------|
-| `amount_tag` | Hybrid (`combined_ss`) | `scan_output` / `scan_output_recover`: ML-KEM decap → `derive_output_secrets` → **then** `amount_tag` compare (`output.rs` ~515–532, ~734–738) | **Verified safe** — no FA-6 change |
-| `label_tag` | Hybrid (`combined_ss`) | Same path: tag compare **after** decap + `derive_output_secrets`, **before** `decrypt_label_plaintext` (~534–537, ~741–745, ~758) | **Verified safe** — not a view-tag sibling |
-| `enc_label` | Hybrid (`k_label` from `combined_ss`) | Decrypt only after `derive_output_secrets` | **Verified safe** |
-| `view_tag` | Classical today | `derive_view_tag_x25519` **before** decap (~485–490, ~712–717) | **FA-6 re-key** |
+| `view_tag` | Hybrid (`ml_kem_ss`) | `ml_kem_decap_prefilter_with_parsed_dk` → tag compare → reject wipes `ml_kem_ss` (`output.rs:486–516`, `600–607`) | **Verified — re-keyed** (`derive_view_tag_prefilter`, construct `output.rs:278`) |
+| `amount_tag` | Hybrid (`combined_ss`) | Decap → X25519 → `derive_output_secrets` → compare (`output.rs:626–631`) | **Verified safe** |
+| `label_tag` | Hybrid (`combined_ss`) | Same; compare before `decrypt_label_plaintext` (`output.rs:634–637`, `650`) | **Verified safe** |
+| `enc_label` | Hybrid (`k_label`) | Post-decap decrypt only | **Verified safe** |
+| `view_tag_hints` (FA-6b) | Hybrid (`ss_i`) | Multisig: decap → `derive_view_tag_hint` compare (`multisig_receiving.rs:269–274`) | **Separate audit — §5.4.1** |
 
-Derivation: `label_tag` / `k_amount` from `derive_output_secrets(combined_ss, …)`
-(`derivation.rs` — `HKDF_SALT_OUTPUT_DERIVE`, labels `shekyl-output-label-tag` /
-`shekyl-output-amount-tag`). **S2 sign-off:** attach reviewer initials to this
-table; no further design work unless a new classical pre-decap byte is found.
+Derivation anchors: `amount_tag` / `label_tag` from `derive_output_secrets`
+(`derivation.rs:223–232`, salt `shekyl-output-derive-v1`); `view_tag_prefilter`
+from `HKDF_SALT_VIEW_TAG_PREFILTER` + `ml_kem_ss` only (`derivation.rs:263–265`).
+C++ wire: `od.view_tag_prefilter` (`cryptonote_tx_utils.cpp`, `wallet2.cpp`).
 
-**Likely outcome (hypothesis, not closure):** Main-path `amount_tag` /
-`label_tag` / `enc_label` are already hybrid-derived; the view tag is the
-**deliberate** classical exception because it is the **only** pre-decap
-filter. **“Likely” is not “verified.”** §3.1 exists to force verification.
+**S2 sign-off:** no reopened row; no further design unless a new classical
+pre-decap byte is found in code review.
 
 ### 3.2 Multisig hints (separate track — do not fold into FA-6 closure)
 
@@ -459,6 +459,24 @@ If multisig were ever promoted to V3.0 user-shippable without FA-6b, that would
 be an explicit product/security decision recorded in `V3_WALLET_DECISION_LOG.md`,
 not an accident of scheduling.
 
+#### 5.4.1 FA-6b genesis wire disposition (2026-06-07)
+
+Code audit of `tx_extra_pqc_view_tag_hints` / `derive_view_tag_hint`
+(`multisig_receiving.rs`, `PQC_MULTISIG.md` §7.1). **Genesis-visible wire**
+(format + inclusion in multisig scaffold); **not** folded into FA-6 T6 closure.
+
+| Question | Finding |
+|----------|---------|
+| Computable from view scalar `a` without decap? | **No** — hint compare after `kem.decapsulate` |
+| Per-output variation? | **Yes** — per-output KEM randomness includes `output_index_in_tx` + participant index (`LABEL_MULTISIG_KEM`) |
+| Passive 1-byte wire linker without view key? | **Possible** — public metadata; distinct from T6 (quantum-recoverable secret) |
+| V3.0 user-shippable multisig? | **No** — FROST multisig V3.1 per `WALLET_REWRITE_PLAN.md` |
+| Genesis posture | Scaffold may emit hints; **conscious acceptance** at genesis; hint re-key (if needed) before V3.1 multisig ships |
+
+**Round-3 wire-lock artifact:** this table + §5.4 bullets. **Implementation /
+re-key** of hints remains V3.1 (FA-6b track), not deferred as an unsigned
+genesis decision.
+
 ---
 
 ## 6. Verification and test vectors
@@ -725,6 +743,8 @@ Run **both**; neither alone is sufficient.
 1. **Micro — decap + pre-filter (FA-6-specific)**  
    Inputs in memory; loop `N_outputs` (or `ΔN` for scenario A) of ML-KEM decap
    + `derive_view_tag_prefilter` + compare; no daemon, no disk. Isolates CPU.
+   **Harness:** `cargo run --release -p shekyl-crypto-pq --bin fa6_decap_prefilter_gate`
+   (`--scenario smoke|a|b`); Pi capture via `scripts/bench/fa6_pi4_gate.sh`.
    Archive as `fa6_decap_prefilter_throughput_pi4` in `PERFORMANCE_BASELINE.md`.
 
 2. **End-to-end restore (integration)**  
@@ -858,7 +878,7 @@ requires §8.7 against §11.1 pins when benches are run.
 | # | Item | Pass | Notes |
 |---|------|------|-------|
 | S1 | T6 model + **§3.1 inventory** (not tag-only) | ✅ | Closure = no wire byte from quantum-recoverable secret; §3.1 completeness artifact. |
-| S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ✅ | Code-grounded: `view_tag` sole classical pre-decap byte; `amount_tag` / `label_tag` post-decap from `combined_ss` PRK; §3.1.1 accurate. |
+| S2 | §3.1 **Verify** rows closed — §3.1.1 re-audit 2026-06-07 post–PR #101 | ✅ | `view_tag` re-keyed (`derive_view_tag_prefilter` post-decap); hybrid tags verified; FA-6b row → §5.4.1. |
 | S3 | HKDF constants §4.2 + **domain separation** §4.5 | ✅ | Constants pinned §4.2; distinctness table + one-byte PRF argument §4.5 (not TBD). |
 | S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ✅ | Leg-swap order; `view_tag_combined` internal only — no scan gate. |
 | S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 bench outcome still pending. |
@@ -893,8 +913,9 @@ parallel; they do **not** set these pins.
 
 | Gate | When |
 |------|------|
-| **Implementation PR** | After S5 artifact filed and S5 row → ✅ |
-| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) |
+| **Implementation PR** | After S5 artifact filed and S5 row → ✅ (PR #101) |
+| **§8.5.1 gate binary** | `fa6_decap_prefilter_gate` — Pi 4 capture selects §8.7 branch |
+| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) — **impl merged; §8.7 outcome open** |
 | **Re-review** | Implementation deltas only — section-scoped |
 
 ### 11.3 Implementation checklist (blind spots — ranked)
