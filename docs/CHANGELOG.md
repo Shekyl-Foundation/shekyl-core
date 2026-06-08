@@ -4,6 +4,14 @@
 
 ### Added
 
+- **docs: 8c retention-soundness hinge + gate-2 ordering fix (2026-06-08).**
+  Review amendment: Merkle opening proves **membership**, not set-B **retention** (public
+  leaves + reacquire-on-demand). [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)
+  §7.5 reacquisition-asymmetry hinge OPEN; economics reopen if hinge fails; `m=3` scoped to
+  partial-deletion only. [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md)
+  downgraded to Round 0 draft; `H_anchor` must fall inside epoch `E` (fixes `H_close+1` bug);
+  bytes/KATs held for Round 1.
+
 - **docs: archival retention gate-2 Round 0 spec (2026-06-08).**
   [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) — challenge derivation
   (`cSHAKE`, `m=3`, `R_k`-local Merkle openings), `txin_archival_retention_response` wire,
