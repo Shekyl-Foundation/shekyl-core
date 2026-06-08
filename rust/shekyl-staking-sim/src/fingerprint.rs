@@ -173,10 +173,10 @@ impl Ta1Recorder {
         }
 
         let mut portfolios: Vec<Vec<usize>> = vec![Vec::new(); world.actors.len()];
-        for a in 0..world.actors.len() {
+        for (a, portfolio) in portfolios.iter_mut().enumerate().take(world.actors.len()) {
             for s in 0..world.shards.len() {
                 if self.bits[a][s].last() == Some(&true) {
-                    portfolios[a].push(s);
+                    portfolio.push(s);
                 }
             }
         }
@@ -186,11 +186,11 @@ impl Ta1Recorder {
                 *counts.entry(p.clone()).or_insert(0) += 1;
             }
         }
-        for a in 0..world.actors.len() {
-            let size = if portfolios[a].is_empty() {
+        for (a, portfolio) in portfolios.iter().enumerate().take(world.actors.len()) {
+            let size = if portfolio.is_empty() {
                 0
             } else {
-                counts.get(&portfolios[a]).copied().unwrap_or(1)
+                counts.get(portfolio).copied().unwrap_or(1)
             };
             self.cohort_sizes[a].push(size);
         }
@@ -227,9 +227,8 @@ impl Ta1Recorder {
         if self.closed_settlements < self.post_lapse_start_epoch {
             return;
         }
-        for s in 0..world.shards.len().min(pre.len()) {
-            if world.shards[s].is_deep(self.deep_threshold)
-                && pre[s].last().copied().unwrap_or(false)
+        for (s, bits) in pre.iter().enumerate().take(world.shards.len()) {
+            if world.shards[s].is_deep(self.deep_threshold) && bits.last().copied().unwrap_or(false)
             {
                 world.holdings[actor][s] = true;
                 world.inflight[actor][s] = 0;
@@ -275,12 +274,10 @@ impl Ta1Recorder {
 
         let sample_adequate = n_ep >= MIN_SETTLEMENT_EPOCHS;
         let timeline_homogeneous = baseline_sim >= MIN_INDEPENDENT_SIMILARITY;
-        let rotation_no_timeline_advantage =
-            lapse_relink.is_none_or(|r| r <= baseline_sim + 1e-9);
+        let rotation_no_timeline_advantage = lapse_relink.is_none_or(|r| r <= baseline_sim + 1e-9);
         let cohort_adequate = mean_cohort >= MIN_MEAN_COHORT_SIZE
             && singleton_frac <= MAX_SINGLETON_PORTFOLIO_FRACTION;
-        let distinctive_identifiable =
-            singleton_frac >= MIN_DISTINCTIVE_SINGLETON_FRACTION;
+        let distinctive_identifiable = singleton_frac >= MIN_DISTINCTIVE_SINGLETON_FRACTION;
         let cosmetic_relinks = cosmetic_overlap.is_none_or(|o| o >= MIN_COSMETIC_OVERLAP);
 
         let f1_pass = if self.expect_distinctive_portfolio {
@@ -315,7 +312,12 @@ impl Ta1Recorder {
 }
 
 /// Force an actor's deep holdings to an exact shard set (portfolio-distinctiveness sweep).
-pub fn force_deep_portfolio(world: &mut World, actor: usize, shards: &[usize], deep_threshold: f64) {
+pub fn force_deep_portfolio(
+    world: &mut World,
+    actor: usize,
+    shards: &[usize],
+    deep_threshold: f64,
+) {
     for s in 0..world.shards.len() {
         if !world.shards[s].is_deep(deep_threshold) {
             continue;

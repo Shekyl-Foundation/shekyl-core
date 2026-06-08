@@ -23,6 +23,7 @@ mod participation;
 mod retrieval;
 mod reward;
 mod scenarios;
+mod timing_cluster;
 mod transport;
 
 use scenarios::{build_scenarios, run_sim, ScenarioResult};
@@ -336,7 +337,52 @@ fn print_summary(results: &[ScenarioResult]) {
     }
 }
 
+fn print_timing_cluster_report() {
+    let report = timing_cluster::verify();
+    eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
+    eprintln!(
+        "  W={} epochs (~{:.1} d)  REORG={} blocks (~{:.0} d)  release_cooldown={} epochs  challenge={} blocks",
+        report.constants.max_claim_age_w,
+        report.constants.w_wall_clock_days,
+        report.constants.reorg_horizon_blocks,
+        report.constants.reorg_horizon_days,
+        report.constants.release_cooldown_epochs,
+        report.constants.challenge_resolution_blocks,
+    );
+    eprintln!(
+        "  prune_horizon_epochs={}  couplings+F4: {}",
+        report.constants.prune_horizon_epochs,
+        yn(report.all_pass)
+    );
+    for c in &report.couplings {
+        eprintln!("    {} — {} ({})", yn(c.pass), c.name, c.detail);
+    }
+    eprintln!(
+        "    F4 offline burst — worst offline {} / {} tested: {}",
+        report.f4_offline_burst.worst_offline_without_forfeit,
+        report.f4_offline_burst.max_offline_epochs_tested,
+        yn(report.f4_offline_burst.pass)
+    );
+    eprintln!(
+        "    F4 slow emitter — {}: {}",
+        report.f4_slow_emitter.detail,
+        yn(report.f4_slow_emitter.pass)
+    );
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing timing cluster report: {e}"),
+    }
+    if !report.all_pass {
+        std::process::exit(1);
+    }
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--timing-cluster") {
+        print_timing_cluster_report();
+        return;
+    }
+
     let axis_filter = std::env::args().find_map(|a| a.strip_prefix("--axis=").map(str::to_string));
 
     let cfgs: Vec<_> = build_scenarios()
