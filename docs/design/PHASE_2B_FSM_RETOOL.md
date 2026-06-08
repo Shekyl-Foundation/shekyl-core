@@ -369,7 +369,7 @@ claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](PH
 
 **Closed in review:**
 
-- [x] F1 — provisionally accepted; **T-A1 sim gate** (open); SEB structural lever.
+- [x] F1 — conditionally finally accepted (T-A1 v2); SEB **not** F1 lever; timing cluster pinned.
 - [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion) + T-A17 (join censorship, low).
 - [x] G11 — positive KAT invariants G11-E1/E2/E3; full-node vs light-client split.
 - [x] G1 — three-tier surfacing; partial slash stays `Bonded` (FSM amended).

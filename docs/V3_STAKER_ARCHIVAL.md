@@ -1274,7 +1274,7 @@ epochs and prunes reward-accounting state (`ClaimedEpochSet`, retention
 rows, `Σwork` history) — see
 [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2.4;
 [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6.6. Trades
-state growth against lapse-forfeiture (gate-6 decorrelation).
+state growth against lapse-forfeiture economics (not decorrelation — F1 T-A1).
 
 **Price curve shape.** Naive 1/R (diminishing returns, may give weak
 redundancy). 1/R² (sharper redundancy preference). Threshold function

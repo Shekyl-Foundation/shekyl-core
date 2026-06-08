@@ -118,7 +118,7 @@ must not form a standing correlation channel.
 | Settlement-epoch emission cadence (~14 d default) | Emission leg §3 | Batches work claims; reduces drip timing tell |
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` per `P` | Emission leg §3 | Default batch; single-epoch claim = test-only |
 | Per-epoch retention ledger resolution | Archival state / F1 | **Public liveness fingerprint** at epoch granularity |
-| `MAX_CLAIM_AGE_W` | Archival state §2.4 | Deliberate lapse forfeiture vs decorrelation |
+| `MAX_CLAIM_AGE_W` | Archival state §2.4 | Forfeiture horizon + hot-state bound (not decorrelation — F1 T-A1) |
 
 **E-4 threat (named):** Fine-grained per-epoch retention timeline + shard-set adjacency
 across **`P_old` → `P_new` rotation** re-links identities if rotation is cosmetic
@@ -180,7 +180,7 @@ fires relative to principal activity is observability the firewall must address
 ```text
 [seed] → derive P → announce/backing (off-chain) → join-Market (on-chain bond anchor)
        → serve + challenges → paying emissions → bond updates / slash / re-bond
-       → optional rotation P_old → P_new → lapse / decorrelation
+       → optional rotation P_old → P_new (portfolio-changing) → lapse / forfeit
        → terminal drain → retire P
 ```
 
@@ -191,8 +191,8 @@ fires relative to principal activity is observability the firewall must address
 | **join-Market** | Yes (bond record create, `E_join`) | **Standing timing event** — defang via §2.3/§2.5; cannot hide in mint |
 | First **paying** emission | Yes (mint + dedup) | Decorrelate from principal funding |
 | Ongoing service | Yes (retention bits, holdings) | Network path; epoch-timeline fingerprint |
-| Rotation | Yes (new `P_id`, holdings transfer) | Decorrelate timeline + shard-set adjacency |
-| Deliberate lapse > `W` | Yes (forfeiture) | Acceptable decorrelation cost |
+| Rotation | Yes (new `P_id`, holdings transfer) | Portfolio change only — cosmetic swap insufficient (T-A1) |
+| Deliberate lapse > `W` | Yes (forfeiture) | Forfeiture economics — does not decorrelate without portfolio change |
 | Terminal drain | Yes (transfer) | Output decorrelation |
 
 **Registration fusion:** No separate *registration tx type*; **join-Market** is the
@@ -278,7 +278,7 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 - [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp
       (T-A4/T-A6 conditional passes; [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9).
 - [ ] Land wallet disclosure §10 in UX copy.
-- [ ] Pin epoch-length disposition jointly with gate-2 cadence + gate-6 decorrelation.
+- [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
       [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives.

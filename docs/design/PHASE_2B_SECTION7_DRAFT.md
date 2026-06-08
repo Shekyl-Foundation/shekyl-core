@@ -106,7 +106,7 @@ Each item needs a disposition before §7 lands: **mitigated-in-design** / **FOLL
 | **T-A11** | **Reorg** | Re-fetch path under adversarial reorg shapes; join-Market disconnect only when join block popped (gate-4 §5). |
 | **T-A12** | **Daemon lie — bond record** | Stale `good_standing`, wrong `claimed_settlement_epochs`, false `bonded_total` — wallet refuses emit build; loud error. |
 | **T-A13** | **Memory — `P` key material** | Session-only derivation; no RPC/plaintext `ask` payloads; HW-wallet path for `P` signing (round-open). |
-| **T-A14** | **Economic — slash / lapse** | Rational `P` lets epochs lapse past `W` for decorrelation — forfeiture vs privacy trade explicit in UI? |
+| **T-A14** | **Economic — slash / lapse** | Rational `P` lets epochs lapse past `W` (forfeiture, not decorrelation) — income vs reclaim trade explicit in UI? |
 | **T-A15** | **Economic — bond floor gaming** | Sybil split across `P` — `total bond = shards × FLOOR`; CompleteTree `×1` exception only (G4-7). |
 | **T-A15b** | **Economic — HoldingsUpdate slash evasion (A5)** | `P` drops shard *s* via HoldingsUpdate the instant before challenge would slash — escapes penalty unless release cooldown blocks (gate-4 §4.4). Pin: per-shard last-served epoch + cooldown inheritance on dropped shard. |
 | **T-A16** | **A6 — challenge grief** | **(i) Forced slash via liveness:** flood challenges faster than `P` can answer, or DoS onion rendezvous → miss response window → slash. Mitigation: `CHALLENGE_RESOLUTION_BLOCKS` > L16 latency + transient-DoS margin; **bounded challenge rate**. **(ii) Challenger-position deanonymization:** interactive challenger sees response timing/path — sharper than passive A2/T-A3. **(iii) False dispute:** challenge issuance must be **consensus-witnessed** — A6 cannot claim non-response to undelivered challenge. |
@@ -166,28 +166,21 @@ It is also a **persistent public fingerprint** of `P`'s serving pattern.
 | Axis | Coarsenable? | Why |
 |------|--------------|-----|
 | **Shard** (`s`) | **No** | Per-shard `R_market` scarcity; `Σwork` needs per-`(P,s,E)` granularity (emission work formula). |
-| **Epoch** (`E`) | **Yes — protocol dial** | `SETTLEMENT_EPOCH_BLOCKS` (SEB) sets epoch-axis resolution. |
+| **Epoch** (`E`) | **Pinned — not an F1 dial** | `SETTLEMENT_EPOCH_BLOCKS` (SEB) = **10_000** — emission cadence + public liveness resolution; see [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1.2 |
 
-**SEB is the structural F1 lever.** [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
-pins SEB at **10_000** (~13.9 d at 120 s blocks) as **inherited** from confidential-staking
-emission cadence — not TBD. Two branches:
+**SEB is not the structural F1 lever (T-A1 v2, 2026-06-07).** `ta1_f1_seb_coarse` (SEB=20_000)
+does not materially change portfolio cohort size. F1's **structural axis is shard / portfolio**
+(per-`(P,s,E)` granularity; ~98% singleton portfolios at lean eq). SEB governs emission
+cadence, challenge cadence (gate 2 interface), and epoch-granularity liveness fingerprint —
+not re-linkage decorrelation.
 
-1. **If SEB = 10_000 is a genuine lock** for emission-cadence / servo reasons, then F1's
-   **structural resolution is fixed at SEB**; what remains is a **hygiene-only residual**
-   (rotation, lapse, firewall) — not fixable by operator discipline alone, but also not
-   fixable without breaking Σwork if you hide bits.
-2. **If "inherited" is a placeholder**, F1 gets a **vote on coarser SEB** before accepting
-   hygiene-only residual — coarser epochs are protocol-level fingerprint reduction and
-   outrank operator discipline per priority order (privacy-priority property).
+**Hygiene mitigations (E-4, gate 6).** Network/output/timing firewall layers + **portfolio-changing**
+rotation (abandons scarce-shard income). Cosmetic `P_id` swap without storage change does
+**not** decorrelate (F1 T-A1). Lapse > `W` is **forfeiture**, not decorrelation.
 
-**Hygiene mitigations (E-4, gate 6).** Rotation, lapse > `W`, network/output/timing firewall
-layers buy down residual **after** SEB is pinned. Incrementing `p_slot` only helps if
-observable behavior changes — not cosmetic `P_id` swap.
-
-**Disposition (tightened):** **Provisionally accepted** — category "accepted residual, not
-fix-by-hiding" is correct. **Not finally accepted until T-A1 sim sign-off** at pinned SEB +
-hygiene defaults. T-A1 is a **gate** (burden on accept), not a reopen trigger fired after
-the fact. Failing T-A1 blocks §7 F1 closure and may force SEB reconsideration (branch 2).
+**Disposition:** **Conditionally finally accepted** — qual wargame T-A3/T-A5/T-A6/T-A7 pass;
+T-A4 consensus leg pinned with timing cluster. **Full closure:** gate-6 Round 3–4 wallet
+defaults (jitter, drain spacing). See [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9.8.
 
 ---
 

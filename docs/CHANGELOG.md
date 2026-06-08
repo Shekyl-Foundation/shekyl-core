@@ -17,6 +17,30 @@
   destination `original` is a `shekyl:…?rid=` URI. CLI stubs: `request new`,
   `requests list`, `history incoming --unattributed`.
 
+- **docs: 8c retention-soundness hinge + gate-2 ordering fix (2026-06-08).**
+  Review amendment: Merkle opening proves **membership**, not set-B **retention** (public
+  leaves + reacquire-on-demand). [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)
+  §7.5 reacquisition-asymmetry hinge OPEN; economics reopen if hinge fails; `m=3` scoped to
+  partial-deletion only. [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md)
+  downgraded to Round 0 draft; `H_anchor` must fall inside epoch `E` (fixes `H_close+1` bug);
+  bytes/KATs held for Round 1.
+
+- **docs: archival retention gate-2 Round 0 spec (2026-06-08).**
+  [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) — challenge derivation
+  (`cSHAKE`, `m=3`, `R_k`-local Merkle openings), `txin_archival_retention_response` wire,
+  verifier order, slash handoff to gate 4; §4 flags retention-credit vs slash-window tension
+  for stressnet. Cross-refs: consensus state §6, bond gate 4 §4.2, 8c feasibility §10.
+
+- **docs: loud 8c retention-proof constructibility pass (2026-06-08).**
+  [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) —
+  BUILD disposition: Merkle opening PoR to shard `R_k` on `shekyl-fcmp::tree` primitives; ZK
+  and FCMP++ membership rejected for genesis.
+
+- **docs: archival corpus fossil sweep (2026-06-08).**
+  [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](design/ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) — superseded-model
+  rationale audit; 8c constructibility test surface §5. Active fossils fixed (SEB-as-F1-lever,
+  lapse-decorrelation, deferred SEB pin).
+
 - **archival: timing cluster pinned + reorg/retention split (2026-06-07).**
   [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md): `W=26`,
   `RETENTION_HORIZON_BLOCKS=420_000`, `ARCHIVAL_REORG_DEPTH_BLOCKS=720`,

@@ -4,7 +4,8 @@
 `cargo run -p shekyl-staking-sim -- --timing-cluster` (see §6).
 
 **Authority:** This doc is the **single enumeration** for the interdependent timing cluster.
-Consumers cite this file; they do not re-derive couplings locally.
+Consumers cite this file; they do not re-derive couplings locally. Superseded-model rationale
+audit: [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md).
 
 | Doc | Consumes |
 |-----|----------|

@@ -2,7 +2,8 @@
 
 **Status:** **Round 1 base (2026-06-07).** Consensus-balance custody; balance-equation
 `bond_credit` / `bond_debit`; conservation law; `== bond_floor`; `Unbond`; `E_join+1`.
-Numeric cluster (§8.2) and slash trigger (gate-2) still open.
+Numeric cluster pinned in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md);
+slash trigger interface pinned in [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6.
 
 **Scope:** Consensus objects and vin wire for **bond posture** — **join-Market**, **re-bond**,
 **clean unbond** (collateral return), holdings updates — **distinct** from reward **mint**
@@ -322,8 +323,9 @@ Slash is **not** a user transaction and has **no** balance equation. It is a
 **consensus-internal transfer** between tracked counters (§4.5), same class as coinbase
 emission being rule-driven rather than balance-proven.
 
-**Trigger:** gate-2 delivers verifiable challenge-failure for `(P, s, E)` within grace (8c
-deliverable); gate-4 applies `slash(P, s)`.
+**Trigger:** gate-2 `challenge_failed(P,s,E)` at `H > H_deadline` without
+`retention_bit` ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6); gate-4
+applies `slash(P, s)`.
 
 **Atomic write set (entire slash on block connect):**
 
@@ -467,12 +469,12 @@ Pin joint disposition in gate-6 Round 2+ with this doc's join event as the named
 **Closed at round 1:** custody model (§3.2); `bond_credit`/`bond_debit` wire; conservation
 law (§4.5); `== bond_floor`; UTXO framings rejected.
 
-**Remaining (numeric or gate-2-owned):**
+**Remaining (implementation):**
 
-- [ ] **Numeric cluster** — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
-      (values still open; shape pinned).
-- [ ] **Slash trigger construction** — gate-2 8c deliverable; gate-4 consumes
-  "challenge for `(P,s,E)` failed within grace."
+- [x] **Numeric cluster** — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
+      (2026-06-07 pin).
+- [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
+      §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook open.
 - [ ] C++ / Rust vin type registration; `bond_credit`/`bond_debit` in RCT balance verifier.
 - [ ] KAT: join → serve `E_first` → paying emit; conservation-law cross-check fixture.
 
