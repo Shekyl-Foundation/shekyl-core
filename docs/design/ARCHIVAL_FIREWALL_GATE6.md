@@ -125,22 +125,21 @@ across **`P_old` → `P_new` rotation** re-links identities if rotation is cosme
 (same storage, same shard set, adjacent epochs). **Rotation must change observable
 behavior**, not only `P_id`.
 
-**T-A1 update (2026-06-07, v2 instrument).** At the lean deep-archiver equilibrium,
-timeline similarity is a **non-channel** for re-linkage (independent operators ~96%
-identical; rotation `P₀→P₁` is *less* similar than a random other archiver). The binding
-public identifier is the **deep shard-set portfolio** and its **co-holder cohort**:
-`|{P' : portfolio(P') = portfolio(P)}|`. A distinctive combination identifies even when
-per-shard `R_target` is healthy; a portfolio within a healthy co-holder cohort is not
-re-linkable on set alone. **Honest disclosure:** re-linkability across rotation is
-**cohort-bounded** — a distinctive archival portfolio is a persistent public identity by
-function; timeline rotation does not decorrelate what the sim shows is already homogeneous.
-Mitigation is portfolio shape (serve within a cohort) plus the `R_target` coverage floor
-doubling as a re-linkage anonymity floor where combination-uniqueness binds below per-shard
-replication. Evidence: [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
+**T-A1 update (2026-06-07).** At lean equilibrium, scarcity-spread produces **unique
+portfolios** (~98% singleton) — the privacy shadow of coverage working correctly. Timeline
+re-linkage is a **non-channel**; **portfolio = public identity** when rotation preserves
+storage (rational for scarce-shard income). Rotation does **not** reset the observation
+window: effective `T_obs` = operator **lifetime**. T-A3–T-A7 must hold against that window;
+see [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md).
 
-**Round-open:** jitter policy (wallet-local vs daemon-assisted), rotation cadence vs
-`W`, joint pin of `SETTLEMENT_EPOCH_BLOCKS` with gate-6 decorrelation (archival state
-§9.2 when landed).
+**Honest disclosure:** re-linkability across rotation is portfolio-bound; decorrelation
+requires abandoning scarce-shard income. Forced cohort portfolios price ~97% deep
+under-coverage — not a viable mitigation without Form-C / reward-shape reopen.
+
+**F1 disposition:** conditionally finally accepted (qual wargame §9.8). Form-C reopen **not
+triggered**. Wallet disclosure draft: [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §10.
+
+**Round-open:** jitter policy; T-A4 quantitative pins after timing-cluster values land.
 
 ### 2.4 Output layer
 
@@ -222,8 +221,10 @@ per-root subkey only; never cross-authorizing master
 3. **Emission timing ≠ principal timing** — a watcher cannot align principal spends and
    `P` emissions to a single clock better than chance + public epoch boundaries, under
    stated wallet discipline.
-4. **Rotation is not cosmetic** — `P_new` must not be trivially linkable to `P_old` via
-   epoch-adjacent retention on the same shard-set with the same network fingerprint.
+4. **Rotation is not cosmetic (network leg)** — `P_new` must not share principal clearnet
+   path / network fingerprint. **Portfolio/timeline leg superseded by T-A1:** cosmetic
+   rotation with fixed storage is rational and re-linkable on public holdings (F1 residual);
+   see [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9.7.
 5. **Cross-`P` hygiene** — multiple `P` from one principal require **per-`P`** network,
    timing, and output discipline; intersection is the residual class named in V3 honest
    residual.
@@ -273,7 +274,9 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration).
 - [ ] Pin network rendezvous requirement for production archival serving.
-- [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp.
+- [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp
+      (T-A4/T-A6 conditional passes; [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9).
+- [ ] Land wallet disclosure §10 in UX copy.
 - [ ] Pin epoch-length disposition jointly with gate-2 cadence + gate-6 decorrelation.
 - [ ] Rebase PHASE_2B §7 threat model — draft:
       [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) (review → land).

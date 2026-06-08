@@ -252,9 +252,7 @@ fn print_summary(results: &[ScenarioResult]) {
         eprintln!(
             "  Timeline (diagnostic): baseline sim≥0.90; rotation relink≤baseline (no advantage)."
         );
-        eprintln!(
-            "  Cohort (gate): mean cohort≥2.0; singleton≤10%. Distinctive: singleton≥50%."
-        );
+        eprintln!("  Cohort (gate): mean cohort≥2.0; singleton≤10%. Distinctive: singleton≥50%.");
         eprintln!(
             "{:<22} {:>4} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} | {:>4} {:>4} {:>4} {:>4} {:>4} {:>4}",
             "scenario",
@@ -314,8 +312,7 @@ fn print_summary(results: &[ScenarioResult]) {
         if let Some(d) = distinctive {
             eprintln!(
                 "  Distinctive: cohort {:.1}, singleton {:.3} (portfolio threat demo)",
-                d.mean_portfolio_cohort_size,
-                d.singleton_portfolio_fraction,
+                d.mean_portfolio_cohort_size, d.singleton_portfolio_fraction,
             );
         }
         let shared = ta1_rows

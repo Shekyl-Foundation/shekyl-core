@@ -1462,7 +1462,7 @@ Three mechanisms — same as §0 status block; do not shorthand as "P solves pri
 
 | Threat | Mitigation pin |
 |--------|----------------|
-| **F1 — epoch-granularity retention fingerprint** | Shard axis fixed at per-`(P,s,E)`. **Structural dial = `SETTLEMENT_EPOCH_BLOCKS` (SEB).** Hygiene buys residual after SEB pinned. **Provisionally accepted; gated on T-A1 sim** at pinned SEB + defaults. |
+| **F1 — gate-3 holdings publicity through rotation** | Form-C holdings consensus-public. T-A1: portfolio ≈ identity at lean eq; lifetime `T_obs`. **Provisionally accepted; finally accepted iff T-A3–T-A7 pass.** |
 | **A6 — challenge grief** | T-A16; `CHALLENGE_RESOLUTION_BLOCKS` + L16 + consensus-witnessed delivery |
 | **`P`↔principal correlation** | Gate 6 four layers + bond-funding; Tor/onion (L16); decorrelated drains |
 | **Cross-pseudonym intersection** | Per-`P` path, emission batching, rotation; bonds do not make multi-`P` free |
@@ -1487,13 +1487,13 @@ Each item: **mitigated-in-design** / **FOLLOWUP** / **cross-track** / **priority
 
 | ID | Vector | Disposition summary |
 |----|--------|---------------------|
-| **T-A1** | **F1 — retention timeline (GATE)** | Quantify within-shard identifiability at **SEB = 10_000** + L10–L16 hygiene. **F1 not accepted until T-A1 passes.** May force coarser SEB vote if SEB is not emission lock. |
-| **T-A2** | Cosmetic `P` rotation (E-4) | Open — real break vs re-linkage proof |
-| **T-A3** | Firewall — network path | Open — L16 onion containment |
-| **T-A4** | Firewall — timing | Open — batching + jitter defaults |
-| **T-A5** | Firewall — output graph | Open — FCMP++ sufficient or min-delay pin |
-| **T-A6** | Firewall — bond funding | Open — admission stake-in correlation |
-| **T-A7** | Cross-pseudonym intersection | Open |
+| **T-A1** | **F1 instrument** | **CLOSED** — [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §1 |
+| **T-A2** | Cosmetic `P` rotation (E-4) | Portfolio re-link; timeline irrelevant (T-A1) |
+| **T-A3** | Firewall — network path | **PASS (qual)** — L16 onion; §9.1 |
+| **T-A4** | Firewall — timing | **CONDITIONAL** — shape pass; timing-cluster pin |
+| **T-A5** | Firewall — output graph | **PASS (qual)** — decorrelated drains; §9.3 |
+| **T-A6** | Firewall — bond funding | **CONDITIONAL** — fund-from-earnings ramp; Round 4 pin |
+| **T-A7** | Cross-pseudonym intersection | **PASS (qual)** — per-`P` hygiene default; §9.5 |
 | **T-A8** | Silent inflation — emission | Mitigated-in-design + G11-E1 KAT |
 | **T-A9** | Silent inflation — bond | Mitigated-in-design + G11-E2/E3 KAT |
 | **T-A10** | Dedup / double-emit | Mitigated-in-design (§3.4 pending + consensus) |
@@ -1529,23 +1529,26 @@ T9 (fake `StakeEvent`) superseded.
 
 Historical analogs: Zcash 2018 / Monero 2017 inflation → G11; wallet2 fingerprint → G13.
 
-### 7.7 F1 — retention fingerprint vs rotation
+### 7.7 F1 — gate-3 holdings publicity through rotation
 
-Archival state publishes settlement-epoch-resolution retention bits for `Σwork` — a persistent
-public fingerprint of `P`'s serving pattern. **Not F0** (no confidential claim). **Not hide
-retention** (bits must be public).
+Archival state publishes settlement-epoch-resolution retention bits for `Σwork` and **per-`P`
+holdings** (Form C, gate-3). **Not F0** (no confidential claim). **Not hide retention or
+holdings** (consensus-public by construction).
 
-| Axis | Coarsenable? |
-|------|--------------|
-| Shard `s` | **No** — per-shard `R_market` / `Σwork` |
-| Epoch `E` | **Yes** — **`SETTLEMENT_EPOCH_BLOCKS`** |
+T-A1/T-A2 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*): at lean
+equilibrium, scarcity pricing spreads archivers across under-replicated deep shards → **unique
+portfolios** (~98% singleton). Timeline channel is empty (homogeneous serving); **portfolio =
+public identity** across rotation when storage is preserved. The reward mechanism
+disincentivizes the only decorrelating move (re-storing a different shard-set).
 
-SEB pinned at **10_000** (~13.9 d @ 120 s) per [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
-If genuine emission lock → structural F1 fixed at SEB; hygiene-only residual. If placeholder →
-vote coarser SEB before hygiene-only accept.
+**Observation window (load-bearing):** rotation does **not** bound `P`↔principal correlation
+for fixed-portfolio operators. Effective `T_obs` = operator archival **lifetime**. T-A3–T-A7
+must be run under that premise ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md)).
 
-**Disposition:** provisionally accepted category; **finally accepted only after T-A1 sim** at
-pinned SEB + hygiene defaults.
+**Disposition:** provisionally accepted + honest residual disclosed. **Conditionally finally
+accepted** (2026-06-07): T-A3/T-A5/T-A7 pass qualitatively under lifetime `T_obs` + wallet
+defaults; T-A4/T-A6 conditional on timing-cluster + funding-ramp pins. Form-C reopen **not
+triggered**. Full final accept when pins land — [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9.
 
 ### 7.8 G11 — inflation and conservation
 
@@ -1584,9 +1587,11 @@ Lens-3: global totals + coarse counts; no per-`P` retention export amplifying ch
 | Tier | Items |
 |------|-------|
 | **Closed in design** | Join-Market lag; dedup; conservation; `== bond_floor`; slash no history rewrite; P2B-5 |
-| **Gated on sim** | **F1 (T-A1)** |
-| **Mitigated pending pin** | Firewall layers; T-A16 bounds; emission batching |
-| **OPEN wargame** | T-A2–T-A7, T-A15b, T-A16, G8 |
+| **Conditionally finally accepted** | **F1** — qual wargame §9.8; full accept on T-A4 + Round 3–4 pins |
+| **Closed** | **T-A1/T-A2** instrument; **T-A3/T-A5/T-A7** qual pass |
+| **Conditional pass** | **T-A4** (timing cluster); **T-A6** (funding ramp pin) |
+| **Mitigated pending pin** | Firewall wallet defaults (gate-6 Round 3–4); T-A16 bounds |
+| **OPEN wargame** | T-A15b, T-A16, G8 |
 | **FOLLOWUP** | G6, G9, G13 |
 | **Priority-reject** | G10 |
 

@@ -54,8 +54,12 @@ structural re-linkage decorrelation.
 
 | SEB disposition | F1 consequence |
 |-----------------|----------------|
-| **10_000 is a genuine emission-cadence lock** | F1 final accept is **sim-gated on cohort channel** at this SEB (see [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*). Timeline rotation/lapse hygiene is necessary but not sufficient. |
-| **"Inherited" is placeholder** | Coarser SEB remains an **emission-policy** vote only — not an F1 privacy dial per T-A1 evidence. |
+| **10_000 is a genuine emission-cadence lock** | F1 finally accepted **iff T-A3–T-A7 pass** under lifetime `T_obs` ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md)). T-A1 instrument closed. |
+| **"Inherited" is placeholder** | Coarser SEB is **emission-policy** only — not an F1 privacy dial. |
+
+**T-A4 coupling:** emission batching, `W`, and drain cadence set *secondary* correlation
+rhythms inside `T_obs`; they do not shorten the window below operator lifetime. Quantitative
+T-A4 pass/fail thresholds pin with this cluster's values.
 
 SEB is **not** TBD in the same sense as `W` or `REORG_HORIZON`; it is pinned pending the
 emission-cadence inheritance review above.

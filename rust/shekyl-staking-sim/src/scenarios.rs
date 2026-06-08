@@ -682,7 +682,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 force_deep_portfolio(&mut world, actor, shards, cfg.deep_threshold);
             }
         }
-        if let (Some(ref shards), Some(actor)) = (&cfg.ta1_pinned_portfolio, cfg.ta1_portfolio_actor)
+        if let (Some(ref shards), Some(actor)) =
+            (&cfg.ta1_pinned_portfolio, cfg.ta1_portfolio_actor)
         {
             force_deep_portfolio(&mut world, actor, shards, cfg.deep_threshold);
         }

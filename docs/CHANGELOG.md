@@ -17,8 +17,9 @@
   eq (baseline 0.959, lapse 0.928 — rotation harder than chance); cohort **fails** (mean
   cohort 1.0, singleton ~98%). `ta1_cohort_shared` positive control: cohort 92.6, singleton
   0.075, F1 PASS (instrument validated; lean failure is emergent portfolio diversity). SEB=20_000
-  does not move cohort. F1 final accept still blocked on cohort at lean eq, not rotation.
-  Gate-6 / timing doc disclosure ripple. See
+  does not move cohort.   F1 qual wargame T-A3–T-A7: conditionally finally accepted (Form-C reopen not triggered);
+  T-A4/T-A6 pending timing + wallet-default pins. Disclosure draft §10.
+  [`F1_TA3_TA7_LIFETIME_WINDOW.md`](design/F1_TA3_TA7_LIFETIME_WINDOW.md). See
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**

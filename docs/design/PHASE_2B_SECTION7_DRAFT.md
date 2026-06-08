@@ -2,10 +2,9 @@
 
 **Status:** **Landed (2026-06-07).** Spliced into
 [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7; claim-era wargame → §7.A.
-LMDB substrate verified on `dev` (§7.11). **T-A1/T-A2 v2 (2026-06-07):** timeline channel
-passes (rotation no advantage vs baseline); **cohort channel fails** (singleton portfolios
-~98% at lean eq) — F1 final accept still blocked; SEB is not the F1 lever; see
-[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
+LMDB substrate verified on `dev` (§7.11). **F1 wargame closed (2026-06-07):** conditionally
+finally accepted — qual T-A3–T-A7 pass under lifetime `T_obs`; Form-C reopen not triggered.
+See [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9.
 
 **Authority chain:** [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-6;
 [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
@@ -67,7 +66,7 @@ Run each T-item against every applicable model; mark N/A explicitly.
 
 | Threat | Mitigation pin (draft) |
 |--------|------------------------|
-| **F1 — retention re-linkage (timeline + portfolio cohort)** | Shard axis **fixed** at per-`(P,s,E)`. **Binding variable (T-A1 v2):** deep **shard-set portfolio** co-holder cohort — not epoch resolution (`SEB` is emission/UX only per sim). Timeline homogeneity at lean eq is **protective** (non-fingerprint); rotation/lapse decorrelates timeline only. **Disposition:** provisionally accepted, **gated on T-A1 cohort channel** at pinned SEB + hygiene defaults. |
+| **F1 — gate-3 holdings publicity through rotation** | Form-C per-`P` holdings are consensus-public (gate-3). T-A1: portfolio ≈ public identity at lean eq (~98% singleton); timeline channel empty; rational rotation keeps storage → re-linkable on portfolio; reward disincentivizes decorrelation. **Disposition:** provisionally accepted + honest residual; **finally accepted iff T-A3–T-A7 pass** under lifetime `T_obs`. Form-C reopen contingent on their failure. |
 | **A6 — challenge grief** | Flood challenges / DoS rendezvous / false-dispute — see T-A16; couples to `CHALLENGE_RESOLUTION_BLOCKS` + L16 + consensus-witnessed challenge delivery. |
 | **`P`↔principal long-lived correlation** | Four firewall layers + bond-funding (gate 6 §2). Tor/onion serving (L16); decorrelated drains; no clearnet production fallback. |
 | **Cross-pseudonym intersection** | Per-`P` network path, emission batching, rotation discipline; bonds do **not** make multi-`P` free. |
@@ -94,13 +93,13 @@ Each item needs a disposition before §7 lands: **mitigated-in-design** / **FOLL
 
 | ID | Vector | Wargame question |
 |----|--------|------------------|
-| **T-A1** | **F1 — re-linkage instrument (GATE)** | At **pinned SEB**, quantify (a) timeline channel **relative to independent-operator baseline** and (b) **portfolio cohort size** as anonymity floor. **F1 is not accepted until cohort channel passes** at lean equilibrium. SEB coarsening is **not** an F1 lever (T-A1 evidence). Shared-portfolio positive control is the next experiment. |
-| **T-A2** | **E-4 — cosmetic rotation** | `P_old → P_new` with same storage, adjacency epochs, same network path — re-linkage proof obligation. What wallet defaults force a real break? |
-| **T-A3** | **Firewall — network path** | Under A2/A4, does onion rendezvous (L16) contain principal↔`P` for production serving? Seeding relaxation bounded? |
-| **T-A4** | **Firewall — timing** | Emission batching + drain/Unbond spacing — standing correlation channel vs principal spends? Pin jitter defaults. |
-| **T-A5** | **Firewall — output graph** | Reward receipts + Unbond refund + terminal drain — FCMP++ membership sufficient, or pinned min-delay / output-count discipline needed? |
-| **T-A6** | **Firewall — bond funding** | Admission stake-in pattern — correlation channel size vs ordinary transfer hygiene? |
-| **T-A7** | **Cross-pseudonym intersection** | One principal, N `P` without per-`P` hygiene — intersection via retention timeline + network fingerprint. |
+| **T-A1** | **F1 — re-linkage instrument** | **CLOSED.** Cohort instrument complete. See [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §1. |
+| **T-A2** | **E-4 — cosmetic rotation** | `P_old → P_new` with same storage — re-linkage on portfolio (T-A1: timeline irrelevant). Cosmetic overlap confirmed in sim. |
+| **T-A3** | **Firewall — network path** | **Lifetime `T_obs`.** Onion rendezvous (L16) must not admit principal↔`P` link over operator lifetime; rotation does not reset window. |
+| **T-A4** | **Firewall — timing** | **Lifetime `T_obs`.** Emission/drain cadence vs principal spends over full operator lifetime. Quantitative thresholds blocked on timing-cluster pin. |
+| **T-A5** | **Firewall — output graph** | **Lifetime `T_obs`.** FCMP++ membership + drain discipline vs principal graph over operator lifetime. |
+| **T-A6** | **Firewall — bond funding** | **Lifetime `T_obs`.** Admission funding pattern vs ordinary transfer hygiene over operator lifetime. |
+| **T-A7** | **Cross-pseudonym intersection** | **Lifetime `T_obs`.** Portfolio intersection primary (timeline de-weighted per T-A1); merge `P_i`↔`P_j` without per-`P` hygiene. |
 | **T-A8** | **Silent inflation — emission** | Wallet constructs emission only from recomputed public `reward_P(E)`; never trusts daemon-supplied mint total. Loud vin check matches vouts. |
 | **T-A9** | **Silent inflation — bond** | Wallet never treats `bond_credit` as "free mint"; local preview matches verifier balance equation. Conservation law in node audit. |
 | **T-A10** | **Dedup / double-emit** | `emission_pending_epochs` runtime reservation + consensus `claimed_settlement_epochs` backstop — same Hybrid-B shape as retired claim pending (§3.4). |
@@ -263,9 +262,11 @@ per-stake `claimed_epochs` pattern (wallet-sealed).
 | Tier | Items | Status |
 |------|-------|--------|
 | **Closed in design** | Join-Market lag; dedup on bond record; conservation law; `== bond_floor`; slash no history rewrite; P2B-5 reorg fetch; F0 substrate deleted | Cite gate-4, emission §6, P2B-5 |
-| **Gated on sim** | **F1 (T-A1)** at pinned SEB + hygiene defaults | `STAKER_ARCHIVAL_SIM.md` — blocks F1 accept |
-| **Mitigated pending defaults pin** | Firewall layers; emission batching; T-A16 challenge bounds | Gate-6 rounds + timing cluster values + gate-2 8c |
-| **OPEN wargame** | T-A3–T-A7 firewall quantification; T-A5 output min-delay; T-A16 (A6); G8 HW path | Soundness pass step 3–5 |
+| **Conditionally finally accepted** | **F1** — qual wargame §9.8; full accept on T-A4 + gate-6 Round 3–4 pins | [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) |
+| **Closed** | **T-A1/T-A2**; **T-A3/T-A5/T-A7** qual pass | §9 |
+| **Conditional pass** | **T-A4** timing cluster; **T-A6** funding ramp | §9.2, §9.4 |
+| **Mitigated pending defaults pin** | Wallet defaults (jitter, drain spacing, ramp); T-A16 | Gate-6 Round 3–4 |
+| **OPEN wargame** | T-A15b, T-A16, G8 | — |
 | **FOLLOWUP** | G6 staleness abstraction; G9 locked wallet; G13 GUI fingerprint | Named targets in FOLLOWUPS |
 | **Priority-reject** | G10 fee-bump for emission | PR 5 precedent |
 
