@@ -129,10 +129,11 @@ fraud (claiming retention/service without storage).
 - Enable 19-month-deep `pop_block` revert (`ARCHIVAL_REORG_DEPTH_BLOCKS` = 720)
 - Make lapse > `W` decorrelate identities (forfeiture only)
 
-### 5.5 Constructibility pass deliverable
+### 5.5 Constructibility pass — **complete**
 
-See [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)
-(landed in follow-up commit).
+[`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md):
+**BUILD** — Merkle opening PoR to frozen `R_k` (not FCMP++ membership, not ZK at genesis).
+Gate-2 wire spec is the next deliverable.
 
 ---
 

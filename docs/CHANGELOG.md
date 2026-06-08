@@ -4,6 +4,11 @@
 
 ### Added
 
+- **docs: loud 8c retention-proof constructibility pass (2026-06-08).**
+  [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) —
+  BUILD disposition: Merkle opening PoR to shard `R_k` on `shekyl-fcmp::tree` primitives; ZK
+  and FCMP++ membership rejected for genesis. Gate-2 wire spec is next.
+
 - **docs: archival corpus fossil sweep (2026-06-08).**
   [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](design/ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) — superseded-model
   rationale audit; 8c constructibility test surface §5. Active fossils fixed (SEB-as-F1-lever,

@@ -251,7 +251,7 @@ replicated_hot_state ≈
 ## 6. Gate-2-internal (not in this contract)
 
 - How a retention bit is **earned** (proof-of-retrievability challenge, future-block-hash
-  leaf selection, 8c unforgeability argument).
+  leaf selection, 8c unforgeability argument) — [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
 - Challenge **cadence** (L14 retrieval-as-proof reduction).
 - Shard **definition** (what bytes/leaves a shard is).
 
