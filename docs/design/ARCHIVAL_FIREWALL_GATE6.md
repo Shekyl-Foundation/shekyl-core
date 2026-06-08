@@ -262,7 +262,8 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 - [ ] Pin network rendezvous requirement for production archival serving.
 - [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp.
 - [ ] Pin epoch-length disposition jointly with gate-2 cadence + gate-6 decorrelation.
-- [ ] Rebase PHASE_2B §7 threat model on rebased firewall (delete claim-era T-items).
+- [ ] Rebase PHASE_2B §7 threat model — draft:
+      [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives.
 
 ---

@@ -171,13 +171,20 @@ conflate.
 | State | Defining predicate | Consensus footprint | Persisted (wallet) |
 |-------|-------------------|---------------------|-------------------|
 | `AdmissionPending` | No bond record | Gate-2 retention bits may accrue but **don't count** (`R_market` filters `P ∈ Market`; §3.3) | `p_slot`, `p_canonical_id`, holdings-being-served (§9.4) |
-| `Bonded` | Bond record ∧ serving | Bond record; counted retention; `Σwork` participation | + `bond_ref`, `backing_outputs`, `claimed_epochs` cache |
-| `Slashed` | Bond record, post-slash unbonded | Record persists; out of `durability_count` | Same; cache frozen |
+| `Bonded` | Bond record ∧ `bonded_total > 0` | Counted retention; `Σwork`; **partial slash** shrinks holdings in-place | + `bond_ref`, `backing_outputs`, `claimed_epochs` cache |
+| `Slashed` | Bond record ∧ `bonded_total == 0` | Terminal slash only; out of Market until re-bond | Same; cache frozen |
 | `Exited` | Drain confirmed; retiring; collateral in release cooldown until **Unbond** | Record until prune | Same; backlog cache; bond cooldown |
 
 **`good_standing`:** predicate from bond record, **not** an FSM state. Grace-window
 (`good_standing = false`, slash pending) stays `Bonded`; blocks emit-new (emission §6.5
-posture) but not FSM transition. GUI: cure-or-be-slashed warning (gate-6 §5).
+posture) but not FSM transition. **G1 (a) — highest-priority surfacing:** wallet shows
+"challenge failure pending, N blocks to respond" (R4) — actionable cure window.
+
+**Partial vs terminal slash (gate-4 §4.2):** dropping one shard from `ShardSetCompact`
+reduces `bonded_total` and `holdings`; `P` **stays `Bonded`** in Market on remaining shards.
+Only last-shard slash (or CompleteTree whole) → `bonded_total == 0` → **`Slashed`**. Wallet
+must surface slash cause (which shard) for re-bond hygiene; must not conflate partial slash
+with `Slashed` transition.
 
 **`Exited` refinements:**
 
@@ -277,7 +284,8 @@ on the wire matches the function decomposition. Re-bond needs (b) regardless.
 |------|-------|-----|
 | — | HKDF derive `P` (§9.4) | `AdmissionPending` |
 | `AdmissionPending` | **join-Market** confirm (bond-post vin; record + `E_join`) | `Bonded` |
-| `Bonded` | Slash finalizes → unbond | `Slashed` |
+| `Bonded` | Partial slash (shard dropped; bond > 0) | `Bonded` |
+| `Bonded` | Terminal slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Standalone re-bond (gate-4) | `Bonded` |
 | `Bonded` / `Slashed` | Decorrelated drain confirms | `Exited` |
 | `Exited` | Release cooldown elapsed | **Unbond** (collateral returned) |
@@ -321,7 +329,8 @@ never authoritative locally.
 | **Custody** | **Closed** — consensus balance + `bond_credit`/`bond_debit` | Gate-4 §3.2 |
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
-| **R4** | Grace-window GUI surfacing | Gate-6 §5 / UX |
+| **R4** | Grace-window GUI surfacing (**G1a — priority-1 UX**) | §7 G1 + gate-6 §5 |
+| **Substrate verify** | Bond balance ↔ LMDB / `already_generated_coins` integration on `main` | Pre-branch code check (§7 draft §13) |
 
 ---
 
@@ -355,17 +364,27 @@ conservation law (gate-4 §4.5) extends G11 — loud bond terms cannot mask infl
 
 ### Disposition
 
-**Ready to rewrite §7** — PHASE_2B §3.1–§3.4 archival FSM landed (2026-06-07); §4–§7 still
-claim-era pending P2B-3+. Custody + reorg (P2B-5) spec'd in gate-4; §7 should cite
-conservation law, release refund decorrelation (gate-6 §2.4), and
-[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
+**Review round 1 incorporated (2026-06-07):**
+[`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) — ready to land.
+
+**Closed in review:**
+
+- [x] F1 — provisionally accepted; **T-A1 sim gate**; SEB structural lever (hygiene residual
+      only if SEB=10_000 is genuine lock).
+- [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion) + T-A17 (join censorship, low).
+- [x] G11 — positive KAT invariants G11-E1/E2/E3; full-node vs light-client split.
+- [x] G1 — three-tier surfacing; partial slash stays `Bonded` (FSM amended).
+
+**Land:** splice draft → PHASE_2B §7; archive claim-era wargame as §7.A.
+
+PHASE_2B §3.1–§3.4 landed (partial-slash FSM pin 2026-06-07). §4–§6 still claim-era.
 
 ---
 
 ## Forward order
 
 ```text
-P2B-6 §7 threat re-center → numeric cluster values (ARCHIVAL_TIMING_CONSTANTS.md) → §4–§5 retool
+P2B-6 §7 review → land into PHASE_2B → numeric cluster values → §4–§5 retool
 ```
 
 P2B-1, R1, R1b, custody, G4-3, **§3 FSM graph** closed. P2B-5 largely closed (gate-4 §5).
@@ -375,6 +394,7 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-06-07 (h):** P2B-6 review r1; partial-slash FSM; R4/G1a elevation; substrate verify item.
 - **2026-06-07 (g):** PHASE_2B §3.1–§3.4 archival FSM landed; P2B-1 §3.3.3 closed;
   `ARCHIVAL_TIMING_CONSTANTS.md` stub; forward order → §7 then numeric values.
 - **2026-06-07 (f):** Gate-4 round-1 custody base; conservation law; P2B-5/forward order.

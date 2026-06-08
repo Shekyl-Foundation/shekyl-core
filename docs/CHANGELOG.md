@@ -4,6 +4,11 @@
 
 ### Added
 
+- **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
+  [`PHASE_2B_SECTION7_DRAFT.md`](design/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
+  lever + T-A1 sim gate; T-A16 (A6); G11 KAT invariants; G1 three-tier slash surfacing;
+  partial slash stays Bonded (FSM). Timing doc §1.1 SEB/F1 coupling.
+
 - **docs: Archival timing constants stub + PHASE_2B §3 FSM (2026-06-07).**
   [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md) — joint cluster
   enumeration and couplings (`W`, reorg, release cooldown, SEB). PHASE_2B §3.1–§3.4:

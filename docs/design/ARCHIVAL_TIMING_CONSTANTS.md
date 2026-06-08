@@ -40,6 +40,20 @@ prune_horizon_epochs     = max(W, REORG_HORIZON / SETTLEMENT_EPOCH_BLOCKS)   // 
 
 At default **120 s** block time, `SEB = 10_000` ⇒ one settlement epoch ≈ **13.9 days**.
 
+### 1.1 SEB and F1 (structural privacy dial)
+
+[`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) §7: retention fingerprint **F1**
+has a fixed **shard** axis (per-`(P,s,E)` — not coarsenable without breaking Σwork / `R_market`)
+and an **epoch** axis controlled only by **SEB**.
+
+| SEB disposition | F1 consequence |
+|-----------------|----------------|
+| **10_000 is a genuine emission-cadence lock** | Structural F1 resolution fixed at ~13.9 d epochs; residual is hygiene-only (rotation/lapse/firewall). **T-A1 sim gates** F1 accept at this SEB. |
+| **"Inherited" is placeholder** | F1 gets a **vote on coarser SEB** before accepting hygiene-only residual — coarser epochs reduce fingerprint at protocol level (outranks operator discipline). |
+
+SEB is **not** TBD in the same sense as `W` or `REORG_HORIZON`; it is pinned pending the
+emission-cadence inheritance review above.
+
 ---
 
 ## 2. Couplings (must pass jointly at pin time)

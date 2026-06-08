@@ -648,9 +648,10 @@ Four **P-states** plus predicates and sub-conditions — not a ladder.
 pub enum ArchivalPState {
     /// HKDF-derived; no on-chain bond record yet (gate-6 §9.4).
     AdmissionPending,
-    /// join-Market confirmed; serving while good-standing.
+    /// join-Market confirmed; serving (may hold reduced holdings after partial slash).
     Bonded,
-    /// Post-slash; bond record persists; out of Market until re-bond.
+    /// Terminal slash only: bonded_total == 0; out of Market until re-bond.
+    /// Partial slash (one shard) stays Bonded — gate-4 §4.2.
     Slashed,
     /// Decorrelated drain confirmed; emit-backlog and/or bond cooldown may persist.
     Exited {
@@ -663,15 +664,16 @@ pub enum ArchivalPState {
 | State | Defining predicate | Consensus footprint |
 |-------|-------------------|---------------------|
 | `AdmissionPending` | No `ArchivalBondRecord` | Gate-2 bits may exist but **don't count** (`P ∉ Market`) |
-| `Bonded` | Record exists ∧ serving | Counted retention; `Σwork`; bond `== bond_floor` |
-| `Slashed` | Record exists; post-slash posture | Record persists; not in `durability_count` until re-bond |
+| `Bonded` | Record exists ∧ `bonded_total > 0` | Counted retention; `Σwork`; bond `== bond_floor`; **partial slash** shrinks holdings here |
+| `Slashed` | Record exists ∧ `bonded_total == 0` | Terminal slash (last shard / CompleteTree); out of Market until re-bond |
 | `Exited` | Drain confirmed | Record until terminal prune; backlog within `W`; bond cooldown |
 
 **Not FSM states:**
 
 | Concept | Treatment |
 |---------|-----------|
-| `good_standing` | Bond-record **predicate**; grace window stays `Bonded`, blocks emit-new |
+| `good_standing` | Bond-record **predicate**; grace window stays `Bonded`, blocks emit-new; wallet surfaces **challenge pending, N blocks** (P2B-4 R4 / §7 G1a) |
+| Partial slash | **Not a state** — `Bonded` with fewer shards; emit-backlog on honest pre-slash epochs (E-3) |
 | "Joined, not yet paid" | `Bonded` with empty `claimed_settlement_epochs` |
 | Emit / rotate / exit | **Actions** (§3.2), not states |
 | Terminal retirement | Bond released ∧ backlog exhausted/lapsed → `p_slot` burn (new `P` = new slot) |
@@ -689,7 +691,8 @@ pub enum ArchivalPState {
 |------|-------|-----|
 | — | HKDF derive `P` (`master_seed_64` + `p_slot`) | `AdmissionPending` |
 | `AdmissionPending` | **join-Market** confirm (`txin_archival_bond_post`) | `Bonded` |
-| `Bonded` | Slash finalizes | `Slashed` |
+| `Bonded` | **Partial** slash (shard dropped; `bonded_total > 0`) | `Bonded` (holdings reduced) |
+| `Bonded` | **Terminal** slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Re-bond confirm | `Bonded` |
 | `Bonded` / `Slashed` | Decorrelated drain confirm | `Exited { collateral_in_cooldown: true }` |
 | `Exited` | Release cooldown elapsed + **Unbond** confirm | `Exited { collateral_in_cooldown: false }` |
