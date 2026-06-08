@@ -896,8 +896,16 @@ fn build_policy_pin(
     }
     if let Some((m, n, fs)) = best_tuned_sliding_transient(m_sweep) {
         rationale.push(format!(
-            "tuned sliding m={m} n={n} above single-outage span → transient fs {fs:.3} (latency cost non-binding)"
+            "tuned sliding m={m} n={n} above single-outage span → transient fs {fs:.3}"
         ));
+        rationale.push(
+            "R_market is serve-credit-weighted (consensus §3.3): dead P without bit does not inflate scarcity at E-close; slash latency trades bond resolution"
+                .into(),
+        );
+        rationale.push(
+            "Round-2 gate: measured outage CDF must admit m above true p99 span AND acceptable bond-resolution latency under fat tails"
+                .into(),
+        );
         rationale.push(format!(
             "fair transient compare: esc {:.3} vs tuned slide {:.3}",
             default.transient.escalate_false_slash_rate, fs

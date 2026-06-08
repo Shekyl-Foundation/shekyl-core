@@ -5,10 +5,10 @@
 ### Added
 
 - **staking-sim: L14b pins sliding-window over escalation FSM (2026-06-08).**
-  `failure_confirmation.rs` — paired dodge slash (esc 0 / slide 1), sliding `m` sweep with
-  tuned transient false-slash above outage span, `policy_pin` + `baseline_timing` in JSON
-  report. Escalation rejected: dodge surface, volR>1 at L16, non-binding volume. Per
-  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` disposition pin.
+  `failure_confirmation.rs` — paired dodge slash (esc 0 / slide 1), sliding `m` sweep,
+  `policy_pin` + Round-2 joint-`m` gate note. `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  restructured: §1 pinned policy, §5 rejected-alternative stratum; `R_market` serve-credit
+  substrate in consensus §3.3.
 
 - **docs: archival failure-confirmation policy pin (2026-06-08).**
   [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](design/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) —

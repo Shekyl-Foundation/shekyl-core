@@ -130,8 +130,11 @@ R_market(shard_id, E) =
 ```
 
 - **One consensus value** per `(shard, E)` — identical for every claimer.
-- **Pinned measure:** count at **epoch close** with `retention ∧ good_through` — not
-  time-weighted over `E` (rejected: buys little, costs determinism).
+- **Pinned measure:** count at **epoch close** with `serve_credit_bit ∧ good_through` — not
+  bond-slot count, not time-weighted over `E` (rejected: buys little, costs determinism).
+  A bonded `P` that misses challenges **without** earning credit **does not** inflate
+  `R_market` at that `E` — slash latency trades bond-resolution timing, not scarcity at
+  E-close ([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §3.1).
 - **`Market` membership (per epoch `E`):** record exists ∧ `E ≥ E_join + 1` ∧
   `good_through(P,E)` at E-close ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
   **No retention bits before join** or for epoch `E_join` (partial). Foundation

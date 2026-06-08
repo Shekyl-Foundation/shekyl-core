@@ -2014,13 +2014,13 @@ cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_
 
 Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`,
 `l14b_confirm_tail_assumed_exp_true_lognormal`, `l14b_confirm_width_*`,
-`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Round-1 outcome (pinned):** sliding-window **m-of-n** (`m=11,n=13` at L16 defaults —
-`m` above p99 single-outage span). Escalation **rejected**: dodge slash 0 vs sliding 1
-(predictable recheck surface); volume ≈0.8% SEB (**not binding**); `volR≈1.7` at L16
-(escalation re-polices frequently-down honest Ps); tuned transient fs **0.002** vs
-escalation **0.025** (unfair untuned `m=2` at 59% was apples-to-oranges). Report fields:
-`policy_pin`, `sliding_m_sweep`, paired `dEsc`/`dSl`, `baseline_timing` (production:
-`H_fire` beacon). Property enforced: **not-durably-absent** — no confirmation FSM.
+`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Round-1 outcome (pinned):** sliding-window **m-of-n** (`m=11,n=13` provisional at L16
+exponential — **Round-2** stressnet CDF gates final `m`). Escalation **rejected** (§5 of pin
+doc — audit stratum only): dodge 0/1, `volR≈1.7`, tuned transient fs 0.002 vs 0.025.
+`R_market` is **serve-credit-weighted** (consensus §3.3) — slow slash does not pollute
+scarcity at E-close; Round-2 must confirm no slot-weighted path. Fat-tail may force higher
+`m`; joint feasibility with bond-resolution latency is the Round-2 gate. Report:
+`policy_pin`, `sliding_m_sweep`, `dEsc`/`dSl`, `baseline_timing`.
 
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
