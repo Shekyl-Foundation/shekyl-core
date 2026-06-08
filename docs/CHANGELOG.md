@@ -4,6 +4,13 @@
 
 ### Added
 
+- **crypto-pq: FA-6 §8.5.1 decap pre-filter gate harness.**
+  `fa6_decap_prefilter_gate` binary (scenarios smoke / a / b) and criterion
+  smoke bench `fa6_decap_prefilter`; Pi capture script
+  `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
+  updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
+  Pi 4 A/B capture.
+
 - **crypto-pq / engine: primary claim derivation rename (FA-2 residue).**
   `subaddress` → `output_claim`; `subaddress_derivation_scalar` →
   `output_spend_offset_scalar`; `derive_primary_source_secrets_bundle`
