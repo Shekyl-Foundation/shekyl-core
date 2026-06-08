@@ -1490,7 +1490,7 @@ Each item: **mitigated-in-design** / **FOLLOWUP** / **cross-track** / **priority
 | **T-A1** | **F1 instrument** | **CLOSED** — [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §1 |
 | **T-A2** | Cosmetic `P` rotation (E-4) | Portfolio re-link; timeline irrelevant (T-A1) |
 | **T-A3** | Firewall — network path | **PASS (qual)** — L16 onion; §9.1 |
-| **T-A4** | Firewall — timing | **CONDITIONAL** — shape pass; timing-cluster pin |
+| **T-A4** | Firewall — timing | **PASS (consensus leg)** — cluster pinned; wallet defaults gate-6 R3–4 |
 | **T-A5** | Firewall — output graph | **PASS (qual)** — decorrelated drains; §9.3 |
 | **T-A6** | Firewall — bond funding | **CONDITIONAL** — fund-from-earnings ramp; Round 4 pin |
 | **T-A7** | Cross-pseudonym intersection | **PASS (qual)** — per-`P` hygiene default; §9.5 |
@@ -1589,7 +1589,7 @@ Lens-3: global totals + coarse counts; no per-`P` retention export amplifying ch
 | **Closed in design** | Join-Market lag; dedup; conservation; `== bond_floor`; slash no history rewrite; P2B-5 |
 | **Conditionally finally accepted** | **F1** — qual wargame §9.8; full accept on T-A4 + Round 3–4 pins |
 | **Closed** | **T-A1/T-A2** instrument; **T-A3/T-A5/T-A7** qual pass |
-| **Conditional pass** | **T-A4** (timing cluster); **T-A6** (funding ramp pin) |
+| **Conditional pass** | **T-A6** (funding ramp pin); T-A4 wallet defaults (gate-6 R3–4) |
 | **Mitigated pending pin** | Firewall wallet defaults (gate-6 Round 3–4); T-A16 bounds |
 | **OPEN wargame** | T-A15b, T-A16, G8 |
 | **FOLLOWUP** | G6, G9, G13 |
@@ -1618,7 +1618,7 @@ accrual records — archival bond deltas should follow the same per-block audit 
 Pre-genesis: no migration from `main`; claim-era pool balance is deleted with entitlement wire,
 not carried forward.
 
-**Remaining risk:** (1) timing cluster numeric inequalities at pinned values; (2) gate-2 slash
+**Remaining risk:** (1) gate-6 Round 3–4 wallet defaults (T-A4/T-A6 non-consensus leg); (2) gate-2 slash
 trigger / T-A16 on 8c.
 
 ### 7.A — Archive pointer (claim-era wargame)

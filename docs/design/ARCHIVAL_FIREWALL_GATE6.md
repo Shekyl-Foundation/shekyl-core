@@ -139,7 +139,8 @@ under-coverage — not a viable mitigation without Form-C / reward-shape reopen.
 **F1 disposition:** conditionally finally accepted (qual wargame §9.8). Form-C reopen **not
 triggered**. Wallet disclosure draft: [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §10.
 
-**Round-open:** jitter policy; T-A4 quantitative pins after timing-cluster values land.
+**Round-open:** jitter policy; drain-spacing defaults (consensus cluster pinned —
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7).
 
 ### 2.4 Output layer
 

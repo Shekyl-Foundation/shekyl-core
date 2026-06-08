@@ -201,7 +201,7 @@ them.
 ## 5. `MAX_CLAIM_AGE_W` — claim window (genesis constant)
 
 ```text
-W = MAX_CLAIM_AGE_W   // settlement epochs; consensus constant (value TBD)
+W = MAX_CLAIM_AGE_W   // settlement epochs; consensus constant = 26 (ARCHIVAL_TIMING_CONSTANTS.md)
 ```
 
 Epochs with `E < tip_epoch − W` are **unclaimable** (forfeited). This is what makes the
@@ -218,8 +218,8 @@ structure **prunable**:
 decorrelation) longer than `W` **forfeits** older unclaimed epochs. `W` couples **state
 growth** against **firewall lapse discipline**.
 
-**Open pin:** numeric `W` and `REORG_HORIZON` jointly with finalization boundary (§4
-invariant 2 + emission §4.5 + §8).
+**Pinned (2026-06-07):** `W = 26`, `REORG_HORIZON = 420_000` blocks,
+`prune_horizon_epochs = 42` — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
 
 **Drain vs forfeiture (F4, 2026-06-07):** `W` forfeits epochs older than `tip − W`. If
 claims drain at a bounded batch rate, a continuously-honest `P` with a backlog must
@@ -232,8 +232,8 @@ one vin). Joint invariant (value pin deferred with `W`):
   while backlog_depth ≤ W
 ```
 
-Couple numeric `W`, batch cap, and settlement-epoch length (§9.2 cadence) in one
-pre-code check — not three independent constants.
+F4 signed at pin: `W = 26`, batch cap `15`, `SEB = 10_000` — see timing cluster sim
+(`shekyl-staking-sim --timing-cluster`).
 
 **State cost (gate-2 "irony," now bounded):**
 
@@ -279,7 +279,7 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
-| **Numeric `W`** | Shape pinned; value open |
+| **Numeric `W`** | **Pinned** — `W = 26`, `REORG_HORIZON = 420_000` |
 
 **Blocked on implementation of this schema:** emission vin, `work_P` recompute, bond-record
 integration tests, 8c verifier hookup.
@@ -295,7 +295,8 @@ integration tests, 8c verifier hookup.
 - [ ] Pin `R_market` snapshot at epoch close (count with `retention ∧ good_through`).
 - [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
       semantics** at `E`-close (§3.4; not scalar `slash_epoch`).
-- [ ] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics + **drain-vs-forfeiture**
+- [x] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics + **drain-vs-forfeiture**
+      (timing cluster 2026-06-07)
       joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
 - [ ] Pin `Σwork(E)` finalization (sweep vs incremental) + reorg revert order (emission §8).
 - [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.

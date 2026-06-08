@@ -487,7 +487,7 @@ Foundation `CompleteTree` is **excluded from `Market`** but posts **one** floor 
 `P`, not `FLOOR × all-shards`. Otherwise genesis foundation slots would owe
 `FLOOR × |all shards|`.
 
-### 8.2 Numeric cluster (joint pin — shape settled, values open)
+### 8.2 Numeric cluster (pinned 2026-06-07)
 
 **Authoritative enumeration:** [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
 (cluster table, §2 couplings, pin procedure). Gate-4 owns **release cooldown semantics**

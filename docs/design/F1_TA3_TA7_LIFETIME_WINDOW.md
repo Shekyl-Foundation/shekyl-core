@@ -265,7 +265,8 @@ fingerprints.
 - [x] T-A1/T-A2 sim complete — [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
 - [x] This spec — lifetime premise + per-item pass/fail
 - [x] T-A3–T-A7 qualitative wargame — §9
-- [ ] T-A4 quantitative pass after timing-cluster value pin
+- [x] T-A4 quantitative pass (consensus leg) after timing-cluster value pin
+- [ ] T-A4 full closure — gate-6 Round 3–4 wallet defaults (jitter, drain spacing)
 - [x] F1 conditional final accept recorded — §9.8, PHASE_2B §7.10
 - [x] Wallet disclosure draft — §10
 
@@ -317,8 +318,10 @@ magnitude, min spacing join-Market↔principal spend, drain spacing defaults —
 pin. |
 | **Residual** | Quantitative pass/fail thresholds; daemon-assisted vs wallet-local jitter
 policy. |
-| **Disposition** | **CONDITIONAL PASS (shape)** — no design hole identified; numeric
-defaults **blocked** on timing-cluster pin. Form-C reopen **not** triggered. |
+| **Disposition** | **PASS (consensus leg)** — timing cluster pinned (`W=26`, `SEB=10_000`,
+batch `15`, `REORG=420_000`; ~26 emission samples/year inside `T_obs`). Wallet jitter /
+drain-spacing defaults still gate-6 Round 3–4 (non-consensus). Form-C reopen **not**
+triggered. |
 
 ### 9.3 T-A5 — Output graph
 

@@ -2401,6 +2401,24 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
   addresses a distinct (timing) failure mode `g` does not touch. Net: **L9 is reopened (leaning
   age-scaled-constant)**; the residue is the genesis-pin *shape* under a known-positive sign with a
   post-testnet magnitude, not a demonstrated cost.
+
+### Archival timing cluster pin (2026-06-07)
+
+**Authority:** [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
+
+| Constant | Value |
+|----------|-------|
+| `MAX_CLAIM_AGE_W` (`W`) | **26** settlement epochs (~361 d) |
+| `REORG_HORIZON` | **420_000** blocks (~583 d) |
+| `RELEASE_COOLDOWN_EPOCHS` | **2** |
+| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (one `SEB`) |
+| `prune_horizon_epochs` (derived) | **42** |
+
+**Verification:** `cargo run -p shekyl-staking-sim -- --timing-cluster` — all couplings §2 and
+F4 scenarios **PASS** (`rust/shekyl-staking-sim/src/timing_cluster.rs`).
+
+**T-A4:** consensus-leg quantitative pass unblocked; gate-6 Round 3–4 wallet defaults (jitter,
+drain spacing) remain open per timing doc §7.
 - **Margin-artifacts (regime-specific, do not generalize):** the `deep_und=1.000`
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`

@@ -462,16 +462,16 @@ set is genesis.
 **Growth bound:** Without a claim-age window the set grows without bound. §6.6 pins
 `MAX_CLAIM_AGE_W` and prune semantics jointly with gate-2 retention state.
 
-### 6.6 `MAX_CLAIM_AGE_W` — claim-age window (genesis pin — open constant)
+### 6.6 `MAX_CLAIM_AGE_W` — claim-age window (genesis pin)
 
 **Problem:** State dedup as absolute sparse sets plus per-`(P, shard, E)` retention
 and per-epoch `Σwork` accumulators accrete forever — archival reward accounting in
 replicated consensus state with no prune rule.
 
-**Pin (shape; constant value open until archival-state doc lands):**
+**Pin (2026-06-07 — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)):**
 
 ```text
-MAX_CLAIM_AGE_W : u64    // settlement epochs; consensus constant
+MAX_CLAIM_AGE_W : u64 = 26    // settlement epochs; ~361 d @ 120 s/block, SEB 10_000
 ```
 
 For current settlement epoch `C`, emission for epoch `E` is rejected if `E < C - W`
@@ -489,8 +489,8 @@ may deliberately lapse `P` — `W` trades **state growth** against **lapse forfe
 **Drain vs batch cap (F4, 2026-06-07):** `W` and `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§3,
 **per `P` per emission**, cap 15) are one invariant. A continuously-honest `P` with a
 `W`-deep backlog must drain before the oldest epoch crosses `tip − W`, given settlement-
-epoch cadence and the per-`P` batch limit. Pin numeric `W` jointly with batch cap and
-`SETTLEMENT_EPOCH_BLOCKS` (archival state §9.2) — pre-code inequality TBD.
+epoch cadence and the per-`P` batch limit. **Signed** at `W = 26`, batch `15`, `SEB = 10_000`
+(`shekyl-staking-sim --timing-cluster`).
 
 ### 6.4 join-Market (gate 4 — not this vin)
 

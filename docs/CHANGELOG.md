@@ -4,6 +4,13 @@
 
 ### Added
 
+- **archival: timing cluster values pinned + sim harness (2026-06-07).**
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md): `W=26`,
+  `REORG_HORIZON=420_000`, `RELEASE_COOLDOWN_EPOCHS=2`, `CHALLENGE_RESOLUTION_BLOCKS=10_000`;
+  F4 drain inequality signed. `shekyl-staking-sim --timing-cluster` +
+  `src/timing_cluster.rs`. `config/consensus_constants.json` documented (codegen deferred).
+  T-A4 consensus leg unblocked; gate-6 Round 3–4 wallet defaults remain open.
+
 - **docs: P2B-6 §7 landed + LMDB substrate verify (2026-06-07).**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat
   model (T-A*, G11 extended, F1/T-A1 gate); claim-era wargame → §7.A. §7.11: LMDB on `dev`

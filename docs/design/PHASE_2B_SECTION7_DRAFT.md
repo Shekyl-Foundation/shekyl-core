@@ -96,7 +96,7 @@ Each item needs a disposition before §7 lands: **mitigated-in-design** / **FOLL
 | **T-A1** | **F1 — re-linkage instrument** | **CLOSED.** Cohort instrument complete. See [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §1. |
 | **T-A2** | **E-4 — cosmetic rotation** | `P_old → P_new` with same storage — re-linkage on portfolio (T-A1: timeline irrelevant). Cosmetic overlap confirmed in sim. |
 | **T-A3** | **Firewall — network path** | **Lifetime `T_obs`.** Onion rendezvous (L16) must not admit principal↔`P` link over operator lifetime; rotation does not reset window. |
-| **T-A4** | **Firewall — timing** | **Lifetime `T_obs`.** Emission/drain cadence vs principal spends over full operator lifetime. Quantitative thresholds blocked on timing-cluster pin. |
+| **T-A4** | **Firewall — timing** | **Lifetime `T_obs`.** Consensus leg **PASS** (`W=26`, `SEB=10_000`, batch `15`); wallet jitter/drain defaults gate-6 R3–4. |
 | **T-A5** | **Firewall — output graph** | **Lifetime `T_obs`.** FCMP++ membership + drain discipline vs principal graph over operator lifetime. |
 | **T-A6** | **Firewall — bond funding** | **Lifetime `T_obs`.** Admission funding pattern vs ordinary transfer hygiene over operator lifetime. |
 | **T-A7** | **Cross-pseudonym intersection** | **Lifetime `T_obs`.** Portfolio intersection primary (timeline de-weighted per T-A1); merge `P_i`↔`P_j` without per-`P` hygiene. |
@@ -264,7 +264,7 @@ per-stake `claimed_epochs` pattern (wallet-sealed).
 | **Closed in design** | Join-Market lag; dedup on bond record; conservation law; `== bond_floor`; slash no history rewrite; P2B-5 reorg fetch; F0 substrate deleted | Cite gate-4, emission §6, P2B-5 |
 | **Conditionally finally accepted** | **F1** — qual wargame §9.8; full accept on T-A4 + gate-6 Round 3–4 pins | [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) |
 | **Closed** | **T-A1/T-A2**; **T-A3/T-A5/T-A7** qual pass | §9 |
-| **Conditional pass** | **T-A4** timing cluster; **T-A6** funding ramp | §9.2, §9.4 |
+| **Conditional pass** | **T-A6** funding ramp; T-A4 wallet defaults | §9.2, §9.4 |
 | **Mitigated pending defaults pin** | Wallet defaults (jitter, drain spacing, ramp); T-A16 | Gate-6 Round 3–4 |
 | **OPEN wargame** | T-A15b, T-A16, G8 | — |
 | **FOLLOWUP** | G6 staleness abstraction; G9 locked wallet; G13 GUI fingerprint | Named targets in FOLLOWUPS |
@@ -310,7 +310,7 @@ breaks on `Σwork(E)` finalization trace.
 
 **Risk has moved off shape** onto:
 
-1. **Values** — drain-vs-forfeit, reorg horizon, release cooldown contingent on timing cluster
+1. **Values** — timing cluster **pinned** (2026-06-07); codegen + `ClaimedEpochSet` encoding remain
    §2 inequalities at pinned numbers (not yet sim-run).
 2. **Gate-2 slash trigger** — `Slashed` transition and T-A16 hang on 8c (last open Tier-1
    soundness item).
