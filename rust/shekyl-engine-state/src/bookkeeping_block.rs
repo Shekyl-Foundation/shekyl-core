@@ -26,13 +26,12 @@ use crate::{error::WalletLedgerError, payment_id::PaymentId, payment_request::Pa
 
 /// Schema version of the bookkeeping block.
 ///
-/// FA-8 ships [`BOOKKEEPING_BLOCK_VERSION`] `4` (payment requests).
-/// Version `3` carried `primary_label` and `address_book` only (FA-2
-/// End-state 5). Version `2` carried `subaddress_registry` and
-/// `subaddress_labels`; version `1` carried the pre-flat-namespace
-/// two-field `SubaddressIndex`. Shekyl is pre-genesis — loads that see
-/// any other version refuse rather than migrate.
-pub const BOOKKEEPING_BLOCK_VERSION: u32 = 4;
+/// Primary-claim rename ships [`BOOKKEEPING_BLOCK_VERSION`] `5`
+/// (`AddressBookEntry::is_subaddress` deleted). Version `4` carried
+/// payment requests (FA-8). Version `3` carried `primary_label` and
+/// `address_book` only (FA-2 End-state 5). Shekyl is pre-genesis — loads
+/// that see any other version refuse rather than migrate.
+pub const BOOKKEEPING_BLOCK_VERSION: u32 = 5;
 
 /// One entry in the external address book — a contact / recurring payee
 /// the user has saved for convenience.
@@ -49,11 +48,6 @@ pub struct AddressBookEntry {
     /// legacy unencrypted marker at parse time.
     #[serde(default)]
     pub payment_id: Option<PaymentId>,
-
-    /// True when `address` decodes to a subaddress (rather than the
-    /// contact's primary address). Cached here so rendering does not
-    /// need a parse round-trip.
-    pub is_subaddress: bool,
 }
 
 /// The bookkeeping block. See module docs for scope, versioning, and
@@ -145,13 +139,11 @@ mod tests {
                     address: "Shk1example".into(),
                     description: "alice".into(),
                     payment_id: Some(PaymentId([1u8; 8])),
-                    is_subaddress: false,
                 },
                 AddressBookEntry {
                     address: "Shk1sub".into(),
-                    description: "bob subaddr".into(),
+                    description: "bob contact".into(),
                     payment_id: None,
-                    is_subaddress: true,
                 },
             ],
         )
@@ -222,7 +214,6 @@ mod tests {
                 (
                     "[A-Za-z0-9]{1,16}",
                     "[a-z ]{0,12}",
-                    any::<bool>(),
                     any::<Option<[u8; 8]>>(),
                 ),
                 0..5,
@@ -230,11 +221,10 @@ mod tests {
         ) {
             let address_book: Vec<_> = addr_book
                 .into_iter()
-                .map(|(a, d, is_sub, pid)| AddressBookEntry {
+                .map(|(a, d, pid)| AddressBookEntry {
                     address: a,
                     description: d,
                     payment_id: pid.map(PaymentId),
-                    is_subaddress: is_sub,
                 })
                 .collect();
             let b = BookkeepingBlock::new(primary_label, address_book);

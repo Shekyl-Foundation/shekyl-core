@@ -73,7 +73,9 @@ use crate::{
 /// `LEDGER_BLOCK_VERSION` 5 (`TransferDetails::subaddress` removed).
 /// Version `6` is FA-8: `BOOKKEEPING_BLOCK_VERSION` 4 (payment
 /// requests), `LEDGER_BLOCK_VERSION` 6 (`ReceiveAttribution` on
-/// `TransferDetails`).
+/// `TransferDetails`). Version `7` is the primary-claim rename:
+/// `BOOKKEEPING_BLOCK_VERSION` 5 (`AddressBookEntry::is_subaddress`
+/// deleted).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -85,7 +87,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 6;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 7;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.

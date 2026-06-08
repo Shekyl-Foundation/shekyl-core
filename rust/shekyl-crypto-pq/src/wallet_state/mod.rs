@@ -10,11 +10,11 @@
 //! region 2 of the `.wallet.keys` file:
 //!
 //! * [`identity`] — network, seed language, key-device kind, password mode
-//! * [`settings`] — scan / UX / spending / scan-safety / subaddress /
+//! * [`settings`] — scan / UX / spending / scan-safety /
 //!   device / original-keys / background-sync preferences
 //!
 //! Everything else that historically lived here — the transfers cache,
-//! subaddress/address-book/account tags, tx keys/notes, and the
+//! address-book/account tags, tx keys/notes, and the
 //! confirmed/unconfirmed sync state — is deliberately *not* part of this
 //! type. Those live in [`shekyl_engine_state`] as `postcard`-serialized
 //! ledger blocks that fit in the `.wallet` (region 3) of the two-file
@@ -60,10 +60,9 @@ pub use identity::{AskPasswordMode, IdentityBlock, KeyDeviceType, IDENTITY_BLOCK
 pub use primitives::{Network, WalletStateError};
 pub use settings::{
     BackgroundMiningSetup, BackgroundSyncConfig, BackgroundSyncType, DeviceSettings, OriginalKeys,
-    ScanMode, ScanSafetySettings, ScanSettings, SettingsBlock, SpendingPrefs, SubaddressLookahead,
-    UxPrefs, DEFAULT_DISPLAY_DECIMAL_POINT, DEFAULT_INACTIVITY_LOCK_TIMEOUT,
-    DEFAULT_MAX_REORG_DEPTH, DEFAULT_SUBADDRESS_LOOKAHEAD_MAJOR,
-    DEFAULT_SUBADDRESS_LOOKAHEAD_MINOR, SETTINGS_BLOCK_VERSION, TOTAL_MONEY_SUPPLY,
+    ScanMode, ScanSafetySettings, ScanSettings, SettingsBlock, SpendingPrefs, UxPrefs,
+    DEFAULT_DISPLAY_DECIMAL_POINT, DEFAULT_INACTIVITY_LOCK_TIMEOUT, DEFAULT_MAX_REORG_DEPTH,
+    SETTINGS_BLOCK_VERSION, TOTAL_MONEY_SUPPLY,
 };
 
 use serde::{Deserialize, Serialize};
@@ -81,7 +80,7 @@ pub const CURRENT_METADATA_FORMAT_VERSION: u32 = 1;
 /// This type contains **only** the small, human-oriented settings +
 /// identity surface serialized into region 2 of the `.wallet.keys` file.
 /// Runtime ledger state (transfers, blockchain tip, sync bookkeeping,
-/// subaddress registry, tx notes / keys) lives separately in
+/// payment requests, tx notes / keys) lives separately in
 /// [`shekyl_engine_state`] and is persisted as postcard-encoded blocks
 /// in the `.wallet` file via the wallet-file orchestrator (commit 2h).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

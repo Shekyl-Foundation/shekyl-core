@@ -21,7 +21,7 @@ V3.0 according to their attack-surface profile.
 carrying ~50 fields: the account seed, `seed_language`, and a pile of
 user-preference settings (`ask_password`, `auto_refresh`,
 `m_refresh_from_block_height`, `default_priority`,
-`subaddress_lookahead_*`, `max_reorg_depth`, `key_reuse_mitigation2`,
+`max_reorg_depth`, `key_reuse_mitigation2`,
 `inactivity_lock_timeout`, `track_uses`, `export_format`, …). Everything
 goes through the same AEAD, the same versioning story, and the same
 refuse-to-load bar as the cryptographic seed itself.
@@ -196,13 +196,6 @@ where no pre-fork output set exists. Per rule
 | `persistent_rpc_client_id`           | random  | Stable client identifier for RPC payments; tampering merely breaks RPC pay, not funds. |
 | `auto_mine_for_rpc_payment_threshold`| `0`     | If enabled, bounded auto-mine for RPC credits. |
 | `credits_target`                     | `0`     | RPC credit balance target. |
-
-#### Subaddress lookahead (Bucket 6)
-
-| Field                          | Default        | Rationale |
-|--------------------------------|----------------|-----------|
-| `subaddress_lookahead.major`   | `5`            | Visibility trade-off (too small ⇒ miss incoming; too large ⇒ CPU DoS). Not consensus. Some HW-wallet workflows need to bump this, so TOML-persistent is right. |
-| `subaddress_lookahead.minor`   | `200`          | Same. |
 
 #### Display-only identity
 

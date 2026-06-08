@@ -275,8 +275,8 @@ mod tests {
 
     #[test]
     fn borrow_str_pins_the_str_view() {
-        // The bookkeeping block keys subaddress labels by
-        // SubaddressIndex, not by label string, so we deliberately
+        // Payment-request labels are keyed by `PaymentRequestId`, not by
+        // label string, so we deliberately
         // do NOT derive Ord/Hash on LocalLabel. The Borrow<str>
         // impl is provided so a future case-folding search by label
         // name can pull a `&str` view out of the wrapper without

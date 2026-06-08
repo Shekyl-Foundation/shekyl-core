@@ -297,38 +297,6 @@ pub struct RpcPrefs {
     pub credits_target: AtomicUnits,
 }
 
-/// Subaddress-lookahead prefs (Bucket 6). Visibility trade-off: too
-/// small misses incoming transfers on heavy subaddress generators,
-/// too large is a CPU tax. HW-wallet workflows often need to bump
-/// these.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubaddressLookahead {
-    /// Account-index lookahead distance.
-    #[serde(default = "default_lookahead_major")]
-    pub major: u32,
-    /// Per-account subaddress-index lookahead distance.
-    #[serde(default = "default_lookahead_minor")]
-    pub minor: u32,
-}
-
-impl Default for SubaddressLookahead {
-    fn default() -> Self {
-        Self {
-            major: default_lookahead_major(),
-            minor: default_lookahead_minor(),
-        }
-    }
-}
-
-fn default_lookahead_major() -> u32 {
-    5
-}
-
-fn default_lookahead_minor() -> u32 {
-    200
-}
-
 /// Top-level prefs document. Serialized as a TOML file with one
 /// table per bucket.
 ///
@@ -340,10 +308,8 @@ fn default_lookahead_minor() -> u32 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletPrefs {
-    /// Version byte for the prefs schema. Currently fixed at `1`.
-    /// A future breaking schema change bumps this and adds an
-    /// explicit migration (or refuses to load the old version,
-    /// depending on the kind of change).
+    /// Version byte for the prefs schema. Must equal
+    /// [`PREFS_SCHEMA_VERSION`] on load ([`crate::load_prefs`]).
     #[serde(default = "default_schema_version")]
     pub schema_version: u8,
 
@@ -365,9 +331,6 @@ pub struct WalletPrefs {
     /// Bucket 5.
     #[serde(default)]
     pub rpc: RpcPrefs,
-    /// Bucket 6.
-    #[serde(default)]
-    pub subaddress_lookahead: SubaddressLookahead,
 }
 
 impl Default for WalletPrefs {
@@ -379,13 +342,16 @@ impl Default for WalletPrefs {
             operational: OperationalPrefs::default(),
             device: DevicePrefs::default(),
             rpc: RpcPrefs::default(),
-            subaddress_lookahead: SubaddressLookahead::default(),
         }
     }
 }
 
+/// Current `prefs.toml` schema version. Bumped when persisted fields
+/// are added or removed (`subaddress_lookahead` deletion → `2`).
+pub const PREFS_SCHEMA_VERSION: u8 = 2;
+
 fn default_schema_version() -> u8 {
-    1
+    PREFS_SCHEMA_VERSION
 }
 
 fn default_seed_language() -> String {
@@ -470,7 +436,6 @@ mod tests {
         let mut prefs = WalletPrefs::default();
         prefs.cosmetic.default_decimal_point = 10;
         prefs.operational.refresh_type = RefreshType::Full;
-        prefs.subaddress_lookahead.major = 50;
         prefs.rpc.credits_target = AtomicUnits::from_raw(1_000_000);
 
         let encoded = toml::to_string(&prefs).expect("serialize");

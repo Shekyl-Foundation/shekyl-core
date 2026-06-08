@@ -70,7 +70,7 @@
 //! | [`errors`]      | `PrefsError`, including Bucket-3 collision variants.                  |
 //! | [`hmac_key`]    | HKDF-Expand derivation + `PrefsHmacKey` newtype with `Zeroize`.       |
 //! | [`paths`]       | `<base>.prefs.toml` / `<base>.prefs.toml.hmac` derivation.            |
-//! | [`schema`]      | `WalletPrefs` and nested structs (Buckets 1/2/4/5/6 from §3.2).      |
+//! | [`schema`]      | `WalletPrefs` and nested structs (Buckets 1/2/4/5 from §3.2).        |
 //! | [`io`]          | `load_prefs` / `save_prefs` with HMAC verify, atomic write, quarantine. |
 //!
 //! # What this crate does not do
@@ -101,5 +101,5 @@ pub use hmac_key::PrefsHmacKey;
 pub use io::{load_prefs, save_prefs, LoadOutcome, MAX_PREFS_TOML_BYTES};
 pub use paths::{prefs_hmac_path_from, prefs_toml_path_from};
 pub use schema::{
-    CosmeticPrefs, DevicePrefs, OperationalPrefs, RpcPrefs, SubaddressLookahead, WalletPrefs,
+    CosmeticPrefs, DevicePrefs, OperationalPrefs, RpcPrefs, WalletPrefs, PREFS_SCHEMA_VERSION,
 };
