@@ -827,5 +827,5 @@ DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync fro
 - `pending_tree_leaves`: changed from `MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED` (key=maturity, dup=leaf) to composite 16-byte key `BE(maturity) || BE(output_index)` with `MDB_CREATE` only.
 - `pending_tree_drain`: same restructuring (key was block_height with DUPSORT, now composite key).
 - Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
-- `maxdbs` increased from 32 to 36.
+- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate (six subdbs) requires **42** (`db_lmdb.cpp`).
 - Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.
