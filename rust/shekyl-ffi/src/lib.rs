@@ -5386,4 +5386,53 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_null_ptr_returns_minus_four() {
+        let mut out = [0u8; 8];
+        out.fill(0x42);
+        let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
+        // SAFETY: null out buffer; uri is valid.
+        let rc = unsafe {
+            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, std::ptr::null_mut())
+        };
+        assert_eq!(rc, -4);
+        assert_eq!(out, [0x42; 8], "output untouched on -4");
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_coop_off_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let mut out = [0u8; 8];
+        let uri = std::ffi::CString::new("not-a-valid-uri").unwrap();
+        // SAFETY: valid pointers; cooperative off must not parse.
+        let rc = unsafe {
+            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), false, out.as_mut_ptr())
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(out, sentinel_plaintext());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_coop_on_rid_echo() {
+        use shekyl_crypto_pq::label::encode_request_plaintext;
+        let rid = 0x1234_u64;
+        let uri = std::ffi::CString::new(format!("shekyl:addr1abc?rid={rid}")).unwrap();
+        let mut out = [0u8; 8];
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        assert_eq!(out, encode_request_plaintext(rid).unwrap());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let uri = std::ffi::CString::new("shekyl:").unwrap();
+        let mut out = [0u8; 8];
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        assert_eq!(rc, -3);
+        assert_eq!(out, sentinel_plaintext());
+    }
 }
