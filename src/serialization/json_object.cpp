@@ -407,6 +407,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
     {
       INSERT_INTO_JSON_OBJECT(dest, archival_serve_credit_response, input);
     }
+    void operator()(cryptonote::txin_archival_bond_post const& input) const
+    {
+      INSERT_INTO_JSON_OBJECT(dest, archival_bond_post, input);
+    }
   };
   std::visit(add_input{dest}, txin);
   dest.EndObject();
@@ -460,6 +464,12 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_v& txin)
     else if (elem.name == "archival_serve_credit_response")
     {
       cryptonote::txin_archival_serve_credit_response tmpVal;
+      fromJsonValue(elem.value, tmpVal);
+      txin = std::move(tmpVal);
+    }
+    else if (elem.name == "archival_bond_post")
+    {
+      cryptonote::txin_archival_bond_post tmpVal;
       fromJsonValue(elem.value, tmpVal);
       txin = std::move(tmpVal);
     }
@@ -588,7 +598,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_stake_claim& tx
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_leaf_bytes& leaf)
 {
-  std::vector<uint8_t> bytes(leaf.data, leaf.data + cryptonote::config::ARCHIVAL_LEAF_BYTES);
+  std::vector<uint8_t> bytes(leaf.data, leaf.data + ::config::ARCHIVAL_LEAF_BYTES);
   toJsonValue(dest, bytes);
 }
 
@@ -596,9 +606,9 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes&
 {
   std::vector<uint8_t> bytes;
   fromJsonValue(val, bytes);
-  if (bytes.size() != cryptonote::config::ARCHIVAL_LEAF_BYTES)
+  if (bytes.size() != ::config::ARCHIVAL_LEAF_BYTES)
     throw WRONG_TYPE("archival leaf bytes must be 128 bytes");
-  memcpy(leaf.data, bytes.data(), cryptonote::config::ARCHIVAL_LEAF_BYTES);
+  memcpy(leaf.data, bytes.data(), ::config::ARCHIVAL_LEAF_BYTES);
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_segment_path_opening& path)
@@ -648,6 +658,51 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_
   GET_FROM_JSON_OBJECT(val, txin.leaf_bytes, leaf_bytes);
   GET_FROM_JSON_OBJECT(val, txin.path, path);
   GET_FROM_JSON_OBJECT(val, txin.hybrid_signature, hybrid_signature);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest,
+  const cryptonote::archival_holdings_descriptor& holdings)
+{
+  dest.StartObject();
+  INSERT_INTO_JSON_OBJECT(dest, kind, static_cast<uint8_t>(holdings.kind));
+  INSERT_INTO_JSON_OBJECT(dest, shard_ids, holdings.shard_ids);
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_holdings_descriptor& holdings)
+{
+  if (!val.IsObject())
+    throw WRONG_TYPE("json object");
+  uint8_t kind_u8 = 0;
+  GET_FROM_JSON_OBJECT(val, kind_u8, kind);
+  holdings.kind = static_cast<cryptonote::archival_holdings_kind>(kind_u8);
+  GET_FROM_JSON_OBJECT(val, holdings.shard_ids, shard_ids);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_bond_post& txin)
+{
+  dest.StartObject();
+  INSERT_INTO_JSON_OBJECT(dest, hybrid_public_key, txin.hybrid_public_key);
+  INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
+  INSERT_INTO_JSON_OBJECT(dest, post_kind, txin.post_kind);
+  INSERT_INTO_JSON_OBJECT(dest, holdings, txin.holdings);
+  INSERT_INTO_JSON_OBJECT(dest, bonded_total_atomic, txin.bonded_total_atomic);
+  INSERT_INTO_JSON_OBJECT(dest, bond_credit, txin.bond_credit);
+  INSERT_INTO_JSON_OBJECT(dest, bond_debit, txin.bond_debit);
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_post& txin)
+{
+  if (!val.IsObject())
+    throw WRONG_TYPE("json object");
+  GET_FROM_JSON_OBJECT(val, txin.hybrid_public_key, hybrid_public_key);
+  GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
+  GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
+  GET_FROM_JSON_OBJECT(val, txin.holdings, holdings);
+  GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);
+  GET_FROM_JSON_OBJECT(val, txin.bond_credit, bond_credit);
+  GET_FROM_JSON_OBJECT(val, txin.bond_debit, bond_debit);
 }
 
 

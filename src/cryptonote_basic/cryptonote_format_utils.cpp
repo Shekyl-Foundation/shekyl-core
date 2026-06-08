@@ -703,25 +703,25 @@ namespace cryptonote
         ++spend_keys;
       else
       {
-        MERROR_VER("wrong variant type (index " << in.index() << "), in transaction id="
+        MERROR("wrong variant type (index " << in.index() << "), in transaction id="
           << get_transaction_hash(tx));
         return false;
       }
     }
     if (serve_credits > 0 && (bond_posts + stake_claims + spend_keys) > 0)
     {
-      MERROR_VER("archival serve-credit vins cannot mix with spend/claim/bond inputs, tx id="
+      MERROR("archival serve-credit vins cannot mix with spend/claim/bond inputs, tx id="
         << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts > 1)
     {
-      MERROR_VER("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
+      MERROR("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts == 1 && (serve_credits + stake_claims) > 0)
     {
-      MERROR_VER("archival bond-post cannot mix with serve-credit or stake-claim vins, tx id="
+      MERROR("archival bond-post cannot mix with serve-credit or stake-claim vins, tx id="
         << get_transaction_hash(tx));
       return false;
     }

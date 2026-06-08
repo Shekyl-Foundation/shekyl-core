@@ -233,6 +233,10 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_pat
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_credit_response& txin);
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_holdings_descriptor& holdings);
+void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_holdings_descriptor& holdings);
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_bond_post& txin);
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_post& txin);
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txout_target_v& txout);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txout_target_v& txout);

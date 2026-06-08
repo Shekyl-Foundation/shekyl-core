@@ -35,6 +35,7 @@
 #include <map>
 
 #include "blockchain_db.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 
 namespace cryptonote
 {

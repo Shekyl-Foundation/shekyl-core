@@ -4615,7 +4615,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
   crypto::hash recomputed{};
   if (!shekyl_archival_p_canonical_id_from_pubkey(
-        bond.hybrid_public_key.data(), bond.hybrid_public_key.size(), recomputed.data))
+        bond.hybrid_public_key.data(), bond.hybrid_public_key.size(),
+        reinterpret_cast<uint8_t*>(recomputed.data)))
   {
     MERROR_VER("Archival bond-post P_canonical_id recomputation failed");
     return false;
@@ -4745,7 +4746,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
 
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(
-    h_open, h_close, seal_hash.data(), resp.p_canonical_id.data(),
+    h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
+    reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
     resp.shard_id, resp.settlement_epoch);
   if (h_fire == 0)
   {
@@ -4796,8 +4798,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   shekyl_archival_verify_ctx ctx{};
   ctx.current_height = current_height;
   ctx.settlement_epoch = resp.settlement_epoch;
-  memcpy(ctx.block_hash_at_seal, seal_hash.data(), 32);
-  memcpy(ctx.registry_segment_subroot_rk, registry_rk.data(), 32);
+  memcpy(ctx.block_hash_at_seal, seal_hash.data, 32);
+  memcpy(ctx.registry_segment_subroot_rk, registry_rk.data, 32);
   ctx.segment_leaf_count = segment_leaf_count;
   ctx.pqc_pubkey_ptr = bond_pubkey.data();
   ctx.pqc_pubkey_len = bond_pubkey.size();

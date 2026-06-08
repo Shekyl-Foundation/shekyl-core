@@ -4942,10 +4942,11 @@ bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uin
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
   TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  const int get_result = mdb_get(m_txn, m_archival_serve_credit, &k, &v);
   TXN_POSTFIX_RDONLY();
   return get_result == 0;
 }
@@ -4956,10 +4957,11 @@ void BlockchainLMDB::set_archival_serve_credit_bit(const crypto::hash& p_id, uin
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
   static const uint8_t flag = 1;
   MDB_val v = {sizeof(flag), const_cast<uint8_t*>(&flag)};
-  const int result = mdb_put(*m_write_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_serve_credit, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to set archival serve-credit bit: ", result).c_str()));
 }
@@ -4970,8 +4972,9 @@ void BlockchainLMDB::remove_archival_serve_credit_bit(const crypto::hash& p_id, 
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
-  const int result = mdb_del(*m_write_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), nullptr);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  const int result = mdb_del(*m_write_txn, m_archival_serve_credit, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove archival serve-credit bit: ", result).c_str()));
 }
@@ -4979,10 +4982,11 @@ void BlockchainLMDB::remove_archival_serve_credit_bit(const crypto::hash& p_id, 
 bool BlockchainLMDB::load_archival_bond_value(const crypto::hash& p_id,
   shekyl::db::ArchivalBondValue& out) const
 {
-  shekyl::db::ArchivalBondKey key(p_id.data());
+  shekyl::db::ArchivalBondKey key(reinterpret_cast<const uint8_t*>(p_id.data));
+  MDB_val k = key.as_mdb_val();
   TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_bond, const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  const int get_result = mdb_get(m_txn, m_archival_bond, &k, &v);
   TXN_POSTFIX_RDONLY();
   if (get_result != 0)
     return false;
@@ -5045,9 +5049,10 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
   check_open();
 
   shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
   TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_shard_segment, const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  const int get_result = mdb_get(m_txn, m_archival_shard_segment, &k, &v);
   TXN_POSTFIX_RDONLY();
   if (get_result != 0)
     return false;
@@ -5071,9 +5076,10 @@ bool BlockchainLMDB::get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
   check_open();
 
   shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
+  MDB_val k = key.as_mdb_val();
   TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_shard_leaf, const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  const int get_result = mdb_get(m_txn, m_archival_shard_leaf, &k, &v);
   TXN_POSTFIX_RDONLY();
   if (get_result != 0 || v.mv_size == 0 || (v.mv_size % 32) != 0)
     return false;
@@ -5105,9 +5111,10 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   }
 
   const std::vector<uint8_t> encoded = bond.encode();
-  shekyl::db::ArchivalBondKey key(p_id.data());
+  shekyl::db::ArchivalBondKey key(reinterpret_cast<const uint8_t*>(p_id.data));
+  MDB_val k = key.as_mdb_val();
   MDB_val v = { encoded.size(), const_cast<uint8_t*>(encoded.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_bond, const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_bond, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival bond record: ", result).c_str()));
 }
@@ -5117,8 +5124,9 @@ void BlockchainLMDB::remove_archival_bond_record(const crypto::hash& p_id)
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalBondKey key(p_id.data());
-  const int result = mdb_del(*m_write_txn, m_archival_bond, const_cast<MDB_val*>(&key.as_mdb_val()), nullptr);
+  shekyl::db::ArchivalBondKey key(reinterpret_cast<const uint8_t*>(p_id.data));
+  MDB_val k = key.as_mdb_val();
+  const int result = mdb_del(*m_write_txn, m_archival_bond, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove archival bond record: ", result).c_str()));
 }
@@ -5162,11 +5170,11 @@ bool BlockchainLMDB::has_archival_slash_applied(const crypto::hash& p_id, uint64
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
   TXN_PREFIX_RDONLY();
   MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_slash_applied,
-    const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  const int get_result = mdb_get(m_txn, m_archival_slash_applied, &k, &v);
   TXN_POSTFIX_RDONLY();
   return get_result == 0;
 }
@@ -5177,11 +5185,11 @@ void BlockchainLMDB::set_archival_slash_applied(const crypto::hash& p_id, uint64
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
   static const uint8_t flag = 1;
   MDB_val v = {sizeof(flag), const_cast<uint8_t*>(&flag)};
-  const int result = mdb_put(*m_write_txn, m_archival_slash_applied,
-    const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_slash_applied, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to set archival slash-applied bit: ", result).c_str()));
 }
@@ -5192,9 +5200,9 @@ void BlockchainLMDB::remove_archival_slash_applied(const crypto::hash& p_id, uin
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
-  const int result = mdb_del(*m_write_txn, m_archival_slash_applied,
-    const_cast<MDB_val*>(&key.as_mdb_val()), nullptr);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  const int result = mdb_del(*m_write_txn, m_archival_slash_applied, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove archival slash-applied bit: ", result).c_str()));
 }
@@ -5207,9 +5215,9 @@ void BlockchainLMDB::append_archival_slash_log(uint64_t block_height, uint32_t s
 
   const std::vector<uint8_t> encoded = entry.encode();
   shekyl::db::ArchivalSlashLogKey key(block_height, seq);
+  MDB_val k = key.as_mdb_val();
   MDB_val v = {encoded.size(), const_cast<uint8_t*>(encoded.data())};
-  const int result = mdb_put(*m_write_txn, m_archival_slash_log,
-    const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_slash_log, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to append archival slash log: ", result).c_str()));
 }
@@ -5250,7 +5258,8 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
   }
 
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(
-    h_open, h_close, seal_hash.data(), p_id.data(), shard_id, settlement_epoch);
+    h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
+    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   if (h_fire == 0 || h_fire > h_close)
     return false;
 
@@ -5292,7 +5301,7 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   set_archival_slash_applied(p_id, shard_id, settlement_epoch);
 
   shekyl::db::ArchivalSlashRevertValue log_entry{};
-  std::memcpy(log_entry.p_id, p_id.data(), 32);
+  std::memcpy(log_entry.p_id, p_id.data, 32);
   log_entry.shard_id = shard_id;
   log_entry.settlement_epoch = settlement_epoch;
   log_entry.slashed_amount = slashed_amount;
@@ -5387,9 +5396,9 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
 
   shekyl::db::ArchivalSlashLogKey marker_key(block_height,
     shekyl::db::kArchivalSlashLogEpochMarkerSeq);
+  MDB_val marker_k = marker_key.as_mdb_val();
   MDB_val marker_v;
-  const int marker_get = mdb_get(*m_write_txn, m_archival_slash_log,
-    const_cast<MDB_val*>(&marker_key.as_mdb_val()), &marker_v);
+  const int marker_get = mdb_get(*m_write_txn, m_archival_slash_log, &marker_k, &marker_v);
   if (marker_get == 0)
   {
     shekyl::db::ArchivalSlashRevertValue marker_entry{};
@@ -5397,8 +5406,7 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
           marker_entry))
       throw std::runtime_error("FATAL: archival slash epoch marker decode failed on pop");
     epoch_marker = marker_entry.settlement_epoch;
-    mdb_del(*m_write_txn, m_archival_slash_log,
-      const_cast<MDB_val*>(&marker_key.as_mdb_val()), nullptr);
+    mdb_del(*m_write_txn, m_archival_slash_log, &marker_k, nullptr);
   }
   else if (marker_get != MDB_NOTFOUND)
   {
@@ -5409,9 +5417,9 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
   for (uint32_t seq = 0; ; ++seq)
   {
     shekyl::db::ArchivalSlashLogKey key(block_height, seq);
+    MDB_val k = key.as_mdb_val();
     MDB_val v;
-    const int get_result = mdb_get(*m_write_txn, m_archival_slash_log,
-      const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+    const int get_result = mdb_get(*m_write_txn, m_archival_slash_log, &k, &v);
     if (get_result == MDB_NOTFOUND)
       break;
     if (get_result)
@@ -5451,7 +5459,7 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     set_total_burned(burned_total - entry.slashed_amount);
 
     remove_archival_slash_applied(p_id, entry.shard_id, entry.settlement_epoch);
-    mdb_del(*m_write_txn, m_archival_slash_log, const_cast<MDB_val*>(&key.as_mdb_val()), nullptr);
+    mdb_del(*m_write_txn, m_archival_slash_log, &k, nullptr);
   }
 
   if (epoch_marker != std::numeric_limits<uint64_t>::max())
@@ -5476,12 +5484,13 @@ void BlockchainLMDB::put_archival_shard_segment(uint64_t shard_id, uint64_t free
   shekyl::db::ArchivalShardSegmentValue segment{};
   segment.freeze_height = freeze_height;
   segment.segment_leaf_count = segment_leaf_count;
-  std::memcpy(segment.segment_subroot_rk.data(), segment_subroot_rk.data(), 32);
+  std::memcpy(segment.segment_subroot_rk.data(), segment_subroot_rk.data, 32);
 
   const std::vector<uint8_t> encoded = segment.encode();
   shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
   MDB_val v = { encoded.size(), const_cast<uint8_t*>(encoded.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival shard segment: ", result).c_str()));
 }
@@ -5496,8 +5505,9 @@ void BlockchainLMDB::put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
     throw0(DB_ERROR("Archival shard leaf scalars must be a non-empty multiple of 32 bytes"));
 
   shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
+  MDB_val k = key.as_mdb_val();
   MDB_val v = { flat_scalars.size(), const_cast<uint8_t*>(flat_scalars.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_leaf, const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  const int result = mdb_put(*m_write_txn, m_archival_shard_leaf, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival shard leaf scalars: ", result).c_str()));
 }
