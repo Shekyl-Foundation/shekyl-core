@@ -10,6 +10,11 @@
   `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
+- **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
+  `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with
+  `put_*` seeding APIs; serve-credit verifier reads bond posture and registry geometry.
+  Bond-post connect (`txin_archival_bond_post`) remains gate-4 open.
+
 - **archival: serve-credit consensus hook + LMDB bit (gate-2 §10 steps 2–3).**
   `shekyl-ffi` `shekyl_archival_verify_serve_credit_vin`; `Blockchain::check_archival_serve_credit_input`
   and pure archival tx admission in `check_tx_inputs`; `archival_serve_credit` LMDB subdb

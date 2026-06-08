@@ -106,6 +106,7 @@ set(unit_tests_sources
   aligned.cpp
   staking.cpp
   archival_serve_credit.cpp
+  archival_substrate_lmdb.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp
