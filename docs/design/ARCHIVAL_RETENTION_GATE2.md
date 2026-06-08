@@ -446,6 +446,11 @@ verifier treats registry as authoritative at `H_anchor`.
 - [x] KAT vectors (`tests/fixtures/gate2_serve_credit_kat_v1.json`, `gate2_serve_credit_kat_vectors`)
 - [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
 - [x] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
+- [x] `txin_archival_serve_credit_response` deserializer (C++ `txin_v` tag 4; `shekyl-oxide` `Input::ArchivalServeCreditResponse`; KAT cross-check)
+
+**Open (consensus hook, step 2 remainder):**
+
+- [ ] Archival vin validation in `Blockchain::check_tx_inputs` + LMDB serve-credit bit write
 
 ---
 

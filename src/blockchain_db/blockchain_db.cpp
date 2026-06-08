@@ -230,6 +230,10 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       /* nothing to do here */
       miner_tx = true;
     }
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
+    {
+      throw std::runtime_error("archival serve-credit vin accepted only after gate-2 consensus hook");
+    }
     else
     {
       LOG_PRINT_L1("Unsupported input type, aborting transaction addition");
@@ -589,6 +593,10 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
 
       uint64_t pool_balance = get_staker_pool_balance();
       set_staker_pool_balance(pool_balance + claim.amount);
+    }
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
+    {
+      throw std::runtime_error("archival serve-credit vin removal requires gate-2 consensus hook");
     }
   }
 

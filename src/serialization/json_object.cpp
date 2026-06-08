@@ -403,6 +403,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
     {
       INSERT_INTO_JSON_OBJECT(dest, stake_claim, input);
     }
+    void operator()(cryptonote::txin_archival_serve_credit_response const& input) const
+    {
+      INSERT_INTO_JSON_OBJECT(dest, archival_serve_credit_response, input);
+    }
   };
   std::visit(add_input{dest}, txin);
   dest.EndObject();
@@ -450,6 +454,12 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_v& txin)
     else if (elem.name == "stake_claim")
     {
       cryptonote::txin_stake_claim tmpVal;
+      fromJsonValue(elem.value, tmpVal);
+      txin = std::move(tmpVal);
+    }
+    else if (elem.name == "archival_serve_credit_response")
+    {
+      cryptonote::txin_archival_serve_credit_response tmpVal;
       fromJsonValue(elem.value, tmpVal);
       txin = std::move(tmpVal);
     }
@@ -574,6 +584,70 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_stake_claim& tx
   GET_FROM_JSON_OBJECT(val, txin.from_height, from_height);
   GET_FROM_JSON_OBJECT(val, txin.to_height, to_height);
   GET_FROM_JSON_OBJECT(val, txin.k_image, key_image);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_leaf_bytes& leaf)
+{
+  std::vector<uint8_t> bytes(leaf.data, leaf.data + cryptonote::config::ARCHIVAL_LEAF_BYTES);
+  toJsonValue(dest, bytes);
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes& leaf)
+{
+  std::vector<uint8_t> bytes;
+  fromJsonValue(val, bytes);
+  if (bytes.size() != cryptonote::config::ARCHIVAL_LEAF_BYTES)
+    throw WRONG_TYPE("archival leaf bytes must be 128 bytes");
+  memcpy(leaf.data, bytes.data(), cryptonote::config::ARCHIVAL_LEAF_BYTES);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_segment_path_opening& path)
+{
+  dest.StartObject();
+  INSERT_INTO_JSON_OBJECT(dest, c1_layers, path.c1_layers);
+  INSERT_INTO_JSON_OBJECT(dest, c2_layers, path.c2_layers);
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_path_opening& path)
+{
+  if (!val.IsObject())
+    throw WRONG_TYPE("json object");
+  GET_FROM_JSON_OBJECT(val, path.c1_layers, c1_layers);
+  GET_FROM_JSON_OBJECT(val, path.c2_layers, c2_layers);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin)
+{
+  dest.StartObject();
+
+  INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
+  INSERT_INTO_JSON_OBJECT(dest, shard_id, txin.shard_id);
+  INSERT_INTO_JSON_OBJECT(dest, settlement_epoch, txin.settlement_epoch);
+  INSERT_INTO_JSON_OBJECT(dest, segment_subroot_rk, txin.segment_subroot_rk);
+  INSERT_INTO_JSON_OBJECT(dest, leaf_index_in_segment, txin.leaf_index_in_segment);
+  INSERT_INTO_JSON_OBJECT(dest, leaf_bytes, txin.leaf_bytes);
+  INSERT_INTO_JSON_OBJECT(dest, path, txin.path);
+  INSERT_INTO_JSON_OBJECT(dest, hybrid_signature, txin.hybrid_signature);
+
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_credit_response& txin)
+{
+  if (!val.IsObject())
+  {
+    throw WRONG_TYPE("json object");
+  }
+
+  GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
+  GET_FROM_JSON_OBJECT(val, txin.shard_id, shard_id);
+  GET_FROM_JSON_OBJECT(val, txin.settlement_epoch, settlement_epoch);
+  GET_FROM_JSON_OBJECT(val, txin.segment_subroot_rk, segment_subroot_rk);
+  GET_FROM_JSON_OBJECT(val, txin.leaf_index_in_segment, leaf_index_in_segment);
+  GET_FROM_JSON_OBJECT(val, txin.leaf_bytes, leaf_bytes);
+  GET_FROM_JSON_OBJECT(val, txin.path, path);
+  GET_FROM_JSON_OBJECT(val, txin.hybrid_signature, hybrid_signature);
 }
 
 

@@ -49,6 +49,30 @@ pub struct ArchivalServeCreditResponse {
     pub hybrid_signature: HybridSignature,
 }
 
+impl PartialEq for ArchivalServeCreditResponse {
+    fn eq(&self, other: &Self) -> bool {
+        self.p_canonical_id == other.p_canonical_id
+            && self.shard_id == other.shard_id
+            && self.settlement_epoch == other.settlement_epoch
+            && self.segment_subroot_rk == other.segment_subroot_rk
+            && self.leaf_index_in_segment == other.leaf_index_in_segment
+            && self.leaf_bytes == other.leaf_bytes
+            && self.path == other.path
+            && self
+                .hybrid_signature
+                .to_canonical_bytes()
+                .ok()
+                .as_deref()
+                == other
+                    .hybrid_signature
+                    .to_canonical_bytes()
+                    .ok()
+                    .as_deref()
+    }
+}
+
+impl Eq for ArchivalServeCreditResponse {}
+
 #[derive(Debug)]
 pub enum WireError {
     Io(io::Error),

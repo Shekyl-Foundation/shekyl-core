@@ -53,3 +53,42 @@ fn v2_coinbase_round_trip() {
     assert_eq!(tx.hash(), deserialized.hash());
     assert!(deserialized.signature_hash().is_none());
 }
+
+#[test]
+fn archival_serve_credit_input_gate2_kat() {
+    const KAT: &str =
+        include_str!("../../../../shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json");
+
+    #[derive(serde::Deserialize)]
+    struct KatWire {
+        wire_hex: String,
+        shard_id: u64,
+        settlement_epoch: u64,
+        leaf_index_in_segment: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct KatFixture {
+        wire: KatWire,
+    }
+
+    let kat: KatFixture = serde_json::from_str(KAT).unwrap();
+    let bytes = hex::decode(&kat.wire.wire_hex).unwrap();
+    let input = Input::read(&mut bytes.as_slice()).unwrap();
+
+    let Input::ArchivalServeCreditResponse(resp) = input else {
+        panic!("expected archival serve-credit input");
+    };
+    assert_eq!(resp.shard_id, kat.wire.shard_id);
+    assert_eq!(resp.settlement_epoch, kat.wire.settlement_epoch);
+    assert_eq!(
+        resp.leaf_index_in_segment,
+        kat.wire.leaf_index_in_segment
+    );
+
+    let mut out = Vec::new();
+    Input::ArchivalServeCreditResponse(resp.clone())
+        .write(&mut out)
+        .unwrap();
+    assert_eq!(out, bytes);
+}

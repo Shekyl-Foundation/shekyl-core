@@ -105,6 +105,7 @@ set(unit_tests_sources
   is_hdd.cpp
   aligned.cpp
   staking.cpp
+  archival_serve_credit.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp

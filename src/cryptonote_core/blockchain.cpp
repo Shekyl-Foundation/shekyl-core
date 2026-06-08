@@ -3295,6 +3295,12 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
       }
       return true;
     }
+    bool operator()(const txin_archival_serve_credit_response& in) const
+    {
+      (void)in;
+      // Consensus hook (gate-2 §10 step 2) lands separately; reject until then.
+      return false;
+    }
   };
 
   for (const txin_v& in : tx.vin)

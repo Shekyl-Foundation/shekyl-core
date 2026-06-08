@@ -4089,6 +4089,7 @@ dependencies = [
  "hex-literal",
  "serde",
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",

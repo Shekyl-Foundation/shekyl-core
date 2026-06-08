@@ -10,6 +10,10 @@
   `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
+- **archival: `txin_archival_serve_credit_response` deserializer (gate-2 §10 step 2).**
+  C++ `txin_v` tag `0x04` with path bounds; `shekyl-oxide` `Input::ArchivalServeCreditResponse`
+  delegates to `shekyl-archival-retention::wire`; KAT cross-check in C++ and Rust unit tests.
+  Consensus validation hook remains open (vin rejected at mempool/block until hook lands).
 
 - **archival: `serve_credit_bit` rename sweep (gate-2 §11).**
   `retention_bit` / `proven_retention` → `serve_credit_bit` across emission/consensus specs,
