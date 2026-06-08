@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include <fstream>
+#include <stdexcept>
 #include <cstring>
 #include <map>
 #include <set>
@@ -23,8 +24,9 @@
 #include "blockchain_db/testdb.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
+#include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
-#include "epee/string_tools.h"
+#include "string_tools.h"
 #include "serialization/binary_archive.h"
 
 #ifndef GATE2_KAT_FIXTURE_PATH
@@ -54,12 +56,13 @@ struct IntegrationKat {
 IntegrationKat load_integration_kat()
 {
   std::ifstream ifs(GATE2_KAT_FIXTURE_PATH);
-  ASSERT_TRUE(ifs.good()) << "missing gate-2 KAT fixture at " GATE2_KAT_FIXTURE_PATH;
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing gate-2 KAT fixture at ") + GATE2_KAT_FIXTURE_PATH);
   rapidjson::IStreamWrapper wrapper(ifs);
   rapidjson::Document doc;
   doc.ParseStream(wrapper);
-  ASSERT_FALSE(doc.HasParseError());
-  ASSERT_TRUE(doc.HasMember("integration"));
+  if (doc.HasParseError() || !doc.HasMember("integration"))
+    throw std::runtime_error("invalid gate-2 KAT fixture");
 
   const auto& i = doc["integration"];
   IntegrationKat kat{};
@@ -82,11 +85,19 @@ IntegrationKat load_integration_kat()
 crypto::hash hash_from_hex(const std::string& hex)
 {
   std::string bin;
-  EXPECT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(hex, bin));
-  ASSERT_EQ(bin.size(), 32u);
+  if (!epee::string_tools::parse_hexstr_to_binbuff(hex, bin) || bin.size() != 32)
+    throw std::runtime_error("invalid 32-byte hash hex");
   crypto::hash h{};
   memcpy(h.data, bin.data(), 32);
   return h;
+}
+
+std::vector<uint8_t> bytes_from_hex(const std::string& hex)
+{
+  std::string bin;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(hex, bin))
+    throw std::runtime_error("invalid hex blob");
+  return {bin.begin(), bin.end()};
 }
 
 class ArchivalServeCreditIntegrationDB: public BaseTestDB
@@ -197,6 +208,13 @@ public:
   }
 
 private:
+  struct HashLess {
+    bool operator()(const crypto::hash& a, const crypto::hash& b) const
+    {
+      return memcmp(a.data, b.data, 32) < 0;
+    }
+  };
+
   struct CreditKey {
     crypto::hash p_id;
     uint64_t shard_id;
@@ -213,7 +231,7 @@ private:
 
   std::map<uint64_t, crypto::hash> m_block_hashes;
   std::set<CreditKey> m_credit_bits;
-  std::map<crypto::hash, shekyl::db::ArchivalBondValue> m_bonds;
+  std::map<crypto::hash, shekyl::db::ArchivalBondValue, HashLess> m_bonds;
   std::map<uint64_t, shekyl::db::ArchivalShardSegmentValue> m_segments;
   std::map<uint64_t, std::map<uint32_t, std::vector<uint8_t>>> m_leaf_scalars;
 };
@@ -239,11 +257,8 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   const crypto::hash seal_hash = hash_from_hex(kat.seal_hash_hex);
   const crypto::hash segment_rk = resp.segment_subroot_rk;
 
-  std::vector<uint8_t> bond_pubkey;
-  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(kat.bond_pubkey_hex, bond_pubkey));
-
   shekyl::db::ArchivalBondValue bond{};
-  bond.hybrid_pubkey = std::move(bond_pubkey);
+  bond.hybrid_pubkey = bytes_from_hex(kat.bond_pubkey_hex);
   bond.join_settlement_epoch = kat.join_epoch;
   bond.held_shard_ids = {kat.shard_id};
   db.put_bond(p_id, std::move(bond));
@@ -251,12 +266,12 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   shekyl::db::ArchivalShardSegmentValue segment{};
   segment.freeze_height = kat.freeze_height;
   segment.segment_leaf_count = kat.segment_leaf_count;
-  segment.segment_subroot_rk = segment_rk;
+  memcpy(segment.segment_subroot_rk.data(), segment_rk.data, 32);
   db.put_segment(kat.shard_id, std::move(segment));
 
-  std::vector<uint8_t> leaf_scalars;
-  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(kat.leaf_scalars_hex, leaf_scalars));
-  ASSERT_EQ(leaf_scalars.size() % 32, 0u);
+  std::vector<uint8_t> leaf_scalars = bytes_from_hex(kat.leaf_scalars_hex);
+  if (leaf_scalars.size() % 32 != 0)
+    throw std::runtime_error("leaf scalars not multiple of 32 bytes");
   db.put_leaf_scalars(kat.shard_id, kat.leaf_index, std::move(leaf_scalars));
 
   db.set_seal_hash(kat.h_seal, seal_hash);
@@ -264,12 +279,14 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
 
 txin_archival_serve_credit_response load_serve_credit_vin(const std::string& wire_hex)
 {
-  std::string wire;
-  EXPECT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(wire_hex, wire));
+  const std::vector<uint8_t> wire = bytes_from_hex(wire_hex);
   txin_v vin;
-  binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
-  EXPECT_TRUE(::do_serialize(iar, vin));
-  EXPECT_TRUE(std::holds_alternative<txin_archival_serve_credit_response>(vin));
+  binary_archive<false> iar({wire.data(), wire.size()});
+  if (!::do_serialize(iar, vin)
+      || !std::holds_alternative<txin_archival_serve_credit_response>(vin))
+  {
+    throw std::runtime_error("failed to deserialize serve-credit vin");
+  }
   return std::get<txin_archival_serve_credit_response>(vin);
 }
 

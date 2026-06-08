@@ -34,7 +34,7 @@
 #include <variant>
 
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "epee/string_tools.h"
+#include "string_tools.h"
 #include "serialization/binary_archive.h"
 
 using namespace cryptonote;

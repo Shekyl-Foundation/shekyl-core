@@ -162,7 +162,7 @@ fn build_integration_from_pinned_wire(
     );
 
     json!({
-        "label": "ct2_opening_epoch0_consensus_verify",
+        "label": "ct2_opening_epoch1_consensus_verify",
         "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
         "shard_id": response.shard_id,
         "settlement_epoch": response.settlement_epoch,
@@ -194,7 +194,8 @@ fn build_integration_substrate(
 
     let (leaf_bytes, rk, path, layer_scalars) = ct2_founder_opening();
     let shard_id = 42u64;
-    let settlement_epoch = 0u64;
+    // Consensus requires settlement_epoch >= join_settlement_epoch + 1; join at 0 ⇒ first credit at 1.
+    let settlement_epoch = 1u64;
     let segment_leaf_count = 26_000u64;
     let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
 
@@ -242,8 +243,8 @@ fn build_integration_substrate(
     .expect("integration path");
 
     let wire = response.serialize().expect("integration wire");
-  json!({
-        "label": "ct2_opening_epoch0_consensus_verify",
+    json!({
+        "label": "ct2_opening_epoch1_consensus_verify",
         "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
         "shard_id": response.shard_id,
         "settlement_epoch": response.settlement_epoch,
@@ -488,32 +489,11 @@ fn regenerate_gate2_kat_fixture() {
             .as_str()
             .map(str::to_owned)
     });
-    let integration_wire = existing.as_ref().and_then(|v| {
-        v["integration"]["wire_hex"].as_str().map(str::to_owned)
-    });
-    let integration_scalars = existing.as_ref().and_then(|v| {
-        v["integration"]["leaf_layer_scalars_hex"]
-            .as_str()
-            .map(str::to_owned)
-    });
-    let doc = if integration_sk.is_some() {
-        build_kat_document(
-            pinned_sig.as_deref(),
-            integration_pk.as_deref(),
-            integration_sk.as_deref(),
-        )
-    } else if let (Some(wire), Some(pk), Some(scalars)) = (
-        integration_wire.as_deref(),
+    let doc = build_kat_document(
+        pinned_sig.as_deref(),
         integration_pk.as_deref(),
-        integration_scalars.as_deref(),
-    ) {
-        let mut base = build_kat_document(pinned_sig.as_deref(), None, None);
-        base["integration"] =
-            build_integration_from_pinned_wire(wire, pk, scalars);
-        base
-    } else {
-        build_kat_document(pinned_sig.as_deref(), None, None)
-    };
+        integration_sk.as_deref(),
+    );
     std::fs::write(&path, serde_json::to_string_pretty(&doc).expect("json")).expect("write");
     eprintln!("wrote {}", path.display());
 }
