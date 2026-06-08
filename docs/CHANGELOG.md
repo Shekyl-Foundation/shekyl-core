@@ -4,6 +4,12 @@
 
 ### Added
 
+- **docs: gate-2 Round 1 on-demand serving obligation (2026-06-08).**
+  [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) §0 — solved shape:
+  affirmative serve-credit per epoch; leaf `ℓ` deterministic, `H_fire` beacon-sealed; no 24/7
+  disk proof. `serve_credit_bit` rename; L15 = reach not durability; traffic-pay reopen §0.3.
+  Retires §7.5 reacquisition panic ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)).
+
 - **docs: 8c retention-soundness hinge + gate-2 ordering fix (2026-06-08).**
   Review amendment: Merkle opening proves **membership**, not set-B **retention** (public
   leaves + reacquire-on-demand). [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)

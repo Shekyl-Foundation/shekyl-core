@@ -1,15 +1,15 @@
-# Archival retention proof — gate 2 (challenge + loud 8c wire)
+# Archival serve-credit — gate 2 (epoch challenge + loud 8c wire)
 
-**Status:** **Round 0 draft (2026-06-08) — membership wire sketched; retention soundness
-OPEN.** Byte-exact serialization, verifier crate, and KATs are **held** until
-[`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) §7.5
-(reacquisition-asymmetry hinge) closes. Membership layer: constructible; retention layer: not
-settled.
+**Status:** **Round 1 obligation pinned (2026-06-08).** On-demand **serving** semantics;
+no continuous-storage proof. Byte-exact wire + verifier crate open (membership layer
+constructible per [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)).
 
-**Scope:** How `retention_bit(P_id, shard, E)` is **earned** — challenge derivation,
-Merkle-opening response wire, verifier order, grace/slash handoff to gate 4, `pop_block`
-revert. Writes the gate-2-internal surface deferred in
-[`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §6.
+**Scope:** How `serve_credit_bit(P_id, shard, E)` is **earned** — one affirmative epoch
+challenge per bonded shard, Merkle opening to `R_k`, consensus verify, slash on miss.
+Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §6.
+
+**Legacy name:** `retention_bit` in emission formulas = **`serve_credit_bit`** (misnomer; means
+"passed this epoch's on-demand check," not "stored continuously").
 
 **Authority chain:**
 
@@ -17,13 +17,75 @@ revert. Writes the gate-2-internal surface deferred in
 |-----|------|
 | [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Constructibility — Merkle PoR to `R_k` |
 | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2 | Segment = shard; frozen `R_k`; subtree level |
-| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | `retention_bit` ledger; invariants 1–4 |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | `serve_credit_bit` ledger; invariants 1–4 |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge; join gates bit writes |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Off-chain delivery; `P` signature binding |
 | [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
 
 **Out of scope here:** emission economics (gate 1); bond-post wire (gate 4); wallet FSM;
-onion RPC message formats (gate 6 + `ANONYMITY_NETWORKS.md`); ZK PoR (deferred per 8c §6.2).
+onion RPC message formats (gate 6 + `ANONYMITY_NETWORKS.md`); per-fetch payment for organic
+retrieval volume (§0.4 reopen); PoRep-class independent storage (priced alternative, not genesis).
+
+---
+
+## 0. Obligation (Round 1 — solved shape)
+
+**Product.** Foundation guarantees **B+C exist** somewhere durable and auditable. Market
+archivers provide **reach + privacy + participation** — shard data available from many
+firewalled pseudonyms `P` on demand, not a second durability domain over public bytes.
+
+**Paid good.** Successful **response to demand** when tested — not a ledger of 24/7 disk
+possession. Quiet epochs with no organic fetch and no challenge: no credit, no slash, silence.
+
+**Protocol (consensus / hash / convergence only):**
+
+1. **P bonds** to shard `s` (join-Market, gate 4).
+2. **Each epoch `E`:** one **guaranteed** challenge per `(P, s)` — the demand floor so honest
+   `P` can earn even with no organic traffic.
+3. **Leaf index `ℓ`** — deterministic, public (`H(P, s, E)`-style); pre-knowledge does not
+   help (must still produce the opening when fired).
+4. **Challenge fire time** within `E` — **beacon-unpredictable** (reachability: `P` must be
+   reachable across the epoch, not post-and-vanish at a known minute).
+5. **P posts** verifying opening to `R_k`, signed as `P`, by deadline.
+6. **Consensus** verifies hash path + signature; nodes converge.
+7. **Affirmative pass** → `serve_credit_bit`; **miss** → slash (gate 4).
+
+Fetch-on-demand at test time **is** providing the service for that test. There is no
+cryptographic barrier to verifying shards — only a prior **wrong statement** ("proved
+continuous private storage") that this section retires.
+
+### 0.1 Load-bearing pins
+
+**Affirmative pass, not absence-of-failure.** Credit requires **demonstrated response this
+epoch**. "Bonded and never slashed" is not credit — unreachable `P` must not earn.
+
+**Timing unpredictability** targets **reachability**, not leaf secrecy. Leaf grinding is
+secondary (hashpower-gated; `P` still had to answer). Predictable fire time lets `P`
+post-and-vanish; unpredictable fire time is the service shape.
+
+### 0.2 Architecture consequences (relabel, no new crypto)
+
+| Topic | Disposition |
+|-------|-------------|
+| **`serve_credit_bit`** | "Passed epoch on-demand check" — rename from `retention_bit` in prose; emission wire may keep legacy field name until sweep |
+| **L15 `R_target` / three-nines** | **Reach/availability** over serving endpoints — not market durability (foundation floor only) |
+| **Market redundancy** | Redundancy of **pseudonyms** ≤ redundancy of **operators**; firewall makes the gap unmeasurable by design — **accepted**; Sybil cost = bond sizing (existing lever), not durability risk |
+| **Organic user fetches** | Actual service (users fetch; **no** per-fetch consensus payment at genesis) |
+
+### 0.3 Reopen clause — traffic-proportional pay
+
+**Rejected at genesis:** consensus credit proportional to **attributed organic retrieval
+volume** ("`P` served user `W`"). Baseline epoch challenge has no witness to fake; volume
+pay needs attributable serves, `W` can be `P`'s cheap Sybil → **self-dealing** without chain
+capture.
+
+**Reopen:** Form-C economics review + threat-model amendment + explicit auditor/attribution
+protocol if "pay for measured real traffic" is ever desired.
+
+### 0.4 PoRep alternative (calibration, not plan)
+
+True **independent durable storage** (second domain beyond foundation) requires slow
+P-specific sealing (PoRep-class). Priced upper bound; not genesis for this obligation.
 
 ---
 
@@ -32,12 +94,11 @@ onion RPC message formats (gate 6 + `ANONYMITY_NETWORKS.md`); ZK PoR (deferred p
 For settlement epoch `E`, shard `s` (segment `k`), and archiver `P` with
 `P_id = P_canonical_id`:
 
-**Prover** (holder of set **B** for `s`) produces, for each sample index `j ∈ [0, m)`, an
-opening `π_j` proving possession of leaf `L_{ℓ_j}` at segment-relative index `ℓ_j` under
-frozen sub-root `R_k(s)`:
+**Prover** (`P`, serving shard `s`) produces opening `π` proving correct leaf `L_ℓ` at
+segment-relative index `ℓ` under frozen sub-root `R_k(s)`:
 
 ```text
-VerifyPath(L_{ℓ_j}, π_j, R_k) = true
+VerifyPath(L_ℓ, π, R_k) = true
 ```
 
 using `shekyl-fcmp::tree` grow/trim rules ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) §1.2).
@@ -47,16 +108,16 @@ using `shekyl-fcmp::tree` grow/trim rules ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBI
 1. `P` has an `ArchivalBondRecord` and `shard s ∈ holdings` at response height.
 2. `P ∈ Market` for epoch `E` (gate 4 §2.2).
 3. `E ≥ E_join + 1` (no pre-join bits — gate 4 §1.4).
-4. All `m` samples verify against the checkpointed `R_k` for `(s, E)`.
-5. Response arrives before slash deadline (§4).
-6. Response carries valid `P` hybrid signature (§5.2).
+4. Opening verifies against checkpointed `R_k` for `(s, E)`.
+5. `ℓ` matches deterministic epoch index (§3.3).
+6. Response arrives by credit deadline (§4).
+7. Response carries valid `P` hybrid signature (§5.2).
 
-**Effect on accept:** `retention_bit(P_id, s, E) := true` (consensus write at block connect).
+**Effect on accept:** `serve_credit_bit(P_id, s, E) := true` (consensus write at block connect).
 
-**Loud 8c (target):** Forging acceptance without set-B material is infeasible. **Round 0
-gap:** Merkle opening + `P` signature proves **membership + responder identity**, not
-**prior retention** — see feasibility §7.5. Round 1 must close the hinge before this
-statement is load-bearing.
+**Loud 8c:** Forging acceptance without producing a valid opening at **fire time** is
+infeasible under hash collision resistance. **Not claimed:** continuous offline possession
+between challenges (§0).
 
 ---
 
@@ -84,134 +145,126 @@ superseded by `R_k`-local paths (8c feasibility §4).
 ## 3. Challenge derivation (deterministic, no challenge tx)
 
 Challenges are **not** a separate on-chain transaction type at genesis. Every full node
-derives identical `(ℓ_j, R_k)` from consensus-visible state.
+derives identical `(ℓ, H_fire, R_k)` from consensus-visible state (§3.3–§3.4).
 
 ### 3.1 Constants (genesis pin)
 
 | Constant | Value | Role |
 |----------|-------|------|
-| `RETENTION_SAMPLES_PER_CHALLENGE` (`m`) | **3** | Independent leaf indices per `(P,s,E)` |
-| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Response + slash grace (one SEB) — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) |
-| `CHALLENGE_ANCHOR_LEAD_BLOCKS` | **TBD (Round 1)** | Blocks before `H_close(E)` at which `H_anchor` falls **inside** `E` |
-| `CHALLENGE_CREDIT_MAX_BLOCKS` | **TBD (Round 1)** | Max blocks after `H_anchor` for `retention_bit` credit; must satisfy §4 ordering |
+| `CHALLENGES_PER_EPOCH` | **1** | Guaranteed on-demand test per `(P,s,E)` — demand floor (§0) |
+| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) |
+| `CHALLENGE_RESPONSE_BLOCKS` | **TBD (byte pin)** | Blocks after `H_fire` to accept credit; must end before `H_close` |
 
-`m = 3` mitigates partial-storage free-riding (~1/26k per sample → ~1/26k³ joint miss mass
-at level-2 segment scale; 8c feasibility §7).
-
-### 3.2 Anchor height (Round 0 bug — ordering unresolved)
+### 3.2 Epoch heights (ordering)
 
 ```text
-E        = settlement epoch under test
-H_open   = first block with settlement_epoch(height) == E
-H_close  = last block with settlement_epoch(height) == E
-H_anchor = H_close − CHALLENGE_ANCHOR_LEAD_BLOCKS     // MUST satisfy H_open < H_anchor ≤ H_close
-H_credit_deadline = H_close                            // emission reads bit at E-close (invariant 2)
+E                 = settlement epoch under test
+H_open            = first block with settlement_epoch(height) == E
+H_close           = last block with settlement_epoch(height) == E
+H_fire            = beacon height ∈ (H_open, H_close]     // §3.4
+H_credit_deadline = H_close
 H_slash_deadline  = H_close + CHALLENGE_RESOLUTION_BLOCKS
 ```
 
-**Round 0 error (do not implement):** `H_anchor = H_close + 1` (first block of `E+1`) is
-**incompatible** with `retention_bit(P,s,E)` finalized at `H_close(E)` — the challenge would
-issue after the emission read. This is a **consensus ordering** defect, not a latency margin
-question; stressnet cannot fix it.
+**Round 0 error (do not implement):** `H_fire` in epoch `E+1` — incompatible with E-close
+emission read.
 
-**Unpredictability:** `H_anchor` must be a block **inside epoch `E`** whose hash was unknown
-when the archiver committed to serve `E` (future-within-`E` beacon). `CHALLENGE_ANCHOR_LEAD`
-pins how late in `E` the anchor falls; Round 1 must derive it jointly with §7.5 credit window.
-
-**Grindable beacon (secondary):** Single `block_hash(H_anchor)` lets the miner of `H_anchor`
-bias `ℓ_j` toward cheap-to-reacquire leaves. Mitigations: multi-block commit-reveal anchor,
-or `m` hashes from distinct heights in `E`. Moot until §7.5 closes; still note for Round 1.
-
-### 3.3 Per-sample index
+### 3.3 Leaf index (deterministic)
 
 ```text
-block_hash_anchor = block_hash(H_anchor)    // 32 bytes; consensus hash
+τ = cSHAKE256(
+  customization = "shekyl/archival-serve-challenge-leaf-v1",
+  input         = P_id[32]
+                  || shard_id_le64
+                  || E_le64
+)
 
-τ_j = cSHAKE256(
-  customization = "shekyl/archival-retention-challenge-v1",
-  input         = block_hash_anchor
+ℓ = uint64(τ) mod segment_leaf_count(shard, E)
+```
+
+`ℓ` is knowable at epoch open; `P` must still be **reachable at `H_fire`**.
+
+### 3.4 Fire time (beacon — reachability)
+
+```text
+H_seal = H_open + CHALLENGE_BEACON_SEAL_BLOCKS    // early in E; genesis pin TBD (≥ 1)
+span   = H_close − H_seal                         // known once H_seal exists
+H_fire = H_seal + ( uint64(beacon) mod max(span − 1, 1) ) + 1
+
+beacon = cSHAKE256(
+  customization = "shekyl/archival-serve-challenge-fire-v1",
+  input         = block_hash(H_seal)
                   || P_id[32]
                   || shard_id_le64
                   || E_le64
-                  || j_le32                    // j ∈ {0, 1, …, m-1}
 )
-
-ℓ_j = uint64(τ_j) mod segment_leaf_count(shard, E)
 ```
 
-**Domain labels** are normative; changing them is a consensus fork.
+**Knowable at `H_seal`:** `ℓ` (§3.3) and `H_fire` are fixed; `P` must post in
+`(H_fire, H_close]` — cannot post-and-vanish at epoch open. Unpredictable at `H_open`
+(`block_hash(H_seal)` unknown).
 
-### 3.4 Who is challenged
+**Load-bearing:** unpredictability is **when** the opening must post, not **which** leaf.
 
-After `H_anchor` (within `E`), for each `P_id` with `ArchivalBondRecord` where:
+**Grinding (exotic):** colluding miner may bias `H_fire` within `E`; hashpower-gated; `P` must
+still serve a valid opening.
 
-- `shard_id ∈ holdings` at `H_anchor`, and
-- `P ∈ Market` for settlement epoch `E` (evaluated at E-close snapshot),
+### 3.5 Who is challenged
 
-consensus expects a valid response by `H_credit_deadline` for bit credit, and by
-`H_slash_deadline` for slash adjudication if no bit (§6).
+After `H_fire`, for each `P_id` with `ArchivalBondRecord` where:
 
-**Foundation `CompleteTree`:** same challenge path on **B**; slash semantics differ (gate 4
-§4.2 whole-bond). Retention bit still written for emission exclusion rules (E-2).
+- `shard_id ∈ holdings` at `H_fire`, and
+- `P ∈ Market` for settlement epoch `E` (E-close snapshot),
+
+consensus expects **affirmative** response by `H_credit_deadline`, else slash after
+`H_slash_deadline` (§6).
+
+**Foundation `CompleteTree`:** same path; slash semantics differ (gate 4 §4.2). Serve-credit
+for emission (E-2).
 
 ---
 
-## 4. Response window and retention bit timing (consensus ordering — pin in Round 1)
+## 4. Response window and serve-credit timing
 
 ```text
-Timeline (single settlement epoch E):
+Timeline (settlement epoch E):
 
-  H_open ─── … ─── H_anchor ─── … ─── H_close ─── … ─── H_slash_deadline ───►
-                    (indices known)     (emission    (slash if no bit;
-                                         reads bit)    not for credit)
+  H_open ─── … ─── H_fire ─── … ─── H_close ─── … ─── H_slash_deadline ───►
+                  (beacon; ℓ      (emission      (slash if no
+                   known)          reads bit)     serve_credit)
 ```
 
-| Event | Height constraint | Consensus action |
-|-------|-------------------|------------------|
-| Challenge materialized | `H_anchor` ∈ `(H_open, H_close]` | Derive `(ℓ_j, R_k)`; deliver to `P` (gate 6) |
-| Valid response — **credit** | `H_anchor < height ≤ H_credit_deadline = H_close` | Set `retention_bit(P_id,s,E)` |
-| Emission accounting | `height = H_close` | Read finalized bit (invariant 2); no retroactive set |
-| Slash adjudication | `height > H_slash_deadline = H_close + CHALLENGE_RESOLUTION_BLOCKS` | `challenge_failed` → gate-4 slash |
+| Event | Height | Consensus action |
+|-------|--------|------------------|
+| `H_fire` known | `H_fire` ∈ `(H_open, H_close]` | Derive `ℓ`; deliver challenge to `P` (gate 6) |
+| **Affirmative pass** | `H_fire < height ≤ H_credit_deadline` | Set `serve_credit_bit(P_id,s,E)` |
+| Emission read | `H_close` | Finalized bit for `E` (invariant 2) |
+| Slash | `height > H_slash_deadline` | No bit → gate-4 slash |
 
-**Determinacy (not empirical):** `H_credit_deadline = H_close` and `H_slash_deadline`
-post-close are **orthogonal roles**. Stressnet measures onion RTT against
-`CHALLENGE_CREDIT_MAX_BLOCKS` (Round 1 pin, likely `≪ SEB`), not whether credit precedes
-emission read — that ordering is **spec logic**.
+**Quiet epoch:** no organic fetch and challenge not yet fired → no bit, no slash.
 
-**Storage-soundness (feasibility §7.5):** Even with correct ordering, point-sample Merkle
-openings do not prove set-B retention unless reacquisition within
-`H_anchor…H_credit_deadline` is prohibitively expensive. Round 1 chooses hinge closure
-(bulk-range challenge, L14-primary credit, short credit window, etc.) **before** wire freeze.
-
-**One bit per `(P_id, shard, E)`:** All `m` openings must verify atomically in one accept.
-**`m = 3`:** Partial-deletion defense only; not zero-storage reacquire (feasibility §4).
+**One bit per `(P_id, shard, E)`:** single opening per epoch challenge (§3.1).
 
 ---
 
-## 5. Wire — `txin_archival_retention_response`
+## 5. Wire — `txin_archival_serve_credit_response`
 
-New non-spending vin type (consensus). One vin per `(P_id, shard, E)` response.
+New non-spending vin type (consensus). One vin per `(P_id, shard, E)` affirmative pass.
+(Legacy alias in drafts: `txin_archival_retention_response`.)
 
 ### 5.1 Logical fields
 
 ```text
-ArchivalRetentionResponse {
+ArchivalServeCreditResponse {
   p_canonical_id:           [u8; 32],
   shard_id:                 u64,
   settlement_epoch:         u64,          // E
-  segment_subroot_rk:       [u8; 32],     // must match registry at H_anchor
-  samples:                  [RetentionSample; m],
-
-  // Binding (gate 6 / hybrid PQC)
-  hybrid_signature:         HybridSignature,   // over domain-separated preimage
-}
-```
-
-```text
-RetentionSample {
-  leaf_index_in_segment:    u32,          // must equal ℓ_j from §3.3
-  leaf_bytes:               [u8; 128],    // set-B leaf; construct_leaf layout
+  segment_subroot_rk:       [u8; 32],     // must match registry at H_fire
+  leaf_index_in_segment:    u32,          // must equal ℓ from §3.3
+  leaf_bytes:               [u8; 128],
   path:                     SegmentPathOpening,
+
+  hybrid_signature:         HybridSignature,
 }
 ```
 
@@ -233,12 +286,14 @@ mutation; FCMP++ membership proof (8c feasibility §6.3).
 
 ```text
 sig_preimage = cSHAKE256(
-  customization = "shekyl/archival-retention-response-v1",
+  customization = "shekyl/archival-serve-credit-response-v1",
   input         = p_canonical_id
                   || shard_id_le64
                   || settlement_epoch_le64
                   || segment_subroot_rk
-                  || encode(samples)           // canonical sample serialization
+                  || leaf_index_le32
+                  || leaf_bytes
+                  || encode(path)
 )
 ```
 
@@ -249,21 +304,18 @@ against `ArchivalBondRecord.P_pubkey`.
 
 Fail-fast:
 
-1. **Structural** — `samples.len() == m`; field bounds; duplicate `leaf_index` rejected.
+1. **Structural** — field bounds.
 2. **Bond posture** — record exists; `shard_id ∈ holdings`; `E ≥ E_join + 1`.
-3. **Market** — `good_through(P,E)` at E-close (interval log).
-4. **Challenge replay** — recompute each `ℓ_j` from `block_hash(H_anchor)` per §3.3;
-   `leaf_index_in_segment == ℓ_j`.
-5. **Geometry** — `segment_subroot_rk` matches shard registry at `H_anchor`.
-6. **Path verify** — for each sample, `VerifyPath(leaf_bytes, path, R_k)` via
-   `shekyl-fcmp::tree` (same primitives as wallet path assembly).
-7. **Signature** — hybrid verify on §5.2 preimage.
-8. **Credit deadline** — `current_height ≤ H_credit_deadline` (§4); else reject for bit
-   (slash path separate per `H_slash_deadline`).
-9. **Idempotency** — if bit already set, vin is no-op or reject duplicate (pin: **reject**
-   duplicate to limit spam).
+3. **Market** — `good_through(P,E)` at E-close.
+4. **Leaf replay** — `leaf_index_in_segment == ℓ` from §3.3.
+5. **Fire time** — `current_height > H_fire` (challenge has fired).
+6. **Geometry** — `segment_subroot_rk` matches registry at `H_fire`.
+7. **Path verify** — `VerifyPath(leaf_bytes, path, R_k)` via `shekyl-fcmp::tree`.
+8. **Signature** — hybrid verify on §5.2 preimage.
+9. **Credit deadline** — `current_height ≤ H_credit_deadline`.
+10. **Idempotency** — reject duplicate if `serve_credit_bit` already set.
 
-On accept (step 8 pass): `retention_bit(P_id, shard_id, E) := true`.
+On accept: `serve_credit_bit(P_id, shard_id, E) := true` (**affirmative pass only**).
 
 **Not verified:** spend authority on leaf; amount; output ownership.
 
@@ -276,8 +328,8 @@ Gate 2 **does not** implement slash accounting. It emits a **verifiable failure*
 ```text
 challenge_failed(P_id, shard, E) :=
   H_current > H_slash_deadline
-  ∧ ¬ retention_bit(P_id, shard, E)
-  ∧ ArchivalBondRecord existed for P with shard in holdings at H_anchor
+  ∧ ¬ serve_credit_bit(P_id, shard, E)
+  ∧ ArchivalBondRecord existed for P with shard in holdings at H_fire
 ```
 
 On first block connect where `challenge_failed` is true, consensus calls gate-4
@@ -311,7 +363,7 @@ chain and may self-respond — delivery is operational, not soundness.
 
 Within [`ARCHIVAL_REORG_DEPTH_BLOCKS`](../ARCHIVAL_TIMING_CONSTANTS.md) (720 blocks):
 
-On disconnect of block `H` that **set** `retention_bit(P,s,E)`: clear bit.
+On disconnect of block `H` that **set** `serve_credit_bit(P,s,E)`: clear bit.
 
 On disconnect of block `H` that **recorded** `slash(P,s)` from challenge failure: revert
 slash per gate-4 §5 (bond credit restore, event log pop).
@@ -346,26 +398,21 @@ verifier treats registry as authoritative at `H_anchor`.
 
 ---
 
-## 11. Round 0 / Round 1 checklist
+## 11. Checklist
 
-**Round 0 (draft — partial):**
+**Round 1 obligation (pinned):**
 
-- [x] Membership statement + Merkle-opening shape
-- [x] Challenge derivation sketch (`cSHAKE`, `m`)
-- [x] Response vin logical fields + verifier order (membership layer)
-- [x] `P` signature binding (identity, not storage)
-- [x] Slash predicate → gate 4 (height naming fixed §4)
-- [x] `pop_block` scope
-- [x] **Named** retention-soundness gap (feasibility §7.5)
+- [x] §0 serving semantics; affirmative-pass credit; timing beacon
+- [x] `serve_credit_bit` rename; L15 reach relabel; traffic-pay reopen §0.3
+- [x] Leaf deterministic + fire unpredictable (§3.3–§3.4)
+- [x] Epoch ordering (`H_fire` inside `E`, credit at `H_close`)
 
-**Round 1 (blocking before bytes/KATs):**
+**Open (implementation):**
 
-- [ ] Close reacquisition-asymmetry hinge (feasibility §7.5 A–E)
-- [ ] Pin `CHALLENGE_ANCHOR_LEAD` + `CHALLENGE_CREDIT_MAX` inside epoch `E`
-- [ ] Beacon grinding mitigation (if still point-sample)
-- [ ] Byte-exact serialization
-- [ ] KAT vectors
-- [ ] Verify-budget benchmark at **chosen** challenge shape
+- [ ] Byte-exact serialization + domain labels frozen
+- [ ] KAT vectors (single opening per epoch)
+- [ ] `shekyl-archival-retention` verify crate
+- [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
 
 ---
 
@@ -382,5 +429,5 @@ verifier treats registry as authoritative at `H_anchor`.
 
 ## Changelog
 
-- **2026-06-08:** Round 0 draft — membership wire sketched; §7.5 hinge + §4 ordering fix
-  (review amendment).
+- **2026-06-08:** Round 1 — §0 on-demand serving obligation; `serve_credit_bit`; beacon fire.
+- **2026-06-08:** Round 0 draft — membership wire; ordering fix (review amendment).

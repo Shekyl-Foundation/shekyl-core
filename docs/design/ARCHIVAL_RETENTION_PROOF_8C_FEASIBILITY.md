@@ -1,11 +1,9 @@
 # Archival retention proof (loud 8c) — constructibility pass
 
-**Status:** **Feasibility pass — membership sub-problem closed; retention soundness OPEN
-(2026-06-08, amended).** Merkle opening to frozen `R_k` is **constructible as a membership
-witness** on public set-B leaves. It is **not yet shown** to be **storage-sound** (store vs
-reacquire-on-demand) without an explicit reacquisition-asymmetry argument or a strengthened
-challenge shape. Do **not** crystallize byte-exact wire / verifier crate until the hinge in
-§7.5 is resolved.
+**Status:** **BUILD for on-demand serving obligation (2026-06-08, Round 1).** Merkle opening
+to `R_k` + consensus verify + affirmative serve-credit is the correct statement for the
+market layer ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0). Continuous
+offline possession is **out of scope**; §7.5 reacquisition "hinge" retired as wrong statement.
 
 **Inputs:** [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) §5 (test
 surface after fossil purge); [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) set B;
@@ -27,16 +25,16 @@ adversary might inflate undetectably. Pay-for-service rebasing makes emission **
 verifiers recompute `reward_P(E)` from public `Σwork`, `R_market`, and bond state
 ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4).
 
-**Loud 8c** is *retention-proof unforgeability*: an adversary without set-B material for
-shard `s` must not be able to set `retention_bit(P, s, E)` and thereby inflate
-`work_P(E)` / `Σwork(E)`.
+**Loud 8c** is *serve-credit unforgeability*: an adversary who cannot produce a valid
+opening when the epoch challenge fires must not earn `serve_credit_bit(P, s, E)` (legacy name
+`retention_bit`) and thereby inflate `work_P(E)` / `Σwork(E)`.
 
 | | Old 8a | Loud 8c |
 |---|--------|---------|
-| Secret forged | Reward amount | Storage / retention |
+| Secret forged | Reward amount | Serve-credit / availability |
 | Detection | Silent (bad) | Loud recompute (good) |
-| Proof family | Confidential range / entitlement | Proof-of-retrievability (PoR) |
-| On-chain footprint | Hidden in RCT | Public ledger bit + optional opening |
+| Proof family | Confidential range / entitlement | On-demand opening + consensus verify |
+| On-chain footprint | Hidden in RCT | `serve_credit_bit` + response vin |
 
 ### 1.2 Formal statement (genesis target)
 
@@ -59,15 +57,9 @@ segment `k` (= shard `s`), produce opening `π` consisting of:
 **Effect:** Set `retention_bit(P_id, s, E) := true` (gate-2 write; emission reads at
 E-close).
 
-**Soundness target (8c — two layers):**
-
-1. **Membership (closed at this pass):** For negligible `ε`, no adversary without correct
-   `(L_{ℓ_j}, path_j)` for challenged indices wins `VerifyPath` against `R_k`.
-2. **Retention / possession (OPEN — §7.5):** No adversary without **set-B material for shard
-   `s` held (or regenerable only at cost ≫ response window)** wins acceptance at scale.
-
-The feasibility pass proved (1). Treating (1) as (2) is a **category error** when leaves are
-public and recomputable from chain history.
+**Soundness (8c — on-demand serving):** At challenge fire, no adversary produces a valid
+`(L_ℓ, path, P_sig)` without being able to **serve** correct shard bytes for `ℓ` relative to
+`R_k`. Continuous disk possession between challenges is **not claimed** (gate-2 §0).
 
 ---
 
@@ -220,49 +212,15 @@ subset. It does **not** prevent reacquiring the revealed `ℓ` after `H_anchor`.
 - **"Verify is cheap"** — true and irrelevant; soundness rests on **generate/reacquire** cost
   vs deadline, not verify cost.
 
-### 7.5 Reacquisition-asymmetry hinge (OPEN — load-bearing)
+### 7.5 Retired — "reacquisition hinge" (wrong statement)
 
-**Adversary (zero-storage):** At `H_anchor`, learn `(ℓ_0…ℓ_{m−1})`. Reacquire each
-`L_{ℓ_j}` and path siblings; sign as `P`; submit before deadline. Passes membership verify
-and `P` signature. Stored **zero** of set **B**.
+Round 0 treated fetch-on-demand at test time as failure. **Round 1 (gate-2 §0):** that *is*
+the service when tested — the paid good is **response to demand**, not 24/7 disk attestation.
+Foundation owns durability; market owns reach + privacy + participation.
 
-**Why this is fatal unless closed:** Set-B leaves are `{O.x, I.x, C.x, h(pqc_pk)}` — public
-on chain (`CURVE_TREE_CLIENT.md` §4.1, §7). Any party with chain history + drain replay (or
-a bulk fetch from foundation / another archiver / set-C corpus) can build openings **without**
-having retained the shard. Signature binds **who answered**, not **that P held B before the
-challenge**.
-
-**Order-of-magnitude costs (provisional level-2 segment, `E ≈ 26k` leaves):**
-
-| Reacquisition path | Work / bytes | vs `CHALLENGE_RESOLUTION_BLOCKS` (10_000 ≈ 14 d @ 120 s) |
-|--------------------|--------------|-----------------------------------------------------------|
-| **On-wire opening only** | `m × (128 + depth×32)` ≈ **2–4 KiB** crypto material | Trivial |
-| **Fetch `m` leaves + siblings from foundation peer** | KB + onion RTT (L16 worst case still ≪ 14 d) | Trivial |
-| **Block-derived drain of full segment** | O(`E`) leaf reconstructions + auxiliary **C** for position range; ~**3.3 MiB** leaves alone | Feasible in grace window; not a retention proof |
-| **Hold set B (design intent)** | Full segment + shard-local **C** auxiliary | What economics assumes |
-
-**Verdict:** As stated, 8c proves **membership in the committed segment**, not **retention of
-set B**. The hinge question:
-
-> Is reacquisition of the challenged opening **materially more expensive** than holding the
-> segment, relative to the **credit deadline** (must precede `H_close(E)` — gate-2 §4)?
-
-If **no** → free-rider equilibrium; `R_market` counts reacquirers; L15 replica
-**independence** fails (all replicas derivable from public chain + foundation); L14 cold-tail
-challenges are forgeable by fetch-on-demand.
-
-**Candidate closures (disposition TBD — gate-2 Round 1):**
-
-| Direction | Idea | Tradeoff |
-|-----------|------|----------|
-| **A — Short credit window** | Bit credit only if response in `≪ SEB` blocks after `H_anchor` inside epoch `E` | Must not break onion path; may still allow KB fetch |
-| **B — Bulk-range challenge** | Prove contiguous random sub-range of size `R ≫ m` (e.g. 256–1024 leaves), not `m` points | Larger on-chain verify budget; closer to "hold segment" |
-| **C — L14-primary** | Explicit challenge only tops up unread tail; reward bit from **served retrieval credits** | Cold shards remain hard; couples gate 2 to gate 6 fetch |
-| **D — PoRep / encoding** | Replica-specific encoding (Filecoin-class) | New primitive; likely ZK or heavy verify |
-| **E — Asymmetric regeneration bound** | Prove segment rebuild from **C** alone exceeds deadline (quantitative) | Requires pinned segment size + drain benchmark; may fail |
-
-Until one closure is chosen and bounded, **economics reopen** on storage-soundness grounds
-(§9.1 criterion 4), not merely verify-budget grounds.
+**PoRep** remains the priced path to **independent durable storage** (second domain); not
+genesis. **Traffic-proportional pay** for organic retrieval volume is a named reopen (gate-2
+§0.3) — self-dealing via Sybil requesters.
 
 ---
 
@@ -288,35 +246,26 @@ archivers × `m` samples; reject ZK deferral path only if measurement passes.
 
 | Question | Answer |
 |----------|--------|
-| **Membership witness constructible?** | **Yes** — Merkle opening to `R_k` on `shekyl-fcmp::tree` |
-| **Retention sound (as stated)?** | **OPEN** — public leaves + reacquire path; §7.5 hinge |
-| **New primitive needed?** | **Maybe** — depends on hinge closure (A–E); not ruled out |
-| **ZK required at genesis?** | **No** for membership; **TBD** if hinge forces succinct proof of bulk hold |
-| **Economics reopen?** | **Yes if hinge fails** — storage-soundness is the trigger, not verify budget |
-| **Next deliverable** | Gate-2 Round 1: resolve §7.5 + fix challenge/epoch ordering (gate-2 §4); **then** bytes/KATs |
+| **On-demand serve-credit constructible?** | **Yes** — opening + verify + affirmative bit (gate-2 §0) |
+| **Continuous storage provable cheaply?** | **No** — not the market claim; PoRep if ever needed |
+| **New primitive at genesis?** | **No** — consensus/hash/convergence |
+| **ZK at genesis?** | **No** |
+| **Economics reopen?** | **Only** traffic-proportional pay (§0.3 reopen) or PoRep durability fork |
+| **Next deliverable** | Byte-exact wire + verifier crate + field rename sweep |
 
 ### 9.1 Reopening criteria (reversion clause)
 
-Reopen **membership BUILD** only if hash-path verify fails substrate review.
+Reopen **BUILD** if hash-path verify fails substrate review or verify budget exceeds block
+limit.
 
-Reopen **retention soundness** (default until §7.5 closes) when:
-
-1. **Reacquisition asymmetry** — demonstrated cost to produce valid openings without set **B**
-   is **not** ≫ credit deadline (benchmark + threat model). **This criterion is active.**
-2. **Verify budget** — worst-case on-chain openings exceed block limit (after hinge shape
-   chosen).
-3. **Binding failure** — cannot bind response to `P_id` without breaking gate-6 firewall.
-4. **Segment pin breaks** — `R_k` checkpoint model incompatible with growth.
-
-Reopen **economics / reward leg** if (1) fails and no closure A–E restores storage-soundness
-without breaking L14/L15 premises — full Form-C review, not a gate-2 patch.
+Reopen **economics** for: (a) **traffic-proportional pay** (gate-2 §0.3), (b) **PoRep
+independent storage** fork, (c) binding failure at gate-6 firewall.
 
 ---
 
 ## 10. Implementation path (ordered)
 
-1. **Gate-2 Round 1** — close §7.5 hinge + fix epoch ordering ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
-   §4 amended); **hold** byte-exact wire until then.
+1. **Gate-2 Round 1** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0 obligation pinned.
 2. **`shekyl-archival-retention` crate (proposed)** — verify-only membership replay; KATs
    **after** challenge shape frozen.
 3. **Substrate reconciliation** — confirm `R_k` checkpoints in LMDB match §7.2 model;
@@ -340,4 +289,5 @@ without breaking L14/L15 premises — full Form-C review, not a gate-2 patch.
 
 ## Changelog
 
-- **2026-06-08:** Membership BUILD; retention hinge §7.5 OPEN (review amendment). Initial Merkle opening pass.
+- **2026-06-08:** Round 1 — on-demand serving BUILD; §7.5 hinge retired.
+- **2026-06-08:** Membership layer; initial Merkle opening pass.

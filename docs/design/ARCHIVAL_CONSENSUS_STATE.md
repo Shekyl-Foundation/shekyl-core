@@ -99,16 +99,17 @@ P_canonical_id = cSHAKE256(
 The emission leg **reads** these records; it does **not** define gate-2 challenge
 mechanics or gate-4 slash wire.
 
-### 3.1 Retention ledger (gate 2)
+### 3.1 Serve-credit ledger (gate 2)
 
 ```text
-retention_bit(P_id, shard_id, E) : bool
+serve_credit_bit(P_id, shard_id, E) : bool
 ```
 
-- Set when the challenge for `(P, shard)` relevant to settlement epoch `E` **passed**
-  ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §4–§5).
-- Challenge metadata (which leaf, which block) stays **gate-2-internal** — not in this
-  contract.
+**Legacy field name in emission wire:** `retention_bit` — same semantics; misnomer ("stored
+continuously"). Means **affirmative pass** on epoch on-demand challenge ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0).
+
+- Set only on **demonstrated response** this epoch — not "bonded and never failed."
+- Challenge metadata stays **gate-2-internal** — not in this contract.
 
 ### 3.2 Shard registry (gate 2)
 
@@ -123,7 +124,7 @@ what bytes a shard is (set-B boundary).
 
 ```text
 R_market(shard_id, E) =
-  |{ P_id : retention_bit(P_id, shard_id, E)
+  |{ P_id : serve_credit_bit(P_id, shard_id, E)   // legacy: retention_bit
          ∧ good_through(P_id, E)
          ∧ P_id ∈ Market }|
 ```
