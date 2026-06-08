@@ -1718,8 +1718,9 @@ struct shekyl_archival_verify_ctx {
     uint64_t segment_leaf_count;
     const uint8_t* pqc_pubkey_ptr;
     size_t pqc_pubkey_len;
+    /// Flattened Selene leaf-layer scalars (`N × 32` bytes); not a scalar count.
     const uint8_t* leaf_layer_scalars_ptr;
-    size_t leaf_layer_scalar_count;
+    size_t leaf_layer_scalars_len;
 };
 
 #define SHEKYL_ARCHIVAL_VERIFY_OK                    0

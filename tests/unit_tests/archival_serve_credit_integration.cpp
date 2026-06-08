@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <cstring>
 #include <map>
@@ -297,7 +298,7 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   const IntegrationKat kat = load_integration_kat();
   const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
 
-  auto* db = new ArchivalServeCreditIntegrationDB();
+  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
   seed_substrate(*db, kat, resp);
 
   BlockchainAndPool bap;
@@ -307,7 +308,8 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  // init() takes ownership; ~Blockchain deletes the DB in deinit().
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, kat.current_height));
 }
@@ -318,7 +320,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
   const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
   const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
 
-  auto* db = new ArchivalServeCreditIntegrationDB();
+  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
   seed_substrate(*db, kat, resp);
   db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch);
 
@@ -329,7 +331,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
 }

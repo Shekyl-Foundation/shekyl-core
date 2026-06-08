@@ -4808,7 +4808,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.pqc_pubkey_ptr = bond_pubkey.data();
   ctx.pqc_pubkey_len = bond_pubkey.size();
   ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.data();
-  ctx.leaf_layer_scalar_count = leaf_layer_scalars.size();
+  ctx.leaf_layer_scalars_len = leaf_layer_scalars.size();
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
     reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), &ctx);

@@ -607,7 +607,10 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes&
   std::vector<uint8_t> bytes;
   fromJsonValue(val, bytes);
   if (bytes.size() != ::config::ARCHIVAL_LEAF_BYTES)
-    throw WRONG_TYPE("archival leaf bytes must be 128 bytes");
+  {
+    const std::string expect = std::to_string(::config::ARCHIVAL_LEAF_BYTES) + " byte archival leaf";
+    throw WRONG_TYPE(expect.c_str());
+  }
   memcpy(leaf.data, bytes.data(), ::config::ARCHIVAL_LEAF_BYTES);
 }
 

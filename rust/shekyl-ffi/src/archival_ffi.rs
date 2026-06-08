@@ -17,6 +17,7 @@ use shekyl_archival_retention::{
     CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
+use shekyl_fcmp::SCALARS_PER_LEAF;
 
 /// Success.
 pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
@@ -60,7 +61,8 @@ pub struct ShekylArchivalVerifyCtx {
     pub pqc_pubkey_ptr: *const u8,
     pub pqc_pubkey_len: usize,
     pub leaf_layer_scalars_ptr: *const u8,
-    pub leaf_layer_scalar_count: usize,
+    /// Byte length of the flattened scalar blob (`N × 32`); not a scalar count.
+    pub leaf_layer_scalars_len: usize,
 }
 
 #[must_use]
@@ -190,10 +192,14 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     if ctx.pqc_pubkey_ptr.is_null() || ctx.pqc_pubkey_len == 0 {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
     }
-    if ctx.leaf_layer_scalars_ptr.is_null() || ctx.leaf_layer_scalar_count == 0 {
+    if ctx.leaf_layer_scalars_ptr.is_null() || ctx.leaf_layer_scalars_len == 0 {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
     }
-    if !ctx.leaf_layer_scalar_count.is_multiple_of(32) {
+    if !ctx.leaf_layer_scalars_len.is_multiple_of(32) {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE;
+    }
+    let scalar_count = ctx.leaf_layer_scalars_len / 32;
+    if !scalar_count.is_multiple_of(SCALARS_PER_LEAF) {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE;
     }
 
@@ -238,10 +244,9 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
         return SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE;
     }
 
-    let scalar_count = ctx.leaf_layer_scalar_count / 32;
     let mut scalars = Vec::with_capacity(scalar_count);
     let flat = unsafe {
-        std::slice::from_raw_parts(ctx.leaf_layer_scalars_ptr, ctx.leaf_layer_scalar_count)
+        std::slice::from_raw_parts(ctx.leaf_layer_scalars_ptr, ctx.leaf_layer_scalars_len)
     };
     for chunk in flat.chunks_exact(32) {
         let mut s = [0u8; 32];
@@ -290,5 +295,27 @@ mod tests {
     fn ffi_rejects_null_context() {
         let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
         assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn ffi_rejects_leaf_layer_scalar_count_not_multiple_of_four() {
+        let pubkey = [0u8; 32];
+        let scalars = [0u8; 32];
+        let ctx = ShekylArchivalVerifyCtx {
+            current_height: 1,
+            settlement_epoch: 0,
+            block_hash_at_seal: [0u8; 32],
+            registry_segment_subroot_rk: [0u8; 32],
+            segment_leaf_count: 1,
+            pqc_pubkey_ptr: pubkey.as_ptr(),
+            pqc_pubkey_len: pubkey.len(),
+            leaf_layer_scalars_ptr: scalars.as_ptr(),
+            leaf_layer_scalars_len: scalars.len(),
+        };
+        let payload = [0u8];
+        let code = unsafe {
+            shekyl_archival_verify_serve_credit_vin(payload.as_ptr(), payload.len(), &ctx)
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE);
     }
 }
