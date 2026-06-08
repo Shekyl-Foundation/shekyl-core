@@ -2,9 +2,10 @@
 
 **Status:** **Landed (2026-06-07).** Spliced into
 [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7; claim-era wargame → §7.A.
-LMDB substrate verified on `dev` (§7.11). **T-A1 sim run (2026-06-07): FAIL** at
-SEB=10_000 + hygiene defaults — F1 final accept still blocked; see
-[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1*.
+LMDB substrate verified on `dev` (§7.11). **T-A1/T-A2 v2 (2026-06-07):** timeline channel
+passes (rotation no advantage vs baseline); **cohort channel fails** (singleton portfolios
+~98% at lean eq) — F1 final accept still blocked; SEB is not the F1 lever; see
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 **Authority chain:** [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-6;
 [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
@@ -66,7 +67,7 @@ Run each T-item against every applicable model; mark N/A explicitly.
 
 | Threat | Mitigation pin (draft) |
 |--------|------------------------|
-| **F1 — epoch-granularity retention fingerprint** | Shard axis **fixed** at per-`(P,s,E)` (Σwork / `R_market` scarcity). **Structural resolution = `SETTLEMENT_EPOCH_BLOCKS` (SEB)** — only protocol dial on epoch-axis granularity. Hygiene (rotation/lapse/firewall) buys down **residual** after SEB is pinned. **Disposition:** provisionally accepted, **gated on T-A1 sim sign-off** at pinned SEB + defaults. |
+| **F1 — retention re-linkage (timeline + portfolio cohort)** | Shard axis **fixed** at per-`(P,s,E)`. **Binding variable (T-A1 v2):** deep **shard-set portfolio** co-holder cohort — not epoch resolution (`SEB` is emission/UX only per sim). Timeline homogeneity at lean eq is **protective** (non-fingerprint); rotation/lapse decorrelates timeline only. **Disposition:** provisionally accepted, **gated on T-A1 cohort channel** at pinned SEB + hygiene defaults. |
 | **A6 — challenge grief** | Flood challenges / DoS rendezvous / false-dispute — see T-A16; couples to `CHALLENGE_RESOLUTION_BLOCKS` + L16 + consensus-witnessed challenge delivery. |
 | **`P`↔principal long-lived correlation** | Four firewall layers + bond-funding (gate 6 §2). Tor/onion serving (L16); decorrelated drains; no clearnet production fallback. |
 | **Cross-pseudonym intersection** | Per-`P` network path, emission batching, rotation discipline; bonds do **not** make multi-`P` free. |
@@ -93,7 +94,7 @@ Each item needs a disposition before §7 lands: **mitigated-in-design** / **FOLL
 
 | ID | Vector | Wargame question |
 |----|--------|------------------|
-| **T-A1** | **F1 — retention timeline fingerprint (GATE)** | At **pinned SEB**, quantify within-shard epoch-timeline identifiability under L10–L16 + hygiene defaults. **F1 is not accepted until T-A1 passes** — burden on accept, not reopen-after-fact. If SEB is not a genuine emission-cadence lock, F1 gets a **vote on coarser SEB** before accepting hygiene-only residual. |
+| **T-A1** | **F1 — re-linkage instrument (GATE)** | At **pinned SEB**, quantify (a) timeline channel **relative to independent-operator baseline** and (b) **portfolio cohort size** as anonymity floor. **F1 is not accepted until cohort channel passes** at lean equilibrium. SEB coarsening is **not** an F1 lever (T-A1 evidence). Shared-portfolio positive control is the next experiment. |
 | **T-A2** | **E-4 — cosmetic rotation** | `P_old → P_new` with same storage, adjacency epochs, same network path — re-linkage proof obligation. What wallet defaults force a real break? |
 | **T-A3** | **Firewall — network path** | Under A2/A4, does onion rendezvous (L16) contain principal↔`P` for production serving? Seeding relaxation bounded? |
 | **T-A4** | **Firewall — timing** | Emission batching + drain/Unbond spacing — standing correlation channel vs principal spends? Pin jitter defaults. |

@@ -24,8 +24,8 @@ couples the L10 onion-rendezvous latency band to L15 by depressing effective per
 `u` (`u_eff = u_base/(1+k·L)`), so a **fully-covered** deep set (`deep_und=0`, `R≈6`) fails its
 retrieval SLA from transport alone at `L≥1` (`rUDp` 0→1.0 across `L0..L6`) while derived
 `R_target` climbs 3→7 — duration backstop and replica floor do not repair depressed `u`
-(2026-06-06); **T-A1 F1 fingerprint instrument built and run — gate FAIL at SEB=10_000
-(2026-06-07).**
+(2026-06-06); **T-A1/T-A2 F1 instrument built; v2 metrics re-pointed (2026-06-07) — F1
+final accept still blocked on cohort channel, not timeline rotation.**
 Crate `rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
 build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
 residual-by-age*, the flat-vs-age-scaled-bond fork in §*Iteration 1c — the
@@ -2117,21 +2117,28 @@ a covered deep set fails its SLA from transport alone above `L=0`, derived `R_ta
 3→7 across the band, and neither duration backstop nor replica floor repairs depressed `u` —
 transport is a first-class retrieval input compositing with L15 diversity.
 
-## T-A1 — F1 retention-timeline fingerprint (PHASE_2B §7.7 gate)
+## T-A1 / T-A2 — F1 re-linkage instrument (PHASE_2B §7.7 gate)
 
-**Status: BUILT and RUN (2026-06-07).** Crate module `rust/shekyl-staking-sim/src/fingerprint.rs`;
-axis `ta1_f1` (`cargo run -p shekyl-staking-sim --release -- --axis=ta1_f1`).
+**Status: BUILT, v2 RE-POINTED, RUN (2026-06-07).** Crate module
+`rust/shekyl-staking-sim/src/fingerprint.rs`; axes `ta1_f1` and `ta1_cohort`
+(`cargo run -p shekyl-staking-sim --release -- --axis=ta1_f1`).
 
-**What it models.** Public per-`(P, deep_shard, settlement_epoch)` retention bits at pinned
-`SETTLEMENT_EPOCH_BLOCKS = 10_000` (~13.9 d @ 120 s). A bit is set when the actor is
-**held + seated** on a deep shard (`holdings && inflight == 0`). Metrics:
+**Metric re-point (v1 → v2).** The v1 instrument scored absolute timeline Hamming
+(`mean_pairwise_distance ≥ 0.10`, `lapse_relink ≤ 0.55`). At the lean equilibrium those
+thresholds confound **homogeneous serving** (everyone serves every epoch on their seated
+shards) with **fingerprinting**. v2 splits two channels:
 
-| Metric | Meaning | Pass threshold |
-|--------|---------|----------------|
-| `settlement_epochs` | Completed settlement epochs in run | ≥ 20 |
-| `mean_pairwise_distance` | Mean normalized Hamming between **distinct `P`** on the **same shard** | ≥ 0.10 |
-| `lapse_relink_correlation` | Pre-lapse vs post-reentry similarity (`1 − Hamming`); hygiene uses rotation `P₀→P₁` | ≤ 0.55 |
-| `cosmetic_overlap` | Pre/post overlap when cosmetic relink is forced (E-4 failure mode) | ≥ 0.70 (documents failure, not F1 pass) |
+| Channel | Metric | Meaning | Pass threshold |
+|---------|--------|---------|----------------|
+| **Timeline (diagnostic)** | `mean_independent_similarity` | `1 − mean_pairwise_distance` between distinct `P` on the same shard | ≥ 0.90 (homogeneous ⇒ non-fingerprint) |
+| | `lapse_relink_similarity` | Pre-lapse `P₀` vs post-rotation `P₁` (`1 − Hamming`) | ≤ baseline (no rotation advantage) |
+| | `lapse_vs_baseline_advantage` | `baseline − lapse_relink` | > 0 ⇒ rotation *harder* to link than a random other archiver |
+| **Cohort (F1 gate)** | `mean_portfolio_cohort_size` | Mean `\|{P' : portfolio(P') = portfolio(P)}\|` over seated deep actor-epochs | ≥ 2.0 |
+| | `singleton_portfolio_fraction` | Fraction of seated deep actor-epochs in a size-1 cohort | ≤ 0.10 |
+| **E-4 control** | `cosmetic_overlap` | Pre/post overlap when cosmetic relink is forced | ≥ 0.70 (documents failure) |
+
+Portfolio = the set of deep shards an actor is **held + seated** on at settlement close.
+Cohort size = count of actors with the **exact same** portfolio that epoch.
 
 **Scenario pin (hygiene default).** `gate4_fine` lean stack (`bond_rate=0.75`, `g=2`, endogenous
 L11 at ρ≈0.02, L10 `fetch_latency_per_unit=2`, age-scaled duration 2/2, L16 transport,
@@ -2139,31 +2146,61 @@ L11 at ρ≈0.02, L10 `fetch_latency_per_unit=2`, age-scaled duration 2/2, L16 t
 Lapse window on actor 0 at settlement epoch 30 for 15 epochs; hygiene row rotates to actor 1
 post-lapse (`ta1_rotation_actor`).
 
-**First run (2026-06-07).**
+**v2 run (2026-06-07) — timeline axis (`ta1_f1`).**
 
-| Scenario | nE | dist | lapse relink | cosmetic | F1 |
-|----------|-----|------|--------------|----------|-----|
-| `ta1_f1_hygiene` | 160 | 0.041 | 0.928 | — | **FAIL** |
-| `ta1_f1_no_hygiene` | 160 | 0.002 | 0.000 | — | FAIL |
-| `ta1_f1_cosmetic` | 160 | 0.041 | 0.881 | 0.957 | FAIL |
-| `ta1_f1_seb_coarse` (SEB=20_000) | 80 | 0.051 | 0.939 | — | FAIL |
+| Scenario | nE | baseline | lapse | advantage | cohort | singleton | F1 |
+|----------|-----|----------|-------|-----------|--------|-----------|-----|
+| `ta1_f1_hygiene` | 160 | 0.959 | 0.928 | +0.031 | 1.0 | 0.982 | **FAIL** |
+| `ta1_f1_no_hygiene` | 160 | 0.998 | 0.000 | +0.998 | 1.1 | 0.948 | FAIL |
+| `ta1_f1_cosmetic` | 160 | 0.959 | 0.881 | +0.078 | 1.0 | 0.982 | FAIL |
+| `ta1_f1_seb_coarse` (SEB=20_000) | 80 | 0.949 | 0.939 | +0.010 | 1.0 | 0.981 | FAIL |
 
-**Headline.** F1 **does not clear** the T-A1 gate on this instrument:
+**v2 run — cohort sweep (`ta1_cohort`).**
 
-1. **Distinguishability** — hygiene raises per-shard pairwise distance ~20× over no-hygiene
-   (0.041 vs 0.002) but remains **below** the 0.10 floor at SEB=10_000. Coarser SEB=20_000
-   improves distance slightly (0.051) without clearing the bar.
-2. **Lapse decorrelation** — wallet rotation to `P₁` does **not** decorrelate under the lean
-   equilibrium: post-reentry serving tracks the same economic optimum as pre-lapse (`relink ≈ 0.93`).
-   No-hygiene same-actor lapse reads as fully decorrelated (0.000) because static population
-   does not re-establish the same timeline.
-3. **Cosmetic failure mode** — `ta1_f1_cosmetic` confirms E-4 relink (`overlap 0.957 ≥ 0.70`).
+| Scenario | cohort | singleton | distinctive ctrl | F1 |
+|----------|--------|-----------|-------------------|-----|
+| `ta1_cohort_lean` | 1.0 | 0.982 | — | FAIL |
+| `ta1_cohort_distinctive` (pin actor 0 → shards `{7,53,211}`) | 1.0 | 0.978 | PASS (singleton ≥ 0.50) | PASS* |
+| `ta1_cohort_shared` (pin actors 0–109 → shards `{0..9}`) | **92.6** | **0.075** | — | **PASS** |
+
+\*Distinctive row passes the **negative-control** claim (`distinctive_identifiable`), not the
+lean F1 gate (`cohort_adequate`).
+
+**Shared-portfolio positive control (2026-06-07).** Forcing 110 actors onto the identical
+10-shard deep set raises mean cohort **1.0 → 92.6** and cuts singleton fraction **0.982 → 0.075**
+— the cohort instrument responds correctly. F1 cohort gate **passes** on this row. The forced
+homogeneity is **not** an equilibrium outcome: `deep_und` rises to 0.973 and churn spikes
+(coverage collateral), confirming lean eq's combinatorial portfolio uniqueness is emergent, not
+a metric artifact. **Conclusion:** F1 anonymity at lean eq fails because actors naturally diverge
+in shard-set holdings, not because the gate is broken.
+
+**Headline (revised).** F1 **does not clear** final accept, but **not** because rotation is
+futile:
+
+1. **Timeline channel is empty (reassuring).** Independent operators' timelines are ~96%
+   identical at lean equilibrium (`baseline 0.959`). Rotation `P₀→P₁` is *less* similar
+   (`0.928`) than a random other archiver — timeline similarity has **no discriminating
+   power** for re-linkage here. Homogeneous serving is protective, not a fingerprint.
+2. **Cohort channel fails (binding).** Mean portfolio cohort size is **1.0** and singleton
+   fraction **~98%** — at this equilibrium every seated deep archiver has a **combinatorially
+   unique** shard-set portfolio even while retention timelines homogenize. Re-linkage across
+   rotation is bounded by portfolio co-holder cohort, and the sim's lean attractor does **not**
+   produce large shared portfolios.
+3. **SEB is not the F1 lever.** `ta1_f1_seb_coarse` (SEB=20_000) barely moves timeline metrics
+   (`advantage +0.010` vs `+0.031`); cohort unchanged. SEB stays emission-cadence / UX only.
+4. **Cosmetic E-4** — `ta1_f1_cosmetic` still confirms relink (`overlap 0.957 ≥ 0.70`).
+5. **Distinctive negative control is inconclusive** — pinning a rare triple does not raise
+   singleton rate above the already-singleton lean baseline (everyone is already singleton).
+6. **Shared-portfolio positive control passes** — `ta1_cohort_shared` confirms the cohort
+   metric and gate work; lean failure is an **emergent portfolio-diversity** property, not
+   instrument mis-pointing.
 
 **Disposition.** F1 remains **provisionally accepted, sim-gated** per
-[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7.7. T-A1 does **not** sign off
-final accept at SEB=10_000 + current hygiene defaults. Open paths: (a) coarser SEB vote if not
-emission-locked; (b) stronger firewall / rotation semantics not captured by economic re-optimization;
-(c) threshold recalibration against sparse-bit density (~0.9%). See ledger **T-A1**.
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7.7. T-A1/T-A2 do **not** sign off
+final accept. Open paths: (a) wallet disclosure that re-linkability
+is **cohort-bounded by shard-set**, not timeline-decorrelated by rotation alone; (c) tie
+`R_target` diversity floor to portfolio anonymity where combination-uniqueness binds below
+per-shard replication. See ledger **T-A1**.
 
 ## Soundness pass — ordering, SLA pin, and deferred conditions
 
@@ -2340,7 +2377,7 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the audit cadence, not the bond. Modeled the deterrence threshold `a* = benefit/penalty` (abstain iff caught-prob·slash ≥ saved flow cost) and the **read-credit**: a content-bound retrieval *is* a proof, so the explicit-challenge rate is only the top-up `max(0, (a*−p_read)/(1−p_read))` the unread tail needs (`src/audit.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** The non-productive (oversight-only) traffic **collapses onto the cold tail**: crediting real reads cuts the mean challenge cadence from the naive `a*=0.1` to `0.035` (**~65%**) with **98% of the residual on deep shards** (`l14_credited`: `auN 0.100 → auC 0.035`, `auDp 0.98`) — hot shards are proven for free by their own reads; only the oldest carry cadence (`auOld 0.090`, P3). Two levers shrink it further: (1) **a credible slash is the primary deterrent** — penalty 0.5/1/2/4 drops `a*` 0.20/0.10/0.05/0.025 and credited cadence 0.106/0.035/0.010/0.002 (`l14_penalty_*`), so the bond/penalty does the deterring and challenges are the top-up, not the reverse; (2) **demand self-polices** — as the cold-tail read floor rises to `a*`, even the oldest self-prove and explicit challenges vanish (`l14_read_*`: `auOld 0.090→0`). **Disposition:** gate-4's free-rider gate is **retrieval-credited PoR** — real reads are the proof wherever they occur; explicit challenges are cover traffic confined to the unread cold tail, sampled/aggregated, rate-set by the band's irreplaceability (P3) and its retrieval SLA (L15); deterrence is carried by a credible slash, with the challenge cadence only topping up the read-audit to `a*`. **Residue:** live read-rate distribution, the real `benefit/penalty` ratio, and the challenge-faking cost (can a free-rider fetch-on-demand to fake a challenge? — sets the floor cadence) are post-testnet/gate-7 empirics. See §*L14 — proof-of-archival* and the §*L14×L15 specification*. |
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
-| T-A1 | **F1 retention-timeline fingerprint** (PHASE_2B §7.7; `SETTLEMENT_EPOCH_BLOCKS`) | First instrument run (2026-06-07): at SEB=10_000 + hygiene defaults, per-shard pairwise distance 0.041 (< 0.10 floor) though ~20× no-hygiene; lapse rotation `P₀→P₁` does not decorrelate (`relink 0.93`); cosmetic E-4 relink confirmed (`overlap 0.96`). Coarser SEB=20_000 does not clear distance bar (0.051). | **OPEN — F1 final accept blocked.** **Reversion:** pass T-A1 at pinned SEB + hygiene defaults, **or** ratify coarser SEB / stronger firewall semantics and re-run. Evidence: §*T-A1 — F1 retention-timeline fingerprint*. |
+| T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; timeline + cohort channels) | v2 re-point (2026-06-07): timeline **passes** at lean eq; cohort **fails** at lean (mean 1.0, singleton ~98% — emergent portfolio diversity). `ta1_cohort_shared` positive control **passes** (cohort 92.6, singleton 0.075) — instrument validated. SEB=20_000 not an F1 lever. Cosmetic E-4 relink confirmed. | **OPEN — F1 final accept blocked at lean eq, not rotation.** **Reversion:** pass cohort gate at **unforced** lean equilibrium, **or** ratify honest residual (portfolio cohort bounds re-linkage; `R_target` doubles as co-holder anonymity floor). Evidence: §*T-A1 / T-A2*. |
 
 ### Robustness-sweep verdicts (which findings are structural)
 

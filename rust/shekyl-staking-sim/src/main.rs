@@ -248,68 +248,92 @@ fn print_summary(results: &[ScenarioResult]) {
     let ta1_rows: Vec<_> = results.iter().filter(|r| r.ta1.is_some()).collect();
     if !ta1_rows.is_empty() {
         eprintln!();
-        eprintln!("T-A1 / F1 retention fingerprint (PHASE_2B §7.7; SEB=10_000 default):");
-        eprintln!("  Pass: sample≥20 settlement epochs; pairwise dist≥0.10; lapse relink≤0.55.");
-        eprintln!("  Cosmetic row: overlap≥0.70 documents E-4 failure (same pattern, new id).");
+        eprintln!("T-A1/T-A2 F1 re-linkage (PHASE_2B §7.7; SEB=10_000 default):");
         eprintln!(
-            "{:<22} {:>4} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} | {:>4} {:>4} {:>4} {:>4} {:>4}",
+            "  Timeline (diagnostic): baseline sim≥0.90; rotation relink≤baseline (no advantage)."
+        );
+        eprintln!(
+            "  Cohort (gate): mean cohort≥2.0; singleton≤10%. Distinctive: singleton≥50%."
+        );
+        eprintln!(
+            "{:<22} {:>4} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} | {:>4} {:>4} {:>4} {:>4} {:>4} {:>4}",
             "scenario",
             "nE",
-            "days",
-            "dens",
-            "dist",
-            "auto",
+            "base",
             "relnk",
+            "adv",
+            "cohrt",
+            "sing",
             "cosm",
             "samp",
-            "dist",
-            "laps",
-            "cosm",
+            "hom",
+            "rot",
+            "coh",
+            "dst",
             "F1",
         );
         for r in &ta1_rows {
             let t = r.ta1.as_ref().unwrap();
             let c = &t.claims;
             eprintln!(
-                "{:<22} {:>4} {:>6.1} {:>6.3} {:>6.3} {:>6.3} {:>6.3} {:>6.3} | {:>4} {:>4} {:>4} {:>4} {:>4}",
+                "{:<22} {:>4} {:>5.3} {:>5.3} {:>5.3} {:>5.1} {:>5.3} {:>5.3} | {:>4} {:>4} {:>4} {:>4} {:>4} {:>4}",
                 r.name,
                 t.settlement_epochs,
-                t.settlement_epoch_days,
-                t.mean_bit_density,
-                t.mean_pairwise_distance,
-                t.half_run_autocorrelation,
-                t.lapse_relink_correlation.unwrap_or(-1.0),
+                t.mean_independent_similarity,
+                t.lapse_relink_similarity.unwrap_or(-1.0),
+                t.lapse_vs_baseline_advantage.unwrap_or(-1.0),
+                t.mean_portfolio_cohort_size,
+                t.singleton_portfolio_fraction,
                 t.cosmetic_overlap.unwrap_or(-1.0),
                 yn(c.sample_adequate),
-                yn(c.independent_distinguishable),
-                yn(c.lapse_decorrelates),
-                yn(c.cosmetic_relinks),
+                yn(c.timeline_homogeneous),
+                yn(c.rotation_no_timeline_advantage),
+                yn(c.cohort_adequate),
+                yn(c.distinctive_identifiable),
                 yn(c.f1_pass),
             );
         }
-        let hygiene = ta1_rows
+        let lean = ta1_rows
             .iter()
-            .find(|r| r.name == "ta1_f1_hygiene")
+            .find(|r| r.name == "ta1_f1_hygiene" || r.name == "ta1_cohort_lean")
             .and_then(|r| r.ta1.as_ref());
-        let no_hygiene = ta1_rows
+        let distinctive = ta1_rows
             .iter()
-            .find(|r| r.name == "ta1_f1_no_hygiene")
+            .find(|r| r.name == "ta1_cohort_distinctive")
             .and_then(|r| r.ta1.as_ref());
-        if let (Some(h), Some(n)) = (hygiene, no_hygiene) {
-            let dist_ratio = h.mean_pairwise_distance / n.mean_pairwise_distance.max(1e-9);
+        if let Some(h) = lean {
             eprintln!(
-                "  Comparative (hygiene vs no_hygiene): dist {:.3} vs {:.3} ({:.1}×); lapse {:.3} vs {:.3}",
-                h.mean_pairwise_distance,
-                n.mean_pairwise_distance,
-                dist_ratio,
-                h.lapse_relink_correlation.unwrap_or(-1.0),
-                n.lapse_relink_correlation.unwrap_or(-1.0),
+                "  Lean: baseline {:.3}, lapse {:.3}, advantage {:+.3}, cohort {:.1}, singleton {:.3}",
+                h.mean_independent_similarity,
+                h.lapse_relink_similarity.unwrap_or(-1.0),
+                h.lapse_vs_baseline_advantage.unwrap_or(-1.0),
+                h.mean_portfolio_cohort_size,
+                h.singleton_portfolio_fraction,
             );
         }
-        let f1_pass = hygiene.map(|t| t.claims.f1_pass).unwrap_or(false);
+        if let Some(d) = distinctive {
+            eprintln!(
+                "  Distinctive: cohort {:.1}, singleton {:.3} (portfolio threat demo)",
+                d.mean_portfolio_cohort_size,
+                d.singleton_portfolio_fraction,
+            );
+        }
+        let shared = ta1_rows
+            .iter()
+            .find(|r| r.name == "ta1_cohort_shared")
+            .and_then(|r| r.ta1.as_ref());
+        if let Some(s) = shared {
+            eprintln!(
+                "  Shared (+ctrl): cohort {:.1}, singleton {:.3} (F1 cohort {})",
+                s.mean_portfolio_cohort_size,
+                s.singleton_portfolio_fraction,
+                if s.claims.f1_pass { "PASS" } else { "FAIL" },
+            );
+        }
+        let f1_pass = lean.map(|t| t.claims.f1_pass).unwrap_or(false);
         eprintln!();
         eprintln!(
-            "F1 gate (ta1_f1_hygiene): {}",
+            "F1 gate (lean cohort): {}",
             if f1_pass { "PASS" } else { "FAIL" }
         );
     }

@@ -125,6 +125,19 @@ across **`P_old` → `P_new` rotation** re-links identities if rotation is cosme
 (same storage, same shard set, adjacent epochs). **Rotation must change observable
 behavior**, not only `P_id`.
 
+**T-A1 update (2026-06-07, v2 instrument).** At the lean deep-archiver equilibrium,
+timeline similarity is a **non-channel** for re-linkage (independent operators ~96%
+identical; rotation `P₀→P₁` is *less* similar than a random other archiver). The binding
+public identifier is the **deep shard-set portfolio** and its **co-holder cohort**:
+`|{P' : portfolio(P') = portfolio(P)}|`. A distinctive combination identifies even when
+per-shard `R_target` is healthy; a portfolio within a healthy co-holder cohort is not
+re-linkable on set alone. **Honest disclosure:** re-linkability across rotation is
+**cohort-bounded** — a distinctive archival portfolio is a persistent public identity by
+function; timeline rotation does not decorrelate what the sim shows is already homogeneous.
+Mitigation is portfolio shape (serve within a cohort) plus the `R_target` coverage floor
+doubling as a re-linkage anonymity floor where combination-uniqueness binds below per-shard
+replication. Evidence: [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
+
 **Round-open:** jitter policy (wallet-local vs daemon-assisted), rotation cadence vs
 `W`, joint pin of `SETTLEMENT_EPOCH_BLOCKS` with gate-6 decorrelation (archival state
 §9.2 when landed).

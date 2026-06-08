@@ -40,16 +40,22 @@ prune_horizon_epochs     = max(W, REORG_HORIZON / SETTLEMENT_EPOCH_BLOCKS)   // 
 
 At default **120 s** block time, `SEB = 10_000` ⇒ one settlement epoch ≈ **13.9 days**.
 
-### 1.1 SEB and F1 (structural privacy dial)
+### 1.1 SEB and F1 (emission cadence — not a structural F1 lever)
 
 [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) §7: retention fingerprint **F1**
 has a fixed **shard** axis (per-`(P,s,E)` — not coarsenable without breaking Σwork / `R_market`)
-and an **epoch** axis controlled only by **SEB**.
+and an **epoch** axis at settlement granularity.
+
+**T-A1 update (2026-06-07, v2 instrument).** Coarser SEB (`ta1_f1_seb_coarse`, 20_000 blocks)
+does **not** materially change timeline baseline/lapse metrics or portfolio cohort size. The
+binding F1 variable in sim is **shard-set portfolio co-holder cohort**, not epoch resolution.
+SEB therefore governs **emission cadence and wallet UX** (claim batching, calendar rhythm), not
+structural re-linkage decorrelation.
 
 | SEB disposition | F1 consequence |
 |-----------------|----------------|
-| **10_000 is a genuine emission-cadence lock** | Structural F1 resolution fixed at ~13.9 d epochs; residual is hygiene-only (rotation/lapse/firewall). **T-A1 sim gates** F1 accept at this SEB. |
-| **"Inherited" is placeholder** | F1 gets a **vote on coarser SEB** before accepting hygiene-only residual — coarser epochs reduce fingerprint at protocol level (outranks operator discipline). |
+| **10_000 is a genuine emission-cadence lock** | F1 final accept is **sim-gated on cohort channel** at this SEB (see [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*). Timeline rotation/lapse hygiene is necessary but not sufficient. |
+| **"Inherited" is placeholder** | Coarser SEB remains an **emission-policy** vote only — not an F1 privacy dial per T-A1 evidence. |
 
 SEB is **not** TBD in the same sense as `W` or `REORG_HORIZON`; it is pinned pending the
 emission-cadence inheritance review above.

@@ -9,7 +9,7 @@
 
 use crate::agent::{run_epoch, AgentParams};
 use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
-use crate::fingerprint::{Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
+use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
@@ -256,6 +256,14 @@ pub struct SimConfig {
     pub ta1_cosmetic_relink: bool,
     /// Post-lapse identity for lapse decorrelation (models wallet rotation to new `P`).
     pub ta1_rotation_actor: Option<usize>,
+    /// Pin an actor to an exact deep shard set (portfolio-distinctiveness sweep).
+    pub ta1_pinned_portfolio: Option<Vec<usize>>,
+    pub ta1_portfolio_actor: Option<usize>,
+    /// Force multiple actors onto the same deep shard set (shared-portfolio positive control).
+    pub ta1_shared_portfolio: Option<Vec<usize>>,
+    pub ta1_shared_portfolio_actors: Vec<usize>,
+    /// Negative control: expect singleton portfolio cohort (distinctive threat demo).
+    pub ta1_expect_distinctive: bool,
 
     // targets
     pub r_target_hot: f64,
@@ -603,6 +611,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             cfg.ta1_lapse_span_settlement,
             cfg.ta1_cosmetic_relink,
             cfg.ta1_rotation_actor,
+            cfg.ta1_expect_distinctive,
         ))
     } else {
         None
@@ -666,6 +675,16 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 
         if let (Some(ref ta1_rec), Some(actor)) = (&ta1, cfg.ta1_lapse_actor) {
             ta1_rec.apply_lapse_drop(&mut world, actor);
+        }
+
+        if let Some(ref shards) = cfg.ta1_shared_portfolio {
+            for &actor in &cfg.ta1_shared_portfolio_actors {
+                force_deep_portfolio(&mut world, actor, shards, cfg.deep_threshold);
+            }
+        }
+        if let (Some(ref shards), Some(actor)) = (&cfg.ta1_pinned_portfolio, cfg.ta1_portfolio_actor)
+        {
+            force_deep_portfolio(&mut world, actor, shards, cfg.deep_threshold);
         }
 
         // Oldest-band churn attribution (at the ages agents acted on this epoch).
@@ -1272,6 +1291,11 @@ fn baseline() -> SimConfig {
         ta1_lapse_span_settlement: 0,
         ta1_cosmetic_relink: false,
         ta1_rotation_actor: None,
+        ta1_pinned_portfolio: None,
+        ta1_portfolio_actor: None,
+        ta1_shared_portfolio: None,
+        ta1_shared_portfolio_actors: Vec::new(),
+        ta1_expect_distinctive: false,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -2570,6 +2594,37 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = "ta1_f1_seb_coarse".into();
         c.axis = "ta1_f1".into();
         c.settlement_epoch_blocks = 20_000;
+        out.push(c);
+    }
+
+    // --- T-A2 / F1 portfolio-cohort sweep (shard-set anonymity floor). ---
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_cohort_lean".into();
+        c.axis = "ta1_cohort".into();
+        out.push(c);
+    }
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_cohort_distinctive".into();
+        c.axis = "ta1_cohort".into();
+        c.ta1_pinned_portfolio = Some(vec![7, 53, 211]);
+        c.ta1_portfolio_actor = Some(0);
+        c.ta1_expect_distinctive = true;
+        c.ta1_rotation_actor = None;
+        c.ta1_lapse_actor = None;
+        out.push(c);
+    }
+    {
+        // Positive control: if N archivers share the exact deep portfolio, cohort size
+        // should rise and F1 cohort gate should be satisfiable (instrument sanity check).
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_cohort_shared".into();
+        c.axis = "ta1_cohort".into();
+        c.ta1_shared_portfolio = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        c.ta1_shared_portfolio_actors = (0..110).collect();
+        c.ta1_rotation_actor = None;
+        c.ta1_lapse_actor = None;
         out.push(c);
     }
 

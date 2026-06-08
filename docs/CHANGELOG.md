@@ -10,11 +10,16 @@
   verified (`m_properties` scalars, `already_generated_coins`, `pop_block` revert pattern;
   bond wire greenfield). FSM retool substrate-verify row closed.
 
-- **staking-sim: T-A1 F1 fingerprint instrument (2026-06-07).**
-  `rust/shekyl-staking-sim/src/fingerprint.rs`; axis `ta1_f1` (four scenarios). First run:
-  **F1 gate FAIL** at SEB=10_000 + hygiene defaults (pairwise dist 0.041 < 0.10; lapse
-  relink 0.93). Cosmetic E-4 failure mode confirmed. See
-  [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1*.
+- **staking-sim: T-A1/T-A2 F1 re-linkage instrument v2 (2026-06-07).**
+  `rust/shekyl-staking-sim/src/fingerprint.rs` re-pointed: timeline channel (baseline-relative
+  rotation advantage) + cohort channel (portfolio co-holder size). Axes `ta1_f1` (four
+  scenarios) and `ta1_cohort` (lean vs distinctive pin). v2 run: timeline **passes** at lean
+  eq (baseline 0.959, lapse 0.928 — rotation harder than chance); cohort **fails** (mean
+  cohort 1.0, singleton ~98%). `ta1_cohort_shared` positive control: cohort 92.6, singleton
+  0.075, F1 PASS (instrument validated; lean failure is emergent portfolio diversity). SEB=20_000
+  does not move cohort. F1 final accept still blocked on cohort at lean eq, not rotation.
+  Gate-6 / timing doc disclosure ripple. See
+  [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
   [`PHASE_2B_SECTION7_DRAFT.md`](design/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
