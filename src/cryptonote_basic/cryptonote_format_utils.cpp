@@ -680,7 +680,12 @@ namespace cryptonote
     const uint64_t per_shard = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
     if (holdings.kind == archival_holdings_kind::CompleteTree)
       return per_shard;
-    return per_shard * holdings.shard_ids.size();
+    const size_t shard_count = holdings.shard_ids.size();
+    if (shard_count == 0 || shard_count > config::ARCHIVAL_MAX_HOLDINGS_SHARDS)
+      return 0;
+    if (per_shard > std::numeric_limits<uint64_t>::max() / shard_count)
+      return 0;
+    return per_shard * shard_count;
   }
 
   bool check_inputs_types_supported(const transaction& tx)

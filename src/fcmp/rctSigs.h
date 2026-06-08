@@ -95,6 +95,8 @@ namespace rct {
         const std::vector<xmr_amount> &outamounts, const keyV &destinations);
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
+    // Fee-only RCT (empty FCMP++ proof and pseudo-outs); used by archival serve-credit.
+    bool verRctSemanticsFeeOnly(const rctSig &rv);
     key get_tx_prehash(const rctSig &rv, hw::device &hwdev);
 }
 #endif  /* RCTSIGS_H */

@@ -264,6 +264,55 @@ namespace
       return verRctSemanticsSimple(std::vector<const rctSig*>(1, &rv));
     }
 
+    bool verRctSemanticsFeeOnly(const rctSig &rv)
+    {
+      try
+      {
+        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+            "verRctSemanticsFeeOnly called on unsupported rctSig type");
+        CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
+        CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
+            false, "Mismatched sizes of outPk and bulletproofs_plus");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of outPk and rv.enc_amounts");
+        CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of enc_labels and rv.enc_amounts");
+
+        rct::keyV masks(rv.outPk.size());
+        for (size_t i = 0; i < rv.outPk.size(); ++i)
+          masks[i] = rv.outPk[i].mask;
+        key sumOutpks = addKeys(masks);
+        const key txnFeeKey = scalarmultH(d2h(rv.txnFee));
+        addKeys(sumOutpks, txnFeeKey, sumOutpks);
+        if (!equalKeys(sumOutpks, identity()))
+        {
+          LOG_PRINT_L1("Sum check failed");
+          return false;
+        }
+
+        std::vector<const BulletproofPlus*> bpp_proofs;
+        for (size_t i = 0; i < rv.p.bulletproofs_plus.size(); ++i)
+          bpp_proofs.push_back(&rv.p.bulletproofs_plus[i]);
+        if (!bpp_proofs.empty() && !verBulletproofPlus(bpp_proofs))
+        {
+          LOG_PRINT_L1("Aggregate range proof verification failed");
+          return false;
+        }
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly, but not an actual exception");
+        return false;
+      }
+    }
+
     //------------------------------------------------------------------------------------------------------------------------------
     // FCMP++ transaction construction: replaces ring signatures with a single
     // full-chain membership proof plus Bulletproofs+ range proofs.

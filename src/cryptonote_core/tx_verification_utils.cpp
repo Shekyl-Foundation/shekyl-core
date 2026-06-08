@@ -28,6 +28,7 @@
 
 #include <boost/iterator/transform_iterator.hpp>
 
+#include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
@@ -103,17 +104,31 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         // Stake-claim transactions use RCTTypeFcmpPlusPlusPqc but have an empty
         // FCMP++ proof (ownership is proven via PQC auth on public amounts, not
         // membership proofs). Exclude them from the RCT semantics batch which
-        // rejects empty fcmp_pp_proof.
+        // rejects empty fcmp_pp_proof. Serve-credit txs verify BP+/balance on a
+        // dedicated fee-only path (hybrid signature is on the vin).
         if (tx.version >= 2)
         {
+            bool archival_serve_credit_only = !tx.vin.empty();
             bool skip_rct_semantics_batch = !tx.vin.empty();
             for (const auto& in : tx.vin)
             {
-                if (!std::holds_alternative<txin_stake_claim>(in)
-                    && !std::holds_alternative<txin_archival_serve_credit_response>(in))
-                { skip_rct_semantics_batch = false; break; }
+                if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
+                    archival_serve_credit_only = false;
+                if (!std::holds_alternative<txin_stake_claim>(in))
+                    skip_rct_semantics_batch = false;
             }
-            if (!skip_rct_semantics_batch)
+            if (archival_serve_credit_only)
+            {
+                if (!tx.pqc_auths.empty()
+                    || !is_canonical_bulletproof_plus_layout(tx.rct_signatures.p.bulletproofs_plus)
+                    || !rct::verRctSemanticsFeeOnly(tx.rct_signatures))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else if (!skip_rct_semantics_batch)
                 rvv.push_back(&tx.rct_signatures);
         }
     }
