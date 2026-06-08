@@ -100,4 +100,6 @@ pub use errors::PrefsError;
 pub use hmac_key::PrefsHmacKey;
 pub use io::{load_prefs, save_prefs, LoadOutcome, MAX_PREFS_TOML_BYTES};
 pub use paths::{prefs_hmac_path_from, prefs_toml_path_from};
-pub use schema::{CosmeticPrefs, DevicePrefs, OperationalPrefs, RpcPrefs, WalletPrefs};
+pub use schema::{
+    CosmeticPrefs, DevicePrefs, OperationalPrefs, PREFS_SCHEMA_VERSION, RpcPrefs, WalletPrefs,
+};

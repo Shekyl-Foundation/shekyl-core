@@ -111,6 +111,14 @@ pub enum PrefsError {
     )]
     OversizeToml { limit: usize, actual: u64 },
 
+    /// `schema_version` in the file does not match [`crate::schema::PREFS_SCHEMA_VERSION`].
+    /// Treated as a tamper/stale-format event; `load_prefs` quarantines the pair.
+    #[error(
+        "prefs.toml schema_version {file} is unsupported (binary expects {binary}). \
+         Pre-genesis: delete ~/.shekyl prefs and re-sync."
+    )]
+    UnsupportedSchemaVersion { file: u8, binary: u8 },
+
     /// Parsing the TOML body failed for a reason other than a
     /// Bucket-3 collision: unknown field, missing value, syntactic
     /// error, wrong type, etc. Wraps the underlying `toml` error for

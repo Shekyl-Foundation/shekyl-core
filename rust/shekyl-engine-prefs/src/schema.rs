@@ -308,10 +308,8 @@ pub struct RpcPrefs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletPrefs {
-    /// Version byte for the prefs schema. Currently fixed at `2`
-    /// (`subaddress_lookahead` deleted at V3.0). A future breaking
-    /// schema change bumps this and refuses to load older versions
-    /// (pre-genesis: no migration tooling).
+    /// Version byte for the prefs schema. Must equal
+    /// [`PREFS_SCHEMA_VERSION`] on load ([`crate::load_prefs`]).
     #[serde(default = "default_schema_version")]
     pub schema_version: u8,
 
@@ -348,8 +346,12 @@ impl Default for WalletPrefs {
     }
 }
 
+/// Current `prefs.toml` schema version. Bumped when persisted fields
+/// are added or removed (`subaddress_lookahead` deletion → `2`).
+pub const PREFS_SCHEMA_VERSION: u8 = 2;
+
 fn default_schema_version() -> u8 {
-    2
+    PREFS_SCHEMA_VERSION
 }
 
 fn default_seed_language() -> String {
