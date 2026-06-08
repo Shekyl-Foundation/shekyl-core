@@ -20,7 +20,7 @@
 //! ### Runtime-state types
 //!
 //! [`TransferDetails`], [`LedgerBlock`], [`LedgerIndexes`],
-//! [`SubaddressIndex`], [`PaymentId`], [`StakerPoolState`], [`AccrualRecord`],
+//! [`PaymentId`], [`StakerPoolState`], [`AccrualRecord`],
 //! [`FcmpPrecomputedPath`], and [`SPENDABLE_AGE`] are owned by the
 //! [`shekyl_engine_state`] crate; this crate re-exports them explicitly (no glob)
 //! so existing `use shekyl_scanner::…` imports keep resolving. Scanner-only
@@ -54,7 +54,6 @@ pub mod output;
 pub mod scan;
 pub mod shared_key;
 pub mod staker_pool;
-pub mod subaddress;
 pub mod transfer;
 pub mod view_pair;
 
@@ -89,5 +88,5 @@ pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 // `shekyl-engine-state` does NOT silently expand the scanner's API.
 pub use shekyl_engine_state::{
     AccrualRecord, ConservationCheck, FcmpPrecomputedPath, LedgerBlock, LedgerIndexes, PaymentId,
-    StakerPoolState, SubaddressIndex, TransferDetails, SPENDABLE_AGE,
+    StakerPoolState, TransferDetails, SPENDABLE_AGE,
 };

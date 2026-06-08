@@ -28,7 +28,7 @@ reorg handling, and wallet-state mutation are owned by
 shekyl-scanner
 ├── scan.rs          # Block/tx/output scanning pipeline (Scanner)
 │                    # Hybrid KEM: parse 0x06, view-tag pre-filter,
-│                    # scan_output_recover, subaddress lookup, key image
+│                    # scan_output_recover, primary spend-key claim, key image
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
@@ -40,8 +40,7 @@ shekyl-scanner
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation
-├── claim.rs         # Claimable reward info for staked outputs
-└── subaddress.rs    # SubaddressIndex type
+└── claim.rs         # Claimable reward info for staked outputs
 ```
 
 ## Dependencies
@@ -71,7 +70,7 @@ use shekyl_scanner::{
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
     view_public, spend_public, view_secret,
-    x25519_sk, ml_kem_dk, subaddresses,
+    x25519_sk, ml_kem_dk,
 );
 let scanner = Scanner::new(view_pair, spend_secret);
 

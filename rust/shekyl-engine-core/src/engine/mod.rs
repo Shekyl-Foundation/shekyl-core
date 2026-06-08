@@ -30,15 +30,14 @@
 //! that is *not* being carried forward; the briefest summary, kept here
 //! so the rejection survives "while we're here" temptations:
 //!
-//! - **Integrated addresses and `payment_id`s.** Subaddresses provide
-//!   per-recipient tracking with strictly stronger privacy properties.
-//!   `TxRequest` carries no `payment_id` field and the `IntegratedAddress`
-//!   type is not modeled.
-//! - **The two-level account / subaddress hierarchy.** Shekyl ships a
-//!   single flat [`SubaddressIndex`](shekyl_engine_state::SubaddressIndex)
-//!   namespace; index 0 is the primary address. Exchanges that need
-//!   stronger isolation use multiple wallet files (separate keys are a
-//!   strictly stronger boundary than wallet2's account-shared keys).
+//! - **Integrated addresses and legacy encrypted `payment_id`s on wire.**
+//!   Receive attribution uses payment requests (FA-8), not address rotation.
+//!   `TxRequest` carries no standalone `payment_id` field and the
+//!   `IntegratedAddress` type is not modeled.
+//! - **Subaddresses and flat index namespaces.** End-state 5 (FA-2): one
+//!   primary address per account; signing uses `output_claim` offset `m₀`
+//!   at index 0. Exchanges that need stronger isolation use multiple wallet
+//!   files (separate keys are a strictly stronger boundary than shared keys).
 //! - **The `export_outputs` / `import_outputs` / `export_key_images` /
 //!   `import_key_images` four-call dance.** Air-gapped flows use two
 //!   typed bundle types (`UnsignedTxBundle`, `SignedTxBundle`) — see
@@ -66,9 +65,8 @@
 //!    reservation-bearing. Lands with the build/submit/discard methods.
 //! 5. **`Network`** — closed enum re-exported as [`Network`] from
 //!    [`shekyl_address`]; daemon mismatch is `OpenError::NetworkMismatch`.
-//! 6. **Subaddress hierarchy** — flat
-//!    [`SubaddressIndex`](shekyl_engine_state::SubaddressIndex). No
-//!    account level.
+//! 6. **Receive addressing** — one primary address per account (End-state 5);
+//!    payment requests for merchant attribution (FA-8). No subaddress surface.
 //! 7. **`RefreshHandle`** — cancel-on-drop RAII, single-flight via
 //!    `&mut self`. Lands with `Engine::refresh`.
 //! 8. **Fee priority** — `FeePriority { Economy | Standard | Priority |

@@ -126,7 +126,7 @@ pub struct TransferDetails {
     ///
     /// **Non-secret** (broadcast in the transaction's `tx_extra`). The
     /// engine's deterministic-handle pathway
-    /// (`shekyl_engine_core::engine::local_keys::LocalKeys::derive_source_secrets_bundle`)
+    /// (`shekyl_engine_core::engine::local_keys::LocalKeys::derive_primary_source_secrets_bundle`)
     /// consumes this field to re-derive `combined_ss` and the per-output
     /// secrets at signing time. Post-M3d, the orchestrator-side
     /// `TransferDetails` schema no longer carries those derived secrets;

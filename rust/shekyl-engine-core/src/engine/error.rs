@@ -593,7 +593,7 @@ pub(crate) enum KeyEngineError {
     )]
     SignTransactionTraitSurfaceIncomplete,
 
-    /// The deterministic-handle re-decap path (`LocalKeys::derive_source_secrets_bundle`,
+    /// The deterministic-handle re-decap path (`LocalKeys::derive_primary_source_secrets_bundle`,
     /// Layer 2 of M3b D1 per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2)
     /// failed to recover `combined_ss` from the persisted
     /// [`shekyl_crypto_pq::kem::HybridCiphertext`] using the wallet's

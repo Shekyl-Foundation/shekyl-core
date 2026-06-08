@@ -47,7 +47,7 @@
 //! implementor reconstructs the per-input secret material internally
 //! via [`recover_combined_ss`] (Layer 1) composed with the engine-owned
 //! spend-secret material in
-//! `LocalKeys::derive_source_secrets_bundle`
+//! `LocalKeys::derive_primary_source_secrets_bundle`
 //! (Layer 2; lands in M3b commit 6). The bundle's *shape* documents
 //! the contract that
 //! [`shekyl_tx_builder::sign_transaction`] consumes; it stays stable
@@ -348,7 +348,7 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// materials [`KeyEngine::sign_transaction`] needs to produce a
 /// signature against an FCMP++ input. Post-M3b this bundle never
 /// crosses the trait boundary; it is a Layer-2 derivation result
-/// returned by `LocalKeys::derive_source_secrets_bundle`
+/// returned by `LocalKeys::derive_primary_source_secrets_bundle`
 /// (composed from the Layer-1 [`recover_combined_ss`] primitive
 /// and the engine-owned spend-secret material) and consumed by
 /// the implementor's `sign_transaction` body before being dropped
@@ -729,7 +729,7 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// it inside the engine from each
     /// [`TxInputSigningContext::source_ciphertext`] +
     /// [`output_index`](TxInputSigningContext::output_index) via the
-    /// engine-internal `LocalKeys::derive_source_secrets_bundle`
+    /// engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
     /// helper. The trait's contract for what `sign_transaction`
     /// consumes stays stable across the stub-to-PR-5 transition.
     ///
