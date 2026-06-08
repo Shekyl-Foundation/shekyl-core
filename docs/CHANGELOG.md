@@ -4,12 +4,14 @@
 
 ### Added
 
-- **archival: timing cluster values pinned + sim harness (2026-06-07).**
+- **archival: timing cluster pinned + reorg/retention split (2026-06-07).**
   [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md): `W=26`,
-  `REORG_HORIZON=420_000`, `RELEASE_COOLDOWN_EPOCHS=2`, `CHALLENGE_RESOLUTION_BLOCKS=10_000`;
-  F4 drain inequality signed. `shekyl-staking-sim --timing-cluster` +
-  `src/timing_cluster.rs`. `config/consensus_constants.json` documented (codegen deferred).
-  T-A4 consensus leg unblocked; gate-6 Round 3–4 wallet defaults remain open.
+  `RETENTION_HORIZON_BLOCKS=420_000`, `ARCHIVAL_REORG_DEPTH_BLOCKS=720`,
+  `RELEASE_COOLDOWN_EPOCHS=2`, `CHALLENGE_RESOLUTION_BLOCKS=10_000` (T-A16 margin);
+  `prune_horizon_epochs=W`. Deleted conflated `REORG_HORIZON`. F4 drain inequality signed.
+  `shekyl-staking-sim --timing-cluster` + `src/timing_cluster.rs`.
+  `config/consensus_constants.json` documented (codegen deferred). T-A4 consensus leg
+  unblocked; gate-6 Round 3–4 wallet defaults remain open.
 
 - **docs: P2B-6 §7 landed + LMDB substrate verify (2026-06-07).**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat

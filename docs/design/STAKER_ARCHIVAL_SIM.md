@@ -2409,10 +2409,11 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
 | Constant | Value |
 |----------|-------|
 | `MAX_CLAIM_AGE_W` (`W`) | **26** settlement epochs (~361 d) |
-| `REORG_HORIZON` | **420_000** blocks (~583 d) |
+| `RETENTION_HORIZON_BLOCKS` | **420_000** blocks (~583 d retention floor) |
+| `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** blocks (~24 h processable reorg) |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** |
-| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (one `SEB`) |
-| `prune_horizon_epochs` (derived) | **42** |
+| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (one `SEB`; T-A16 margin) |
+| `prune_horizon_epochs` | **26** (`= W`) |
 
 **Verification:** `cargo run -p shekyl-staking-sim -- --timing-cluster` — all couplings §2 and
 F4 scenarios **PASS** (`rust/shekyl-staking-sim/src/timing_cluster.rs`).

@@ -9,7 +9,8 @@ use serde::Serialize;
 pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;
 pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 = 15;
 pub const MAX_CLAIM_AGE_W: u64 = 26;
-pub const REORG_HORIZON_BLOCKS: u64 = 420_000;
+pub const RETENTION_HORIZON_BLOCKS: u64 = 420_000;
+pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = 720;
 pub const RELEASE_COOLDOWN_EPOCHS: u64 = 2;
 pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
 
@@ -39,14 +40,17 @@ pub struct TimingClusterConstants {
     pub settlement_epoch_blocks: u64,
     pub max_settlement_epochs_per_emission: u64,
     pub max_claim_age_w: u64,
-    pub reorg_horizon_blocks: u64,
+    pub retention_horizon_blocks: u64,
+    pub archival_reorg_depth_blocks: u64,
     pub release_cooldown_epochs: u64,
     pub challenge_resolution_blocks: u64,
     pub prune_horizon_epochs: u64,
+    pub retention_horizon_epochs: u64,
     pub settlement_epoch_days: f64,
     pub w_wall_clock_days: f64,
     pub release_cooldown_days: f64,
-    pub reorg_horizon_days: f64,
+    pub retention_horizon_days: f64,
+    pub archival_reorg_depth_days: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,22 +69,26 @@ pub struct F4SlowEmitter {
 }
 
 pub fn verify() -> TimingClusterReport {
-    let prune_horizon_epochs =
-        MAX_CLAIM_AGE_W.max(div_ceil(REORG_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS));
+    let retention_horizon_epochs = div_ceil(RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS);
     let seb_days = (SETTLEMENT_EPOCH_BLOCKS as f64 * BLOCK_TIME_SEC as f64) / 86_400.0;
 
     let constants = TimingClusterConstants {
         settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
         max_settlement_epochs_per_emission: MAX_SETTLEMENT_EPOCHS_PER_EMISSION,
         max_claim_age_w: MAX_CLAIM_AGE_W,
-        reorg_horizon_blocks: REORG_HORIZON_BLOCKS,
+        retention_horizon_blocks: RETENTION_HORIZON_BLOCKS,
+        archival_reorg_depth_blocks: ARCHIVAL_REORG_DEPTH_BLOCKS,
         release_cooldown_epochs: RELEASE_COOLDOWN_EPOCHS,
         challenge_resolution_blocks: CHALLENGE_RESOLUTION_BLOCKS,
-        prune_horizon_epochs,
+        prune_horizon_epochs: MAX_CLAIM_AGE_W,
+        retention_horizon_epochs,
         settlement_epoch_days: seb_days,
         w_wall_clock_days: seb_days * MAX_CLAIM_AGE_W as f64,
         release_cooldown_days: seb_days * RELEASE_COOLDOWN_EPOCHS as f64,
-        reorg_horizon_days: (REORG_HORIZON_BLOCKS as f64 * BLOCK_TIME_SEC as f64) / 86_400.0,
+        retention_horizon_days: (RETENTION_HORIZON_BLOCKS as f64 * BLOCK_TIME_SEC as f64)
+            / 86_400.0,
+        archival_reorg_depth_days: (ARCHIVAL_REORG_DEPTH_BLOCKS as f64 * BLOCK_TIME_SEC as f64)
+            / 86_400.0,
     };
 
     let mut couplings = Vec::new();
@@ -104,14 +112,32 @@ pub fn verify() -> TimingClusterReport {
         ),
     });
 
-    let reorg_min =
+    let retention_min =
         MAX_CLAIM_AGE_W * SETTLEMENT_EPOCH_BLOCKS + JOIN_LAG_BLOCKS + EMISSION_BATCH_WINDOW_BLOCKS;
     couplings.push(CouplingCheck {
-        name: "reorg_horizon_floor",
-        pass: REORG_HORIZON_BLOCKS >= reorg_min,
+        name: "retention_horizon_floor",
+        pass: RETENTION_HORIZON_BLOCKS >= retention_min,
         detail: format!(
-            "REORG_HORIZON ({}) >= W*SEB + join_lag + batch ({})",
-            REORG_HORIZON_BLOCKS, reorg_min
+            "RETENTION_HORIZON_BLOCKS ({}) >= W*SEB + join_lag + batch ({})",
+            RETENTION_HORIZON_BLOCKS, retention_min
+        ),
+    });
+
+    couplings.push(CouplingCheck {
+        name: "archival_reorg_depth_ll_seb",
+        pass: ARCHIVAL_REORG_DEPTH_BLOCKS < SETTLEMENT_EPOCH_BLOCKS,
+        detail: format!(
+            "ARCHIVAL_REORG_DEPTH_BLOCKS ({}) < SEB ({})",
+            ARCHIVAL_REORG_DEPTH_BLOCKS, SETTLEMENT_EPOCH_BLOCKS
+        ),
+    });
+
+    couplings.push(CouplingCheck {
+        name: "prune_horizon_is_w",
+        pass: constants.prune_horizon_epochs == MAX_CLAIM_AGE_W,
+        detail: format!(
+            "prune_horizon_epochs ({}) == W ({})",
+            constants.prune_horizon_epochs, MAX_CLAIM_AGE_W
         ),
     });
 
@@ -165,7 +191,6 @@ fn offline_burst_survives(offline_epochs: u64) -> bool {
     }
     let tip_at_return = offline_epochs;
     let oldest = 0u64;
-    // Forfeit when oldest < tip - W.
     if oldest < tip_at_return.saturating_sub(MAX_CLAIM_AGE_W) {
         return false;
     }
@@ -174,7 +199,6 @@ fn offline_burst_survives(offline_epochs: u64) -> bool {
         let claimed = remaining.min(MAX_SETTLEMENT_EPOCHS_PER_EMISSION);
         remaining -= claimed;
     }
-    // Still claimable after burst at return tip.
     oldest >= tip_at_return.saturating_sub(MAX_CLAIM_AGE_W)
 }
 
@@ -192,7 +216,6 @@ fn verify_f4_slow_emitter(offline_epochs: u64, emit_period: u64) -> F4SlowEmitte
 }
 
 fn slow_emitter_survives(offline_epochs: u64, emit_period: u64) -> bool {
-    // Unclaimed settlement-epoch indices `[oldest, oldest + backlog)`.
     let mut oldest = 0u64;
     let mut backlog = offline_epochs;
     let mut tip = offline_epochs;
@@ -213,7 +236,6 @@ fn slow_emitter_survives(offline_epochs: u64, emit_period: u64) -> bool {
             break;
         }
         tip += 1;
-        // Honest and serving while catching up: one new epoch accrues per advance.
         backlog += 1;
         if tip > offline_epochs + MAX_CLAIM_AGE_W * 8 {
             return false;

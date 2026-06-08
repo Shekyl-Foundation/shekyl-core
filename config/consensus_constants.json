@@ -19,7 +19,8 @@
   "settlement_epoch_blocks": 10000,
   "max_settlement_epochs_per_emission": 15,
   "max_claim_age_w": 26,
-  "reorg_horizon_blocks": 420000,
+  "retention_horizon_blocks": 420000,
+  "archival_reorg_depth_blocks": 720,
   "release_cooldown_epochs": 2,
   "challenge_resolution_blocks": 10000
 }

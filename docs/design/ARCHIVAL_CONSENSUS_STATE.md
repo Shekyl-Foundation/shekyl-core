@@ -207,7 +207,7 @@ W = MAX_CLAIM_AGE_W   // settlement epochs; consensus constant = 26 (ARCHIVAL_TI
 Epochs with `E < tip_epoch − W` are **unclaimable** (forfeited). This is what makes the
 structure **prunable**:
 
-| Structure | Prune after `tip − max(W, REORG_HORIZON)` |
+| Structure | Prune after `tip − W` (settlement epochs) |
 |-----------|---------------------------------------------|
 | Retention ledger rows | Yes |
 | Derived / stored `R_market` views | Yes |
@@ -218,8 +218,9 @@ structure **prunable**:
 decorrelation) longer than `W` **forfeits** older unclaimed epochs. `W` couples **state
 growth** against **firewall lapse discipline**.
 
-**Pinned (2026-06-07):** `W = 26`, `REORG_HORIZON = 420_000` blocks,
-`prune_horizon_epochs = 42` — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
+**Pinned (2026-06-07):** `W = 26`, `RETENTION_HORIZON_BLOCKS = 420_000`,
+`ARCHIVAL_REORG_DEPTH_BLOCKS = 720`, `prune_horizon_epochs = W` —
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
 
 **Drain vs forfeiture (F4, 2026-06-07):** `W` forfeits epochs older than `tip − W`. If
 claims drain at a bounded batch rate, a continuously-honest `P` with a backlog must
@@ -279,7 +280,7 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
-| **Numeric `W`** | **Pinned** — `W = 26`, `REORG_HORIZON = 420_000` |
+| **Numeric `W`** | **Pinned** — timing cluster split (retention vs reorg depth) |
 
 **Blocked on implementation of this schema:** emission vin, `work_P` recompute, bond-record
 integration tests, 8c verifier hookup.
@@ -295,7 +296,7 @@ integration tests, 8c verifier hookup.
 - [ ] Pin `R_market` snapshot at epoch close (count with `retention ∧ good_through`).
 - [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
       semantics** at `E`-close (§3.4; not scalar `slash_epoch`).
-- [x] Pin `MAX_CLAIM_AGE_W` + `REORG_HORIZON` + prune semantics + **drain-vs-forfeiture**
+- [x] Pin `MAX_CLAIM_AGE_W` + retention/reorg split + prune semantics + **drain-vs-forfeiture**
       (timing cluster 2026-06-07)
       joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
 - [ ] Pin `Σwork(E)` finalization (sweep vs incremental) + reorg revert order (emission §8).
@@ -316,7 +317,7 @@ gate-2 / gate-6 parameter**:
 
 L14 retrieval-as-proof makes the on-chain retention bit the primary public liveness
 signal; epoch length sets that signal's resolution. **Defer numeric pin** until the
-joint decision with `W`, `REORG_HORIZON`, and finalization boundary (§9.1) — coarser
+joint decision with `W`, retention horizon, and finalization boundary (§9.1) — coarser
 `E` may trade acceptable forfeiture/lapse headroom against firewall decorrelation.
 Record disposition here before choosing the constant; gate-6 firewall spec owns the
 threat-model argument, this doc owns the consensus read-surface coupling.
@@ -342,7 +343,7 @@ threat-model argument, this doc owns the consensus read-surface coupling.
 - **2026-06-07 (initial):** Schema gating doc; `MAX_CLAIM_AGE_W`; §4.4/§4.5 collapse.
 - **2026-06-07 (contract pin):** Gate-3 ν dissolution; two-half contract (read surface +
   invariants); public `P_id` keying; derived `R_market`; `good_through` read requirement;
-  prune horizon `max(W, REORG_HORIZON)`.
+  prune horizon `W`; retention floor `RETENTION_HORIZON_BLOCKS`.
 - **2026-06-07 (F1–F4 pins):** Timeline-axis honest residual (§2); §9.2 epoch-length
   joint gate-2/6; `good_through` interval event log (§3.4); `W` × per-`P` batch drain
   invariant (§5).

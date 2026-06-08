@@ -132,7 +132,7 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 **Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) — Layer 1
 closed (2026-06-07). **Archival read contract:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 **pinned** (gate 3 ν dissolved; `MAX_CLAIM_AGE_W` shape pinned). FSM retool (§3–§7)
-**unblocked** in parallel. **Next:** implement schema + pin numeric `W` / `REORG_HORIZON`;
+**unblocked** in parallel. **Next:** implement schema + timing cluster codegen;
 close (ii)–(iii).
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)

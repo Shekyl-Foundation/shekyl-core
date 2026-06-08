@@ -319,7 +319,8 @@ pin. |
 | **Residual** | Quantitative pass/fail thresholds; daemon-assisted vs wallet-local jitter
 policy. |
 | **Disposition** | **PASS (consensus leg)** — timing cluster pinned (`W=26`, `SEB=10_000`,
-batch `15`, `REORG=420_000`; ~26 emission samples/year inside `T_obs`). Wallet jitter /
+batch `15`, retention `420_000` blocks / reorg depth `720`; ~26 emission samples/year inside
+`T_obs`). Wallet jitter /
 drain-spacing defaults still gate-6 Round 3–4 (non-consensus). Form-C reopen **not**
 triggered. |
 

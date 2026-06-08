@@ -500,7 +500,8 @@ Foundation `CompleteTree` is **excluded from `Market`** but posts **one** floor 
 | `SETTLEMENT_EPOCH_BLOCKS` | `E_join`, epoch-close cadence |
 | `MAX_CLAIM_AGE_W` (`W`) | E-3 backlog forfeiture |
 | `RELEASE_COOLDOWN_EPOCHS` | Anti front-run before `Unbond` (floored by L16 + gate-2) |
-| `REORG_HORIZON` | Wallet + consensus reorg depth |
+| `ARCHIVAL_REORG_DEPTH_BLOCKS` | Wallet + consensus `pop_block` depth |
+| `RETENTION_HORIZON_BLOCKS` | Archival derived-state retention floor |
 
 **Asymmetry (load-bearing):** `RELEASE_COOLDOWN_EPOCHS < W`. Collateral return and reward
 backlog are independent value flows (§3.5).
