@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 
-use blake2::{Blake2b512, Digest};
-use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
+use shekyl_crypto_pq::label::{
+    classify_label_plaintext, hash_label_plaintext_for_display, LabelPlaintextKind,
+};
 use shekyl_engine_state::{
     LedgerBlock, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
@@ -63,16 +64,6 @@ pub(crate) fn apply_receive_attributions(
     }
 }
 
-fn hash_label_plaintext(plaintext: &[u8; 8]) -> [u8; 32] {
-    let mut h = Blake2b512::new();
-    h.update(b"shekyl-receive-label-hash-v1");
-    h.update(plaintext);
-    let out = h.finalize();
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&out[..32]);
-    arr
-}
-
 /// Core matching rules per `SUBADDRESS_UNDER_PQC.md` §5.7.9 (rid + amount).
 pub fn match_inbound_attribution(
     cooperative_enabled: bool,
@@ -90,7 +81,7 @@ pub fn match_inbound_attribution(
     match classify_label_plaintext(label_plaintext) {
         LabelPlaintextKind::Sentinel => ReceiveAttribution::Unattributed,
         LabelPlaintextKind::Unknown(pt) => ReceiveAttribution::LabelUnknown {
-            echoed_label_hash: hash_label_plaintext(&pt),
+            echoed_label_hash: hash_label_plaintext_for_display(&pt),
         },
         LabelPlaintextKind::Request(rid) => {
             let id = PaymentRequestId(rid);
@@ -110,7 +101,7 @@ pub fn match_inbound_attribution(
                 }
                 if match_idx.is_some() {
                     return ReceiveAttribution::LabelUnknown {
-                        echoed_label_hash: hash_label_plaintext(label_plaintext),
+                        echoed_label_hash: hash_label_plaintext_for_display(label_plaintext),
                     };
                 }
                 match_idx = Some(i);
@@ -122,7 +113,7 @@ pub fn match_inbound_attribution(
                 return ReceiveAttribution::Matched(id);
             }
             ReceiveAttribution::LabelUnknown {
-                echoed_label_hash: hash_label_plaintext(label_plaintext),
+                echoed_label_hash: hash_label_plaintext_for_display(label_plaintext),
             }
         }
     }

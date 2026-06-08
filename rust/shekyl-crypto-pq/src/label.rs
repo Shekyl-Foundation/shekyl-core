@@ -16,7 +16,16 @@
 //! is forbidden). `label_tag` is HKDF-derived like `amount_tag`; it is **not**
 //! a sentinel-vs-tag category flag — classification happens only after decrypt.
 
+use sha3::digest::core_api::CoreWrapper;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{CShake256, CShake256Core};
 use zeroize::Zeroizing;
+
+/// SP 800-185 customization for wallet-side display fingerprints of decrypted
+/// label plaintext (`ReceiveAttribution::LabelUnknown::echoed_label_hash`).
+/// Non-consensus; spec leaves the algorithm open (`SUBADDRESS_UNDER_PQC.md`
+/// §5.7.9). Matches the cSHAKE256 discipline used for [`crate::handle`].
+pub const RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION: &[u8] = b"shekyl/receive-label-hash-v1";
 
 /// Normative sentinel plaintext: no cooperative label (launch default).
 pub const SENTINEL_PLAINTEXT: [u8; 8] = [0xFF; 8];
@@ -90,6 +99,21 @@ pub fn classify_label_plaintext(plaintext: &[u8; 8]) -> LabelPlaintextKind {
 /// `shekyl_engine_state::PAYMENT_REQUEST_RID_U48_MAX`.
 pub const REQUEST_RID_U48_MAX: u64 = (1u64 << 48) - 1;
 
+/// Hash decrypted label plaintext for ledger display/logging (§5.7.9).
+///
+/// Cleartext labels must not appear in logs; this 32-byte fingerprint lets the
+/// UI correlate `LabelUnknown` rows without persisting the plaintext.
+#[must_use]
+pub fn hash_label_plaintext_for_display(plaintext: &[u8; 8]) -> [u8; 32] {
+    let core = CShake256Core::new(RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION);
+    let mut hasher: CShake256 = CoreWrapper::from_core(core);
+    hasher.update(plaintext);
+    let mut reader = hasher.finalize_xof();
+    let mut out = [0u8; 32];
+    reader.read(&mut out);
+    out
+}
+
 /// Build the 8-byte REQUEST plaintext for cooperative send (§5.7.11).
 ///
 /// Returns `None` if `rid` is `0`, exceeds u48, or the encoding would collide
@@ -136,5 +160,14 @@ mod tests {
     fn request_plaintext_rejects_rid_above_u48() {
         assert!(encode_request_plaintext(REQUEST_RID_U48_MAX).is_some());
         assert!(encode_request_plaintext(REQUEST_RID_U48_MAX + 1).is_none());
+    }
+
+    #[test]
+    fn display_hash_is_deterministic() {
+        let pt = encode_request_plaintext(0x1234).unwrap();
+        let a = hash_label_plaintext_for_display(&pt);
+        let b = hash_label_plaintext_for_display(&pt);
+        assert_eq!(a, b);
+        assert_ne!(a, hash_label_plaintext_for_display(&SENTINEL_PLAINTEXT));
     }
 }
