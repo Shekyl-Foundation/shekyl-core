@@ -1265,10 +1265,15 @@ sustainability is unaffected by the recalibration.
   restore-time math (§8.3.1); `M_margin` for clean vs marginal pass (§8.7);
   scenario B = genesis restore worst case. Pins before benches (§8.6). FA-6b
   budgeted separately. §3.1.1 verified post–PR #100.
-  Fail ⇒ ship-slow or §10.1 waiver; marginal ⇒ §10.2 record — not “defer FA-6.”
-  **§11 sign-off (2026-06-02):** S1–S4, S6–S9 ✅; **S5** pending ratified SLA
-  numbers; **S8** merge verifies decap totality + §6.4 KAT. **FA-9 owner:** Rick
-  Dawson, ClockWorX LLC.
+  **§8.7 recorded (2026-06-08):** budget **fail** (Pi scenario A; B expected);
+  disposition **ship FA-6**; **§10.1 waiver rejected** (classical counterfactual
+  slower on Pi 4). Marginal ⇒ §10.2 record — not “defer FA-6.” **§11 sign-off
+  (2026-06-02):** S1–S4, S6–S9 ✅; S5 ratified; S8 merge deliverables on impl PR.
+  **FA-9 owner:** Rick Dawson, ClockWorX LLC.
+
+  *Post-genesis perf (wire-preserving, V3.1+):* faster ML-KEM decap within
+  `fips203` pin; reduce-N via birthday / restore-height / checkpointing.
+  §8.5.2 end-to-end restore bench (integration, not micro gate).
 
   *Target:* V3.0 pre-genesis, separate PR from FA-11 / FA-2.
 

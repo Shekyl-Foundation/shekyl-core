@@ -4,7 +4,8 @@
 **Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
 at launch; payment-request / meaningful-tag UX behind product flag (later).
 **FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
-§3.1 wire inventory, initial-sync gate).
+§3.1 wire inventory, initial-sync gate); **§8.7 fail → ship FA-6** (2026-06-08),
+§10.1 waiver rejected; T6 closed on account path at genesis.
 **R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
 End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**
 (pin): address-knowledge / phishing tier (§5.7.12) — dust-tracking class
@@ -221,15 +222,16 @@ alone is re-keyed. FA-6 spec §3.1 is the **inventory table** (view tag,
 `amount_tag`, FA-11 `label_tag` / `enc_label`, multisig hints); each row must
 be **verified** in code before merge.
 
-**Confirmed:** T6 is **not** closed by End-state 5 or the 5-T pin; it stays
-on the **adversary** track (§4.7–§4.8) until FA-6 lands with §3.1 verified.
+**Confirmed:** T6 on the **account-output** path closes when FA-6 ships at genesis
+with §3.1 verified (2026-06-08 disposition). End-state 5 / 5-T do not substitute
+for FA-6 on the adversary track (§4.7–§4.8).
 
 | Item | Status |
 |------|--------|
-| Account-output pre-filter | **FA-6** — leg-swap (decap → tag → X25519 on match); genesis-locked. |
-| Per-output wire inventory | **FA-6 §3.1** — verify `amount_tag` / `label_tag` are post-decap hybrid-leg. |
+| Account-output pre-filter | **FA-6** — leg-swap (decap → tag → X25519 on match); genesis-locked; **ship** (§8.7 fail on budget). |
+| Per-output wire inventory | **FA-6 §3.1** — verified post–PR #101 (`§3.1.1` 2026-06-07). |
 | Multisig `view_tag_hints` | **FA-6b** — separate audit (classical linkability risk; not FA-6 closure). |
-| Initial-sync benchmark | **FA-6 §8** — wall-clock on worst target; bench fail ⇒ slow sync **or** T6 waiver, not defer. |
+| Initial-sync benchmark | **FA-6 §8.7** — **fail** on Pi 4 A (+ B expected); ship FA-6 anyway; **§10.1 waiver rejected** (classical slower). |
 | Threat-model wargaming | FA-9 propagates §2.2 residuals after FA-6 implementation. |
 
 End-state 5 **does not** relax T6. Sentinel-only launch **does not** change
@@ -1861,7 +1863,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-3 | `STAGE_1_PR_3_KEY_ENGINE.md` | §3.1.3 superseded banner → this doc |
 | FA-4 | `POST_QUANTUM_CRYPTOGRAPHY.md` / user docs | **Reusable-address privacy** product principle (R2-F1); drop subaddress-per-invoice narrative; T2 disclosure if multi-account |
 | FA-5 | `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 / §8.2 | **Delete** `AuditSubaddressSecret` disposition — moot under End-state 5 |
-| FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Spec revised** — §3.1 wire inventory; `view_tag_prefilter`; §8 initial-sync gate; impl after §11; **FA-6b** multisig hints |
+| FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Ship at genesis** — §3.1 verified; §8.7 budget fail (ship FA-6); §10.1 rejected; **FA-6b** multisig hints separate |
 | FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | **Landed on `dev` 2026-06-07** — End-state 5 binding; drop `create_subaddress`; payment requests + URI labels (§5.7.2) |
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | Threat-model / user docs (`POST_QUANTUM_CRYPTOGRAPHY.md` or new `docs/THREAT_MODEL_WALLET.md` §) | **In progress.** Propagate §4.6–§4.8, **R2-F9** (§5.7.12): pit-of-success vs adversary; marketing split; address substitution; dust non-oracle; **T6 ↔ phishing harvest** framing; liveness + label-injection hygiene |
