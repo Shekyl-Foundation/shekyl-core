@@ -1,11 +1,13 @@
 # Subaddress mechanism under PQC — design round
 
-**Status.** Round 3 in progress. **5-T-substrate adopted** (§6.4, 2026-05-31).
+**Status.** **Round 3 closed** (2026-06-08). **Round 4** scoped below (§10.1).
+**5-T-substrate adopted** (§6.4, 2026-05-31).
 **Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
 at launch; payment-request / meaningful-tag UX behind product flag (later).
 **FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
-§3.1 wire inventory, initial-sync gate); **§8.7 fail → ship FA-6** (2026-06-08),
-§10.1 waiver rejected; T6 closed on account path at genesis.
+§3.1 wire inventory, initial-sync gate); **close-out:**
+[`FA-6_CLOSEOUT.md`](FA-6_CLOSEOUT.md) (§8.7 fail → ship FA-6; §10.1 rejected;
+T6 closed on account path; FA-6b genesis wire pinned).
 **R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
 End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**
 (pin): address-knowledge / phishing tier (§5.7.12) — dust-tracking class
@@ -460,7 +462,7 @@ It gives **zero cover** to **adversary** surfaces.
 |-------|---------|-------------------------|-------|
 | User-behavior | T2 collusion (you handed both addresses) | Yes → deliberate, not mandatory | T2 **closed** optional |
 | User-behavior | Network hygiene, amount/timing correlation | Partially — educate, don't mandate platform fix | Out of this round |
-| **Adversary** | **T6 view-tag clustering** (quantum + your address) | **No** — diligent user still clustered | **T6 open** (FA-6) |
+| **Adversary** | **T6 view-tag clustering** (quantum + your address) | **No** — diligent user still clustered | **T6 closed** on account path (FA-6 genesis); FA-6b separate |
 | **Adversary** | **T7 address-knowledge / phishing** (§5.7.12) | **No** — publication + harvest are adversary-driven | **R2-F9 pinned**; FA-9 propagation |
 
 **Anti-pattern (forbidden):** "We can't stop a careless user" → "we can't
@@ -475,7 +477,7 @@ governs user-behavior only (§4.7).
 
 | ID | Surface | Round disposition | Forward action |
 |----|---------|-------------------|----------------|
-| **T6** | Quantum observer + off-chain address → view-tag receive clustering | **Open**, option-independent (§4.4) | **FA-6** — scan-speed / pre-filter trade |
+| **T6** | Quantum observer + off-chain address → view-tag receive clustering | **Closed** on account path (FA-6 genesis, `FA-6_CLOSEOUT.md`); FA-6b multisig hints separate | **FA-9** — propagate framing; perf follow-up V3.1+ |
 | **T7** | Leaked receive address — phishing, dust, channel substitution, wallet liveness | **R2-F9 pinned** (§5.7.12): dust **receive/spend oracle closed** (FCMP++); substitution + T6 harvest + app-layer probes **named** | **FA-9** — propagate to `POST_QUANTUM_CRYPTOGRAPHY.md` or `THREAT_MODEL_WALLET.md` |
 
 **T6 ↔ T7 cross-link (load-bearing).** Phishing that collects a public
@@ -529,7 +531,7 @@ choice does not close it; only a view-tag/scan-speed trade does.
 
 | ID | Adversary objective | Status |
 |----|---------------------|--------|
-| **T6** | Quantum observer + off-chain address → account-level receive clustering via view tag | **Open, option-independent.** 8-bit, noisy, weak at scale — but the one classical leak surviving the quantum transition on the **receive** path. Closing it costs scan speed (drop or hybridize pre-filter). → **FA-6** (parallel track, same priority as T2 pin). |
+| **T6** | Quantum observer + off-chain address → account-level receive clustering via view tag | **Closed on account path** at genesis (FA-6 PQ-keyed pre-filter). §8.7 budget fail does not reopen wire. Multisig hint surface → **FA-6b**. Historical: classical leak on receive path pre-FA-6. | **FA-6_CLOSEOUT.md**; FA-9 propagation |
 
 ### 4.5 Pressure test: per-subaddress isolation counterexamples (R1-F6)
 
@@ -1578,8 +1580,9 @@ with only `(B, V, x25519_pk, ml_kem_ek)` can and cannot do, and separates
 that from publication-channel and post-quantum harvest threats. **Feeds
 FA-9** (user/threat-model docs) and **cross-links T6** (§4.8).
 
-**Status.** **CLOSED** as a design-round pin (2026-05-31). **T6 scoping**
-remains **open** on FA-6.
+**Status.** **CLOSED** as a design-round pin (2026-05-31). **T6 account path**
+closed at genesis (FA-6, `FA-6_CLOSEOUT.md`); FA-9 still propagates harvest
+framing for threat-model readers.
 
 ##### What the address-holder actually gets (public material)
 
@@ -1622,7 +1625,7 @@ sense, but it is **not benign**.
 | Rank | Threat | Class | V3.0 disposition |
 |------|--------|-------|------------------|
 | **1** | **Address substitution** — swap QR/URI/email signature so payers pay attacker | Publication-channel **authenticity**; orthogonal to on-chain crypto | **FA-9 / product:** signed publication, out-of-band verify for high-value, protect payment-request URI integrity end-to-end |
-| **2** | **Post-quantum harvest (T6)** — collect address today; quantum recovery of view secret later; view-tag replay on archived chain | **Adversary** (§4.4) | **Open (FA-6).** Phishing is the **concrete exploitation path** for T6 — no break required today (§4.8) |
+| **2** | **Post-quantum harvest (T6)** — collect address today; quantum recovery of view secret later; view-tag replay on archived chain | **Adversary** (§4.4) | **Mitigated on account path** (FA-6 genesis wire). Phishing remains the **concrete harvest step** for threat-model docs (§4.8); FA-9 propagation |
 | **3** | **Dust spam / DoS** — flood outputs; scan cost; clutter; fee to consolidate | Griefing, not deanonymization | Wallet **dust threshold / ignore-below** policy; consolidating dust does not re-open ring analysis |
 | **4** | **Liveness oracle** — wallet auto-POSTs "payment received" on dust timing | Implementation footgun | **Passive receipt:** detect locally, emit nothing; flag merchant-integration hooks |
 | **5** | **Label injection** (5-T) — Eve controls `enc_label` plaintext on dust she sends | Application layer after decrypt | Treat received label bytes as **untrusted input** at UI/export/backend boundaries |
@@ -1651,10 +1654,11 @@ sign-off on **no subaddresses** stands (§5.7.9 R2-F2 sign-off).
 
 ## 6. Provisional disposition (End-state 5 — Round 2)
 
-**Not full design closure** (Round 4 propagation pending). End-state 5 is
-the closure target (**5-T-substrate** per §6.4). **Gates:** (1) ~~T2~~
-**closed** (§4.6); (2) ~~**R2-F2**~~ **closed** (§5.7.9, 2026-05-31); (3)
-~~**R2-F8**~~ **closed** (§6.4); (4) **T6** parallel (**FA-6**, **FA-9**).
+**Round 3 wire closure complete** (2026-06-08); **Round 4** is doc
+propagation (§10.1). End-state 5 is the closure target (**5-T-substrate**
+per §6.4). **Gates:** (1) ~~T2~~ **closed** (§4.6); (2) ~~**R2-F2**~~
+**closed** (§5.7.9, 2026-05-31); (3) ~~**R2-F8**~~ **closed** (§6.4);
+(4) ~~**T6 account path**~~ **closed** (FA-6 genesis, `FA-6_CLOSEOUT.md`).
 
 ### 6.1 Binding commitment (`00-mission.mdc`) — Round 2
 
@@ -1879,8 +1883,43 @@ V4 removes hybrid KEM from addresses entirely.
 | **0 — Pre-flight / substrate** | **Closed** | Confirmed scanner–trait–STAGE_1 §3.1.3 incoherence; live model = account hybrid KEM + classical `B'`. Provisional End-state 1. Findings: R0-F1..F5. |
 | **1 — Challenge pricing & priority** | **Closed** | End-state 4 dominated by 1 (R1-F1 inverts PQ premise; R1-F3 misattribution). **R1-F5 layer separation:** T1 is output-layer, not subaddress-layer; subaddresses serve J1/J2/J3. Option A fails J1 (R1-F2). T2 pin deferred to Round 2. View-tag (T6) elevated to same impossibility shape as R1-F2 (§4.4). Per-subaddress isolation counterexamples negative (R1-F6). |
 | **2 — Usability + End-state 5 + T2 pin** | **Closed** (R2-F2 + R2-F9) | **R2-F1** product principle. **End-state 5 minimal** **shipped decision.** **§4.6 T2 PINNED.** **R2-F2** + **R2-F9** closed 2026-05-31. **T6** → FA-6/FA-9. |
-| **3 — Spec closure** | **In progress** | R2-F8 synthesis §5.7.10; foundation pin §6.4; enc_label wire (FA-11); FA-2/FA-8 impl PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113); account KDF deferred P3. |
-| **4 — Closure + forward propagation** | Pending | FA-9 threat-model sweep; FA-6 after §11; Round-4 adversarial record. STAGE_1 §3.1.3 banner landed (FA-7). |
+| **3 — Spec closure** | **Closed** (2026-06-08) | 5-T + FA-11 wire; FA-2/FA-8 PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113); FA-6 wire + §8.7 disposition (`FA-6_CLOSEOUT.md`); FA-6b genesis wire pin (§5.4.1); account KDF deferred P3. |
+| **4 — Closure + forward propagation** | **Scoped** (§10.1) | Consensus-invisible doc sweep + adversarial record; **not** genesis wire. Parallel tracks outside this round: CT-2, 2A send-path, 2B stake. |
+
+### 10.1 Round 4 scope (defined 2026-06-08)
+
+Round 3 closed the **consensus-visible** subaddress-round obligations
+(genesis-locked wire: FA-6 account pre-filter, FA-6b hint format, 5-T
+`enc_label` slot, End-state 5 deletion target). Round 4 is the **doc
+propagation and adversarial-record** pass — consensus-invisible work that
+must not be confused with reopening genesis wire.
+
+**In scope (Round 4)**
+
+| Track | Work | Consensus visibility | Owner / home |
+|-------|------|----------------------|--------------|
+| **FA-9** | Threat-model propagation: §4.6–§4.8, R2-F9 phishing tier, T6 framing post-FA-6 close-out, pit-of-success vs adversary, address-substitution, dust non-oracle | Invisible | `POST_QUANTUM_CRYPTOGRAPHY.md` or `THREAT_MODEL_WALLET.md`; Rick Dawson |
+| **FA-10** | Foundation pin prose sweep (§6.4 5-T-substrate → user-facing docs) | Invisible | Same homes as FA-9 |
+| **FA-4** | Reusable-address product principle; no Bitcoin-style rotation nudges (R2-F1, R2-F7) | Invisible | User docs / GUI copy guidance |
+| **Round 4 record** | Adversarial findings log closure; §11 definition-of-done final checkbox | Invisible | This doc §10–§11 |
+| **Cooperative UX docs** | Payment-request / sentinel sequencing in Phase 2c/4b docs as those phases land | Invisible | `WALLET_REWRITE_PLAN.md`, engine docs |
+
+**Explicitly out of scope (parallel tracks — not Round 4)**
+
+| Track | Why separate |
+|-------|----------------|
+| **FA-6 wire / §8.7 disposition** | Closed Round 3 — `FA-6_CLOSEOUT.md` |
+| **FA-6b hint re-key implementation** | V3.1 before multisig user-ship; wire pin closed Round 3 |
+| **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
+| **CT-2 Round 1** | Curve-tree client arc; ungates 2A DoD — `CT2_DRAIN_ORDER.md` |
+| **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
+| **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
+
+**Round 4 definition of done:** FA-9 + FA-10 + FA-4 landed; §11 adversarial
+record checkbox closed; no genesis wire item remains under "moved to Round 4."
+
+**Reopen Round 4 scope** only if a new **consensus-visible** wallet privacy
+surface emerges (substrate change per `21-reversion-clause-discipline.mdc`).
 
 ### Round 0 findings log
 
@@ -1941,7 +1980,8 @@ From `docs/FOLLOWUPS.md`, checked at **design closure** (after Round 4):
 - [x] (e′) R2-F9: address-knowledge / phishing pin — §5.7.12 (2026-05-31)
 - [x] (f) R2-F8: §6.4 **5-T adopted**; §5.7.11 logical tags; sentinel-only launch
 - [x] (g) FA-11: RCT + HKDF + verifier + KATs for `enc_label`
-- [ ] Adversarial record 4–6 rounds — §10 (Rounds 0–2 closed; 3 in progress; 4 pending FA-9/FA-6)
+- [x] Round 3 adversarial record — §10 (FA-6 close-out, FA-6b wire pin, 5-T + FA-11)
+- [ ] Round 4 adversarial record — §10.1 (FA-9/FA-10/FA-4 propagation)
 - [x] Documentation: STAGE_1 §3.1.3 superseded banner (FA-7); `WALLET_REWRITE_PLAN` End-state 5 (FA-7); FOLLOWUPS + §9 table updated 2026-06-07. **Remaining:** cooperative UX sequencing in Phase 2c/4b docs as those phases land.
 
 **Explicitly out of scope for this doc series:** Stage 2 actor code changes;

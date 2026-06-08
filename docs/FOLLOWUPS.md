@@ -1265,10 +1265,10 @@ sustainability is unaffected by the recalibration.
   restore-time math (§8.3.1); `M_margin` for clean vs marginal pass (§8.7);
   scenario B = genesis restore worst case. Pins before benches (§8.6). FA-6b
   budgeted separately. §3.1.1 verified post–PR #100.
-  **§8.7 recorded (2026-06-08):** budget **fail** (Pi scenario A; B expected);
-  disposition **ship FA-6**; **§10.1 waiver rejected** (classical counterfactual
-  slower on Pi 4). Marginal ⇒ §10.2 record — not “defer FA-6.” **§11 sign-off
-  (2026-06-02):** S1–S4, S6–S9 ✅; S5 ratified; S8 merge deliverables on impl PR.
+  **Close-out (2026-06-08):** `docs/design/FA-6_CLOSEOUT.md` — §8.7 budget
+  **fail**, ship FA-6; §10.1 rejected (classical slower on Pi 4); FA-6b
+  genesis-lock vs no-V3.0-user-leak pinned. Round 3 closed; FA-9 → Round 4.
+  **§11 sign-off (2026-06-02):** S1–S4, S6–S9 ✅; S5 ratified; S8 on impl PR.
   **FA-9 owner:** Rick Dawson, ClockWorX LLC.
 
   *Post-genesis perf (wire-preserving, V3.1+):* faster ML-KEM decap within
