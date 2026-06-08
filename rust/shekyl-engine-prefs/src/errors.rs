@@ -114,8 +114,9 @@ pub enum PrefsError {
     /// `schema_version` in the file does not match [`crate::schema::PREFS_SCHEMA_VERSION`].
     /// Treated as a tamper/stale-format event; `load_prefs` quarantines the pair.
     #[error(
-        "prefs.toml schema_version {file} is unsupported (binary expects {binary}). \
-         Pre-genesis: delete ~/.shekyl prefs and re-sync."
+        "prefs.toml schema_version {file} is unsupported (this binary expects {binary}). \
+         The prefs.toml / prefs.toml.hmac pair is quarantined and built-in defaults are \
+         loaded for this session. Remove stale quarantine copies when you no longer need them."
     )]
     UnsupportedSchemaVersion { file: u8, binary: u8 },
 
@@ -184,6 +185,17 @@ mod tests {
         let s = format!("{e}");
         assert!(s.contains("--max-reorg-depth"), "{s}");
         assert!(s.contains("docs/WALLET_PREFS.md"), "{s}");
+    }
+
+    #[test]
+    fn unsupported_schema_version_error_is_path_agnostic() {
+        let e = PrefsError::UnsupportedSchemaVersion { file: 1, binary: 2 };
+        let s = format!("{e}");
+        assert!(s.contains("schema_version 1"), "{s}");
+        assert!(s.contains("expects 2"), "{s}");
+        assert!(s.contains("quarantined"), "{s}");
+        assert!(s.contains("defaults"), "{s}");
+        assert!(!s.contains("~/.shekyl"), "{s}");
     }
 
     #[test]
