@@ -283,6 +283,7 @@ const char* const LMDB_PROPERTIES = "properties";
 
 const char* const LMDB_STAKER_ACCRUAL = "staker_accrual";
 const char* const LMDB_STAKER_CLAIMS = "staker_claims";
+const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
 
 const char* const LMDB_PENDING_TREE_LEAVES = "pending_tree_leaves";
 const char* const LMDB_PENDING_TREE_DRAIN = "pending_tree_drain";
@@ -1616,6 +1617,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
 
   lmdb_db_open(txn, LMDB_STAKER_ACCRUAL, MDB_INTEGERKEY | MDB_CREATE, m_staker_accrual, "Failed to open db handle for m_staker_accrual");
   lmdb_db_open(txn, LMDB_STAKER_CLAIMS, MDB_INTEGERKEY | MDB_CREATE, m_staker_claims, "Failed to open db handle for m_staker_claims");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_SERVE_CREDIT, MDB_CREATE, m_archival_serve_credit,
+    "Failed to open db handle for m_archival_serve_credit");
 
   // INVARIANT: Shekyl curve-tree state uses composite keys. No DUPSORT.
   // If you're reaching for MDB_DUPSORT, stop and use a composite key instead.
@@ -4877,6 +4880,46 @@ void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
   int result = mdb_del(*m_write_txn, m_staker_claims, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove staker claim watermark: ", result).c_str()));
+}
+
+bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  TXN_PREFIX_RDONLY();
+  MDB_val v;
+  const int get_result = mdb_get(m_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), &v);
+  TXN_POSTFIX_RDONLY();
+  return get_result == 0;
+}
+
+void BlockchainLMDB::set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  static const uint8_t flag = 1;
+  MDB_val v = {sizeof(flag), const_cast<uint8_t*>(&flag)};
+  const int result = mdb_put(*m_write_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to set archival serve-credit bit: ", result).c_str()));
+}
+
+void BlockchainLMDB::remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalServeCreditKey key(p_id.data(), shard_id, settlement_epoch);
+  const int result = mdb_del(*m_write_txn, m_archival_serve_credit, const_cast<MDB_val*>(&key.as_mdb_val()), nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove archival serve-credit bit: ", result).c_str()));
 }
 
 // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────

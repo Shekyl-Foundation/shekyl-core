@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <limits>
 #include <boost/range/adaptor/reversed.hpp>
 
 #include "string_tools.h"
@@ -232,7 +233,8 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     }
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
-      throw std::runtime_error("archival serve-credit vin accepted only after gate-2 consensus hook");
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
     }
     else
     {
@@ -596,7 +598,8 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     }
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
-      throw std::runtime_error("archival serve-credit vin removal requires gate-2 consensus hook");
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
     }
   }
 
@@ -1287,6 +1290,42 @@ void BlockchainDB::fixup()
     }
   }
   batch_stop();
+}
+
+bool BlockchainDB::get_archival_bond_hybrid_pubkey(const crypto::hash& /*p_id*/,
+  std::vector<uint8_t>& /*out_pubkey*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_holds_shard(const crypto::hash& /*p_id*/, uint64_t /*shard_id*/,
+  uint64_t /*at_height*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_good_through(const crypto::hash& /*p_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return false;
+}
+
+uint64_t BlockchainDB::archival_bond_join_epoch(const crypto::hash& /*p_id*/) const
+{
+  return std::numeric_limits<uint64_t>::max();
+}
+
+bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, uint64_t /*at_height*/,
+  crypto::hash& /*out_rk*/, uint64_t& /*out_leaf_count*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::get_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
+  uint32_t /*leaf_index_in_segment*/, uint64_t /*at_height*/,
+  std::vector<uint8_t>& /*out_flat_scalars*/) const
+{
+  return false;
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)

@@ -449,6 +449,13 @@ private:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;
 
+  virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
+  virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) override;
+  virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) override;
+
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
   virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output) override;
@@ -558,6 +565,7 @@ private:
 
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> empty (key = bit)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

@@ -178,6 +178,10 @@ public:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
   virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
 
+  virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) const override { return false; }
+  virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
+  virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
+
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex, const uint8_t*) override {}
   virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex) override {}
   virtual uint64_t drain_pending_tree_leaves(shekyl::db::BlockHeight, std::vector<uint8_t>&) override { return 0; }

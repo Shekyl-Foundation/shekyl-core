@@ -1945,6 +1945,29 @@ public:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
   virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
 
+  // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
+
+  virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const = 0;
+  virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+  virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+
+  // Gate-4 / shard-registry substrate (default: false until implemented).
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
+    std::vector<uint8_t>& out_pubkey) const;
+  virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const;
+  virtual bool archival_bond_good_through(const crypto::hash& p_id,
+    uint64_t settlement_epoch) const;
+  virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const;
+  virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
+    crypto::hash& out_rk, uint64_t& out_leaf_count) const;
+  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, uint64_t at_height,
+    std::vector<uint8_t>& out_flat_scalars) const;
+
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 
   /**

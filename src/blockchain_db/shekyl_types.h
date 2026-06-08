@@ -113,6 +113,7 @@ static constexpr size_t kDrainKeySize        = 16;  // BE(block_height) || BE(ou
 static constexpr size_t kDrainValueSize      = 136; // maturity[8] || leaf[128]
 static constexpr size_t kBlockPendingKeySize = 16;  // BE(block_height) || BE(output_index)
 static constexpr size_t kBlockPendingValSize = 8;   // maturity[8]
+static constexpr size_t kArchivalServeCreditKeySize = 48; // P_id[32] || BE(shard) || BE(epoch)
 
 // ─── Encoder lifetime contract ─────────────────────────────────────────────
 //
@@ -356,6 +357,29 @@ public:
 private:
     BlockPendingValue() = default;
     std::array<uint8_t, kBlockPendingValSize> bytes_{};
+};
+
+// ─── ArchivalServeCreditKey ────────────────────────────────────────────────
+//
+// Serve-credit ledger row: affirmative pass for (P_id, shard_id, E).
+// Key existence is the bit; value is empty (gate-2 §3.1).
+
+class ArchivalServeCreditKey {
+public:
+    ArchivalServeCreditKey(const uint8_t p_id[32], uint64_t shard_id, uint64_t settlement_epoch) noexcept
+    {
+        std::memcpy(bytes_.data(), p_id, 32);
+        store_be64(bytes_.data() + 32, shard_id);
+        store_be64(bytes_.data() + 40, settlement_epoch);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
 };
 
 // ─── Mapping-table helpers (single-uint64 key and value) ───────────────────
