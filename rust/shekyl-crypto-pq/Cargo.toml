@@ -152,5 +152,13 @@ proptest = "1"
 name = "pqc_rederivation"
 harness = false
 
+[[bench]]
+name = "fa6_decap_prefilter"
+harness = false
+
+[[bin]]
+name = "fa6_decap_prefilter_gate"
+path = "examples/fa6_decap_prefilter_gate.rs"
+
 [lints]
 workspace = true
