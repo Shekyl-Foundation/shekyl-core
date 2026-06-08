@@ -314,7 +314,11 @@ mod tests {
         };
         let payload = [0u8];
         let code = unsafe {
-            shekyl_archival_verify_serve_credit_vin(payload.as_ptr(), payload.len(), &ctx)
+            shekyl_archival_verify_serve_credit_vin(
+                payload.as_ptr(),
+                payload.len(),
+                std::ptr::from_ref(&ctx),
+            )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE);
     }
