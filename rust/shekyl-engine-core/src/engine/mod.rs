@@ -30,10 +30,12 @@
 //! that is *not* being carried forward; the briefest summary, kept here
 //! so the rejection survives "while we're here" temptations:
 //!
-//! - **Integrated addresses and legacy encrypted `payment_id`s on wire.**
-//!   Receive attribution uses payment requests (FA-8), not address rotation.
-//!   `TxRequest` carries no standalone `payment_id` field and the
-//!   `IntegratedAddress` type is not modeled.
+//! - **Integrated addresses and legacy unencrypted `payment_id`s on wire.**
+//!   Shekyl supports encrypted 8-byte [`shekyl_engine_state::PaymentId`]
+//!   only; unencrypted IDs
+//!   are rejected. Receive attribution uses payment requests (FA-8), not
+//!   address rotation. `TxRequest` carries no standalone `payment_id` field
+//!   and the `IntegratedAddress` type is not modeled.
 //! - **Subaddresses and flat index namespaces.** End-state 5 (FA-2): one
 //!   primary address per account; signing uses `output_claim` offset `m₀`
 //!   at index 0. Exchanges that need stronger isolation use multiple wallet

@@ -34,9 +34,9 @@
 //! Secret wrappers (`ViewSecret`, `SpendSecret`, `MlKem768DecapKey`)
 //! carry `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key
 //! wrappers (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash`
-//! for use as identity-bearing values in registries (e.g. payment-request
-//! attribution maps in
-//! `shekyl-engine-core`'s `LocalKeys`); they implement `Zeroize` (so
+//! for use as identity-bearing values in maps and sets keyed by account
+//! identity (e.g. `HashMap<SpendPublicKey, _>`); they implement
+//! `Zeroize` (so
 //! the surrounding `AllKeysBlob`'s derived `ZeroizeOnDrop` calls
 //! `.zeroize()` on them as part of the uniform field-wipe pattern raw
 //! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict

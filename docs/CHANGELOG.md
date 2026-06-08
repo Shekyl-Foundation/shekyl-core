@@ -9,7 +9,8 @@
   `output_spend_offset_scalar`; `derive_primary_source_secrets_bundle`
   hardcodes `PRIMARY_CLAIM_INDEX_LE`. Deleted public `SubaddressIndex`,
   `subaddress_lookahead` (settings v2, prefs schema v2),
-  `AddressBookEntry::is_subaddress` (`BOOKKEEPING_BLOCK_VERSION` 5).
+  `AddressBookEntry::is_subaddress` (`BOOKKEEPING_BLOCK_VERSION` 5);
+  paired `WALLET_LEDGER_FORMAT_VERSION` 6→7 (`wallet_ledger.snap`).
   Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](design/PRIMARY_CLAIM_DERIVATION_RENAME.md).
 
 - **docs: gate-2 Round 1 on-demand serving obligation (2026-06-08).**

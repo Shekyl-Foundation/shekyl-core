@@ -242,7 +242,7 @@ impl LocalKeys {
     ///    PRIMARY_CLAIM_INDEX_LE)`. Genesis-locked derivation per
     ///    `shekyl-crypto-pq::output_claim::output_spend_offset_scalar`.
     ///    V3.0 hardcodes index `0`; the offset enters additively in step 4.
-    /// 4. **Per-input spend scalar** ← `x = ho + b + m_i` where `b`
+    /// 4. **Per-input spend scalar** ← `x = ho + b + m₀` where `b`
     ///    is the engine-owned account spend secret. Computed with
     ///    `Scalar` arithmetic in canonical encoding; the result's
     ///    little-endian byte form is the bundle's
@@ -315,7 +315,7 @@ impl LocalKeys {
             *self.keys.spend_sk.as_canonical_bytes(),
         ));
         let m_i: Zeroizing<Scalar> = Zeroizing::new(output_spend_offset_scalar(
-            &*self.derived.view_scalar,
+            &self.derived.view_scalar,
             &PRIMARY_CLAIM_INDEX_LE,
         ));
         let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar + *m_i);
@@ -464,7 +464,7 @@ mod tests {
         spend_public: &EdwardsPoint,
         idx_le: [u8; 4],
     ) -> [u8; 32] {
-        let m = output_spend_offset_scalar(&**view_scalar, &idx_le);
+        let m = output_spend_offset_scalar(view_scalar, &idx_le);
         (spend_public + (&m * ED25519_BASEPOINT_TABLE))
             .compress()
             .to_bytes()
@@ -945,9 +945,9 @@ mod tests {
     ///
     /// - 8 distinct `(output_index, tx_hash)` pairs to exercise the
     ///   `derive_output_secrets` HKDF-SHA-512 context-binding paths.
-    /// Index sensitivity (`output_spend_offset_scalar` for non-zero
-    /// indices) is pinned in `shekyl-crypto-pq::output_claim` unit tests;
-    /// this test exercises only the primary claim index (`m₀`).
+    /// - Index sensitivity (`output_spend_offset_scalar` for non-zero
+    ///   indices) is pinned in `shekyl-crypto-pq::output_claim` unit tests;
+    ///   this test exercises only the primary claim index (`m₀`).
     ///
     /// Per the M3a Round 4a `pub(crate)` visibility lock on
     /// [`LocalKeys`], [`SourceSecretsBundle`], and [`KeyEngineError`],
