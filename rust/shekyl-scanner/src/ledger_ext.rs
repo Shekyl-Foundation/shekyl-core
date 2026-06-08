@@ -33,7 +33,9 @@
 
 use std::ops::Range;
 
-use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
+use shekyl_engine_state::{
+    LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails, SPENDABLE_AGE,
+};
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -109,6 +111,7 @@ impl TransferDetailsExt for TransferDetails {
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: ReceiveAttribution::default(),
         }
     }
 }

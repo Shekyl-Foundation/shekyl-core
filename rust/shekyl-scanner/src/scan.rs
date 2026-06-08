@@ -141,6 +141,8 @@ pub struct RecoveredWalletOutput {
     /// One-byte amount tag carried alongside `enc_amount`. Public.
     #[zeroize(skip)]
     pub(crate) amount_tag: u8,
+    /// Decrypted label plaintext (sentinel or cooperative `REQUEST` tag).
+    pub(crate) label_plaintext: [u8; 8],
 }
 
 impl Zeroize for RecoveredWalletOutput {
@@ -151,6 +153,7 @@ impl Zeroize for RecoveredWalletOutput {
         self.z.zeroize();
         self.k_amount.zeroize();
         self.combined_shared_secret.zeroize();
+        self.label_plaintext.zeroize();
         // `self.key_image`, `self.amount`, `self.source_ciphertext`,
         // `self.view_tag`, `self.enc_amount`, `self.amount_tag` are
         // public on-chain data, not secret — they deliberately skip
@@ -203,6 +206,11 @@ impl RecoveredWalletOutput {
         self.amount_tag
     }
 
+    /// Decrypted 8-byte label plaintext from scan (FA-8 attribution).
+    pub fn label_plaintext(&self) -> &[u8; 8] {
+        &self.label_plaintext
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(base: WalletOutput, amount: u64) -> Self {
         Self {
@@ -233,6 +241,7 @@ impl RecoveredWalletOutput {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 }
@@ -597,6 +606,7 @@ impl InternalScanner {
                 view_tag: view_tag_on_chain,
                 enc_amount,
                 amount_tag: amount_tag_on_chain,
+                label_plaintext: recovered.label_plaintext,
             });
         }
 

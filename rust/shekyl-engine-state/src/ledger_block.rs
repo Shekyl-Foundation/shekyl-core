@@ -66,8 +66,10 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   `TransferDetails::output_handle` (M3b deterministic-handle pathway).
 /// - Version `4` removes the M3a–M3c per-output secret fields from
 ///   `TransferDetails` (M3d).
-/// - Version `5` (this version) removes `TransferDetails::subaddress`
-///   per FA-2 End-state 5 (`SUBADDRESS_UNDER_PQC.md` §5.7.4).
+/// - Version `5` removes `TransferDetails::subaddress` per FA-2 End-state 5
+///   (`SUBADDRESS_UNDER_PQC.md` §5.7.4).
+/// - Version `6` (this version) adds `TransferDetails::receive_attribution`
+///   (FA-8, §5.7.9).
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -75,7 +77,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 5;
+pub const LEDGER_BLOCK_VERSION: u32 = 6;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -450,6 +452,7 @@ mod tests {
             eligible_height: 100 + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
         }
     }
 

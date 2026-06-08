@@ -56,8 +56,8 @@ use crate::{
 
 /// Bundle-level `format_version`.
 ///
-/// At V3.0 genesis the bundle shipped as version `3`; FA-2 ships
-/// [`WALLET_LEDGER_FORMAT_VERSION`] `5`. Version `1` (pre-flat-namespace) carried a two-level
+/// At V3.0 genesis the bundle shipped as version `3`; FA-8 ships
+/// [`WALLET_LEDGER_FORMAT_VERSION`] `6`. Version `1` (pre-flat-namespace) carried a two-level
 /// subaddress index in transfer records and extra bookkeeping maps (a
 /// dedicated primary-label slot, per-index labels, and account-level tags).
 /// Version `2` flattened the index representation and dropped the
@@ -71,6 +71,9 @@ use crate::{
 /// `LEDGER_BLOCK_VERSION` 4). Version `5` is FA-2 End-state 5:
 /// `BOOKKEEPING_BLOCK_VERSION` 3 (subaddress registry removed) and
 /// `LEDGER_BLOCK_VERSION` 5 (`TransferDetails::subaddress` removed).
+/// Version `6` is FA-8: `BOOKKEEPING_BLOCK_VERSION` 4 (payment
+/// requests), `LEDGER_BLOCK_VERSION` 6 (`ReceiveAttribution` on
+/// `TransferDetails`).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -82,7 +85,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 5;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 6;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.

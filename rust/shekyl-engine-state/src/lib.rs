@@ -38,6 +38,7 @@ pub mod ledger_block;
 pub mod ledger_indexes;
 pub mod local_label;
 pub mod payment_id;
+pub mod payment_request;
 pub mod safety_constants;
 pub mod schema_snapshot;
 pub mod serde_helpers;
@@ -56,6 +57,9 @@ pub use ledger_block::{
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
+pub use payment_request::{
+    DisputeReason, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
+};
 pub use safety_constants::NetworkSafetyConstants;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use subaddress::SubaddressIndex;

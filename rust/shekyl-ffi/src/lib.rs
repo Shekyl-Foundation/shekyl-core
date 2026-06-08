@@ -3459,26 +3459,160 @@ pub unsafe extern "C" fn shekyl_construct_output(
 
     use shekyl_crypto_pq::output::construct_output;
     match construct_output(&tx_key, &x_pk, ek, &sk, amount, output_index) {
-        Ok(out) => ShekylOutputData {
-            output_key: out.output_key,
-            commitment: out.commitment,
-            enc_amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-            enc_label: out.enc_label,
-            label_tag: out.label_tag,
-            view_tag_prefilter: out.view_tag_prefilter,
-            kem_ciphertext_x25519: out.kem_ciphertext_x25519,
-            kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
-            pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),
-            h_pqc: out.h_pqc,
-            y: out.y,
-            z: out.z,
-            k_amount: out.k_amount,
-            success: true,
-            // out drops here — ZeroizeOnDrop wipes y, z, k_amount
-        },
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
         Err(_) => fail,
     }
+}
+
+/// Like [`shekyl_construct_output`] but encrypts the supplied 8-byte label plaintext.
+///
+/// # Safety
+/// Same as `shekyl_construct_output`; `label_plaintext` must point to 8 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_construct_output_labeled(
+    tx_key_secret_ptr: *const u8,
+    x25519_pk: *const u8,
+    ml_kem_ek: *const u8,
+    ml_kem_ek_len: usize,
+    spend_key: *const u8,
+    amount: u64,
+    output_index: u64,
+    label_plaintext: *const u8,
+) -> ShekylOutputData {
+    let fail = ShekylOutputData {
+        output_key: [0; 32],
+        commitment: [0; 32],
+        enc_amount: [0; 8],
+        amount_tag: 0,
+        enc_label: [0; 8],
+        label_tag: 0,
+        view_tag_prefilter: 0,
+        kem_ciphertext_x25519: [0; 32],
+        kem_ciphertext_ml_kem: ShekylBuffer::null(),
+        pqc_public_key: ShekylBuffer::null(),
+        h_pqc: [0; 32],
+        y: [0; 32],
+        z: [0; 32],
+        k_amount: [0; 32],
+        success: false,
+    };
+
+    let Some(tx_key) = arr32_from_ptr(tx_key_secret_ptr) else {
+        return fail;
+    };
+    let Some(x_pk) = arr32_from_ptr(x25519_pk) else {
+        return fail;
+    };
+    let Some(sk) = arr32_from_ptr(spend_key) else {
+        return fail;
+    };
+    let Some(ek) = (unsafe { slice_from_ptr(ml_kem_ek, ml_kem_ek_len) }) else {
+        return fail;
+    };
+    let Some(label_slice) = (unsafe { slice_from_ptr(label_plaintext, 8) }) else {
+        return fail;
+    };
+    let mut label_pt = [0u8; 8];
+    label_pt.copy_from_slice(label_slice);
+
+    use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
+    match construct_output_with_label_plaintext(
+        &tx_key,
+        &x_pk,
+        ek,
+        &sk,
+        amount,
+        output_index,
+        &label_pt,
+    ) {
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
+        Err(_) => fail,
+    }
+}
+
+/// Select the 8-byte label plaintext for a cooperative payment URI (FA-8c).
+///
+/// Returns `0` on success and writes plaintext to `out_plaintext` (8 bytes).
+/// Returns `-4` on null pointer (output untouched). On all other returns the
+/// output is the sentinel plaintext so C callers never read uninitialized bytes.
+/// Returns `-3` on UTF-8 / URI parse failure when `cooperative_enabled` is true.
+///
+/// # Safety
+/// `uri` must be a valid NUL-terminated UTF-8 C string; `out_plaintext` must
+/// point to 8 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
+    uri: *const std::ffi::c_char,
+    cooperative_enabled: bool,
+    out_plaintext: *mut u8,
+) -> i32 {
+    if uri.is_null() || out_plaintext.is_null() {
+        return -4;
+    }
+    use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
+    let sentinel = sentinel_plaintext();
+    unsafe {
+        std::ptr::copy_nonoverlapping(sentinel.as_ptr(), out_plaintext, 8);
+    }
+    if !cooperative_enabled {
+        return 0;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(uri) };
+    let Ok(uri_str) = cstr.to_str() else {
+        return -3;
+    };
+    let parsed = match shekyl_address::parse_payment_uri(uri_str) {
+        Ok(p) => p,
+        Err(_) => return -3,
+    };
+    let pt = parsed
+        .rid
+        .and_then(encode_request_plaintext)
+        .unwrap_or_else(sentinel_plaintext);
+    unsafe {
+        std::ptr::copy_nonoverlapping(pt.as_ptr(), out_plaintext, 8);
+    }
+    0
 }
 
 /// Free a ShekylOutputData's heap-allocated buffer fields.
@@ -5251,5 +5385,54 @@ mod tests {
                 "vector {i}: parsed a mismatch"
             );
         }
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_null_ptr_returns_minus_four() {
+        let mut out = [0u8; 8];
+        out.fill(0x42);
+        let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
+        // SAFETY: null out buffer; uri is valid.
+        let rc = unsafe {
+            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, std::ptr::null_mut())
+        };
+        assert_eq!(rc, -4);
+        assert_eq!(out, [0x42; 8], "output untouched on -4");
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_coop_off_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let mut out = [0u8; 8];
+        let uri = std::ffi::CString::new("not-a-valid-uri").unwrap();
+        // SAFETY: valid pointers; cooperative off must not parse.
+        let rc = unsafe {
+            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), false, out.as_mut_ptr())
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(out, sentinel_plaintext());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_coop_on_rid_echo() {
+        use shekyl_crypto_pq::label::encode_request_plaintext;
+        let rid = 0x1234_u64;
+        let uri = std::ffi::CString::new(format!("shekyl:addr1abc?rid={rid}")).unwrap();
+        let mut out = [0u8; 8];
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        assert_eq!(out, encode_request_plaintext(rid).unwrap());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let uri = std::ffi::CString::new("shekyl:").unwrap();
+        let mut out = [0u8; 8];
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        assert_eq!(rc, -3);
+        assert_eq!(out, sentinel_plaintext());
     }
 }

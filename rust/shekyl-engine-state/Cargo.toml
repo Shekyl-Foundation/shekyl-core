@@ -20,6 +20,7 @@ serde_bytes = "0.11"
 thiserror.workspace = true
 tracing = "0.1"
 postcard = { version = "1", features = ["alloc"] }
+getrandom = { version = "0.2", features = ["std"] }
 
 # Hardening-pass commit 3.4 (`docs/MID_REWIRE_HARDENING.md` §3.4):
 # `postcard-schema` turns the `block_version` discipline from cultural

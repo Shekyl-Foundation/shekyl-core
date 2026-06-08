@@ -84,6 +84,7 @@ pub(crate) mod staking {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 
@@ -876,6 +877,7 @@ mod ledger_proptest {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 
@@ -1065,6 +1067,7 @@ mod sync_bookkeeping {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 

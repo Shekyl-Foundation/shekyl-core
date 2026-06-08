@@ -516,6 +516,28 @@ ShekylOutputData shekyl_construct_output(
     uint64_t amount,
     uint64_t output_index);
 
+/// Construct output with explicit 8-byte label plaintext (FA-8 cooperative send).
+ShekylOutputData shekyl_construct_output_labeled(
+    const uint8_t* tx_key_secret,
+    const uint8_t* x25519_pk,
+    const uint8_t* ml_kem_ek,
+    size_t ml_kem_ek_len,
+    const uint8_t* spend_key,
+    uint64_t amount,
+    uint64_t output_index,
+    const uint8_t* label_plaintext);
+
+/// Label plaintext for a cooperative payment URI.
+/// When `cooperative_enabled` is false, writes the sentinel plaintext and
+/// returns 0 without parsing `uri`. When true, parses `shekyl:…?rid=…` and
+/// returns 0 on success (REQUEST plaintext if `rid` present, else sentinel).
+/// On -3 (parse/UTF-8 failure) the output is still the sentinel plaintext.
+/// -4 is returned on null pointer without writing `out_plaintext`.
+int32_t shekyl_label_plaintext_for_payment_uri(
+    const char* uri,
+    bool cooperative_enabled,
+    uint8_t* out_plaintext);
+
 /// Free heap-allocated fields in ShekylOutputData.
 void shekyl_output_data_free(ShekylOutputData* data);
 
