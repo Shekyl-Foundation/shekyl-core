@@ -5,7 +5,7 @@
 **Pinned:** form **C** (§4.0); state dedup (§6); lagged §4.4 read (§4.5 collapsed).
 **Un-implementable until:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 (archival read contract + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
-**Gate 3 dissolved (2026-06-07):** no `ν` primitive; `R_market` derived from retention ledger.
+**Gate 3 dissolved (2026-06-07):** no `ν` primitive; `R_market` derived from serve-credit ledger.
 **Admission wire:** ordinary transfer ≥ `MIN`, **no `C_stake`** (§7.2–§7.4; gate 7 reopen).
 **Layer 2:** margin-robustness gate on spread (§1.2), not point calibration at one `giniW` reading.
 
@@ -105,7 +105,7 @@ Nothing to re-litigate on form **C** or `sprdW` verdict. Pinning the emission le
 changes what is next:
 
 1. **Archival consensus read contract is the critical path.** Loud 8c recompute reads
-   retention ledger, shard registry, derived `R_market`, and bond-record `good_through`
+   serve-credit ledger, shard registry, derived `R_market`, and bond-record `good_through`
    from state this doc does not define (§5.4). The leg is fully specified **at its layer**
    and **un-implementable** until [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
    is implemented. Gate 3 **ν dissolved** — `R_market` is ledger-derived. 8c **soundness**
@@ -117,7 +117,7 @@ changes what is next:
    **named reopen**, not a live architectural fork.
 
 3. **Unbounded reward-accounting state needs `MAX_CLAIM_AGE_W`.** `ClaimedEpochSet`,
-   per-`(P, shard, E)` retention, and per-epoch `Σwork` accrete without bound — the
+   per-`(P, shard, E)` serve-credit rows, and per-epoch `Σwork` accrete without bound — the
    gate-2 "irony" (archival accounting in replicated state) made concrete. Pin
    consensus-visible `W`: epochs older than `W` unclaimable; state prunes; tradeoff
    with gate-6 deliberate `P` lapse. See archival-state doc §2.4.
@@ -214,7 +214,7 @@ stack (form **C** above), aligned with
 
 ```text
 scarcity(s,E)  = (1 / R_market(s,E)) · g(age(s))     // channel 1: self-diluting scarcity
-work_P(E)      = Σ_{s ∈ held(P,E)} scarcity(s,E) · proven_retention(P,s,E)
+work_P(E)      = Σ_{s ∈ held(P,E)} scarcity(s,E) · serve_credit_bit(P,s,E)
 capped_P(E)    = Curve(work_P(E))                     // channel 2: concave plateau-cap (per P)
 Σwork(E)       = Σ_{P'∈Market} capped_{P'}(E)         // channel 3: market-only denominator (§4.2)
 reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud on vin; Σ = budget
@@ -223,7 +223,7 @@ reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud o
 **Channel 1 — scarcity.** `R_market` is the public replication count; holding a shard
 raises `R` and dilutes its own `1/R`. `g(age) = 1 + age_weight·age` (public shard
 property) is the privacy-clean deep-history premium replacing retired tier weighting.
-`proven_retention` is the challenge-pass bit from consensus archival state (gate 2), not
+`serve_credit_bit` is the challenge-pass bit from consensus archival state (gate 2), not
 retrieval volume.
 
 **Channel 2 — `Curve`.** Per-`P` concave-to-plateau cap on credited work (the sim’s
@@ -261,7 +261,7 @@ wants a gate-5 **budget ramp** is a separate call; denominator scope is not.
 ### 4.3 `WorkClaimVector` maps to channel 1
 
 §5.4 carries per-shard `scarcity_milli` (fixed-point `(1/R)·g(age) × 1000`) and
-`proven_retention` so verifiers recompute `work_P(E)` before applying `Curve`.
+`serve_credit_bit` so verifiers recompute `work_P(E)` before applying `Curve`.
 
 **Fixed-point pin:** `scarcity_milli = floor((1/R)·g(age) · 1000)` (integer, zero
 tolerance at verify). Effective **R ceiling:** for `g(age) ≥ 1`, `R > 1000·g(age)` rounds
@@ -278,7 +278,7 @@ accumulator**:
 
 ```text
 Σwork_acc(E)  finalized at epoch E close from continuous recording
-              (each market P's capped_P(E) updated as challenge/retention state settles)
+              (each market P's capped_P(E) updated as challenge/serve-credit state settles)
 ```
 
 Emission vins **read** the finalized accumulator; they do not author it.
@@ -360,7 +360,7 @@ WorkEpochClaim {
 }
 ShardWorkEntry {
   shard_id:           ShardId,           // consensus shard identifier (gate 2)
-  proven_retention:   bool,              // must match challenge state at E
+  serve_credit_bit:   bool,              // must match challenge state at E
   scarcity_milli:     u32,               // fixed-point scarcity × 1000 (integer recompute)
 }
 ```
@@ -460,11 +460,11 @@ epochs per `P` ≤ 16 at all times, a relative mask may return; until then, abso
 set is genesis.
 
 **Growth bound:** Without a claim-age window the set grows without bound. §6.6 pins
-`MAX_CLAIM_AGE_W` and prune semantics jointly with gate-2 retention state.
+`MAX_CLAIM_AGE_W` and prune semantics jointly with gate-2 serve-credit state.
 
 ### 6.6 `MAX_CLAIM_AGE_W` — claim-age window (genesis pin)
 
-**Problem:** State dedup as absolute sparse sets plus per-`(P, shard, E)` retention
+**Problem:** State dedup as absolute sparse sets plus per-`(P, shard, E)` serve-credit
 and per-epoch `Σwork` accumulators accrete forever — archival reward accounting in
 replicated consensus state with no prune rule.
 
@@ -479,7 +479,7 @@ For current settlement epoch `C`, emission for epoch `E` is rejected if `E < C -
 
 - `ClaimedEpochSet` semantics bounded in practice (verify rejects ancient `E`).
 - Finalized `Σwork(E)` for `E < C - W` droppable from hot consensus tables.
-- Per-`(P, shard, E)` retention rows reclaimable after `W`.
+- Per-`(P, shard, E)` serve-credit rows reclaimable after `W`.
 
 **Tradeoff:** `P` offline longer than `W` loses older unclaimed epochs. Gate-6 decorrelation
 may deliberately lapse `P` — `W` trades **state growth** against **lapse forfeiture**.

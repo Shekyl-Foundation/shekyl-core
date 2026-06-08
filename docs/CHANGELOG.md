@@ -11,6 +11,10 @@
   updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
   Pi 4 A/B capture.
 
+- **archival: `serve_credit_bit` rename sweep (gate-2 §11).**
+  `retention_bit` / `proven_retention` → `serve_credit_bit` across emission/consensus specs,
+  `WorkClaimVector` field pin, and `shekyl-staking-sim` T-A1 fingerprint helper.
+
 - **archival: gate-2 serve-credit KAT fixture (v1).**
   `tests/fixtures/gate2_serve_credit_kat_v1.json` tripwires challenge replay, wire bytes,
   signature preimage, and CT-2 founder opening; regen via `regenerate_gate2_kat_fixture`.

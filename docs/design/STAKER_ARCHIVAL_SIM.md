@@ -318,7 +318,7 @@ from both ends.
   iteration 1 (below).
 - **Reward (the model under test).** Per the canonical doc, with two refinements the
   equilibrium analysis forces into iteration 1:
-  - `work_P = Σ_shards scarcity(shard) · proven_retention(P, shard)`, where
+  - `work_P = Σ_shards scarcity(shard) · serve_credit_bit(P, shard)`, where
     **`scarcity(shard) ∝ (1/R(shard)) · g(age)`** — age-weighted, not pure `1/R`.
     `g(age)` is a **swept model parameter from the start**, *not* a "maybe discover"
     correctable finding: `g(age)=1` is a baseline point included specifically to

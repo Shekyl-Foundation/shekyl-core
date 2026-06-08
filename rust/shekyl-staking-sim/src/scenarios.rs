@@ -239,8 +239,8 @@ pub struct SimConfig {
     /// Depression per epoch of deep fetch latency in `u_eff = u_base / (1 + k·L)`.
     pub transport_u_k: f64,
 
-    /// **T-A1 / F1 retention fingerprint** (PHASE_2B §7.7). Records per-settlement-epoch
-    /// retention bits at `settlement_epoch_blocks` granularity. Off ⇒ inert.
+    /// **T-A1 / F1 serve-credit fingerprint** (PHASE_2B §7.7). Records per-settlement-epoch
+    /// serve-credit bits at `settlement_epoch_blocks` granularity. Off ⇒ inert.
     pub ta1_model: bool,
     /// Settlement epoch length in blocks (`SETTLEMENT_EPOCH_BLOCKS`; default 10_000).
     pub settlement_epoch_blocks: u64,
@@ -2537,7 +2537,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(cc);
     }
 
-    // --- T-A1 / F1 retention fingerprint (PHASE_2B §7.7 gate). Hygiene defaults =
+    // --- T-A1 / F1 serve-credit fingerprint (PHASE_2B §7.7 gate). Hygiene defaults =
     // gate-4 lean pin (ρ=0.02, bond_rate=0.75, g=2) + L10 L2 + age-scaled duration
     // (lean pin) + L16 transport + dynamic frontier churn. Settlement epoch pinned at
     // SEB=10_000; 500 sim epochs × 2000 blocks/epoch = 1M blocks ⇒ 100 settlement epochs.

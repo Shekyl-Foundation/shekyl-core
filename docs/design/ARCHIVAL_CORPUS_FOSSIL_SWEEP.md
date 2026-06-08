@@ -92,7 +92,7 @@ must confirm or refute.
 shard root `R_k` — using **set B** (segment leaves + per-shard canonical auxiliary in
 the shard's height range).
 
-**On pass:** Set `retention_bit(P, s, E)` in consensus retention ledger
+**On pass:** Set `serve_credit_bit(P, s, E)` in consensus serve-credit ledger
 (`ARCHIVAL_CONSENSUS_STATE.md` §3.1). Challenge metadata (leaf index, block hash) stays
 gate-2-internal.
 
@@ -102,7 +102,7 @@ void honest prior epochs (`good_through`).
 ### 5.2 Soundness property (loud 8c)
 
 **Unforgeability:** No PPT adversary without set-B material for `(s, E)` can produce a
-verifier-accepting retention proof that sets `retention_bit(P,s,E)`.
+verifier-accepting serve-credit proof that sets `serve_credit_bit(P,s,E)`.
 
 **Not** the old confidential 8a (hidden reward amount). Inflation detection is **loud
 recompute** of emission amounts from public `Σwork` / bond state; 8c guards **work credit**

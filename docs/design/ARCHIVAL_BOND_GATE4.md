@@ -63,7 +63,7 @@ makes each counted replica cost `ARCHIVAL_BOND_FLOOR` (sim pin) and real storage
 
 ### 1.4 No pre-join consensus footprint
 
-Gate-2 **does not write** `retention_bit(P, shard, E)` before join-Market. Bits may not
+Gate-2 **does not write** `serve_credit_bit(P, shard, E)` before join-Market. Bits may not
 accrue for `P` without a bond record — closes state-bloat and grief vectors for
 unbonded announced `P`.
 
@@ -82,7 +82,7 @@ unbonded announced `P`.
 5. Sets `good_standing = true` (initial posture).
 6. Admits `P` to **`Market`** from this height forward.
 
-After join, gate-2 may write retention bits for **`E ≥ E_join + 1`**; `P` is counted in
+After join, gate-2 may write serve-credit bits for **`E ≥ E_join + 1`**; `P` is counted in
 `R_market` / `Σwork` and may emit for those epochs subject to lag, `W`, and dedup.
 
 ### 2.2 `E_join` boundary (R1b — closed)
@@ -106,7 +106,7 @@ P ∈ Market for settlement-epoch E  ⇔
 **Derived reads (same predicate — no §2.2 vs §4 split):**
 
 ```text
-counted_in_R_market(P, shard, E)  ⇔  retention_bit(P,s,E) ∧ (P ∈ Market for E)
+counted_in_R_market(P, shard, E)  ⇔  serve_credit_bit(P,s,E) ∧ (P ∈ Market for E)
 claimable_epoch(E) in emission    ⇔  (P ∈ Market for E) ∧ dedup ∧ W ∧ … (emission §6.5)
 ```
 
@@ -324,7 +324,7 @@ Slash is **not** a user transaction and has **no** balance equation. It is a
 emission being rule-driven rather than balance-proven.
 
 **Trigger:** gate-2 `challenge_failed(P,s,E)` at `H > H_deadline` without
-`retention_bit` ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6); gate-4
+`serve_credit_bit` ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6); gate-4
 applies `slash(P, s)`.
 
 **Atomic write set (entire slash on block connect):**

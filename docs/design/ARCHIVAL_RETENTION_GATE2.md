@@ -8,9 +8,6 @@ constructible per [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENT
 challenge per bonded shard, Merkle opening to `R_k`, consensus verify, slash on miss.
 Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §6.
 
-**Legacy name:** `retention_bit` in emission formulas = **`serve_credit_bit`** (misnomer; means
-"passed this epoch's on-demand check," not "stored continuously").
-
 **Authority chain:**
 
 | Doc | Role |
@@ -71,7 +68,7 @@ post-and-vanish; unpredictable fire time is the service shape.
 
 | Topic | Disposition |
 |-------|-------------|
-| **`serve_credit_bit`** | "Passed epoch on-demand check" — rename from `retention_bit` in prose; emission wire may keep legacy field name until sweep |
+| **`serve_credit_bit`** | "Passed epoch on-demand check" — affirmative response this epoch, not continuous storage |
 | **L15 `R_target` / three-nines** | **Reach/availability** over serving endpoints — not market durability (foundation floor only) |
 | **Market redundancy** | Redundancy of **pseudonyms** ≤ redundancy of **operators**; firewall makes the gap unmeasurable by design — **accepted**; Sybil cost = bond sizing (existing lever), not durability risk |
 | **Organic user fetches** | Actual service (users fetch; **no** per-fetch consensus payment at genesis) |
@@ -448,7 +445,7 @@ verifier treats registry as authoritative at `H_anchor`.
 - [x] Byte-exact serialization + domain labels frozen (`shekyl-archival-retention::wire`, §5.1.1)
 - [x] KAT vectors (`tests/fixtures/gate2_serve_credit_kat_v1.json`, `gate2_serve_credit_kat_vectors`)
 - [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
-- [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
+- [x] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
 
 ---
 
@@ -458,12 +455,14 @@ verifier treats registry as authoritative at `H_anchor`.
 |-----|--------------|
 | [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Cryptographic disposition |
 | [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass fossils |
-| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Reads `retention_bit` for `work_P` |
+| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Reads `serve_credit_bit` for `work_P` |
 | [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) | Challenge delivery class |
 
 ---
 
 ## Changelog
 
+- **2026-06-08:** Emission/consensus rename sweep — `retention_bit` / `proven_retention` →
+  `serve_credit_bit` across specs and `shekyl-staking-sim` fingerprint.
 - **2026-06-08:** Round 1 — §0 on-demand serving obligation; `serve_credit_bit`; beacon fire.
 - **2026-06-08:** Round 0 draft — membership wire; ordering fix (review amendment).

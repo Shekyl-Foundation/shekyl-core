@@ -342,7 +342,7 @@ use `market_R` under-count and behave incorrectly.
 
 | Symbol | Definition | Foundation / `CompleteTree` |
 |---|---|---|
-| **`market_R(shard, E)`** | At epoch close: count of **market** archivers `P` with `retention_bit(P,s,E) ∧ good_through(P,E)` — **derived** from the retention ledger keyed by public `P_id` ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §3.3). **No** `ν = H(P, shard)` primitive — incompatible with form **C** per-`P` cap grouping. | **`CompleteTree` / foundation excluded from `Market`** — absent from count by membership rule, not a nullifier shortcut |
+| **`market_R(shard, E)`** | At epoch close: count of **market** archivers `P` with `serve_credit_bit(P,s,E) ∧ good_through(P,E)` — **derived** from the serve-credit ledger keyed by public `P_id` ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §3.3). **No** `ν = H(P, shard)` primitive — incompatible with form **C** per-`P` cap grouping. | **`CompleteTree` / foundation excluded from `Market`** — absent from count by membership rule, not a nullifier shortcut |
 | **`durability_count(shard)`** | Distinct **bonded-and-good-standing** archivers covering *s* | **`CompleteTree` + genesis-enumerated active slot → covers every shard**; market **`ShardSetCompact`** holders cover *s* iff set includes *s* |
 
 **Good standing:** bonded retention commitment posted; not **unbonded** after
@@ -840,7 +840,7 @@ anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
 `HoldingsDescriptor`: either **`ShardSetCompact`** (partial portfolio) or
 **`CompleteTree`** (one sentinel = all shards). **`market_R`** is the **derived
 ledger count** at epoch close ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
-§3.3) — **`ShardSetCompact`** market holders with `retention ∧ good_through`;
+§3.3) — **`ShardSetCompact`** market holders with `serve_credit_bit ∧ good_through`;
 **`CompleteTree`** / foundation identities are **excluded from `Market`**, so they
 never appear in `market_R` **without any foundation flag on the pricing path**. Market archivers
 use per-shard bond accounting (`total bond = shards × rate`). Genesis
@@ -902,7 +902,7 @@ as everywhere else in the privacy design. Three layers must hold:
   more, for someone else. The two compose into "every shard covered, spread across
   many holders, none holding everything."
 - **Shape: concave-to-plateau, and banded — for provability, not economics.** Per-shard
-  scarcity composes into `work_P = Σ scarcity·proven_retention`; the **genesis-pinned**
+  scarcity composes into `work_P = Σ scarcity·serve_credit_bit`; the **genesis-pinned**
   payout is `reward_P = budget · Curve(work_P) / Σ_{P'∈Market} Curve(work_{P'})` (cap in
   the **numerator**, normalize by summed capped work — **not** `Curve(budget·work/Σwork)`,
   which strands budget when caps bind). See [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
@@ -994,7 +994,7 @@ and a fresh soundness pass before it ships:
    holdings **consensus-public**; the prior `ν = H(P_key, shard)` primitive promised
    hidden-`P` counting but is **incompatible** with the adopted reward shape (same
    dissolution as `N_arch`). **`market_R(s,E)`** is the count of market archivers with
-   `retention ∧ good_through` at epoch close — derived from the retention ledger keyed
+   `serve_credit_bit ∧ good_through` at epoch close — derived from the serve-credit ledger keyed
    by public `P_id`. Privacy that remains is **P ↔ principal** (gate 6), not
    P-holdings hiding. See [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
    §2–§3.

@@ -1,6 +1,6 @@
 //! T-A1 / T-A2 — F1 re-linkage instrument (PHASE_2B §7.7).
 //!
-//! **Timeline channel (diagnostic):** per-`(P, shard, settlement_epoch)` retention bits at
+//! **Timeline channel (diagnostic):** per-`(P, shard, settlement_epoch)` serve-credit bits at
 //! `SETTLEMENT_EPOCH_BLOCKS`. At the lean equilibrium, independent operators' timelines
 //! converge on "serve every epoch" → high homogeneity is *protective* (non-fingerprint).
 //! Re-linkage via timeline must be scored **relative to the independent-operator baseline**,
@@ -73,7 +73,7 @@ pub struct Ta1Metrics {
     pub claims: Ta1Claims,
 }
 
-/// Per-actor retention-bit timelines: `bits[actor][shard] = one bool per completed settlement epoch.
+/// Per-actor serve-credit-bit timelines: `bits[actor][shard] = one bool per completed settlement epoch.
 pub struct Ta1Recorder {
     settlement_epoch_blocks: u64,
     blocks_per_sim_epoch: u64,
@@ -142,7 +142,7 @@ impl Ta1Recorder {
         }
     }
 
-    fn retention_bit(world: &World, actor: usize, shard: usize, deep_threshold: f64) -> bool {
+    fn serve_credit_bit(world: &World, actor: usize, shard: usize, deep_threshold: f64) -> bool {
         world.shards[shard].is_deep(deep_threshold)
             && world.holdings[actor][shard]
             && world.inflight[actor][shard] == 0
@@ -167,7 +167,7 @@ impl Ta1Recorder {
 
         for a in 0..world.actors.len() {
             for s in 0..world.shards.len() {
-                let bit = Self::retention_bit(world, a, s, self.deep_threshold);
+                let bit = Self::serve_credit_bit(world, a, s, self.deep_threshold);
                 self.bits[a][s].push(bit);
             }
         }

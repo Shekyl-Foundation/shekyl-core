@@ -163,7 +163,7 @@ With `W = 26`, batch cap `15`: offline burst through full `W`, and slow catch-up
 
 Hot consensus structures pruned for epochs with `E < tip_epoch − W`:
 
-- retention ledger rows
+- serve-credit ledger rows
 - derived `R_market` / `Σwork` views
 - per-`P` `ClaimedEpochSet` entries (verify rejects ancient `E`)
 
