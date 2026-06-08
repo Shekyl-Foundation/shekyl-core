@@ -133,7 +133,7 @@ fraud (claiming retention/service without storage).
 
 [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md):
 **BUILD** — Merkle opening PoR to frozen `R_k` (not FCMP++ membership, not ZK at genesis).
-Gate-2 wire spec is the next deliverable.
+Gate-2 Round 0: [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md); verifier crate + KATs next.
 
 ---
 

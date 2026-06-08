@@ -8,8 +8,9 @@ economics unless verification-cost or binding barriers fail at gate-2 spec revie
 surface after fossil purge); [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) set B;
 [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2; [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.1, §6.
 
-**Out of scope here:** Gate-2 wire bytes, challenge cadence pin, wallet/daemon RPC for
-challenge delivery (separate gate-2 design doc). This pass answers: **can the statement be
+**Out of scope here:** Byte-exact gate-2 serialization and verifier crate (see
+[`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)); wallet/daemon RPC for
+challenge delivery. This pass answers: **can the statement be
 built soundly at all?**
 
 ---
@@ -73,7 +74,8 @@ over the hash.
 | Wallet path assembly (owned output) | `shekyl-curve-tree` (in progress) | **Same math**, different leaf index (random, not owned) |
 | Retention ledger interface | `ARCHIVAL_CONSENSUS_STATE.md` §3.1 | Output bit only — construction deferred |
 
-**Gap (expected):** No gate-2 verifier crate, no challenge wire, no `P`-bound response
+**Gap (expected):** No gate-2 verifier crate or byte-exact wire yet; Round 0 logical spec in
+[`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md). No `P`-bound response
 envelope. These are **engineering**, not unknown cryptography.
 
 ---
@@ -220,7 +222,7 @@ archivers × `m` samples; reject ZK deferral path only if measurement passes.
 | **New primitive needed?** | **No** — composition of landed hash-path + segment pin |
 | **ZK required at genesis?** | **No** — public leaves; hash-path verify |
 | **Economics reopen?** | **No** — failure would be verify-cost or sampling, not Σwork shape |
-| **Next deliverable** | Gate-2 spec: wire format, `m`, cadence, response tx, verifier crate |
+| **Next deliverable** | [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) Round 0 landed; verifier crate + byte-exact wire |
 
 ### 9.1 Reopening criteria (reversion clause)
 
@@ -241,8 +243,8 @@ review, not a gate-2 patch.
 
 ## 10. Implementation path (ordered)
 
-1. **Gate-2 design doc** — challenge/response wire, verifier API, `m` and cadence (owns
-   construction bytes deferred in consensus contract §6).
+1. **Gate-2 design doc** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) Round 0
+   (challenge/response wire, verifier order, `m`, cadence); byte-exact serialization + KATs open.
 2. **`shekyl-archival-retention` crate (proposed)** — verify-only path replay; KAT vectors
    from `shekyl-fcmp::tree` + fixed segment fixture.
 3. **Substrate reconciliation** — confirm `R_k` checkpoints in LMDB match §7.2 model;
@@ -256,6 +258,7 @@ review, not a gate-2 patch.
 | Doc | Relationship |
 |-----|--------------|
 | [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass test surface |
+| [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) | Gate-2 wire + verifier (Round 0) |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | Reads `retention_bit`; §6 gate-2-internal |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge |
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumes bits for `work_P` |

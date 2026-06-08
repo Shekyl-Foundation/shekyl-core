@@ -4,10 +4,16 @@
 
 ### Added
 
+- **docs: archival retention gate-2 Round 0 spec (2026-06-08).**
+  [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) — challenge derivation
+  (`cSHAKE`, `m=3`, `R_k`-local Merkle openings), `txin_archival_retention_response` wire,
+  verifier order, slash handoff to gate 4; §4 flags retention-credit vs slash-window tension
+  for stressnet. Cross-refs: consensus state §6, bond gate 4 §4.2, 8c feasibility §10.
+
 - **docs: loud 8c retention-proof constructibility pass (2026-06-08).**
   [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) —
   BUILD disposition: Merkle opening PoR to shard `R_k` on `shekyl-fcmp::tree` primitives; ZK
-  and FCMP++ membership rejected for genesis. Gate-2 wire spec is next.
+  and FCMP++ membership rejected for genesis.
 
 - **docs: archival corpus fossil sweep (2026-06-08).**
   [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](design/ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) — superseded-model

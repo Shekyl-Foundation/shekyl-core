@@ -106,7 +106,7 @@ retention_bit(P_id, shard_id, E) : bool
 ```
 
 - Set when the challenge for `(P, shard)` relevant to settlement epoch `E` **passed**
-  (grace window per gate 4).
+  ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §4–§5).
 - Challenge metadata (which leaf, which block) stays **gate-2-internal** — not in this
   contract.
 
@@ -250,10 +250,14 @@ replicated_hot_state ≈
 
 ## 6. Gate-2-internal (not in this contract)
 
-- How a retention bit is **earned** (proof-of-retrievability challenge, future-block-hash
-  leaf selection, 8c unforgeability argument) — [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
-- Challenge **cadence** (L14 retrieval-as-proof reduction).
-- Shard **definition** (what bytes/leaves a shard is).
+Mechanics live in [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) (Round 0,
+2026-06-08). Cryptographic disposition: [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
+
+This contract names **outputs only** — `retention_bit`, shard registry fields — not:
+
+- Challenge derivation, response vin, verifier order (gate-2 §3–§5).
+- Slash predicate handoff (gate-2 §6 → gate 4 §4.2).
+- Shard **definition** bytes (set-B boundary; curve-tree segment geometry).
 
 The emission leg consumes **outputs** — bits, counts, ids — and depends on the four
 invariants; it defines none of the mechanisms.
@@ -277,7 +281,8 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | Workstream | Status |
 |------------|--------|
 | **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet`; retool disposition [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) |
-| **Gate 4 join-Market** | **Active** — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) Round 0 |
+| **Gate 2 retention** | **Round 0** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md); bytes/KATs open |
+| **Gate 4 join-Market** | **Active** — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) Round 1 |
 | **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
