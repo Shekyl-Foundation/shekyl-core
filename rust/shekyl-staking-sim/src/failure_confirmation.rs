@@ -10,8 +10,8 @@
 //! - Recheck has **window start + width `w`** (gaming knob); deterministic point recheck
 //!   is not modeled.
 //! - Tail robustness: pick delay from law A, measure false-slash under true law B.
-//! - Decision gate: **gaming floor `b_min` first**, then **binding constraint** (absolute
-//!   block-space arithmetic), then relative volume ratio.
+//! - Decision gate: **sliding dodge slash + tuned `m` first**, then binding, then volR.
+//! - Escalation's predictable post-miss recheck is the dodge surface; sliding has none.
 //! - **`P(slash)` vs `u` sweep** names the not-durably-absent slope (honest hosting).
 
 use crate::model::Rng;
@@ -36,6 +36,12 @@ pub const BLOCK_WEIGHT_LIMIT_BYTES: u64 = 300_000;
 /// Fraction of per-SEB block-weight budget above which challenge traffic is binding.
 /// Order-of-magnitude check only; per-P micro-sim cannot settle absolute volume.
 pub const VOLUME_BINDING_FRACTION: f64 = 0.05;
+
+/// Mostly-offline dodge-P must be slashed at least this often under a sound policy.
+pub const DODGE_SLASH_FLOOR: f64 = 0.90;
+
+/// Single-transient outage duration quantile for `m` tuning (baselines spanned).
+pub const SINGLE_OUTAGE_DURATION_QUANTILE: f64 = 0.99;
 
 /// Down-segment duration law. Stressnet target: **outage-duration CDF** (residual-life
 /// CDF is the gating empirical input; equals marginal duration only when memoryless).
@@ -99,6 +105,31 @@ impl DownDurationLaw {
     pub fn nominal_false_slash_bound(quantile: f64) -> f64 {
         (1.0 - quantile).clamp(0.0, 1.0)
     }
+
+    /// p-quantile down-segment length (epochs) — sizes sliding `m` above single-outage span.
+    pub fn outage_duration_quantile_epochs(self, quantile: f64) -> u32 {
+        let p = quantile.clamp(f64::EPSILON, 1.0 - f64::EPSILON);
+        match self {
+            Self::Exponential { mean_epochs } => {
+                (-mean_epochs * (1.0 - p).ln()).ceil().max(1.0) as u32
+            }
+            Self::Lognormal { mean_epochs, sigma } => {
+                let mu = mean_epochs.ln() - sigma * sigma / 2.0;
+                let z = standard_normal_quantile(p);
+                (z * sigma + mu).exp().ceil().max(1.0) as u32
+            }
+        }
+    }
+}
+
+/// Standard-normal quantile for outage-span sizing (Winitzki upper-tail approx).
+fn standard_normal_quantile(p: f64) -> f64 {
+    let q = p.clamp(1e-9, 1.0 - 1e-9);
+    if q < 0.5 {
+        return -standard_normal_quantile(1.0 - q);
+    }
+    let t = (2.0 * (1.0 - q).ln()).sqrt();
+    t - (2.30753 + 0.27061 * t) / (1.0 + 0.99229 * t + 0.04481 * t * t)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,9 +245,46 @@ pub struct USlashPoint {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SlidingMSweepPoint {
+    pub miss_threshold: usize,
+    pub window_epochs: usize,
+    pub transient_false_slash_rate: f64,
+    pub max_single_outage_baselines: u32,
+    pub above_outage_span: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BaselineTimingNote {
+    /// Micro-sim: baseline every `baseline_period` settlement epochs (deterministic grid).
+    pub sim_baseline_model: String,
+    /// Production: `H_fire` beacon-unpredictable per gate-2 §3.4 (shared prerequisite).
+    pub production_baseline_model: String,
+    pub production_unpredictable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyPin {
+    pub chosen_policy: String,
+    pub chosen_miss_threshold: usize,
+    pub chosen_window_epochs: usize,
+    pub max_single_outage_baselines: u32,
+    pub sliding_dodge_slash_rate: f64,
+    pub escalate_dodge_slash_rate: f64,
+    pub sliding_catches_dodge: bool,
+    pub tuned_sliding_transient_false_slash: f64,
+    pub escalate_transient_false_slash: f64,
+    pub volume_binding: bool,
+    pub volume_ratio_at_l16: f64,
+    pub rationale: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FailureConfirmationReport {
     pub binding: BindingAnalysis,
+    pub baseline_timing: BaselineTimingNote,
     pub u_sweep: Vec<USlashPoint>,
+    pub sliding_m_sweep: Vec<SlidingMSweepPoint>,
+    pub policy_pin: PolicyPin,
     pub scenarios: Vec<Round1Result>,
 }
 
@@ -261,6 +329,10 @@ pub struct PairedActorStats {
 pub struct TransientStats {
     pub escalate_false_slash_rate: f64,
     pub sliding_false_slash_rate: f64,
+    /// Best sliding transient false-slash at `m` above single-outage span (fair comparison).
+    pub sliding_tuned_false_slash_rate: f64,
+    pub tuned_miss_threshold: usize,
+    pub max_single_outage_baselines: u32,
     pub nominal_bound_exponential_only: f64,
     pub tail_misspecification_gap: f64,
 }
@@ -268,14 +340,19 @@ pub struct TransientStats {
 #[derive(Debug, Clone, Serialize)]
 pub struct DodgeStats {
     pub escalate_slash_rate: f64,
-    pub forced_online_fraction: f64,
+    pub sliding_slash_rate: f64,
+    pub escalate_forced_online_fraction: f64,
+    /// Escalation: dodge evades when slash rate ≈ 0 (predictable recheck surface).
+    pub escalate_gaming_floor_satisfied: bool,
+    /// Sliding: mostly-offline dodge accumulates misses → slash.
+    pub sliding_gaming_floor_satisfied: bool,
     pub gaming_floor_baseline_period: u32,
-    pub gaming_floor_satisfied: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DecisionGate {
-    pub gaming_floor_satisfied: bool,
+    pub sliding_catches_dodge: bool,
+    pub escalate_allows_dodge: bool,
     pub volume_binding: bool,
     pub latency_binding: bool,
     pub fsm_justified: bool,
@@ -575,7 +652,12 @@ pub fn binding_analysis(baseline_period: u32, recheck_width: u32) -> BindingAnal
     }
 }
 
-fn gaming_floor_baseline(params: &Round1Params) -> (u32, bool, f64) {
+fn max_single_outage_baselines(law: DownDurationLaw, baseline_period: u32) -> u32 {
+    let span_epochs = law.outage_duration_quantile_epochs(SINGLE_OUTAGE_DURATION_QUANTILE);
+    ((span_epochs as f64) / baseline_period as f64).ceil().max(1.0) as u32
+}
+
+fn dodge_stats(params: &Round1Params) -> DodgeStats {
     let uptime_target = params.outage.uptime_target();
     let forced_target = (1.0 - uptime_target).max(0.20);
     let mut best_period = params.baseline_period;
@@ -591,7 +673,79 @@ fn gaming_floor_baseline(params: &Round1Params) -> (u32, bool, f64) {
             best_period = period;
         }
     }
-    (best_period, best_forced >= forced_target, best_forced)
+    let (dodge_esc, dodge_slide) =
+        paired_for_truth(GroundTruth::DodgeServing, params, 0x444F_4447_455F);
+    let escalate_slash_rate =
+        dodge_esc.iter().filter(|o| o.slashed).count() as f64 / dodge_esc.len() as f64;
+    let sliding_slash_rate =
+        dodge_slide.iter().filter(|o| o.slashed).count() as f64 / dodge_slide.len() as f64;
+    DodgeStats {
+        escalate_slash_rate,
+        sliding_slash_rate,
+        escalate_forced_online_fraction: best_forced,
+        // Escalation gaming floor: dodge must be forced online enough OR policy fails open.
+        escalate_gaming_floor_satisfied: best_forced >= forced_target
+            && escalate_slash_rate >= DODGE_SLASH_FLOOR,
+        sliding_gaming_floor_satisfied: sliding_slash_rate >= DODGE_SLASH_FLOOR,
+        gaming_floor_baseline_period: best_period,
+    }
+}
+
+fn transient_false_slash_sliding(params: &Round1Params) -> f64 {
+    let (_, trans_slide) =
+        paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
+    stats_from(&trans_slide).false_slashes as f64 / params.seeds as f64
+}
+
+pub fn run_sliding_m_sweep(params: &Round1Params) -> Vec<SlidingMSweepPoint> {
+    let max_span = max_single_outage_baselines(params.outage.true_law, params.baseline_period);
+    let mut out = Vec::new();
+    for m in 2..=12_usize {
+        let n = m + 2;
+        let mut p = params.clone();
+        p.miss_threshold = m;
+        p.sliding_window_epochs = n;
+        let fs = transient_false_slash_sliding(&p);
+        out.push(SlidingMSweepPoint {
+            miss_threshold: m,
+            window_epochs: n,
+            transient_false_slash_rate: fs,
+            max_single_outage_baselines: max_span,
+            above_outage_span: (m as u32) > max_span,
+        });
+    }
+    out
+}
+
+fn best_tuned_sliding_transient(
+    sweep: &[SlidingMSweepPoint],
+) -> Option<(usize, usize, f64)> {
+    sweep
+        .iter()
+        .filter(|pt| pt.above_outage_span)
+        .min_by(|a, b| {
+            a.transient_false_slash_rate
+                .partial_cmp(&b.transient_false_slash_rate)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|pt| {
+            (
+                pt.miss_threshold,
+                pt.window_epochs,
+                pt.transient_false_slash_rate,
+            )
+        })
+}
+
+fn baseline_timing_note(baseline_period: u32) -> BaselineTimingNote {
+    BaselineTimingNote {
+        sim_baseline_model: format!(
+            "settlement-epoch grid: baseline every {baseline_period} epoch(s) (deterministic)"
+        ),
+        production_baseline_model: "gate-2 §3.4: H_fire beacon from block_hash(H_seal) — unpredictable at H_open"
+            .into(),
+        production_unpredictable: true,
+    }
 }
 
 pub fn run_u_sweep(seeds: u32, epochs: usize) -> Vec<USlashPoint> {
@@ -625,43 +779,57 @@ pub fn run_u_sweep(seeds: u32, epochs: usize) -> Vec<USlashPoint> {
 }
 
 fn decide(
-    gaming_ok: bool,
+    dodge: &DodgeStats,
     binding: &BindingAnalysis,
     volume_ratio: f64,
     slash_delta: i32,
     transient: &TransientStats,
 ) -> DecisionGate {
-    if !gaming_ok {
+    let sliding_catches_dodge = dodge.sliding_gaming_floor_satisfied;
+    let escalate_allows_dodge = dodge.escalate_slash_rate < DODGE_SLASH_FLOOR;
+
+    if !sliding_catches_dodge {
         return DecisionGate {
-            gaming_floor_satisfied: false,
+            sliding_catches_dodge: false,
+            escalate_allows_dodge,
             volume_binding: binding.volume_binding,
             latency_binding: binding.latency_binding,
             fsm_justified: false,
             sliding_window_preferred: false,
             volume_ratio,
             slash_latency_delta_epochs: slash_delta,
-            rationale: "pin b_min first — gaming floor not met (recheck width / baseline cadence)"
-                .into(),
+            rationale: format!(
+                "sliding dodge slash {:.3} < {DODGE_SLASH_FLOOR} — enforcement leg reopens",
+                dodge.sliding_slash_rate
+            ),
         };
     }
 
     if !binding.volume_binding && !binding.latency_binding {
         return DecisionGate {
-            gaming_floor_satisfied: true,
+            sliding_catches_dodge: true,
+            escalate_allows_dodge,
             volume_binding: false,
             latency_binding: false,
             fsm_justified: false,
             sliding_window_preferred: true,
             volume_ratio,
             slash_latency_delta_epochs: slash_delta,
-            rationale: "neither challenge volume nor slash-latency binding — FSM unjustified; sliding-window wins"
-                .into(),
+            rationale: if escalate_allows_dodge {
+                format!(
+                    "volume/latency non-binding; sliding slashes dodge ({:.3}) — escalation dodge evades ({:.3})",
+                    dodge.sliding_slash_rate, dodge.escalate_slash_rate
+                )
+            } else {
+                "neither volume nor latency binding — FSM unjustified; sliding-window wins".into()
+            },
         };
     }
 
-    let transient_escalate_wins = transient.escalate_false_slash_rate
-        < transient.sliding_false_slash_rate * 0.5;
+    let tuned_sliding = transient.sliding_tuned_false_slash_rate;
+    let transient_escalate_wins = transient.escalate_false_slash_rate < tuned_sliding * 0.5;
     let fsm_justified = binding.volume_binding
+        && !escalate_allows_dodge
         && transient_escalate_wins
         && volume_ratio < 0.85
         && transient.tail_misspecification_gap < 0.15;
@@ -669,26 +837,107 @@ fn decide(
     let sliding_window_preferred = !fsm_justified;
     let rationale = if fsm_justified {
         format!(
-            "volume binding + escalate false-slash {:.3} vs {:.3} with volR={volume_ratio:.3}",
-            transient.escalate_false_slash_rate, transient.sliding_false_slash_rate
+            "volume binding + escalate fs {:.3} vs tuned sliding {:.3}, volR={volume_ratio:.3}",
+            transient.escalate_false_slash_rate, tuned_sliding
         )
-    } else if !transient_escalate_wins {
-        "sliding-window false-slashes transients less — no FSM edge on separation".into()
+    } else if escalate_allows_dodge {
+        format!(
+            "escalation dodge evades (slash {:.3}); sliding catches ({:.3}); tuned fs {:.3} vs esc {:.3}",
+            dodge.escalate_slash_rate,
+            dodge.sliding_slash_rate,
+            tuned_sliding,
+            transient.escalate_false_slash_rate
+        )
+    } else if volume_ratio > 1.0 {
+        format!(
+            "volR={volume_ratio:.3} > 1 at L16 u_eff — escalation re-polices honest/down Ps; tuned fs {:.3}",
+            tuned_sliding
+        )
     } else {
         format!(
-            "relative trade only: volR={volume_ratio:.3}, tail gap {:.3}, Δslash={slash_delta}",
-            transient.tail_misspecification_gap
+            "no FSM edge: tuned sliding fs {:.3}, esc fs {:.3}, volR={volume_ratio:.3}",
+            tuned_sliding,
+            transient.escalate_false_slash_rate
         )
     };
 
     DecisionGate {
-        gaming_floor_satisfied: true,
+        sliding_catches_dodge: true,
+        escalate_allows_dodge,
         volume_binding: binding.volume_binding,
         latency_binding: binding.latency_binding,
         fsm_justified,
         sliding_window_preferred,
         volume_ratio,
         slash_latency_delta_epochs: slash_delta,
+        rationale,
+    }
+}
+
+fn build_policy_pin(
+    default: &Round1Result,
+    m_sweep: &[SlidingMSweepPoint],
+    binding: &BindingAnalysis,
+) -> PolicyPin {
+    let mut rationale = Vec::new();
+    rationale.push(
+        "sliding-window: every baseline miss counts toward m-of-n — no predictable recheck surface"
+            .into(),
+    );
+    rationale.push(format!(
+        "mostly-offline dodge-P: escalate slash {:.3}, sliding slash {:.3}",
+        default.dodge.escalate_slash_rate, default.dodge.sliding_slash_rate
+    ));
+    if default.dodge.escalate_slash_rate < DODGE_SLASH_FLOOR {
+        rationale.push(
+            "escalation structurally misses dodge — recheck follows baseline miss and is gameable"
+                .into(),
+        );
+    }
+    if let Some((m, n, fs)) = best_tuned_sliding_transient(m_sweep) {
+        rationale.push(format!(
+            "tuned sliding m={m} n={n} above single-outage span → transient fs {fs:.3} (latency cost non-binding)"
+        ));
+        rationale.push(format!(
+            "fair transient compare: esc {:.3} vs tuned slide {:.3}",
+            default.transient.escalate_false_slash_rate, fs
+        ));
+    }
+    if default.honest.challenge_volume_ratio > 1.0 {
+        rationale.push(format!(
+            "volR {:.3} at L16 u_eff — escalation costs more on frequently-down honest Ps",
+            default.honest.challenge_volume_ratio
+        ));
+    }
+    if !binding.volume_binding {
+        rationale.push(format!(
+            "challenge block-space {:.4} of SEB budget — not binding",
+            binding.volume_fraction_of_block_budget
+        ));
+    }
+    rationale.push(
+        "production baseline: H_fire beacon-unpredictable (gate-2 §3.4) — shared anti-gaming prerequisite"
+            .into(),
+    );
+
+    let (chosen_m, chosen_n, tuned_fs) = best_tuned_sliding_transient(m_sweep).unwrap_or((
+        default.params.miss_threshold,
+        default.params.sliding_window_epochs,
+        default.transient.sliding_tuned_false_slash_rate,
+    ));
+
+    PolicyPin {
+        chosen_policy: "sliding-window m-of-n".into(),
+        chosen_miss_threshold: chosen_m,
+        chosen_window_epochs: chosen_n,
+        max_single_outage_baselines: default.transient.max_single_outage_baselines,
+        sliding_dodge_slash_rate: default.dodge.sliding_slash_rate,
+        escalate_dodge_slash_rate: default.dodge.escalate_slash_rate,
+        sliding_catches_dodge: default.dodge.sliding_gaming_floor_satisfied,
+        tuned_sliding_transient_false_slash: tuned_fs,
+        escalate_transient_false_slash: default.transient.escalate_false_slash_rate,
+        volume_binding: binding.volume_binding,
+        volume_ratio_at_l16: default.honest.challenge_volume_ratio,
         rationale,
     }
 }
@@ -704,10 +953,14 @@ pub fn run_round1(params: &Round1Params) -> Round1Result {
     let (trans_esc, trans_slide) =
         paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
     let (dead_esc, dead_slide) = paired_for_truth(GroundTruth::NotServing, params, 0x4445_4144_5F50);
-    let (dodge_esc, _) = paired_for_truth(GroundTruth::DodgeServing, params, 0x444F_4447_455F);
+    let dodge = dodge_stats(params);
 
     let honest = paired_stats(&honest_esc, &honest_slide);
     let not_serving = paired_stats(&dead_esc, &dead_slide);
+
+    let m_sweep = run_sliding_m_sweep(params);
+    let max_span = max_single_outage_baselines(params.outage.true_law, params.baseline_period);
+    let tuned = best_tuned_sliding_transient(&m_sweep);
 
     let trans_esc_stats = stats_from(&trans_esc);
     let trans_slide_stats = stats_from(&trans_slide);
@@ -724,26 +977,17 @@ pub fn run_round1(params: &Round1Params) -> Round1Result {
     let transient = TransientStats {
         escalate_false_slash_rate: trans_esc_stats.false_slashes as f64 / params.seeds as f64,
         sliding_false_slash_rate: trans_slide_stats.false_slashes as f64 / params.seeds as f64,
+        sliding_tuned_false_slash_rate: tuned.map(|(_, _, fs)| fs).unwrap_or_else(|| {
+            trans_slide_stats.false_slashes as f64 / params.seeds as f64
+        }),
+        tuned_miss_threshold: tuned.map(|(m, _, _)| m).unwrap_or(params.miss_threshold),
+        max_single_outage_baselines: max_span,
         nominal_bound_exponential_only: nominal,
         tail_misspecification_gap: tail_gap,
     };
 
-    let dodge_slash_rate =
-        dodge_esc.iter().filter(|o| o.slashed).count() as f64 / dodge_esc.len() as f64;
-    let forced_online_fraction = dodge_esc.iter().map(|o| o.forced_online_epochs).sum::<u32>()
-        as f64
-        / (dodge_esc.len() as f64 * params.epochs as f64);
-    let (gaming_floor_baseline_period, gaming_ok, _) = gaming_floor_baseline(params);
-
-    let dodge = DodgeStats {
-        escalate_slash_rate: dodge_slash_rate,
-        forced_online_fraction,
-        gaming_floor_baseline_period,
-        gaming_floor_satisfied: gaming_ok,
-    };
-
     let decision = decide(
-        gaming_ok,
+        &dodge,
         &binding,
         honest.challenge_volume_ratio,
         not_serving.slash_latency_delta_epochs,
@@ -768,7 +1012,7 @@ pub fn run_round1(params: &Round1Params) -> Round1Result {
             sliding_window_epochs: params.sliding_window_epochs,
             miss_threshold: params.miss_threshold,
             baseline_period: params.baseline_period,
-            gaming_floor_baseline_period,
+            gaming_floor_baseline_period: dodge.gaming_floor_baseline_period,
         },
         honest,
         transient,
@@ -832,7 +1076,16 @@ pub fn build_round1_scenarios() -> Vec<Round1Params> {
         out.push(p);
     }
 
-    for (label, m, n) in [("m2n3", 2, 3), ("m2n5", 2, 5), ("m3n7", 3, 7)] {
+    for (label, m, n) in [
+        ("m2n3", 2, 3),
+        ("m2n5", 2, 5),
+        ("m3n7", 3, 7),
+        ("m4n6", 4, 6),
+        ("m5n7", 5, 7),
+        ("m6n8", 6, 8),
+        ("m8n10", 8, 10),
+        ("m10n12", 10, 12),
+    ] {
         let mut p = base(exp, exp);
         p.name = format!("l14b_confirm_window_{label}");
         p.axis = "l14b_confirm_window".into();
@@ -853,16 +1106,35 @@ pub fn build_round1_scenarios() -> Vec<Round1Params> {
 }
 
 pub fn run_full_report(axis_prefix: Option<&str>) -> FailureConfirmationReport {
-    let scenarios: Vec<_> = build_round1_scenarios()
+    let all_params = build_round1_scenarios();
+    let default_params = all_params
+        .iter()
+        .find(|p| p.name == "l14b_confirm_default")
+        .cloned()
+        .expect("l14b_confirm_default scenario");
+    let m_sweep = run_sliding_m_sweep(&default_params);
+
+    let scenarios: Vec<_> = all_params
         .into_iter()
         .filter(|p| axis_prefix.is_none_or(|prefix| p.axis.starts_with(prefix)))
         .map(|p| run_round1(&p))
         .collect();
+
     let binding = binding_analysis(1, 3);
     let u_sweep = run_u_sweep(256, 500);
+    let default_result = scenarios
+        .iter()
+        .find(|r| r.name == "l14b_confirm_default")
+        .cloned()
+        .unwrap_or_else(|| run_round1(&default_params));
+    let policy_pin = build_policy_pin(&default_result, &m_sweep, &binding);
+
     FailureConfirmationReport {
         binding,
+        baseline_timing: baseline_timing_note(1),
         u_sweep,
+        sliding_m_sweep: m_sweep,
+        policy_pin,
         scenarios,
     }
 }
@@ -944,5 +1216,58 @@ mod tests {
         let low = sweep.first().unwrap();
         let high = sweep.last().unwrap();
         assert!(low.escalate_slash_probability >= high.escalate_slash_probability);
+    }
+
+    #[test]
+    fn sliding_catches_dodge_escalation_evades() {
+        let exp = DownDurationLaw::exponential(2.0);
+        let p = Round1Params {
+            name: "dodge".into(),
+            axis: "test".into(),
+            epochs: 500,
+            seeds: 256,
+            outage: OutageProcess::l16_default(exp),
+            assumed_law: exp,
+            recheck_quantile: 0.95,
+            recheck_window_width_epochs: 3,
+            sliding_window_epochs: 5,
+            miss_threshold: 2,
+            baseline_period: 1,
+            gaming_baseline_sweep: vec![1, 2, 3, 5],
+        };
+        let r = run_round1(&p);
+        assert!(
+            r.dodge.sliding_slash_rate >= DODGE_SLASH_FLOOR,
+            "sliding should slash mostly-offline dodge-P"
+        );
+        assert!(
+            r.dodge.escalate_slash_rate < DODGE_SLASH_FLOOR,
+            "escalation dodge should surface for recheck and evade"
+        );
+    }
+
+    #[test]
+    fn tuned_sliding_transient_beats_untuned_m2() {
+        let exp = DownDurationLaw::exponential(2.0);
+        let p = Round1Params {
+            name: "tune".into(),
+            axis: "test".into(),
+            epochs: 500,
+            seeds: 512,
+            outage: OutageProcess::l16_default(exp),
+            assumed_law: exp,
+            recheck_quantile: 0.95,
+            recheck_window_width_epochs: 3,
+            sliding_window_epochs: 5,
+            miss_threshold: 2,
+            baseline_period: 1,
+            gaming_baseline_sweep: vec![1],
+        };
+        let r = run_round1(&p);
+        assert!(
+            r.transient.sliding_tuned_false_slash_rate
+                <= r.transient.sliding_false_slash_rate + 0.05,
+            "tuned m should not exceed untuned m=2 false-slash"
+        );
     }
 }

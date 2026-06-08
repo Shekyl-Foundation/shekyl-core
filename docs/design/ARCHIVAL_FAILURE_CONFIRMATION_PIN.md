@@ -1,8 +1,10 @@
 # Archival challenge policy — failure-confirmation pin (pre-implementation)
 
-**Status:** **Design pin (2026-06-08).** Records the escalate-on-failure + randomized
-recheck policy under evaluation. **Not** consensus-implemented; sim comparison vs
-sliding-window is the decision gate before any per-`P` confirmation FSM lands.
+**Status:** **Disposition pinned (2026-06-08).** Round-1 sim selects **sliding-window
+m-of-n** for post-miss scheduling at genesis. Escalate-on-failure + recheck window is
+**rejected** — predictable post-miss recheck is a dodge surface; per-`P` confirmation FSM
+is unjustified (volume, latency, gaming, reorg cost). **Not** consensus-implemented until
+gate-2 baseline + sliding tally wire lands.
 
 **Scope:** How epoch challenges are **scheduled** after a baseline miss — challenge volume
 on healthy archivers, transient-vs-durable separation, and the consensus-state cost of
@@ -123,17 +125,23 @@ Escalation adds a **per-`P` confirmation-sequence state machine** — reorg inte
 exactly the part of the system this project is most careful about
 ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) composite-key discipline).
 
-**Decision gate (pre-implementation).** Order of operations:
+**Decision gate (Round-1 closed).** Order of operations:
 
-1. **Pin `b_min`** (gaming floor on baseline cadence + recheck width).
-2. **Ask whether optimized resources bind** — absolute challenge block-space
-   (`N_market × shards_per_P × rate × vin / SEB`) and slash-latency (likely **non-binding**
-   when the foundation durability floor carries deterrence). If neither binds, **no**
-   `volume_ratio` justifies a consensus FSM; sliding-window wins outright.
-3. Only if binding: compare relative escalate vs sliding efficiency above `b_min`.
+1. **Dodge slash on both policies** — mostly-offline dodge-P: escalation dodge evades
+   (recheck follows miss, slash ≈ 0); sliding accumulates baseline misses → slash ≈ 1.
+   Production also requires **beacon-unpredictable** `H_fire` (gate-2 §3.4) so baselines
+   are not fixed-time gameable.
+2. **Binding check** — absolute block-space ≈ 0.8% of SEB at defaults (**not binding**);
+   slash-latency non-binding under foundation durability floor.
+3. **Fair transient compare** — sliding `m` tuned above single-outage span (p99 duration /
+   baseline interval); higher `m` cost is detection latency only (free when (2) holds).
+4. Escalation **rejected** additionally: `volR > 1` at L16 `u_eff` (honest Ps are
+   frequently-down → constant rechecks); recheck width has no sweet spot (wide `w` closes
+   dodge but reopens false-slash from secondary blips in window).
 
-Plausible outcome: volume and latency are not binding; FSM is unjustified regardless of
-adaptivity appeal.
+**Pinned policy:** sliding-window **m-of-n** with `m` above max single-transient baseline
+span (Round-1 default: **m=11, n=13** at L16 exponential outage, baseline every epoch).
+Enforces **not-durably-absent** with no confirmation FSM, no reorg surface, no dodge window.
 
 ---
 
@@ -146,13 +154,13 @@ Compare on the same outage process (exponential + fat-tail misspec scenarios):
    miss.
 2. **Sliding-window m-of-n** — baseline cadence; slash when `m` misses in window `n`.
 
-Report: **`P(slash)` vs honest `u` sweep** (not-durably-absent slope); realized false-slash
-and **tail gap** vs nominal `1−p` (exponential-only); `b_min` + width sweep; **binding
-analysis** (analytical block-space); relative `volR` only when binding.
+Report: **`P(slash)` vs honest `u` sweep**; **dodge slash escalate vs sliding**; **sliding
+`m` sweep** with `m` above outage span; tuned transient false-slash; **binding analysis**;
+`policy_pin` rationale block.
 
-**Round-1 landed (2026-06-08, revised).** `shekyl-staking-sim --failure-confirmation` —
-`failure_confirmation.rs`. JSON report includes `binding`, `u_sweep`, and `scenarios`.
-Consensus FSM remains gated on binding check + `b_min` + reorg/`Unbond` spec.
+**Round-1 landed (2026-06-08).** `shekyl-staking-sim --failure-confirmation` —
+`failure_confirmation.rs`. JSON: `policy_pin`, `sliding_m_sweep`, `baseline_timing`,
+`binding`, `u_sweep`, `scenarios`. **Outcome:** pin sliding-window; reject escalation FSM.
 
 ---
 
@@ -160,9 +168,9 @@ Consensus FSM remains gated on binding check + `b_min` + reorg/`Unbond` spec.
 
 | Item | Target | Notes |
 |------|--------|-------|
-| Per-`P` confirmation sequence in consensus | After sim decision gate | Reorg + `Unbond` mid-sequence spec required first |
-| `CHALLENGE_RESOLUTION_BLOCKS` / recheck quantile pin | After sim | T-A16 margin may couple to chosen `p` |
-| Sliding-window as fallback production shape | If sim shows thin escalation margin | Document disposition in gate-2 §6 |
+| Per-`P` confirmation sequence in consensus | **Rejected** (Round-1) | Escalation dodge-evasion + non-binding volume |
+| Sliding-window m-of-n in consensus | **Pinned** — implement | `m`/`n` from outage CDF at stressnet; gate-2 §6 |
+| `CHALLENGE_RESOLUTION_BLOCKS` / sliding `m` pin | After stressnet CDF | T-A16 margin; `m` above p99 single-outage span |
 
 Cross-reference: gate-2 §10 step 2 remainder (consensus hook + LMDB bit write) proceeds
 independently of this pin; challenge **scheduling** policy is orthogonal to vin verify.
@@ -176,3 +184,6 @@ independently of this pin; challenge **scheduling** policy is orthogonal to vin 
 - **2026-06-08 (rev):** Residual-life window start + width `w`; tail-misspec robustness;
   `b_min` → binding → relative trade decision order; stressnet outage-duration CDF as gating
   input; `P(slash)` vs `u` sweep.
+- **2026-06-08 (pin):** Sliding-window selected; escalation rejected on dodge surface
+  (esc slash 0, slide 1), non-binding volume, volR>1 at L16, tuned-m transient parity;
+  `policy_pin` in sim report.

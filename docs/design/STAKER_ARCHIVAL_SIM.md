@@ -2014,11 +2014,13 @@ cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_
 
 Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`,
 `l14b_confirm_tail_assumed_exp_true_lognormal`, `l14b_confirm_width_*`,
-`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Early read:** binding analysis shows
-challenge block-space is a negligible slice of the budget at default parameters → sliding-window
-wins on gate (2); escalate still separates transients better than sliding at L16 `u_eff` when
-gaming floor is met, but that edge does not justify consensus FSM cost without a binding
-resource.
+`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Round-1 outcome (pinned):** sliding-window **m-of-n** (`m=11,n=13` at L16 defaults —
+`m` above p99 single-outage span). Escalation **rejected**: dodge slash 0 vs sliding 1
+(predictable recheck surface); volume ≈0.8% SEB (**not binding**); `volR≈1.7` at L16
+(escalation re-polices frequently-down honest Ps); tuned transient fs **0.002** vs
+escalation **0.025** (unfair untuned `m=2` at 59% was apples-to-oranges). Report fields:
+`policy_pin`, `sliding_m_sweep`, paired `dEsc`/`dSl`, `baseline_timing` (production:
+`H_fire` beacon). Property enforced: **not-durably-absent** — no confirmation FSM.
 
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
