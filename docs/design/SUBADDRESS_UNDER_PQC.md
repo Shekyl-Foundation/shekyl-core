@@ -1884,7 +1884,7 @@ V4 removes hybrid KEM from addresses entirely.
 | **1 — Challenge pricing & priority** | **Closed** | End-state 4 dominated by 1 (R1-F1 inverts PQ premise; R1-F3 misattribution). **R1-F5 layer separation:** T1 is output-layer, not subaddress-layer; subaddresses serve J1/J2/J3. Option A fails J1 (R1-F2). T2 pin deferred to Round 2. View-tag (T6) elevated to same impossibility shape as R1-F2 (§4.4). Per-subaddress isolation counterexamples negative (R1-F6). |
 | **2 — Usability + End-state 5 + T2 pin** | **Closed** (R2-F2 + R2-F9) | **R2-F1** product principle. **End-state 5 minimal** **shipped decision.** **§4.6 T2 PINNED.** **R2-F2** + **R2-F9** closed 2026-05-31. **T6** → FA-6/FA-9. |
 | **3 — Spec closure** | **Closed** (2026-06-08) | 5-T + FA-11 wire; FA-2/FA-8 PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113); FA-6 wire + §8.7 disposition (`FA-6_CLOSEOUT.md`); FA-6b genesis wire pin (§5.4.1); account KDF deferred P3. |
-| **4 — Closure + forward propagation** | **Scoped** (§10.1) | Consensus-invisible doc sweep + adversarial record; **not** genesis wire. Parallel tracks outside this round: CT-2, 2A send-path, 2B stake. |
+| **4 — Closure + forward propagation** | **Scoped** (§10.1) | Consensus-invisible doc sweep + adversarial record; **not** genesis wire. Parallel tracks outside this round: 2A send-path, 2B stake. CT-2 Round 1 **closed** (2026-06-06, `CT2_ROUND1_CLOSEOUT.md`). |
 
 ### 10.1 Round 4 scope (defined 2026-06-08)
 
@@ -1911,7 +1911,7 @@ must not be confused with reopening genesis wire.
 | **FA-6 wire / §8.7 disposition** | Closed Round 3 — `FA-6_CLOSEOUT.md` |
 | **FA-6b hint re-key implementation** | V3.1 before multisig user-ship; wire pin closed Round 3 |
 | **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
-| **CT-2 Round 1** | Curve-tree client arc; ungates 2A DoD — `CT2_DRAIN_ORDER.md` |
+| **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
 | **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
 | **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
 
