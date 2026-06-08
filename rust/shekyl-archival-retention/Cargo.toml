@@ -1,0 +1,25 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-archival-retention"
+description = "Archival serve-credit challenge replay and segment Merkle path verification (docs/design/ARCHIVAL_RETENTION_GATE2.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+sha3 = { version = "0.10", default-features = false }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+
+# CT-4 assembled-path KAT cross-check (gate-2 §10 step 1).
+[dev-dependencies]
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
