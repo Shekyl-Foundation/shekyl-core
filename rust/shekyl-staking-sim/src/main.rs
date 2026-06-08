@@ -16,6 +16,7 @@
 
 mod agent;
 mod audit;
+mod fingerprint;
 mod metrics;
 mod model;
 mod participation;
@@ -243,6 +244,75 @@ fn print_summary(results: &[ScenarioResult]) {
         "{n_all}/{} scenarios pass all four sub-claims.",
         results.len()
     );
+
+    let ta1_rows: Vec<_> = results.iter().filter(|r| r.ta1.is_some()).collect();
+    if !ta1_rows.is_empty() {
+        eprintln!();
+        eprintln!("T-A1 / F1 retention fingerprint (PHASE_2B §7.7; SEB=10_000 default):");
+        eprintln!("  Pass: sample≥20 settlement epochs; pairwise dist≥0.10; lapse relink≤0.55.");
+        eprintln!("  Cosmetic row: overlap≥0.70 documents E-4 failure (same pattern, new id).");
+        eprintln!(
+            "{:<22} {:>4} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} | {:>4} {:>4} {:>4} {:>4} {:>4}",
+            "scenario",
+            "nE",
+            "days",
+            "dens",
+            "dist",
+            "auto",
+            "relnk",
+            "cosm",
+            "samp",
+            "dist",
+            "laps",
+            "cosm",
+            "F1",
+        );
+        for r in &ta1_rows {
+            let t = r.ta1.as_ref().unwrap();
+            let c = &t.claims;
+            eprintln!(
+                "{:<22} {:>4} {:>6.1} {:>6.3} {:>6.3} {:>6.3} {:>6.3} {:>6.3} | {:>4} {:>4} {:>4} {:>4} {:>4}",
+                r.name,
+                t.settlement_epochs,
+                t.settlement_epoch_days,
+                t.mean_bit_density,
+                t.mean_pairwise_distance,
+                t.half_run_autocorrelation,
+                t.lapse_relink_correlation.unwrap_or(-1.0),
+                t.cosmetic_overlap.unwrap_or(-1.0),
+                yn(c.sample_adequate),
+                yn(c.independent_distinguishable),
+                yn(c.lapse_decorrelates),
+                yn(c.cosmetic_relinks),
+                yn(c.f1_pass),
+            );
+        }
+        let hygiene = ta1_rows
+            .iter()
+            .find(|r| r.name == "ta1_f1_hygiene")
+            .and_then(|r| r.ta1.as_ref());
+        let no_hygiene = ta1_rows
+            .iter()
+            .find(|r| r.name == "ta1_f1_no_hygiene")
+            .and_then(|r| r.ta1.as_ref());
+        if let (Some(h), Some(n)) = (hygiene, no_hygiene) {
+            let dist_ratio = h.mean_pairwise_distance / n.mean_pairwise_distance.max(1e-9);
+            eprintln!(
+                "  Comparative (hygiene vs no_hygiene): dist {:.3} vs {:.3} ({:.1}×); lapse {:.3} vs {:.3}",
+                h.mean_pairwise_distance,
+                n.mean_pairwise_distance,
+                dist_ratio,
+                h.lapse_relink_correlation.unwrap_or(-1.0),
+                n.lapse_relink_correlation.unwrap_or(-1.0),
+            );
+        }
+        let f1_pass = hygiene.map(|t| t.claims.f1_pass).unwrap_or(false);
+        eprintln!();
+        eprintln!(
+            "F1 gate (ta1_f1_hygiene): {}",
+            if f1_pass { "PASS" } else { "FAIL" }
+        );
+    }
 }
 
 fn main() {

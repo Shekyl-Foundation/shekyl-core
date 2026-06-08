@@ -8,8 +8,13 @@
   [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat
   model (T-A*, G11 extended, F1/T-A1 gate); claim-era wargame → §7.A. §7.11: LMDB on `dev`
   verified (`m_properties` scalars, `already_generated_coins`, `pop_block` revert pattern;
-  bond wire greenfield). FSM retool substrate-verify row closed. **T-A1 sim still open**
-  (F1 final accept).
+  bond wire greenfield). FSM retool substrate-verify row closed.
+
+- **staking-sim: T-A1 F1 fingerprint instrument (2026-06-07).**
+  `rust/shekyl-staking-sim/src/fingerprint.rs`; axis `ta1_f1` (four scenarios). First run:
+  **F1 gate FAIL** at SEB=10_000 + hygiene defaults (pairwise dist 0.041 < 0.10; lapse
+  relink 0.93). Cosmetic E-4 failure mode confirmed. See
+  [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
   [`PHASE_2B_SECTION7_DRAFT.md`](design/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural

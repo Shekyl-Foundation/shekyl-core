@@ -2,7 +2,9 @@
 
 **Status:** **Landed (2026-06-07).** Spliced into
 [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7; claim-era wargame → §7.A.
-LMDB substrate verified on `dev` (§7.11). **T-A1 sim** remains open F1 gate.
+LMDB substrate verified on `dev` (§7.11). **T-A1 sim run (2026-06-07): FAIL** at
+SEB=10_000 + hygiene defaults — F1 final accept still blocked; see
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*T-A1*.
 
 **Authority chain:** [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-6;
 [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)

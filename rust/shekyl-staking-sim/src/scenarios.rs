@@ -9,6 +9,7 @@
 
 use crate::agent::{run_epoch, AgentParams};
 use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
+use crate::fingerprint::{Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
@@ -238,6 +239,24 @@ pub struct SimConfig {
     /// Depression per epoch of deep fetch latency in `u_eff = u_base / (1 + k·L)`.
     pub transport_u_k: f64,
 
+    /// **T-A1 / F1 retention fingerprint** (PHASE_2B §7.7). Records per-settlement-epoch
+    /// retention bits at `settlement_epoch_blocks` granularity. Off ⇒ inert.
+    pub ta1_model: bool,
+    /// Settlement epoch length in blocks (`SETTLEMENT_EPOCH_BLOCKS`; default 10_000).
+    pub settlement_epoch_blocks: u64,
+    /// Simulated chain advance per sim epoch (blocks).
+    pub blocks_per_sim_epoch: u64,
+    /// Actor forced into lapse window (hygiene decorrelation test).
+    pub ta1_lapse_actor: Option<usize>,
+    /// Settlement epoch index at which lapse begins.
+    pub ta1_lapse_at_settlement: u32,
+    /// Settlement epochs of forced deep idle during lapse.
+    pub ta1_lapse_span_settlement: u32,
+    /// After lapse, restore pre-lapse deep holdings (cosmetic rotation failure mode).
+    pub ta1_cosmetic_relink: bool,
+    /// Post-lapse identity for lapse decorrelation (models wallet rotation to new `P`).
+    pub ta1_rotation_actor: Option<usize>,
+
     // targets
     pub r_target_hot: f64,
     pub r_target_deep: f64,
@@ -390,6 +409,9 @@ pub struct ScenarioResult {
     pub series_deep_frac_under: Vec<f64>,
     pub series_gini_actor: Vec<f64>,
     pub series_changes: Vec<usize>,
+    /// T-A1 F1 fingerprint metrics when `ta1_model` is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ta1: Option<Ta1Metrics>,
 }
 
 fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
@@ -569,6 +591,23 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // `token_price` otherwise; consulted only when `flow_cost_fiat`.
     let mut tok_price = cfg.token_price;
 
+    let mut ta1 = if cfg.ta1_model {
+        Some(Ta1Recorder::new(
+            world.actors.len(),
+            world.shards.len(),
+            cfg.settlement_epoch_blocks,
+            cfg.blocks_per_sim_epoch,
+            cfg.deep_threshold,
+            cfg.ta1_lapse_actor,
+            cfg.ta1_lapse_at_settlement,
+            cfg.ta1_lapse_span_settlement,
+            cfg.ta1_cosmetic_relink,
+            cfg.ta1_rotation_actor,
+        ))
+    } else {
+        None
+    };
+
     for ep in 0..cfg.epochs {
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
@@ -617,8 +656,17 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             admit_entrants(&mut world, &pp);
         }
 
+        if let (Some(ref ta1_rec), Some(actor)) = (&ta1, cfg.ta1_lapse_actor) {
+            ta1_rec.apply_lapse_drop(&mut world, actor);
+            ta1_rec.apply_cosmetic_relink(&mut world, actor);
+        }
+
         let before = world.holdings.clone();
         let changes = run_epoch(&mut world, price, &ap, cfg.age_weight, &mut rng);
+
+        if let (Some(ref ta1_rec), Some(actor)) = (&ta1, cfg.ta1_lapse_actor) {
+            ta1_rec.apply_lapse_drop(&mut world, actor);
+        }
 
         // Oldest-band churn attribution (at the ages agents acted on this epoch).
         let mut old_changes = 0usize;
@@ -825,7 +873,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // rebuild. λ=0.25 ⇒ ~4-epoch trust horizon. Drives next epoch's servo + coupling.
         signal = 0.75 * signal + 0.25 * serving_metrics.deep_frac_under_target;
         series_fee_budget.push(rp.budget);
+
+        if let Some(ref mut rec) = ta1 {
+            rec.tick_epoch(&world);
+        }
     }
+
+    let ta1_metrics = ta1.map(|r| r.finalize(None));
 
     let total_held: usize = (0..world.actors.len())
         .map(|a| world.actor_shard_count(a))
@@ -1093,6 +1147,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         series_deep_frac_under,
         series_gini_actor,
         series_changes,
+        ta1: ta1_metrics,
     }
 }
 
@@ -1209,6 +1264,14 @@ fn baseline() -> SimConfig {
         transport_model: false,
         transport_u_base: 0.9,
         transport_u_k: 0.07,
+        ta1_model: false,
+        settlement_epoch_blocks: SEB_DEFAULT,
+        blocks_per_sim_epoch: 2000,
+        ta1_lapse_actor: None,
+        ta1_lapse_at_settlement: 0,
+        ta1_lapse_span_settlement: 0,
+        ta1_cosmetic_relink: false,
+        ta1_rotation_actor: None,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
         // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
@@ -2447,6 +2510,67 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         cc.axis = "gate4_fine_coloc".into();
         cc.bond_rate = rate;
         out.push(cc);
+    }
+
+    // --- T-A1 / F1 retention fingerprint (PHASE_2B §7.7 gate). Hygiene defaults =
+    // gate-4 lean pin (ρ=0.02, bond_rate=0.75, g=2) + L10 L2 + age-scaled duration
+    // (lean pin) + L16 transport + dynamic frontier churn. Settlement epoch pinned at
+    // SEB=10_000; 500 sim epochs × 2000 blocks/epoch = 1M blocks ⇒ 100 settlement epochs.
+    let ta1_hygiene_base = || {
+        let mut c = gate4_fine_base();
+        c.bond_rate = 0.75;
+        c.dynamic = true;
+        c.epoch_aging = 0.05;
+        c.epochs = 800;
+        c.churn_window = 120;
+        c.bond_dur_base = 2.0;
+        c.bond_dur_age_scale = 2.0;
+        c.fetch_latency_per_unit = 2.0;
+        c.transport_model = true;
+        c.ta1_model = true;
+        c.blocks_per_sim_epoch = 2000;
+        c.settlement_epoch_blocks = SEB_DEFAULT;
+        c.ta1_lapse_actor = Some(0);
+        c.ta1_rotation_actor = Some(1);
+        c.ta1_lapse_at_settlement = 30;
+        c.ta1_lapse_span_settlement = 15;
+        c.entry_per_epoch = 8;
+        c
+    };
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_f1_hygiene".into();
+        c.axis = "ta1_f1".into();
+        out.push(c);
+    }
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_f1_no_hygiene".into();
+        c.axis = "ta1_f1".into();
+        c.dynamic = false;
+        c.epoch_aging = 0.0;
+        c.endogenous = false;
+        c.fetch_latency_per_unit = 0.0;
+        c.bond_dur_base = 0.0;
+        c.bond_dur_age_scale = 0.0;
+        c.transport_model = false;
+        c.ta1_rotation_actor = None;
+        out.push(c);
+    }
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_f1_cosmetic".into();
+        c.axis = "ta1_f1".into();
+        c.ta1_cosmetic_relink = true;
+        c.ta1_rotation_actor = None;
+        out.push(c);
+    }
+    {
+        let mut c = ta1_hygiene_base();
+        c.name = "ta1_f1_seb_coarse".into();
+        c.axis = "ta1_f1".into();
+        c.settlement_epoch_blocks = 20_000;
+        out.push(c);
     }
 
     out
