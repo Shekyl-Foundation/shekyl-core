@@ -4,6 +4,14 @@
 
 ### Added
 
+- **crypto-pq / engine: primary claim derivation rename (FA-2 residue).**
+  `subaddress` → `output_claim`; `subaddress_derivation_scalar` →
+  `output_spend_offset_scalar`; `derive_primary_source_secrets_bundle`
+  hardcodes `PRIMARY_CLAIM_INDEX_LE`. Deleted public `SubaddressIndex`,
+  `subaddress_lookahead` (settings v2, prefs schema v2),
+  `AddressBookEntry::is_subaddress` (`BOOKKEEPING_BLOCK_VERSION` 5).
+  Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](design/PRIMARY_CLAIM_DERIVATION_RENAME.md).
+
 - **docs: gate-2 Round 1 on-demand serving obligation (2026-06-08).**
   [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) §0 — solved shape:
   affirmative serve-credit per epoch; leaf `ℓ` deterministic, `H_fire` beacon-sealed; no 24/7

@@ -1,8 +1,7 @@
 # Primary claim derivation — vocabulary and API cleanup
 
-**Status.** **Approved** (2026-06-07). **Implementation gated on FA-8
-(PR #113) landing on `dev`** — execute this work immediately after; do not
-start PR B while FA-8 is in flight.
+**Status.** **Landed** (2026-06-07). FA-8 (#113) prerequisite satisfied;
+implementation on branch `chore/primary-claim-rename`.
 
 **Binding decisions (do not relitigate).**
 
@@ -43,7 +42,7 @@ x  = ho + b + m₀                                                // signing / k
 
 At V3.0 **only `idx = 0`** is used on production paths. See
 `rust/shekyl-engine-core/src/engine/local_keys.rs` (FA-2 comment block and
-`derive_source_secrets_bundle`).
+`derive_primary_source_secrets_bundle`).
 
 ### Critical nuance (document once — do not “fix” back to Monero)
 
