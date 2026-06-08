@@ -1036,9 +1036,10 @@ the founder coinbase first drains into the tree at 61), so the window is
 **structural**, not
 chain-content-dependent. The regular-output `+10` rule (`SPENDABLE_AGE`) is
 unchanged and correct; the early-height empty window is specifically the
-coinbase case. CT-2's KAT confirms the `selene_hash_init` root at an early
-height (e.g. 5 and 59, both inside the `0..=60` window) against the live header.
-The first non-empty root at height 61 is a **single leaf wrapped into the
+coinbase case. CT-2's KAT pins the empty-window **boundary** at
+`last_empty=60` / `first_drain=61` (`recon_kat::empty_window_then_first_drain_at_61`)
+against `selene_hash_init` and the live header — not interior heights that leave
+the S2 off-by-one surface unasserted. The first non-empty root at height 61 is a **single leaf wrapped into the
 layer-1 Helios node** — the Selene leaf layer is never itself the root (every
 non-empty tree is depth ≥ 2; `CT2_DRAIN_ORDER.md` §5, `shekyl-fcmp::tree`).
 `empty_tree_is_a_ct2_boundary` keeps the chunk-empty/tree-empty distinction
