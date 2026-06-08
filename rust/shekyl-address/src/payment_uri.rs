@@ -32,7 +32,7 @@ pub struct PaymentUri {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PaymentUriError {
-    #[error("empty URI")]
+    #[error("missing or empty address in payment URI")]
     Empty,
     #[error("missing shekyl: scheme")]
     MissingScheme,

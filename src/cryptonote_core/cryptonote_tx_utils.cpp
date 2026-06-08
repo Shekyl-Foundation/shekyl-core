@@ -521,7 +521,7 @@ namespace cryptonote
           dst_entr.amount, static_cast<uint64_t>(output_index),
           dst_entr.original);
         CHECK_AND_ASSERT_MES(od.success, false,
-          "shekyl_construct_output failed for output " << output_index);
+          "construct_output_for_destination failed for output " << output_index);
 
         crypto::public_key out_key;
         memcpy(out_key.data, od.output_key, 32);

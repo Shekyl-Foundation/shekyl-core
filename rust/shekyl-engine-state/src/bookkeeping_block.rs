@@ -18,7 +18,7 @@
 //!
 //! Subaddress registry and per-index labels were deleted per
 //! `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.4 / §6.2. Payment requests
-//! (FA-8) payment requests replace subaddress-based receive UX.
+//! (FA-8) replace subaddress-based receive UX.
 
 use serde::{Deserialize, Serialize};
 

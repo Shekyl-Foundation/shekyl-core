@@ -527,8 +527,10 @@ ShekylOutputData shekyl_construct_output_labeled(
     uint64_t output_index,
     const uint8_t* label_plaintext);
 
-/// Label plaintext for a `shekyl:…?rid=` URI.
-/// Returns 0 on success; -3 on parse/encoding failure; -4 on null pointer.
+/// Label plaintext for a cooperative payment URI.
+/// When `cooperative_enabled` is false, writes the sentinel plaintext and
+/// returns 0 without parsing `uri`. When true, parses `shekyl:…?rid=…` and
+/// returns 0 on success; -3 on parse/encoding failure; -4 on null pointer.
 int shekyl_label_plaintext_for_payment_uri(
     const char* uri,
     bool cooperative_enabled,
