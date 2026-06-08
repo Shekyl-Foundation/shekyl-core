@@ -663,7 +663,7 @@ fn dodge_stats(params: &Round1Params) -> DodgeStats {
     for &period in &params.gaming_baseline_sweep {
         let mut p = params.clone();
         p.baseline_period = period;
-        let (esc, _) = paired_for_truth(GroundTruth::DodgeServing, &p, 0xD0D6_E_51D6);
+        let (esc, _) = paired_for_truth(GroundTruth::DodgeServing, &p, 0xD0D6_E51D6);
         let forced = esc.iter().map(|o| o.forced_online_epochs).sum::<u32>() as f64
             / (esc.len() as f64 * params.epochs as f64);
         if forced > best_forced {

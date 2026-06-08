@@ -17,8 +17,8 @@ use shekyl_crypto_pq::output::ml_kem_decap_prefilter_with_parsed_dk;
 fn bench_fa6_decap_prefilter_reject(c: &mut Criterion) {
     let (ek, dk) = ml_kem_768::KG::try_keygen().expect("keygen");
     let (_ss, ct) = ek.try_encaps().expect("encaps");
-    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = dk.into_bytes().try_into().expect("dk len");
-    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = ct.into_bytes().try_into().expect("ct len");
+    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = dk.into_bytes();
+    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = ct.into_bytes();
     let parsed_dk = MlKemDecapsKey::from_bytes(&dk_bytes).expect("parse dk");
     let dk_inner = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes).expect("parse dk inner");
     let ct_inner = ml_kem_768::CipherText::try_from_bytes(ct_bytes).expect("parse ct");
