@@ -3573,7 +3573,9 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
 /// Select the 8-byte label plaintext for a cooperative payment URI (FA-8c).
 ///
 /// Returns `0` on success and writes plaintext to `out_plaintext` (8 bytes).
-/// Returns `-4` on null pointer, `-3` on parse failure.
+/// Returns `-4` on null pointer (output untouched). On all other returns the
+/// output is the sentinel plaintext so C callers never read uninitialized bytes.
+/// Returns `-3` on UTF-8 / URI parse failure when `cooperative_enabled` is true.
 ///
 /// # Safety
 /// `uri` must be a valid NUL-terminated UTF-8 C string; `out_plaintext` must
@@ -3588,11 +3590,11 @@ pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
         return -4;
     }
     use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
+    let sentinel = sentinel_plaintext();
+    unsafe {
+        std::ptr::copy_nonoverlapping(sentinel.as_ptr(), out_plaintext, 8);
+    }
     if !cooperative_enabled {
-        let pt = sentinel_plaintext();
-        unsafe {
-            std::ptr::copy_nonoverlapping(pt.as_ptr(), out_plaintext, 8);
-        }
         return 0;
     }
     let cstr = unsafe { std::ffi::CStr::from_ptr(uri) };
