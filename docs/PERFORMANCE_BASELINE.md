@@ -797,17 +797,43 @@ Per [`docs/design/FA-6_VIEW_TAG_ML_KEM.md`](design/FA-6_VIEW_TAG_ML_KEM.md) §8.
 
 | Field | Value |
 |-------|-------|
-| Harness | `rust/shekyl-crypto-pq/src/bin/fa6_decap_prefilter_gate.rs` |
-| Pi capture | `scripts/bench/fa6_pi4_gate.sh smoke\|a\|b` |
-| Reference device | Raspberry Pi 4 Model B, 4 GB, active cooling (§8.2) |
+| Harness | `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs` (`--path fa6\|classical`, `--scenario smoke\|a\|b`) |
+| Pi capture | `scripts/bench/fa6_pi4_gate.sh <scenario> [fa6\|classical]` |
+| Reference device | Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (§8.2) |
 | Scenario A | 2,016,000 outputs, `T_ceil` = 45 s (clean ≤ 36 s) |
 | Scenario B | 525,960,000 outputs, `T_ceil` = 20 min (clean ≤ 16 min) |
 | `M_margin` | 20% |
 
-**Status (2026-06-07):** harness landed; **Pi capture pending**. Archive each run
-under `docs/benchmarks/fa6_decap_prefilter_pi4_<scenario>_<utc>.txt` and record
-`gate_outcome` here when A/B complete. End-to-end restore bench (§8.5.2) remains
-a separate follow-up.
+**Disposition (2026-06-08):** §8.7 **fail** on budget (A and B); **ship FA-6**
+at genesis; **§10.1 T6 waiver rejected** (classical counterfactual slower on
+Pi 4). See §8.7.1 in the FA-6 spec. End-to-end restore bench (§8.5.2) remains
+separate.
+
+Archive captures under
+`docs/benchmarks/fa6_decap_prefilter_pi4_<path>_<scenario>_<utc>.txt`.
+
+### Pi 4 (skl-pi, USB3 SSD, `rustc` 1.96.0 aarch64)
+
+| Path | Scenario | `T_meas` | ns/out | `RUSTFLAGS` | `gate_outcome` |
+|------|----------|----------|--------|-------------|----------------|
+| fa6 | smoke | — | 271,505 | default | informational |
+| fa6 | A | 550.4 s | 273,023 | default | **fail** |
+| fa6 | B | *(pending)* | ~273,000 (extrap.) | — | **fail** (expected) |
+| classical | smoke | — | 639,791 | `-C target-cpu=cortex-a72` | informational |
+| classical | A | 1,289.9 s | 639,834 | `-C target-cpu=cortex-a72` | **fail** |
+| classical | B | *(pending)* | ~640,000 (extrap.) | — | **fail** (expected) |
+
+Replace B *(pending)* rows with measured `T_meas` when overnight capture
+completes; disposition unchanged.
+
+### Laptop reference (le7560, x86_64, `rustc` 1.95.0 — ceilings not reachable)
+
+| Path | Scenario | `T_meas` | ns/out | `RUSTFLAGS` | vs classical |
+|------|----------|----------|--------|-------------|--------------|
+| fa6 | A | 127.6 s | 63,315 | default | faster |
+| fa6 | A | 151.4 s | 75,123 | `-C target-cpu=native` | faster |
+| classical | A | 166.7 s | 82,679 | default | — |
+| classical | A | 171.3 s | 84,976 | `-C target-cpu=native` | — |
 
 ## Cross-references
 

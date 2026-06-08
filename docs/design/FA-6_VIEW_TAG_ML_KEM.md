@@ -2,13 +2,15 @@
 
 **Status.** Specification reviewed (2026-06-02): §11 S1–S4, S6–S9 signed; **S5
 ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§3.1 / FA-6b wire locks re-verified
-2026-06-07** (§3.1.1, §5.4.1). **§8.7 outcome pending** — harness landed
-(`fa6_decap_prefilter_gate`, §8.5.1); Pi 4 A/B capture selects pre-written §10
-branch. **Disposition:** adopt at
-V3.0 genesis — re-key the on-wire 1-byte pre-filter from classical
-(`x25519_ss`) to hybrid-leg (`ml_kem_ss`). **Implementation:** separate PR
-after spec review; not bundled with FA-11 (`enc_label` wire) or subaddress
-removal (FA-2).
+2026-06-07** (§3.1.1, §5.4.1). **§8.7 outcome recorded (2026-06-08):** **fail**
+on §8.4 budget (scenarios A and B); **ship FA-6** at genesis per §10 (T6 closed
+on verified §3.1 account path). **§10.1 T6 waiver rejected** — Pi 4 classical
+counterfactual is slower than FA-6, not faster (§8.7.1). Post-genesis perf
+(birthday / checkpointing, faster ML-KEM decap within `fips203` pin) is
+wire-preserving follow-up, not a waiver. **Disposition:** adopt at V3.0 genesis —
+re-key the on-wire 1-byte pre-filter from classical (`x25519_ss`) to hybrid-leg
+(`ml_kem_ss`). **Implementation:** separate PR after spec review; not bundled
+with FA-11 (`enc_label` wire) or subaddress removal (FA-2).
 
 **Naming discipline.** APIs and HKDF symbols use **`view_tag_prefilter`** —
 the **role** (pre-decap filter byte), not the derivation implementation.
@@ -784,6 +786,35 @@ For each scenario, let `T_meas` = measured wall-clock, `T_ceil` = §8.4 ceiling.
 | **Marginal pass** | `T_ceil × (1 − M_margin) < T_meas ≤ T_ceil` | **Not** a silent green. Requires **margin-acceptance record** on file (same formality as §10.1): states measured time, ceiling, `M_margin`, `N_outputs` / `O_per_block` pinned, and that thin headroom is **consciously accepted** because chain growth past horizon may exceed budget without fork-free remedy. Security + product sign-off. |
 | **Fail** | `T_meas > T_ceil` | **Not** “defer FA-6.” Choose §10: ship FA-6 (accept cost) **or** §10.1 T6 waiver. |
 
+#### 8.7.1 Recorded outcome (2026-06-08)
+
+Micro gate (§8.5.1) on reference device **skl-pi** (Pi 4 Model B, 4 GB, active
+cooling, USB3 SSD host, wallet-only). Harness:
+`rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs` with
+`--path fa6|classical`; Pi capture via `scripts/bench/fa6_pi4_gate.sh`. Full
+matrix in `PERFORMANCE_BASELINE.md` §FA-6.
+
+| Host | Path | Scenario | `T_meas` | ns/out | `T_ceil` | `gate_outcome` |
+|------|------|----------|----------|--------|----------|----------------|
+| skl-pi | fa6 | smoke | — | 271,505 | — | informational |
+| skl-pi | fa6 | A | 550.4 s | 273,023 | 45 s | **fail** |
+| skl-pi | fa6 | B | *(pending capture)* | ~273,000 (extrap. from A) | 20 min | **fail** (expected) |
+| skl-pi | classical | smoke | — | 639,791 | — | informational |
+| skl-pi | classical | A | 1,289.9 s | 639,834 | 45 s | **fail** |
+| skl-pi | classical | B | *(pending capture)* | ~640,000 (extrap. from A) | 20 min | **fail** (expected) |
+
+Classical counterfactual captures used `RUSTFLAGS=-C target-cpu=cortex-a72`
+per §8.2; FA-6 scenario A used default `RUSTFLAGS` on Pi (ratio ~2.3× still
+decisive). Laptop (**le7560**, x86_64) scenario A also exceeds ceilings on
+both paths; FA-6 remains faster than classical with matched `native` flags —
+§8.4 pins are not reachable on tested hardware.
+
+**Disposition (fail branch):** **Ship FA-6** (§10). §8.7 is a **budget fail**,
+not a T6 wire verdict. **§10.1 rejected** — waiver assumed “fast classical,
+slow PQ”; measurements invert this on Pi 4. When scenario B capture completes,
+update `T_meas` / ns/out in `PERFORMANCE_BASELINE.md` only; disposition
+unchanged.
+
 Both scenarios A and B must be **clean pass** for an unqualified FA-6 merge.
 **One marginal pass** ⇒ margin-acceptance record **before** merge (genesis
 irreversibility: a 96%-of-budget pass is a decision, not a default).
@@ -824,6 +855,13 @@ must be equally deliberate** so neither is the path of least resistance.
 | **Ship FA-6 with marginal pass** | At or under ceiling but below `M_margin` headroom (§8.7). | **Margin-acceptance record** (§10.2) — not a silent merge. |
 
 ### 10.1 T6 waiver document (required if bench fails and fast-sync wins)
+
+**Disposition (2026-06-08): REJECTED.** §8.7 fail does **not** authorize this
+branch. Pi 4 counterfactual (`--path classical`, §8.7.1) is **slower** than FA-6
+at equal `N_outputs`; the “sync wall-clock outweighs T6” tradeoff does not
+apply. Reopen only if §8.5 data on Pi 4 shows FA-6 strictly slower than
+classical at matched `RUSTFLAGS` **and** product/security signs the waiver per
+(1)–(4) below.
 
 If §8.4 is exceeded and the project chooses **not** to ship FA-6 at genesis,
 the waiver is a **named artifact** (section in `AUDIT_SCOPE.md` or
@@ -881,8 +919,8 @@ requires §8.7 against §11.1 pins when benches are run.
 | S2 | §3.1 **Verify** rows closed — §3.1.1 re-audit 2026-06-07 post–PR #101 | ✅ | `view_tag` re-keyed (`derive_view_tag_prefilter` post-decap); hybrid tags verified; FA-6b row → §5.4.1. |
 | S3 | HKDF constants §4.2 + **domain separation** §4.5 | ✅ | Constants pinned §4.2; distinctness table + one-byte PRF argument §4.5 (not TBD). |
 | S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ✅ | Leg-swap order; `view_tag_combined` internal only — no scan gate. |
-| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 bench outcome still pending. |
-| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | Machinery ratified; branch choice = §8.7 outcome vs S5 numbers (not pre-selected). |
+| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 recorded fail (2026-06-08). |
+| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | **Ship FA-6** selected; §10.1 waiver rejected per §8.7.1 counterfactual. |
 | S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ✅ | Account path only; multisig hints separate (§2.2, §5.1). |
 | S8 | Decap totality / fuzz §4.9, §6.4; §6.5 universal-decap wipe | ✅* | *§6.4/§6.5 merge gates: decap totality on adversarial CT + `ml_kem_ss` wipe on tag-mismatch reject (`output.rs` tests). |
 | S9 | FA-9 owner for propagation PR | ✅ | **Rick Dawson**, ClockWorX LLC. |
@@ -915,7 +953,7 @@ parallel; they do **not** set these pins.
 |------|------|
 | **Implementation PR** | After S5 artifact filed and S5 row → ✅ (PR #101) |
 | **§8.5.1 gate binary** | `fa6_decap_prefilter_gate` — Pi 4 capture selects §8.7 branch |
-| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) — **impl merged; §8.7 outcome open** |
+| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) — **impl merged; §8.7 fail → ship FA-6 (2026-06-08)** |
 | **Re-review** | Implementation deltas only — section-scoped |
 
 ### 11.3 Implementation checklist (blind spots — ranked)

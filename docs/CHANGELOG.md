@@ -5,11 +5,12 @@
 ### Added
 
 - **crypto-pq: FA-6 §8.5.1 decap pre-filter gate harness.**
-  `fa6_decap_prefilter_gate` binary (scenarios smoke / a / b) and criterion
-  smoke bench `fa6_decap_prefilter`; Pi capture script
-  `scripts/bench/fa6_pi4_gate.sh`. §3.1.1 + FA-6b §5.4.1 verification records
-  updated in `docs/design/FA-6_VIEW_TAG_ML_KEM.md`. §8.7 outcome still pending
-  Pi 4 A/B capture.
+  `fa6_decap_prefilter_gate` example (`--path fa6|classical`, scenarios
+  smoke / a / b), classical counterfactual derivation, criterion smoke bench
+  `fa6_decap_prefilter`; Pi capture script `scripts/bench/fa6_pi4_gate.sh`.
+  §8.7 recorded **fail** on §8.4 budget (2026-06-08): ship FA-6 at genesis;
+  §10.1 T6 waiver rejected (Pi classical path slower than FA-6). Matrix in
+  `docs/PERFORMANCE_BASELINE.md` §FA-6; Pi scenario B capture pending.
 - **archival: serve-credit consensus integration test (gate-2 §10 step 3).**
   `archival_serve_credit_integration.cpp` seeds in-memory archival substrate from KAT fixture
   `integration` block (CT-2 opening + epoch-0 challenge geometry) and exercises
