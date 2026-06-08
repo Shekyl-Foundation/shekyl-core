@@ -1981,6 +1981,27 @@ fetch-on-demand to answer a challenge it can't otherwise serve — this sets the
 that a pure read-credit cannot go below) are post-testnet / gate-7 empirics. L14 fixes the
 *shape* — oversight ∝ unread-tail, slash-primary, challenge-top-up — not the live cadence.
 
+### L14b — failure-confirmation scheduling (design pin; sim-gated)
+
+**Pin:** [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
+
+After a baseline epoch challenge **miss**, consensus may escalate scrutiny with a
+**randomized near-term recheck** (delay from the L16 outage-duration CDF quantile) rather than
+fixed-cadence re-policing of every healthy `P`. This strictly dominates fixed cadence on
+challenge volume and collapses the `(cadence, grace, bar)` sweep to "fit recheck to outage
+CDF."
+
+**Enforcement claim:** policy certifies **not-durably-absent**, not a reachability SLA —
+mediocre `u` passes most baselines untested by design.
+
+**Decision gate:** sim must compare escalate-on-failure vs **sliding-window m-of-n** on
+challenge volume, false-slash vs quantile `p`, and **gaming-resistance floor** on baseline
+cadence (recheck-surfacing dodge) before a per-`P` confirmation FSM lands in consensus.
+Escalation trades faster durable-failure detection for sequence state + reorg surface;
+sliding-window may capture ~90% of the benefit statelessly.
+
+**Not in scope for current gate-2 wire PR** — sim work follows deserializer stability.
+
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
 L15 is the first layer that scores the property users actually need — *retrieval* (≥1 holder
