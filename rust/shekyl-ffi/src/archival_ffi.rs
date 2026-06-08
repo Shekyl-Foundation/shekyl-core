@@ -78,9 +78,9 @@ pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
     settlement_epoch_close_height(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
 }
 
-fn map_verify_error(err: shekyl_archival_retention::VerifyError) -> u8 {
+fn map_verify_error(err: &shekyl_archival_retention::VerifyError) -> u8 {
     use shekyl_archival_retention::VerifyError;
-    match err {
+    match *err {
         VerifyError::PathTooShallow => SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW,
         VerifyError::LeafNotInOpening => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING,
         VerifyError::SubrootMismatch => SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH,
@@ -88,7 +88,7 @@ fn map_verify_error(err: shekyl_archival_retention::VerifyError) -> u8 {
     }
 }
 
-fn map_wire_error(_err: WireError) -> u8 {
+fn map_wire_error(_err: &WireError) -> u8 {
     SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
 }
 
@@ -167,14 +167,7 @@ pub extern "C" fn shekyl_archival_challenge_fire_height(
     let pid = unsafe { std::slice::from_raw_parts(p_id, 32) };
     let mut p = [0u8; 32];
     p.copy_from_slice(pid);
-    challenge_fire_height(
-        h_open,
-        h_close,
-        &hash,
-        &p,
-        shard_id,
-        settlement_epoch,
-    )
+    challenge_fire_height(h_open, h_close, &hash, &p, shard_id, settlement_epoch)
 }
 
 /// Verify vin payload bytes (after the type tag) for steps 4–9 of gate-2 §5.3.
@@ -207,7 +200,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     let payload = unsafe { std::slice::from_raw_parts(vin_payload_ptr, vin_payload_len) };
     let response = match ArchivalServeCreditResponse::read_payload(&mut Cursor::new(payload)) {
         Ok(r) => r,
-        Err(e) => return map_wire_error(e),
+        Err(e) => return map_wire_error(&e),
     };
 
     if response.settlement_epoch != ctx.settlement_epoch {
@@ -224,7 +217,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
         response.settlement_epoch,
         ctx.segment_leaf_count,
     ) {
-        return map_verify_error(e);
+        return map_verify_error(&e);
     }
 
     let h_open = settlement_epoch_open_height(response.settlement_epoch);
@@ -262,7 +255,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
         &response.path,
         &response.segment_subroot_rk,
     ) {
-        return map_verify_error(e);
+        return map_verify_error(&e);
     }
 
     let preimage = response.signature_preimage();

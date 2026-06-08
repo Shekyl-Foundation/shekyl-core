@@ -58,16 +58,8 @@ impl PartialEq for ArchivalServeCreditResponse {
             && self.leaf_index_in_segment == other.leaf_index_in_segment
             && self.leaf_bytes == other.leaf_bytes
             && self.path == other.path
-            && self
-                .hybrid_signature
-                .to_canonical_bytes()
-                .ok()
-                .as_deref()
-                == other
-                    .hybrid_signature
-                    .to_canonical_bytes()
-                    .ok()
-                    .as_deref()
+            && self.hybrid_signature.to_canonical_bytes().ok().as_deref()
+                == other.hybrid_signature.to_canonical_bytes().ok().as_deref()
     }
 }
 
@@ -117,10 +109,7 @@ fn write_fixed32<W: Write>(w: &mut W, bytes: &[u8; 32]) -> io::Result<()> {
     w.write_all(bytes)
 }
 
-fn write_branch_layers<W: Write>(
-    w: &mut W,
-    layers: &[Vec<[u8; 32]>],
-) -> Result<(), WireError> {
+fn write_branch_layers<W: Write>(w: &mut W, layers: &[Vec<[u8; 32]>]) -> Result<(), WireError> {
     write_varint(&layers.len(), w)?;
     for (i, branch) in layers.iter().enumerate() {
         if branch.len() > MAX_BRANCH_SCALARS {
@@ -303,7 +292,10 @@ mod tests {
         assert_eq!(decoded.shard_id, response.shard_id);
         assert_eq!(decoded.settlement_epoch, response.settlement_epoch);
         assert_eq!(decoded.segment_subroot_rk, response.segment_subroot_rk);
-        assert_eq!(decoded.leaf_index_in_segment, response.leaf_index_in_segment);
+        assert_eq!(
+            decoded.leaf_index_in_segment,
+            response.leaf_index_in_segment
+        );
         assert_eq!(decoded.leaf_bytes, response.leaf_bytes);
         assert_eq!(decoded.path, response.path);
         assert_eq!(

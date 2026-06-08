@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
+use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, encode_path,
     p_canonical_id_from_hybrid_pubkey, verify_leaf_index, verify_segment_path,
@@ -20,10 +21,9 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
-use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_curve_tree::{
-    BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
+    TxLeafInputs,
 };
 use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
 
@@ -109,83 +109,27 @@ fn integration_keypair(
     pinned_sk_hex: Option<&str>,
 ) -> (HybridPublicKey, HybridSecretKey) {
     if let (Some(pk_hex), Some(sk_hex)) = (pinned_pk_hex, pinned_sk_hex) {
-        let pk = HybridPublicKey::from_canonical_bytes(&decode_hex(pk_hex)).expect("integration pk");
-        let sk = HybridSecretKey::from_canonical_bytes(&decode_hex(sk_hex)).expect("integration sk");
+        let pk =
+            HybridPublicKey::from_canonical_bytes(&decode_hex(pk_hex)).expect("integration pk");
+        let sk =
+            HybridSecretKey::from_canonical_bytes(&decode_hex(sk_hex)).expect("integration sk");
         return (pk, sk);
     }
-    HybridEd25519MlDsa.keypair_generate().expect("integration keypair")
+    HybridEd25519MlDsa
+        .keypair_generate()
+        .expect("integration keypair")
 }
 
 fn flat_layer_scalars_hex(scalars: &[[u8; 32]]) -> String {
-    encode_hex(&scalars.iter().flat_map(|s| s.iter().copied()).collect::<Vec<_>>())
-}
-
-fn build_integration_from_pinned_wire(
-    wire_hex: &str,
-    bond_hybrid_pubkey_hex: &str,
-    leaf_layer_scalars_hex: &str,
-) -> Value {
-    let wire = decode_hex(wire_hex);
-    assert_eq!(wire[0], VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE);
-    let mut cursor = std::io::Cursor::new(&wire[1..]);
-    let response =
-        ArchivalServeCreditResponse::read_payload(&mut cursor).expect("pinned integration wire");
-
-    let layer_scalars: Vec<[u8; 32]> = decode_hex(leaf_layer_scalars_hex)
-        .chunks_exact(32)
-        .map(|chunk| {
-            let mut s = [0u8; 32];
-            s.copy_from_slice(chunk);
-            s
-        })
-        .collect();
-    verify_segment_path(
-        &response.leaf_bytes,
-        &layer_scalars,
-        &response.path,
-        &response.segment_subroot_rk,
+    encode_hex(
+        &scalars
+            .iter()
+            .flat_map(|s| s.iter().copied())
+            .collect::<Vec<_>>(),
     )
-    .expect("pinned integration path");
-
-    let block_hash_at_seal = [0xABu8; 32];
-    let settlement_epoch = response.settlement_epoch;
-    let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = settlement_epoch_close_height(settlement_epoch);
-    let h_seal = challenge_seal_height(h_open);
-    let h_fire = challenge_fire_height(
-        h_open,
-        h_close,
-        &block_hash_at_seal,
-        &response.p_canonical_id,
-        response.shard_id,
-        settlement_epoch,
-    );
-
-    json!({
-        "label": "ct2_opening_epoch1_consensus_verify",
-        "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
-        "shard_id": response.shard_id,
-        "settlement_epoch": response.settlement_epoch,
-        "segment_leaf_count": 26_000u64,
-        "leaf_index_in_segment": response.leaf_index_in_segment,
-        "freeze_height": h_fire,
-        "h_open": h_open,
-        "h_close": h_close,
-        "h_seal": h_seal,
-        "h_fire": h_fire,
-        "current_height": h_fire.saturating_add(1),
-        "block_hash_at_seal_hex": encode_hex(&block_hash_at_seal),
-        "join_settlement_epoch": 0,
-        "bond_hybrid_pubkey_hex": bond_hybrid_pubkey_hex,
-        "leaf_layer_scalars_hex": leaf_layer_scalars_hex,
-        "wire_hex": wire_hex,
-    })
 }
 
-fn build_integration_substrate(
-    pinned_pk_hex: Option<&str>,
-    pinned_sk_hex: Option<&str>,
-) -> Value {
+fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Option<&str>) -> Value {
     let scheme = HybridEd25519MlDsa;
     let (hybrid_pk, hybrid_sk) = integration_keypair(pinned_pk_hex, pinned_sk_hex);
     let hybrid_pk_bytes = hybrid_pk.to_canonical_bytes().expect("pk bytes");
@@ -224,7 +168,9 @@ fn build_integration_substrate(
         hybrid_signature: kat_hybrid_signature(None),
     };
     let preimage = response.signature_preimage();
-    response.hybrid_signature = scheme.sign(&hybrid_sk, &preimage).expect("integration sign");
+    response.hybrid_signature = scheme
+        .sign(&hybrid_sk, &preimage)
+        .expect("integration sign");
 
     verify_leaf_index(
         response.leaf_index_in_segment,
@@ -264,12 +210,12 @@ fn build_integration_substrate(
     })
 }
 
-fn kat_hybrid_signature(
-    pinned_hex: Option<&str>,
-) -> shekyl_crypto_pq::signature::HybridSignature {
+fn kat_hybrid_signature(pinned_hex: Option<&str>) -> shekyl_crypto_pq::signature::HybridSignature {
     if let Some(hex) = pinned_hex {
-        return shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&decode_hex(hex))
-            .expect("pinned hybrid signature");
+        return shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&decode_hex(
+            hex,
+        ))
+        .expect("pinned hybrid signature");
     }
     let scheme = HybridEd25519MlDsa;
     let (_pk, sk) = scheme.keypair_generate().expect("keypair");
@@ -317,7 +263,7 @@ fn ct2_main_chain() -> Vec<Ct2Block> {
         .collect()
 }
 
-fn ct2_founder_opening() -> ( [u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]> ) {
+fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
     let blocks = ct2_main_chain();
     let mut client = CurveTreeClient::new();
     for blk in &blocks {
@@ -357,14 +303,18 @@ fn ct2_founder_opening() -> ( [u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 
         .iter()
         .find(|cl| cl.output_key == founder.output_key)
         .expect("founder chunk leaf");
-    let leaf_bytes =
-        construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
+    let leaf_bytes = construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers,
         c2_layers: path.c2_layers,
     };
-    (leaf_bytes, reference.curve_tree_root, opening, layer_scalars)
+    (
+        leaf_bytes,
+        reference.curve_tree_root,
+        opening,
+        layer_scalars,
+    )
 }
 
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
@@ -510,22 +460,19 @@ fn gate2_serve_credit_kat_vectors() {
         let count = case["segment_leaf_count"].as_u64().expect("count");
         let h_open = case["h_open"].as_u64().expect("h_open");
         let h_close = case["h_close"].as_u64().expect("h_close");
-        let seal_hash =
-            decode_hex32(case["block_hash_at_seal_hex"].as_str().expect("seal hash"));
+        let seal_hash = decode_hex32(case["block_hash_at_seal_hex"].as_str().expect("seal hash"));
 
+        let leaf_index = u32::try_from(case["leaf_index"].as_u64().expect("leaf_index"))
+            .expect("leaf_index fits u32");
         assert_eq!(
             challenge_leaf_index(&p_id, shard_id, epoch, count),
-            case["leaf_index"].as_u64().expect("leaf_index") as u32
+            leaf_index
         );
-        verify_leaf_index(
-            case["leaf_index"].as_u64().expect("leaf_index") as u32,
-            &p_id,
-            shard_id,
-            epoch,
-            count,
-        )
-        .expect("leaf index verify");
-        assert_eq!(challenge_seal_height(h_open), case["h_seal"].as_u64().expect("h_seal"));
+        verify_leaf_index(leaf_index, &p_id, shard_id, epoch, count).expect("leaf index verify");
+        assert_eq!(
+            challenge_seal_height(h_open),
+            case["h_seal"].as_u64().expect("h_seal")
+        );
         assert_eq!(
             challenge_fire_height(h_open, h_close, &seal_hash, &p_id, shard_id, epoch),
             case["h_fire"].as_u64().expect("h_fire")
@@ -546,9 +493,10 @@ fn gate2_serve_credit_kat_vectors() {
         shard_id: wire["shard_id"].as_u64().expect("shard"),
         settlement_epoch: wire["settlement_epoch"].as_u64().expect("epoch"),
         segment_subroot_rk: decode_hex32(wire["segment_subroot_rk_hex"].as_str().expect("rk")),
-        leaf_index_in_segment: wire["leaf_index_in_segment"]
-            .as_u64()
-            .expect("leaf idx") as u32,
+        leaf_index_in_segment: u32::try_from(
+            wire["leaf_index_in_segment"].as_u64().expect("leaf idx"),
+        )
+        .expect("leaf idx fits u32"),
         leaf_bytes: decode_hex128(wire["leaf_bytes_hex"].as_str().expect("leaf")),
         path,
         hybrid_signature,
@@ -576,7 +524,10 @@ fn gate2_serve_credit_kat_vectors() {
     let rk = decode_hex32(opening["segment_subroot_rk_hex"].as_str().expect("rk"));
 
     let (live_leaf, live_rk, live_path, live_layer_scalars) = ct2_founder_opening();
-    assert_eq!(leaf_bytes, live_leaf, "opening leaf_bytes drifted from CT-2");
+    assert_eq!(
+        leaf_bytes, live_leaf,
+        "opening leaf_bytes drifted from CT-2"
+    );
     assert_eq!(rk, live_rk, "opening R_k drifted from CT-2");
     assert_eq!(opening_path.c1_layers, live_path.c1_layers);
     assert_eq!(opening_path.c2_layers, live_path.c2_layers);
@@ -610,7 +561,9 @@ fn gate2_serve_credit_kat_vectors() {
             &parsed.p_canonical_id,
             parsed.shard_id,
             parsed.settlement_epoch,
-            integration["segment_leaf_count"].as_u64().expect("segment count"),
+            integration["segment_leaf_count"]
+                .as_u64()
+                .expect("segment count"),
         ),
         parsed.leaf_index_in_segment
     );

@@ -56,8 +56,9 @@ fn v2_coinbase_round_trip() {
 
 #[test]
 fn archival_serve_credit_input_gate2_kat() {
-    const KAT: &str =
-        include_str!("../../../../shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json");
+    const KAT: &str = include_str!(
+        "../../../../shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
+    );
 
     #[derive(serde::Deserialize)]
     struct KatWire {
@@ -81,10 +82,7 @@ fn archival_serve_credit_input_gate2_kat() {
     };
     assert_eq!(resp.shard_id, kat.wire.shard_id);
     assert_eq!(resp.settlement_epoch, kat.wire.settlement_epoch);
-    assert_eq!(
-        resp.leaf_index_in_segment,
-        kat.wire.leaf_index_in_segment
-    );
+    assert_eq!(resp.leaf_index_in_segment, kat.wire.leaf_index_in_segment);
 
     let mut out = Vec::new();
     Input::ArchivalServeCreditResponse(resp.clone())

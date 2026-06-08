@@ -34,6 +34,10 @@ pub mod id;
 pub mod path;
 pub mod wire;
 
+pub use bond_wire::{
+    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
+    HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
+};
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
@@ -44,12 +48,8 @@ pub use constants::{
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use error::VerifyError;
-pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
-pub use bond_wire::{
-    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor, HoldingsKind,
-    BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
-};
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
+pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
 pub use wire::{
     encode_path, ArchivalServeCreditResponse, WireError, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };

@@ -15,7 +15,7 @@ use crate::{
     primitives::keccak256,
 };
 
-fn wire_error(err: shekyl_archival_retention::WireError) -> io::Error {
+fn wire_error(err: &shekyl_archival_retention::WireError) -> io::Error {
     io::Error::other(err.to_string())
 }
 
@@ -47,6 +47,7 @@ const MAX_NON_MINER_TRANSACTION_OUTPUTS: usize =
     MAX_NON_MINER_TRANSACTION_SIZE / NON_MINER_TRANSACTION_OUTPUT_SIZE_LOWER_BOUND;
 
 /// An input in the Shekyl protocol.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Input {
     /// An input for a miner transaction, which is generating new coins.
@@ -109,9 +110,9 @@ impl Input {
                 write_varint(to_height, w)?;
                 key_image.write(w)
             }
-            Input::ArchivalServeCreditResponse(response) => response
-                .write(w)
-                .map_err(wire_error),
+            Input::ArchivalServeCreditResponse(response) => {
+                response.write(w).map_err(|e| wire_error(&e))
+            }
         }
     }
 
@@ -143,9 +144,11 @@ impl Input {
                 to_height: read_varint(r)?,
                 key_image: CompressedPoint::read(r)?,
             },
-            VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE => Input::ArchivalServeCreditResponse(
-                ArchivalServeCreditResponse::read_payload(r).map_err(wire_error)?,
-            ),
+            VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE => {
+                let response =
+                    ArchivalServeCreditResponse::read_payload(r).map_err(|e| wire_error(&e))?;
+                Input::ArchivalServeCreditResponse(response)
+            }
             _ => Err(io::Error::other(
                 "Tried to deserialize unknown/unused input type",
             ))?,
