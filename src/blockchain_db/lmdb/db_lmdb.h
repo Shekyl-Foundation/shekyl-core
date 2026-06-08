@@ -456,6 +456,29 @@ private:
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) override;
 
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
+    std::vector<uint8_t>& out_pubkey) const override;
+  virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const override;
+  virtual bool archival_bond_good_through(const crypto::hash& p_id,
+    uint64_t settlement_epoch) const override;
+  virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const override;
+  virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
+    crypto::hash& out_rk, uint64_t& out_leaf_count) const override;
+  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, uint64_t at_height,
+    std::vector<uint8_t>& out_flat_scalars) const override;
+
+  virtual void put_archival_bond_record(const crypto::hash& p_id,
+    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    const std::vector<uint64_t>& held_shard_ids,
+    const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
+  virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
+  virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
+    const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count) override;
+  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars) override;
+
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
   virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output) override;
@@ -532,6 +555,9 @@ private:
   uint64_t read_tx_prune_next_block_height() const;
   void write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block);
 
+  bool load_archival_bond_value(const crypto::hash& p_id,
+    shekyl::db::ArchivalBondValue& out) const;
+
 private:
   MDB_env* m_env;
 
@@ -566,6 +592,9 @@ private:
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
   MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> empty (key = bit)
+  MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
+  MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
+  MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

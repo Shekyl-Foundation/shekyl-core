@@ -39,7 +39,9 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace shekyl { namespace db {
 
@@ -114,6 +116,9 @@ static constexpr size_t kDrainValueSize      = 136; // maturity[8] || leaf[128]
 static constexpr size_t kBlockPendingKeySize = 16;  // BE(block_height) || BE(output_index)
 static constexpr size_t kBlockPendingValSize = 8;   // maturity[8]
 static constexpr size_t kArchivalServeCreditKeySize = 48; // P_id[32] || BE(shard) || BE(epoch)
+static constexpr size_t kArchivalBondKeySize = 32;        // P_id[32]
+static constexpr size_t kArchivalShardKeySize = 8;        // BE(shard_id)
+static constexpr size_t kArchivalShardLeafKeySize = 16;   // BE(shard_id) || BE(leaf_index)
 
 // ─── Encoder lifetime contract ─────────────────────────────────────────────
 //
@@ -380,6 +385,241 @@ public:
 
 private:
     std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
+};
+
+// ─── ArchivalBondKey ───────────────────────────────────────────────────────
+//
+// Gate-4 bond record keyed by P_canonical_id (ARCHIVAL_CONSENSUS_STATE.md §3.4).
+
+class ArchivalBondKey {
+public:
+    explicit ArchivalBondKey(const uint8_t p_id[32]) noexcept
+    {
+        std::memcpy(bytes_.data(), p_id, 32);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalBondKeySize> bytes_{};
+};
+
+// ─── ArchivalShardKey / ArchivalShardLeafKey ───────────────────────────────
+//
+// Shard registry segment and per-leaf Selene layer scalars (gate-2 §9).
+
+class ArchivalShardKey {
+public:
+    explicit ArchivalShardKey(uint64_t shard_id) noexcept
+    {
+        store_be64(bytes_.data(), shard_id);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalShardKeySize> bytes_{};
+};
+
+class ArchivalShardLeafKey {
+public:
+    ArchivalShardLeafKey(uint64_t shard_id, uint64_t leaf_index_in_segment) noexcept
+    {
+        store_be64(bytes_.data(), shard_id);
+        store_be64(bytes_.data() + 8, leaf_index_in_segment);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalShardLeafKeySize> bytes_{};
+};
+
+// ─── ArchivalBondValue ─────────────────────────────────────────────────────
+//
+// Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
+
+struct ArchivalBondValue {
+    static constexpr uint8_t kVersion = 1;
+    static constexpr size_t kMaxPubkeyLen = 2048;
+    static constexpr size_t kMaxHoldings = 4096;
+    static constexpr size_t kMaxBadIntervals = 256;
+
+    struct BadInterval {
+        uint64_t start_epoch = 0;
+        uint64_t end_exclusive = 0; // UINT64_MAX = open-ended bad standing
+    };
+
+    std::vector<uint8_t> hybrid_pubkey;
+    uint64_t join_settlement_epoch = 0;
+    std::vector<uint64_t> held_shard_ids;
+    std::vector<BadInterval> bad_intervals;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (hybrid_pubkey.size() > kMaxPubkeyLen
+            || held_shard_ids.size() > kMaxHoldings
+            || bad_intervals.size() > kMaxBadIntervals)
+        {
+            throw std::runtime_error("ArchivalBondValue encode: bounds exceeded");
+        }
+
+        std::vector<uint8_t> out;
+        out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 4 + held_shard_ids.size() * 8
+            + 4 + bad_intervals.size() * 16);
+        out.push_back(kVersion);
+        const uint16_t pk_len = static_cast<uint16_t>(hybrid_pubkey.size());
+        out.push_back(static_cast<uint8_t>(pk_len >> 8));
+        out.push_back(static_cast<uint8_t>(pk_len));
+        out.insert(out.end(), hybrid_pubkey.begin(), hybrid_pubkey.end());
+        for (int i = 7; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
+        const uint32_t holdings_count = static_cast<uint32_t>(held_shard_ids.size());
+        for (int i = 3; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((holdings_count >> (i * 8)) & 0xFF));
+        for (const uint64_t shard_id : held_shard_ids)
+        {
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((shard_id >> (i * 8)) & 0xFF));
+        }
+        const uint32_t interval_count = static_cast<uint32_t>(bad_intervals.size());
+        for (int i = 3; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((interval_count >> (i * 8)) & 0xFF));
+        for (const BadInterval& iv : bad_intervals)
+        {
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((iv.start_epoch >> (i * 8)) & 0xFF));
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((iv.end_exclusive >> (i * 8)) & 0xFF));
+        }
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondValue& out)
+    {
+        if (!data || len < 1 + 2 + 8 + 4 + 4)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        if (off + 2 > len)
+            return false;
+        const uint16_t pk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
+        off += 2;
+        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 + 4 > len)
+            return false;
+        out.hybrid_pubkey.assign(p + off, p + off + pk_len);
+        off += pk_len;
+        out.join_settlement_epoch = load_be64(p + off);
+        off += 8;
+        if (off + 4 > len)
+            return false;
+        const uint32_t holdings_count = static_cast<uint32_t>(
+            (static_cast<uint32_t>(p[off]) << 24)
+            | (static_cast<uint32_t>(p[off + 1]) << 16)
+            | (static_cast<uint32_t>(p[off + 2]) << 8)
+            | static_cast<uint32_t>(p[off + 3]));
+        off += 4;
+        if (holdings_count > kMaxHoldings || off + holdings_count * 8u + 4 > len)
+            return false;
+        out.held_shard_ids.clear();
+        out.held_shard_ids.reserve(holdings_count);
+        for (uint32_t i = 0; i < holdings_count; ++i)
+        {
+            out.held_shard_ids.push_back(load_be64(p + off));
+            off += 8;
+        }
+        const uint32_t interval_count = static_cast<uint32_t>(
+            (static_cast<uint32_t>(p[off]) << 24)
+            | (static_cast<uint32_t>(p[off + 1]) << 16)
+            | (static_cast<uint32_t>(p[off + 2]) << 8)
+            | static_cast<uint32_t>(p[off + 3]));
+        off += 4;
+        if (interval_count > kMaxBadIntervals || off + interval_count * 16u != len)
+            return false;
+        out.bad_intervals.clear();
+        out.bad_intervals.reserve(interval_count);
+        for (uint32_t i = 0; i < interval_count; ++i)
+        {
+            BadInterval iv{};
+            iv.start_epoch = load_be64(p + off);
+            off += 8;
+            iv.end_exclusive = load_be64(p + off);
+            off += 8;
+            out.bad_intervals.push_back(iv);
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool good_through(uint64_t settlement_epoch) const noexcept
+    {
+        if (settlement_epoch < join_settlement_epoch + 1)
+            return false;
+        for (const BadInterval& iv : bad_intervals)
+        {
+            if (settlement_epoch < iv.start_epoch)
+                continue;
+            if (iv.end_exclusive == std::numeric_limits<uint64_t>::max()
+                || settlement_epoch < iv.end_exclusive)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool holds_shard(uint64_t shard_id) const noexcept
+    {
+        for (const uint64_t held : held_shard_ids)
+        {
+            if (held == shard_id)
+                return true;
+        }
+        return false;
+    }
+};
+
+// ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
+
+struct ArchivalShardSegmentValue {
+    static constexpr uint8_t kVersion = 1;
+
+    uint64_t freeze_height = 0;
+    uint64_t segment_leaf_count = 0;
+    std::array<uint8_t, 32> segment_subroot_rk{};
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        std::vector<uint8_t> out(1 + 8 + 8 + 32);
+        out[0] = kVersion;
+        store_be64(out.data() + 1, freeze_height);
+        store_be64(out.data() + 9, segment_leaf_count);
+        std::memcpy(out.data() + 17, segment_subroot_rk.data(), 32);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalShardSegmentValue& out)
+    {
+        if (!data || len != 1 + 8 + 8 + 32)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        if (p[0] != kVersion)
+            return false;
+        out.freeze_height = load_be64(p + 1);
+        out.segment_leaf_count = load_be64(p + 9);
+        std::memcpy(out.segment_subroot_rk.data(), p + 17, 32);
+        return true;
+    }
 };
 
 // ─── Mapping-table helpers (single-uint64 key and value) ───────────────────

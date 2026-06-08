@@ -182,6 +182,12 @@ public:
   virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
 
+  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&, uint64_t,
+    const std::vector<uint64_t>&, const std::vector<std::pair<uint64_t, uint64_t>>&) override {}
+  virtual void remove_archival_bond_record(const crypto::hash&) override {}
+  virtual void put_archival_shard_segment(uint64_t, uint64_t, const crypto::hash&, uint64_t) override {}
+  virtual void put_archival_shard_leaf_layer_scalars(uint64_t, uint32_t, const std::vector<uint8_t>&) override {}
+
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex, const uint8_t*) override {}
   virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex) override {}
   virtual uint64_t drain_pending_tree_leaves(shekyl::db::BlockHeight, std::vector<uint8_t>&) override { return 0; }
