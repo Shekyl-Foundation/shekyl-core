@@ -4,6 +4,13 @@
 
 ### Added
 
+- **curve-tree: CT-2 Round 1 close-out.**
+  Tier-A boundary pin (`last_empty=60`, `first_drain=61`), fixture provenance
+  baseline, Tier-B `#[ignore]` drift-canary scaffold (`recon_tier_b.rs`),
+  scanner `tx_extra 0x07` parse tests (first-match; daemon parity unverified).
+  Close-out `docs/design/CT2_ROUND1_CLOSEOUT.md`; `CT2_DRAIN_ORDER.md` empty-window
+  prose aligned to fixture truth.
+
 - **crypto-pq: FA-6 §8.5.1 decap pre-filter gate harness.**
   `fa6_decap_prefilter_gate` example (`--path fa6|classical`, scenarios
   smoke / a / b), classical counterfactual derivation, criterion smoke bench
