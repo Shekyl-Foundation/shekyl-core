@@ -47,9 +47,14 @@ pub const SINGLE_OUTAGE_DURATION_QUANTILE: f64 = 0.99;
 /// CDF is the gating empirical input; equals marginal duration only when memoryless).
 #[derive(Debug, Clone, Copy)]
 pub enum DownDurationLaw {
-    Exponential { mean_epochs: f64 },
+    Exponential {
+        mean_epochs: f64,
+    },
     /// Fat-tailed stalls (onion circuit/guard failures). `sigma` is log-space stddev.
-    Lognormal { mean_epochs: f64, sigma: f64 },
+    Lognormal {
+        mean_epochs: f64,
+        sigma: f64,
+    },
 }
 
 impl DownDurationLaw {
@@ -58,10 +63,7 @@ impl DownDurationLaw {
     }
 
     pub fn lognormal_fat_tail(mean_epochs: f64, sigma: f64) -> Self {
-        Self::Lognormal {
-            mean_epochs,
-            sigma,
-        }
+        Self::Lognormal { mean_epochs, sigma }
     }
 
     /// Mean down-segment length (epochs).
@@ -407,11 +409,7 @@ fn schedule_recheck_window(
     let width = width.max(1);
     let probe = start + (rng.below(width as usize) as u32);
     let end = start + width - 1;
-    RecheckWindow {
-        start,
-        end,
-        probe,
-    }
+    RecheckWindow { start, end, probe }
 }
 
 fn can_serve(
@@ -431,7 +429,9 @@ fn can_serve(
                 true
             }
         }
-        GroundTruth::DodgeServing => dodge_window.is_some_and(|w| epoch >= w.start && epoch <= w.end),
+        GroundTruth::DodgeServing => {
+            dodge_window.is_some_and(|w| epoch >= w.start && epoch <= w.end)
+        }
     }
 }
 
@@ -566,7 +566,9 @@ fn paired_for_truth(
     for i in 0..params.seeds {
         let seed = base_seed.wrapping_add(i as u64);
         let mut rng_avail = Rng::new(seed);
-        let avail = params.outage.simulate_availability(params.epochs, &mut rng_avail);
+        let avail = params
+            .outage
+            .simulate_availability(params.epochs, &mut rng_avail);
         let transient = if truth == GroundTruth::TransientOnce {
             let mut rng_tr = Rng::new(seed.wrapping_add(0x5452_414E_5349_454E));
             Some(transient_window(
@@ -578,13 +580,7 @@ fn paired_for_truth(
             None
         };
         let mut rng_esc = Rng::new(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
-        esc.push(run_escalate(
-            truth,
-            &avail,
-            params,
-            transient,
-            &mut rng_esc,
-        ));
+        esc.push(run_escalate(truth, &avail, params, transient, &mut rng_esc));
         slide.push(run_sliding(truth, &avail, params, transient));
     }
     (esc, slide)
@@ -654,7 +650,9 @@ pub fn binding_analysis(baseline_period: u32, recheck_width: u32) -> BindingAnal
 
 fn max_single_outage_baselines(law: DownDurationLaw, baseline_period: u32) -> u32 {
     let span_epochs = law.outage_duration_quantile_epochs(SINGLE_OUTAGE_DURATION_QUANTILE);
-    ((span_epochs as f64) / baseline_period as f64).ceil().max(1.0) as u32
+    ((span_epochs as f64) / baseline_period as f64)
+        .ceil()
+        .max(1.0) as u32
 }
 
 fn dodge_stats(params: &Round1Params) -> DodgeStats {
@@ -692,8 +690,7 @@ fn dodge_stats(params: &Round1Params) -> DodgeStats {
 }
 
 fn transient_false_slash_sliding(params: &Round1Params) -> f64 {
-    let (_, trans_slide) =
-        paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
+    let (_, trans_slide) = paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
     stats_from(&trans_slide).false_slashes as f64 / params.seeds as f64
 }
 
@@ -717,9 +714,7 @@ pub fn run_sliding_m_sweep(params: &Round1Params) -> Vec<SlidingMSweepPoint> {
     out
 }
 
-fn best_tuned_sliding_transient(
-    sweep: &[SlidingMSweepPoint],
-) -> Option<(usize, usize, f64)> {
+fn best_tuned_sliding_transient(sweep: &[SlidingMSweepPoint]) -> Option<(usize, usize, f64)> {
     sweep
         .iter()
         .filter(|pt| pt.above_outage_span)
@@ -742,8 +737,8 @@ fn baseline_timing_note(baseline_period: u32) -> BaselineTimingNote {
         sim_baseline_model: format!(
             "settlement-epoch grid: baseline every {baseline_period} epoch(s) (deterministic)"
         ),
-        production_baseline_model: "gate-2 §3.4: H_fire beacon from block_hash(H_seal) — unpredictable at H_open"
-            .into(),
+        production_baseline_model:
+            "gate-2 §3.4: H_fire beacon from block_hash(H_seal) — unpredictable at H_open".into(),
         production_unpredictable: true,
     }
 }
@@ -856,8 +851,7 @@ fn decide(
     } else {
         format!(
             "no FSM edge: tuned sliding fs {:.3}, esc fs {:.3}, volR={volume_ratio:.3}",
-            tuned_sliding,
-            transient.escalate_false_slash_rate
+            tuned_sliding, transient.escalate_false_slash_rate
         )
     };
 
@@ -951,16 +945,14 @@ fn build_policy_pin(
 }
 
 pub fn run_round1(params: &Round1Params) -> Round1Result {
-    let binding = binding_analysis(
-        params.baseline_period,
-        params.recheck_window_width_epochs,
-    );
+    let binding = binding_analysis(params.baseline_period, params.recheck_window_width_epochs);
 
     let (honest_esc, honest_slide) =
         paired_for_truth(GroundTruth::HonestHosting, params, 0x4854_5F48_4F4E);
     let (trans_esc, trans_slide) =
         paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
-    let (dead_esc, dead_slide) = paired_for_truth(GroundTruth::NotServing, params, 0x4445_4144_5F50);
+    let (dead_esc, dead_slide) =
+        paired_for_truth(GroundTruth::NotServing, params, 0x4445_4144_5F50);
     let dodge = dodge_stats(params);
 
     let honest = paired_stats(&honest_esc, &honest_slide);
@@ -985,9 +977,9 @@ pub fn run_round1(params: &Round1Params) -> Round1Result {
     let transient = TransientStats {
         escalate_false_slash_rate: trans_esc_stats.false_slashes as f64 / params.seeds as f64,
         sliding_false_slash_rate: trans_slide_stats.false_slashes as f64 / params.seeds as f64,
-        sliding_tuned_false_slash_rate: tuned.map(|(_, _, fs)| fs).unwrap_or_else(|| {
-            trans_slide_stats.false_slashes as f64 / params.seeds as f64
-        }),
+        sliding_tuned_false_slash_rate: tuned
+            .map(|(_, _, fs)| fs)
+            .unwrap_or_else(|| trans_slide_stats.false_slashes as f64 / params.seeds as f64),
         tuned_miss_threshold: tuned.map(|(m, _, _)| m).unwrap_or(params.miss_threshold),
         max_single_outage_baselines: max_span,
         nominal_bound_exponential_only: nominal,
@@ -1201,8 +1193,7 @@ mod tests {
         let r_exp = run_round1(&base(exp));
         let r_fat = run_round1(&base(fat));
         assert!(
-            r_fat.transient.escalate_false_slash_rate
-                >= r_exp.transient.escalate_false_slash_rate,
+            r_fat.transient.escalate_false_slash_rate >= r_exp.transient.escalate_false_slash_rate,
             "fat-tailed true outages should weakly increase transient false-slash vs exp"
         );
         assert!(

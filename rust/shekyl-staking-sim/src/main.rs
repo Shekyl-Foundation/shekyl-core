@@ -378,9 +378,10 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     for line in &pin.rationale {
         eprintln!("  • {line}");
     }
-    eprintln!("Baseline timing: {} | prod: {}", 
-        report.baseline_timing.sim_baseline_model,
-        report.baseline_timing.production_baseline_model);
+    eprintln!(
+        "Baseline timing: {} | prod: {}",
+        report.baseline_timing.sim_baseline_model, report.baseline_timing.production_baseline_model
+    );
     eprintln!("Sliding m-sweep (transient fs, m>span):");
     for pt in &report.sliding_m_sweep {
         if pt.above_outage_span {
@@ -400,15 +401,7 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     eprintln!();
     eprintln!(
         "{:<32} {:>5} {:>5} {:>5} {:>5} {:>4} {:>4} {:>5} | {}",
-        "scenario",
-        "volR",
-        "fsE",
-        "fsS",
-        "fsT",
-        "dEsc",
-        "dSl",
-        "FSM?",
-        "gate",
+        "scenario", "volR", "fsE", "fsS", "fsT", "dEsc", "dSl", "FSM?", "gate",
     );
     for r in &report.scenarios {
         eprintln!(
