@@ -3596,7 +3596,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     is_archival_bond_post_tx = (bond_post_count == 1);
   }
 
-  if (tx.version >= 2)
+  if (tx.version >= 2 && !is_archival_serve_credit_only)
   {
     if (tx.vout.size() < 2)
     {
@@ -3775,6 +3775,22 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
             << " must not carry pqc_auths (signature is on the vin)");
           tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (!tx.vout.empty() || rv.txnFee != 0)
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must have no outputs and zero fee");
+          tvc.m_verifivation_failed = true;
+          tvc.m_invalid_output = true;
+          return false;
+        }
+        if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty() || !rv.p.pseudoOuts.empty())
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must not carry RCT output material");
+          tvc.m_verifivation_failed = true;
+          tvc.m_invalid_output = true;
           return false;
         }
         if (!rv.p.fcmp_pp_proof.empty())

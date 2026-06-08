@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <cstring>

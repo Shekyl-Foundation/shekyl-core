@@ -119,9 +119,17 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
             }
             if (archival_serve_credit_only)
             {
+                const rct::rctSig& rv = tx.rct_signatures;
+                // Non-spending vin: no chain outputs, no fee, no RCT output material (gate-2 §5).
                 if (!tx.pqc_auths.empty()
-                    || !is_canonical_bulletproof_plus_layout(tx.rct_signatures.p.bulletproofs_plus)
-                    || !rct::verRctSemanticsFeeOnly(tx.rct_signatures))
+                    || !tx.vout.empty()
+                    || rv.txnFee != 0
+                    || !rv.outPk.empty()
+                    || !rv.p.bulletproofs_plus.empty()
+                    || !rv.p.fcmp_pp_proof.empty()
+                    || !rv.p.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verRctSemanticsFeeOnly(rv))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;
