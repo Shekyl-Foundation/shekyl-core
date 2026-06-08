@@ -4,6 +4,13 @@
 
 ### Added
 
+- **docs: P2B-6 §7 landed + LMDB substrate verify (2026-06-07).**
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat
+  model (T-A*, G11 extended, F1/T-A1 gate); claim-era wargame → §7.A. §7.11: LMDB on `dev`
+  verified (`m_properties` scalars, `already_generated_coins`, `pop_block` revert pattern;
+  bond wire greenfield). FSM retool substrate-verify row closed. **T-A1 sim still open**
+  (F1 final accept).
+
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
   [`PHASE_2B_SECTION7_DRAFT.md`](design/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
   lever + T-A1 sim gate; T-A16 (A6); G11 KAT invariants; G1 three-tier slash surfacing;

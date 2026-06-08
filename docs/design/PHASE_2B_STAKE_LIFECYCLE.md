@@ -38,9 +38,10 @@ claims, `tier_num`, `band_sum` servo, exact-yield-from-secret-weight) — see §
 
 Wallet Rounds 0–2 pins (FSM skeleton, persistence discipline, §4.7 actor shape,
 §5 reorg forward-rebuild, §6 API *intent*) remain load-bearing **where §2 says
-retain** — but §3–§7 body text below §2 is still **claim-centric** until retooled;
-§2 is authoritative for rebased scope. No Stage 3 until **Round 3 closes on the
-rebased substrate** (gate-list + gate 6 to soundness depth) per
+retain** — **§3 FSM** and **§7 threat model** are rebased (P2B-3/6, 2026-06-07);
+**§4–§6** body text is still **claim-centric** until retooled. §2 is authoritative
+for rebased scope. No Stage 3 until **Round 3–4 closes on the rebased substrate**
+(gate-list + gate 6 to soundness depth + **T-A1** F1 gate) per
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §7.
 
 **Process discipline:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -1415,1059 +1416,215 @@ backlog requires multiple txs, avoid fixed epoch-boundary broadcast cadence; Dan
 
 ---
 
-## 7. Threat model (Round 1 wargaming seed) — **expanded**
+## 7. Threat model (archival re-center — P2B-6)
+
+**Status:** **Landed (2026-06-07).** Replaces claim-era Round 3 wargame (§7.A archive).
+Authority: [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-6;
+[`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+§4.5; [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md);
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md).
+
+### 7.1 Substrate change — what moved
+
+| Retired with claim wire | Rebased threat focus |
+|-------------------------|----------------------|
+| F0 `{tier × creation}` cohort on confidential claim | **Deleted** — model removal, not mitigation |
+| Nullifier dedup / `N_S = x·G_S` / DDH claim↔unstake split | **Deleted** — consensus `claimed_settlement_epochs` on bond record |
+| `h_bind` + entitlement 8a / tier-forgery 8b | **Deleted** — loud emission amounts + work vector |
+| `StakeOpening` / sealed `claimed_epochs` reorg replay | **Deleted** — P2B-5 re-fetch bond record |
+| Band cohort / `ρ_e` × secret weight yield | **Deleted** — `Σwork` servo + per-shard bonds |
+
+**Carried forward (reframed):** priority-1 silent inflation (emission + bond_credit/debit
+conservation); priority-2 firewall discipline (`P`↔principal correlation); A1/A3/A5 economic
+actors with archival semantics; wider-substrate audit habit.
+
+### 7.2 Identity framing (do not collapse)
+
+Three mechanisms — same as §0 status block; do not shorthand as "P solves privacy."
+
+1. **F0 dissolved** — confidential claim wire not shipped.
+2. **`P` is public by function** — firewalled pseudonymity, not claim-style anonymity.
+3. **Gate 6 is the unbuilt privacy work** — `P`↔principal correlation + cross-pseudonym
+   intersection. Bonds carry Sybil cost; multi-`P` is hygiene.
+
+### 7.3 Adversary models
+
+| ID | Model | Archival instantiation |
+|----|-------|------------------------|
+| **A1** | Adversary-controlled daemon | Stale/wrong bond record, `Σwork`, `R_market`; withholds join-Market confirm |
+| **A2** | Passive chain / network analyst | Correlates `P_id` retention timeline, emission cadence, bond events, drain/Unbond |
+| **A3** | Memory-disclosure | `master_seed_64`, HKDF `P` keys, emission build state, prover bundles |
+| **A4** | A1 + A2 collusion | Timing oracle on emission/drain + public `P` timeline |
+| **A5** | Rational economic actor | Slash-evasion, bond floor gaming, workload split, lapse/forfeit arbitrage |
+| **A6** | Archival peer / challenger | Grief challenges, false retention disputes, reachability probing |
+
+### 7.4 Seed threat table
 
 | Threat | Mitigation pin |
 |--------|----------------|
-| Malicious daemon **misreports the rate `ρ_e`** | Yield uses the wallet's own (secret) weight × public `ρ_e`; `ρ_e` is consensus-derived from the on-chain `band_sum` and verifiable by full nodes. Light clients carry residual trust; warn on stale/inconsistent rate. (Replaces the old "understates `total_weighted_stake`" threat — there is no daemon-supplied denominator anymore.) |
-| Wallet over-claims reward amount | Claim built from the public rate × the stake's own weight over **unclaimed** epochs; consensus range proof + entitlement relation reject over-claims. Wallet must not rely on consensus to mask a local accounting bug (priority-1). |
-| **Claim↔stake linkage** | Membership-unlinkable claims + per-epoch nullifiers; wallet uses fresh `N_{i,S}`, exposes no RPC/UI field correlating a claim to a stake, batches/jitters broadcast timing. |
-| **Per-stake claim sequence** | Piecemeal claims leak `(tier, contiguous-window)` serial signal even when nullifiers are DDH-unlinkable (upstream §6.2); mitigate via full-window batching default (§6). Round 3 wargame drip vs delay-then-batch. |
-| **Nullifier / key-image cross-link** | **DDH split:** `N_S = x·G_S` vs unstake `x·Hp(O)` unlinkable under independent NUMS bases (upstream §6.3). Load-bearing for claim/unstake decoupling. |
-| **Commitment-opening disclosure** | `StakeOpening` holds `(amount, z)` only — **not** `x` (§3.3.1); **never at rest** — re-derived on hydration, held in memory only, zeroized on drop, never in RPC or actor-message plaintext (§4.2 dissolution). Spend secret derived transiently for nullifier match / claim prove. |
-| **Band cohort-size leakage** | Band is coarse (4–6 decade bands); at cold start, thin cohorts make even a coarse band revealing — wallet UI may warn early stakers; consensus may floor/suppress the signal at low participation (upstream). |
-| **Nullifier-reorg desync** | Ordered §5.2 reorg folded onto `ApplyStakeEvents { reorg_rewind }` (D1); wallet rebuilds `claimed_epochs` clear-all/replay-all against the post-reorg nullifier set; mirrors consensus pop reverting the nullifier set. |
-| Reorg desync between ledger and stake actor | Ordered §5.3; `reorg_rewind` field on `ApplyStakeEvents`, rewind-first in one uninterruptible turn (D1) — no separate message to race against the forward apply |
-| Fake `StakeEvent` injection | Events originate from scanner parsing blocks tied to daemon headers; `OwnNullifierObserved` requires matching a locally derived nullifier (a forged event cannot fabricate the wallet's own nullifier) |
-| **Silent inflation** | **`h_bind`** (tier+creation) + window arithmetic + recomputed `N/D` + **(A)** bounded-remainder (committed `ρ`, range `0≤ρ<D`) + `ρ_cap` (upstream §9) |
+| **F1 — epoch-granularity retention fingerprint** | Shard axis fixed at per-`(P,s,E)`. **Structural dial = `SETTLEMENT_EPOCH_BLOCKS` (SEB).** Hygiene buys residual after SEB pinned. **Provisionally accepted; gated on T-A1 sim** at pinned SEB + defaults. |
+| **A6 — challenge grief** | T-A16; `CHALLENGE_RESOLUTION_BLOCKS` + L16 + consensus-witnessed delivery |
+| **`P`↔principal correlation** | Gate 6 four layers + bond-funding; Tor/onion (L16); decorrelated drains |
+| **Cross-pseudonym intersection** | Per-`P` path, emission batching, rotation; bonds do not make multi-`P` free |
+| **Emission timing tell** | Batch ≤ `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; wallet jitter / Dandelion++ (open) |
+| **Bond-funding correlation** | Admission transfers must not become standing linkage (gate 6 §2.5) |
+| **Unbond refund linkage** | Loud `bond_floor` refund — same decorrelation as rewards (gate 6 §2.4) |
+| **Silent inflation (emission)** | Loud vin; verifier recomputes `reward_P(E)`; wallet G11-E1 |
+| **Silent inflation (bond)** | `bond_credit`/`bond_debit` in RCT balance equation; conservation law; G11-E2/E3 |
+| **Double emission** | `claimed_settlement_epochs` on bond record (P2B-2) |
+| **Work forgery** | Gate 2 retention proofs + `good_through(E)` |
+| **Daemon misreports economics** | Wallet recomputes from public state + own `P` keys |
+| **Reorg desync** | Re-fetch bond record; P2B-5; join-Market disconnect → `AdmissionPending` |
+| **Memory exposure of `P` keys** | Session-only; never persist `P` secrets (gate-6 §9.4) |
+| **Slash rewriting history** | Slash mutates bond only; no rewrite of past `R_market`/`Σwork` (E-3) |
+| **Over-bond fingerprint** | `bonded_total == bond_floor(holdings)` (not `≥`) |
+| **Join-Market lag bypass** | First mint cannot bundle with join (gate-4 §1) |
 
-### 7.3 Diagnostic projection (lens 3)
+### 7.5 Threat-exhaustion agenda (T-A items)
 
-RPC fields are **field-redacted** along *two* classes,
-not one. (i) The **secret class** — no view/spend, no `z`. (ii) The **derived-value class**,
-which the secret-class redaction does **not** cover and which must therefore be named
-explicitly: **no per-stake `claimable`** (it is a deterministic function of the
-confidential principal and public params — `amount = claimable / (tier_num · ΣK_S ·
-|unclaimed|)` — so it discloses the staked amount) and **no per-stake `claimed_epochs`**
-(it discloses the per-stake claim pattern). A redaction written only for "secrets" /
-"per-output secret correlation" would read as covering this leak without covering it. The
-lens is further **height-labeled**, **distribution-safe** (no per-output secret
-correlation), and **claim-unlinkable** (no stake↔claim join key), and carries only a
-**global** claimable total + coarse state. **Distinct from the owner-grade `StakeView`
-(§4.6):** `StakeView` carries those two per-stake fields and is owner-only; this lens
-carries **neither**. `StakeView` must not be widened into this lens.
+Each item: **mitigated-in-design** / **FOLLOWUP** / **cross-track** / **priority-reject**
+/ **gated-on-sim** before Stage 3.
 
-### 7.4 Round 3 agenda (pre-staged 2026-06-05): threat-model exhaustion + wider-substrate audit
+| ID | Vector | Disposition summary |
+|----|--------|---------------------|
+| **T-A1** | **F1 — retention timeline (GATE)** | Quantify within-shard identifiability at **SEB = 10_000** + L10–L16 hygiene. **F1 not accepted until T-A1 passes.** May force coarser SEB vote if SEB is not emission lock. |
+| **T-A2** | Cosmetic `P` rotation (E-4) | Open — real break vs re-linkage proof |
+| **T-A3** | Firewall — network path | Open — L16 onion containment |
+| **T-A4** | Firewall — timing | Open — batching + jitter defaults |
+| **T-A5** | Firewall — output graph | Open — FCMP++ sufficient or min-delay pin |
+| **T-A6** | Firewall — bond funding | Open — admission stake-in correlation |
+| **T-A7** | Cross-pseudonym intersection | Open |
+| **T-A8** | Silent inflation — emission | Mitigated-in-design + G11-E1 KAT |
+| **T-A9** | Silent inflation — bond | Mitigated-in-design + G11-E2/E3 KAT |
+| **T-A10** | Dedup / double-emit | Mitigated-in-design (§3.4 pending + consensus) |
+| **T-A11** | Reorg | Mitigated-in-design (P2B-5) |
+| **T-A12** | Daemon lie — bond record | Mitigated-in-design — refuse emit build |
+| **T-A13** | Memory — `P` keys | Open — HW path (G8) |
+| **T-A14** | Economic — slash / lapse | Open — UX trade explicit |
+| **T-A15** | Bond floor gaming | Mitigated-in-design (G4-7) |
+| **T-A15b** | HoldingsUpdate slash evasion | Open — cooldown on dropped shard |
+| **T-A16** | A6 challenge grief | Open — bounded rate + resolution window |
+| **T-A17** | Join-Market censorship | Open — lowest priority |
 
-Round 3 is the threat-model-exhaustion + wider-substrate-audit round
-([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) op. 5–7). This subsection
-**pre-stages the agenda** — the vectors to wargame to exhaustion and the deployed-system
-failure modes to disposition — but **does not pre-judge outcomes**: each item is `OPEN`
-until Round 3 drives it to a disposition (mitigated-in-design / FOLLOWUP'd with a reopening
-trigger / priority-rejected with reopening criteria, per `21-reversion-clause-discipline.mdc`).
-**Round-3 closure** (§9 row + §10.1 box) requires every T- and G-item below to carry a
-disposition. Pre-staging is **not** a round (Principle 5 closure-rule): it sets the surface;
-it does not close it.
+**Retired (genesis path N/A):** T1–T4, T7, T14 (claim/DDH); T6 → T-A11; T8 → T-A8/T-A9;
+T9 (fake `StakeEvent`) superseded.
 
-**Adversary models** (Principle 7 anchors; run each T-item against the applicable models):
+### 7.6 Wider-substrate audit (G-items)
 
-- **A1 — adversary-controlled daemon** (expected deployment, Tor/I2P-first per
-  [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)): rate misreport, block withholding,
-  selective/late delivery, header-timing manipulation.
-- **A2 — passive network observer / chain analyst**: claim linkage, broadcast-timing
-  correlation, band-cohort analysis across the public chain.
-- **A3 — memory-disclosure adversary** (per `35-secure-memory.mdc`): in-memory opening
-  `(amount, z)`, transient spend secret `x`, prover bundles.
-- **A4 — collusion** (A1 + A2): daemon timing oracle composed with chain analysis.
-- **A5 — economic / rational internal actor** (added in §7.5.3 synthesis): yield-optimizing
-  agents (stake vs. unstake/other uses — bank-run dynamics), MEV extractors, stake-rental
-  markets. Not a confidentiality adversary; an incentive-and-liveness adversary against the
-  economic servo. Run against A5: mass-unstaking shock, claim/unstake MEV.
+| ID | Disposition |
+|----|-------------|
+| **G1** | Three-tier surfacing: (a) pre-slash grace warning, (b) partial slash stays `Bonded`, (c) terminal slash → `Slashed` |
+| **G2** | N/A — not delegated PoS |
+| **G3** | Reframed — bond + release cooldown + `W` backlog surfacing |
+| **G4** | Warn on uneconomic emission fee |
+| **G5** | `emission_pending_epochs` runtime-only + consensus dedup |
+| **G6** | FOLLOWUP — mempool staleness primitive |
+| **G7** | Mitigated — P2B-5 re-fetch |
+| **G8** | OPEN — HW-wallet `P` sign path |
+| **G9** | FOLLOWUP — locked wallet during emit |
+| **G10** | Priority-reject fee-bump for emission |
+| **G11** | Extended — conservation law + G11-E1/E2/E3 wallet KATs; full vs light client split (G12) |
+| **G12** | Split by client mode — see draft G11 §8.2 |
+| **G13** | FOLLOWUP V3.1+ GUI fingerprint |
 
-**Threat-model-exhaustion agenda** (carried from the §7 seed table + the §0.10 new surfaces;
-each `OPEN`):
+Historical analogs: Zcash 2018 / Monero 2017 inflation → G11; wallet2 fingerprint → G13.
 
-| ID | Vector | Wargame question (drive to exhaustion in Round 3) |
-|----|--------|---------------------------------------------------|
-| **T1** | Per-stake claim-sequence correlation | Is full-window batching (§6 default) sufficient against A2, or does the residual `(tier, contiguous-window)` signal need a **pinned** jitter/Dandelion++ default? Drip vs delay-then-batch (the §7 seed row). |
-| **T2** | Claim↔stake linkage across a sequence | Confirm DDH-unlinkability (`N_{i,S}=x_i·G_S`) holds across the *whole* claim sequence under A2/A4, not only per single claim. |
-| **T3** | Band cohort-size leakage (cold start) | Thin-cohort de-anonymization under A2; wallet-UI early-staker warning vs consensus floor/suppress — **name the cross-track upstream ask** (do not assume the consensus floor). |
-| **T4** | Claim-timing correlation | Broadcast cadence + epoch-boundary clustering under A1/A4; pin the wallet-side timing defaults; Dandelion++/jitter as the network-layer mitigation. |
-| **T5** | In-memory opening exposure | Re-derive-on-hydration window + zeroize-on-drop coverage + no-plaintext-in-message/RPC under A3; confirm the `35-secure-memory.mdc` posture end-to-end (opening `(amount, z)`, transient `x`, prover bundle). |
-| **T6** | Nullifier-reorg desync | Adversarial reorg shapes (straddling-lock, deep reorg, reorg-then-re-mine) against the §5.2 **forward rebuild** — does `claimed_epochs` recompute correctly from the post-reorg chain in every shape? **Wallet-side property**; daemon reorg correctness is assumed as for spent key images (§5.2), not tracked here. |
-| **T7** | Nullifier / key-image cross-link | Confirm `x·G_S` (claim) vs `x·Hp(O)` (unstake) independent-NUMS-base unlinkability is not weakened by any wallet surface (no shared serial, no correlated broadcast). |
-| **T8** | Silent inflation (wallet role) | Wallet must never construct over-entitlement and must not rely on the consensus range proof to mask a local accounting bug (priority-1); `h_bind` / `N·D`-recompute / bounded-remainder is upstream's argument, the wallet's job is not to undermine it. |
-| **T9** | Fake `StakeEvent` injection | Confirm scanner-origin + own-nullifier-match forecloses forged events under A1 (no path fabricates the wallet's own nullifier). |
+### 7.7 F1 — retention fingerprint vs rotation
 
-**§6 wider-substrate audit seed** (Principle 6 — "what have deployed staking systems / crypto
-wallets taught us about staking-deployment failure modes this design hasn't named?"; each
-candidate `OPEN`, dispositioned substrate-now / FOLLOWUP / priority-reject in Round 3).
-Confidential-claim staking is **not delegated PoS**, so several canonical PoS failure classes
-are expected N/A — recording the non-applicability *is* an audit result, not a skipped item:
+Archival state publishes settlement-epoch-resolution retention bits for `Σwork` — a persistent
+public fingerprint of `P`'s serving pattern. **Not F0** (no confidential claim). **Not hide
+retention** (bits must be public).
 
-| ID | Deployed-system failure mode | Pre-stage note (disposition lands in Round 3) |
-|----|------------------------------|-----------------------------------------------|
-| **G1** | Slashing / penalty tracking | Shekyl staking has **no slashing** (confirm vs [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)); if confirmed, the "wallet tracks slashing risk" class is N/A — document and close. |
-| **G2** | Validator / delegation UX | Not delegated PoS — expected N/A; confirm + document. |
-| **G3** | Lock-up / unbonding surprise | Tier lock windows; wallet surfaces `unlock_height` (`StakeView`, §6). Wargame "funds locked longer than the user expected" — is the surfacing sufficient? |
-| **G4** | Dust-reward / fee-starved claim | Claiming costs a tx fee; if `claimable < fee` the claim is uneconomic (a real Cosmos/ETH-staking failure mode). Does the wallet warn / batch / defer? Likely a substrate-now UX pin or a FOLLOWUP. |
-| **G5** | Resync during in-flight claim | Covered by §3.4 (`claim_pending_epochs` runtime-only; `Restore` starts empty) + §5 — confirm exhaustively, do not assume. |
-| **G6** | Mempool eviction of a claim tx | Does the claim path inherit `PendingTxEngine`'s staleness gate (§8.9)? Confirm the duplicated gate covers claim eviction, not only ordinary spends. |
-| **G7** | Long-range reorg of a confirmed claim | Covered by the §5.2 forward rebuild — confirm no *additional* wallet gap. Daemon reorg correctness assumed as for spends (§5.2). |
-| **G8** | HW-wallet signing latency (claim/unstake) | Claim prove needs `x` transiently via the `Signer` boundary (anchor 2); confirm the HW-wallet path and its latency posture for the time-sensitive claim window. |
-| **G9** | Wallet-locked during claim window | Does a locked / passphrase-gated wallet block time-sensitive claims? UX-vs-security trade — disposition in Round 3. |
-| **G10** | Fee-bump / replacement of a stuck claim | Expected **priority-3 rejection** mirroring the PR 5 G3 precedent (reopening criteria: FCMP++ fingerprint-unobservability analysis OR telemetry re-classification of stuck-tx-recovery into a higher priority class). Confirm the precedent transfers to claim txs. |
+| Axis | Coarsenable? |
+|------|--------------|
+| Shard `s` | **No** — per-shard `R_market` / `Σwork` |
+| Epoch `E` | **Yes** — **`SETTLEMENT_EPOCH_BLOCKS`** |
 
-**Round-3 dependencies / cross-track asks:** (1) upstream Round 2 wire/KAT gates (§8.0) are
-not blocking the *wargame*, but byte-exact claim/stake wire and entitlement vectors must be
-cited where **T8** / **G7** reference consensus behavior; (2) **T3**'s cold-start cohort floor
-may require an upstream consensus coordination ask — record it as a cross-track item, do not
-assume it exists.
+SEB pinned at **10_000** (~13.9 d @ 120 s) per [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
+If genuine emission lock → structural F1 fixed at SEB; hygiene-only residual. If placeholder →
+vote coarser SEB before hygiene-only accept.
 
-### 7.5 Round 3 wargame (executed 2026-06-05): dispositions
+**Disposition:** provisionally accepted category; **finally accepted only after T-A1 sim** at
+pinned SEB + hygiene defaults.
 
-This subsection **executes** the §7.4 agenda — every T- and G-item is driven to a
-disposition — and **augments** it with a survey of attacks that deployed privacy chains
-(Monero, Zcash, Grin/MimbleWimble) and PoS/DeFi staking systems have actually suffered, so
-the threat model is exhausted against history, not only against the design's own internal
-seed. Each disposition is one of (per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):
-**mitigated-in-design** (mechanism cited), **FOLLOWUP** (target version + reopening trigger),
-**cross-track upstream** (consensus ask, not assumed), or **priority-reject** (reopening
-criteria). Adversary models **A1–A4** are §7.4. Real-world analogs are named so a future
-maintainer can see *which* historical failure each pin defends against.
+### 7.8 G11 — inflation and conservation
 
-**Threat-model-exhaustion dispositions (T1–T9 from §7.4):**
+**Conservation law (consensus):**
 
-| ID | Real-world analog | Disposition |
-|----|-------------------|-------------|
-| **T1** Per-stake claim-sequence correlation | Monero temporal analysis + EAE (Eve-Alice-Eve) anonymity-set shrinkage | **Mitigated-in-design (default) + FOLLOWUP (jitter).** Full-window batching (claim all unclaimed ≤ `MAX_EPOCHS_PER_CLAIM=15` in one tx — §6/§6.2) collapses the common case to a single event. Residual: tier-3 backlogs > 15 epochs force multiple txs carrying a `(tier, contiguous-window)` serial signal. Wallet pin: **no fixed epoch-boundary broadcast cadence**; randomized delay + Dandelion++ (network layer). **FOLLOWUP V3.1**: pin the jitter distribution + Dandelion++ default. **Reopen:** testnet shows residual serial correlation under A2 despite batching (mirrors `CONFIDENTIAL_STAKING.md` §14.4 reopen-if). |
-| **T2** Claim↔stake linkage across a sequence | Zcash nullifier-analysis / repeated-shielded-action linkage | **Mitigated-in-design.** `N_{i,S}=x_i·G_S` is pairwise-unlinkable across **independent per-epoch bases** `G_S` (§6.3 DDH split, KAT-locked). Confirmed across the *whole* sequence: the nullifier vector exposes no cross-epoch join key beyond the claimed set `{S}` itself. Residual linkage is **not cryptographic** — it is the tier+window scope (T1) and the claim-tx-type tell (T10). **Reopen:** the DDH/RO heuristic on `hash_to_ec` bases breaks (consensus-crypto event, not wallet). |
-| **T3** Band cohort-size leakage (cold start) | Zcash small-shielded-pool deanonymization | **Cross-track upstream + wallet-UI FOLLOWUP.** Structural fix (floor `band_sum_eff`, suppress burn-signal publication below a cohort threshold) is consensus-owned (`CONFIDENTIAL_STAKING.md` §14.1/§14.4 P2). **Cross-track ask (record, do not assume):** confirm the cohort-floor/suppression is active at genesis. **FOLLOWUP V3.1**: wallet surfaces an early-staker thin-cohort warning before a stake lands (cohort estimable from public participation). **Reopen:** testnet residual fingerprinting despite the consensus floor. |
-| **T4** Claim-timing correlation | Monero broadcast-timing + first-seen origin heuristic | **Mitigated-in-design (network layer) + wallet pin.** Global settlement-epoch boundaries cluster claimers, *growing* the temporal anonymity set (§6.2). Wallet must not undermine it: **no auto-claim at a deterministic height** tied to a stake's unlock; jitter + Dandelion++ + Tor/I2P-first ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)). Folds into the T1 jitter FOLLOWUP. |
-| **T5** In-memory opening exposure | Heap-disclosure / cold-boot / swap-leak of wallet secrets | **Mitigated-in-design.** `(amount, z)` in-memory only, re-derived on hydration, **never sealed** (§3.3.1/§4.2); transient `x` zeroized after claim build; no plaintext opening in messages/RPC (R0-D3). **Stage-3 test (load-bearing):** verify the prover bundle wipes after proof emission — the one place a copy of `(amount, z, x)` transits. **Reopen:** a measured zeroization gap in the prover-bundle path. |
-| **T6** Nullifier-reorg desync | (no external analog — wallet-internal) | **Mitigated-in-design (forward rebuild).** §5.2 clear-all/replay-all recomputes `claimed_epochs` from the post-reorg chain ∩ `{x·G_S}`, height-free, so it self-heals across adversarial shapes; the sharp case — a **straddling-lock reorg** that moves `eligible_height` across a tier boundary — re-derives the window from post-reorg `creation` (§3C arithmetic), so it is correct by construction. Daemon reorg correctness assumed as for spent key images (§5.2). **Stage-3 test:** the three §7.4 shapes. |
-| **T7** Nullifier / key-image cross-link | **Janus attack** (Monero subaddress-linkage); "shared secret across two surfaces" class | **Mitigated-in-design.** `x·G_S` (claim) vs `x·Hp(O)` (unstake/spend) unlinkable under independent NUMS bases (§6.3, KAT-locked, `G_S ≠ Hp(O)`). Wallet must never emit both tags in a correlated context nor expose a join field. **Janus specifically N/A:** FA-1 single static address ⇒ no subaddresses to cross-test; the Janus surface does not exist. **Reopen:** DDH-base independence break (consensus-crypto). |
-| **T8** Silent inflation (wallet role) | **Zcash 2018 counterfeiting vuln**; **Monero 2017 RingCT inflation bug** | **Mitigated-in-design (wallet non-masking) — priority-1.** Soundness of the entitlement relation is consensus-owned (`h_bind` + `N/D`-recompute + bounded-remainder + `ρ_cap`, §9). Wallet obligations: (a) never construct over-entitlement (recompute `N/D` before prove); (b) **never rely on the consensus range proof to mask a local accounting bug**. See G11. **Reopen:** any wallet code deriving claimable from a daemon-supplied figure rather than its own secret weight × public `ρ_e`. |
-| **T9** Fake `StakeEvent` injection | Light-client false-event injection by a malicious server | **Mitigated-in-design.** Events are scanner-origin (blocks tied to daemon headers); `OwnNullifierObserved` requires matching a locally derived `N_{i,S}` — a forged event cannot fabricate the wallet's own nullifier (adversary lacks `x`). A1 can **withhold/delay** (liveness, not safety) but cannot fabricate a claimed epoch. **Reopen:** any path that sets `claimed_epochs` from an event not gated on local nullifier match. |
-
-**Privacy-crypto-survey vectors (new in Round 3 — T10–T14):** vectors that deployed privacy
-systems suffered and the §7.4 seed had not named.
-
-| ID | Real-world analog | Disposition |
-|----|-------------------|-------------|
-| **T10** Claim-tx-type distinguishability / staker-set anonymity | **Zcash transparent↔shielded distinguishability** (the *act* of shielding was observable; low usage collapsed the effective set) | **Accept v1 scope (consensus) + V4/L4 FOLLOWUP + wallet non-worsening.** A claim is a distinct input type (`txin_stake_claim_v2`), so the act of staking/claiming is publicly classifiable and the claim anonymity set is "stakers in the same tier+window," never "all txs." **Mission note (Priority 2):** this is *not* "privacy as a setting" — *within* staking every staker gets identical guarantees; non-participation is a user choice, not a downgrade of the base transfer. Structural hide (conceal tier/window) = **L4, deferred to V4** (`CONFIDENTIAL_STAKING.md` §14.4). Wallet's job: add **no** further fingerprint (T14/G12) and surface to the user that staking is publicly observable as such. **Reopen:** product requires full-staker-set indistinguishability before genesis (§14.4 item-9 reopen-if). |
-| **T11** Stake/unstake/claim amount & commitment linkage | **MimbleWimble tx-graph reconstruction**; Monero pre-RingCT amount correlation | **Mitigated-in-design — confirmed at source (2026-06-05).** Unstake is a **normal post-lock FCMP++ membership spend**: it consumes the staked leaf via a ZK membership proof that **does not reveal which leaf** (`CONFIDENTIAL_STAKING.md` §6.3 step 1) + key image `x·Hp(O)`, and **appends a fresh main-tree principal output** (§6.4.3 cross-tree transition) — the literal `C_stake` is **never re-published**, so there is **no point-equality stake↔unstake link** (the unlinkability an ordinary transfer enjoys; §7 pins the spend "unlinkable"). The "re-stake principal in the same tx" model that *would* have coupled them was explicitly **rejected** (§6.4.5). Residual: the unstake's membership anonymity set is the **staking subtree** (3C separate tree), not the whole main tree — that is the **T10/T3 staker-set/cold-start scoping**, already dispositioned, **not** a commitment-linkage leak. (b) Band→amount bounding = T3/T10. Wallet never surfaces a stake↔unstake/claim join key (lens-3, §7.3). **Reopen:** consensus changes unstake to re-publish or re-stake the principal commitment in-place. |
-| **T12** One-time-key collision / dust-stake | **Monero 2018 burning bug** (multiple outputs to the same one-time key) | **Mitigated-in-design (key by OutputRef) + Stage-3 test.** `StakeInstance` is keyed on `OutputRef=(tx_hash, index)` (§3.3 byte-stable derivation), **not** the one-time key, so two outputs colliding on a one-time key are distinct instances — the burning-bug collision cannot corrupt stake tracking. (An attacker cannot create a stake bearing the victim's spend authority; the staker holds the opening.) **Stage-3 test:** two staked outputs sharing a one-time key resolve to two `StakeInstance`s. **Reopen:** any scanner path that dedups stakes by one-time key. |
-| **T13** Remote-node query-pattern leakage | **Monero malicious-remote-node** key-image/output-query deanonymization | **Mitigated-in-design (bulk-fetch invariant) — load-bearing.** Wallet recomputes `{x·G_S}` locally and intersects the chain nullifier set; it must fetch the **whole** set (bulk/contiguous), **never** query "is *this* nullifier present?" per-item — else A1/A4 learns the wallet's claimed epochs. Adopt [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md)'s "bulk/contiguous only, never per-output query" invariant verbatim for the nullifier set + stake scan. **Stage-3 pin (load-bearing).** **Reopen:** any RPC path querying nullifier membership per-item. |
-| **T14** Whole-lifecycle broadcast-origin linkage | Monero broadcast-origin / IP↔tx correlation across a wallet's activity | **Mitigated-in-design (network layer) + wallet pin.** stake-create / claims / unstake from one wallet over a correlated origin (IP/Tor circuit) or at correlated heights link the whole lifecycle. Tor/I2P-first + Dandelion++ + fresh circuit per tx; **wallet must not chain stake→auto-claim→auto-unstake at deterministic offsets.** Folds into the T1/T4 jitter FOLLOWUP. |
-
-**Wider-substrate audit dispositions (G1–G10 from §7.4):**
-
-| ID | Real-world analog | Disposition |
-|----|-------------------|-------------|
-| **G1** Slashing / penalty tracking | Cosmos/ETH validator slashing | **N/A — confirmed.** Shekyl confidential staking is reward-only; no slashing/penalty. The "wallet tracks slashing risk" class does not exist. Recording N/A *is* the audit result. |
-| **G2** Validator / delegation UX | Delegated-PoS delegation flows | **N/A — confirmed.** Not delegated PoS; no validators, no delegation surface. |
-| **G3** Lock-up / unbonding surprise | Cosmos/ETH unbonding-period confusion | **Mitigated-in-design + FOLLOWUP (UX).** `StakeView.unlock_height` surfaces the lock boundary (§6). **FOLLOWUP V3.1**: GUI/CLI shows lock duration + unlock height at stake time and warns on long tier-3 locks. **Reopen:** usability testing shows lock surprise. |
-| **G4** Dust-reward / fee-starved claim | Cosmos/ETH "claiming costs more than the reward" | **FOLLOWUP V3.1 (UX pin).** Wallet compares `claimable` to the estimated claim-tx fee; if `claimable < fee`, **never auto-broadcast** — warn / defer / accrue more epochs ("not yet worth claiming"). Implemented at Stage 3. |
-| **G5** Resync during in-flight claim | — | **Mitigated-in-design.** `claim_pending_epochs` runtime-only; `Restore` starts empty; R0-D2 rebuild recomputes `claimed_epochs` from chain ∩ `{x·G_S}`; an in-flight claim either landed (folded) or did not (epoch claimable again; consensus rejects a duplicate nullifier). **Reopen:** any persistence of `claim_pending_epochs`. |
-| **G6** Mempool eviction of a claim tx | — | **Mitigated-in-design (inherits staleness gate) + Stage-3 test.** Claim path runs through `PendingTxEngine`'s staleness/eviction handling (§8.9); on eviction the epoch returns to claimable with no chain trace. **Stage-3 test:** evicted claim ⇒ epoch re-claimable. **Reopen:** claim path bypasses the staleness gate. |
-| **G7** Long-range reorg of a confirmed claim | — | **Mitigated-in-design (forward rebuild).** Same as T6; no additional wallet gap. Daemon correctness assumed as for spends. |
-| **G8** HW-wallet signing latency (claim/unstake) | Hardware-wallet round-trip latency | **FOLLOWUP V3.1 + design note.** Claim-prove needs `x` transiently via the `Signer` boundary; HW round-trips add latency. Claims are **not deadline-tight** (settlement epochs are coarse and epochs stay claimable in the accrued window), so this is **not a Stage-3 blocker**. **FOLLOWUP V3.1**: measure HW claim-prove latency. **Reopen:** a HW path where claim-prove exceeds a settlement epoch. |
-| **G9** Wallet-locked during claim window | — | **Mitigated-by-window + FOLLOWUP.** Because claims are not deadline-tight, a locked wallet claims when next unlocked — no loss/expiry in v1. **FOLLOWUP V3.1**: optional reminder. **Reopen:** any v1 mechanism that expires a claim. |
-| **G10** Fee-bump / replacement of a stuck claim | RBF / CPFP fee-bumping | **Priority-3 reject (precedent transfers).** Per the PR 5 G3 precedent: claims inherit the no-RBF posture; a stuck claim is handled by the staleness gate + re-claim (epoch stays claimable). **Reopen criteria (PR 5 G3):** FCMP++ fingerprint-unobservability analysis **OR** telemetry re-classification of stuck-tx recovery into a higher priority class. |
-
-**Privacy-crypto-survey wider-substrate items (new — G11–G13):**
-
-| ID | Real-world analog | Disposition |
-|----|-------------------|-------------|
-| **G11** Proof-system soundness / inflation bug | **Zcash 2018 counterfeiting vuln**; **Monero 2017 inflation bug** | **Consensus-owned; wallet priority-1 non-masking (cross-ref T8).** A soundness break in entitlement/range/membership proofs would mint coins — consensus-track (audit + KATs + §9 conservation). Wallet role: non-masking (T8) + **loud failure** on any local accounting inconsistency rather than trusting the proof. Naming it ensures the worst historical class is on record. **Reopen:** consensus audit finding. |
-| **G12** Wallet/tx-construction fingerprint | **Monero wallet2 fingerprinting** (ordering/fee/extra-field tells partition the anonymity set by wallet) | **FOLLOWUP V3.1 (canonicalization pin) + Stage-3 test.** Claim txs carry `settlement_epochs[]` + `nullifiers[]`; ordering must be **canonical (sorted)**, fee per the 2A canonical model, no wallet-specific padding. **Reopen:** any non-canonical ordering or wallet-specific field in the claim/stake wire (cross-ref the upstream byte-exact wire, §8.0). |
-| **G13** Claim front-running / censorship (MEV) | DeFi claim front-running / miner censorship | **Mitigated-by-construction + retry.** A claim's reward binds to the wallet's own nullifier — no observer extracts value by front-running (idempotent to ordering, non-competitive). Censorship: a miner can omit a claim, but the epoch stays claimable ⇒ retry. **Reopen:** a consensus change that makes claims order-dependent or competitive. |
-
-#### 7.5.1 Load-bearing findings (the four that warrant depth)
-
-1. **Inflation is the worst historical class — the wallet's role is non-masking (T8/G11).**
-   Both major privacy chains shipped silent-inflation vulnerabilities (Zcash's 2018 zk-SNARK
-   counterfeiting flaw; Monero's 2017 RingCT bug). The wallet cannot prevent a consensus
-   soundness break, but it **must not become the layer that hides one**: it derives
-   `claimable` only from its own secret weight × the public, full-node-verifiable `ρ_e`
-   (§8.6) — never from a daemon-supplied figure — and it loud-fails any local accounting
-   inconsistency rather than letting the consensus range proof absorb it (priority-1,
-   `00-mission.mdc`). This is the single most important wallet-side privacy/soundness pin.
-   **The *consensus*-side soundness is the existential surface and must not be scored
-   "strong" on mechanism-presence:** the entitlement proof (8a) and the band-declaration
-   binding (8b), split out in §7.5.3, are **unverified** and carry the round's **top audit
-   rigor** — "the mechanism exists" is not "the mechanism is sound," and a soundness break
-   here is undetectable infinite inflation (the Zcash/Monero lesson). The wallet pin above is
-   necessary but does not discharge 8a/8b.
-2. **Stake↔unstake commitment linkage — investigated and closed (T11, 2026-06-05).** The
-   Round-3 concern was that unstake might re-publish the *literal* `C_stake` (a
-   MimbleWimble-class point-equality link no wallet redaction could close). **Confirmed at
-   source it does not:** unstake is a normal FCMP++ membership spend — the staked leaf is
-   consumed via a ZK membership proof that does not reveal which leaf
-   (`CONFIDENTIAL_STAKING.md` §6.3 step 1), and a **fresh** main-tree principal output is
-   appended (§6.4.3 cross-tree transition); §7 pins the spend "unlinkable," and the coupling
-   "re-stake in the same tx" alternative was explicitly **rejected** (§6.4.5). The only
-   residual is that the unstake's anonymity set is the **staking subtree** (3C), not the
-   whole main tree — already captured as the T10/T3 staker-set/cold-start property, not a
-   linkage bug. **No Priority-2 finding from T11.** (The clean close T11 would have permitted
-   was subsequently re-gated by the §7.5.3 synthesis on the unrelated top finding F0.)
-3. **Remote-node query-pattern leakage is a load-bearing Stage-3 pin (T13).** Monero's
-   malicious-remote-node deanonymization came from light wallets revealing *which* outputs /
-   key images they cared about. The confidential-staking nullifier scan must inherit the
-   curve-tree client's **bulk/contiguous-only, never-per-item-query** invariant verbatim;
-   a per-nullifier "is this present?" RPC would hand A1 the wallet's exact claimed-epoch set.
-   Recorded here as load-bearing so Stage-3 implementation cannot quietly add a per-item query.
-4. **Staking is publicly observable as a class — accepted for v1, hidden in V4 (T10).** The
-   distinct claim input type makes "this wallet stakes" public; the claim anonymity set is
-   tier+window-scoped, not global. This is the Zcash shielded-set lesson applied honestly:
-   v1 accepts it (with full intra-cohort uniformity, so it is not "privacy as a setting"),
-   and the structural hide (L4: conceal tier/window) is a V4 lattice-path gate. The wallet's
-   obligation is to add no *further* fingerprint (T14/G12) and to tell the user the truth
-   about observability.
-
-#### 7.5.2 Residuals and forward actions
-
-- **FOLLOWUPS (target V3.1)** — `docs/FOLLOWUPS.md` entries: jitter/Dandelion++ broadcast
-  default (T1/T4/T14); thin-cohort early-staker warning (T3); dust/fee-starved-claim UX (G4);
-  lock-up surfacing UX (G3); HW-wallet claim-prove latency measurement (G8); locked-wallet
-  claim reminder (G9); claim-tx canonical-ordering fingerprint pin (G12).
-- **Cross-track upstream asks (record, do not assume):** cohort-floor/suppression active at
-  genesis (T3); L4 hide-tier/window for V4 (T10). *(T11 principal-commitment
-  re-randomization was investigated and confirmed at source 2026-06-05 — §7.5.1 #2 — so it
-  is no longer an open ask.)*
-- **Stage-3 implementation pins (load-bearing):** bulk-fetch-only nullifier scan (T13);
-  `OutputRef`-keying not one-time-key (T12); prover-bundle zeroization (T5); claim via the
-  `PendingTxEngine` staleness gate (G6); canonical wire ordering (G12).
-- **Priority-rejects:** fee-bump/RBF of a stuck claim (G10), with the PR 5 G3 reopening
-  criteria.
-- **N/A confirmed (audit results):** slashing (G1), delegation UX (G2), Janus subaddress
-  linkage (T7) — all structurally absent.
-
-**Closure status:** all T1–T14 and G1–G13 carry a disposition; the wargame is **executed**,
-and **T11** (the candidate gating finding) was investigated and **resolved at source**
-(§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend with a fresh output; no
-point-equality link, no Priority-2 finding). A first clean close was recorded 2026-06-05 —
-then **re-gated the same day by the dual-wargamer synthesis in §7.5.3**, which surfaced a new
-top finding **F0** (the claim's effective anonymity set is the `{tier × creation-window}`
-cohort, confirmed at source, which reframes T1/T2/T3 into one structural problem and can
-approach a cohort of one at cold start). **Historical note (2026-06-05):** closure was
-re-gated on F0 bucketing on the **confidential-entitlement claim wire**. **Superseded
-(2026-06):** F-ARCHIVAL pay-for-service rebasing retires that wire for genesis; F0
-bucketing is **not** the Round 3 closure item on the rebased substrate (see §7.5.3
-*F0 disposition on the rebased substrate*). The other residuals (FOLLOWUPS V3.1,
-Stage-3 pins on principal/unstake path) carry reopening triggers where still
-load-bearing. Stage 3 *merge* remains gated on §8.0 (rebased substrate + Tier 1
-soundness), not on F0 bucketing.
-
-#### 7.5.3 Round 3 synthesis (dual-wargamer adversarial pass, 2026-06-05)
-
-Two independent adversarial passes over §7.5 (one privacy-crypto-graveyard-led, one
-PoS/economic-research-led) were synthesized. The pass **confirmed** the §7.5 dispositions
-that hold, **sharpened** several, surfaced **one finding that outranks the entire pre-staged
-T-list** (F0), and added an adversary model (**A5**, economic/rational actors). F0 re-gates
-Round 3 closure; everything else lands as a sharpening or a new forward action.
-
-##### F0 — The claim anonymity set is the `{tier × creation-window}` cohort, not the staking subtree (top finding; reframes T1/T2/T3)
-
-FCMP++ gives *spends* a whole-chain anonymity set — the design's crown jewel. A **claim**
-does not inherit it. A claim proves membership in the **staking subtree** (already strictly
-smaller), and the claim-verify surface then narrows it further. **The reveal-vs-ZK question
-is now settled at source — and the answer is the worst case: both partitioning fields are
-transmitted in cleartext.**
-
-- **`tier` and `creation_height` are explicit public wire fields.** `CONFIDENTIAL_STAKING.md`
-  §6.4.8 `txin_stake_claim_v2`: **`tier` (u8, "Public")** and **`creation_height` (u64,
-  "Public")**. §6.4.3 confirms the verifier path — "**At claim (public `(tier, creation)`
-  from wire):** verifier recomputes `h_bind`, … checks the window arithmetically"; "Verifier
-  reads **one** `tier` scalar; uses it for the `h_bind` recompute **and** `tier_num`." So
-  `creation_height` is **not** merely brute-forceable from a published `h_bind` (my earlier
-  §7.5.3 hedge) — it is **published directly**. The membership proof hides *which leaf* (so
-  `C_stake`/principal stays unlinked), but the two partitioning fields are in the clear on
-  every claim.
-
-**Consequence — this reframes three pre-staged threats into one structural variable.** The
-`{tier × creation_height}` **cohort size** is the master variable behind T1 (claim-sequence
-correlation), T2 (claim↔stake linkage), and T3 (cold-start). Because **every claim of one
-stake carries the identical cleartext `(tier, creation_height)`**, a stake's claims **link to
-each other by deterministic exact-match on two public fields, regardless of the DDH-unlinkable
-nullifiers** — so T2 is **structural, not residual** (the §7.5 T2 disposition under-weighted
-this: the §6.3 DDH split protects claim↔*unstake-key-image* linkage, **not** claim↔claim
-linkage within a stake's sequence). The doc's own §6.2 "a weak serial signal that accumulates"
-is **understated**: it is an exact-match join key, not a statistical signal. At cold start the
-cohort of stakes sharing an exact `(tier, creation_height)` approaches **one** — the **Zcash
-small-shielded-pool lesson with a Shekyl-specific multiplier**: the pool is not merely small,
-it is **partitioned by tier and exact creation-height**.
-
-**Why it is revealed — the security/privacy coupling (do not "just add ZK").** The reveal is
-**load-bearing for inflation-safety**, not an oversight. §6.4.3 excludes tier-forgery
-*because* the **single revealed `tier`** drives **both** the `h_bind` hash-equality **and** the
-multiplier `N = tier_num(tier)·ΣK_S` (recompute-and-reject); the revealed `creation_height`
-makes the window check `creation < S ≤ creation + tier_lock` **pure arithmetic** rather than an
-in-circuit relation. This is precisely the **3C** win over **3A** (§6.4.3): "no new primitive."
-Moving `(tier, creation)` into zero knowledge pushes the multiplier-consistency and
-window-membership checks **in-circuit** — reintroducing the **novel-consensus-ZK-primitive cost
-that 3A was rejected for**. So **L4-hide-tier/window is not a bolt-on**; it re-opens the
-3C-vs-3A decision and must be co-designed with the entitlement circuit.
-
-**The reveal also shrinks the existential audit surface (the coupling is stronger than
-"cheaper consensus").** Every check that stays cleartext is a check that is **not in the
-entitlement circuit** — and the circuit is exactly where **8a soundness** lives, the one item
-that "must not be waved through." So the reveal does not merely buy inflation-safety
-*without a new primitive*; it buys a **smaller, more auditable 8a circuit** — a **tighter
-soundness perimeter on the existential item.** The corollary is a **named cost on any future
-V4 hide-(tier, creation) design:** hiding those fields **grows the 8a surface it must
-re-audit** (multiplier-consistency and window-membership move inside the circuit). That is a
-security cost of the privacy fix, not a privacy-neutral move — it must be priced into the V4
-design up front, not discovered during its audit.
-
-Under [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) the hierarchy is explicit: the
-reveal serves **Priority 1** (inflation-safety, cheap + auditable + smaller circuit); F0 is a
-**Priority 2** privacy cost. Priority 2 cannot override Priority 1 unless a construction
-delivers **both** — which is the V4/L4 work, not a v1 patch. **But the hierarchy ranks the
-*conflict resolution*; it does not *price the residual*.** "It's a P2 cost" correctly licenses
-*why the reveal ships in v1* — it does **not** establish that the cost is small. For a privacy
-coin, "staking is deterministically deanonymizable into small cohorts by an exact-match join on
-two cleartext fields" is a **material degradation of the staking feature's headline value** for
-the subset of users who stake — confidentiality **weaker than the spend path's whole-chain
-set**. That can be the right product call, but the F0 "document-and-accept" option must clear a
-**high, eyes-open product bar** — it must not be **defaulted-to because the leak sorts under
-P2.**
-
-**Disposition — confirmed finding; re-opens `§14.4` item-9; cross-track decision (not an open
-factual question).** The reveal-vs-ZK *question* (the merged-list #2, the cheapest existential
-check) is **answered: revealed-by-design, Priority-1-justified.** What remains is a **consensus
-policy decision**, which per `21-reversion-clause-discipline.mdc` **re-opens**
-`CONFIDENTIAL_STAKING.md` §14.4 item 9 ("accept tier+window-scoped anonymity for v1") with the
-scope now known to be **exact `(tier, creation_height)`** — tighter than the pin acknowledges,
-and `cohort → 1` at cold start collides with **Priority 2** (same guarantees for every user).
-**Cross-track ask (the gating item for clean closure):**
-- **The `band_sum_eff` floor (§14) does *not* address this — it is a different leak.** The
-  floor smooths the **public-rate readout** (T3's rate-channel); it does **nothing** for the
-  **cohort-membership collapse**, because flooring the aggregate `band_sum` does not enlarge
-  the `{tier × creation_height}` set a claim narrows to. Cold-start therefore needs **two**
-  mitigations: the band floor (rate channel) **and** a claim-cohort mechanism (reveal channel).
-- The decision is **three-way**, not the binary "new mechanism vs. accept" an earlier draft
-  implied. In increasing cost:
-  1. **Accept-exact** (`{tier × creation_height}`). The high-bar product decision above —
-     deterministic cross-claim linkage, cohort `→ 1` at cold start, on record. Cheapest to
-     ship, weakest privacy.
-  2. **Cleartext `creation` bucketing (the cheap middle — no circuit, no new primitive).**
-     Bind a **bucketed** creation into `h_bind` (bucket width `W`), not the exact height; the
-     cohort enlarges from `{tier × exact-height}` to `{tier × bucket}`, `W` is the
-     **cohort-size ⇄ cost dial**, and it is **all cleartext arithmetic** — just a coarsening
-     rule plus a rounding direction. **The rounding direction is the hard inflation
-     constraint:** round creation **UP** to the bucket ceiling and make that single bucketed
-     value canonical for the lower bound, `eff_lock`, **and** the consensus lock-enforcement
-     together. Then `S > ceiling ≥ true_creation` (no claiming pre-stake epochs — inflation
-     safe) and accrual `(ceiling, ceiling+tier_lock]` stays `≤` the consensus-enforced lock
-     (no over-claim); the cost is a **bounded ≤W lock-shift**, not unbounded yield loss. Round
-     **down** and `S > floor` admits epochs in `(floor, true_creation]` — **claiming before
-     the stake existed = silent inflation** (the forbidden direction). Two residuals to name
-     if taken: **(i)** the **tier factor is irreducible** to ~⅓ (per-tier) without V4 — the
-     multiplier needs `tier_num` in clear regardless of any creation bucketing; **(ii)**
-     round-up gives a mild incentive to time stake creation near a bucket ceiling to minimize
-     the lock-shift, **re-clustering creation timing inside the bucket** (harmless to cohort
-     size; a faint stake-tx-timing tell). ***Recommended v1 disposition*** *— it attacks the
-     one property that exceeds the already-accepted staking budget (scale-resistance): it
-     restores dilution-with-growth so the crowd covers a claim again as the network grows. See
-     the baseline-budget calibration below.*
-  3. **V4 in-circuit hiding** of `(tier, creation)` — the only path that removes the **tier**
-     axis too, at the 3A circuit cost + the 8a re-audit cost named in the coupling note.
-  (A `{tier × bucket}` k-anonymity *gate* can compose on top of option 2, but the band floor
-  is **not** it.) "Incentivize more staking" fixes absolute size, **not** the partition.
-- **Adjacent economic-redesign question raised 2026-06-05 (cross-track to consensus/economics,
-  own design round): can the `tier` axis be removed at the source?** F0's irreducible residual
-  (2(i)) is the tier reveal, forced because the multiplier is tier-specific. If reward were
-  **derivative** (a single global rate / function of already-committed quantities, not a
-  staker-declared discrete tier), `tier_num` would not be per-stake and the **`tier` field
-  could leave the wire** — collapsing the cohort to `{creation_bucket}` with **no tier
-  subdivision**. **Structural finding:** removing tiers removes the tier axis, but **does not
-  remove `creation`** — a *time-accrued* reward needs a provable accrual-start, and proving it
-  is the **same 3C-vs-3A choice already settled** (reveal `creation` cleartext, or adopt the
-  rejected non-membership primitive). So the end state is **`{creation_bucket}`**, not
-  "nothing," unless reward also stops being time-accrued (a larger economic change). The
-  trade is real: tiers exist to **price duration commitment**; removing them trades that
-  incentive lever for the privacy win. **This is a consensus-economics change, not a wallet
-  change** — recorded here as an F0-motivated alternative; it needs its own spec-first design
-  round (`05-system-thinking.mdc`) before any disposition. See the §7.5.3 economic-redesign
-  note below.
-
-**Wallet-side forward action (FOLLOWUP V3.1, does not substitute for the consensus decision):**
-surface a **cohort-size warning before a *claim*** when the observable cohort
-(`{tier × creation_height}`, or `{tier × bucket}` / `{creation_bucket}` under options 2/tier-
-removal) is small (estimable from public chain state) — the honest-UX analog of the T3
-thin-cohort stake warning, elevated to the headline and extended to the claim path.
-
-###### F0 baseline-budget calibration — membership cost (already accepted) vs. linkage cost (the excess)
-
-F0's magnitude must be priced against the **staking-exposure budget the project accepted
-*before* confidential staking existed** (staking as "a public notice of support"), not against
-zero-reveal. Separating the two cleanly de-escalates the finding and re-targets the mitigation.
-
-- **The accepted baseline is a membership-and-aggregate cost, and it is *scale-friendly*.** The
-  original posture priced: you are observably a staker; the **band aggregate** and the **public
-  rate** are public *by design*; stake/claim/unstake txs are identifiable *as staking*. This was
-  the right thing to accept — staking is an **overlay**, it cannot match the spend path (the
-  headline product), and the cost **dilutes with growth**: at maturity you are one of thousands
-  of stakers and the crowd is your cover. It gets *better* as the network grows.
-- **F0's cohort-collapse is a different *category* — a linkage cost — and the part that exceeds
-  baseline is specifically its *scale-resistance*.** The reveal (a) joins your claims into an
-  **attributable sequence**, (b) **bridges that sequence back to your stake-creation event**,
-  and (c) pins it to a `{tier × exact-height}` cohort. The budget-breaking property is (c)'s
-  scale-resistance: the cohort is *one block's stake-creations ÷ 3 tiers* — governed by the
-  **per-block creation rate, not the accumulated total**. Ten thousand lifetime stakers do not
-  help; your cohort is the two or three stakes minted *in your block at your tier*. **The crowd
-  never becomes your cover.** The membership cost dilutes with growth; this one does not — that
-  is the qualitative difference, and (per the block-granularity of `creation_height ≜
-  eligible_height`, `CONFIDENTIAL_STAKING.md` §2/§6.4.3) it is a **steady-state** thinness, not
-  only a cold-start one.
-- **Second escalation the baseline lacked: targeted-cascade force-multiplier.** Under pure
-  set-membership, deanonymizing one claim tells the adversary nothing about the others. Under
-  the reveal, **one foothold** — a single linked claim, or merely watching your stake tx —
-  **cascades to your entire claim history** via the deterministic join. Set-membership does not
-  cascade; this does.
-- **Net the other way (correcting the prior "headline #2" overstatement).** A stake's claims
-  were **already substantially linkable without the reveal** — timing cadence, claim-tx
-  fingerprint + epoch-count (T10/G12), network circuit reuse (T1/T4/T14). Against that realistic
-  counterfactual, the reveal's **marginal** contribution is "**exact-and-deterministic instead
-  of strong-statistical**," plus the **creation-anchor** bridging to the stake side. For a
-  careless staker it adds **modestly**; for a careful one (batches, fresh circuits, irregular
-  timing) the reveal is the **whole** leak — the one channel behavior cannot defeat. **So the
-  reveal most penalizes the privacy-conscious staker** (the wrong population to penalize), but
-  it is a **smaller delta over baseline than the "headline" framing implied** for everyone else.
-
-**Honest calibration.** F0 is the **same category of cost the team already accepted** — staking
-is the exposed overlay, the spend path is untouched, **nothing here breaches the core privacy
-promise** — at a **larger magnitude** than "staking reveals something" naturally priced. The
-magnitude excess is specifically **scale-resistance + targeted-cascade**, *not the existence of
-exposure per se*.
-
-**Reframed mitigation target (this lowers the temperature).** The goal was **never zero
-reveal** — it is "**do not sit above the staking-exposure budget already set.**"
-**Creation-bucketing (option 2 — cheap cleartext, no economic redesign) attacks exactly the
-budget-exceeding feature:** it **restores dilution-with-growth**, because the cohort becomes a
-*bucket's worth* of creations rather than *one height's*, so the crowd starts to cover you again
-as the network grows. Bucketing brings the cost **back toward the membership-shaped baseline**,
-residual = the **within-tier, within-bucket** cohort.
-
-**Settled decision shape (de-escalates the F0 gate).** F0 is **not** "perfect claim privacy vs.
-accept a deanonymization hole." It is: **(1) bucket creation to restore scale-dilution — cheap,
-no redesign — the recommended v1 disposition**; then **(2) decide whether the residual tier-⅓
-sits inside the staking-reveals-something budget.** Honest read: it **probably does** — a
-within-tier, within-bucket cohort that **grows with the network** is close in spirit to the
-set-membership cost already accepted. The **exact-height, scale-resistant** version is what
-genuinely **broke** the budget, and bucketing fixes that **without touching the economics**
-(which are a designed counterweight — not to be unbalanced). **De-tiering (the economic
-redesign) is therefore *not* a forced move** — per
-[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
-it is **reject-now-with-reopening-criterion**: reopen **only if a specific high-value-target
-threat model shows the within-tier within-bucket cohort is unacceptable for a staking population
-the project must protect.** For the general posture, bucketing likely closes the gap; the
-economic redesign stays a **V-future option**, not a v1 dependency.
-
-###### F0 option-2 (bucketing) — mitigation, quantified
-
-Mechanism (restated for the math): `h_bind` binds a **bucket ceiling**
-`creation_bucket = ⌈ eligible_height / W ⌉ · W` instead of the exact `creation_height`,
-where `W` is the bucket width in blocks. The window check then reads `S > creation_bucket`
-(round **up**, §"hard inflation rule" below). The claim cohort coarsens from
-`{tier × exact-height}` to `{tier × bucket}`.
-
-**Cohort size.** Let `λ` = network-wide stake-creation rate (stakes/block) and `B` = number of
-tiers (`B = 3`). With creations spread roughly evenly across tiers, the expected cohort a claim
-falls into is
-
-```
-cohort(W) ≈ (W · λ) / B          # within-tier, within-bucket creations
+```text
+already_generated_coins == circulating + bonded + burned
 ```
 
-The **exact-height baseline is `W = 1`**: `cohort ≈ λ/3`, governed by the *per-block* creation
-rate — a handful regardless of how many lifetime stakers exist. Two effects of `W > 1`:
+Bond events move circulating ↔ bonded; slash bonded → burned; emission mint increases
+circulating via `already_generated`. Audit: `total_bonded_atomic == Σ_P bonded_total_atomic`.
 
-1. **Tunable multiplier (immediate).** `cohort` scales linearly in `W`. Picking `W` to span,
-   e.g., a day's creations turns a per-block handful into a per-day crowd. Illustrative
-   (assume ~720 blocks/day, flag block-time as an assumption to confirm):
+**Wallet preview invariants (KAT-backed):**
 
-   | `W` (blocks) | span (≈) | cohort at `λ=0.05/blk` | cohort at `λ=0.5/blk` |
-   |---|---|---|---|
-   | 1 | per-block | ~0.02 (→ floor of 1, i.e. *you*) | ~0.17 |
-   | 180 | ~6 h | ~3 | ~30 |
-   | 720 | ~1 day | ~12 | ~120 |
-   | 5040 | ~1 week | ~84 | ~840 |
+| ID | Invariant |
+|----|-----------|
+| **G11-E1** | `loud_vin_total == Σ recomputed reward_P(E)` for eligible epochs |
+| **G11-E2** | Bond-post: `bond_credit == bond_floor(holdings)` or Unbond debit matches |
+| **G11-E3** | Per-tx conservation neutrality in preview |
 
-2. **Restores dilution-with-growth (the load-bearing fix).** `λ` rises with adoption, so for a
-   fixed `W` the cohort *grows with the network* — the property the accepted baseline had and the
-   exact-height reveal destroyed (per the calibration above, scale-resistance was the specific
-   budget-breaker). Bucketing is the cheapest mechanism that puts the crowd back in front of you.
+Full node: strong recompute from validated state. Light client: warn + refuse on inconsistency;
+consensus is backstop.
 
-**Targeted-cascade is divided by the cohort.** Under exact height, one deanonymizing foothold
-cascades to a staker's entire claim history via the deterministic join (calibration §2). Under
-bucketing, the foothold lands on a *commingled* `(tier, bucket)` cohort of `cohort(W)` stakes, so
-the cascade's certainty is divided by ≈`cohort(W)` — the adversary recovers "one of these `k`,"
-not "this exact account."
+Retired 8a/8b (entitlement wire) — §7.A only.
 
-**What it does *not* fix (residuals to name with the disposition):**
+### 7.9 Diagnostic RPC projection (rebase of old §7.3)
 
-- **Tier ⅓ is irreducible without V4.** The multiplier needs `tier_num` in clear regardless of
-  bucketing; the `1/B` factor stays. De-tiering is the only lever on it, and it is deferred
-  (reversion-clause above).
-- **Within-stake self-linkage becomes cohort-linkage, not unlinkage.** A single stake's separate
-  claims still share `(tier, bucket)`, so they remain mutually linkable — but now *commingled with
-  `cohort(W)−1` other stakes' claims*, which is the point. Distinguishing one stake's claims from
-  its cohort-mates' **inside the bucket** rests on DDH (distinct `N_S` per epoch-base), i.e. on T7.
-- **DDH-dependence (T7) is load-bearing here.** Bucketing widens the cohort; it does not unlink
-  claims *within* the cohort — only the DDH split (`x·G_S` vs `x·Hp(O)`, independent NUMS bases)
-  does. This is exactly why T7 climbed to the soundness tier (sharpenings table): it is the **sole
-  on-chain protection for within-cohort claim unlinkability**.
-- **Network layer is orthogonal.** Cohort↔identity is network-owned; bucketing does nothing for it
-  (Tor/I2P + per-claim circuit hygiene remain necessary, now scoped as "don't let the network undo
-  DDH," per the sharpenings table).
-- **Band/amount surfaces unchanged.** Bucketing touches only `creation_height` exposure; it has no
-  effect on the inflation surfaces (8a/8b) or the band aggregate.
+**Secret class:** no `P` spend/view/KEM; no principal spend secrets.
+**Correlation class:** no field joining principal graph to `P_id` in one query.
 
-**Cost is a bounded, tier-relative lock-shift — and this picks `W`.** Rounding `creation` up to
-`creation_bucket` extends the effective lock by up to `W` blocks (the stake is treated as created
-at the ceiling). Reward accrues over `tier_lock` epochs either way, so there is **no yield-rate
-loss** — but capital is locked up to `W` longer, which is an **APY hit that is large for short
-locks and negligible for long ones.** Against the archival-doc tier locks
-(`V3_STAKER_ARCHIVAL.md`: tier-1 = 1,000-block lock, tier-2 = 25,000, tier-3 = 150,000), a flat
-`W = 720` is **~72 % extra on a tier-1 lock** but **~0.5 % on tier-3** — flat `W` breaks the
-tier-1 short-lock value proposition.
+Owner `ArchivalPView` may show grace-window pending slash, partial-slash holdings — owner-only.
+Lens-3: global totals + coarse counts; no per-`P` retention export amplifying chain-public bits.
 
-The clean resolution falls out of the cohort formula: **scale `W` per tier.** Tier-1 (hot-set,
-short lock) has the **highest** creation density, so it reaches a target cohort at the **smallest**
-`W`; tier-3 (deep-archival, long lock) has the **lowest** density and needs the **largest** `W` —
-which it can absorb (0.5 % of 150k). `W(tier)` is publicly computable (tier is already revealed),
-so it adds **no new leak**, and it aligns the lock-shift cost with each tier's lock budget. The v1
-ratification therefore picks **a per-tier `W(tier)` targeting a cohort floor `k`**, not a single
-flat `W`.
+### 7.10 Dispositions summary
 
-**Fixed vs. adaptive `W` — sliding the window to a participant floor.** The natural follow-on is to
-*size the window to maintain a minimum cohort `k`* rather than fix it. Two forms, with very
-different safety:
+| Tier | Items |
+|------|-------|
+| **Closed in design** | Join-Market lag; dedup; conservation; `== bond_floor`; slash no history rewrite; P2B-5 |
+| **Gated on sim** | **F1 (T-A1)** |
+| **Mitigated pending pin** | Firewall layers; T-A16 bounds; emission batching |
+| **OPEN wargame** | T-A2–T-A7, T-A15b, T-A16, G8 |
+| **FOLLOWUP** | G6, G9, G13 |
+| **Priority-reject** | G10 |
 
-- **Hard form (close a bucket once `k` creations land) — rejected.** It makes the ceiling a function
-  of *future* chain state, breaking four things at once: **(1) non-causal binding** — a stake created
-  as the bucket's 1st member cannot commit `creation_bucket` at creation (the ceiling isn't reached
-  yet), defeating the single-canonical-value rule the round-up guard below depends on; **(2)
-  reorg-unstable membership** — a stake's bucket (hence `h_bind`, window lower-bound, `eff_lock`)
-  would depend on *other* stakes' creations and could flip on reorg, unlike fixed-`W`'s `⌈h/W⌉·W`
-  which depends only on the stake's own height; **(3) cold-start deadlock** — the open bucket near the
-  tip (and in any quiet period) may never reach `k`, so a new staker cannot finalize a ceiling or
-  claim — failing in exactly the regime F0 is worst in; **(4) a new aggregate leak** — the *sequence
-  of bucket widths* becomes a high-resolution public readout of `λ(t)` (boundary spacing ∝ `1/λ`) and
-  pins each staker's temporal precision to the instantaneous rate. It also hands a Sybil the binning
-  knob (flood `k−1` to define the boundary) and, objectively, *caps* the cohort at `k` — spending the
-  growth dividend on time-resolution instead of banking it as larger cohorts.
-- **Soft form (DAA-style adaptive width) — candidate.** Derive `W` from a *trailing, public* rate
-  estimate: `W(tier, epoch) = clamp(⌈k·B / λ̂_tier⌉, W_min, W_max)`, recomputed on an epoch schedule
-  and **frozen at binding** (a stake uses the `W` of its creation epoch forever). Because `W` is a
-  function of *past, agreed* state it is knowable at creation, reorg-stable over the averaging window
-  (the property LWMA-1 DAA and adaptive burn rely on, per
-  [`75-system-autonomy.mdc`](../../.cursor/rules/75-system-autonomy.mdc)), and adds **no new aggregate
-  leak** — `λ̂_tier` is already public (every creation reveals `tier`; per-tier counts are on-chain)
-  and `tier` is already revealed, so `W = f(λ̂_tier, tier)` exposes nothing an observer couldn't
-  already compute. It yields a **soft floor** (lagged, not hard-guaranteed), degrades gracefully at
-  cold-start (large `W`, clamped at `W_max`, ceiling still known immediately), and **adapts the
-  lock-shift cost to need**: `W` is small when staking is busy (the rate alone delivers the cohort, so
-  forfeiture is cheap) and large only when quiet (where cover is actually needed) — which directly
-  softens the tier-1 lock-shift problem above.
+### 7.11 FSM rebase + LMDB substrate verification (2026-06-07)
 
-**Estimator primitive — reuse LWMA (the difficulty algorithm), estimator-half only.** `λ̂_tier`
-should not be a novel estimator: the LWMA-1 difficulty algorithm already in consensus solves the
-*same problem class* — responsive-but-stable rate estimation of a roughly-Poisson arrival process as
-a deterministic, reorg-stable function of past chain state — and reusing the ratified primitive
-shrinks design and audit surface (and supplies the lag/smoothing the servo discipline above demands).
-Three deliberate differences from its difficulty use:
+**FSM:** subtraction rebase — four states, consensus balance, no claim nullifiers. Structural
+discovery: join-Market distinct from first mint (R1).
 
-- **Estimator, not controller.** Difficulty LWMA estimates a rate *then retargets to a setpoint*
-  (target solve-time). Here there is **no setpoint** — LWMA's recency-weighted average yields
-  `λ̂_tier`, and `W = ⌈k·B/λ̂_tier⌉` replaces the retarget. Take the weighted-average half; do not
-  import the retarget law. (The only closed loop is through staker behavior — the feedback the clamp
-  and slew bound — not a protocol setpoint.)
-- **Apply over per-tier, *height-keyed creation counts*, not inter-arrival times.** Creations are
-  sparse (tier-3, cold-start), so an inter-arrival LWMA divides by near-zero in quiet windows; a
-  per-epoch *count* series degrades gracefully (a zero count is a valid observation → large `W`,
-  clamped). Keying on `creation_height` (consensus-ordered height, not wall-clock) makes the estimator
-  **immune to the timestamp-manipulation surface difficulty LWMA must defend** (the reason the LWMA-1
-  cutover tightened FTL 7200→540 / MTP 60→11) — a place the staking estimator is *cleaner* than
-  difficulty.
-- **Re-tune the window; responsiveness is double-edged here.** For difficulty, fast hashrate tracking
-  is purely good. For an anonymity estimator it is double-edged: fast tracking aids cold-start
-  dilution, but a Sybil creation-flood would *quickly* shrink `W` and thin a target's real cohort. So
-  the **weight curve is LWMA's linear recency, but the window `N` is the dial and points longer** (more
-  smoothing, epoch-scale not block-scale given per-tier sparsity) to resist flood-thinning — tuned for
-  the anonymity objective, not copied from difficulty's `N`. This window/weight tuning is a simulation
-  item (below), distinct from the difficulty tuning.
+**LMDB on `dev` — VERIFIED (integration pattern clean; bond wire greenfield):**
 
-**Two honest limits on any window scheme.** **(a)** No bucketing manufactures `k`-anonymity from
-*fewer than `k` total stakers* — at genuine cold-start the cohort is the whole population regardless
-of `W`; the floor is soft and population-bounded. **(b)** Rate→`W`→staking-incentive is a **feedback
-loop** (high `W` in quiet periods raises the cost of staking *when quiet*, further suppressing the
-rate and raising `W`); an *unclamped* adapter is self-destabilizing — this is the real "the math
-itself creates an aggregate problem" case, bounded the same way the other servos are: clamp
-`[W_min, W_max]` + averaging lag + slew-rate limit, per `75-system-autonomy.mdc`.
+| Mechanism | `dev` location | Status |
+|-----------|----------------|--------|
+| `already_generated_coins` | Per-height `block_info.bi_coins`; `get_block_reward` on connect; capped `MONEY_SUPPLY` | **Exists** |
+| `total_burned` | `m_properties` `"total_burned"`; incremented on connect from `burn.actually_destroyed` | **Exists** — slash sink precedent |
+| `staker_pool_balance` | `m_properties` `"staker_pool_balance"`; connect increment / `pop_block` revert via `staker_accrual` | **Exists** — **precedent for `total_bonded_atomic`** |
+| `total_bonded_atomic`, `bond_credit`/`bond_debit`, `ArchivalBondRecord` table | — | **Not wired** — implementation per gate-4 |
+| Claim-era `m_staker_accrual` / `m_staker_claims` | LMDB integer-key tables | **Deletion target** at archival cutover |
 
-**Window disposition.** The floor `k` is the *target*; the open choice is **fixed `W(tier)` vs. soft
-`W(tier, λ̂)`**, with soft the candidate (it banks growth as cohort *and* trims cost when busy, with
-no new aggregate leak — but inherits servo-stability discipline), and the **LWMA estimator-half
-(above) is the recommended `λ̂_tier` primitive** (ratified, reorg-stable, audit-surface-reducing).
-Exact `k`, the clamps, the slew limit, and the **LWMA window `N`/weight tuning for the anonymity
-objective** (longer than difficulty's, to resist flood-thinning) defer to consensus-policy review and
-the archival simulation (`docs/V3_STAKER_ARCHIVAL.md` already models staker-population dynamics — the
-right tool for the parameter sweep).
+**Conservation integration:** `get_block_reward` / miner subsidy path uses `already_generated`
+only — archival `bond_credit` stays below mint bar (gate-4 §4.5), no collision with subsidy
+accounting. `pop_block` already reverts `total_burned` and `staker_pool_balance` from per-height
+accrual records — archival bond deltas should follow the same per-block audit + revert shape.
 
-**Hard inflation rule (the one thing that must be exactly right): round `creation` *up*.** Round
-**down** and `S > bucket_floor` admits epochs in `(true_creation, bucket_floor]` — claiming epochs
-*before the stake existed*, which is silent inflation (the 8a/8b class). Round **up** and the
-staker simply **forfeits** the sub-bucket epochs `(eligible_height, creation_bucket]` —
-inflation-safe, at the bounded yield cost above. This is a coarsening rule plus a rounding
-direction: **no circuit, no new primitive.**
+Pre-genesis: no migration from `main`; claim-era pool balance is deleted with entitlement wire,
+not carried forward.
 
-**Net judgment.** Bucketing closes the *specific* F0 excess (scale-resistance and
-targeted-cascade — the two features that exceeded the accepted staking-exposure budget) at the cost
-of a tier-scaled, bounded lock-shift and a publicly-derived `W(tier)`. It does not restore
-spend-path-grade privacy (tier ⅓ + within-bucket residual remain), and it relies on T7 for
-within-cohort unlinkability. Recommended v1 disposition; ratify `k` (cohort floor) and the
-`W(tier)` schedule at consensus-policy review.
+**Remaining risk:** (1) timing cluster numeric inequalities at pinned values; (2) gate-2 slash
+trigger / T-A16 on 8c.
 
-###### F0 threat-model input — stakers self-advertise (the share feature is deliberate)
+### 7.A — Archive pointer (claim-era wargame)
 
-A realism check that bears directly on the F0 calibration: **Shekyl's own staking product is
-designed to manufacture a self-advertising staker population.** Shard visualizations
-(`docs/V3_SHARD_VISUALIZATION.md`) are deterministic data-art whose stated purpose is cultural
-resonance — "cool pictures people share" — with **"print/share rendering" an explicit open
-question** (Twitter screenshots, blog portfolios). And archival ties an identity-legible *role* to
-tier (`docs/V3_STAKER_ARCHIVAL.md`: **tier-3 = deep critical-history archivist, tier-1 = hot-set**),
-so ordinary bragging ("I'm a deep archivist," "just started staking") leaks `tier` and an
-approximate `creation_height` for free. The honest expectation is that **a substantial fraction of
-stakers will voluntarily reveal they stake**, and some will reveal tier and rough creation time
-through normal social behavior. Four consequences for F0:
+The 2026-06-05 Round 3 wargame (old §7.4–§7.5.3) executed against the **confidential
+entitlement claim wire**. Historical record for F0, T8 8a/8b, DDH/nullifier/`StakeOpening` rows.
 
-1. **For self-advertisers, F0's marginal privacy cost ≈ 0.** They have voluntarily made the
-   membership disclosure the baseline already priced; the on-chain `(tier, creation)` cohort leak
-   adds nothing they did not broadcast. This **reinforces the calibration**: F0 penalizes the
-   *privacy-conscious* staker, and we now have a *structural* reason to expect a large self-doxxing
-   crowd — the feature is built to encourage it.
-
-2. **For the silent tail, self-doxxing by *others* erodes the cohort by elimination.** Classic
-   anonymity-set erosion: if a `(tier, bucket)` cohort has `k` members and `j` self-identify
-   publicly, the silent members' effective set shrinks to `k − j`. This is **sharpest exactly where
-   F0 is sharpest** — a thin exact-height cohort of 3 where 2 self-identify exposes the 3rd
-   completely. Voluntary disclosure by the proud crowd is a direct tax on the private minority.
-
-3. **This strengthens the bucketing case and feeds the `W` choice.** `W` must widen the cohort
-   enough to survive **self-doxx attrition**, not merely to reach a nominal `k`: target
-   `k − E[self-doxxers]` ≥ floor, not `k` ≥ floor. The self-advertising population is thus a direct
-   input to the `W(tier)` schedule above — and note the adverse interaction with the tier-scaled
-   refinement: **tier-3 deep-archivists are the most likely to publicly brag** about rare-shard
-   holdings, so the long-lock tier (which can afford the widest buckets) is also the tier that most
-   needs them.
-
-4. **Second-order vector — cross-track to archival (flag, do not solve here).** The shard-visual
-   itself leaks no wallet secret (`V3_SHARD_VISUALIZATION.md` §Privacy derives parameters from
-   public shard content only). But the **act of sharing** bridges real-world identity ↔ "a staker
-   holding shard-set `{S}`." For active rare-shard hunters the held set is distinctive, and a
-   candidate query-routing design is an **on-chain holder registry**
-   (`V3_STAKER_ARCHIVAL.md` open question) — which would let an observer bridge
-   shared-picture → on-chain holder → (composed with F0) claim-cohort. That is an **archival /
-   shard-visual privacy concern that composes with F0** and belongs to *their* privacy review, not
-   Phase 2B's wallet path. Recorded cross-track (FOLLOWUPS).
-
-**Disposition.** Threat-model input, not a wallet-code change. It (a) confirms the calibration
-direction (sharers opt out of staking privacy by choice; F0's residual harm concentrates on the
-silent), (b) makes self-doxx attrition a named input to the `W(tier)` choice, and (c) raises a
-cross-track archival item: the share feature + holder-registry + shard-set identity must get their
-own privacy review against claim-cohort linkage before `ArchivalEngine` / `shekyl-shard-visual`
-ship.
-
-##### F-ARCHIVAL — archival commitment binding is the load-bearing whole-system tier/membership question (gates the F0 `W`-choice) — RESOLVED IN DESIGN (see resolution subsection below)
-
-Reading `docs/V3_STAKER_ARCHIVAL.md` and `docs/V3_SHARD_VISUALIZATION.md` *together* surfaces a leak
-that neither addresses alone, and it **outranks the F0 `W`-choice** because it determines whether the
-entire chain-side cohort analysis is *sharing-gated* (only self-doxxers expose) or
-*sharing-independent* (every staker exposed on-chain by construction). The leak has moved off the
-visual artifact and onto three structural couplings the sharing reality activates:
-
-1. **Archival *is* staking.** "If you stake, you archive" (`V3_STAKER_ARCHIVAL.md` — the staking
-   software *is* the archival client, not a separate service). So any archival visibility is a
-   **staking-membership disclosure**, now wired to a feature engineered for virality — the accepted
-   membership baseline gets **opted into at scale** rather than reluctantly.
-2. **The portfolio is a tier oracle, by economic design (the one that matters).** The tier-interaction
-   design sorts tiers onto shard types (tier-1 → hot/recent, tier-3 → deep/historical; "the reward
-   formula should weight by tier, naturally driving critical-history shards toward long-tier holders").
-   Economically elegant — but it makes **which shards you hold strong Bayesian evidence of your tier.**
-   This is a channel **entirely separate from the claim wire**, and it is *precisely the channel the
-   product gamifies you into advertising.* (Weaker secondary signal: shard time-ranges correlate
-   loosely with staking era → `creation`.) **Implication for the F0 tier-⅓ "irreducible" finding:**
-   tier privacy was never just a claim-wire property — it is a **whole-system property**, and the
-   archival layer re-exposes it. The claim-wire tier (`tier_num` in `h_bind` + multiplier, F0) and the
-   archival tier-weighted pricing are **two separable levers**; whole-system tier privacy needs **both**
-   weakened. This **further devalues de-tiering-the-claim-alone** (you would pay the economic cost *and*
-   still leak tier via portfolio composition) — reinforcing the existing reversion-clause parking of
-   de-tiering, not reopening it.
-3. **Gamification selects for the wrong population.** The most shareable shard is the rarest, and the
-   rarest is by definition the **most identifying** (few others hold it). The stakers who opt out of
-   quick-pick to hunt rare shards are the engaged, often larger stakers — disproportionately
-   **high-value targets** — with the most distinctive, fingerprintable portfolios and the most
-   motivation to post them. The feature's social appeal is mechanically a fingerprint disclosure,
-   concentrated where it hurts most.
-
-**The load-bearing question (undecided in the docs; the existing draft *leans the dangerous way*).**
-Is the archival commitment **publicly address-bound** or **privately bound by a membership proof**?
-The archival privacy section covers only *query metadata* (who-asks-for-which-block, closed with
-mandatory Tor/I2P); it says nothing about how the *commitment* ("I archive shard X, I earn the
-reward") ties to identity. And the existing draft mechanisms — **on-chain challenge-response** to
-"shards they claim," an **on-chain holder registry** ("each shard's holders publish presence"), and
-reward routing to identified servers — all **lean public address-bound**, which is the default
-trajectory unless private binding is *actively designed*. The two outcomes:
-
-- **Public address-bound** ("address A archives shard X, A earns the reward" on-chain): the tier oracle
-  and membership disclosure fire for **every staker, on-chain, with no sharing required**. Mandatory
-  archival + public binding + tier-sorted shards = every staker's membership and approximate tier are
-  **public by construction.** This **dwarfs F0** — we would have hardened the claim's cleartext
-  `(tier, creation)` while a sibling layer publishes membership-and-tier for everyone; bucketing and
-  de-tiering would both be downstream of a larger leak.
-- **Privately bound** (the commitment proves "a bonded stake of mine covers shard X" *without*
-  revealing which stake/address; rewards route to stealth outputs; the archival identity is
-  **HKDF-separated** from the claim/spend identity): non-sharers stay protected, only sharers expose
-  themselves, and all chain-side work retains its value.
-
-**Architectural-consistency presumption favors private; the burden is on public to justify breaking
-the pattern.** The rest of staking (claim/unstake) is already a privacy-first membership-proof +
-nullifier + stealth model; public archival binding would be the *inherited "it's easier to count if
-public" convenience* — the cost-benefit-defer-to-later / user-protection-default anti-patterns of
-`16-architectural-inheritance.mdc`. Private binding is **not exotic** — it is the same
-membership-proof + stealth-output pattern already in the staking design (data availability is a
-public good answerable by anyone holding the shard; only *reward eligibility* needs identity, and that
-can be proven privately). **The genuinely hard part — the open cryptographic question — is private
-replication counting:** scarcity pricing needs a per-shard replication count (reward ∝ `1/R`), and
-counting distinct holders *without identifying them* (private set cardinality / proof-of-distinct-
-holders) is the non-trivial primitive public binding gets for free. That tension is *why* public is
-tempting and is the thing a private design must solve; it does not change the presumption, but it is
-the cost to weigh. **Superseded (2026-06-07):** form **C** makes per-`P` holdings
-consensus-public; gate 3 dissolved — `R_market` is a derived ledger count, not ν-hiding
-([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2). Privacy is gate 6
-(P ↔ principal), not P-holdings hiding.
-
-**Organizing principle — graceful degradation.** A user who shares should disclose *what they chose*
-— "I stake, here's cool art" — and not have it silently cascade into tier, claim history, and
-inferable amounts. Today the couplings make it non-graceful:
-`share → distinctive portfolio → tier (via shard-type) → identity foothold → cohort-collapse → full
-attributed history`. **Bucketing softens only the last link; it does nothing for the first three.**
-
-**Reprioritization (this is the clean consequence).**
-- **For the sharing majority,** further chain-side cohort refinement is **near-moot** — they have
-  handed over a foothold more precise than any cohort. Spending consensus complexity to protect people
-  who post their portfolios is misallocated → **reinforces keeping de-tiering parked.**
-- **For the non-sharing minority** — the high-value targets the privacy actually exists for —
-  chain-side privacy is **load-bearing, but it now depends on (a) the archival binding being private
-  and (b) weakening the tier⟺shard-price coupling enough that *mandatory* archival doesn't out their
-  tier even when they never share.** **Bucketing alone no longer carries non-sharer privacy** — the
-  archival layer can undo it.
-- **Timeline.** Archival is V3.x (ships after the V3.0/V3.1 claim path), so this does not retroactively
-  break the claim work — but the binding decision must be made **before archival ships** and made
-  *consistent with* the claim-privacy posture, and the **pre-genesis discount** (`16-architectural-
-  inheritance.mdc`) says design private binding from the start rather than retrofit it forever.
-
-**Disposition — record, do not decide here; highest-priority cross-track open item.** This is an
-archival-mechanism design decision with whole-system staking-privacy consequences; it belongs to the
-`ArchivalEngine` / `shekyl-shard-visual` design review, not the Phase 2B wallet path. The actionable
-set, in priority:
-
-1. **Resolve public-vs-private archival commitment binding** (gates everything else; presumption =
-   private, per architectural consistency).
-2. **Weaken tier-weighted shard pricing** so portfolio composition stops being a tier oracle — an
-   explicit **economics-vs-privacy** choice (it trades the "elegant" tier-archival alignment for
-   portfolio privacy).
-3. **HKDF-separate the archival identity** from the claim/spend identity so archival visibility cannot
-   be joined to stake linkage.
-4. **Treat share-UX as a privacy surface** — warn that posting a portfolio links social identity to
-   staking history, and that the rarer the shard, the more uniquely it identifies the holder.
-
-Recorded cross-track to `V3_STAKER_ARCHIVAL.md` / `V3_SHARD_VISUALIZATION.md` and `FOLLOWUPS.md`; it
-**gates the F0 `W`-choice** (bucketing's value for non-sharers is conditional on private binding +
-weakened tier-pricing).
-
-###### F-ARCHIVAL resolution — pay-for-service + firewalled pseudonym (the intended design; supersedes the two-stream framing)
-
-The binding question resolves **private**, and the resolution is bigger than binding: it follows
-*Problem 1* ("what useful work do stakers do?") to its end and **rebases the staking reward itself.**
-The canonical build-out lives in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service rebasing and the
-firewalled-pseudonym identity model*; this is the finding-side summary and gate-list.
-
-**The enumeration.** Archival is the **only** service staking provides. Consensus is PoW's job
-(staking has no block-production/fork-choice/finality role — the reason the classic-PoS attack class
-was retired). The capital-at-risk "bond" is slashable for nothing, so it bonds nothing (just locked
-coins). Supply/monetary effects are achievable by just-holding (no claims/tiers/nullifiers needed).
-Governance signaling is downstream of staking existing. Only **archival** is a genuine, growing,
-structural network need. So the staking reward **is** payment for archival, "stake without archiving"
-is paid-for-nothing (the *Problem 1* rent the design exists to kill), and there is **no opt-out
-privacy tier** — privacy is won inside a firewalled pseudonym, not an escape hatch.
-
-**The model (low-new-primitive).** One staker type (archiver); one reward (performance-scaled,
-retention-based, scarcity-weighted, banded plateau-cap); principal = locked collateral that **never
-slashes** (resilience) and serves as the (small) eligibility/admission gate, **not** a yield
-multiplier. Archival cannot be unlinkable like a claim (reachability + persistence + challengeability
-require a stable holder), so the goal is a **firewalled pseudonym P**: replace the direct
-`StakeEngine::is_active_staker(entity_id)` lookup with **membership-proof registration** ("some active
-stake backs me") + an **archival nullifier `N_arch = x·G_arch`** over a base independent of `Hp(O)` and
-`G_S` + **HKDF-derived independent keypair** P (no algebraic link to the stake key) + **periodic
-liveness re-proof** that lapses on unstake. This **extends T7's DDH requirement to a third base
-`{Hp(O), G_S, G_arch}`** that must be mutually independent. **P needs unlinkability + backing-proof,
-not uniqueness** — the keystone below carries Sybil-resistance, so one-P-per-stake is no longer
-load-bearing. The **firewall is a stack** — network (P's circuits separate from spend/claim
-broadcasts), timing (randomized registration delay vs. stake creation), output (reward → stealth
-output, no linkable consolidation).
-
-**The keystone — per-shard retention bonds (corrects the longevity framing).** An earlier draft priced
-the critical-shard premium on demonstrated **holding-longevity**; that is **insufficient** — longevity
-is a *past* signal and deep history needs a commitment to *future* retention. The fix is a **slashable
-per-shard retention bond** (post collateral against retaining a deep-history shard for a duration; drop
-it → lose the *archival* bond, principal untouched). One mechanism resolves three gaps: (a) the
-deep-history guarantee becomes real (bond-at-risk, not inferred); (b) the **staker-wide tier
-disappears**, so F0 + the portfolio tier-oracle both close *because bonds replace tier*, not "for
-free"; (c) Sybil-splitting buys nothing — **total bond = shards × rate, independent of pseudonym
-count** — flipping the scarce input back to expensive-countable capital and **de-overloading the lock**
-(small eligibility lock vs. scaling per-shard bonds = two separate parameters). This **re-bases
-capital** from "wealth as yield multiplier" to "**slashable service-collateral**" — the accurate
-slogan is "pay for work, where doing the work requires proportional capital-at-risk that bonds the
-work" (not the earlier "pay for work, not wealth"). The residual is **bond-rate calibration** (a
-sim-and-design bind).
-
-**What this replaces, and what dissolves (replace, not converge).** This **replaces** the
-confidential-yield subsystem — the entitlement machinery (reserve-DLEQ, bounded-remainder,
-`entitlement.rs`/`tiers.rs`/`rewards.rs`) becomes **dead code**, not adapted; a reader who sees
-"converge" would wrongly assume the entitlement proof still applies to a subsystem that no longer
-exists. What transfers is the **adversarial method** and the **primitives** (membership proofs,
-DDH-independent nullifiers, firewall hygiene). Work-based reward is **publicly computable**, dissolving
-**three** threads: **F0** (tier left the claim wire — reward no longer needs `tier_num`); the
-**portfolio tier-oracle** (no staker tier to signal, *because per-shard bonds replace it*); and
-**F-INFLATION 8a → a loud 8c** (no confidential amount in the entitlement — reward recomputable from
-public archival history, so silent inflation becomes **detectable** inflation; the existential item
-moves to retention-proof unforgeability, public not silent). The only ZK left on the reward path is
-membership/backing + stealth payout. Reward is publicly computable **globally** (via the `Σwork` servo,
-gate 1), not locally — but *public, not local,* is what kills silent inflation. Privacy stops being
-"hide the amounts" and becomes entirely "firewall the identity."
-
-**Gate-list — must be blessed by sim + a fresh soundness pass before consensus-real** (full text in
-`V3_STAKER_ARCHIVAL.md`):
-
-1. **Σwork supply servo (supply-safe *and* differencing-clean)** — a per-staker cap does not bound the
-   aggregate; the servo is forced, re-based from `band_sum` onto `Σwork` (`reward_P = budget · work_P /
-   Σwork`), conceding the "locally computable" claim. But the `band_sum`-differencing leak does **not**
-   transfer: `band_sum` leaked because it aggregated *confidential* amounts; `Σwork` sums
-   *continuously-public* numbers (challenge-responses, replication counts), so differencing reveals
-   nothing not already on P's public record. Strictly better than `band_sum` on privacy.
-2. **Retention-proof soundness + state cost (8a → loud 8c)** — reward is "loud" only if every node
-   recomputes every P's challenge-pass + replication record → per-P/per-shard retention state **in
-   consensus**; the existential item is now **retention-proof unforgeability**, detectable not silent.
-3. **`R_market` derived ledger count (gate 3 dissolved)** — count at epoch close from
-   retention ledger keyed by public `P_id`; no `ν` primitive. Holdings are consensus-public
-   under form **C**; privacy is gate 6 (P ↔ principal). See
-   [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2–§3.
-4. **Per-shard retention bond replacing tier (keystone — collapses old G-D/G-E)** — slashable
-   per-shard collateral gives the *future*-retention commitment longevity could not; kills the staker
-   tier (→ F0 + oracle close); makes Sybil-splitting worthless (`total bond = shards × rate`); flips
-   the scarce input to expensive-countable capital; de-overloads the lock. Residual: **bond-rate
-   calibration** (sim output). *Supersedes the old "tier decision / longevity-pricing" framing.*
-5. **Bootstrap shape (months 0–6) — overlapped, flat, sunset** — not a cliff if the foundation floor
-   **overlaps** (foundation stays full-archival, sheds only as staker coverage is demonstrated); the
-   subsidy is **flat per-active-bonded-shard** (privacy-clean; amount-scaled resurrects F0).
-6. **`P` backing-and-firewall design (unbuilt; uniqueness relaxed)** — transfer-shaped
-   admission (§2.4): off-chain backing presentation + first reward emission on-chain anchor;
-   reward dedup on bond-record epoch bitmap (**no** `N_arch` published tag); membership-only
-   control on emission. Bonds carry Sybil-resistance; multi-`P` is privacy hygiene only.
-7. **Economic sim re-priced for capital-collateralizes-work (gate 7 — foundational)** —
-   **couples to admission-principal decision (§2.4 close-condition iii):** if admission lock
-   goes soft or away, **bond-locked supply is the sole sink** — re-price `stake_ratio` /
-   circulating-supply assumptions in macro sim, not a footnote. Bond-rate (gate 4) is a sim
-   output. The strongest pre-genesis argument:
-   capital-bonded yield has no justification in the fee-only era (it is the rent the mission forbids,
-   the one part that cannot re-justify itself once the subsidy ends), so this is a **genesis-class**
-   decision, not a deferrable refinement. The sim is specified (spec-first, pre-code) in
-   `STAKER_ARCHIVAL_SIM.md`; iteration 1 isolates **coverage dynamics**, gates 1/4/5/7 layered after.
-
-**Honest residual.** An opted-in staker has a long-lived **public pseudonymous profile** (shard-set,
-longevity, performance) *by function*; pseudonym count ≈ active-stake count (an aggregate, accepted-leak
-column, like `band_sum`). No individual is deanonymized if the firewall holds across all four layers,
-but it is a **discipline maintained over the pseudonym's life**, not a one-time property — and
-cross-pseudonym intersection (one person, multiple Ps) re-merges profiles if network/timing/output
-hygiene fails per-pseudonym. The keystone makes this a *privacy* hygiene concern, not a *security* one
-(multiple Ps buy no bond savings, so running many is not itself an attack).
-
-**Scope — genesis binding (2026-06).** This **replaces** the confidential-yield subsystem
-(reserve-DLEQ entitlement, bounded-remainder, `tier_num·amount`; `rust/shekyl-staking/`
-`entitlement.rs`/`tiers.rs`/`rewards.rs`) rather than extending it — a large audit-surface
-deletion, which is the point. **Pre-genesis discipline:** implement **once** against this
-substrate; do **not** land Stage 3 on the entitlement claim path and plan a post-genesis
-migration. `CONFIDENTIAL_STAKING.md` is edited **surgically** — retain principal
-lock / `C_stake` / unstake membership machinery; **delete or never implement** the
-claim-entitlement wire (`txin_stake_claim_v2` tier/`h_bind` reward path) in favor of
-the `P`-mediated pay-for-archival reward surface. Sim gate 4 (bond rate) and gate 1
-(`Σwork` normalizer) pins are **closed or in flight**; Tier 1 crypto soundness
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) step 3) gates consensus-real
-implementation. Nutshell: **staking is the opt-in to archival because staking =
-archiving**. Reward is accounted under public **`P`**; **privacy on the reward path
-is gate 6 firewall discipline** — not "P solves F0" (F0's substrate is deleted).
-
-##### F0 disposition on the rebased substrate (supersedes bucketing gate for genesis)
-
-**Do not read this as "P solves F0."** Three mechanisms — see §2.1 *Identity* and
-status block:
-
-1. **F0 dissolved by model deletion.** F0 was structural leakage on the confidential
-   claim wire (`tier`, `creation_height` → `{tier × creation-window}` cohort). Work-based
-   reward removes `tier_num`; per-shard bonds replace the tier oracle; the claim wire
-   is **not shipped**. F0 is not mitigated — its substrate is gone. Bucketing
-   (`CONFIDENTIAL_STAKING.md` §14.4 item-9) is **moot** for genesis.
-2. **`P` addresses archival's problem, not F0's.** Archival requires a stable,
-   reachable holder; privacy becomes **firewalled pseudonymity** (public `P`, hidden
-   principal link) — a threat **substitution**, not F0 closure.
-3. **Gate 6 firewall is the unbuilt privacy work** — long-lived `P` profile +
-   cross-pseudonym intersection if hygiene slips; bonds carry Sybil-resistance so
-   multi-`P` is hygiene-only.
-
-**Genesis Round 3 closure:** F-ARCHIVAL gate-list + **§2.4 close-conditions (i)–(iii)** +
-gate 6 to soundness-pass depth (Tier 1 step 3). Not F0 bucketing. **(i) spec:**
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md).
-
-##### F-INFLATION — split T8 on the **retired** entitlement substrate (historical wargame record)
-
-Silent inflation is the existential class — the two worst bugs in privacy-crypto history are
-both invisible-inflation (**Zcash's BCTV14 counterfeiting flaw**, patched in secret; **Monero's
-2017 RingCT inflation bug**). When amounts are hidden, a soundness flaw is undetectable
-infinite inflation — you learn it from the price chart, not the chain. Confidential staking
-adds **two** fresh soundness surfaces beyond the spend path; T8 is split along this line and
-gets the round's heaviest rigor (both are consensus-owned; the wallet's role is non-masking
-per §7.5 T8, but the round must name both surfaces so the audit covers them):
-
-- **(8a) Entitlement-proof soundness.** Can a prover make the verifier accept a `C_claim`
-  committing to more than `floor(N·amount/D)`? Bounded-remainder + range proof close `ρ ≥ 0`
-  and `reward < 2⁶⁴`, but **`full reward ≤ entitled` rests on the reserve-DLEQ-class
-  soundness** (§6.4.1). This is the heaviest audit item.
-- **(8b) Band-declaration binding (co-equal, newly elevated).** If a staker can declare a
-  **more-favorable band than the committed amount warrants**, they inflate their `M` / `ρ_e`
-  allocation **at zero cost and invisibly** (the amount is committed). The defense exists —
-  §4.4's "range proof binding the band to `C_stake` (anti-lie)" — but the round's pin is that
-  **this band↔amount range proof must carry the same rigor as the value range proof**, not be
-  treated as a lesser check. Inflation via band-lie is as catastrophic as inflation via
-  entitlement-lie.
-
-##### Sharpenings to existing dispositions
-
-| Item | Sharpening from the synthesis | Added pin / disposition |
-|------|-------------------------------|-------------------------|
-| **T9** (+ A1) | **Induced-duplicate knife.** A lying daemon (A1) reports a nullifier `N_S` as *unused* when it is not, inducing the wallet to broadcast a **duplicate claim**. Consensus rejects it — but the duplicate `N_S` is now **revealed**, which trivially links the two claim attempts (the one thing nullifier-unlinkability was protecting). | **Wallet pin:** daemon-reported claimability is **advisory, never a license to reveal a second nullifier**. The wallet treats its own derived `{x·G_S}` ∩ chain as authoritative and must not re-emit an `N_S` it has already broadcast on daemon say-so. |
-| **T13** (+ A1) | **A1 has three distinct knives:** (i) broadcast **origin** (T1/T4/T14), (ii) **query-leak** (asking "is epoch `S` of this stake claimed?" links the wallet to its stake), (iii) **induced-duplicate** (T9 above). | **Pin (sharpens T13):** full **local scan, no selective per-stake/per-nullifier queries** — already the bulk-fetch invariant; the synthesis confirms it defends knife (ii). |
-| **T1 / T4 / T14** (A1/A2) | **F0 re-scopes the network layer — three layers separate cleanly.** With `(tier, creation)` in clear, **cohort linkage is chain-owned** (on-chain deterministic; only F0 moves it — circuit hygiene buys *nothing* against cohort-level linkage). But hygiene is **not** futile: **within a cohort, a single stake's separate-batch claims stay unlinkable *only* by DDH** (distinct `N_S` per epoch-base), and the network re-links exactly what DDH protects if the **same circuit submits them**. So: **(a) cohort linkage = chain-owned**, **(b) within-cohort claim unlinkability = DDH-owned, network-preserved**, **(c) cohort↔identity = network-owned.** | **Per-claim circuit hygiene earns its keep as "don't let the network undo DDH," not "break the claim sequence"** (the chain already linked the sequence to the cohort). **Two questions folded into the T1/T4/T14 FOLLOWUP (V3.1):** (a) does the broadcast path obscure origin **beyond "send over Tor"** (Dandelion++-equivalent — defends layer (c))? (b) is **circuit hygiene per-claim** (fresh circuit per broadcast — defends layer (b))? **Batch-default value narrows** to fewer identity-correlation events + fewer claim-tx fingerprints, **not** sequence-unlinkability. |
-| **T10 / G12** (A2) | **The claim tx leaks stake age off the wire.** A claim is structurally distinguishable (membership + per-epoch nullifiers + entitlement + reward output), and **nullifier count = epoch count**, which leaks the stake's **age and claim cadence** directly — "claims every 30 epochs in fixed batches" is a signature. | **Round decision (FOLLOWUP V3.1):** explicitly decide **accept the epoch-count leak vs pad** to a fixed count with dummy nullifiers (uniform but expensive), and **standardize claim construction deterministically** so wallet-version fingerprints don't add a second axis (G12). |
-| **T3** (A2/A4) | **Public-rate whale/cold-start readout.** `band_sum` drives `ρ_e`, so a staker large enough to move `band_sum` makes their entry/exit visible in the public rate; at cold start `ρ_e` is a low-noise readout of a small staker set (dynamics observable, not just the static cohort). | **Cross-track confirm (sharpens T3):** the §14 servo + `band_sum`-differencing gate must be confirmed to **bound single-staker observability**, not merely smooth the aggregate. |
-| **T5** (A3) | **Two named residuals + a constant-time requirement.** (i) `Copy` `AtomicUnits` can leave un-zeroized copies (**accepted**). (ii) the **view key is resident**, so an A3 who reaches `KeyEngine` RAM has everything regardless — the reason full-transient bought less than it seemed (**recorded, not re-solved**). (iii) **claim-build crypto must be constant-time** — a co-located timing/cache side-channel on the Schnorr / membership / nullifier scalar work extracts `x` or `z` directly. | **Stage-3 pin (added):** claim-build scalar operations **constant-time** (`30-cryptography.mdc`). Residuals (i)/(ii) recorded as accepted/known. |
-| **T7** (elevated by F0) | **No longer a hygiene footnote — F0 makes DDH the *sole on-chain protection* for within-cohort claim unlinkability.** Once the chain links a stake's claim *sequence* to its cohort (F0), the only thing keeping a stake's separate-batch claims unlinkable *within* that cohort is DDH across independent NUMS bases (distinct `N_S = x·G_S` per epoch-base). T7 therefore **climbs toward the soundness tier** — it is co-load-bearing with the inflation surfaces, not an assumption footnote. | **On record (priority-elevated):** `G_S` must be a **verifiable nothing-up-my-sleeve** generator with **no relation to `Hp`**, and DDH must hold for the curve; if independence is fudged, **(i)** claim and unstake link by construction **and (ii)** within-cohort claim unlinkability collapses (the chain having already supplied cohort linkage). `AUDIT_SCOPE.md` load-bearing assumption, ranked adjacent to 8a/8b. |
-| **T6** | The reorg-double-claim defense (claim epoch `S`, induce reorg that keeps the minted reward but reverts the nullifier, re-claim `S`) **rests entirely on §11's all-five-members-in-one-txn atomicity** (reward output + nullifier revert together or not at all). | **Audit pin:** this atomicity is **load-bearing and cannot be hand-waved** — the audit must confirm **no member (reward output, nullifier, `band_sum`, subtree leaf, key image) can revert independently of the nullifier**. |
-
-##### A5 — economic / rational adversary (new model)
-
-Added to A1–A4: **rational agents optimizing yield** (staking vs. unstaking/other uses),
-**MEV extractors**, **stake-rental markets**. Real-world parallels: deep-reorg double-spends
-via hashrate rental (ETC/BTG/VTC), LST depeg/bank-run dynamics, MEV-driven reorgs/sandwiching
-of claims/unstakes, coordinated unstaking waves when yields drop.
-
-- **Mass-unstaking / bank-run dynamics.** Yield-chasing can produce coordinated unstaking
-  waves **without malice**. Shekyl's decaying-emission share + fee-burn servo + `ρ_cap` are
-  designed to self-stabilize, **but this is unverified under a rational mass-unstaking
-  shock**. **Disposition: cross-track to economics + FOLLOWUP (simulation required)** — the
-  burn-servo stability under a coordinated-exit scenario must be **simulated**, not asserted
-  (the economics design docs already call for stability simulation; this names the specific
-  scenario).
-- **MEV on claims/unstakes.** Re-confirms §7.5 G13: claims bind to the staker's own
-  nullifier (non-competitive, idempotent to ordering) → no extractable front-run value;
-  censorship → retry. **No change.**
-
-##### Architectural advantages — recorded, not just N/A
-
-The §7.5 "N/A" results for slashing (G1) and delegation (G2) are not gaps — they are a
-**genuine architectural advantage** worth stating as a result: confidential-claim staking
-(an economic overlay on PoW, not validator-PoS) **structurally excludes an entire class** of
-attacks that delegated-PoS systems spend enormous effort on — **slashing-griefing /
-correlation-penalty backfire, nothing-at-stake / cheap fork-voting, long-range history
-revision, stake-bleeding / equivocation, 33% BFT disruption, and stake-grinding.** There is
-no validator, no cheap fork-vote primitive, and PoW + the `h_bind`/`eligible_height` canonical
-height (§2) make long-range revision expensive and detectable. Naming this tells an auditor
-the classes were **considered and excluded by construction**, not missed.
-
-##### Economic-redesign note — can the `tier` axis be removed at the source? (deferred V-future; reopening criterion below)
-
-F0's irreducible privacy residual (option-2(i) above) is the **tier** reveal: the multiplier
-`N = tier_num(tier)·ΣK_S` is tier-specific, so `tier` must be in clear regardless of any
-`creation` bucketing. This raises an economic-redesign question (raised 2026-06-05): **tiers
-exist to price duration commitment — what if reward were *derivative* (a single global
-rate/function of already-committed quantities) instead of a staker-declared discrete tier?**
-
-**Structural analysis (the answer to "tier, then height, then nothing?"):**
-- **Removing `tier` removes the tier axis — a real F0 win.** A derivative/uniform reward needs
-  no per-stake `tier_num`, so the `tier` field leaves the wire and the cohort drops from
-  `{tier × creation_height}` to `{creation_height}` (or `{creation_bucket}` with option 2). The
-  ~⅓ per-tier partition disappears.
-- **Removing `tier` does *not* remove `creation`/height.** Any **time-accrued** reward needs a
-  **provable accrual-start**, and proving it is the **same 3C-vs-3A choice already settled**
-  (§6.4.3): either reveal `creation` in cleartext (the lower-bound window check stays pure
-  arithmetic, inflation-safe, no new primitive) or adopt the **rejected** non-membership-at-
-  historical-root primitive. Tree membership alone never proves *when* a leaf entered — that is
-  exactly why 3C stamps `creation` into `h_bind`. So **"leaving only height" is the answer**;
-  the cohort reduces to `{creation_bucket}`, fully tunable by the option-2 width dial with **no
-  tier subdivision** — the cleanest cleartext end state.
-- **"Nothing" only if reward stops being time-accrued** (e.g., a one-shot principal-proportional
-  bonus with no duration component) — a larger economic change that abandons the duration
-  incentive entirely, not just the tier discretization.
-
-**The cost is economic, not cryptographic.** Tiers are the lever that **prices duration
-commitment** (longer lock → higher yield, reducing velocity / stabilizing the staked set). A
-single uniform rate removes that lever; a continuous derivative-of-*declared-duration* reward
-**re-introduces a per-stake duration reveal that is finer-grained (worse for privacy) than the
-3-valued tier** — so the only privacy-improving derivative is one whose rate does **not** depend
-on a staker-chosen duration. That is the crux the economics track must weigh.
-
-**Disposition (decided 2026-06-05): deferred V-future — *not* a forced move; the round is *not*
-opened now.** The economics are a **designed counterweight** and de-tiering would unbalance the
-system for a privacy delta that the baseline-budget calibration (above) shows **bucketing
-likely already closes**. Per
-[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
-this is **reject-now-with-reopening-criterion**, not refuse-forever: **reopen only if a specific
-high-value-target threat model shows the within-tier within-bucket cohort (the residual after
-option-2 bucketing) is unacceptable for a staking population the project must protect.** If
-reopened, it is a **consensus-economics change** (`CONFIDENTIAL_STAKING.md` + the economics
-docs), needs its own spec-first design round per `05-system-thinking.mdc`, and composes with
-option 2 (no-tier + `creation` bucketing → `{creation_bucket}`). Logged as a V-future
-cross-track FOLLOWUP under F0; it does **not** gate Phase 2B or Round 3 closure.
-
-##### Synthesis closure status
-
-The synthesis **confirms** the §7.5 wargame's dispositions except where sharpened above, and
-surfaces **F0 as the round's top finding on the then-current confidential-entitlement
-substrate** (2026-06-05). **Genesis substrate update (2026-06):** F-ARCHIVAL pay-for-service
-rebasing **supersedes F0 as a Round 3 closure gate** — tier leaves the reward path, identity
-moves to **`P`**, entitlement claims are not shipped. The wargame record (F0 analysis,
-8a/8b inflation split, T7/`G_S` on the claim wire) remains **audit history** for the retired
-path; do not implement against it.
-
-**Round 3 closure on the rebased substrate** ratifies the F-ARCHIVAL gate-list (§7.5.3 /
-`V3_STAKER_ARCHIVAL.md`) and pins Stage 3 against:
-
-1. **Tier 1 crypto soundness** — `P` registration/backing, archival-state contract
-   ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md); gate 3 dissolved), L14
-   crediting, retention-proof unforgeability (loud 8c); [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
-   soundness pass step 3.
-2. **`Σwork` supply servo** — gate 1; replaces `band_sum`-differencing normalizer on the
-   reward path.
-3. **Per-shard retention bonds** — gate 4 pin closed (`ARCHIVAL_BOND_FLOOR`); calibration
-   record in sim.
-4. **Gate 6 firewall stack** — network / timing / stealth payout for `P` (**the**
-   unbuilt priority-2 work; privacy = firewall discipline, not hidden amounts).
-5. **Principal-path carry-forward** — committed `C_stake`, unstake membership spend, wallet
-   §3.3.1 opening discipline, §5 nullifier rebuild **where still applicable** on the rebased
-   payout path (exact claim-tx shape is a Round 4 pin, not the retired `txin_stake_claim_v2`
-   entitlement wire).
-
-Residual forward actions that **still apply** on the rebased substrate: T5 constant-time
-secret-touching crypto; T9 advisory daemon claimability (adapted to `P`/challenge state);
-A5 mass-unstaking / `Σwork` shock sim; reorg + `AtomicUnits` boundary tests. **Retired with
-the entitlement path:** F0 bucketing, 8a/8b entitlement circuit, tier on claim wire.
+**Do not implement** F0 bucketing, `txin_stake_claim_v2`, or claim nullifier dedup on genesis.
+Full text: git history pre-P2B-6 land; summary retained in [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md).
 
 ---
-
 ## 8. Forward actions and reversion clauses
 
 ### 8.0 Genesis substrate dependency (Stage 3 merge gate)

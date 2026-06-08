@@ -1,7 +1,8 @@
 # PHASE_2B §7 — Threat model re-center (P2B-6 draft)
 
-**Status:** **Review round 1 incorporated (2026-06-07).** Ready to land into
-[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7 (claim-era §7.4–§7.5 → §7.A).
+**Status:** **Landed (2026-06-07).** Spliced into
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7; claim-era wargame → §7.A.
+LMDB substrate verified on `dev` (§7.11). **T-A1 sim** remains open F1 gate.
 
 **Authority chain:** [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-6;
 [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
@@ -310,11 +311,11 @@ breaks on `Σwork(E)` finalization trace.
 2. **Gate-2 slash trigger** — `Slashed` transition and T-A16 hang on 8c (last open Tier-1
    soundness item).
 
-**Substrate verification (doc-ahead-of-code):** consensus-balance bond validated against
-precedent (`staker_pool_balance`, `already_generated_coins`) and docs — **not** against live
-LMDB integration on current `main`. Single verify-before-branch item: bond balance integrates
-with actual schema and `get_block_reward` / `already_generated_coins` accounting as cleanly as
-conservation law assumes. Design hole if false; integration task if true-but-unwired.
+**Substrate verification (`dev`, 2026-06-07):** **PASS — pattern clean, bond greenfield.**
+`m_properties` scalars (`staker_pool_balance`, `total_burned`) + per-height
+`already_generated_coins` + `pop_block` revert via `staker_accrual` match gate-4 conservation
+shape. `total_bonded_atomic` is a sibling property key; bond terms via RCT balance equation, not
+`get_block_reward`. Full table in PHASE_2B §7.11.
 
 ---
 

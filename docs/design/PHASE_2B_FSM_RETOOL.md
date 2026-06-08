@@ -330,7 +330,7 @@ never authoritative locally.
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
 | **R4** | Grace-window GUI surfacing (**G1a — priority-1 UX**) | §7 G1 + gate-6 §5 |
-| **Substrate verify** | Bond balance ↔ LMDB / `already_generated_coins` integration on `main` | Pre-branch code check (§7 draft §13) |
+| **Substrate verify** | **Closed (2026-06-07)** — LMDB pattern on `dev` verified; bond wire greenfield | PHASE_2B §7.11 |
 
 ---
 
@@ -364,27 +364,25 @@ conservation law (gate-4 §4.5) extends G11 — loud bond terms cannot mask infl
 
 ### Disposition
 
-**Review round 1 incorporated (2026-06-07):**
-[`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) — ready to land.
+**Landed (2026-06-07):** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7;
+claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md).
 
 **Closed in review:**
 
-- [x] F1 — provisionally accepted; **T-A1 sim gate**; SEB structural lever (hygiene residual
-      only if SEB=10_000 is genuine lock).
+- [x] F1 — provisionally accepted; **T-A1 sim gate** (open); SEB structural lever.
 - [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion) + T-A17 (join censorship, low).
 - [x] G11 — positive KAT invariants G11-E1/E2/E3; full-node vs light-client split.
 - [x] G1 — three-tier surfacing; partial slash stays `Bonded` (FSM amended).
+- [x] LMDB substrate verify on `dev` — pattern clean (§7.11).
 
-**Land:** splice draft → PHASE_2B §7; archive claim-era wargame as §7.A.
-
-PHASE_2B §3.1–§3.4 landed (partial-slash FSM pin 2026-06-07). §4–§6 still claim-era.
+PHASE_2B §3.1–§3.4 + §7 landed. §4–§6 still claim-era. **T-A1** blocks F1 final accept.
 
 ---
 
 ## Forward order
 
 ```text
-P2B-6 §7 review → land into PHASE_2B → numeric cluster values → §4–§5 retool
+T-A1 sim (F1 gate) → numeric cluster values → §4–§5 retool
 ```
 
 P2B-1, R1, R1b, custody, G4-3, **§3 FSM graph** closed. P2B-5 largely closed (gate-4 §5).
