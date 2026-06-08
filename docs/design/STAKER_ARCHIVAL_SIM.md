@@ -1433,7 +1433,9 @@ chain — fall in two groups: **missing model elements** and **the two far ends 
    software bug) breaks it. `R_target` and the spread metric should carry a **diversity axis**
    (jurisdiction/ASN/implementation), not just actor-count Gini — privacy-compatible diversity
    measurement is itself a research question (mission priority 2).
-6. **Bond lifecycle.** Slashing conditions (a failed challenge?), graceful-exit return,
+6. **Bond lifecycle.** Slashing conditions (a failed challenge?), graceful-exit return —
+   **spec'd:** [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §4.3 `Unbond` + release
+   cooldown vs `W` backlog; sim still unmodeled,
    partial slashing, and the capital-lockup opportunity cost over the duration are abstracted
    to a flat seating cost. The duration knob's *real* cost/benefit lives here.
 7. **Unbounded deep-history growth.** Deep shards accumulate forever; total archival storage

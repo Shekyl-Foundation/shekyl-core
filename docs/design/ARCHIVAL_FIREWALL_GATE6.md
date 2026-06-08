@@ -141,6 +141,10 @@ transfers.
   hiding reward size).
 - Terminal unstake = **decorrelated drain** `P`→principal — not a lump sweep that
   ties reward history to a single principal output cluster in one block.
+- **Unbond refund** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4): release
+  creates a P-attributed output at public `bond_floor` amount; mixes in the FCMP++ set like
+  any output — same decorrelated-drain discipline as reward receipts (amount is public;
+  spend anonymity is tree membership).
 
 **Round-open:** minimum delay / output-count discipline between last emission and
 drain; change-output handling on bond-funding transfers.

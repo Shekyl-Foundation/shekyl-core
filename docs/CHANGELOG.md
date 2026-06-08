@@ -4,10 +4,28 @@
 
 ### Added
 
+- **docs: Archival timing constants stub + PHASE_2B §3 FSM (2026-06-07).**
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md) — joint cluster
+  enumeration and couplings (`W`, reorg, release cooldown, SEB). PHASE_2B §3.1–§3.4:
+  archival FSM, `ArchivalPInstance`, `P_canonical_id`, pending emission, reorg (P2B-5).
+  §4–§7 bannered claim-era pending retool. Gate-4 §8.2 → timing doc; FSM retool forward
+  order updated.
+
+- **docs: Gate 4 round-1 custody base (2026-06-07).**
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) — consensus-balance model;
+  `bond_credit`/`bond_debit` balance terms; conservation law; `== bond_floor`; slash
+  forward-only; reorg all-types-atomic; §8.2 numeric cluster. Retool P2B-5/forward order.
+
+- **docs: Gate 4 G4-1–G4-7 review pins (2026-06-07).**
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) — `Unbond` clean release +
+  cooldown; escrow vs spend-lock (reject attestation-only); supply/burn coupling;
+  `E_join+1` boundary; unified Market predicate; HoldingsUpdate principle; `bond_floor`
+  CompleteTree exception. Corpus sync: emission, archival state, PHASE_2B, sim note.
+
 - **docs: Gate 4 join-Market + bond-post wire (2026-06-07).**
   [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) — join-Market seam (lag-forced
-  distinct from paying mint); `txin_archival_bond_post` sketch; `E_join` pin; reorg.
-  Emission §6.4/§8, PHASE_2B §2.4, archival state `Market`, gate-6 lifecycle amended.
+  distinct from paying mint); `txin_archival_bond_post` sketch; reorg. Emission §6.4/§8,
+  PHASE_2B §2.4, archival state `Market`, gate-6 lifecycle amended.
 
 - **docs: PHASE_2B FSM retool disposition P2B-1–6 (2026-06-07).**
   [`PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) — master key

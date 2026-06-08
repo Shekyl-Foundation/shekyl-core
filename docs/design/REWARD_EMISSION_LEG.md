@@ -417,10 +417,10 @@ ArchivalBondRecord {
   bonded_total_atomic:      u64,       // gate 4 accounting
   good_standing:            bool,
   join_market_height:        u64,       // gate 4 JoinMarket block
-  join_settlement_epoch:     u64,       // E_join — Market counting from here
+  join_settlement_epoch:     u64,       // E_join; counting/claims from E_join + 1 (gate-4 §2.2)
   first_paying_emission_height: Option<u64>,  // set on first mint vin
   claimed_settlement_epochs: ClaimedEpochSet,  // §6.3; empty at join
-  // gate 4 extensions (slash hooks, per-shard bond breakdown) colocated in same record
+  // gate-4-owned extensions: bond_event_log, escrow, last_served_epoch — gate-4 §4.1
 }
 ```
 
@@ -497,7 +497,8 @@ epoch cadence and the per-`P` batch limit. Pin numeric `W` jointly with batch ca
 Bond record **creation** is **`txin_archival_bond_post` / `JoinMarket`**
 ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2–§3). This leg **does not**
 create records. Precondition for any paying emission: record exists with
-`join_settlement_epoch = E_join` stamped; gate-2 retention bits only for `E ≥ E_join`.
+`join_settlement_epoch = E_join` stamped; counting and claims from **`E ≥ E_join + 1`**
+([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
 
 ### 6.4.1 First and subsequent paying emissions
 
@@ -506,7 +507,7 @@ create records. Precondition for any paying emission: record exists with
 
 1. Verify `holdings` compatible with stored record (no silent portfolio swap without
    gate-4 `HoldingsUpdate` / re-bond flow).
-2. For each claimed epoch `E`: require `E ≥ E_join`; `good_through(E)`; dedup; lagged
+2. For each claimed epoch `E`: require `E ≥ E_join + 1`; `good_through(E)`; dedup; lagged
    `Σwork(E)` read (§4.5).
 3. On first paying emission: set `first_paying_emission_height = current_height` if `None`.
 4. Apply `claimed_settlement_epochs.check_and_set(E)` for each epoch in vin.
@@ -560,7 +561,7 @@ Apply in order; fail-fast:
 
 1. **Structural** — tx type, vin counts, epoch list monotone unique, `|epochs| ≤ 15`.
 2. **Bond posture** — record **exists** (join-Market already done); holdings match;
-   `E ≥ E_join` for all claimed epochs.
+   `E ≥ E_join + 1` for all claimed epochs.
 3. **Dedup** — for each `E`, `claimed_settlement_epochs.check_and_set(E)` (atomic with
    block connect).
 4. **Archival work** — recompute `work_P(E)` from state; compare to `work_claim`.
@@ -591,8 +592,9 @@ backing_ok(P, roots) :=
 ```
 
 When admission principal is **not** consensus-required (gate 7 bonds-only sink), the
-membership proof may attest **bond posture only**: `bonded_total_atomic ≥
-bond_required(holdings)` without a separate admission UTXO threshold.
+membership proof may attest **bond posture only**: `bonded_total_atomic ==
+bond_floor(holdings)` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2) without a
+separate admission UTXO threshold.
 
 **Unspent-proof wall:** The transfer-shaped admission model plus the unspent-proof
 discipline lean **away** from settled-retained confidential principal machinery.

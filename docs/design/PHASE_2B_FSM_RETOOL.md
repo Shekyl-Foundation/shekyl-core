@@ -1,7 +1,8 @@
 # Phase 2b — `StakeState` FSM retool (rebased substrate)
 
-**Status:** **P2B-1 confirmed; P2B-4 expanded; R1 closed (2026-06-07).** join-Market seam
-(forced distinct from first paying mint by §4.5 lag). Gate-4 wire shape open: (a) vs (b).
+**Status:** **P2B-1 confirmed; P2B-4 expanded; R1 + R1b + G4-1–G4-7 closed (2026-06-07).**
+join-Market seam (lag-forced); gate-4 wire lean **(b)** `txin_archival_bond_post` incl.
+`Unbond` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)).
 Supersedes [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) **§3–§5.2** (claim-era
 FSM) until those sections are rewritten against this doc.
 
@@ -74,7 +75,7 @@ first emission, before bond record. The GUI always has a stable row id from inst
 
 - [x] Primary key = `P_canonical_id`; backing demoted to rotatable field.
 - [x] `PHandle` rejected.
-- [ ] §3.3.3 rewritten as archival-id pin or merged into §9 cross-ref.
+- [x] §3.3.3 rewritten as archival `P_canonical_id` pin (PHASE_2B §3.3; gate-6 §9.5).
 
 ---
 
@@ -133,7 +134,7 @@ Encoding lives on **`ArchivalBondRecord` keyed by `P_canonical_id`** — same ke
 
 ---
 
-## P2B-4 — State collapse (four states + graph; R1 open)
+## P2B-4 — State collapse (four states + graph; R1 closed)
 
 ### Finding
 
@@ -172,7 +173,7 @@ conflate.
 | `AdmissionPending` | No bond record | Gate-2 retention bits may accrue but **don't count** (`R_market` filters `P ∈ Market`; §3.3) | `p_slot`, `p_canonical_id`, holdings-being-served (§9.4) |
 | `Bonded` | Bond record ∧ serving | Bond record; counted retention; `Σwork` participation | + `bond_ref`, `backing_outputs`, `claimed_epochs` cache |
 | `Slashed` | Bond record, post-slash unbonded | Record persists; out of `durability_count` | Same; cache frozen |
-| `Exited` | Drain confirmed; retiring | Record until prune | Same; backlog cache |
+| `Exited` | Drain confirmed; retiring; collateral in release cooldown until **Unbond** | Record until prune | Same; backlog cache; bond cooldown |
 
 **`good_standing`:** predicate from bond record, **not** an FSM state. Grace-window
 (`good_standing = false`, slash pending) stays `Bonded`; blocks emit-new (emission §6.5
@@ -181,9 +182,11 @@ posture) but not FSM transition. GUI: cure-or-be-slashed warning (gate-6 §5).
 **`Exited` refinements:**
 
 1. **Not claim-terminal.** E-3: pre-exit good epochs claimable within `W`. Emit-backlog
-   persists in `Exited` (and `Slashed`) until `W` lapses on the last good epoch. True
-   retirement (`p_slot` burn) = no claimable epoch remains, not drain confirm alone.
-2. **Graph, not ladder.** `Slashed ⇄ Bonded` via re-bond (foundation §3.2). Re-entry of
+   persists in `Exited` (and `Slashed`) until `W` lapses on the last good epoch.
+2. **Not collateral-terminal.** Escrowed bond returns via **`Unbond`** after release
+   cooldown (grace past last serve) — shorter than `W`. Drain does not release bond
+   (G4-1). Full retirement = bond released ∧ backlog exhausted/lapsed; then `p_slot` burn.
+3. **Graph, not ladder.** `Slashed ⇄ Bonded` via re-bond (foundation §3.2). Re-entry of
    `Exited` → **new `p_slot` / new `P`** (R2), not revive — reviving re-links decorrelation.
 
 ### join-Market seam (R1 — closed)
@@ -197,8 +200,8 @@ impossible** given §4.5 lag + invariant 2 (finalized-at-E-close).
 |----------|-------|-------------------|-----------------|----------------|
 | Locked bond present | Ledger admission (anti-bloat) | join | yes | — |
 | Gate-2 writes `(P,s,E)` bits | `P` starts serving | join | yes | — |
-| `P ∈ Market` | `R_market` / `Σwork` counting | join (`E_join`) | yes | — |
-| Claim eligibility | which epochs `P` may mint | `E ≥ E_join` | yes | — |
+| `P ∈ Market` | `R_market` / `Σwork` counting | `E ≥ E_join + 1` | yes | — |
+| Claim eligibility | which epochs `P` may mint | `E ≥ E_join + 1` | yes | — |
 | Drop-after-pay deterrent | ongoing retention | first paid epoch | bond from join | yes |
 | Slash teeth | bond collateral | join | yes | — |
 | Dedup register | double-claim | first mint | empty set at join | yes |
@@ -223,15 +226,14 @@ settlement lag. Bundling is not a privacy tradeoff; it is a **consensus impossib
 
 One on-chain event — **join-Market** — that:
 
-1. Posts locked bond (`bonded_total_atomic ≥ bond_floor(holdings)`).
+1. Posts locked bond (`bonded_total_atomic == bond_floor(holdings)`).
 2. Creates `ArchivalBondRecord` with empty `claimed_settlement_epochs`.
 3. Stamps `E_join` (settlement epoch of join).
 4. From join: gate-2 may write `(P,s,E)` bits (**no bits pre-join** — state-bloat closed).
-5. From join: `P ∈ Market` → counted in `R_market` / `Σwork` for `E ≥ E_join`.
-6. From join: claim-eligible for `E ≥ E_join` (first paying emission is an ordinary **emit**
-   action in `Bonded`, batching `[E_join, …]` subject to `W` and batch cap).
+5. From join: `P ∈ Market` for `E ≥ E_join + 1` (partial epoch `E_join` forfeited).
+6. First paying emission batches `[E_join + 1, …]` subject to `W` and batch cap.
 
-**Counted ⟺ claimable ⟺ `E ≥ E_join`** — no serve-unbonded-then-claim inflation.
+**Counted ⟺ claimable ⟺ `E ≥ E_join + 1`** — deterministic; no gate-2 coupling.
 
 **Anti-replica-flooding:** Market entry without bonded collateral would let attackers flood
 fake `P` replicas, crater `R_market` scarcity, and drive honest reward toward zero. Bond +
@@ -267,8 +269,7 @@ choice:
 **Lean (b):** one bond-posture vin type for create/update; rows 1–4 vs row 5 separation
 on the wire matches the function decomposition. Re-bond needs (b) regardless.
 
-**Open pin:** mid-epoch join — does `E_join = settlement_epoch(join_height)` count partial
-epoch work, or first full epoch after join? Affects first claimable `E` at boundary.
+**R1b closed:** first counted/claimable epoch = **`E_join + 1`** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
 
 ### Transition graph (replaces §3.2 ladder)
 
@@ -279,7 +280,8 @@ epoch work, or first full epoch after join? Affects first claimable `E` at bound
 | `Bonded` | Slash finalizes → unbond | `Slashed` |
 | `Slashed` | Standalone re-bond (gate-4) | `Bonded` |
 | `Bonded` / `Slashed` | Decorrelated drain confirms | `Exited` |
-| `Exited` | Last backlog epoch crosses `W` | Terminal (`p_slot` burn) |
+| `Exited` | Release cooldown elapsed | **Unbond** (collateral returned) |
+| `Exited` | Bond released ∧ backlog exhausted/lapsed (`W`) | Terminal (`p_slot` burn) |
 | `Bonded` | Reorg disconnects **join-Market** block (§8.2) | `AdmissionPending` |
 | `Exited` / `Slashed` | Reorg on drain/slash block | Re-read bond → prior state |
 
@@ -296,7 +298,8 @@ emission is the first emit action within `Bonded`:
 | Fund admission | `AdmissionPending` | Ordinary transfer to `P` |
 | Emit | `Bonded` / `Slashed` / `Exited` | `txin_archival_reward_emission`, batch ≤ 15. **Emit-new:** `Bonded` + `good_standing`. **Emit-backlog:** any of three + `good_through(E)` + `W` + dedup |
 | Rotate backing | `Bonded` | Membership-only; updates `backing_outputs`; no state change |
-| Exit / drain | `Bonded` / `Slashed` | Decorrelated `P`→principal (§2.4 output) |
+| Exit / drain | `Bonded` / `Slashed` | Decorrelated `P`→principal — **non-escrowed** outputs only |
+| Unbond | `Exited` (post-cooldown) | Gate-4 collateral return; independent of backlog emit (`W`) |
 
 `emission_pending_epochs` (P2B-2) attaches to emit action.
 
@@ -312,14 +315,17 @@ never authoritative locally.
 | ID | Item | Owner |
 |----|------|-------|
 | **R1** | **Closed** — join-Market seam; wire lean **(b)** `txin_archival_bond_post` | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) |
-| **R1b** | **Pinned** — `E ≥ E_join`; mid-epoch via gate-2 scheduling | Gate-4 §2.2 |
+| **R1b** | **Closed** — `E ≥ E_join + 1`; partial `E_join` forfeited | Gate-4 §2.2 |
+| **G4-1** | `Unbond` + release cooldown vs `W` backlog | Gate-4 §4.3 |
+| **G4-3** | **Closed** — conservation law `already_generated == circulating + bonded + burned` | Gate-4 §4.5 |
+| **Custody** | **Closed** — consensus balance + `bond_credit`/`bond_debit` | Gate-4 §3.2 |
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
 | **R4** | Grace-window GUI surfacing | Gate-6 §5 / UX |
 
 ---
 
-## P2B-5 — Reorg simplifies to re-read
+## P2B-5 — Reorg simplifies to re-read (largely closed)
 
 ### Finding
 
@@ -328,41 +334,51 @@ never authoritative locally.
 
 ### Disposition
 
-1. **Consensus:** `pop_block` reverts bond mutations + dedup in documented order (emission §8;
-   archival state schema when landed).
+1. **Consensus:** per-block pop **all-types-atomic** (gate-4 §5): bond credit/debit,
+   `total_bonded_atomic`, record create/delete, same-block retention bits, FCMP outputs,
+   interval-log pop — single LMDB txn. Cross-block join cascade via archival state §6
+   ordered pop (tip → `H`).
 2. **Wallet:** on reorg notification, **re-fetch `ArchivalBondRecord` for each live
    `P_canonical_id`**; refresh `claimed_epochs` cache; clear `emission_pending_epochs` for
-   disconnected heights. No mask replay, no `x·G_S` intersection.
+   disconnected heights. `Bonded` → `AdmissionPending` on join-Market revert only.
 3. **Delete:** §3.3.2 reorg-stable anchor / eligible_height drain argument (tier-era).
 
 ---
 
-## P2B-6 — Threat model re-center (last)
+## P2B-6 — Threat model re-center (last structural piece)
 
 ### Finding
 
 §7 wargames F0 + nullifiers — both gone. Re-center on gate-6 long-lived correlation; F1
-(epoch-granularity retention fingerprint vs rotation) is a first-class §7 entry.
+(epoch-granularity retention fingerprint vs rotation) is a first-class §7 entry. Bond
+conservation law (gate-4 §4.5) extends G11 — loud bond terms cannot mask inflation.
 
 ### Disposition
 
-**Do not rewrite §7 until P2B-1–5 land** — otherwise the wargame targets the wrong mechanism.
+**Ready to rewrite §7** — PHASE_2B §3.1–§3.4 archival FSM landed (2026-06-07); §4–§7 still
+claim-era pending P2B-3+. Custody + reorg (P2B-5) spec'd in gate-4; §7 should cite
+conservation law, release refund decorrelation (gate-6 §2.4), and
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md).
 
 ---
 
 ## Forward order
 
 ```text
-R1 wire (gate-4) + emission §6.4/§8 amend → P2B-4 write-up → P2B-2/3 → P2B-5 → P2B-6
+P2B-6 §7 threat re-center → numeric cluster values (ARCHIVAL_TIMING_CONSTANTS.md) → §4–§5 retool
 ```
 
-P2B-1 closed. R1 seam closed (join-Market ≠ first mint). Parallel: gate-6 §2.3/§2.5
-join-Market defanging, `W` pin.
+P2B-1, R1, R1b, custody, G4-3, **§3 FSM graph** closed. P2B-5 largely closed (gate-4 §5).
+Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ---
 
 ## Revision history
 
+- **2026-06-07 (g):** PHASE_2B §3.1–§3.4 archival FSM landed; P2B-1 §3.3.3 closed;
+  `ARCHIVAL_TIMING_CONSTANTS.md` stub; forward order → §7 then numeric values.
+- **2026-06-07 (f):** Gate-4 round-1 custody base; conservation law; P2B-5/forward order.
+- **2026-06-07 (e):** G4-1–G4-7 pins in gate-4 doc; `E_join+1`; Unbond; FSM/emit table.
 - **2026-06-07 (d):** [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) Round 0; corpus
   amendments (emission, PHASE_2B, archival state, gate-6).
 - **2026-06-07 (c):** R1 closed — join-Market seam (lag-forced); bundled lean overturned;

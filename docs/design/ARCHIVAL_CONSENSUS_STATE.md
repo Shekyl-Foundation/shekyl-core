@@ -130,11 +130,10 @@ R_market(shard_id, E) =
 - **One consensus value** per `(shard, E)` — identical for every claimer.
 - **Pinned measure:** count at **epoch close** with `retention ∧ good_through` — not
   time-weighted over `E` (rejected: buys little, costs determinism).
-- **`Market` membership:** `P_id` with an `ArchivalBondRecord` from **join-Market**
-  ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)); counted for epoch `E` only when
-  `E ≥ E_join = join_settlement_epoch`. **No retention bits before join** — gate-2 does not
-  write `(P,s,E)` for unbonded `P`. Foundation `CompleteTree` identities are **excluded**
-  from `R_market` and `Σwork` (E-2).
+- **`Market` membership (per epoch `E`):** record exists ∧ `E ≥ E_join + 1` ∧
+  `good_through(P,E)` at E-close ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
+  **No retention bits before join** or for epoch `E_join` (partial). Foundation
+  `CompleteTree` excluded from `market_R` / `Σwork` (E-2).
 - **Materialization:** may be stored per `(shard_id, E)` at epoch close or computed on
   read from the ledger; semantics are fixed either way.
 
