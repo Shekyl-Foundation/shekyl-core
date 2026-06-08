@@ -31,6 +31,38 @@ pub(crate) fn collect_label_residue(
     map
 }
 
+/// After a chain reorg drops transfers at `fork_height` and above, unwind
+/// `PaymentRequest` rows that matched transfers that no longer exist so a
+/// replay can re-match them.
+pub(crate) fn rewind_matched_payment_requests_after_reorg(
+    payment_requests: &mut [PaymentRequest],
+    ledger: &LedgerBlock,
+) {
+    let current_height = ledger.height();
+    for req in payment_requests.iter_mut() {
+        if req.state != PaymentRequestState::Matched {
+            continue;
+        }
+        let (Some(tx_hash), Some(out_idx)) = (req.matched_tx_hash, req.matched_output_index) else {
+            continue;
+        };
+        let still_matched = ledger
+            .transfers
+            .iter()
+            .any(|td| td.tx_hash == tx_hash && td.internal_output_index == out_idx);
+        if still_matched {
+            continue;
+        }
+        req.matched_tx_hash = None;
+        req.matched_output_index = None;
+        req.state = if req.is_expired_at(current_height) {
+            PaymentRequestState::Expired
+        } else {
+            PaymentRequestState::Pending
+        };
+    }
+}
+
 /// Populate `receive_attribution` on freshly merged transfers and update requests.
 pub(crate) fn apply_receive_attributions(
     payment_requests: &mut [PaymentRequest],
@@ -183,5 +215,65 @@ mod tests {
         let attr = match_inbound_attribution(true, &pt, 100, 10, [3u8; 32], 0, &mut reqs);
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
+    }
+
+    #[test]
+    fn rewind_matched_request_when_transfer_reorged_out() {
+        use shekyl_engine_state::LedgerBlock;
+
+        let rid = 7;
+        let tx_hash = [0xAB; 32];
+        let mut reqs = vec![sample_request(rid, 50)];
+        reqs[0].state = PaymentRequestState::Matched;
+        reqs[0].matched_tx_hash = Some(tx_hash);
+        reqs[0].matched_output_index = Some(0);
+
+        let ledger = LedgerBlock::empty();
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger);
+        assert_eq!(reqs[0].state, PaymentRequestState::Pending);
+        assert!(reqs[0].matched_tx_hash.is_none());
+    }
+
+    #[test]
+    fn rewind_keeps_match_when_transfer_survives() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        use shekyl_engine_state::{transfer::TransferDetails, LedgerBlock};
+        use shekyl_oxide::primitives::Commitment;
+
+        let rid = 8;
+        let tx_hash = [0xCD; 32];
+        let mut reqs = vec![sample_request(rid, 50)];
+        reqs[0].state = PaymentRequestState::Matched;
+        reqs[0].matched_tx_hash = Some(tx_hash);
+        reqs[0].matched_output_index = Some(1);
+
+        let mut ledger = LedgerBlock::empty();
+        ledger.transfers.push(TransferDetails {
+            tx_hash,
+            internal_output_index: 1,
+            global_output_index: 0,
+            block_height: 5,
+            key: ED25519_BASEPOINT_POINT,
+            key_offset: Scalar::ONE,
+            commitment: Commitment::new(Scalar::ONE, 50),
+            payment_id: None,
+            spent: false,
+            spent_height: None,
+            key_image: None,
+            staked: false,
+            stake_tier: 0,
+            stake_lock_until: 0,
+            last_claimed_height: 0,
+            source_ciphertext: None,
+            output_handle: None,
+            eligible_height: 0,
+            frozen: false,
+            fcmp_precomputed_path: None,
+            receive_attribution: ReceiveAttribution::Matched(PaymentRequestId(rid)),
+        });
+
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger);
+        assert_eq!(reqs[0].state, PaymentRequestState::Matched);
+        assert_eq!(reqs[0].matched_tx_hash, Some(tx_hash));
     }
 }

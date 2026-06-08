@@ -55,11 +55,15 @@ namespace {
 
 bool cooperative_payment_requests_enabled()
 {
-  const char* v = std::getenv("SHEKYL_COOPERATIVE_PAYMENT_REQUESTS");
-  if (!v)
-    return false;
-  return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
-         std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0;
+  // Process-global env flag; cache once per process (send hot path).
+  static const bool enabled = []() {
+    const char* v = std::getenv("SHEKYL_COOPERATIVE_PAYMENT_REQUESTS");
+    if (!v)
+      return false;
+    return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+           std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0;
+  }();
+  return enabled;
 }
 
 ShekylOutputData construct_output_for_destination(

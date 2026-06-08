@@ -81,7 +81,10 @@ use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
 use crate::{
-    attribution::{apply_receive_attributions, collect_label_residue},
+    attribution::{
+        apply_receive_attributions, collect_label_residue,
+        rewind_matched_payment_requests_after_reorg,
+    },
     engine::{
         local_ledger::LocalLedger,
         traits::{DaemonEngine, LedgerEngine},
@@ -201,6 +204,7 @@ impl<
         let detection_residue = collect_detection_residue(&result);
         let label_residue = collect_label_residue(&result.new_transfers);
         let cooperative = cooperative_payment_requests_enabled(&self.prefs);
+        let reorg_fork_height = result.reorg_rewind.as_ref().map(|r| r.fork_height);
 
         let mut guard = self.ledger.write();
         let state = &mut *guard;
@@ -211,6 +215,12 @@ impl<
         // a borrow of the guarded inner.
         let inserted =
             apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)?;
+        if reorg_fork_height.is_some() {
+            rewind_matched_payment_requests_after_reorg(
+                &mut state.ledger.bookkeeping.payment_requests,
+                &state.ledger.ledger,
+            );
+        }
 
         // Engine post-pass: idempotent population of the
         // engine-derived fields on the freshly-merged transfers.
