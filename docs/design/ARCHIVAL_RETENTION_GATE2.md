@@ -21,6 +21,7 @@ Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_C
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge; join gates bit writes |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Off-chain delivery; `P` signature binding |
 | [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
+| [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) | Sliding-window m-of-n pinned; escalation rejected (Round-1) |
 
 **Out of scope here:** emission economics (gate 1); bond-post wire (gate 4); wallet FSM;
 onion RPC message formats (gate 6 + `ANONYMITY_NETWORKS.md`); per-fetch payment for organic
@@ -40,8 +41,11 @@ possession. Quiet epochs with no organic fetch and no challenge: no credit, no s
 **Protocol (consensus / hash / convergence only):**
 
 1. **P bonds** to shard `s` (join-Market, gate 4).
-2. **Each epoch `E`:** one **guaranteed** challenge per `(P, s)` — the demand floor so honest
-   `P` can earn even with no organic traffic.
+2. **Each epoch `E`:** one **guaranteed baseline** challenge per `(P, s)` — the demand floor so
+   honest `P` can earn even with no organic traffic. **Scheduling after a miss** —
+   **sliding-window m-of-n** pinned in
+   [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §1; genesis
+   implements baseline + slash-on-miss tally; escalation FSM rejected.
 3. **Leaf index `ℓ`** — deterministic, public (`H(P, s, E)`-style); pre-knowledge does not
    help (must still produce the opening when fired).
 4. **Challenge fire time** within `E` — **beacon-unpredictable** (reachability: `P` must be

@@ -13,9 +13,14 @@
 //!
 //! Optional filter: `--axis=<prefix>` runs only scenarios whose `axis` field starts with
 //! the prefix (e.g. `--axis=gate4_fine` for the iteration-2 bond window sweep).
+//!
+//! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
+//! `--failure-confirmation` (L14b Round-1 policy comparator per
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
 
 mod agent;
 mod audit;
+mod failure_confirmation;
 mod fingerprint;
 mod metrics;
 mod model;
@@ -337,6 +342,103 @@ fn print_summary(results: &[ScenarioResult]) {
     }
 }
 
+fn print_failure_confirmation_report(axis_filter: Option<&str>) {
+    let report = failure_confirmation::run_full_report(axis_filter);
+    if report.scenarios.is_empty() {
+        eprintln!(
+            "shekyl-staking-sim: no failure-confirmation scenarios matched{}",
+            axis_filter
+                .map(|p| format!(" --axis={p}"))
+                .unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+
+    eprintln!("shekyl-staking-sim — L14b failure-confirmation Round-1 (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)");
+    eprintln!("Pin: sliding-window m-of-n. Gate: dodge slash (both policies) → binding → volR.");
+    eprintln!(
+        "Binding: vol_frac={:.5} vol_bind={} lat_bind={} — {}",
+        report.binding.volume_fraction_of_block_budget,
+        yn(report.binding.volume_binding),
+        yn(report.binding.latency_binding),
+        report.binding.rationale,
+    );
+    let pin = &report.policy_pin;
+    eprintln!(
+        "Policy pin: {} m={} n={} (span>{}) | dodge esc={:.3} slide={:.3} | tuned fs esc={:.3} slide={:.3}",
+        pin.chosen_policy,
+        pin.chosen_miss_threshold,
+        pin.chosen_window_epochs,
+        pin.max_single_outage_baselines,
+        pin.escalate_dodge_slash_rate,
+        pin.sliding_dodge_slash_rate,
+        pin.escalate_transient_false_slash,
+        pin.tuned_sliding_transient_false_slash,
+    );
+    for line in &pin.rationale {
+        eprintln!("  • {line}");
+    }
+    eprintln!("Baseline timing: {} | prod: {}", 
+        report.baseline_timing.sim_baseline_model,
+        report.baseline_timing.production_baseline_model);
+    eprintln!("Sliding m-sweep (transient fs, m>span):");
+    for pt in &report.sliding_m_sweep {
+        if pt.above_outage_span {
+            eprintln!(
+                "  m={} n={} fs={:.3}",
+                pt.miss_threshold, pt.window_epochs, pt.transient_false_slash_rate
+            );
+        }
+    }
+    eprintln!("Honest P(slash) vs u:");
+    for pt in &report.u_sweep {
+        eprintln!(
+            "  u={:.2}  P_slash_esc={:.3}  P_slash_slide={:.3}",
+            pt.uptime_target, pt.escalate_slash_probability, pt.sliding_slash_probability,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "{:<32} {:>5} {:>5} {:>5} {:>5} {:>4} {:>4} {:>5} | {}",
+        "scenario",
+        "volR",
+        "fsE",
+        "fsS",
+        "fsT",
+        "dEsc",
+        "dSl",
+        "FSM?",
+        "gate",
+    );
+    for r in &report.scenarios {
+        eprintln!(
+            "{:<32} {:>5.2} {:>5.3} {:>5.3} {:>5.3} {:>4.2} {:>4.2} {:>5} | {}",
+            r.name,
+            r.decision.volume_ratio,
+            r.transient.escalate_false_slash_rate,
+            r.transient.sliding_false_slash_rate,
+            r.transient.sliding_tuned_false_slash_rate,
+            r.dodge.escalate_slash_rate,
+            r.dodge.sliding_slash_rate,
+            if r.decision.fsm_justified {
+                "yes"
+            } else {
+                "no"
+            },
+            if r.decision.sliding_window_preferred {
+                "slide"
+            } else {
+                "reopen"
+            },
+        );
+    }
+
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing failure-confirmation report: {e}"),
+    }
+}
+
 fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
@@ -386,6 +488,11 @@ fn main() {
     }
 
     let axis_filter = std::env::args().find_map(|a| a.strip_prefix("--axis=").map(str::to_string));
+
+    if std::env::args().any(|a| a == "--failure-confirmation") {
+        print_failure_confirmation_report(axis_filter.as_deref());
+        return;
+    }
 
     let cfgs: Vec<_> = build_scenarios()
         .into_iter()

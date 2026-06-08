@@ -13,6 +13,19 @@
   paired `WALLET_LEDGER_FORMAT_VERSION` 6→7 (`wallet_ledger.snap`).
   Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](design/PRIMARY_CLAIM_DERIVATION_RENAME.md).
 
+- **staking-sim: L14b pins sliding-window over escalation FSM (2026-06-08).**
+  `failure_confirmation.rs` — paired dodge slash (esc 0 / slide 1), sliding `m` sweep,
+  `policy_pin` + Round-2 joint-`m` gate note. `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  restructured: §1 pinned policy, §5 rejected-alternative stratum; `R_market` serve-credit
+  substrate in consensus §3.3.
+
+- **docs: archival failure-confirmation policy pin (2026-06-08).**
+  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](design/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) —
+  escalate-on-failure with randomized near-term recheck (not exponential backoff);
+  not-durably-absent enforcement claim; outage-CDF quantile → false-slash; sim decision gate
+  vs sliding-window m-of-n before per-`P` confirmation FSM. Cross-links in gate-2 §0 and
+  `STAKER_ARCHIVAL_SIM.md` L14b.
+
 - **archival: `shekyl-archival-retention` verify crate (gate-2 §10 step 1).**
   Challenge leaf index + beacon fire height (`cSHAKE` domain labels per
   `ARCHIVAL_RETENTION_GATE2.md` §3.3–§3.4); `verify_segment_path` replays

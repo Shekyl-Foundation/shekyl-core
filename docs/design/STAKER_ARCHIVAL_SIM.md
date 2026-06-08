@@ -1981,6 +1981,47 @@ fetch-on-demand to answer a challenge it can't otherwise serve — this sets the
 that a pure read-credit cannot go below) are post-testnet / gate-7 empirics. L14 fixes the
 *shape* — oversight ∝ unread-tail, slash-primary, challenge-top-up — not the live cadence.
 
+### L14b — failure-confirmation scheduling (design pin; sim-gated)
+
+**Pin:** [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
+
+After a baseline epoch challenge **miss**, consensus may escalate scrutiny with a **recheck
+window** `[start, start+w]` — `start` from the **assumed residual-life** quantile `p`
+(false-slash knob), `w` the spread width (gaming / dodge-cost knob). Not a single deterministic
+delay: false-slash wants late recheck; gaming wants spread. Nominal `false_slash ≈ 1−p` is
+exact only for exponential (memoryless); fat-tailed true outages inflate realized false-slash
+when start is sized from the wrong law — Round-1 reports **tail misspecification gap**.
+
+**Enforcement claim:** policy certifies **not-durably-absent**, not a reachability SLA. The
+quantitative form is **`P(slash)` vs honest `u`** (u-sweep in report), not a single operating
+point at `u_eff ≈ 0.634`. Steady-state `u_eff` does not pin tail shape; stressnet needs the
+**outage-duration CDF**.
+
+**Decision gate (ordered):** (1) pin **`b_min`** (gaming floor on baseline + `w`); (2)
+**binding check** — analytical `N_market × shards_per_P × rate × vin / SEB` (per-P sim cannot
+settle absolute volume); slash-latency likely non-binding under the durability floor; (3) only
+if binding: relative `volR` escalate vs sliding-window. If volume and latency do not bind, FSM
+is unjustified regardless of adaptivity.
+
+**Round-1 harness (revised).** `rust/shekyl-staking-sim/src/failure_confirmation.rs` — per-`P`
+epoch micro-sim; exponential + lognormal tail-misspec scenarios. JSON report: `binding`,
+`u_sweep`, `scenarios`. Run:
+
+```bash
+cargo run -p shekyl-staking-sim --release -- --failure-confirmation
+cargo run -p shekyl-staking-sim --release -- --failure-confirmation --axis=l14b_confirm_tail
+```
+
+Scenarios: `l14b_confirm_default`, `l14b_confirm_quantile_*`,
+`l14b_confirm_tail_assumed_exp_true_lognormal`, `l14b_confirm_width_*`,
+`l14b_confirm_window_*`, `l14b_confirm_gaming_thin`. **Round-1 outcome (pinned):** sliding-window **m-of-n** (`m=11,n=13` provisional at L16
+exponential — **Round-2** stressnet CDF gates final `m`). Escalation **rejected** (§5 of pin
+doc — audit stratum only): dodge 0/1, `volR≈1.7`, tuned transient fs 0.002 vs 0.025.
+`R_market` is **serve-credit-weighted** (consensus §3.3) — slow slash does not pollute
+scarcity at E-close; Round-2 must confirm no slot-weighted path. Fat-tail may force higher
+`m`; joint feasibility with bond-resolution latency is the Round-2 gate. Report:
+`policy_pin`, `sliding_m_sweep`, `dEsc`/`dSl`, `baseline_timing`.
+
 ### L15 — retrieval availability: coverage ≠ retrieval, and `R_target` is derivable
 
 L15 is the first layer that scores the property users actually need — *retrieval* (≥1 holder
