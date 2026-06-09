@@ -300,6 +300,21 @@ fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
     }
 }
 
+/// Flattened `count × 32` commitment keys from a C pointer; rejects overflow and oversize slices.
+fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
+    if count == 0 {
+        return Ok(&[]);
+    }
+    let Some(byte_len) = count.checked_mul(32) else {
+        return Err(SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
+    };
+    if byte_len > isize::MAX as usize {
+        return Err(SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
+    }
+    // SAFETY: caller guarantees `ptr` addresses `byte_len` valid bytes when count > 0.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, byte_len) })
+}
+
 /// Verify bond-post RCT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
 ///
 /// `pseudo_outs_ptr` and `out_masks_ptr` are flattened `N × 32` byte arrays; either pointer may
@@ -321,20 +336,14 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
         return SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR;
     }
 
-    let pseudo_flat = if num_pseudo_outs == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(pseudo_outs_ptr, num_pseudo_outs * 32) }
+    let pseudo_flat = match flat_commitment_keys(pseudo_outs_ptr, num_pseudo_outs) {
+        Ok(slice) => slice,
+        Err(code) => return code,
     };
-    let mask_flat = if num_out_masks == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(out_masks_ptr, num_out_masks * 32) }
+    let mask_flat = match flat_commitment_keys(out_masks_ptr, num_out_masks) {
+        Ok(slice) => slice,
+        Err(code) => return code,
     };
-
-    if !pseudo_flat.len().is_multiple_of(32) || !mask_flat.len().is_multiple_of(32) {
-        return SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT;
-    }
 
     let mut pseudo_refs = Vec::with_capacity(num_pseudo_outs);
     for chunk in pseudo_flat.chunks_exact(32) {
