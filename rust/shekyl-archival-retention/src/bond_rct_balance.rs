@@ -16,6 +16,8 @@ use shekyl_generators::H as H_POINT_LAZY;
 pub enum BondRctBalanceError {
     /// Vin may not carry both `bond_credit` and `bond_debit` (§3.2).
     BothTermsNonzero,
+    /// Bond-post must carry exactly one direction term (credit xor debit; §3.2).
+    NoBondTerm,
     /// A pseudo-out or output mask is not a valid curve point.
     InvalidPoint,
     /// Left and right commitment sums differ.
@@ -69,6 +71,9 @@ pub fn verify_bond_post_rct_balance(
     if bond_credit > 0 && bond_debit > 0 {
         return Err(BondRctBalanceError::BothTermsNonzero);
     }
+    if bond_credit == 0 && bond_debit == 0 {
+        return Err(BondRctBalanceError::NoBondTerm);
+    }
 
     let mut sum_out = sum_commitments_flat(out_masks_flat)?;
     sum_out += amount_h(txn_fee);
@@ -95,6 +100,14 @@ mod tests {
 
     fn h_only(amount: u64) -> [u8; 32] {
         amount_h(amount).compress().to_bytes()
+    }
+
+    #[test]
+    fn rejects_neither_bond_term() {
+        assert_eq!(
+            verify_bond_post_rct_balance(&[], &[], 0, 0, 0),
+            Err(BondRctBalanceError::NoBondTerm)
+        );
     }
 
     #[test]
@@ -140,7 +153,7 @@ mod tests {
             b
         };
         assert_eq!(
-            verify_bond_post_rct_balance(&torsion, &[], 0, 0, 0),
+            verify_bond_post_rct_balance(&torsion, &[], 0, 1, 0),
             Err(BondRctBalanceError::InvalidPoint)
         );
     }

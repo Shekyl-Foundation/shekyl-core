@@ -104,6 +104,19 @@ TEST(archival_bond_post, tx_input_mixing_rejects_bond_with_serve_credit)
   EXPECT_FALSE(check_inputs_types_supported(tx));
 }
 
+TEST(archival_bond_post, rct_balance_rejects_zero_bond_terms)
+{
+  constexpr uint64_t amount = 750'000'000;
+
+  rct::rctSig rv{};
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.p.fcmp_pp_proof = {0x01};
+  rv.p.pseudoOuts.push_back(rct::scalarmultH(rct::d2h(amount)));
+
+  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, 0));
+}
+
 TEST(archival_bond_post, rct_balance_includes_bond_credit_term)
 {
   constexpr uint64_t bond_credit = 750'000'000;

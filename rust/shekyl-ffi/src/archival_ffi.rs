@@ -61,6 +61,8 @@ pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 /// Left and right commitment sums differ.
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
+/// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
+pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
 
 /// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
 #[repr(C)]
@@ -295,6 +297,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
 fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
     match err {
         BondRctBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS,
+        BondRctBalanceError::NoBondTerm => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM,
         BondRctBalanceError::InvalidPoint => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT,
         BondRctBalanceError::SumMismatch => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH,
     }

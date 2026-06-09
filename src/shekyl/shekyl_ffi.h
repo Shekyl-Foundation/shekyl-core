@@ -1771,6 +1771,7 @@ uint8_t shekyl_archival_verify_serve_credit_vin(
 #define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS      2
 #define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT   3
 #define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH    4
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM    5
 
 /// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.
 uint8_t shekyl_archival_verify_bond_post_rct_balance(
