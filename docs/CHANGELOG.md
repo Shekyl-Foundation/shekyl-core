@@ -50,7 +50,7 @@
   `total_bonded_atomic` on connect/pop; JoinMarket-only at genesis.
 
 - **archival: bond-post RCT balance verifier (gate-4 §3.2 / §3.5 step 6).**
-  `verRctSemanticsBondPost` closes `sum(pseudoOuts) + bond_debit = sum(out) + fee +
+  `verRctSemanticsBondPost` closes `sum(pseudoOuts) + bond_debit = sum(out masks) + fee +
   bond_credit`; commitment sum is verified in `shekyl-archival-retention` via
   `shekyl_archival_verify_bond_post_rct_balance`; Bulletproof+ stays in C++.
   NIC path routes bond-post txs away from `verRctSemanticsSimple`.

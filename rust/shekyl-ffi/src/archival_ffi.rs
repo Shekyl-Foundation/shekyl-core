@@ -301,7 +301,11 @@ fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
 }
 
 /// Flattened `count × 32` commitment keys from a C pointer; rejects overflow and oversize slices.
-fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
+///
+/// # Safety
+///
+/// When `count > 0`, `ptr` must address `count * 32` valid bytes for the lifetime `'a`.
+unsafe fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
     if count == 0 {
         return Ok(&[]);
     }
@@ -311,8 +315,8 @@ fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8
     if byte_len > isize::MAX as usize {
         return Err(SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
     }
-    // SAFETY: caller guarantees `ptr` addresses `byte_len` valid bytes when count > 0.
-    Ok(unsafe { std::slice::from_raw_parts(ptr, byte_len) })
+    // SAFETY: caller contract per function docs.
+    Ok(std::slice::from_raw_parts(ptr, byte_len))
 }
 
 /// Verify bond-post RCT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
@@ -336,11 +340,11 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
         return SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR;
     }
 
-    let pseudo_flat = match flat_commitment_keys(pseudo_outs_ptr, num_pseudo_outs) {
+    let pseudo_flat = match unsafe { flat_commitment_keys(pseudo_outs_ptr, num_pseudo_outs) } {
         Ok(slice) => slice,
         Err(code) => return code,
     };
-    let mask_flat = match flat_commitment_keys(out_masks_ptr, num_out_masks) {
+    let mask_flat = match unsafe { flat_commitment_keys(out_masks_ptr, num_out_masks) } {
         Ok(slice) => slice,
         Err(code) => return code,
     };
@@ -375,6 +379,23 @@ mod tests {
             shekyl_archival_verify_bond_post_rct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn bond_rct_balance_ffi_rejects_count_overflow() {
+        let buf = [0u8; 32];
+        let code = unsafe {
+            shekyl_archival_verify_bond_post_rct_balance(
+                buf.as_ptr(),
+                usize::MAX,
+                ptr::null(),
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
     }
 
     #[test]
