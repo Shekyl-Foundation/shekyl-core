@@ -42,7 +42,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_engine_state::LedgerBlock;
@@ -311,6 +311,18 @@ fn release_output_locks_for(state: &mut PendingTxState, rid: ReservationId) {
     state.output_locks.retain(|_, owner| *owner != rid);
 }
 
+/// Best-effort state access for cleanup paths (sign/commit failure).
+///
+/// Mutating handlers fail loud on poison; cleanup must still release
+/// `output_locks` so a poisoned mutex does not strand spendable outputs.
+fn with_pending_tx_state_mut<R>(
+    mutex: &Mutex<PendingTxState>,
+    f: impl FnOnce(&mut PendingTxState) -> R,
+) -> R {
+    let mut state = mutex.lock().unwrap_or_else(PoisonError::into_inner);
+    f(&mut state)
+}
+
 fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
@@ -379,8 +391,61 @@ struct BuiltPendingMeta {
     selected: SelectedOutputs,
     synced: u64,
     tip_hash: [u8; 32],
-    /// Output locks are held from assembly through sign (released on sign failure).
+    /// Output locks are held from assembly until `consumer_held` commit.
     reservation_id: ReservationId,
+}
+
+/// Releases [`BuiltPendingMeta::reservation_id`] output locks unless disarmed.
+struct BuildReservationCleanup<'a, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    engine: &'a LocalPendingTx<S, O, F, FS, TS, L>,
+    reservation_id: ReservationId,
+    committed: bool,
+}
+
+impl<'a, S, O, F, FS, TS, L> BuildReservationCleanup<'a, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    fn new(engine: &'a LocalPendingTx<S, O, F, FS, TS, L>, reservation_id: ReservationId) -> Self {
+        Self {
+            engine,
+            reservation_id,
+            committed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl<S, O, F, FS, TS, L> Drop for BuildReservationCleanup<'_, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    fn drop(&mut self) {
+        if !self.committed {
+            self.engine.release_build_reservation(self.reservation_id);
+        }
+    }
 }
 
 #[allow(private_bounds)]
@@ -743,9 +808,9 @@ where
     }
 
     fn release_build_reservation(&self, reservation_id: ReservationId) {
-        if let Ok(mut state) = self.state.lock() {
-            release_output_locks_for(&mut state, reservation_id);
-        }
+        with_pending_tx_state_mut(&self.state, |state| {
+            release_output_locks_for(state, reservation_id);
+        });
     }
 
     fn commit_built_sync(
@@ -1104,23 +1169,20 @@ where
         })?;
         let BuildAssembled { tx_to_sign, meta } =
             self.build_assemble_sync(&request, fee_snapshot)?;
-        let signed = match self
+        let mut reservation_cleanup =
+            BuildReservationCleanup::new(self, meta.reservation_id);
+        let signed = self
             .signer
             .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
             .await
-        {
-            Ok(signed) => signed,
-            Err(err) => {
-                self.release_build_reservation(meta.reservation_id);
+            .map_err(|err| {
                 let signer_err: SignerError = err.into();
-                return Err(fail_build_after_attempted(
-                    self.sink.as_ref(),
-                    map_signer_error(&signer_err),
-                ));
-            }
-        };
+                fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
+            })?;
         let tx_bytes = signed.tx_bytes().to_vec();
-        self.commit_built_sync(&request, &meta, tx_bytes)
+        let pending = self.commit_built_sync(&request, &meta, tx_bytes)?;
+        reservation_cleanup.disarm();
+        Ok(pending)
     }
 
     fn submit(
