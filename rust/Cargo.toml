@@ -210,6 +210,12 @@ sha2 = "0.10"
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
 
+# CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).
+# Verified at source (redb 2.6.3): `Database::create`, `begin_write`/`begin_read`,
+# `TableDefinition`, `ReadableTable` range scan; public chain data only — no
+# `Zeroize` requirement (`17-dependency-discipline.mdc`).
+redb = "2.3"
+
 # `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
 # "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
 # the 2026-04-27 *Engine binary boundary* decision in
