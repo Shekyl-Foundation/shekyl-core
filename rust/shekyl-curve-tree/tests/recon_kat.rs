@@ -181,18 +181,15 @@ fn empty_window_then_first_drain_at_61() {
         assert_eq!(*root, init, "height {h} must be selene_hash_init");
     }
     assert_eq!(
-        recon[LAST_EMPTY],
-        blocks[LAST_EMPTY].root,
+        recon[LAST_EMPTY], blocks[LAST_EMPTY].root,
         "last empty height must match consensus header root"
     );
     assert_ne!(
-        recon[FIRST_DRAIN],
-        init,
+        recon[FIRST_DRAIN], init,
         "height {FIRST_DRAIN} is the first drained leaf"
     );
     assert_eq!(
-        recon[FIRST_DRAIN],
-        blocks[FIRST_DRAIN].root,
+        recon[FIRST_DRAIN], blocks[FIRST_DRAIN].root,
         "first drain height must match consensus header root"
     );
 }
