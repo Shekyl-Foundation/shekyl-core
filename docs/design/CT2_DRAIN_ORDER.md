@@ -274,9 +274,11 @@ of (init-valued node) vs (`build_layers([]) == [[]]` zero-node structure) the
 daemon emits. **Answer: neither as a `build_layers` artifact — the daemon emits
 the `selene_hash_init` point.** The wallet's reconstruct path therefore must:
 `if leaf_count == 0 { root = selene_hash_init() }` and never index
-`build_layers([])`. CT-2's KAT hits early heights (e.g. 5 and 59, both within
-the `0..=60` empty window) to pin this against the live header, and height
-**61** as the first non-empty checkpoint (the founder allocation, maturity 60,
+`build_layers([])`. CT-2's KAT pins the **boundary**: `last_empty = 60` and
+`first_drain = 61` (`recon_kat::empty_window_then_first_drain_at_61`), both
+against `selene_hash_init` and the live header — not interior heights that
+leave the off-by-one surface unasserted. Height **61** is the first non-empty
+checkpoint (the founder allocation, maturity 60,
 enters as tree position 0 — a single leaf wrapped into the layer-1 Helios
 root per the small-tree convention above).
 
@@ -401,7 +403,7 @@ what is drivable **today**:
 - **Every non-coinbase leaf needs an FCMP++ spend.** A regular (`+10`) output
   exists only as the output of some transaction, and any non-coinbase tx spends
   a prior output — which needs an FCMP++ membership proof. This is the *same*
-  structural argument that makes the empty-window 0..59 structural (§5): no
+  structural argument that makes the empty-window 0..=60 structural (§5): no
   non-coinbase leaf can exist until spending works.
 - **A staked output is a spend.** `wallet2::create_staking_transaction`
   (`wallet/wallet2.cpp:9974`) routes through `create_transactions_2` — it
@@ -428,8 +430,9 @@ what is drivable **today**:
 
 **Tier A — coinbase-only, landable in Round 1 (no spend path required):**
 
-- an **early/empty height** (e.g. 5 and 59, both in the `0..=60` empty window)
-  — pins empty-tree root = `selene_hash_init` against the live header (§5);
+- the **empty-window boundary** (`last_empty = 60`, `first_drain = 61`) —
+  pins `recon[last_empty] == selene_hash_init` and
+  `recon[first_drain] != selene_hash_init`, both consensus-anchored (§5);
 - **height 61** — first non-empty checkpoint; the founder allocation (maturity
   60) drains as position `0`, a single leaf wrapped into the layer-1 Helios
   root (the first `R_0`);
@@ -544,9 +547,10 @@ confirmed equal (the RPC reads the stored per-height root; agreement proves the
 fixture captures the consensus value, not an off-by-one). Note **height 0 is an
 unverified constant** — the genesis header-root check is *skipped*
 (`blockchain.cpp:4989-4990`, §5), so a height-0 assertion would test a
-self-asserted value, not consensus. The meaningful empty-window assertions are
-at **heights 5 and 59**: both are consensus-verified empty roots
-(`selene_hash_init`), which is exactly why Tier A picks them over height 0. A real daemon
+self-asserted value, not consensus. The meaningful empty-window assertion is
+the **boundary** at `last_empty = 60` / `first_drain = 61` (both
+consensus-verified), which pins the S2 drain trigger without leaving height 60
+unasserted. A real daemon
 (not in-process `chaingen`, §8.1) is required because only it can build the real
 coinbase chain now (Tier A) and, once 2A ships, real spends/stakes/reorgs
 (Tier B). This matches the determinism discipline (seeded, Guix-reproducible),
@@ -560,25 +564,29 @@ same artifact when the send path can generate them.
 
 ## 9. Disposition of the framing corrections + Round-1 open questions
 
-### Corrections to land (cross-edits, not silent)
+### Corrections landed (Round 1 close-out, 2026-06-06)
 
-1. **Coinbase `+60` / empty window 0..59.** `CURVE_TREE_CLIENT.md`'s
-   early-height prose (§8 #7 area and the §7.7 "heights `0..SPENDABLE_AGE`"
-   line) says founder allocations drain at `SPENDABLE_AGE = 10`. They are
-   coinbase ⇒ `+60`. Cross-edit `CURVE_TREE_CLIENT.md` to "heights 0..59 empty;
-   founder drains at 60." (The regular-output `+10` rule is unchanged and
-   correct; the error is specifically the founder/coinbase case.)
-2. **Empty-tree root = `selene_hash_init`.** Update the
-   `empty_tree_is_a_ct2_boundary` resolution in `CURVE_TREE_CLIENT.md` §7.7 from
-   "open, verified in CT-2" to "**resolved: daemon emits `selene_hash_init`**;
-   wallet special-cases `leaf_count == 0`; KAT confirms at an early height." The
-   `build_layers([]) == [[]]` structure is **not** a root and must never be
-   indexed for one.
-3. **`h_pqc` on-chain.** Add to `CURVE_TREE_CLIENT.md` §4 (Set A) that the
-   block-derived path's leaf input includes `h_pqc` parsed from `tx_extra`
-   `0x07` — it is public (already on-chain), so it joins Set A, but it is a
-   *parsed* input, not a `TransferDetails` field. (Bulk-leaf path is unaffected:
-   the daemon hands finished leaves.)
+Cross-edits below are **done** — recorded here so §9 does not read as open work.
+Authoritative close-out: [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md).
+
+1. **Coinbase `+60` / empty window 0..=60 — LANDED.** Founder coinbase matures at
+   `+60` but enters the tree on the *next* block (`drained_through = H − 1`),
+   so heights **0..=60** are empty and the first non-empty root is at height
+   **61** (pinned by `recon_kat::empty_window_then_first_drain_at_61` at
+   `last_empty=60` / `first_drain=61`). The regular-output `+10` rule is
+   unchanged and correct. Prose aligned in this doc (§5, §8.2, §8.3) and
+   `CURVE_TREE_CLIENT.md` §7.7.
+2. **Empty-tree root = `selene_hash_init` — LANDED.** `CURVE_TREE_CLIENT.md`
+   §7.7 now records the resolution: daemon emits `selene_hash_init` for
+   `leaf_count == 0`; wallet special-cases empty tree; `build_layers([])` is
+   **not** indexed for a root. KAT boundary pin at heights 60/61 (not interior
+   heights). `empty_tree_is_a_ct2_boundary` in CT-0 remains the executable
+   chunk-empty vs tree-empty distinction.
+3. **`h_pqc` on-chain — LANDED.** `CURVE_TREE_CLIENT.md` §4.1 (Set A) documents
+   block-derived `h_pqc` parsed from `tx_extra` `0x07` (public, parsed input,
+   not `TransferDetails`). Parser ownership: `shekyl_scanner::extra::Extra`;
+   validate stage: `recon::extract_leaf_hashes`. Scanner `0x07` unit tests
+   landed; daemon adversarial parity deferred to Tier B (§8.2).
 
 ### Open questions for Round 1
 

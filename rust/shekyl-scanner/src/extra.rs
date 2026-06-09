@@ -276,3 +276,52 @@ impl Extra {
         Ok(res)
     }
 }
+
+#[cfg(test)]
+mod pqc_leaf_hashes_tests {
+    use super::*;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+    fn leaf_blob(n: usize) -> Vec<u8> {
+        (0..n)
+            .map(|i| u8::try_from(i).expect("test fixture n <= 256"))
+            .collect()
+    }
+
+    /// Scanner first-match behavior. Daemon parity on duplicate/malformed `0x07`
+    /// is unverified — owned by the Tier-B seam test (`recon_tier_b.rs`).
+    #[test]
+    fn pqc_leaf_hashes_round_trip() {
+        let payload = leaf_blob(64);
+        let field = ExtraField::PqcLeafHashes(payload.clone());
+        let mut wire = Vec::new();
+        field.write(&mut wire).unwrap();
+        let extra = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(extra.pqc_leaf_hashes(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn pqc_leaf_hashes_after_pubkey_field() {
+        let payload = leaf_blob(32);
+        let extra = Extra(vec![
+            ExtraField::PublicKey(ED25519_BASEPOINT_POINT),
+            ExtraField::PqcLeafHashes(payload.clone()),
+        ]);
+        let wire = extra.serialize();
+        let parsed = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn pqc_leaf_hashes_duplicate_tag_returns_first_match() {
+        let first = leaf_blob(32);
+        let second = leaf_blob(64);
+        let extra = Extra(vec![
+            ExtraField::PqcLeafHashes(first.clone()),
+            ExtraField::PqcLeafHashes(second),
+        ]);
+        let wire = extra.serialize();
+        let parsed = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(first.as_slice()));
+    }
+}

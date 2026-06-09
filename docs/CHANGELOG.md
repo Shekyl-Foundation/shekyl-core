@@ -4,13 +4,30 @@
 
 ### Added
 
+- **docs: Round 4 subaddress design closure (FA-9 / FA-10).**
+  New [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) — pit-of-success vs
+  adversary, T6/T7, R2-F9 phishing tier. FA-10 cooperative attribution
+  foundation pin in [`POST_QUANTUM_CRYPTOGRAPHY.md`](POST_QUANTUM_CRYPTOGRAPHY.md).
+  FA-4 recorded closed (FA-7 + §5.7.8/§5.7.9); `USER_GUIDE.md` Monero
+  subaddress copy removed. `SUBADDRESS_UNDER_PQC.md` §9–§11 Round 4 closed.
+
+- **curve-tree: CT-2 Round 1 close-out.**
+  Tier-A boundary pin (`last_empty=60`, `first_drain=61`), fixture provenance
+  baseline, Tier-B `#[ignore]` drift-canary scaffold (`recon_tier_b.rs`),
+  scanner `tx_extra 0x07` parse tests (first-match; daemon parity unverified).
+  Close-out `docs/design/CT2_ROUND1_CLOSEOUT.md`; `CT2_DRAIN_ORDER.md` empty-window
+  prose aligned to fixture truth.
+
 - **crypto-pq: FA-6 §8.5.1 decap pre-filter gate harness.**
   `fa6_decap_prefilter_gate` example (`--path fa6|classical`, scenarios
   smoke / a / b), classical counterfactual derivation, criterion smoke bench
   `fa6_decap_prefilter`; Pi capture script `scripts/bench/fa6_pi4_gate.sh`.
   §8.7 recorded **fail** on §8.4 budget (2026-06-08): ship FA-6 at genesis;
-  §10.1 T6 waiver rejected (Pi classical path slower than FA-6). Matrix in
-  `docs/PERFORMANCE_BASELINE.md` §FA-6; Pi scenario B capture pending.
+  §10.1 T6 waiver rejected (Pi classical path slower than FA-6). Close-out
+  `docs/design/FA-6_CLOSEOUT.md`; Round 3 closed / Round 4 scoped in
+  `SUBADDRESS_UNDER_PQC.md` §10.1. Matrix in `PERFORMANCE_BASELINE.md` §FA-6;
+  Pi scenario B capture pending.
+
 - **archival: serve-credit consensus integration test (gate-2 §10 step 3).**
   `archival_serve_credit_integration.cpp` seeds in-memory archival substrate from KAT fixture
   `integration` block (CT-2 opening + epoch-0 challenge geometry) and exercises

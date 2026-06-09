@@ -5,9 +5,10 @@ ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§3.1 / FA-6b wire locks re-ve
 2026-06-07** (§3.1.1, §5.4.1). **§8.7 outcome recorded (2026-06-08):** **fail**
 on §8.4 budget (scenarios A and B); **ship FA-6** at genesis per §10 (T6 closed
 on verified §3.1 account path). **§10.1 T6 waiver rejected** — Pi 4 classical
-counterfactual is slower than FA-6, not faster (§8.7.1). Post-genesis perf
-(birthday / checkpointing, faster ML-KEM decap within `fips203` pin) is
-wire-preserving follow-up, not a waiver. **Disposition:** adopt at V3.0 genesis —
+counterfactual is slower than FA-6, not faster (§8.7.1). **Close-out artifact:**
+[`FA-6_CLOSEOUT.md`](FA-6_CLOSEOUT.md). Post-genesis perf (birthday /
+checkpointing, faster ML-KEM decap within `fips203` pin) is wire-preserving
+follow-up, not a waiver. **Disposition:** adopt at V3.0 genesis —
 re-key the on-wire 1-byte pre-filter from classical (`x25519_ss`) to hybrid-leg
 (`ml_kem_ss`). **Implementation:** separate PR after spec review; not bundled
 with FA-11 (`enc_label` wire) or subaddress removal (FA-2).

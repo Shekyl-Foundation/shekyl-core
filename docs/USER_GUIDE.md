@@ -357,22 +357,26 @@ To see your address inside the wallet:
 
 ### Receiving SKL
 
-Display your address with the `address` command. Share this address with the
-sender.
+Each account has **one reusable primary address**. On-chain privacy comes from
+per-output cryptography (stealth outputs, hybrid KEM) — **not** from generating a
+new address for every sender. Reuse your address freely; rotation does not
+improve chain privacy and is not recommended as default hygiene.
 
-**Subaddresses** let you give a unique address to each sender without
-revealing your main address:
-
-```
-[wallet]: address new [label]
-```
-
-**Integrated addresses** embed a payment ID into the address for merchant
-use:
+Display your primary address:
 
 ```
-[wallet]: integrated_address [payment_id]
+[wallet]: address
 ```
+
+**Merchants and invoicing:** create a **payment request** (amount, label,
+optional expiry) and share a `shekyl:` URI with query parameters. Attribution
+is cooperative (off-chain label + optional on-wire `enc_label` echo when the
+product flag is enabled). Unattributed inbound payments are normal — funds are
+still yours.
+
+**Separate contexts** (e.g. personal vs business) use **accounts** or separate
+wallet files — deliberate opsec, not a casual default. Seed-derived
+multi-account is planned post-V3.0.
 
 **Address book** for saving frequent recipients:
 
@@ -1156,7 +1160,7 @@ Behavior changes to be aware of when upgrading:
 | **RPC** | Remote Procedure Call -- the JSON-based API exposed by the daemon and wallet RPC server. |
 | **Staking** | Locking SKL for a period to earn yield from the emission pool. |
 | **Stealth address** | A one-time address generated for each transaction so only sender and receiver know the destination. |
-| **Subaddress** | A derived address within your wallet, useful for separating incoming payments by source. |
+| **Payment request** | A merchant invoice record (amount, label, expiry) tied to your primary address — replaces per-sender subaddress rotation. |
 | **View-only wallet** | A wallet that can see incoming transactions but cannot spend. Created with `save_watch_only`. |
 
 ---

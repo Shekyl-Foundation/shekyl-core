@@ -30,6 +30,7 @@ use shekyl_curve_tree::{
     BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
     TxLeafInputs,
 };
+use shekyl_fcmp::tree::selene_hash_init;
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
 
@@ -168,17 +169,29 @@ fn reconstructed_root_matches_consensus_at_every_height() {
 /// root. Guards against an off-by-one in the drain trigger.
 #[test]
 fn empty_window_then_first_drain_at_61() {
+    const LAST_EMPTY: usize = 60;
+    const FIRST_DRAIN: usize = 61;
+
     let f = fixture();
     let blocks = decode_chain(chain(&f, "main"));
     let recon = reconstruct_roots(&blocks);
-    let empty = recon[0];
-    for (h, root) in recon.iter().enumerate().take(61) {
-        assert_eq!(*root, empty, "height {h} must be the empty-tree root");
+    let init = selene_hash_init();
+
+    for (h, root) in recon.iter().enumerate().take(FIRST_DRAIN) {
+        assert_eq!(*root, init, "height {h} must be selene_hash_init");
     }
-    assert_ne!(recon[61], empty, "height 61 is the first drained leaf");
-    // And it matches consensus (covered by the per-height test, asserted
-    // explicitly here as the boundary's consensus anchor).
-    assert_eq!(recon[61], blocks[61].root);
+    assert_eq!(
+        recon[LAST_EMPTY], blocks[LAST_EMPTY].root,
+        "last empty height must match consensus header root"
+    );
+    assert_ne!(
+        recon[FIRST_DRAIN], init,
+        "height {FIRST_DRAIN} is the first drained leaf"
+    );
+    assert_eq!(
+        recon[FIRST_DRAIN], blocks[FIRST_DRAIN].root,
+        "first drain height must match consensus header root"
+    );
 }
 
 /// S3 position-stability + freeze-lag: a reorg leaves the pre-fork prefix
