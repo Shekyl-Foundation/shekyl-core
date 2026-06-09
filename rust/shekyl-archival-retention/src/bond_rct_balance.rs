@@ -18,7 +18,7 @@ pub enum BondRctBalanceError {
     BothTermsNonzero,
     /// Bond-post must carry exactly one direction term (credit xor debit; §3.2).
     NoBondTerm,
-    /// A pseudo-out or output mask is not a valid curve point.
+    /// Malformed flat buffer or a pseudo-out / output mask is not a valid prime-order point.
     InvalidPoint,
     /// Left and right commitment sums differ.
     SumMismatch,

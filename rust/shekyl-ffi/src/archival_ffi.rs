@@ -57,7 +57,8 @@ pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK: u8 = 0;
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR: u8 = 1;
 /// Both `bond_credit` and `bond_debit` are non-zero.
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
-/// A pseudo-out or output mask is not a valid curve point.
+/// Invalid commitment point, malformed flat buffer (length not a multiple of 32), or
+/// `count * 32` overflow / oversize slice in the FFI flatten path.
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 /// Left and right commitment sums differ.
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;

@@ -147,7 +147,10 @@ TEST(archival_bond_post, rct_balance_rejects_noncanonical_bulletproof_layout)
   rv.outPk[1].mask = rct::commit(bond_debit / 2, mask_scalar);
   rv.enc_amounts.resize(2);
   rv.enc_labels.resize(2);
-  rv.p.pseudoOuts.push_back(rct::commit(0, mask_scalar));
+  // Two outputs share one blinding scalar → pseudo must carry 2× that blinding so the
+  // bond balance equation holds; failure is then only the non-canonical two-proof layout.
+  const rct::key zero_mask = rct::commit(0, mask_scalar);
+  rv.p.pseudoOuts.push_back(rct::addKeys(zero_mask, zero_mask));
   rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
   rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
 
