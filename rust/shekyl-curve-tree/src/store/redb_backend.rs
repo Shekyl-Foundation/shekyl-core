@@ -254,14 +254,17 @@ impl LeafStore {
                 }
             }
         }
-        let all_leaves = read_leaf_bytes_range_read(&txn, 0, leaf_count)?;
         let tail_start = complete * e;
-        let tail_start_usize =
-            usize::try_from(tail_start).expect("tail start tree position fits usize");
-        let tail = &all_leaves[tail_start_usize..];
-        match mixed_composition_root(leaf_count, &frozen_r, tail) {
+        let tail = read_leaf_bytes_range_read(&txn, tail_start, leaf_count)?;
+        match mixed_composition_root(leaf_count, &frozen_r, &tail) {
             Ok(root) => Ok(root),
-            Err(_) => Ok(full_build_root(&all_leaves)),
+            Err(_) if tail_start == 0 => Ok(full_build_root(&tail)),
+            Err(_) => match read_leaf_bytes_range_read(&txn, 0, leaf_count) {
+                Ok(all_leaves) => Ok(full_build_root(&all_leaves)),
+                Err(_) => Err(StoreError::CorruptMeta(
+                    "mixed root failed with incomplete leaf range (post-prune)",
+                )),
+            },
         }
     }
 
@@ -352,55 +355,23 @@ impl LeafStore {
             }
             let start = u64::from(seg_id) * e;
             let end = start + e;
-            let mut owned_in_seg = false;
+            let mut leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
+            let mut owned_tbl = txn.open_table(OWNED_IDENTITIES_TABLE)?;
             for pos in start..end {
+                let leaf_bytes = match leaves.get(pos)? {
+                    Some(leaf) => *leaf.value(),
+                    None => continue,
+                };
                 if owned.contains(&pos) {
-                    owned_in_seg = true;
-                    let leaf_bytes = {
-                        let leaves = txn.open_table(LEAVES_TABLE)?;
-                        let l = leaves.get(pos)?;
-                        l.map(|g| *g.value())
-                    };
-                    if let Some(leaf_bytes) = leaf_bytes {
-                        let mut owned_tbl = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-                        owned_tbl.insert(pos, &leaf_bytes)?;
-                    }
+                    owned_tbl.insert(pos, &leaf_bytes)?;
                 }
-            }
-            if !owned_in_seg {
-                let mut leaves = txn.open_table(LEAVES_TABLE)?;
-                let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-                for pos in start..end {
-                    leaves.remove(pos)?;
-                    drop(leaf_meta.remove(pos)?);
-                }
+                leaves.remove(pos)?;
+                drop(leaf_meta.remove(pos)?);
             }
         }
         txn.commit()?;
         Ok(())
-    }
-
-    /// Drained [`LeafEntry`] values with `maturity <= cutoff`, in tree order.
-    pub fn drained_entries_through(
-        &self,
-        maturity_cutoff: u64,
-    ) -> Result<Vec<LeafEntry>, StoreError> {
-        let txn = self.db.begin_read()?;
-        let leaves = txn.open_table(LEAVES_TABLE)?;
-        let leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-        let mut out = Vec::new();
-        for item in leaves.iter()? {
-            let (k, leaf) = item?;
-            let meta = leaf_meta
-                .get(k.value())?
-                .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
-            let mut entry = decode_leaf_meta(meta.value())?;
-            if entry.maturity <= maturity_cutoff {
-                entry.leaf = *leaf.value();
-                out.push(entry);
-            }
-        }
-        Ok(out)
     }
 
     /// Read frozen segment record, if present.

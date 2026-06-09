@@ -13,6 +13,8 @@ use shekyl_fcmp::tree::{build_layers, build_upper_layers, selene_hash_init};
 pub enum MixedRootError {
     /// Layer stack from `build_upper_layers` was empty.
     EmptyUpperLayers,
+    /// `frozen_r` is shorter than the number of complete segments required.
+    InsufficientFrozenRoots,
     /// Partial tail has not yet built tree layer `SEGMENT_LAYER_J`.
     TailTooShortForLayerJ,
 }
@@ -49,7 +51,7 @@ pub fn mixed_composition_root(
 
     let frozen_needed = usize::try_from(complete).expect("complete segment count fits usize");
     if frozen_r.len() < frozen_needed {
-        return Err(MixedRootError::TailTooShortForLayerJ);
+        return Err(MixedRootError::InsufficientFrozenRoots);
     }
 
     let mut initial_layer: Vec<[u8; 32]> = frozen_r[..frozen_needed].to_vec();

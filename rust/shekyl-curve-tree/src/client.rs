@@ -218,19 +218,6 @@ impl CurveTreeClient {
         }
     }
 
-    /// Drained leaves through `maturity_cutoff` (store-backed; CT-1).
-    pub(crate) fn drained_entries_through(&self, maturity_cutoff: u64) -> Vec<LeafEntry> {
-        self.store
-            .drained_entries_through(maturity_cutoff)
-            .unwrap_or_else(|_| {
-                self.entries
-                    .iter()
-                    .filter(|e| e.maturity <= maturity_cutoff)
-                    .copied()
-                    .collect()
-            })
-    }
-
     /// The drain cutoff for a reference height: a leaf maturing at `m`
     /// enters the tree on connection of the *next* block, so the root
     /// committed in the header at `reference_height` reflects every leaf

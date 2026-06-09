@@ -39,7 +39,7 @@ use crate::recon::{assemble_leaf_stream, drained_sorted};
 use crate::types::{AssembledPath, ChunkLeaf, OutputIdentity, ReferenceBlock, TreeContext};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
-    selene_hash_init, selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
+    selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
 };
 
 impl CurveTreeClient {
@@ -67,24 +67,11 @@ impl CurveTreeClient {
     ) -> Result<AssembledPath, ClientError> {
         let cutoff = Self::drained_through(reference.height);
 
-        // Build the tree once and reuse it for both the integrity gate and
-        // path extraction. `verify_root` would rebuild it (root_at →
-        // build_layers) and then assembly would rebuild it again — two full
-        // reconstructions of the most expensive work on the spend path. The
-        // layer stack here *is* the integrity gate: its top node is the root
-        // we compare against the consensus header.
-        let drained = self.drained_entries_through(cutoff);
-        let stream = assemble_leaf_stream(&drained, cutoff);
-        let layers = build_layers(&stream);
-
-        // Never assemble against a tree we cannot reproduce (§3.3). Mirror
-        // `recon::root_from_scalars`: the empty tree is the `selene_hash_init`
-        // sentinel, not `build_layers(&[])`'s empty top layer.
-        let got = if stream.is_empty() {
-            selene_hash_init()
-        } else {
-            layers.last().expect("build_layers yields ≥1 layer")[0]
-        };
+        // Integrity gate via `root_at` (store-backed hot path, CT-1). Path
+        // extraction stays on replay-derived `entries` (CT-4); the store may
+        // prune non-owned leaves from frozen segments without retaining a
+        // complete drained stream for assembly.
+        let got = self.root_at(reference.height);
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
                 height: reference.height,
@@ -92,6 +79,9 @@ impl CurveTreeClient {
                 got,
             });
         }
+
+        let stream = assemble_leaf_stream(&self.entries, cutoff);
+        let layers = build_layers(&stream);
 
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
