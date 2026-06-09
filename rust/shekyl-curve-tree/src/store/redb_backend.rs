@@ -54,6 +54,8 @@ pub enum StoreError {
     Redb(Box<redb::Error>),
     /// Leaf meta decode failure.
     CorruptMeta(&'static str),
+    /// Truncation position exceeds the stored leaf count.
+    InvalidTruncate { pos: u64, leaf_count: u64 },
 }
 
 impl From<redb::Error> for StoreError {
@@ -195,31 +197,32 @@ impl LeafStore {
         leaf_count: u64,
     ) -> Result<(), StoreError> {
         let e = leaves_per_segment() as u64;
-        if leaf_count == 0 || !leaf_count.is_multiple_of(e) {
-            return Ok(());
+        let complete_segments = leaf_count / e;
+        for seg_k in 0..complete_segments {
+            let segment_id = u32::try_from(seg_k).expect("segment id fits u32");
+            {
+                let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+                if frozen.get(segment_id)?.is_some() {
+                    continue;
+                }
+            }
+            let end_tree_pos = (seg_k + 1) * e - 1;
+            let end_block_height = read_drain_height(txn, end_tree_pos)?;
+            if !segment_freeze_eligible(tip_height, end_block_height) {
+                continue;
+            }
+            let start = seg_k * e;
+            let seg_leaves = read_leaf_bytes_range(txn, start, end_tree_pos + 1)?;
+            let r_k = recompute_segment_r_k(&seg_leaves);
+            let record = FrozenSegmentRecord {
+                r_k,
+                end_tree_pos,
+                end_block_height,
+                frozen_at_height: tip_height,
+            };
+            let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            frozen.insert(segment_id, &encode_frozen_segment(&record))?;
         }
-        let segment_id = SegmentId(u32::try_from(leaf_count / e - 1).expect("segment id fits u32"));
-        let end_tree_pos = leaf_count - 1;
-        let end_block_height = read_drain_height(txn, end_tree_pos)?;
-        if !segment_freeze_eligible(tip_height, end_block_height) {
-            return Ok(());
-        }
-        let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
-        if frozen.get(segment_id.0)?.is_some() {
-            return Ok(());
-        }
-        let start = end_tree_pos + 1 - e;
-        let seg_leaves = read_leaf_bytes_range(txn, start, end_tree_pos + 1)?;
-        let r_k = recompute_segment_r_k(&seg_leaves);
-        let record = FrozenSegmentRecord {
-            r_k,
-            end_tree_pos,
-            end_block_height,
-            frozen_at_height: tip_height,
-        };
-        drop(frozen);
-        let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
-        frozen.insert(segment_id.0, &encode_frozen_segment(&record))?;
         Ok(())
     }
 
@@ -270,8 +273,15 @@ impl LeafStore {
 
     /// Truncate leaves and metadata at `pos` (ACID reorg).
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
-        let txn = self.db.begin_write()?;
         let pos = pos.0;
+        let current_leaf_count = self.leaf_count()?;
+        if pos > current_leaf_count {
+            return Err(StoreError::InvalidTruncate {
+                pos,
+                leaf_count: current_leaf_count,
+            });
+        }
+        let txn = self.db.begin_write()?;
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
@@ -287,18 +297,28 @@ impl LeafStore {
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
-            let max_segment = if pos == 0 { 0 } else { (pos - 1) / e };
-            let to_remove: Vec<u32> = frozen
-                .range(u32::try_from(max_segment + 1).expect("segment range fits u32")..)?
-                .map(|r| r.map(|(k, _)| k.value()))
-                .collect::<Result<Vec<_>, _>>()?;
-            for key in to_remove {
-                frozen.remove(key)?;
-            }
-            // Drop frozen segment that partially overlaps the truncation boundary.
-            if pos > 0 && !pos.is_multiple_of(e) {
-                let partial_id = (pos - 1) / e;
-                frozen.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
+            if pos == 0 {
+                let to_remove: Vec<u32> = frozen
+                    .iter()?
+                    .map(|r| r.map(|(k, _)| k.value()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for key in to_remove {
+                    frozen.remove(key)?;
+                }
+            } else {
+                let max_segment = (pos - 1) / e;
+                let to_remove: Vec<u32> = frozen
+                    .range(u32::try_from(max_segment + 1).expect("segment range fits u32")..)?
+                    .map(|r| r.map(|(k, _)| k.value()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for key in to_remove {
+                    frozen.remove(key)?;
+                }
+                // Drop frozen segment that partially overlaps the truncation boundary.
+                if !pos.is_multiple_of(e) {
+                    let partial_id = (pos - 1) / e;
+                    frozen.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
+                }
             }
         }
         {
@@ -518,6 +538,7 @@ fn decode_target(tag: u8, extra: &[u8]) -> Result<TargetKind, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment::leaves_per_segment;
     use crate::types::OutputIdentity;
 
     fn sample_entry(gindex: u64, maturity: u64) -> LeafEntry {
@@ -550,5 +571,36 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         store.pin_segment(SegmentId(0)).unwrap();
         store.prune_frozen(&[]).unwrap();
+    }
+
+    #[test]
+    fn truncate_to_zero_clears_frozen_segments() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = leaves_per_segment();
+        let entries: Vec<_> = (0..e)
+            .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
+            .collect();
+        store.append_drained(&entries, 10_000).unwrap();
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 0);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
+    }
+
+    #[test]
+    fn truncate_beyond_leaf_count_rejects() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store.append_drained(&[sample_entry(0, 0)], 1).unwrap();
+        let err = store
+            .truncate_from_tree_position(TreePosition(2))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::InvalidTruncate {
+                pos: 2,
+                leaf_count: 1
+            }
+        ));
+        assert_eq!(store.leaf_count().unwrap(), 1);
     }
 }

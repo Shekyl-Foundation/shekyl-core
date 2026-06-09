@@ -9,7 +9,8 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TxLeafInputs,
+    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
+    TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
@@ -147,6 +148,100 @@ fn store_root_matches_oracle_and_header_tier_a() {
             }
         }
     }
+}
+
+const ED25519_BASEPOINT: [u8; 32] = [
+    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+];
+
+#[test]
+fn store_root_mixed_maturity_drain_order() {
+    // Coinbase (m=60) then regular (m=10) in block 0. At height 61 both are
+    // drained; canonical order is by maturity, not block insertion order.
+    let coinbase = RawOutput {
+        output_key: ED25519_BASEPOINT,
+        commitment: Some(ED25519_BASEPOINT),
+        target: TargetKind::TaggedKey,
+    };
+    let regular = RawOutput {
+        output_key: ED25519_BASEPOINT,
+        commitment: Some(ED25519_BASEPOINT),
+        target: TargetKind::TaggedKey,
+    };
+    let blob_cb = [0x01u8; 32];
+    let blob_reg = [0x02u8; 32];
+    let txs = [
+        TxLeafInputs {
+            is_miner: true,
+            leaf_hash_blob: Some(&blob_cb),
+            outputs: &[coinbase],
+        },
+        TxLeafInputs {
+            is_miner: false,
+            leaf_hash_blob: Some(&blob_reg),
+            outputs: &[regular],
+        },
+    ];
+    let mut client = CurveTreeClient::new();
+    client.ingest_block(BlockLeaves {
+        height: 0,
+        txs: &txs,
+    });
+
+    let mut recon_entries = Vec::new();
+    let identities_cb: Vec<OutputIdentity> = [coinbase]
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| OutputIdentity {
+            output_key: raw.output_key,
+            commitment: raw.commitment,
+            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
+                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_cb)),
+                i,
+            ),
+            target: raw.target,
+        })
+        .collect();
+    let identities_reg: Vec<OutputIdentity> = [regular]
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| OutputIdentity {
+            output_key: raw.output_key,
+            commitment: raw.commitment,
+            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
+                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_reg)),
+                i,
+            ),
+            target: raw.target,
+        })
+        .collect();
+    let recon_txs = [
+        TxOutputs {
+            is_miner: true,
+            outputs: &identities_cb,
+        },
+        TxOutputs {
+            is_miner: false,
+            outputs: &identities_reg,
+        },
+    ];
+    collect_block_leaves(0, &recon_txs, 0, &mut recon_entries);
+
+    let through = 60u64;
+    let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
+    let store_root = client.root_at(61);
+    assert_eq!(
+        store_root, oracle,
+        "store must mirror canonical drain order"
+    );
+
+    let drained = shekyl_curve_tree::recon::drained_sorted(&recon_entries, through);
+    assert_eq!(drained.len(), 2);
+    assert!(
+        drained[0].maturity < drained[1].maturity,
+        "regular output (m=10) must precede coinbase (m=60)"
+    );
 }
 
 #[test]
