@@ -48,7 +48,7 @@
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, drained_sorted, extract_leaf_hashes,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff,
     per_output_h_pqc, root_from_scalars, TxOutputs,
 };
 use crate::store::LeafStore;
@@ -203,19 +203,9 @@ impl CurveTreeClient {
 
     fn sync_store(&mut self, tip_height: u64) {
         let through = Self::drained_through(tip_height);
-        let drained: Vec<LeafEntry> = drained_sorted(&self.entries, through)
-            .into_iter()
-            .copied()
-            .collect();
-        let stored = self.store.leaf_count().unwrap_or(0);
-        let new_entries = if drained.len() as u64 > stored {
-            let start = usize::try_from(stored).expect("stored leaf count fits usize");
-            &drained[start..]
-        } else {
-            &[]
-        };
+        let new_entries = newly_drained_at_cutoff(&self.entries, through);
         self.store
-            .append_drained(new_entries, tip_height)
+            .append_drained(&new_entries, tip_height)
             .expect("sync leaf store to chain tip");
     }
 

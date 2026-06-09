@@ -333,6 +333,32 @@ impl LeafStore {
             }
         }
         {
+            let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+            let e = leaves_per_segment() as u64;
+            if pos == 0 {
+                let to_remove: Vec<u32> = pinned
+                    .iter()?
+                    .map(|r| r.map(|(k, _)| k.value()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for key in to_remove {
+                    pinned.remove(key)?;
+                }
+            } else {
+                let max_segment = (pos - 1) / e;
+                let to_remove: Vec<u32> = pinned
+                    .range(u32::try_from(max_segment + 1).expect("segment range fits u32")..)?
+                    .map(|r| r.map(|(k, _)| k.value()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for key in to_remove {
+                    pinned.remove(key)?;
+                }
+                if !pos.is_multiple_of(e) {
+                    let partial_id = (pos - 1) / e;
+                    pinned.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
+                }
+            }
+        }
+        {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &pos)?;
         }
@@ -601,6 +627,26 @@ mod tests {
         store.append_drained(&[], 10_000).unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), 10_000);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+    }
+
+    #[test]
+    fn truncate_to_zero_clears_stale_pins() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = leaves_per_segment();
+        let entries: Vec<_> = (0..e)
+            .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
+            .collect();
+        store.append_drained(&entries, 10_000).unwrap();
+        store.pin_segment(SegmentId(0)).unwrap();
+        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        store.append_drained(&entries, 20_000).unwrap();
+        store.prune_frozen(&[]).unwrap();
+        let txn = store.db.begin_read().unwrap();
+        let leaves = txn.open_table(LEAVES_TABLE).unwrap();
+        assert!(
+            leaves.get(0).unwrap().is_none(),
+            "stale pin must not block prune"
+        );
     }
 
     #[test]

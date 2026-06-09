@@ -17,6 +17,13 @@ pub enum MixedRootError {
     InsufficientFrozenRoots,
     /// Partial tail has not yet built tree layer `SEGMENT_LAYER_J`.
     TailTooShortForLayerJ,
+    /// `tail_leaf_bytes` length does not match `leaf_count` modulo segment size.
+    TailLengthMismatch {
+        /// Expected tail leaf count from `leaf_count`.
+        expected: usize,
+        /// Actual `tail_leaf_bytes` length supplied by the caller.
+        got: usize,
+    },
 }
 
 /// Root at `leaf_count` drained leaves via frozen `R_k` + tail composition.
@@ -37,6 +44,17 @@ pub fn mixed_composition_root(
     let e = leaves_per_segment() as u64;
     let complete = leaf_count / e;
     let delta = usize::try_from(leaf_count % e).expect("segment tail fits usize");
+    let expected_tail = if complete == 0 {
+        usize::try_from(leaf_count).expect("leaf count fits usize")
+    } else {
+        delta
+    };
+    if tail_leaf_bytes.len() != expected_tail {
+        return Err(MixedRootError::TailLengthMismatch {
+            expected: expected_tail,
+            got: tail_leaf_bytes.len(),
+        });
+    }
     // No complete segments yet — mixed composition does not apply.
     if complete == 0 {
         let scalars = leaf_bytes_to_scalars(tail_leaf_bytes);
@@ -152,6 +170,18 @@ mod tests {
                 leaf
             })
             .collect()
+    }
+
+    #[test]
+    fn mixed_composition_rejects_tail_length_mismatch() {
+        let err = mixed_composition_root(5, &[], &[[0u8; 128]; 3]).unwrap_err();
+        assert!(matches!(
+            err,
+            MixedRootError::TailLengthMismatch {
+                expected: 5,
+                got: 3
+            }
+        ));
     }
 
     #[test]
