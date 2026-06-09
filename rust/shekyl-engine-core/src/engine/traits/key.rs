@@ -67,10 +67,11 @@
 //! [`HybridCiphertext`]: shekyl_crypto_pq::kem::HybridCiphertext
 //! [`TransferDetails`]: shekyl_engine_state::TransferDetails
 
+use shekyl_address::Network;
 use shekyl_crypto_pq::handle::OutputHandle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
-use shekyl_tx_builder::{LeafEntry, TreeContext};
+use shekyl_tx_builder::{LeafEntry, PqcAuth, TreeContext};
 use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -306,6 +307,14 @@ pub(crate) struct TxInputSigningContext {
     /// Resolved by `sign_transaction`'s impl against the implementor's
     /// workflow-internal handle table.
     pub handle: OutputHandle,
+    /// Containing transaction hash (co-located with handle per §3.9 PF2).
+    pub tx_hash: [u8; 32],
+    /// Output index within the containing transaction.
+    pub internal_output_index: u64,
+    /// Decrypted spend amount (atomic units).
+    pub amount: AtomicUnits,
+    /// Claim-time canonical key image (C7 single-site; §3.7.4 PF8).
+    pub key_image: KeyImage,
     /// On-chain hybrid X25519 + ML-KEM-768 ciphertext for this input.
     pub source_ciphertext: HybridCiphertext,
     /// Compressed output public key (on-chain).
@@ -331,6 +340,10 @@ impl std::fmt::Debug for TxInputSigningContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TxInputSigningContext")
             .field("handle", &self.handle)
+            .field("tx_hash", &"[REDACTED]")
+            .field("internal_output_index", &self.internal_output_index)
+            .field("amount", &"[REDACTED]")
+            .field("key_image", &self.key_image)
             .field("source_ciphertext", &self.source_ciphertext)
             .field("output_key", &"[REDACTED]")
             .field("commitment", &"[REDACTED]")
@@ -453,6 +466,8 @@ impl std::fmt::Debug for SourceSecretsBundle {
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
+    /// Network for recipient address decoding at sign time.
+    pub network: Network,
     /// Per-input signing context (one entry per spend input).
     pub inputs: Vec<TxInputSigningContext>,
     /// Per-output context (payments + optional change intent).
@@ -513,7 +528,10 @@ pub(crate) enum TxOutputContext {
         amount: u64,
     },
     /// Change-to-self intent (no amount on the message).
-    Change,
+    Change {
+        /// Subaddress index within the primary account (2a: always 0).
+        subaddress_index: u32,
+    },
 }
 
 impl std::fmt::Debug for TxOutputContext {
@@ -524,7 +542,10 @@ impl std::fmt::Debug for TxOutputContext {
                 .field("dest", &"[REDACTED]")
                 .field("amount", &"[REDACTED]")
                 .finish(),
-            Self::Change => f.debug_struct("Change").finish(),
+            Self::Change { subaddress_index } => f
+                .debug_struct("Change")
+                .field("subaddress_index", subaddress_index)
+                .finish(),
         }
     }
 }
@@ -537,33 +558,34 @@ pub(crate) struct FcmpPlusPlusContext {
     pub tree: TreeContext,
 }
 
-/// Output of [`KeyEngine::sign_transaction`].
-///
-/// Carries hybrid signatures per-input, FCMP++ witnesses, and any
-/// other signature-class output the signing pass produces. All fields
-/// are public (signatures are public by definition); no `Zeroizing`
-/// discipline applies.
-#[derive(Debug)]
+/// Output of [`KeyEngine::sign_transaction`] (§3.9). Secret-free on-chain
+/// material for final wire encode in `LocalSigner`.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxSignatures {
-    /// Per-input hybrid signature bundle.
+    pub bulletproof_plus: Vec<u8>,
+    pub out_commitments: Vec<[u8; 32]>,
+    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_labels: Vec<[u8; 9]>,
     pub per_input: Vec<TxInputSignature>,
-    /// FCMP++ membership-proof witnesses, one per input.
-    pub fcmp_plus_plus_witnesses: Vec<FcmpPlusPlusWitness>,
+    pub fcmp_proof: Vec<u8>,
+    pub fee: u64,
+    pub reference_block: [u8; 32],
+    pub tree_depth: u8,
+    /// Output one-time keys for final wire encode (LocalSigner).
+    pub output_keys: Vec<[u8; 32]>,
+    pub view_tags: Vec<Option<u8>>,
+    pub tx_extra: Vec<u8>,
 }
 
-/// Per-input hybrid signature payload. **Forward declaration;
-/// pinned in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
+/// Per-input public signature bundle (§3.9).
+#[derive(Debug, Clone)]
 #[non_exhaustive]
-pub(crate) struct TxInputSignature {}
-
-/// FCMP++ membership-proof witness. **Forward declaration; pinned
-/// in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
-#[non_exhaustive]
-pub(crate) struct FcmpPlusPlusWitness {}
+pub(crate) struct TxInputSignature {
+    pub key_image: KeyImage,
+    pub pseudo_out: [u8; 32],
+    pub pqc_auth: PqcAuth,
+}
 
 // --- Trait surface ---------------------------------------------------------
 
@@ -781,7 +803,7 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// builder invariants) when it lands.
     fn sign_transaction(
         &self,
-        tx: &TxToSign,
+        tx: TxToSign,
     ) -> impl std::future::Future<Output = Result<TxSignatures, Self::Error>> + Send;
 }
 
@@ -874,6 +896,10 @@ mod tests {
     fn tx_input_signing_context_debug_redacts_on_chain_material() {
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
+            tx_hash: [0x77; 32],
+            internal_output_index: 0,
+            amount: AtomicUnits::from_raw(1),
+            key_image: KeyImage::from_canonical_bytes([0x88; 32]),
             source_ciphertext: sentinel_ciphertext(),
             output_key: [0x44; 32],
             commitment: [0x55; 32],
@@ -904,9 +930,16 @@ mod tests {
         // discipline is cheaper than re-establishing it later.
         use shekyl_tx_builder::TreeContext;
 
+        use shekyl_address::Network;
+
         let tx = TxToSign {
+            network: Network::Mainnet,
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
+                tx_hash: [0x77; 32],
+                internal_output_index: 0,
+                amount: AtomicUnits::from_raw(1),
+                key_image: KeyImage::from_canonical_bytes([0x88; 32]),
                 source_ciphertext: sentinel_ciphertext(),
                 output_key: [0x44; 32],
                 commitment: [0x55; 32],

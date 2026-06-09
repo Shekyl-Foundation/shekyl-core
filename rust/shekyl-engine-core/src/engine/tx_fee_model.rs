@@ -24,14 +24,29 @@ const PER_INPUT_FIXED_WEIGHT: usize = 32 + 32 + HYBRID_PQC_AUTH_WEIGHT + 8;
 /// Per-output on-wire fields (one-time key + commitment + enc_amount + enc_label).
 const PER_OUTPUT_WEIGHT: usize = 32 + 32 + 9 + 9;
 
-/// Conservative tx-prefix + extra pubkey estimate.
-const TX_PREFIX_EXTRA_WEIGHT: usize = 128;
+/// Hybrid KEM material per output embedded in `tx_extra` (x25519 + ML-KEM-768 CT).
+const PER_OUTPUT_HYBRID_EXTRA_WEIGHT: usize = 32 + 1_088;
 
-/// Provisional FCMP proof size stub (2a-3 KAT replaces).
+/// Conservative tx-prefix overhead beyond per-output hybrid extra (version, pubkey, varints).
+const TX_PREFIX_EXTRA_WEIGHT: usize = 64;
+
+/// Bulletproof+ aggregate proof size scales with output count (2a synthetic path KAT).
+const BULLETPROOF_PLUS_PER_OUTPUT_WEIGHT: usize = 320;
+
+/// Depth-1 FCMP proof sizes measured on the synthetic path (`kat_print_depth1_fcmp_sizes`).
+const FCMP_PROOF_DEPTH1: [usize; 9] = [0, 3_392, 4_832, 5_152, 6_048, 7_104, 6_880, 7_712, 8_416];
+
+/// Marginal FCMP proof bytes per additional tree layer above depth 1.
+///
+/// Full `[1,8]×[2,24]` grid measurement is blocked on depth-parametric synthetic
+/// tree path validity (PF7 / §3.0.5); reopen at CT-5 when curve-tree fixtures land.
+/// Until then the fee predictor uses the depth-1 KAT row plus this conservative
+/// per-layer increment (over-estimates vs production when depth > 1).
+const FCMP_PROOF_BYTES_PER_DEPTH_LAYER: usize = 320;
+
 fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
-    const BASE: usize = 400;
-    const PER_INPUT: usize = 180;
-    BASE + n_in.saturating_mul(PER_INPUT) + usize::from(tree_depth).saturating_mul(40)
+    let base = FCMP_PROOF_DEPTH1.get(n_in).copied().unwrap_or(8_416);
+    base + usize::from(tree_depth.saturating_sub(1)) * FCMP_PROOF_BYTES_PER_DEPTH_LAYER
 }
 
 /// Structural weight predictor (§3.10.1). Clawback is 0 for 2a (`n_out ∈ {1,2}`).
@@ -40,6 +55,8 @@ pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64
     TX_PREFIX_EXTRA_WEIGHT
         + n_in.saturating_mul(PER_INPUT_FIXED_WEIGHT)
         + n_out.saturating_mul(PER_OUTPUT_WEIGHT)
+        + n_out.saturating_mul(PER_OUTPUT_HYBRID_EXTRA_WEIGHT)
+        + n_out.saturating_mul(BULLETPROOF_PLUS_PER_OUTPUT_WEIGHT)
         + fcmp_proof_size(n_in, tree_depth)
         + varint_len(fee)
 }
@@ -158,6 +175,61 @@ pub(crate) fn fee_no_change_atomic(directive: &FeeDirective) -> AtomicUnits {
 mod tests {
     use super::*;
     use shekyl_rpc::FeeRate;
+
+    #[test]
+    #[ignore]
+    fn kat_print_depth1_fcmp_sizes() {
+        for n_in in 1..=8usize {
+            let measured = crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, 1)
+                .unwrap_or_else(|e| panic!("({n_in},1): {e}"));
+            eprintln!("n_in={n_in} fcmp={measured}");
+        }
+    }
+
+    #[test]
+    fn kat_fcmp_proof_size_depth1_row() {
+        for n_in in 1..=8usize {
+            let measured = crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, 1)
+                .unwrap_or_else(|e| panic!("({n_in},1): {e}"));
+            assert_eq!(
+                fcmp_proof_size(n_in, 1),
+                measured,
+                "depth=1 KAT mismatch at n_in={n_in}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "slow: emit FCMP_PROOF_SIZE_KAT table; run with --ignored --nocapture"]
+    fn kat_emit_fcmp_proof_size_table() {
+        for n_in in 1..=8usize {
+            print!("        [0");
+            for tree_depth in 1..=24u8 {
+                let measured =
+                    crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
+                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+                print!(", {measured}");
+            }
+            println!("],");
+        }
+    }
+
+    #[test]
+    #[ignore = "slow: full [1,8]×[1,24] fcmp_proof_size KAT; run with --ignored"]
+    fn kat_fcmp_proof_size_grid() {
+        for tree_depth in 1..=24u8 {
+            for n_in in 1..=8usize {
+                let measured =
+                    crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
+                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+                assert_eq!(
+                    fcmp_proof_size(n_in, tree_depth),
+                    measured,
+                    "KAT mismatch at n_in={n_in} depth={tree_depth}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn predict_weight_increases_with_inputs_and_outputs() {

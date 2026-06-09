@@ -53,6 +53,14 @@ shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+# Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
+# placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
+# `sign_bridge` on the production send path.
+shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+multiexp = "0.4"
+rand_core = "0.6"
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }

@@ -14,27 +14,25 @@ use curve25519_dalek::EdwardsPoint;
 use shekyl_engine_state::TransferDetails;
 use shekyl_generators::biased_hash_to_point;
 use shekyl_oxide::primitives::Commitment;
-use shekyl_tx_builder::{LeafEntry, TreeContext};
+use shekyl_tx_builder::LeafEntry;
 
 use super::error::SendError;
+use super::network::Network;
 use super::pending::TxRequest;
+use super::synthetic_tree::{enrich_input_tree, synthetic_h_pqc_bytes, synthetic_tree_context};
 use super::traits::key::{
     FcmpPlusPlusContext, FeeDirective, OutputDestination, TxInputSigningContext, TxOutputContext,
     TxToSign,
 };
 
-/// Synthetic single-leaf tree depth for pre-client 2a builds (§3.0.5).
-const SYNTHETIC_2A_TREE_DEPTH: u8 = 1;
-
-/// Placeholder tree root until the curve-tree client supplies the real root.
-const SYNTHETIC_2A_TREE_ROOT: [u8; 32] = [0u8; 32];
-
 /// Assemble a [`TxToSign`] for the selected transfer indices.
 pub(crate) fn assemble_tx_to_sign(
+    network: Network,
     request: &TxRequest,
     selected_indices: &[usize],
     transfers: &[TransferDetails],
     reference_block: [u8; 32],
+    tree_depth: u8,
     fee_directive: FeeDirective,
 ) -> Result<TxToSign, SendError> {
     let mut inputs = Vec::with_capacity(selected_indices.len());
@@ -43,14 +41,14 @@ pub(crate) fn assemble_tx_to_sign(
         let td = transfers.get(index).ok_or(SendError::CannotSign {
             reason: "selected transfer index out of range",
         })?;
-        inputs.push(input_context_from_transfer(td)?);
+        inputs.push(input_context_from_transfer(td, tree_depth)?);
     }
 
-    let tree = TreeContext {
-        reference_block,
-        tree_root: SYNTHETIC_2A_TREE_ROOT,
-        tree_depth: SYNTHETIC_2A_TREE_DEPTH,
-    };
+    let leaf_for_root = inputs
+        .first()
+        .map(|i| i.leaf_chunk.as_slice())
+        .unwrap_or(&[]);
+    let tree = synthetic_tree_context(reference_block, tree_depth, leaf_for_root);
 
     let mut outputs = Vec::with_capacity(request.recipients.len() + 1);
     for recipient in &request.recipients {
@@ -61,9 +59,12 @@ pub(crate) fn assemble_tx_to_sign(
             amount: recipient.amount_atomic_units.to_raw(),
         });
     }
-    outputs.push(TxOutputContext::Change);
+    outputs.push(TxOutputContext::Change {
+        subaddress_index: 0,
+    });
 
     Ok(TxToSign {
+        network,
         inputs,
         outputs,
         fcmp_plus_plus_context: FcmpPlusPlusContext { tree },
@@ -71,7 +72,13 @@ pub(crate) fn assemble_tx_to_sign(
     })
 }
 
-fn input_context_from_transfer(td: &TransferDetails) -> Result<TxInputSigningContext, SendError> {
+fn input_context_from_transfer(
+    td: &TransferDetails,
+    tree_depth: u8,
+) -> Result<TxInputSigningContext, SendError> {
+    let key_image = td.key_image.ok_or(SendError::CannotSign {
+        reason: "transfer missing key_image (scanner/indexes not populated)",
+    })?;
     let handle = td.output_handle.ok_or(SendError::CannotSign {
         reason: "transfer missing output_handle (engine post-pass not run)",
     })?;
@@ -90,15 +97,21 @@ fn input_context_from_transfer(td: &TransferDetails) -> Result<TxInputSigningCon
         h_pqc,
     };
 
+    let (leaf_chunk, c1_layers, c2_layers, _) = enrich_input_tree(vec![leaf_entry], tree_depth);
+
     Ok(TxInputSigningContext {
         handle,
+        tx_hash: td.tx_hash,
+        internal_output_index: td.internal_output_index,
+        amount: td.amount(),
+        key_image,
         source_ciphertext,
         output_key,
         commitment,
         h_pqc,
-        leaf_chunk: vec![leaf_entry],
-        c1_layers: Vec::new(),
-        c2_layers: Vec::new(),
+        leaf_chunk,
+        c1_layers,
+        c2_layers,
     })
 }
 
@@ -112,13 +125,4 @@ fn commitment_bytes(commitment: &Commitment) -> [u8; 32] {
 
 fn key_image_gen_bytes(output_key: &[u8; 32]) -> [u8; 32] {
     biased_hash_to_point(*output_key).compress().to_bytes()
-}
-
-fn synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    let mut buf = [0u8; 64];
-    buf[..8].copy_from_slice(&seed.to_le_bytes());
-    buf[32..40].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).to_le_bytes());
-    let h_pqc_field = dalek_ff_group::FieldElement::wide_reduce(buf);
-    h_pqc_field.to_repr()
 }

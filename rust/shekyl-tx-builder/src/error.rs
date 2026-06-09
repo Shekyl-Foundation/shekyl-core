@@ -109,4 +109,8 @@ pub enum TxBuilderError {
     /// PQC (hybrid Ed25519 + ML-DSA-65) signing failed for a specific input.
     #[error("PQC signing failed for input {index}: {reason}")]
     PqcSignError { index: usize, reason: String },
+
+    /// Wire encoding / phase-1 payload construction failed.
+    #[error("wire encoding failed: {0}")]
+    WireError(String),
 }

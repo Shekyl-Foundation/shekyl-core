@@ -43,6 +43,7 @@
 
 use super::error::SignerError;
 use super::key_actor::KeyEngineHandle;
+use super::traits::key::KeyEngine;
 
 mod private {
     pub trait Sealed {}
@@ -138,16 +139,6 @@ pub struct SignedTransfer {
 }
 
 impl SignedTransfer {
-    /// Construct an empty Phase 1 stub. The `_context` parameter
-    /// is unused at V3.0; Phase 2a's tx-builder will consume it.
-    /// Crate-internal only.
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn empty_phase1_stub(_context: &TransferSigningContext) -> Self {
-        Self {
-            tx_bytes: Vec::new(),
-        }
-    }
-
     /// Borrow the serialized signed-transaction bytes. Crate-
     /// internal accessor; C5β's `submit` body forwards them to
     /// `DaemonEngine::submit_tx`.
@@ -245,8 +236,8 @@ pub trait Signer: Send + Sync + 'static {
     /// sensitive material.
     fn sign_transfer(
         &self,
-        context: &TransferSigningContext,
-    ) -> Result<SignedTransfer, Self::Error>;
+        context: TransferSigningContext,
+    ) -> impl std::future::Future<Output = Result<SignedTransfer, Self::Error>> + Send;
 }
 
 /// V3.0 default [`Signer`] implementor: a handle to the wallet's
@@ -290,12 +281,6 @@ pub struct LocalSigner {
     /// projections), so the engine shares the one actor with the
     /// signer by cloning the handle — no secret bytes are copied and
     /// no `&AllKeysBlob` is exposed.
-    //
-    // `#[allow(dead_code)]`: the `sign_transfer` body is a Phase 1 stub
-    // that does not yet read the handle. Phase 2a routes real signing
-    // through `self.key`'s `SignTransaction` message; the allow is
-    // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
     pub(crate) key: KeyEngineHandle,
 }
 
@@ -312,16 +297,57 @@ impl LocalSigner {
 impl Signer for LocalSigner {
     type Error = SignerError;
 
-    fn sign_transfer(
+    async fn sign_transfer(
         &self,
-        context: &TransferSigningContext,
+        context: TransferSigningContext,
     ) -> Result<SignedTransfer, Self::Error> {
-        // Phase 1 stub: returns SignedTransfer with empty body
-        // bytes. Matches existing build_pending_tx_in_state
-        // which sets tx_bytes: Vec::new() per the existing
-        // pending.rs stub. Phase 2a routes real signing through
-        // `self.key`'s actor `SignTransaction` message.
-        Ok(SignedTransfer::empty_phase1_stub(context))
+        let expected_tree_depth = context.tx.fcmp_plus_plus_context.tree.tree_depth;
+        let signatures = self
+            .key
+            .sign_transaction(context.tx)
+            .await
+            .map_err(SignerError::from)?;
+
+        debug_assert_eq!(signatures.tree_depth, expected_tree_depth);
+
+        let bulletproof = shekyl_oxide::fcmp::bulletproofs::Bulletproof::read_plus(
+            &mut signatures.bulletproof_plus.as_slice(),
+        )
+        .map_err(|_| SignerError::RemoteFailure {
+            reason: "bulletproof parse failed during wire encode",
+        })?;
+
+        let wire_input = shekyl_tx_builder::WireEncodeInput {
+            key_images: signatures
+                .per_input
+                .iter()
+                .map(|i| *i.key_image.as_bytes())
+                .collect(),
+            output_keys: signatures.output_keys,
+            view_tags: signatures.view_tags,
+            tx_extra: signatures.tx_extra,
+            fee: signatures.fee,
+            enc_amounts: signatures.enc_amounts,
+            enc_labels: signatures.enc_labels,
+            out_commitments: signatures.out_commitments,
+            pseudo_outs: signatures.per_input.iter().map(|i| i.pseudo_out).collect(),
+            bulletproof,
+            reference_block: signatures.reference_block,
+            fcmp_proof: signatures.fcmp_proof,
+            pqc_auths: signatures
+                .per_input
+                .iter()
+                .map(|i| i.pqc_auth.clone())
+                .collect(),
+        };
+
+        let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
+            SignerError::RemoteFailure {
+                reason: "final wire encode failed",
+            }
+        })?;
+
+        Ok(SignedTransfer { tx_bytes })
     }
 }
 
@@ -381,7 +407,9 @@ mod tests {
     }
 
     fn empty_tx_to_sign() -> TxToSign {
+        use shekyl_address::Network;
         TxToSign {
+            network: Network::Mainnet,
             inputs: Vec::new(),
             outputs: Vec::new(),
             fcmp_plus_plus_context: FcmpPlusPlusContext {
@@ -413,23 +441,23 @@ mod tests {
         drop(engine_handle);
         let err = signer
             .key
-            .sign_transaction(&empty_tx_to_sign())
+            .sign_transaction(empty_tx_to_sign())
             .await
-            .expect_err("live actor must return the stub error, not transport failure");
+            .expect_err("empty inputs are rejected by the live actor");
         assert!(
-            matches!(err, KeyEngineError::SignTransactionTraitSurfaceIncomplete),
-            "expected stub error from live actor, got {err:?}",
+            matches!(err, KeyEngineError::Primitive { .. }),
+            "expected primitive rejection from live actor, got {err:?}",
         );
     }
 
     #[tokio::test]
-    async fn local_signer_phase1_stub_succeeds() {
+    async fn local_signer_sign_transfer_rejects_empty_inputs() {
         let signer = LocalSigner::new(KeyEngineHandle::spawn(deterministic_keys()));
         let context = TransferSigningContext::from_tx(empty_tx_to_sign());
-        let result = signer.sign_transfer(&context);
-        let signed = result.expect("Phase 1 stub returns Ok unconditionally");
-        // Phase 1 stub invariant: body bytes are empty (matches
-        // build_pending_tx_in_state's tx_bytes: Vec::new()).
-        assert!(signed.tx_bytes().is_empty());
+        let err = signer
+            .sign_transfer(context)
+            .await
+            .expect_err("empty TxToSign cannot be signed");
+        assert!(matches!(err, SignerError::RemoteFailure { .. }));
     }
 }

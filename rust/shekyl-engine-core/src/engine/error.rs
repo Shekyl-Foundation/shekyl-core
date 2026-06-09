@@ -575,24 +575,6 @@ pub enum KeyError {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum KeyEngineError {
-    /// [`KeyEngine::sign_transaction`](super::traits::key::KeyEngine::sign_transaction)
-    /// cannot be bridged in M3a: the public on-chain per-input data
-    /// (`output_key`, `commitment`, `amount`, `h_pqc`) and the
-    /// FCMP++ tree-branch context required by
-    /// [`shekyl_tx_builder::sign_transaction`] are carried on
-    /// `TxToSign` fields (`outputs: Vec<TxOutputContext>`,
-    /// `fcmp_plus_plus_context: FcmpPlusPlusContext`) that are
-    /// forward-declared as empty stubs in M3a Commit 3 and pinned
-    /// in PR 5 (`PendingTxEngine`) per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md`'s "TxToSign's exact field shape
-    /// … is finalized in PR 5" framing.
-    /// [`LocalKeys::sign_transaction`](super::local_keys::LocalKeys::sign_transaction)
-    /// returns this variant until PR 5's shape lands.
-    #[error(
-        "sign_transaction trait surface is PR-5-pinned; LocalKeys cannot bridge in M3a (TxToSign's public-data and FCMP++ branch carriers are forward-declared)"
-    )]
-    SignTransactionTraitSurfaceIncomplete,
-
     /// The deterministic-handle re-decap path (`LocalKeys::derive_primary_source_secrets_bundle`,
     /// Layer 2 of M3b D1 per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2)
     /// failed to recover `combined_ss` from the persisted
@@ -657,6 +639,22 @@ pub(crate) enum KeyEngineError {
         "key actor unavailable: the key actor task has stopped (terminal, non-retryable; recover via wallet close + re-open)"
     )]
     KeyActorUnavailable,
+
+    /// Dust-fold pre-prove variant selection failed (§3.8.2 F4/F8).
+    #[error("insufficient funds for fee variant: shortfall {shortfall} atomic units")]
+    InsufficientFunds { shortfall: u64 },
+
+    /// Spendable input lacks a canonical key image at assembly time (C7 PF8).
+    #[error("missing key image for spend input at output index {output_index}")]
+    MissingKeyImage { output_index: u64 },
+
+    /// Handle does not match `derive_output_handle(view_sk, tx_hash, index)` (PF2).
+    #[error("output handle mismatch for spend input at output index {output_index}")]
+    HandleMismatch { output_index: u64 },
+
+    /// Non-crypto structural failure during signing (address decode, wire encode, …).
+    #[error("key engine primitive failure: {detail}")]
+    Primitive { detail: &'static str },
 }
 
 // --- IO --------------------------------------------------------------------
@@ -1075,6 +1073,27 @@ pub enum SignerError {
         /// Compile-time-fixed description of the downstream failure.
         reason: &'static str,
     },
+}
+
+impl From<KeyEngineError> for SignerError {
+    fn from(err: KeyEngineError) -> Self {
+        match err {
+            KeyEngineError::KeyActorUnavailable => Self::Unavailable,
+            KeyEngineError::Primitive { detail } => Self::RemoteFailure { reason: detail },
+            KeyEngineError::InsufficientFunds { .. } => Self::RemoteFailure {
+                reason: "insufficient funds for fee variant",
+            },
+            KeyEngineError::HandleMismatch { .. } => Self::RemoteFailure {
+                reason: "output handle mismatch",
+            },
+            KeyEngineError::MissingKeyImage { .. } => Self::RemoteFailure {
+                reason: "missing key image on spend input",
+            },
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
+                reason: "source ciphertext re-decapsulation failed",
+            },
+        }
+    }
 }
 
 // --- Economics (PR 7) ------------------------------------------------------

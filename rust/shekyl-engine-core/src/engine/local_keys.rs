@@ -55,11 +55,8 @@
 //! [`KeyEngine`]: super::traits::key::KeyEngine
 //! [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]: super::error::KeyEngineError::SignTransactionTraitSurfaceIncomplete
 
-use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint, Scalar};
-use zeroize::Zeroizing;
-
-#[cfg(test)]
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint, Scalar};
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_output_secrets;
 use shekyl_crypto_pq::handle::derive_output_handle;
@@ -71,6 +68,7 @@ use shekyl_crypto_pq::output::{
 use shekyl_crypto_pq::output_claim::{output_spend_offset_scalar, PRIMARY_CLAIM_INDEX_LE};
 use shekyl_oxide::generators::hash_to_point;
 use shekyl_units::AtomicUnits;
+use zeroize::Zeroizing;
 
 use super::error::KeyEngineError;
 use super::traits::key::{
@@ -126,7 +124,7 @@ struct DerivedScalars {
 pub struct LocalKeys {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop` so this
     /// field is wiped on drop.
-    keys: AllKeysBlob,
+    pub(crate) keys: AllKeysBlob,
 
     /// Cached account-level public address material. Returned by
     /// reference from [`KeyEngine::account_public_address`].
@@ -329,6 +327,16 @@ impl LocalKeys {
             output_index,
         })
     }
+
+    /// Primary-claim spend public key bytes (`D + m₀·G`).
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn primary_claim_spend_pk(&self) -> [u8; 32] {
+        let m = output_spend_offset_scalar(&self.derived.view_scalar, &PRIMARY_CLAIM_INDEX_LE);
+        (self.derived.spend_public + (&m * ED25519_BASEPOINT_TABLE))
+            .compress()
+            .to_bytes()
+    }
 }
 
 impl KeyEngine for LocalKeys {
@@ -409,18 +417,8 @@ impl KeyEngine for LocalKeys {
         }))
     }
 
-    async fn sign_transaction(&self, _tx: &TxToSign) -> Result<TxSignatures, Self::Error> {
-        // M3a stub — TxToSign's PR-5-pinned shape doesn't carry the
-        // per-input public-on-chain data (output_key, commitment,
-        // amount, h_pqc) and FCMP++ tree-branch context (leaf_chunk,
-        // c1_layers, c2_layers) that `shekyl_tx_builder::sign_transaction`
-        // requires for SpendInput construction. The bridge lands in
-        // PR 5 once `TxToSign`'s shape is finalized; until then this
-        // surface is recognized-but-not-bridgeable.
-        //
-        // See `KeyEngineError::SignTransactionTraitSurfaceIncomplete`'s
-        // doc-comment for the full named-infrastructure-gap rationale.
-        Err(KeyEngineError::SignTransactionTraitSurfaceIncomplete)
+    async fn sign_transaction(&self, tx: TxToSign) -> Result<TxSignatures, Self::Error> {
+        super::sign_bridge::sign_tx(self, &tx)
     }
 }
 
@@ -529,92 +527,6 @@ mod tests {
     // `#[cfg(test)]` and unreachable from `shekyl-engine-core`'s test
     // tree; promoting them is out of scope for an additive test caller.
     // ─────────────────────────────────────────────────────────────────
-
-    /// Build the synthetic single-leaf-chunk Selene tree root for a
-    /// `tree_depth = 1` FCMP++ proof. The tree is the leaf chunk
-    /// itself (no branch layers); the root is `SELENE_HASH_INIT +
-    /// multiexp(generators, [O.x, I.x, C.x, h_pqc] for each leaf)`.
-    ///
-    /// Inputs are the leaf-chunk entries in the same order they appear
-    /// in `SpendInput.leaf_chunk` and `ProveInput.leaf_chunk_outputs`.
-    /// `h_pqc` bytes must be canonical Selene scalar encodings (use
-    /// [`make_synthetic_h_pqc_bytes`]).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `SELENE_FCMP_GENERATORS.generators.g_bold_slice()`
-    /// has fewer than `leaves.len() * 4` entries (the helper consumes
-    /// 4 generators per leaf — one each for `O.x`, `I.x`, `C.x`, and
-    /// `h_pqc`). The assertion is a defensive guard against future
-    /// fixture-expansion regressions; the current 9-fixture sweep
-    /// (`n_in ∈ {1, 2, 3}`) tops out at 12 generator indices, well
-    /// within the FCMP++ generator-slice capacity.
-    fn build_synthetic_single_chunk_tree_root(
-        leaves: &[(EdwardsPoint, EdwardsPoint, EdwardsPoint, [u8; 32])],
-    ) -> [u8; 32] {
-        use ciphersuite::{
-            group::{ff::PrimeField, GroupEncoding},
-            Ciphersuite,
-        };
-        use dalek_ff_group::EdwardsPoint as DfgEdwardsPoint;
-        use ec_divisors::DivisorCurve;
-        use helioselene::Selene;
-        use multiexp::multiexp_vartime;
-        use shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS;
-        use shekyl_generators::SELENE_HASH_INIT;
-
-        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
-        let needed = leaves.len() * 4;
-        assert!(
-            generators.len() >= needed,
-            "SELENE_FCMP_GENERATORS.g_bold_slice() has {} entries; \
-             single-leaf-chunk tree-root construction needs {} (4 per leaf, \
-             {} leaves). Increase the generator slice or shrink the leaf \
-             count before adding fixtures past this bound.",
-            generators.len(),
-            needed,
-            leaves.len(),
-        );
-        let mut terms: Vec<(<Selene as ciphersuite::Ciphersuite>::F, _)> =
-            Vec::with_capacity(needed);
-
-        let mut g_idx = 0usize;
-        for (o, i, c, h_pqc) in leaves {
-            let o_dfg = DfgEdwardsPoint(*o);
-            let i_dfg = DfgEdwardsPoint(*i);
-            let c_dfg = DfgEdwardsPoint(*c);
-            terms.push((
-                <DfgEdwardsPoint as DivisorCurve>::to_xy(o_dfg)
-                    .expect("output_key is on-curve")
-                    .0,
-                generators[g_idx],
-            ));
-            g_idx += 1;
-            terms.push((
-                <DfgEdwardsPoint as DivisorCurve>::to_xy(i_dfg)
-                    .expect("key_image_gen is on-curve")
-                    .0,
-                generators[g_idx],
-            ));
-            g_idx += 1;
-            terms.push((
-                <DfgEdwardsPoint as DivisorCurve>::to_xy(c_dfg)
-                    .expect("commitment is on-curve")
-                    .0,
-                generators[g_idx],
-            ));
-            g_idx += 1;
-            let h_pqc_field: <Selene as Ciphersuite>::F =
-                Option::from(<Selene as Ciphersuite>::F::from_repr(*h_pqc))
-                    .expect("h_pqc bytes must be canonical Selene scalar");
-            terms.push((h_pqc_field, generators[g_idx]));
-            g_idx += 1;
-        }
-
-        let root_point: <Selene as ciphersuite::Ciphersuite>::G =
-            *SELENE_HASH_INIT + multiexp_vartime(&terms);
-        root_point.to_bytes()
-    }
 
     /// Generate a canonical Selene scalar's byte representation for
     /// use as an `h_pqc` leaf field, derived deterministically from
@@ -1380,24 +1292,8 @@ mod tests {
                 engine_bundles.push(engine_bundle);
             }
 
-            // Compute the synthetic single-leaf-chunk tree root
-            // from the assembled chunk.
-            let tree_leaves: Vec<_> = leaf_chunk
-                .iter()
-                .map(|e| {
-                    let o = CompressedEdwardsY(e.output_key)
-                        .decompress()
-                        .expect("output_key is on-curve");
-                    let i = CompressedEdwardsY(e.key_image_gen)
-                        .decompress()
-                        .expect("key_image_gen is on-curve");
-                    let c = CompressedEdwardsY(e.commitment)
-                        .decompress()
-                        .expect("commitment is on-curve");
-                    (o, i, c, e.h_pqc)
-                })
-                .collect();
-            let tree_root = build_synthetic_single_chunk_tree_root(&tree_leaves);
+            let tree_root =
+                crate::engine::synthetic_tree::selene_single_chunk_tree_root(&leaf_chunk);
             let tree = TreeContext {
                 reference_block,
                 tree_root,
@@ -1742,11 +1638,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_transaction_returns_named_gap_stub() {
+    async fn sign_transaction_rejects_empty_inputs() {
         let keys = LocalKeys::from_test_seed(TEST_SEED);
         use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective};
+        use shekyl_address::Network;
         use shekyl_tx_builder::TreeContext;
         let tx = TxToSign {
+            network: Network::Mainnet,
             inputs: vec![],
             outputs: vec![],
             fcmp_plus_plus_context: FcmpPlusPlusContext {
@@ -1763,12 +1661,9 @@ mod tests {
             },
         };
         let err = keys
-            .sign_transaction(&tx)
+            .sign_transaction(tx)
             .await
-            .expect_err("sign_transaction is stub-bearing in M3a");
-        assert!(matches!(
-            err,
-            KeyEngineError::SignTransactionTraitSurfaceIncomplete
-        ));
+            .expect_err("empty inputs are rejected");
+        assert!(matches!(err, KeyEngineError::Primitive { .. }));
     }
 }

@@ -69,6 +69,7 @@ use super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
 use super::traits::{LedgerEngine, PendingTxEngine};
+use super::transaction_submitter::TransactionSubmitter;
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 /// Per-output identifier used as the `output_locks` map key.
@@ -101,6 +102,8 @@ pub(crate) struct ConsumerHeldEntry {
     pub built_at_height: u64,
     /// `block_hash_at(built_at_height)` at build.
     pub built_at_tip_hash: [u8; 32],
+    /// Serialized signed transaction for daemon broadcast.
+    pub tx_bytes: Vec<u8>,
 }
 
 /// Stage 1 ledger access for spendable-output enumeration.
@@ -253,12 +256,13 @@ pub(crate) struct PendingTxState {
 // surface directly. Stage 4's trait promotion deletes this allow.
 //
 #[allow(private_bounds)]
-pub struct LocalPendingTx<S, O, F, FS, L>
+pub struct LocalPendingTx<S, O, F, FS, TS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
     FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     /// Spend-secret holder. `Arc<S>` because the constructor takes
@@ -278,6 +282,8 @@ where
     pub(crate) fee_estimator: F,
     /// Atomic fee-snapshot source (§3.2 / PF2); separate from `F`.
     pub(crate) fee_snapshot_source: FS,
+    /// Daemon (or test) transaction broadcaster.
+    pub(crate) submitter: Arc<TS>,
     /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::Engine)'s
     /// `ledger` field at C6 assembly).
     pub(crate) ledger: Arc<L>,
@@ -288,8 +294,7 @@ where
     #[allow(dead_code)]
     pub(crate) ttl: ReservationTTLConfig,
     /// Network the wallet was opened against. Consumed when address-
-    /// binding validation lands in the build pipeline (C6+).
-    #[allow(dead_code)]
+    /// Network the wallet was opened against (address decode at sign).
     pub(crate) network: Network,
     /// Engine state guarded by [`Mutex`] for interior mutability;
     /// see [`PendingTxState`] rustdoc.
@@ -353,9 +358,12 @@ fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
     })
 }
 
-fn map_signer_error(_err: &SignerError) -> SendError {
-    SendError::CannotSign {
-        reason: "signer unavailable",
+fn map_signer_error(err: &SignerError) -> SendError {
+    match err {
+        SignerError::Unavailable => SendError::CannotSign {
+            reason: "signer unavailable",
+        },
+        SignerError::RemoteFailure { reason } => SendError::CannotSign { reason },
     }
 }
 
@@ -366,12 +374,22 @@ fn phase1_tx_hash(id: ReservationId) -> TxHash {
 }
 
 #[allow(private_bounds)]
-impl<S, O, F, FS, L> LocalPendingTx<S, O, F, FS, L>
+struct BuildAssembled {
+    tx_to_sign: super::traits::key::TxToSign,
+    fee: AtomicUnits,
+    selected: SelectedOutputs,
+    synced: u64,
+    tip_hash: [u8; 32],
+}
+
+#[allow(private_bounds)]
+impl<S, O, F, FS, TS, L> LocalPendingTx<S, O, F, FS, TS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
     FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     fn refresh_current_snapshot(&self, state: &mut PendingTxState) {
@@ -449,10 +467,15 @@ where
 
     fn finalize_submit_ambiguous(
         &self,
+        state: &PendingTxState,
         id: ReservationId,
         kind: AmbiguousErrorKind,
     ) -> SubmitError {
-        let tx_hash = phase1_tx_hash(id);
+        let tx_hash = state
+            .in_flight
+            .get(&id)
+            .map(|flight| TxHash(shekyl_crypto_hash::cn_fast_hash(&flight.tx_bytes)))
+            .unwrap_or_else(|| phase1_tx_hash(id));
 
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
@@ -469,11 +492,11 @@ where
         }
     }
 
-    fn build_sync(
+    fn build_assemble_sync(
         &self,
         request: &TxRequest,
         fee_snapshot: super::traits::FeeEstimates,
-    ) -> Result<PendingTx, SendError> {
+    ) -> Result<BuildAssembled, SendError> {
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
@@ -679,18 +702,45 @@ where
 
         let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
             assemble_tx_to_sign(
+                self.network,
                 request,
                 &selected.indices,
                 ledger.transfers(),
                 tip_hash,
+                tree_depth,
                 fee_directive,
             )
         })?;
-        let signing_context = TransferSigningContext::from_tx(tx_to_sign);
-        let signed = self.signer.sign_transfer(&signing_context).map_err(|err| {
-            fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&err.into()))
+
+        drop(state);
+
+        Ok(BuildAssembled {
+            tx_to_sign,
+            fee,
+            selected,
+            synced,
+            tip_hash,
+        })
+    }
+
+    fn commit_built_sync(
+        &self,
+        request: &TxRequest,
+        fee: AtomicUnits,
+        selected: &SelectedOutputs,
+        synced: u64,
+        tip_hash: [u8; 32],
+        tx_bytes: Vec<u8>,
+    ) -> Result<PendingTx, SendError> {
+        let mut state = self.state.lock().map_err(|_| {
+            fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::CannotSign {
+                    reason: "pending-tx state lock poisoned",
+                },
+            )
         })?;
-        let tx_bytes = signed.tx_bytes().to_vec();
+        self.refresh_current_snapshot(&mut state);
 
         let id = ReservationId::new(state.next_id);
         state.next_id = state
@@ -710,6 +760,7 @@ where
                 snapshot_id,
                 built_at_height: synced,
                 built_at_tip_hash: tip_hash,
+                tx_bytes: tx_bytes.clone(),
             },
         );
 
@@ -744,111 +795,139 @@ where
         Ok(pending)
     }
 
-    fn submit_sync(&self, id: ReservationId) -> Result<TxHash, SubmitError> {
+    async fn submit_async(&self, id: ReservationId) -> Result<TxHash, SubmitError> {
+        let tx_bytes = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            self.refresh_current_snapshot(&mut state);
+
+            let in_consumer = state.consumer_held.contains_key(&id);
+            let in_flight = state.in_flight.contains_key(&id);
+            match (in_consumer, in_flight) {
+                (false, false) => {
+                    return Err(SubmitError::ReservationNotFound { reservation_id: id });
+                }
+                (false, true) => {
+                    return Err(SubmitError::SubmitAlreadyPending { reservation_id: id });
+                }
+                (true, true) => {
+                    panic!("invariant: rid is in at most one of consumer_held / in_flight");
+                }
+                (true, false) => {}
+            }
+
+            let held = state
+                .consumer_held
+                .get(&id)
+                .expect("consumer_held membership established above")
+                .clone();
+
+            if held.snapshot_id != state.current_snapshot {
+                emit_pending_tx_diagnostic(
+                    self.sink.as_ref(),
+                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
+                        reservation_id: id,
+                        reservation_snapshot: held.snapshot_id,
+                        current_snapshot: state.current_snapshot,
+                    },
+                );
+                return Err(SubmitError::SnapshotInvalidated {
+                    reservation_snapshot: held.snapshot_id,
+                    current_snapshot: state.current_snapshot,
+                });
+            }
+
+            let stored_tip = self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(held.built_at_height).copied());
+            if stored_tip != Some(held.built_at_tip_hash) {
+                emit_pending_tx_diagnostic(
+                    self.sink.as_ref(),
+                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
+                        reservation_id: id,
+                        reservation_snapshot: held.snapshot_id,
+                        current_snapshot: state.current_snapshot,
+                    },
+                );
+                return Err(SubmitError::SnapshotInvalidated {
+                    reservation_snapshot: held.snapshot_id,
+                    current_snapshot: state.current_snapshot,
+                });
+            }
+
+            let created_at = held.created_at;
+            let tx_bytes = held.tx_bytes;
+            state.consumer_held.remove(&id);
+            let submitted_at = Instant::now();
+            state.in_flight.insert(
+                id,
+                InFlightSubmit {
+                    tx_bytes: tx_bytes.clone(),
+                    snapshot_id: held.snapshot_id,
+                    created_at,
+                    submitted_at,
+                },
+            );
+
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::SubmitAttempted { reservation_id: id },
+            );
+
+            if let Some(outcome) = self.take_queued_submit_outcome() {
+                return match outcome {
+                    Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
+                    Err(SubmitError::DaemonRejectedTerminal { kind }) => {
+                        Err(self.finalize_submit_terminal(&mut state, id, kind))
+                    }
+                    Err(SubmitError::DaemonAmbiguous {
+                        kind,
+                        reservation_id,
+                    }) => {
+                        debug_assert_eq!(
+                            reservation_id, id,
+                            "queued DaemonAmbiguous must name the reservation under submit"
+                        );
+                        Err(self.finalize_submit_ambiguous(&state, id, kind))
+                    }
+                    Err(e) => {
+                        state.in_flight.remove(&id);
+                        release_output_locks_for(&mut state, id);
+                        Err(e)
+                    }
+                };
+            }
+
+            tx_bytes
+        };
+
+        let submitter = Arc::clone(&self.submitter);
+        let tx_hash = match submitter.submit(tx_bytes).await {
+            Ok(hash) => hash,
+            Err(submit_err) => {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+                return Err(match submit_err {
+                    SubmitError::DaemonRejectedTerminal { kind } => {
+                        self.finalize_submit_terminal(&mut state, id, kind)
+                    }
+                    SubmitError::DaemonAmbiguous { kind, .. } => {
+                        self.finalize_submit_ambiguous(&state, id, kind)
+                    }
+                    other => other,
+                });
+            }
+        };
+
         let mut state = self
             .state
             .lock()
             .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-        self.refresh_current_snapshot(&mut state);
 
-        let in_consumer = state.consumer_held.contains_key(&id);
-        let in_flight = state.in_flight.contains_key(&id);
-        match (in_consumer, in_flight) {
-            (false, false) => {
-                return Err(SubmitError::ReservationNotFound { reservation_id: id });
-            }
-            (false, true) => {
-                return Err(SubmitError::SubmitAlreadyPending { reservation_id: id });
-            }
-            (true, true) => {
-                panic!("invariant: rid is in at most one of consumer_held / in_flight");
-            }
-            (true, false) => {}
-        }
-
-        let held = state
-            .consumer_held
-            .get(&id)
-            .expect("consumer_held membership established above")
-            .clone();
-
-        if held.snapshot_id != state.current_snapshot {
-            emit_pending_tx_diagnostic(
-                self.sink.as_ref(),
-                PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                    reservation_id: id,
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
-                },
-            );
-            return Err(SubmitError::SnapshotInvalidated {
-                reservation_snapshot: held.snapshot_id,
-                current_snapshot: state.current_snapshot,
-            });
-        }
-
-        let stored_tip = self
-            .ledger
-            .with_ledger_block(|ledger| ledger.block_hash_at(held.built_at_height).copied());
-        if stored_tip != Some(held.built_at_tip_hash) {
-            emit_pending_tx_diagnostic(
-                self.sink.as_ref(),
-                PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                    reservation_id: id,
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
-                },
-            );
-            return Err(SubmitError::SnapshotInvalidated {
-                reservation_snapshot: held.snapshot_id,
-                current_snapshot: state.current_snapshot,
-            });
-        }
-
-        let created_at = held.created_at;
-        state.consumer_held.remove(&id);
-        let submitted_at = Instant::now();
-        state.in_flight.insert(
-            id,
-            InFlightSubmit {
-                snapshot_id: held.snapshot_id,
-                created_at,
-                submitted_at,
-            },
-        );
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitAttempted { reservation_id: id },
-        );
-
-        if let Some(outcome) = self.take_queued_submit_outcome() {
-            return match outcome {
-                Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
-                Err(SubmitError::DaemonRejectedTerminal { kind }) => {
-                    Err(self.finalize_submit_terminal(&mut state, id, kind))
-                }
-                Err(SubmitError::DaemonAmbiguous {
-                    kind,
-                    reservation_id,
-                }) => {
-                    debug_assert_eq!(
-                        reservation_id, id,
-                        "queued DaemonAmbiguous must name the reservation under submit"
-                    );
-                    Err(self.finalize_submit_ambiguous(id, kind))
-                }
-                Err(e) => {
-                    state.in_flight.remove(&id);
-                    release_output_locks_for(&mut state, id);
-                    Err(e)
-                }
-            };
-        }
-
-        // Phase 1 stub: daemon always accepts; Phase 2a replaces with
-        // a real broadcast call.
-        let tx_hash = phase1_tx_hash(id);
         Ok(self.finalize_submit_accept(&mut state, id, tx_hash))
     }
 
@@ -936,6 +1015,7 @@ where
         output_selector: O,
         fee_estimator: F,
         fee_snapshot_source: FS,
+        submitter: Arc<TS>,
         ledger: Arc<L>,
         sink: Arc<dyn DiagnosticSink>,
         ttl: ReservationTTLConfig,
@@ -954,6 +1034,7 @@ where
             output_selector,
             fee_estimator,
             fee_snapshot_source,
+            submitter,
             ledger,
             sink,
             ttl,
@@ -981,12 +1062,13 @@ where
 // PendingTxEngine impl
 // ============================================================================
 
-impl<S, O, F, FS, L> PendingTxEngine for LocalPendingTx<S, O, F, FS, L>
+impl<S, O, F, FS, TS, L> PendingTxEngine for LocalPendingTx<S, O, F, FS, TS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
     FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
@@ -1006,14 +1088,31 @@ where
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
         })?;
-        self.build_sync(&request, fee_snapshot)
+        let BuildAssembled {
+            tx_to_sign,
+            fee,
+            selected,
+            synced,
+            tip_hash,
+        } = self.build_assemble_sync(&request, fee_snapshot)?;
+        let signed = self
+            .signer
+            .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
+            .await
+            .map_err(|err| {
+                let signer_err: SignerError = err.into();
+                fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
+            })?;
+        let tx_bytes = signed.tx_bytes().to_vec();
+        self.commit_built_sync(&request, fee, &selected, synced, tip_hash, tx_bytes)
     }
 
     fn submit(
         &self,
         id: ReservationId,
     ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send {
-        std::future::ready(self.submit_sync(id))
+        let this = self;
+        async move { this.submit_async(id).await }
     }
 
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
@@ -1047,48 +1146,78 @@ mod tests {
     use crate::engine::fee_estimator::DaemonFeeEstimator;
     use crate::engine::fee_snapshot::FixedFeeSnapshotSource;
     use crate::engine::key_actor::KeyEngineHandle;
+    use crate::engine::local_keys::LocalKeys;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
     use crate::engine::pending::{FeePriority, TxRecipient};
     use crate::engine::signer::LocalSigner;
     use crate::engine::traits::FeeEstimates;
     use crate::engine::traits::PendingTxEngine;
+    use crate::engine::transaction_submitter::TransactionSubmitter;
     use crate::engine::LocalLedger;
-    use shekyl_crypto_pq::account::{
-        rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-    };
+    use shekyl_address::ShekylAddress;
+    use shekyl_crypto_pq::account::AllKeysBlob;
+    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
     use shekyl_rpc::FeeRate;
     use shekyl_scanner::RecoveredWalletOutput;
 
-    /// Deterministic test seed. Distinct from
-    /// `SIGNER_TEST_MASTER_SEED` (`engine/signer.rs`) so the C5α
-    /// constructor test does not share derivation state with the
-    /// C4α `LocalSigner` fixtures. `seed[i] = (i * 17) ^ 0x5B`
-    /// deterministic.
-    const PENDING_TX_TEST_MASTER_SEED: [u8; MASTER_SEED_BYTES] = {
-        let mut seed = [0u8; MASTER_SEED_BYTES];
+    /// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
+    /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
+    /// with the C4α `LocalSigner` fixtures.
+    const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
+        let mut seed = [0u8; 32];
         let mut i: u8 = 0;
-        while (i as usize) < MASTER_SEED_BYTES {
+        while (i as usize) < 32 {
             seed[i as usize] = i.wrapping_mul(17) ^ 0x5B;
             i += 1;
         }
         seed
     };
 
-    /// Spawn a `KeyActor` over a deterministic test blob and return its
-    /// handle. Stage-2 replacement for the old `test_keys() ->
-    /// Arc<AllKeysBlob>` helper: `LocalSigner` now holds a
-    /// [`KeyEngineHandle`], not the blob (`STAGE_2_KEY_ENGINE_ACTOR.md`
-    /// §6 step 4). `KeyEngineHandle::spawn` is require-ambient (§4.2), so
-    /// every caller runs under `#[tokio::test]`; the default current-thread
-    /// runtime hosts the actor task.
-    fn test_signer_handle() -> KeyEngineHandle {
-        let blob = rederive_account(
-            &PENDING_TX_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
+    const TEST_OUTPUT_TX_KEY: [u8; 32] = [11u8; 32];
+
+    fn test_account_blob() -> AllKeysBlob {
+        let (_master, blob) =
+            generate_account_from_raw_seed(&PENDING_TX_TEST_RAW_SEED, DerivationNetwork::Testnet)
+                .expect("testnet raw32 rederivation succeeds");
+        blob
+    }
+
+    /// Primary-claim spend public key (`D + m₀·G`) so bundle recovery matches on-chain outputs.
+    fn test_recipient_spend_pk() -> [u8; 32] {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use curve25519_dalek::scalar::Scalar;
+        use shekyl_crypto_pq::output_claim::{output_spend_offset_scalar, PRIMARY_CLAIM_INDEX_LE};
+        use zeroize::Zeroizing;
+
+        let blob = test_account_blob();
+        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
+            *blob.view_sk.as_canonical_bytes(),
+        ));
+        let spend_public = CompressedEdwardsY(*blob.spend_pk.as_canonical_bytes())
+            .decompress()
+            .expect("spend_pk decompresses");
+        let m = output_spend_offset_scalar(&view_scalar, &PRIMARY_CLAIM_INDEX_LE);
+        (spend_public + (&m * ED25519_BASEPOINT_TABLE))
+            .compress()
+            .to_bytes()
+    }
+
+    fn test_payment_address() -> String {
+        let blob = test_account_blob();
+        ShekylAddress::new(
+            Network::Mainnet,
+            test_recipient_spend_pk(),
+            *blob.view_pk.as_canonical_bytes(),
+            blob.ml_kem_ek.to_vec(),
         )
-        .expect("rederive_account against fakechain raw32 seed");
-        KeyEngineHandle::spawn(blob)
+        .encode()
+        .expect("encode payment address for test wallet")
+    }
+
+    /// Spawn a `KeyActor` over the pending-tx test blob.
+    fn test_signer_handle() -> KeyEngineHandle {
+        KeyEngineHandle::spawn(test_account_blob())
     }
 
     fn test_ledger() -> LocalLedger {
@@ -1111,6 +1240,18 @@ mod tests {
         FixedFeeSnapshotSource::new(test_fee_estimates())
     }
 
+    struct TestTransactionSubmitter;
+
+    impl TransactionSubmitter for TestTransactionSubmitter {
+        async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
+            Ok(TxHash(shekyl_crypto_hash::cn_fast_hash(&tx_bytes)))
+        }
+    }
+
+    fn test_submitter() -> Arc<TestTransactionSubmitter> {
+        Arc::new(TestTransactionSubmitter)
+    }
+
     /// Smoke test: constructor succeeds and the engine's state
     /// initializes to the (γ) empty-collections baseline.
     #[tokio::test]
@@ -1121,6 +1262,7 @@ mod tests {
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             test_fee_snapshot_source(),
+            test_submitter(),
             Arc::new(test_ledger()),
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
@@ -1135,25 +1277,40 @@ mod tests {
     }
 
     fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredWalletOutput {
-        use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use curve25519_dalek::scalar::Scalar;
+        use shekyl_crypto_pq::output::construct_output;
         use shekyl_oxide::primitives::Commitment;
         use shekyl_scanner::{RecoveredWalletOutput, WalletOutput};
 
-        let mut bytes = [0u8; 32];
-        bytes[..8].copy_from_slice(&global_index.to_le_bytes());
-        bytes[8] = seed;
-        let scalar = Scalar::from_bytes_mod_order(bytes);
-        let key = &scalar * ED25519_BASEPOINT_TABLE;
+        let blob = test_account_blob();
+        let mut tx_hash = [0u8; 32];
+        tx_hash[..8].copy_from_slice(&global_index.to_le_bytes());
+        tx_hash[8] = seed;
+        let output_index = u64::from(seed);
+        let constructed = construct_output(
+            &TEST_OUTPUT_TX_KEY,
+            &blob.x25519_pk,
+            &blob.ml_kem_ek,
+            &test_recipient_spend_pk(),
+            amount,
+            output_index,
+        )
+        .expect("construct_output for test wallet output");
+        let key = CompressedEdwardsY(constructed.output_key)
+            .decompress()
+            .expect("output key decompresses");
+        let commitment = Commitment {
+            mask: Scalar::from_canonical_bytes(constructed.z).expect("mask canonical"),
+            amount,
+        };
         let base = WalletOutput::new_for_test(
-            [seed; 32],
-            0,
+            tx_hash,
+            output_index,
             global_index,
             key,
             Scalar::ZERO,
-            Commitment {
-                mask: Scalar::ONE,
-                amount,
-            },
+            commitment,
             None,
         );
         RecoveredWalletOutput::new_for_test(base, amount)
@@ -1186,39 +1343,68 @@ mod tests {
             );
         }
 
-        // Scan-only test paths skip the merge post-pass; seed signing fields
-        // so `assemble_tx_to_sign` can run in build tests.
-        use shekyl_crypto_pq::{
-            handle::derive_output_handle, kem::HybridCiphertext, key_image::KeyImage,
-        };
-        const VIEW_SECRET: [u8; 32] = [0xAB; 32];
+        // Scan-only test paths skip the merge post-pass; align on-chain fields
+        // with `construct_output` so the 2a-3 sign bridge can run.
+        use shekyl_crypto_pq::handle::derive_output_handle;
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+        use shekyl_crypto_pq::output::{compute_output_key_image, construct_output};
+        use shekyl_generators::biased_hash_to_point;
+
+        let blob = test_account_blob();
+        let local = LocalKeys::from_test_seed(PENDING_TX_TEST_RAW_SEED);
         let transfer_count = ledger_block.transfer_count();
         for i in 0..transfer_count {
             let Some(td) = ledger_block.transfer_mut(i) else {
                 continue;
             };
-            td.source_ciphertext = Some(HybridCiphertext {
-                x25519: [0x11; 32],
-                ml_kem: vec![0x22; 8],
-            });
+            let amount = td.amount().to_raw();
+            let output_index = td.internal_output_index;
+            let constructed = construct_output(
+                &TEST_OUTPUT_TX_KEY,
+                &blob.x25519_pk,
+                &blob.ml_kem_ek,
+                &test_recipient_spend_pk(),
+                amount,
+                output_index,
+            )
+            .expect("construct_output for test ledger output");
+
+            let ciphertext = HybridCiphertext {
+                x25519: constructed.kem_ciphertext_x25519,
+                ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+            };
+            td.source_ciphertext = Some(ciphertext.clone());
             td.output_handle = Some(derive_output_handle(
-                &VIEW_SECRET,
+                blob.view_sk.as_canonical_bytes(),
                 &td.tx_hash,
-                td.internal_output_index,
+                output_index,
             ));
-            if td.key_image.is_none() {
-                let mut ki_bytes = [0x33; 32];
-                ki_bytes[0] = u8::try_from(i & 0xFF).unwrap_or(0x33);
-                let ki = KeyImage::from_canonical_bytes(ki_bytes);
-                indexes.set_key_image(ledger_block, i, ki);
-            }
+
+            let bundle = local
+                .derive_primary_source_secrets_bundle(&ciphertext, output_index)
+                .expect("derive secrets for test output");
+            let combined: [u8; 64] = bundle.combined_ss[..64]
+                .try_into()
+                .expect("combined_ss length");
+            let hp = biased_hash_to_point(constructed.output_key)
+                .compress()
+                .to_bytes();
+            let ki = compute_output_key_image(
+                &combined,
+                output_index,
+                blob.spend_sk.as_canonical_bytes(),
+                &hp,
+            )
+            .expect("key image for test output")
+            .key_image;
+            indexes.set_key_image(ledger_block, i, ki);
         }
     }
 
     fn standard_request(amount: u64) -> TxRequest {
         TxRequest {
             recipients: vec![TxRecipient {
-                address: "test_address".to_string(),
+                address: test_payment_address(),
                 amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
@@ -1230,6 +1416,7 @@ mod tests {
         WalletGreedyOutputSelector,
         DaemonFeeEstimator,
         FixedFeeSnapshotSource,
+        TestTransactionSubmitter,
         LocalLedger,
     >;
 
@@ -1239,6 +1426,7 @@ mod tests {
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             test_fee_snapshot_source(),
+            test_submitter(),
             ledger,
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
@@ -1255,6 +1443,7 @@ mod tests {
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             test_fee_snapshot_source(),
+            test_submitter(),
             ledger,
             sink,
             ReservationTTLConfig::default(),
@@ -1268,8 +1457,8 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 12_000),
-                make_recovered_output(2, 101, 6_000),
+                make_recovered_output(1, 100, 50_000),
+                make_recovered_output(2, 101, 30_000),
             ],
             20,
         );
@@ -1283,8 +1472,8 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 12_000),
-                make_recovered_output(2, 101, 6_000),
+                make_recovered_output(1, 100, 50_000),
+                make_recovered_output(2, 101, 30_000),
             ],
             20,
         );
@@ -1298,10 +1487,36 @@ mod tests {
             built.fee_atomic_units > AtomicUnits::ZERO,
             "fee estimator returns a positive fee from the test snapshot"
         );
+        assert!(
+            !built.tx_bytes.is_empty(),
+            "2a-3 build produces non-empty signed tx bytes"
+        );
+        {
+            use shekyl_oxide::transaction::Transaction;
+            let mut cursor: &[u8] = &built.tx_bytes;
+            let tx = Transaction::read(&mut cursor).expect("built tx parses");
+            let Transaction::V2 { prefix, .. } = &tx;
+            let n_in = prefix.inputs.len();
+            let n_out = prefix.outputs.len();
+            let predicted = crate::engine::tx_fee_model::predict_weight(
+                n_in,
+                n_out,
+                1,
+                built.fee_atomic_units.to_raw(),
+            );
+            assert_eq!(
+                predicted,
+                tx.weight(),
+                "predict_weight matches Transaction::weight() on build path"
+            );
+        }
         assert_eq!(pending.outstanding(), 1);
 
         let tx_hash = pending.submit(built.id).await.expect("submit ok");
-        assert_eq!(&tx_hash.0[..8], &built.id.raw().to_le_bytes());
+        assert_eq!(
+            tx_hash,
+            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+        );
         assert_eq!(pending.outstanding(), 0);
 
         let spent = pending
@@ -1323,8 +1538,8 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 12_000),
-                make_recovered_output(2, 101, 6_000),
+                make_recovered_output(1, 100, 50_000),
+                make_recovered_output(2, 101, 30_000),
             ],
             20,
         );
@@ -1352,7 +1567,7 @@ mod tests {
         populate_ledger(
             ledger.as_ref(),
             1,
-            vec![make_recovered_output(1, 100, 10_000)],
+            vec![make_recovered_output(1, 100, 50_000)],
             20,
         );
         let pending = test_pending_tx(Arc::clone(&ledger));
@@ -1372,6 +1587,7 @@ mod tests {
             state.in_flight.insert(
                 built.id,
                 InFlightSubmit {
+                    tx_bytes: held.tx_bytes,
                     snapshot_id: held.snapshot_id,
                     created_at: held.created_at,
                     submitted_at: Instant::now(),
