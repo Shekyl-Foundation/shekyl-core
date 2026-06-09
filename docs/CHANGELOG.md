@@ -4,6 +4,13 @@
 
 ### Added
 
+- **docs: Round 4 subaddress design closure (FA-9 / FA-10).**
+  New [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) — pit-of-success vs
+  adversary, T6/T7, R2-F9 phishing tier. FA-10 cooperative attribution
+  foundation pin in [`POST_QUANTUM_CRYPTOGRAPHY.md`](POST_QUANTUM_CRYPTOGRAPHY.md).
+  FA-4 recorded closed (FA-7 + §5.7.8/§5.7.9); `USER_GUIDE.md` Monero
+  subaddress copy removed. `SUBADDRESS_UNDER_PQC.md` §9–§11 Round 4 closed.
+
 - **curve-tree: CT-2 Round 1 close-out.**
   Tier-A boundary pin (`last_empty=60`, `first_drain=61`), fixture provenance
   baseline, Tier-B `#[ignore]` drift-canary scaffold (`recon_tier_b.rs`),

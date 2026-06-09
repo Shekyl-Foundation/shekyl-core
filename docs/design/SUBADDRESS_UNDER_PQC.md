@@ -1,6 +1,7 @@
 # Subaddress mechanism under PQC — design round
 
-**Status.** **Round 3 closed** (2026-06-08). **Round 4** scoped below (§10.1).
+**Status.** **Round 4 closed** (2026-06-09). Subaddress design series complete
+for V3.0 genesis wire; cooperative UX sequencing remains in Phase 2c/4b docs.
 **5-T-substrate adopted** (§6.4, 2026-05-31).
 **Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
 at launch; payment-request / meaningful-tag UX behind product flag (later).
@@ -11,8 +12,9 @@ T6 closed on account path; FA-6b genesis wire pinned).
 **R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
 End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**
 (pin): address-knowledge / phishing tier (§5.7.12) — dust-tracking class
-closed; T6 harvest path named. FA-9 propagates FA-6 residuals
-post-implementation. Spec-first.
+closed; T6 harvest path named. **FA-9** landed
+[`docs/THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) (2026-06-09).
+Spec-first.
 Target: V3.0 pre-genesis.
 
 **Provenance.** Surfaced during Stage 2 `KeyEngine` actor pre-flight
@@ -1741,8 +1743,10 @@ withdrawn for V3.0 (would accept hard-fork risk the pin was meant to prevent).
 > (`enc_label` + `label_tag`, §5.7.11). Plaintext is either a logical tag or
 > `SENTINEL_PLAINTEXT`, indistinguishable on wire. Wallet UX for payment
 > requests and meaningful tags is **not** required at launch; **sentinel-only
-> wallets are consensus-valid.** Propagate to `POST_QUANTUM_CRYPTOGRAPHY.md`
-> during Round-4 doc sweep; threat-model wargaming (FA-9) follows.
+> wallets are consensus-valid.** Propagated to
+> [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md) §Cooperative
+> attribution foundation pin (FA-10, 2026-06-09); threat-model wargaming in
+> [`THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) (FA-9).
 
 | Track | Wire | Wallet at V3.0 launch | Status |
 |-------|------|----------------------|--------|
@@ -1865,13 +1869,13 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-1 | Phase 2b planning (`StakeEngine`) | **Confirmed §3.7** — primary-address receive; no subaddress indices |
 | FA-2 | KeyEngine implementation PR | **Delete** subaddress surface per §6.2; do **not** implement `derive_subaddress(Recipient)` |
 | FA-3 | `STAGE_1_PR_3_KEY_ENGINE.md` | §3.1.3 superseded banner → this doc |
-| FA-4 | `POST_QUANTUM_CRYPTOGRAPHY.md` / user docs | **Reusable-address privacy** product principle (R2-F1); drop subaddress-per-invoice narrative; T2 disclosure if multi-account |
+| FA-4 | Design docs + GUI spec (FA-7) | **Closed** (2026-06-07): R2-F1/R2-F7 in §5.7.8–§5.7.9, `V3_WALLET_DECISION_LOG.md`, `WALLET_REWRITE_PLAN.md`; `USER_GUIDE.md` scrubbed 2026-06-09 (stale-doc hygiene) |
 | FA-5 | `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 / §8.2 | **Delete** `AuditSubaddressSecret` disposition — moot under End-state 5 |
 | FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Ship at genesis** — §3.1 verified; §8.7 budget fail (ship FA-6); §10.1 rejected; **FA-6b** multisig hints separate |
 | FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | **Landed on `dev` 2026-06-07** — End-state 5 binding; drop `create_subaddress`; payment requests + URI labels (§5.7.2) |
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
-| FA-9 | Threat-model / user docs (`POST_QUANTUM_CRYPTOGRAPHY.md` or new `docs/THREAT_MODEL_WALLET.md` §) | **In progress.** Propagate §4.6–§4.8, **R2-F9** (§5.7.12): pit-of-success vs adversary; marketing split; address substitution; dust non-oracle; **T6 ↔ phishing harvest** framing; liveness + label-injection hygiene |
-| FA-10 | Foundation pin (`POST_QUANTUM_CRYPTOGRAPHY.md` or `THREAT_MODEL_WALLET.md`) | **Adopted §6.4 (2026-05-31).** Propagate pin prose in Round-4 sweep; wargaming after 1–4 |
+| FA-9 | [`docs/THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) | **Closed** (2026-06-09): §4.6–§4.8, R2-F9 (§5.7.12), T6 post-FA-6 framing, pit-of-success vs adversary |
+| FA-10 | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md) §Cooperative attribution foundation pin | **Closed** (2026-06-09): §6.4 pin prose propagated |
 | FA-11 | Output / RCT spec + verifier | §5.7.10: `enc_label` layout; sentinel encrypt-per-output; bind in tx hash, **not** FCMP++ leaf; amend `rctSigBase` / consensus docs |
 
 ---
@@ -1884,7 +1888,7 @@ V4 removes hybrid KEM from addresses entirely.
 | **1 — Challenge pricing & priority** | **Closed** | End-state 4 dominated by 1 (R1-F1 inverts PQ premise; R1-F3 misattribution). **R1-F5 layer separation:** T1 is output-layer, not subaddress-layer; subaddresses serve J1/J2/J3. Option A fails J1 (R1-F2). T2 pin deferred to Round 2. View-tag (T6) elevated to same impossibility shape as R1-F2 (§4.4). Per-subaddress isolation counterexamples negative (R1-F6). |
 | **2 — Usability + End-state 5 + T2 pin** | **Closed** (R2-F2 + R2-F9) | **R2-F1** product principle. **End-state 5 minimal** **shipped decision.** **§4.6 T2 PINNED.** **R2-F2** + **R2-F9** closed 2026-05-31. **T6** → FA-6/FA-9. |
 | **3 — Spec closure** | **Closed** (2026-06-08) | 5-T + FA-11 wire; FA-2/FA-8 PRs [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) / [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113); FA-6 wire + §8.7 disposition (`FA-6_CLOSEOUT.md`); FA-6b genesis wire pin (§5.4.1); account KDF deferred P3. |
-| **4 — Closure + forward propagation** | **Scoped** (§10.1) | Consensus-invisible doc sweep + adversarial record; **not** genesis wire. Parallel tracks outside this round: CT-2, 2A send-path, 2B stake. |
+| **4 — Closure + forward propagation** | **Closed** (2026-06-09) | FA-9 (`THREAT_MODEL_WALLET.md`), FA-10 (`POST_QUANTUM_CRYPTOGRAPHY.md`), FA-4 recorded closed (FA-7 + §5.7.8/§5.7.9); §11 checkbox. Parallel: 2A, 2B, CT-5. |
 
 ### 10.1 Round 4 scope (defined 2026-06-08)
 
@@ -1911,12 +1915,13 @@ must not be confused with reopening genesis wire.
 | **FA-6 wire / §8.7 disposition** | Closed Round 3 — `FA-6_CLOSEOUT.md` |
 | **FA-6b hint re-key implementation** | V3.1 before multisig user-ship; wire pin closed Round 3 |
 | **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
-| **CT-2 Round 1** | Curve-tree client arc; ungates 2A DoD — `CT2_DRAIN_ORDER.md` |
+| **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
 | **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
 | **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
 
-**Round 4 definition of done:** FA-9 + FA-10 + FA-4 landed; §11 adversarial
-record checkbox closed; no genesis wire item remains under "moved to Round 4."
+**Round 4 definition of done:** **Met** (2026-06-09). FA-9 + FA-10 landed;
+FA-4 closed at design layer (FA-7); §11 checkbox closed; no genesis wire item
+under "moved to Round 4."
 
 **Reopen Round 4 scope** only if a new **consensus-visible** wallet privacy
 surface emerges (substrate change per `21-reversion-clause-discipline.mdc`).
@@ -1981,7 +1986,9 @@ From `docs/FOLLOWUPS.md`, checked at **design closure** (after Round 4):
 - [x] (f) R2-F8: §6.4 **5-T adopted**; §5.7.11 logical tags; sentinel-only launch
 - [x] (g) FA-11: RCT + HKDF + verifier + KATs for `enc_label`
 - [x] Round 3 adversarial record — §10 (FA-6 close-out, FA-6b wire pin, 5-T + FA-11)
-- [ ] Round 4 adversarial record — §10.1 (FA-9/FA-10/FA-4 propagation)
+- [x] Round 4 adversarial record — §10.1 (FA-9/FA-10/FA-4 propagation;
+  `THREAT_MODEL_WALLET.md`, `POST_QUANTUM_CRYPTOGRAPHY.md` FA-10 pin, FA-4 via
+  FA-7 + §5.7.8/§5.7.9, 2026-06-09)
 - [x] Documentation: STAGE_1 §3.1.3 superseded banner (FA-7); `WALLET_REWRITE_PLAN` End-state 5 (FA-7); FOLLOWUPS + §9 table updated 2026-06-07. **Remaining:** cooperative UX sequencing in Phase 2c/4b docs as those phases land.
 
 **Explicitly out of scope for this doc series:** Stage 2 actor code changes;
