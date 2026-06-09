@@ -4899,6 +4899,27 @@ one place to confirm each item's relationship to the wallet stack.
   references: decision log *"Wallet → Engine rename"* (2026-04-27)
   §"Deferred work" entry 1; CHANGELOG `[Unreleased]` BREAKING block.
 
+- **Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after
+  `wallet2` cutover (Monero-era misnomer).** Disposition pinned in
+  [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
+  (2026-06-09). Summary: April `ct_signatures` alias fixes RCT→CT only;
+  verifier module target is `ct_semantics` (not `ct_signatures`); wire tags,
+  C++ identifiers, and Rust vocabulary have separate cost curves; Rust uses
+  Shekyl-native names now and maps at FFI only.
+
+  *Trigger:* **`wallet2.cpp` retirement** (Phase 5) — not a rename PR before
+  then. Rust-side naming discipline is effective immediately per the pin.
+
+  *Target:* **V3.2** — [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+  Phase 5. Scoped rename PR(s) at cutover; no rename riding feature work.
+
+  *Definition of done:* per pin §5 — delete construction stubs; C++ rename
+  gated on byte-identical round-trip; wire-tag changes update KATs at genesis
+  definition; `STRUCTURAL_TODO` updated.
+
+  *Reopening criterion:* new production `rctSigs` / `rct::` accretion after
+  Phase 5 → immediate rename PR (`21-reversion-clause-discipline.mdc`).
+
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names
   (folded into Phase 4b's Shekyl-native RPC method-set work).** The
   `2026-04-27` Wallet → Engine rename did not touch the C++ JSON-RPC
@@ -5241,19 +5262,12 @@ one place to confirm each item's relationship to the wallet stack.
      so a fourth "defer again to V3.3" disposition is allowed only
      with a written reason that does not reduce to cherry-pick-risk.
 
-  2. **`rct::` → `ct::` namespace rename** — the type-alias bridge
-     `using ct_signatures = rct::rctSig;` ships today
-     ([`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"`rct_signatures`
-     field name is a Monero-era misnomer — partially addressed"); the
-     full caller migration and the namespace rename in
-     `src/fcmp/rctTypes.h` / `rctOps.h` / `rctSigs.h` are currently
-     V4-targeted on the same "end of Monero upstream activity"
-     premise. Disposition rule for V3.2: confirm or revise the V4
-     target. If the framing-note premise holds, the rename is
-     orthogonal to V3.2 ship-readiness and can stay V4. If the V3.x
-     line accumulates more `rct::` sightings in fresh code, the
-     rename's deferral cost is rising and the V4 target should
-     compress to V3.x.
+  2. **`rct::` → `ct::` namespace rename** — disposition **revised**
+     (2026-06-09): full pin at
+     [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md).
+     `ct_signatures` alias is not the verifier-module answer; `rctSigs` →
+     `ct_semantics` at cutover. Trigger: `wallet2` gone (V3.2 Phase 5).
+     Rust vocabulary effective now; no rename PR pre-cutover.
 
   Cross-references (by section header, robust against line drift):
   [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) framing note (top of

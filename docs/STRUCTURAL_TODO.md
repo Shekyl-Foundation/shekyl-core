@@ -520,8 +520,9 @@ audit finding.
 
 ### `rct_signatures` field name is a Monero-era misnomer — partially addressed
 **Priority**: Low — cosmetic, but misleading.
-**Target**: V4 (full namespace rename deferred; revisit for V3.2
-scheduled in `docs/FOLLOWUPS.md`).
+**Target**: V3.2 Phase 5 (`wallet2.cpp` retirement). **Disposition pin:**
+[`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
+(2026-06-09). No rename PR before cutover; Rust vocabulary effective now.
 
 `transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
 signatures. In Shekyl v3, the only accepted types are `RCTTypeNull`
@@ -538,13 +539,12 @@ All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 deserialization. The name "rct" (Ring Confidential Transactions) is
 misleading since the ring component no longer exists.
 
-**Status (April 2026):** `using ct_signatures = rct::rctSig;` type alias
-added in `cryptonote_basic.h`. New code should use `ct_signatures` for
-the type. The full caller migration and `rct::` namespace rename to
-`ct::` are deferred to V4. The rationale cited "end of Monero upstream
-cherry-picks" as a trigger; per the framing note above that cost is
-largely notional, and the decision is scheduled for a V3.2 revisit
-tracked in `docs/FOLLOWUPS.md`.
+**Status (April 2026, revised June 2026):** `using ct_signatures =
+rct::rctSig;` in `cryptonote_basic.h` fixes **RCT → CT** (no ring). It does
+**not** fix **signatures** in the verifier module name — `rctSigs` targets
+`ct_semantics`, not `ct_signatures`. Three surfaces (wire tags, C++ ids,
+Rust/FFI) have different timing; see the pin. C++ rename triggers on
+`wallet2` gone; new Rust code uses Shekyl-native names and maps at FFI.
 
 The `rct::` namespace (`src/fcmp/rctTypes.h`, `rctOps.h`, `rctSigs.h`)
 has the same problem — it was renamed from `ringct/` to `fcmp/` at the

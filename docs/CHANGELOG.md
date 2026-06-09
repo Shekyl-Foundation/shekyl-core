@@ -4,6 +4,12 @@
 
 ### Added
 
+- **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
+  Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
+  alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust
+  vocabulary effective now across FFI; no rename PR pre-Phase 5. Updates
+  `FOLLOWUPS.md` and `STRUCTURAL_TODO.md`.
+
 - **engine: Phase 2a-4 — TestDaemon fee-bound build→submit; engine send substrate
   complete.** `daemon_fee_estimator_maps_test_daemon_priority_tiers` and Custom
   sanity-ceiling unit tests; output locks reserved before async sign with
