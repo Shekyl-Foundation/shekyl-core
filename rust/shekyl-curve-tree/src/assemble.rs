@@ -73,7 +73,8 @@ impl CurveTreeClient {
         // reconstructions of the most expensive work on the spend path. The
         // layer stack here *is* the integrity gate: its top node is the root
         // we compare against the consensus header.
-        let stream = assemble_leaf_stream(&self.entries, cutoff);
+        let drained = self.drained_entries_through(cutoff);
+        let stream = assemble_leaf_stream(&drained, cutoff);
         let layers = build_layers(&stream);
 
         // Never assemble against a tree we cannot reproduce (§3.3). Mirror

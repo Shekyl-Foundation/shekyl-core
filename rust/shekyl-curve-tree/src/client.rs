@@ -51,6 +51,7 @@ use crate::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
     root_from_scalars, TxOutputs,
 };
+use crate::store::LeafStore;
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
@@ -112,19 +113,24 @@ pub enum ClientError {
     },
 }
 
-/// Block-derived curve-tree reconstruction over synced blocks (CT-3).
+/// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
 ///
-/// Holds the accumulated drained-leaf entries and the running global
-/// output index, both derived purely from the replayed block sequence.
-/// Construct with [`Self::from_blocks`] (or [`Self::new`] +
-/// [`Self::ingest_block`]) and reconstruct/verify a root at a reference
-/// height.
-#[derive(Clone, Debug, Default)]
+/// Holds leaf candidates and mirrors drained leaves into the store on each
+/// [`Self::ingest_block`]. Construct with [`Self::from_blocks`] (or
+/// [`Self::new`] + ingest) and reconstruct/verify a root at a reference height.
+#[derive(Debug)]
 pub struct CurveTreeClient {
-    // `pub(crate)` so the sibling `assemble` module reads the drained-leaf
-    // entries when building a membership path. Not part of the public API.
+    store: LeafStore,
+    // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
+    // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
     pub(crate) next_gindex: u64,
+}
+
+impl Default for CurveTreeClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CurveTreeClient {
@@ -132,7 +138,11 @@ impl CurveTreeClient {
     /// height is the empty-tree root until the first leaf drains.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            store: LeafStore::open_ephemeral().expect("ephemeral leaf store"),
+            entries: Vec::new(),
+            next_gindex: 0,
+        }
     }
 
     /// Build a client by replaying `blocks` in order from genesis. This is
@@ -141,6 +151,10 @@ impl CurveTreeClient {
     #[must_use]
     pub fn from_blocks(blocks: &[BlockLeaves<'_>]) -> Self {
         let mut client = Self::new();
+        client
+            .store
+            .clear()
+            .expect("clear leaf store for chain replay");
         for block in blocks {
             client.ingest_block(*block);
         }
@@ -184,6 +198,37 @@ impl CurveTreeClient {
 
         self.next_gindex =
             collect_block_leaves(block.height, &txs, self.next_gindex, &mut self.entries);
+        self.sync_store(block.height);
+    }
+
+    fn sync_store(&mut self, tip_height: u64) {
+        let through = Self::drained_through(tip_height);
+        let drained: Vec<LeafEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.maturity <= through)
+            .copied()
+            .collect();
+        let stored = self.store.leaf_count().unwrap_or(0);
+        if drained.len() as u64 > stored {
+            let start = usize::try_from(stored).expect("stored leaf count fits usize");
+            self.store
+                .append_drained(&drained[start..], tip_height)
+                .expect("append drained leaves");
+        }
+    }
+
+    /// Drained leaves through `maturity_cutoff` (store-backed; CT-1).
+    pub(crate) fn drained_entries_through(&self, maturity_cutoff: u64) -> Vec<LeafEntry> {
+        self.store
+            .drained_entries_through(maturity_cutoff)
+            .unwrap_or_else(|_| {
+                self.entries
+                    .iter()
+                    .filter(|e| e.maturity <= maturity_cutoff)
+                    .copied()
+                    .collect()
+            })
     }
 
     /// The drain cutoff for a reference height: a leaf maturing at `m`
@@ -206,8 +251,16 @@ impl CurveTreeClient {
     /// (`CT2_DRAIN_ORDER.md` §5).
     #[must_use]
     pub fn root_at(&self, reference_height: u64) -> [u8; 32] {
-        let scalars = assemble_leaf_stream(&self.entries, Self::drained_through(reference_height));
-        root_from_scalars(&scalars)
+        let through = Self::drained_through(reference_height);
+        let n = self
+            .entries
+            .iter()
+            .filter(|e| e.maturity <= through)
+            .count() as u64;
+        self.store.root_at_count(n).unwrap_or_else(|_| {
+            let scalars = assemble_leaf_stream(&self.entries, through);
+            root_from_scalars(&scalars)
+        })
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`
