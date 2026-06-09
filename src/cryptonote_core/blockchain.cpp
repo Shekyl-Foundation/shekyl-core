@@ -3785,7 +3785,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           tvc.m_invalid_output = true;
           return false;
         }
-        if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty() || !rv.p.pseudoOuts.empty())
+        if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty()
+          || !rv.pseudoOuts.empty() || !rv.p.pseudoOuts.empty())
         {
           MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
             << " must not carry RCT output material");
@@ -4813,8 +4814,6 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     MERROR_VER("Archival serve-credit: unexpected vin wire tag");
     return false;
   }
-  const std::string payload = wire.substr(1);
-
   shekyl_archival_verify_ctx ctx{};
   ctx.current_height = current_height;
   ctx.settlement_epoch = resp.settlement_epoch;
@@ -4827,7 +4826,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.leaf_layer_scalars_len = leaf_layer_scalars.size();
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
-    reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), &ctx);
+    reinterpret_cast<const uint8_t*>(wire.data() + 1), wire.size() - 1, &ctx);
   if (verify_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
   {
     MERROR_VER("Archival serve-credit FFI verify failed (code " << (int)verify_rc << ")");

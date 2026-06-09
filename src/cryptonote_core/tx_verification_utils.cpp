@@ -127,6 +127,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.outPk.empty()
                     || !rv.p.bulletproofs_plus.empty()
                     || !rv.p.fcmp_pp_proof.empty()
+                    || !rv.pseudoOuts.empty()
                     || !rv.p.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsFeeOnly(rv))

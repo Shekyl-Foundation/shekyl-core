@@ -271,6 +271,7 @@ namespace
         CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
             "verRctSemanticsFeeOnly called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
+        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
             false, "Mismatched sizes of outPk and bulletproofs_plus");
