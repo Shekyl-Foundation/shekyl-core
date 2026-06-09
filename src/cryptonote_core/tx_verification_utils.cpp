@@ -125,7 +125,8 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     ++bond_post_count;
                     archival_bond_post_index = i;
                 }
-                else if (!std::holds_alternative<txin_to_key>(in))
+                else if (!std::holds_alternative<txin_to_key>(in)
+                    && !std::holds_alternative<txin_gen>(in))
                     bond_post_count = 2;
             }
             is_archival_bond_post_tx = (bond_post_count == 1);
