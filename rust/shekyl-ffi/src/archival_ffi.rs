@@ -345,23 +345,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
         Err(code) => return code,
     };
 
-    let mut pseudo_refs = Vec::with_capacity(num_pseudo_outs);
-    for chunk in pseudo_flat.chunks_exact(32) {
-        let mut key = [0u8; 32];
-        key.copy_from_slice(chunk);
-        pseudo_refs.push(key);
-    }
-    let pseudo_ptrs: Vec<&[u8; 32]> = pseudo_refs.iter().collect();
-
-    let mut mask_refs = Vec::with_capacity(num_out_masks);
-    for chunk in mask_flat.chunks_exact(32) {
-        let mut key = [0u8; 32];
-        key.copy_from_slice(chunk);
-        mask_refs.push(key);
-    }
-    let mask_ptrs: Vec<&[u8; 32]> = mask_refs.iter().collect();
-
-    match verify_bond_post_rct_balance(&pseudo_ptrs, &mask_ptrs, txn_fee, bond_credit, bond_debit) {
+    match verify_bond_post_rct_balance(pseudo_flat, mask_flat, txn_fee, bond_credit, bond_debit) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK,
         Err(e) => map_bond_rct_balance_error(e),
     }

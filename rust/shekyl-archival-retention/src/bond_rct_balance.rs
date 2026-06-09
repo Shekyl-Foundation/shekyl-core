@@ -44,10 +44,24 @@ fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, BondRctBalanceErro
     Ok(point)
 }
 
-/// Verify the bond-post RCT balance equation for flattened 32-byte commitment keys.
+fn sum_commitments_flat(flat: &[u8]) -> Result<EdwardsPoint, BondRctBalanceError> {
+    if !flat.len().is_multiple_of(32) {
+        return Err(BondRctBalanceError::InvalidPoint);
+    }
+    let mut sum = EdwardsPoint::default();
+    for chunk in flat.chunks_exact(32) {
+        let key: &[u8; 32] = chunk
+            .try_into()
+            .map_err(|_| BondRctBalanceError::InvalidPoint)?;
+        sum += decompress_point(key)?;
+    }
+    Ok(sum)
+}
+
+/// Verify the bond-post RCT balance equation for flattened `N × 32` commitment keys.
 pub fn verify_bond_post_rct_balance(
-    pseudo_outs: &[&[u8; 32]],
-    out_masks: &[&[u8; 32]],
+    pseudo_outs_flat: &[u8],
+    out_masks_flat: &[u8],
     txn_fee: u64,
     bond_credit: u64,
     bond_debit: u64,
@@ -56,17 +70,11 @@ pub fn verify_bond_post_rct_balance(
         return Err(BondRctBalanceError::BothTermsNonzero);
     }
 
-    let mut sum_out = EdwardsPoint::default();
-    for mask in out_masks {
-        sum_out += decompress_point(mask)?;
-    }
+    let mut sum_out = sum_commitments_flat(out_masks_flat)?;
     sum_out += amount_h(txn_fee);
     sum_out += amount_h(bond_credit);
 
-    let mut sum_pseudo = EdwardsPoint::default();
-    for pseudo in pseudo_outs {
-        sum_pseudo += decompress_point(pseudo)?;
-    }
+    let mut sum_pseudo = sum_commitments_flat(pseudo_outs_flat)?;
     sum_pseudo += amount_h(bond_debit);
 
     if sum_pseudo == sum_out {
@@ -93,13 +101,13 @@ mod tests {
     fn credit_term_balances_without_outputs() {
         const BOND_CREDIT: u64 = 750_000_000;
         let pseudo = h_only(BOND_CREDIT);
-        assert!(verify_bond_post_rct_balance(&[&pseudo], &[], 0, BOND_CREDIT, 0).is_ok());
+        assert!(verify_bond_post_rct_balance(&pseudo, &[], 0, BOND_CREDIT, 0).is_ok());
         assert_eq!(
-            verify_bond_post_rct_balance(&[&pseudo], &[], 0, BOND_CREDIT - 1, 0),
+            verify_bond_post_rct_balance(&pseudo, &[], 0, BOND_CREDIT - 1, 0),
             Err(BondRctBalanceError::SumMismatch)
         );
         assert_eq!(
-            verify_bond_post_rct_balance(&[&pseudo], &[], 0, 0, BOND_CREDIT),
+            verify_bond_post_rct_balance(&pseudo, &[], 0, 0, BOND_CREDIT),
             Err(BondRctBalanceError::SumMismatch)
         );
     }
@@ -110,13 +118,13 @@ mod tests {
         let mask_scalar = Scalar::from_bytes_mod_order([7u8; 32]);
         let out_mask = commit(BOND_DEBIT, mask_scalar);
         let pseudo = commit(0, mask_scalar);
-        assert!(verify_bond_post_rct_balance(&[&pseudo], &[&out_mask], 0, 0, BOND_DEBIT).is_ok());
+        assert!(verify_bond_post_rct_balance(&pseudo, &out_mask, 0, 0, BOND_DEBIT).is_ok());
         assert_eq!(
-            verify_bond_post_rct_balance(&[&pseudo], &[&out_mask], 0, BOND_DEBIT, 0),
+            verify_bond_post_rct_balance(&pseudo, &out_mask, 0, BOND_DEBIT, 0),
             Err(BondRctBalanceError::SumMismatch)
         );
         assert_eq!(
-            verify_bond_post_rct_balance(&[&pseudo], &[&out_mask], 0, 0, BOND_DEBIT - 1),
+            verify_bond_post_rct_balance(&pseudo, &out_mask, 0, 0, BOND_DEBIT - 1),
             Err(BondRctBalanceError::SumMismatch)
         );
     }
@@ -132,7 +140,7 @@ mod tests {
             b
         };
         assert_eq!(
-            verify_bond_post_rct_balance(&[&torsion], &[], 0, 0, 0),
+            verify_bond_post_rct_balance(&torsion, &[], 0, 0, 0),
             Err(BondRctBalanceError::InvalidPoint)
         );
     }
