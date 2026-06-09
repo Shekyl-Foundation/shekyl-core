@@ -184,10 +184,13 @@ fn main() {
             }
             "--path" => {
                 i += 1;
-                scan_path = args.get(i).and_then(|s| ScanPath::parse(s)).unwrap_or_else(|| {
-                    eprintln!("unknown --path value");
-                    usage();
-                });
+                scan_path = args
+                    .get(i)
+                    .and_then(|s| ScanPath::parse(s))
+                    .unwrap_or_else(|| {
+                        eprintln!("unknown --path value");
+                        usage();
+                    });
             }
             "--iterations" => {
                 i += 1;
