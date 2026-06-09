@@ -1169,8 +1169,7 @@ where
         })?;
         let BuildAssembled { tx_to_sign, meta } =
             self.build_assemble_sync(&request, fee_snapshot)?;
-        let mut reservation_cleanup =
-            BuildReservationCleanup::new(self, meta.reservation_id);
+        let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
         let signed = self
             .signer
             .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
