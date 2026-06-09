@@ -4900,6 +4900,47 @@ one place to confirm each item's relationship to the wallet stack.
   references: decision log *"Wallet → Engine rename"* (2026-04-27)
   §"Deferred work" entry 1; CHANGELOG `[Unreleased]` BREAKING block.
 
+- **Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after
+  `wallet2` cutover (Monero-era misnomer).** FCMP++ genesis transactions
+  still serialize and verify through Monero-inherited names: namespace
+  `rct::`, struct `rctSig`, module `src/fcmp/rctSigs.{h,cpp}`. That is
+  not ring-signature work anymore — MLSAG/CLSAG paths are deleted
+  (`60-no-monero-legacy.mdc`); production FCMP++ proving is Rust
+  (`shekyl_sign_fcmp_transaction`); bond-post commitment sums are Rust
+  FFI (`shekyl_archival_verify_bond_post_rct_balance`). `rctSigs` retains
+  semantic verification (balance equations, Bulletproof+ batch verify,
+  fee-only / bond-post variants) on the wire container. The name is
+  architectural drift (`16-architectural-inheritance.mdc` §"Ask why is
+  this here?"), not load-bearing cryptography.
+
+  *Deferral rationale (pre-cutover):* renaming touches device paths,
+  LMDB serialization, `tx_verification_utils`, and surviving `wallet2`
+  call sites with zero consensus benefit — rename after caller deletion
+  (`15-deletion-and-debt.mdc`).
+
+  *Target:* **V3.2** — [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+  Phase 5 (`wallet2.cpp` retirement). Do not fold into feature PRs
+  (e.g. gate-4 bond balance); own scoped migration PR with grep-derived
+  site enumeration.
+
+  *Definition of done:* (1) enumeration of `rct::` / `rctSig` / `rctSigs` /
+  `RCTType*` production symbols at cutover time; (2) Shekyl-native naming
+  landed (module + namespace + wire-facing aliases per design round — not
+  `rctSigs`); (3) no JSON-RPC-style compatibility shims unless an external
+  embedder contract requires one release of aliases (default: delete);
+  (4) [`STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"`rct_signatures` field
+  name is a Monero-era misnomer" updated. Behavior byte-identical;
+  consensus KATs unchanged.
+
+  *Reopening criterion:* any new production feature lands under `rctSigs` /
+  `rct::` naming after Phase 5 — triggers immediate rename PR rather than
+  further accretion (`21-reversion-clause-discipline.mdc`).
+
+  *Cross-references:* V3.2 audit-cluster item §"`rct::` → `ct::` namespace
+  rename" (disposition sharpened here); gate-4 `verRctSemanticsBondPost` as
+  an example of verifier logic migrating to Rust while the C++ container
+  name persists.
+
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names
   (folded into Phase 4b's Shekyl-native RPC method-set work).** The
   `2026-04-27` Wallet → Engine rename did not touch the C++ JSON-RPC
