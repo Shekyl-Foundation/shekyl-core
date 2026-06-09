@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-06-09
 
 ## Purpose
 
@@ -25,6 +25,9 @@ This document is source-of-truth for PQC-related implementation work in:
 - `src/cryptonote_basic`
 - `src/cryptonote_core`
 - `src/wallet`
+
+Wallet privacy threat-model propagation (pit-of-success vs adversary, T6/T7):
+[`docs/THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) (FA-9, Round 4).
 
 ## Reboot Assumption
 
@@ -336,8 +339,8 @@ The sender can re-derive `combined_ss` at proof time without storing it:
   `O = ho*G + B + y*T`. Validates `spend_key` is on the prime-order subgroup.
 
 - **`recover_recipient_spend_pubkey(combined_ss, output_key, output_index)`**:
-  Computes `B' = O - ho*G - y*T` for subaddress lookup. Validates the
-  recovered point is prime-order and non-identity.
+  Computes `B' = O - ho*G - y*T` (primary spend point recovery at scan time).
+  Validates the recovered point is prime-order and non-identity.
 
 - **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
   Decrypts the amount and verifies the `amount_tag`.
@@ -967,6 +970,37 @@ PQC spend/ownership authorization works alongside the FCMP++ membership proof
 layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
 spend authorization. Stealth addresses and one-time output derivation remain
 part of the privacy stack.
+
+V3.0 ships **one reusable primary address per account** (End-state 5); on-chain
+privacy is per-output, not per-address rotation. Product and adversary framing:
+[`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md).
+
+### Cooperative attribution foundation pin (FA-10)
+
+**Adopted 2026-05-31** per [`docs/design/SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md)
+§6.4. **5-T-substrate** is the genesis path; **5-N** (off-chain label only) is
+withdrawn for V3.0.
+
+> Shekyl commits at genesis to **Priority-2-clean cooperative attribution
+> substrate**: every output carries a fixed-size encrypted label field
+> (`enc_label` + `label_tag`, §5.7.11 in SUBADDRESS). Plaintext is either a
+> logical tag or `SENTINEL_PLAINTEXT`, indistinguishable on wire. Wallet UX for
+> payment requests and meaningful tags is **not** required at launch;
+> **sentinel-only wallets are consensus-valid.**
+
+| Track | Wire | Wallet at V3.0 launch |
+|-------|------|----------------------|
+| ~~**5-N**~~ | Off-chain label only | Not V3.0 |
+| **5-T-substrate** | Mandatory uniform slot + sentinel always | Sentinel-only; meaningful `REQUEST` tags + reconcile UX behind **product flag** |
+
+**What "optional behind a gate" means (and does not):**
+
+- **Means:** wallet feature flag for meaningful tags + reconcile UX.
+- **Does not mean:** optional presence of the slot on wire, URI flag to skip
+  memo, or delayed network activation — any of those would require a fork to
+  add the slot later (§4.9 fatal in SUBADDRESS).
+
+Adversary and phishing surfaces for leaked addresses: [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md).
 
 ## FFI Contract
 
