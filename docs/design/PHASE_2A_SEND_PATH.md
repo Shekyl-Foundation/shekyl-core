@@ -1,8 +1,14 @@
 # Phase 2a — refresh + send path (design)
 
-**Status:** Implementation — §10 pre-implementation checklist agreement items
-signed off (§1 DoD, §5 PR split, §9 open-question owners/targets); remaining
-unchecked §10 boxes are per-PR implementation work (2a-1…2a-4). PR 2a-1
+**Engine-layer realization of `WALLET_REWRITE_PLAN.md` Phase 2a send substrate
+(`LocalPendingTx` build/sign/wire/submit, daemon fee snapshot, reservations).
+Phase 1 `shekyl-wallet-core::Wallet` orchestrator wrapper (`build_pending_tx` /
+`submit_pending_tx`) is **out of scope** here — see `WALLET_REWRITE_PLAN.md`
+`phase2_ops_refresh_send`.**
+
+**Status:** **Engine substrate complete** (2a-1…2a-4 landed on `dev`). §10 items
+below reconciled in `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict; residuals
+named with reopening criteria. PR 2a-1
 (daemon fee snapshot + broadcast **primitives**) **merged** (`#109`); the
 `LocalPendingTx` async boundary + capability narrowing re-split into 2a-2/2a-3
 with their first consumers (see §5 re-split note).  
@@ -1582,7 +1588,7 @@ producer of `SignedProofs`-shaped material).
 | **2a-1** | Daemon fee snapshot + broadcast primitives | `daemon.rs`, `traits/daemon.rs`, `shekyl-oxide/rpc/lib.rs` | Atomic single-RPC fee snapshot (`DaemonEngine::get_fee_estimates`) + `DaemonEngine::submit_transaction` (local hash, honest-subset verdict map, `TxSubmitOutcome` variants incl. deferred `ProofStale`); `Rpc::publish_transaction` reshaped to surface the daemon relay verdict. **No `LocalPendingTx` wiring** — these are the `DaemonEngine`-trait primitives that 2a-2/2a-3 consume |
 | **2a-2** | Signing context + fee/change directive plumbing + pending-engine async wiring | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()`. **Async boundary + capability narrowing (§3.1/§3.2):** `build`/`submit` stop wrapping `std::future::ready`; capability-narrowed fee-source handle lands **with its first consumer** (the §3.3 snapshot feeding `FeeEstimationContext`) — see re-split note below |
 | **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test. **Submit async boundary + submitter capability (§3.1/§3.2):** `submit` routes real `tx_bytes` through the capability-narrowed submitter handle — lands **with its first consumer** (real bytes exist here, not before) |
-| **2a-4** | Hybrid send test + doc closeout | `local_pending_tx.rs` / `lifecycle.rs` tests, `WALLET_REWRITE_PLAN.md`, `FOLLOWUPS.md`, `CHANGELOG.md` | End-to-end `TestDaemon` build→submit; checklist §10 |
+| **2a-4** | Hybrid send test + doc closeout | `local_pending_tx.rs` tests, audit/docs | **Merged** — `TestDaemon` fee-bound build→submit; §8.1–§8.3 tests; §10 reconciliation |
 
 **Dependency:** 2a-2 and 2a-1 can overlap only if 2a-3 gates on both; default
 serial order above.
@@ -1650,8 +1656,10 @@ step 2), never read from a daemon field.
    `TestDaemon::set_fee_estimates`.
 2. **Unit:** Sanity ceiling rejects inflated priority fee.
 3. **Integration:** `build` → `submit` records one entry in `TestDaemon::submitted_count`;
-   retry submit same reservation → `AlreadyKnown`, same hash.
-4. **Property (optional in 2a-4):** Parsed tx hash stable across submit retries.
+   dedup via second `DaemonTransactionSubmitter::submit(same bytes)` → `AlreadyKnown`
+   (reservation consumed after first `pending.submit`; see audit §2a-4).
+4. **Dropped (2a-4):** Parsed tx hash stable across submit retries — vacuous under
+   reservation lifecycle; byte dedup covered by item 3; parse-back contradicts wire DoD.
 5. **Existing:** `shekyl-tx-builder` unit/property tests remain the FCMP++/BP+
    correctness gate.
 
@@ -1755,21 +1763,21 @@ step 2), never read from a daemon field.
 - [x] §1 definition of done agreed (incl. locally-computed-path reframe + real-root gating)
 - [x] §3.0 F1 decided: no per-leaf path query; bulk-leaf RPC + local assembly
 - [x] §3.0.5 F10 closed into F1; real-root validity gated on curve-tree client + Phase 6
-- [ ] §3.0.3 bulk-leaf RPC + KAT added to `SHEKYLD_PREREQUISITES.md`
-- [ ] §3.0.4 curve-tree client scoped as its own phase (effort sizing)
+- [ ] §3.0.3 bulk-leaf RPC + KAT added to `SHEKYLD_PREREQUISITES.md` (deferred)
+- [x] §3.0.4 curve-tree client scoped as its own phase (`CURVE_TREE_CLIENT.md`)
 - [x] F2 vessel pass (§3.7): field sets pinned under C1; C4/C6/C7 source-verified against `shekyl-tx-builder`
-- [ ] §3.7.3 `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` (`commitment_mask`/`amount`) (2a-3)
-- [ ] §3.7.8 C5 per-field locality assertion + structural test (payment-amount confidential/zeroized, change-amount engine-side); prove-scratch `Zeroizing` cancellation-safe (2a-2/2a-3)
+- [x] §3.7.3 `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` (2a-3)
+- [ ] §3.7.8 C5 structural SpendInput/bridge escape test (deferred; Debug redaction only today)
 - [x] §3.8 change/fee handshake pressure-tested (both-candidate-fees, engine-decides, one-bit return, two-dust-concept trap)
 - [x] §3.9 consolidated type definitions pinned (`TxToSign` + `FeeDirective` + `TxOutputContext` enum + `TxSignatures` with `fee`; no `BuildOutcome` — outcome is a `TxSignatures` projection)
 - [x] §3.8.5 canonical `dust(amount, fee_rate)` predicate (one function, two sites; `K_DUST` canonical not per-wallet; fiat-floating rejected by name; canonical-convention-not-consensus pinned)
-- [ ] §3.9 refinements: `TxOutputContext`/`TxToSign` non-`Clone` (B); `output_index` via `handle` (C); `dest` `zeroize(skip)` 2c re-audit clause (D) (2a-2/2a-3)
+- [x] §3.9 refinements B/C (2a-2/2a-3); [ ] `dest` `zeroize(skip)` 2c re-audit clause (D)
 - [x] §3.10 F4 + F8 design pass complete: W (weight predictor mirrors verified `Transaction::weight()`; only `fcmp_proof_size(n_in,tree_depth)` measured; 2a clawback ≡ 0; `+varint_len(fee)` fixpoint) → D (`dust()` + `K_DUST = 1` re-derived for uniformity + canonical `MARGINAL_INPUT_WEIGHT` at `D_ref = MAX_TREE_DEPTH`, **provisional pending KAT**) → H (surfaces)
-- [ ] §3.10.1 implement: `fcmp_proof_size` KAT over `[1,8]×[1,24]`; `predict_weight == tx.weight()` self-consistency **grid** (n_in × {N,N+1} both variants × depth × {small,large fee}) (2a-3, gated on encoder)
-- [ ] §3.10.2/3 implement: one `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT` constants; migrate `coin_select` nominal `1_000_000` to `dust()`; `FeeEstimationContext` output-shape input; `FeeDirective` population; `InsufficientFunds`; change `SubaddressIndex(0)` (2a-2/2a-3)
-- [ ] §3.7.4 confirm crypto-pq key-image derivation emits sign-bit-canonical encoding (2a-3)
+- [ ] §3.10.1 full `fcmp_proof_size` grid (depth-1 KAT landed 2a-3; depth>1 deferred)
+- [x] §3.10.2/3 implement: `dust()` / `FeeDirective` / `InsufficientFunds` / build path (2a-2/2a-3)
+- [x] §3.7.4 key-image guard + missing-KI negative test (2a-4)
 - [x] §3.2 capability-narrowed fee-source + submitter on `LocalPendingTx` (no `Arc<D>`)
-- [ ] §3.3 two-pass fee loop bounded and testable
+- [x] §3.3 two-pass fee loop bounded and testable (`converge_fee_is_stable_within_two_passes`)
 - [x] §3.3 atomic single-RPC fee snapshot; `Custom` clamped to floor+ceiling band
 - [x] §3.6 tx hash computed locally (never daemon-provided); `ProofStale` outcome
 - [x] §3.6 remote-daemon origin-leak documented in threat model
@@ -1777,7 +1785,7 @@ step 2), never read from a daemon field.
 - [x] §4 wire encoder owner agreed — byte layout owned by `shekyl-oxide`; thin `SignedProofs → Transaction::V2` adapter in `shekyl-tx-builder` `wire` module (no `shekyl-tx-wire` crate; not engine-core; not `shekyl-io`)
 - [x] §5 PR split fits branching policy
 - [x] §9 open questions have owners / Round 1 targets (incl. #5 validity horizon)
-- [ ] `WALLET_REWRITE_PLAN.md` cross-link added when 2a-1 lands
+- [x] `WALLET_REWRITE_PLAN.md` cross-link (orchestrator Phase 2a todo remains `pending`)
 
 ---
 

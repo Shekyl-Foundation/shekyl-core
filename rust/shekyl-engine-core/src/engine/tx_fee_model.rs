@@ -246,4 +246,31 @@ mod tests {
         let fee = converge_fee(&rate, 1, 2, 1, 0);
         assert!(fee > 0);
     }
+
+    /// PHASE_2A_SEND_PATH.md §8.2 — documents the **implemented** Custom-only ceiling.
+    /// Daemon-tier `DaemonFeeUnreasonable` remains a §10 security residual.
+    #[test]
+    fn custom_fee_above_sanity_ceiling_rejected() {
+        use super::fee_rate_for_priority;
+        use crate::engine::error::FeeEstimatorError;
+        use crate::engine::fee_estimator::FeePriority;
+        use crate::engine::traits::FeeEstimates;
+        use std::num::NonZeroU64;
+
+        let snapshot = FeeEstimates {
+            economy: FeeRate::new(1, 1).expect("economy"),
+            standard: FeeRate::new(10, 1).expect("standard"),
+            priority: FeeRate::new(100, 1).expect("priority"),
+            quantization_mask: 1,
+        };
+        let inflated = NonZeroU64::new(101).expect("above 100× economy at weight 1");
+        let err = fee_rate_for_priority(FeePriority::Custom(inflated), &snapshot)
+            .expect_err("custom feerate above ceiling");
+        match err {
+            FeeEstimatorError::DaemonResponseInvalid { reason } => {
+                assert!(reason.contains("sanity ceiling"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

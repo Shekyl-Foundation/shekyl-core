@@ -42,7 +42,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_engine_state::LedgerBlock;
@@ -311,6 +311,18 @@ fn release_output_locks_for(state: &mut PendingTxState, rid: ReservationId) {
     state.output_locks.retain(|_, owner| *owner != rid);
 }
 
+/// Best-effort state access for cleanup paths (sign/commit failure).
+///
+/// Mutating handlers fail loud on poison; cleanup must still release
+/// `output_locks` so a poisoned mutex does not strand spendable outputs.
+fn with_pending_tx_state_mut<R>(
+    mutex: &Mutex<PendingTxState>,
+    f: impl FnOnce(&mut PendingTxState) -> R,
+) -> R {
+    let mut state = mutex.lock().unwrap_or_else(PoisonError::into_inner);
+    f(&mut state)
+}
+
 fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
@@ -374,12 +386,72 @@ fn phase1_tx_hash(id: ReservationId) -> TxHash {
 }
 
 #[allow(private_bounds)]
-struct BuildAssembled {
-    tx_to_sign: super::traits::key::TxToSign,
+struct BuiltPendingMeta {
     fee: AtomicUnits,
     selected: SelectedOutputs,
     synced: u64,
     tip_hash: [u8; 32],
+    /// Output locks are held from assembly until `consumer_held` commit.
+    reservation_id: ReservationId,
+}
+
+/// Releases [`BuiltPendingMeta::reservation_id`] output locks unless disarmed.
+struct BuildReservationCleanup<'a, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    engine: &'a LocalPendingTx<S, O, F, FS, TS, L>,
+    reservation_id: ReservationId,
+    committed: bool,
+}
+
+impl<'a, S, O, F, FS, TS, L> BuildReservationCleanup<'a, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    fn new(engine: &'a LocalPendingTx<S, O, F, FS, TS, L>, reservation_id: ReservationId) -> Self {
+        Self {
+            engine,
+            reservation_id,
+            committed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl<S, O, F, FS, TS, L> Drop for BuildReservationCleanup<'_, S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    fn drop(&mut self) {
+        if !self.committed {
+            self.engine.release_build_reservation(self.reservation_id);
+        }
+    }
+}
+
+#[allow(private_bounds)]
+struct BuildAssembled {
+    tx_to_sign: super::traits::key::TxToSign,
+    meta: BuiltPendingMeta,
 }
 
 #[allow(private_bounds)]
@@ -712,24 +784,39 @@ where
             )
         })?;
 
+        let reservation_id = ReservationId::new(state.next_id);
+        state.next_id = state
+            .next_id
+            .checked_add(1)
+            .expect("ReservationId u64 counter overflowed within a single engine handle");
+        for index in &selected.indices {
+            state.output_locks.insert(*index, reservation_id);
+        }
+
         drop(state);
 
         Ok(BuildAssembled {
             tx_to_sign,
-            fee,
-            selected,
-            synced,
-            tip_hash,
+            meta: BuiltPendingMeta {
+                fee,
+                selected,
+                synced,
+                tip_hash,
+                reservation_id,
+            },
         })
+    }
+
+    fn release_build_reservation(&self, reservation_id: ReservationId) {
+        with_pending_tx_state_mut(&self.state, |state| {
+            release_output_locks_for(state, reservation_id);
+        });
     }
 
     fn commit_built_sync(
         &self,
         request: &TxRequest,
-        fee: AtomicUnits,
-        selected: &SelectedOutputs,
-        synced: u64,
-        tip_hash: [u8; 32],
+        meta: &BuiltPendingMeta,
         tx_bytes: Vec<u8>,
     ) -> Result<PendingTx, SendError> {
         let mut state = self.state.lock().map_err(|_| {
@@ -742,24 +829,16 @@ where
         })?;
         self.refresh_current_snapshot(&mut state);
 
-        let id = ReservationId::new(state.next_id);
-        state.next_id = state
-            .next_id
-            .checked_add(1)
-            .expect("ReservationId u64 counter overflowed within a single engine handle");
-
+        let id = meta.reservation_id;
         let snapshot_id = state.current_snapshot;
         let created_at = Instant::now();
-        for index in &selected.indices {
-            state.output_locks.insert(*index, id);
-        }
         state.consumer_held.insert(
             id,
             ConsumerHeldEntry {
                 created_at,
                 snapshot_id,
-                built_at_height: synced,
-                built_at_tip_hash: tip_hash,
+                built_at_height: meta.synced,
+                built_at_tip_hash: meta.tip_hash,
                 tx_bytes: tx_bytes.clone(),
             },
         );
@@ -775,9 +854,9 @@ where
 
         let pending = PendingTx {
             id,
-            built_at_height: synced,
-            built_at_tip_hash: tip_hash,
-            fee_atomic_units: fee,
+            built_at_height: meta.synced,
+            built_at_tip_hash: meta.tip_hash,
+            fee_atomic_units: meta.fee,
             snapshot_id,
             tx_bytes,
             recipients: summary,
@@ -788,7 +867,7 @@ where
             PendingTxDiagnostic::BuildSucceeded {
                 reservation_id: id,
                 snapshot_id,
-                outputs_count: u32::try_from(selected.indices.len()).unwrap_or(u32::MAX),
+                outputs_count: u32::try_from(meta.selected.indices.len()).unwrap_or(u32::MAX),
             },
         );
 
@@ -1088,13 +1167,9 @@ where
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
         })?;
-        let BuildAssembled {
-            tx_to_sign,
-            fee,
-            selected,
-            synced,
-            tip_hash,
-        } = self.build_assemble_sync(&request, fee_snapshot)?;
+        let BuildAssembled { tx_to_sign, meta } =
+            self.build_assemble_sync(&request, fee_snapshot)?;
+        let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
         let signed = self
             .signer
             .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
@@ -1104,7 +1179,9 @@ where
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
         let tx_bytes = signed.tx_bytes().to_vec();
-        self.commit_built_sync(&request, fee, &selected, synced, tip_hash, tx_bytes)
+        let pending = self.commit_built_sync(&request, &meta, tx_bytes)?;
+        reservation_cleanup.disarm();
+        Ok(pending)
     }
 
     fn submit(
@@ -2040,5 +2117,245 @@ mod tests {
             .discard(built.id, DiscardReason::ConsumerExplicit)
             .expect("consumer releases stale reservation");
         assert_eq!(pending.outstanding(), 0);
+    }
+
+    /// Scan ingest only — leaves `key_image == None` (production scan sentinel path).
+    fn populate_ledger_scan_only(
+        ledger: &LocalLedger,
+        block_height: u64,
+        outputs: Vec<RecoveredWalletOutput>,
+        final_height: u64,
+    ) {
+        use shekyl_scanner::{LedgerIndexesExt, Timelocked};
+
+        let mut guard = ledger.write();
+        let state = &mut *guard;
+        let ledger_block = &mut state.ledger.ledger;
+        let indexes = &mut state.indexes;
+        let timelocked = Timelocked::from_vec(outputs);
+        let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
+        let inserted_range =
+            indexes.process_scanned_outputs(ledger_block, block_height, block_hash, timelocked);
+        assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
+        for h in (block_height + 1)..=final_height {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                ledger_block,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
+    }
+
+    fn daemon_fee_estimates_distinct() -> FeeEstimates {
+        FeeEstimates {
+            economy: FeeRate::new(1, 1).expect("economy rate"),
+            standard: FeeRate::new(10, 1).expect("standard rate"),
+            priority: FeeRate::new(100, 1).expect("priority rate"),
+            quantization_mask: 1,
+        }
+    }
+
+    type DaemonBackedPendingTx = LocalPendingTx<
+        LocalSigner,
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        crate::engine::fee_snapshot::DaemonFeeSnapshotSource<
+            crate::engine::test_support::TestDaemon,
+        >,
+        crate::engine::transaction_submitter::DaemonTransactionSubmitter<
+            crate::engine::test_support::TestDaemon,
+        >,
+        LocalLedger,
+    >;
+
+    fn daemon_funded_ledger() -> Arc<LocalLedger> {
+        let ledger = Arc::new(test_ledger());
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![
+                make_recovered_output(1, 100, 500_000),
+                make_recovered_output(2, 101, 300_000),
+            ],
+            20,
+        );
+        ledger
+    }
+
+    fn daemon_backed_pending_tx(
+        daemon: Arc<crate::engine::test_support::TestDaemon>,
+        ledger: Arc<LocalLedger>,
+    ) -> DaemonBackedPendingTx {
+        daemon.set_fee_estimates(daemon_fee_estimates_distinct());
+        LocalPendingTx::new(
+            Arc::new(LocalSigner::new(test_signer_handle())),
+            WalletGreedyOutputSelector,
+            DaemonFeeEstimator,
+            crate::engine::fee_snapshot::DaemonFeeSnapshotSource::from_arc(Arc::clone(&daemon)),
+            Arc::new(crate::engine::transaction_submitter::DaemonTransactionSubmitter::new(daemon)),
+            ledger,
+            Arc::new(TracingDiagnosticSink),
+            ReservationTTLConfig::default(),
+            Network::Mainnet,
+        )
+    }
+
+    /// PHASE_2A_SEND_PATH.md §8.3 — outputs stay locked after build until submit/discard.
+    #[tokio::test]
+    async fn reserved_outputs_blocked_from_second_build() {
+        let ledger = Arc::new(test_ledger());
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            20,
+        );
+        let pending = test_pending_tx(Arc::clone(&ledger));
+        let _first = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("first build");
+        let err = pending.build(standard_request(1_000)).await.unwrap_err();
+        assert!(
+            matches!(err, SendError::InsufficientFunds { .. }),
+            "second build must not double-select reserved output: {err:?}"
+        );
+    }
+
+    #[test]
+    fn assemble_tx_to_sign_rejects_missing_key_image() {
+        use crate::engine::signing_assembly::assemble_tx_to_sign;
+        use crate::engine::tx_fee_model::build_fee_directive;
+        use shekyl_rpc::FeeRate;
+
+        let ledger = Arc::new(test_ledger());
+        populate_ledger_scan_only(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            20,
+        );
+        let tip_hash = ledger
+            .read()
+            .ledger
+            .ledger
+            .block_hash_at(20)
+            .copied()
+            .expect("tip hash");
+        let request = standard_request(7_000);
+        let rate = FeeRate::new(10, 1).expect("rate");
+        let fee_directive = build_fee_directive(&rate, 1, request.recipients.len(), 1);
+        let err = ledger.with_ledger_block(|block| {
+            assemble_tx_to_sign(
+                Network::Mainnet,
+                &request,
+                &[0],
+                block.transfers(),
+                tip_hash,
+                1,
+                fee_directive,
+            )
+        });
+        let Err(SendError::CannotSign { reason }) = err else {
+            panic!("expected CannotSign for missing key_image, got {err:?}");
+        };
+        assert!(
+            reason.contains("key_image"),
+            "reason should name key_image: {reason}"
+        );
+    }
+
+    /// PHASE_2A_SEND_PATH.md §8.3 — daemon fee flows through to built tx.
+    #[tokio::test]
+    async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+        use crate::engine::tx_fee_model::{
+            converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight,
+        };
+        use shekyl_oxide::transaction::Transaction;
+
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+        let ledger = daemon_funded_ledger();
+        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), Arc::clone(&ledger));
+
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        assert!(!built.tx_bytes.is_empty());
+
+        let mut cursor: &[u8] = &built.tx_bytes;
+        let tx = Transaction::read(&mut cursor).expect("built tx parses");
+        let Transaction::V2 { prefix, .. } = &tx;
+        let n_in = prefix.inputs.len();
+        let n_out = prefix.outputs.len();
+
+        let snapshot = daemon_fee_estimates_distinct();
+        let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
+        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, 1, 0));
+        let expected_fee = converge_fee(&rate, n_in, n_out, 1, seed);
+        assert_eq!(
+            built.fee_atomic_units.to_raw(),
+            expected_fee,
+            "built fee must match daemon Standard tier through production path"
+        );
+        assert_eq!(
+            predict_weight(n_in, n_out, 1, built.fee_atomic_units.to_raw()),
+            tx.weight()
+        );
+
+        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        assert_eq!(
+            tx_hash,
+            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+        );
+        assert_eq!(daemon.submitted_count(), 1);
+
+        let spent = pending
+            .ledger
+            .read()
+            .ledger
+            .ledger
+            .transfers()
+            .first()
+            .expect("output 0")
+            .spent;
+        assert!(spent);
+    }
+
+    #[tokio::test]
+    async fn daemon_dedupes_identical_tx_bytes() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+        use crate::engine::transaction_submitter::DaemonTransactionSubmitter;
+
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+        let ledger = daemon_funded_ledger();
+        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), ledger);
+
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.submit(built.id).await.expect("first submit");
+        assert_eq!(daemon.submitted_count(), 1);
+
+        let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
+        let hash_again = submitter
+            .submit(built.tx_bytes.clone())
+            .await
+            .expect("daemon dedup accepts identical bytes");
+        assert_eq!(
+            hash_again,
+            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+        );
+        assert_eq!(daemon.submitted_count(), 1);
+
+        let err = pending.submit(built.id).await.unwrap_err();
+        assert!(
+            matches!(err, SubmitError::ReservationNotFound { .. }),
+            "reservation consumed after first submit: {err:?}"
+        );
     }
 }

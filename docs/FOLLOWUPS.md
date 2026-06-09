@@ -1284,17 +1284,16 @@ sustainability is unaffected by the recalibration.
   `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
   multisig receive path is production-load-bearing (or explicit waiver).
 
-- **Phase 2a send path — real build / sign / broadcast on `Engine<S>`
-  (2026-05-31).** Stage 1 PR 5 landed the `PendingTxEngine` pipeline with
-  Phase 1 stubs (empty `tx_bytes`, `STUB_FEE_ATOMIC_UNITS`, synthetic submit
-  hash). Stage 2 landed `KeyActor`; `sign_transaction` remains incomplete.
-  **Design doc:** `docs/design/PHASE_2A_SEND_PATH.md` (Round 0). **Target:**
-  V3.0 pre-genesis. **Definition of done:** §1 of that doc (daemon fees,
-  `shekyl-tx-builder` wire bytes, real `submit_transaction`, hybrid
-  `TestDaemon` test). **Implementation PRs:** 2a-1 daemon path, 2a-2 signing
-  context, 2a-3 KeyActor + builder encode, 2a-4 tests + doc closeout.
-  **Blocks:** nothing in 2b/2c; subaddress round blocks Recipient KEM stub
-  only, not single-address sends. **Does not block:** Phase 2b design (parallel).
+- **Phase 2a send path — engine substrate (closed 2026-06).** `LocalPendingTx`
+  build/sign/wire/submit on `Engine<S>` with production daemon fee snapshot +
+  submitter, reservation-before-async-sign, and `TestDaemon` integration tests
+  (2a-1…2a-4). **Design/audit:** `docs/design/PHASE_2A_SEND_PATH.md`,
+  `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict. **Residual (reopen before
+  wallet build against untrusted daemon):** daemon-tier fee sanity ceiling —
+  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked
+  (`tx_fee_model.rs`). **Still open (orchestrator):** `WALLET_REWRITE_PLAN.md`
+  `phase2_ops_refresh_send` — `Wallet::refresh` / `build_pending_tx` / … pending
+  Phase 1. **Does not block:** Phase 2b design (parallel).
 
 - **Phase 2b planning session — stake state-machine shape (gate for
   Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`

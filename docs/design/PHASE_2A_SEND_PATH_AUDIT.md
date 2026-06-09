@@ -174,3 +174,94 @@ trees prove at `tree_depth > 1` (same criterion as plan PF7).
 
 **2a-3 implementation complete** for the §5 row scope; 2a-4 owns TestDaemon
 build→submit integration and doc closeout.
+
+---
+
+## 2a-4 pre-flight (Round 0) — TestDaemon integration + closeout
+
+**Run:** branch `torvaldsl/2a-4-hybrid-send-test` off `dev`, scope = §5 2a-4 row +
+[`PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md) §8 + §10 closeout.
+
+**Pinned `dev` HEAD:** `9494adc31` (merge PR #118, 2a-3).
+
+### Baseline
+
+| Command | Result |
+|---------|--------|
+| `cargo fmt --check` | pass |
+| `cargo clippy -p shekyl-engine-core --all-targets -- -D warnings` | pass |
+| `cargo test -p shekyl-engine-core --lib engine::local_pending_tx` | 19 pass |
+| `cargo test -p shekyl-engine-core --lib engine::test_support` | 24 pass |
+
+### Substrate re-check
+
+| Claim | Source | Verdict |
+|-------|--------|---------|
+| Production pending uses `DaemonFeeSnapshotSource` + `DaemonTransactionSubmitter` | `lifecycle.rs:738–752` | **Holds** |
+| `TestDaemon` submit hash = `cn_fast_hash`; dedup → `AlreadyKnown` | `test_support.rs` tests | **Holds** |
+| `build_then_submit` uses stub fee/submit, not `TestDaemon` | `local_pending_tx.rs` tests | **Holds** — 2a-4 target |
+| Custom-only sanity ceiling (`tx_fee_model.rs:114–118`) | code | **Holds** — §8.2 tests Custom; daemon-tier ceiling is §10 security residual |
+| PF7 partial grid deferred | 2a-3 PF7 | **Holds** — does not block 2a-4 |
+| `submit_sync` consumes reservation on first accept | `finalize_submit_accept` | **Holds** — second `pending.submit(id)` → `ReservationNotFound`; §8.3 dedup via second `DaemonTransactionSubmitter::submit(bytes)` |
+| §8.4 parse-back retry test | plan disposition | **Dropped** — vacuous under reservation lifecycle; redundant with §8.3 byte dedup; dominated-negative vs encode-only wire pin |
+
+### Verdict
+
+**2a-4 clear to implement.**
+
+---
+
+## 2a-4 post-implementation verdict
+
+**Branch:** `torvaldsl/2a-4-hybrid-send-test`.
+
+### Delivered
+
+| Item | Status |
+|------|--------|
+| §8.1 `daemon_fee_estimator_maps_test_daemon_priority_tiers` | Done |
+| §8.2 `custom_fee_above_sanity_ceiling_rejected` (Custom-only; documents implemented path) | Done |
+| Output reservation before `await sign_transfer` (`BuiltPendingMeta` + `release_build_reservation`) | Done |
+| `reserved_outputs_blocked_from_second_build` | Done |
+| §8.3 `build_then_submit_via_test_daemon_uses_daemon_fee` (daemon rate → `tx.fee`) | Done |
+| §8.3 `daemon_dedupes_identical_tx_bytes` (second submitter submit, not second `pending.submit`) | Done |
+| `assemble_tx_to_sign_rejects_missing_key_image` | Done |
+| §8.4 parse-back retry | **Dropped** — vacuous under reservation lifecycle; redundant with §8.3 byte dedup; contradicts encode-only wire pin |
+
+### Artifact execution
+
+| Layer | Result |
+|-------|--------|
+| `cargo test -p shekyl-engine-core --lib engine::fee_estimator` | pass |
+| `cargo test -p shekyl-engine-core --lib engine::tx_fee_model` | pass |
+| `cargo test -p shekyl-engine-core --lib engine::local_pending_tx` | 23 pass |
+
+### §10 reconciliation (2a-4 closeout)
+
+| §10 item | Action |
+|----------|--------|
+| §1 DoD hybrid TestDaemon test | **Tick** — integration asserts daemon-derived `tx.fee` |
+| Daemon-tier fee sanity ceiling (`DaemonFeeUnreasonable`) | **Defer (security residual)** — impl ceilings Custom only (`tx_fee_model.rs:114-118`); reopen before wallet build against untrusted daemon |
+| Output reservation before async sign | **Tick** — locks at assembly; released on sign failure |
+| §3.7.3 TxSignatures reshape / `OutputInfo` ZeroizeOnDrop | **Tick** — 2a-3 |
+| §3.7.8 C5 structural test | **Defer** — Debug redaction only; reopen when SpendInput field-coverage test lands |
+| §3.9 B/C/D refinements | **Tick** non-Clone / handle path; **defer** `dest` zeroize to 2c |
+| §3.10.1 full KAT grid | **Defer** — depth-1 row + analytic depth slope; depth-2 cell optional follow-up |
+| §3.10.2/3 dust/FeeDirective | **Tick** — build path proved |
+| §3.7.4 sign-bit-canonical | **Tick** — missing-KI negative test + scan path |
+| §3.3 two-pass fee loop | **Tick** — `converge_fee_is_stable_within_two_passes` |
+| §3.0.3 bulk-leaf RPC + KAT | **Defer** — shekyld prereq |
+| §3.0.4 curve-tree client scoped | **Tick** — `CURVE_TREE_CLIENT.md` |
+| `WALLET_REWRITE_PLAN.md` cross-link | **Tick** — orchestrator todo stays `pending` |
+
+### Verdict
+
+**Engine substrate complete:** `LocalPendingTx` build→submit proven with production
+`DaemonFeeSnapshotSource` / `DaemonTransactionSubmitter` + `TestDaemon`; daemon fee
+bound in integration test; reservation before async sign.
+
+**Not claimed:** mainnet validity (real curve-tree roots, daemon structural validation) —
+CT-5 + mainnet gate.
+
+**Orchestrator Phase 2a** (`Wallet::build_pending_tx` / refresh send surface): **pending
+Phase 1** — see `WALLET_REWRITE_PLAN.md` `phase2_ops_refresh_send`.
