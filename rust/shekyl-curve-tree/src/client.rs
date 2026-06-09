@@ -208,12 +208,15 @@ impl CurveTreeClient {
             .copied()
             .collect();
         let stored = self.store.leaf_count().unwrap_or(0);
-        if drained.len() as u64 > stored {
+        let new_entries = if drained.len() as u64 > stored {
             let start = usize::try_from(stored).expect("stored leaf count fits usize");
-            self.store
-                .append_drained(&drained[start..], tip_height)
-                .expect("append drained leaves");
-        }
+            &drained[start..]
+        } else {
+            &[]
+        };
+        self.store
+            .append_drained(new_entries, tip_height)
+            .expect("sync leaf store to chain tip");
     }
 
     /// The drain cutoff for a reference height: a leaf maturing at `m`

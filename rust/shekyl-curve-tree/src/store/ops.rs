@@ -37,8 +37,6 @@ pub fn mixed_composition_root(
     let e = leaves_per_segment() as u64;
     let complete = leaf_count / e;
     let delta = usize::try_from(leaf_count % e).expect("segment tail fits usize");
-    let j = usize::from(SEGMENT_LAYER_J);
-
     // No complete segments yet — mixed composition does not apply.
     if complete == 0 {
         let scalars = leaf_bytes_to_scalars(tail_leaf_bytes);
@@ -57,12 +55,7 @@ pub fn mixed_composition_root(
     let mut initial_layer: Vec<[u8; 32]> = frozen_r[..frozen_needed].to_vec();
 
     if delta > 0 {
-        let tail_scalars = leaf_bytes_to_scalars(tail_leaf_bytes);
-        let tail_layers = build_layers(&tail_scalars);
-        if tail_layers.len() <= j {
-            return Err(MixedRootError::TailTooShortForLayerJ);
-        }
-        initial_layer.extend_from_slice(&tail_layers[j]);
+        initial_layer.extend_from_slice(&tail_layer_j_nodes(tail_leaf_bytes, SEGMENT_LAYER_J)?);
     }
 
     let upper = build_upper_layers(initial_layer, SEGMENT_LAYER_J);
@@ -83,9 +76,99 @@ pub fn full_build_root(leaf_bytes: &[[u8; 128]]) -> [u8; 32] {
         .unwrap_or(selene_hash_init())
 }
 
+/// Layer-`j` nodes contributed by a partial tail segment.
+///
+/// When the tail is too shallow for `build_layers` to reach absolute layer `j`
+/// directly, promote from the tail's deepest built layer via `build_upper_layers`
+/// so mixed composition can still combine frozen `R_k` with the tail's node at
+/// the correct absolute depth (not treat the tail as an independent rooted tree
+/// that must already be `j` layers deep).
+fn tail_layer_j_nodes(
+    tail_leaf_bytes: &[[u8; 128]],
+    j: u8,
+) -> Result<Vec<[u8; 32]>, MixedRootError> {
+    let scalars = leaf_bytes_to_scalars(tail_leaf_bytes);
+    if scalars.is_empty() {
+        return Ok(Vec::new());
+    }
+    let layers = build_layers(&scalars);
+    let j_idx = usize::from(j);
+    if layers.len() > j_idx {
+        return Ok(layers[j_idx].clone());
+    }
+    let deepest = layers.len().saturating_sub(1);
+    if layers[deepest].is_empty() {
+        return Err(MixedRootError::EmptyUpperLayers);
+    }
+    let upper = build_upper_layers(layers[deepest].clone(), deepest as u8);
+    let offset = j_idx
+        .checked_sub(deepest)
+        .ok_or(MixedRootError::TailTooShortForLayerJ)?;
+    upper
+        .get(offset)
+        .cloned()
+        .ok_or(MixedRootError::TailTooShortForLayerJ)
+}
+
 /// Recompute `R_k` for segment `segment_id` from contiguous leaf bytes.
 #[must_use]
 pub fn recompute_segment_r_k(segment_leaf_bytes: &[[u8; 128]]) -> [u8; 32] {
     let scalars = leaf_bytes_to_scalars(segment_leaf_bytes);
     extract_r_k(&scalars)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::segment::outputs_per_node;
+    use ciphersuite::{
+        group::ff::{Field, PrimeField},
+        Ciphersuite,
+    };
+    use helioselene::Selene;
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+    use shekyl_fcmp::tree::SCALARS_PER_LEAF;
+
+    fn rand_leaves(rng: &mut ChaCha20Rng, n: usize) -> Vec<[u8; 32]> {
+        let mut out = Vec::with_capacity(n * SCALARS_PER_LEAF);
+        for _ in 0..n * SCALARS_PER_LEAF {
+            out.push(<Selene as Ciphersuite>::F::random(&mut *rng).to_repr());
+        }
+        out
+    }
+
+    fn scalars_to_leaf_bytes(scalars: &[[u8; 32]]) -> Vec<[u8; 128]> {
+        scalars
+            .chunks(SCALARS_PER_LEAF)
+            .map(|c| {
+                let mut leaf = [0u8; 128];
+                for (i, s) in c.iter().enumerate() {
+                    leaf[i * 32..(i + 1) * 32].copy_from_slice(s);
+                }
+                leaf
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tail_layer_j_promotion_matches_oracle_at_j0() {
+        let j = 0u8;
+        let e = outputs_per_node(j);
+        let mut rng = ChaCha20Rng::from_seed([22u8; 32]);
+        for delta in [1usize, e / 3, e - 1] {
+            let seg0 = rand_leaves(&mut rng, e);
+            let tail = rand_leaves(&mut rng, delta);
+            let mut all = seg0.clone();
+            all.extend_from_slice(&tail);
+            let oracle = build_layers(&all);
+            let frozen = vec![build_layers(&seg0)[usize::from(j)][0]];
+            let tail_bytes = scalars_to_leaf_bytes(&tail);
+            let promoted = tail_layer_j_nodes(&tail_bytes, j).expect("tail layer j");
+            let mut initial = frozen;
+            initial.extend_from_slice(&promoted);
+            let got = build_upper_layers(initial, j).last().unwrap()[0];
+            assert_eq!(got, oracle.last().unwrap()[0], "delta={delta} mixed root");
+        }
+    }
 }

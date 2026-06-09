@@ -160,18 +160,19 @@ impl LeafStore {
         Ok(meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0))
     }
 
-    /// Append newly drained leaves in one ACID write txn.
+    /// Append newly drained leaves and advance sync tip in one ACID write txn.
+    ///
+    /// When `entries` is empty, still updates `META_SYNC_TIP` and re-evaluates
+    /// segment-freeze eligibility so height-lagged freezes advance on blocks
+    /// where no new leaves drain.
     pub fn append_drained(&self, entries: &[LeafEntry], tip_height: u64) -> Result<(), StoreError> {
-        if entries.is_empty() {
-            return Ok(());
-        }
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
             let meta = txn.open_table(META_TABLE)?;
             let v = meta.get(META_LEAF_COUNT)?;
             v.map(|g| g.value()).unwrap_or(0)
         };
-        {
+        if !entries.is_empty() {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
             for entry in entries {
@@ -585,6 +586,21 @@ mod tests {
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
+    }
+
+    #[test]
+    fn append_empty_still_advances_sync_tip_and_freeze() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = leaves_per_segment();
+        let entries: Vec<_> = (0..e)
+            .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
+            .collect();
+        store.append_drained(&entries, 100).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 100);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
+        store.append_drained(&[], 10_000).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 10_000);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
     #[test]
