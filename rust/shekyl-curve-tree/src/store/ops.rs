@@ -100,7 +100,10 @@ fn tail_layer_j_nodes(
     if layers[deepest].is_empty() {
         return Err(MixedRootError::EmptyUpperLayers);
     }
-    let upper = build_upper_layers(layers[deepest].clone(), deepest as u8);
+    let upper = build_upper_layers(
+        layers[deepest].clone(),
+        u8::try_from(deepest).expect("tail tree depth fits u8"),
+    );
     let offset = j_idx
         .checked_sub(deepest)
         .ok_or(MixedRootError::TailTooShortForLayerJ)?;
