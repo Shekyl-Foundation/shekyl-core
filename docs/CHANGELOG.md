@@ -4,6 +4,14 @@
 
 ### Added
 
+- **engine: Phase 2a-4 — TestDaemon fee-bound build→submit; engine send substrate
+  complete.** `daemon_fee_estimator_maps_test_daemon_priority_tiers` and Custom
+  sanity-ceiling unit tests; output locks reserved before async sign with
+  `release_build_reservation` on sign failure; integration tests for daemon-derived
+  `tx.fee`, submit dedup, missing key-image rejection, and reserved-output blocking.
+  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4; orchestrator Phase 2a
+  remains pending Phase 1 (`WALLET_REWRITE_PLAN.md`).
+
 - **wallet: Phase 2a-3 sign, wire encode, submit.**
   `KeyActor`/`LocalKeys` sign bridge, `shekyl-tx-builder` `wire` module,
   async `Signer::sign_transfer`, `TransactionSubmitter`, non-empty `tx_bytes`,

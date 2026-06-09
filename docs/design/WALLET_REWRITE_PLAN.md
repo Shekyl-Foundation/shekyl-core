@@ -9,7 +9,7 @@ todos:
     content: "Phase 1: shekyl-wallet-core::Wallet orchestrator type — composition over god-object; lifecycle (create/open_full/open_view_only/open_hardware_offload/change_password/close); RefreshHandle for cancellable scan; Wallet<SoloSigner|MultisigSigner> shape so V3.1 multisig is a feature flip; RuntimeWalletState audit (keep/rename/fold-into-WalletLedger; default lean fold); answer 'why now / can we do better' for address book, tx_keys, tx_notes, account-vs-subaddress, background sync; lock binding decisions: payment IDs DROPPED, air-gapped flow KEPT but reshaped as UnsignedTxBundle/SignedTxBundle"
     status: pending
   - id: phase2_ops_refresh_send
-    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3)"
+    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed — orchestrator Wallet methods remain pending Phase 1."
     status: pending
   - id: phase2_ops_stake_history
     content: "Phase 2b (SUBSTANTIVE): transfer-shaped admission (PHASE_2B §2.4) → reward-emission leg spec → Round 3–4 close-conditions → Stage 3 StakeEngine. One ship target — no entitlement/3C subtree. Blocks Stage 3, not 2a."
@@ -531,8 +531,10 @@ flowchart TD
 ---
 
 **Phase 2a implementation spec:** [`docs/design/PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
-(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4, definition of done, daemon/sign/build
-wiring against the landed `LocalPendingTx` / `KeyActor` substrate.
+(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4. **Engine substrate complete**
+(2026-06): daemon fee snapshot, signing context, wire encode/submit, and
+`TestDaemon` fee-bound build→submit integration on `LocalPendingTx`. **Orchestrator
+Phase 2a** (`Wallet::refresh` / `build_pending_tx` / …) remains **pending Phase 1**.
 
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.
 
