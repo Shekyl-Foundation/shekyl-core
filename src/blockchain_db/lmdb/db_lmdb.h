@@ -618,7 +618,7 @@ private:
 
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
-  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> empty (key = bit)
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars

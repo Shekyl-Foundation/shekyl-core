@@ -411,7 +411,8 @@ Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch)` (gate-2 �
 ### `archival_bond`
 
 Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
-(`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Written on join-Market connect (gate-4 wire TBD).
+(`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Written on JoinMarket bond-post connect
+(gate-4 §3.4.1).
 
 | Property | Value |
 |---|---|
@@ -451,6 +452,34 @@ Selene leaf-layer scalar chunk for a challenged index within a segment.
 | Writers | `put_archival_shard_leaf_layer_scalars` |
 | Readers | `get_archival_shard_leaf_layer_scalars` |
 | Introduced | HF1 (gate-2 verifier step 7) |
+
+### `archival_slash_applied`
+
+Slash idempotency per `(P_id, shard_id, settlement_epoch)` (gate-4 §4.2).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_slash_applied"` |
+| Flags | `MDB_CREATE` |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes; same shape as serve-credit key) |
+| Value | `uint8_t` `0x01` presence flag |
+| Writers | `set_archival_slash_applied` (slash scheduler), `remove_archival_slash_applied` (reorg) |
+| Readers | `has_archival_slash_applied` |
+| Introduced | HF1 (gate-2 §10 step 4) |
+
+### `archival_slash_log`
+
+Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_slash_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | versioned `ArchivalSlashRevertValue` blob, or epoch-marker sentinel at `seq = 0xFFFFFFFF` |
+| Writers | `append_archival_slash_log`, deleted on slash revert |
+| Readers | `revert_archival_slashes_at_height` |
+| Introduced | HF1 (gate-2 §10 step 4) |
 
 ### `properties` — Staking keys
 
@@ -538,6 +567,20 @@ Offset  Size  Field
 |---|---|
 | Writers | `save_curve_tree_checkpoint` (every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks) |
 | Readers | `get_curve_tree_checkpoint` (for rollback), `prune_curve_tree_intermediate_layers` |
+| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+
+### `curve_tree_roots`
+
+Per-block curve-tree root hash for fast lookup without deserializing checkpoints.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"curve_tree_roots"` |
+| Flags | `MDB_INTEGERKEY` |
+| Key | `uint64_t` block height (8 bytes) |
+| Value | 32-byte root hash |
+| Writers | `set_curve_tree_root_at_height` (block connect), deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`
@@ -803,23 +846,27 @@ General key-value store for database-level metadata.
 | 18 | `archival_bond` | `P_id[32]` | `ArchivalBondValue` | var | `CREATE` only |
 | 19 | `archival_shard_segment` | `BE(shard_id)` | segment meta | 49 | `CREATE` only |
 | 20 | `archival_shard_leaf` | `BE(shard)\|\|BE(leaf)` | flat scalars | var | `CREATE` only |
-| 21 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 22 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 23 | `curve_tree_meta` | string | varies | varies | — |
-| 24 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 25 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 26 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 27 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 28 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 29 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 30 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 31 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 32 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 33 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 34 | `properties` | string | varies | varies | — |
-| 31 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
+| 21 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
+| 22 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
+| 23 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
+| 24 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
+| 25 | `curve_tree_meta` | string | varies | varies | — |
+| 26 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
+| 27 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
+| 28 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 29 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 30 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 31 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 32 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 33 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 34 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 35 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 36 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 37 | `properties` | string | varies | varies | — |
+| 38 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
+| 39 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
-Total: **31 sub-databases** (30 active + 1 legacy migration stub).
+Total: **39 sub-databases** (`mdb_env_set_maxdbs(42)` in `db_lmdb.cpp`; 37 active + 2 legacy migration stubs).
 
 ### Schema v6 → v7 migration (breaking)
 

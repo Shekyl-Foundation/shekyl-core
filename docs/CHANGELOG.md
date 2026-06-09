@@ -28,14 +28,14 @@
 
 - **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
   `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with
-  `put_*` seeding APIs; serve-credit verifier reads bond posture and registry geometry.
-  Bond-post connect (`txin_archival_bond_post`) remains gate-4 open.
+  `put_*` seeding APIs; serve-credit verifier reads bond posture and registry geometry
+  from LMDB (rejects when substrate is missing). JoinMarket bond-post connect is separate
+  (see entry above); Rebond/Unbond/HoldingsUpdate kinds remain gate-4 deferred.
 
 - **archival: serve-credit consensus hook + LMDB bit (gate-2 §10 steps 2–3).**
   `shekyl-ffi` `shekyl_archival_verify_serve_credit_vin`; `Blockchain::check_archival_serve_credit_input`
   and pure archival tx admission in `check_tx_inputs`; `archival_serve_credit` LMDB subdb
-  (`serve_credit_bit` write on connect, revert on `pop_block`). Bond posture and shard-registry
-  reads remain stubbed until gate-4 substrate lands (txs fail at step 2 with explicit log).
+  (`serve_credit_bit` write on connect, revert on `pop_block`).
 
 - **archival: `txin_archival_serve_credit_response` deserializer (gate-2 §10 step 2).**
   C++ `txin_v` tag `0x04` with path bounds; `shekyl-oxide` `Input::ArchivalServeCreditResponse`
