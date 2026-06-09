@@ -8,6 +8,7 @@
 use core::fmt;
 use std::io::{self, Read, Write};
 
+use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_io::{read_byte, read_bytes, read_varint, write_varint};
 
 /// Vin type tag: `txin_archival_bond_post` (gate-4 §3.4.1).
@@ -16,7 +17,9 @@ pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 5;
 /// cSHAKE256 customization for bond-post spend-auth preimage (gate-4 §3.4.1).
 pub const BOND_POST_SIG_CUSTOMIZATION: &[u8] = b"shekyl/archival-bond-post-v1";
 
-pub const MAX_HYBRID_PUBKEY_BYTES: usize = 2048;
+/// Canonical single [`HybridPublicKey`] encoding bound; matches
+/// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig blob).
+pub const MAX_HYBRID_PUBKEY_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
 pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

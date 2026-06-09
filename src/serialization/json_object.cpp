@@ -628,6 +628,15 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_pat
     throw WRONG_TYPE("json object");
   GET_FROM_JSON_OBJECT(val, path.c1_layers, c1_layers);
   GET_FROM_JSON_OBJECT(val, path.c2_layers, c2_layers);
+  if (path.c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND
+    || path.c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+    throw WRONG_TYPE("archival segment path layer count exceeds bound");
+  for (const auto& branch : path.c1_layers)
+    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+      throw WRONG_TYPE("archival segment path branch width exceeds bound");
+  for (const auto& branch : path.c2_layers)
+    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+      throw WRONG_TYPE("archival segment path branch width exceeds bound");
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin)
@@ -661,6 +670,8 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_
   GET_FROM_JSON_OBJECT(val, txin.leaf_bytes, leaf_bytes);
   GET_FROM_JSON_OBJECT(val, txin.path, path);
   GET_FROM_JSON_OBJECT(val, txin.hybrid_signature, hybrid_signature);
+  if (txin.hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
+    throw WRONG_TYPE("archival serve-credit hybrid_signature exceeds single-signature bound");
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest,
