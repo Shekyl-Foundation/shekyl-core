@@ -135,7 +135,7 @@ TEST(archival_bond_post, rct_balance_includes_bond_debit_term)
   rv.enc_labels.resize(1);
   // Funding input contributes only blinding; bond_debit is the cleartext source term.
   rv.p.pseudoOuts.push_back(rct::commit(0, mask_scalar));
-  rv.p.bulletproofs_plus.push_back(bulletproof_plus_PROVE(bond_debit, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit, mask_scalar));
 
   EXPECT_FALSE(rct::verRctSemanticsSimple(rv));
   EXPECT_TRUE(rct::verRctSemanticsBondPost(rv, 0, bond_debit));
