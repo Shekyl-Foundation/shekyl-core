@@ -109,14 +109,26 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (tx.version >= 2)
         {
             bool archival_serve_credit_only = !tx.vin.empty();
+            bool is_archival_bond_post_tx = false;
+            size_t archival_bond_post_index = 0;
             bool skip_rct_semantics_batch = !tx.vin.empty();
-            for (const auto& in : tx.vin)
+            size_t bond_post_count = 0;
+            for (size_t i = 0; i < tx.vin.size(); ++i)
             {
+                const auto& in = tx.vin[i];
                 if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
                     archival_serve_credit_only = false;
                 if (!std::holds_alternative<txin_stake_claim>(in))
                     skip_rct_semantics_batch = false;
+                if (std::holds_alternative<txin_archival_bond_post>(in))
+                {
+                    ++bond_post_count;
+                    archival_bond_post_index = i;
+                }
+                else if (!std::holds_alternative<txin_to_key>(in))
+                    bond_post_count = 2;
             }
+            is_archival_bond_post_tx = (bond_post_count == 1);
             if (archival_serve_credit_only)
             {
                 const rct::rctSig& rv = tx.rct_signatures;
@@ -131,6 +143,30 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.p.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsFeeOnly(rv))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else if (is_archival_bond_post_tx)
+            {
+                const txin_archival_bond_post& bond =
+                    std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
+                const rct::rctSig& rv = tx.rct_signatures;
+                size_t spend_input_count = 0;
+                for (const auto& in : tx.vin)
+                {
+                    if (std::holds_alternative<txin_to_key>(in))
+                        ++spend_input_count;
+                }
+                if (tx.pqc_auths.size() != tx.vin.size()
+                    || spend_input_count == 0
+                    || rv.p.pseudoOuts.size() != spend_input_count
+                    || rv.p.fcmp_pp_proof.empty()
+                    || !rv.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;
