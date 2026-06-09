@@ -34,10 +34,14 @@ fn amount_h(amount: u64) -> EdwardsPoint {
 }
 
 fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, BondRctBalanceError> {
-    CompressedEdwardsY::from_slice(bytes)
+    let point = CompressedEdwardsY::from_slice(bytes)
         .map_err(|_| BondRctBalanceError::InvalidPoint)?
         .decompress()
-        .ok_or(BondRctBalanceError::InvalidPoint)
+        .ok_or(BondRctBalanceError::InvalidPoint)?;
+    if !point.is_torsion_free() {
+        return Err(BondRctBalanceError::InvalidPoint);
+    }
+    Ok(point)
 }
 
 /// Verify the bond-post RCT balance equation for flattened 32-byte commitment keys.
@@ -114,6 +118,22 @@ mod tests {
         assert_eq!(
             verify_bond_post_rct_balance(&[&pseudo], &[&out_mask], 0, 0, BOND_DEBIT - 1),
             Err(BondRctBalanceError::SumMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_small_order_commitment() {
+        let torsion: [u8; 32] = {
+            let mut b = [0u8; 32];
+            let hex = "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa";
+            for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+                b[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
+            }
+            b
+        };
+        assert_eq!(
+            verify_bond_post_rct_balance(&[&torsion], &[], 0, 0, 0),
+            Err(BondRctBalanceError::InvalidPoint)
         );
     }
 }
