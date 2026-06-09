@@ -283,7 +283,9 @@ mod pqc_leaf_hashes_tests {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
     fn leaf_blob(n: usize) -> Vec<u8> {
-        (0..n).map(|i| i as u8).collect()
+        (0..n)
+            .map(|i| u8::try_from(i).expect("test fixture n <= 256"))
+            .collect()
     }
 
     /// Scanner first-match behavior. Daemon parity on duplicate/malformed `0x07`
