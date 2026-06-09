@@ -25,6 +25,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod bond_rct_balance;
 pub mod bond_wire;
 pub mod challenge;
 pub mod constants;
@@ -34,6 +35,7 @@ pub mod id;
 pub mod path;
 pub mod wire;
 
+pub use bond_rct_balance::{verify_bond_post_rct_balance, BondRctBalanceError};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
