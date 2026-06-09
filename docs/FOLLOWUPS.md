@@ -47,6 +47,15 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
+  consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while
+  [`config/consensus_constants.json`](../config/consensus_constants.json)
+  carries `archival_reorg_depth_blocks`. **Reopening trigger:** replace the
+  hardcode with generated constant when PHASE_2B wires
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` into Rust codegen. Until then, cross-ref only;
+  two copies are drift debt, not permanent. See
+  [`docs/design/CT1_ROUND1_PINS.md`](./design/CT1_ROUND1_PINS.md).
+
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29,
   post–PR #88; economics-trait update 2026-05-31, post–PR #94).** The
   §8.1 critical-path chain is landed on `dev`:
