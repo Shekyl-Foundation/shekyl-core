@@ -198,9 +198,7 @@ impl LeafStore {
         if leaf_count == 0 || !leaf_count.is_multiple_of(e) {
             return Ok(());
         }
-        let segment_id = SegmentId(
-            u32::try_from(leaf_count / e - 1).expect("segment id fits u32"),
-        );
+        let segment_id = SegmentId(u32::try_from(leaf_count / e - 1).expect("segment id fits u32"));
         let end_tree_pos = leaf_count - 1;
         let end_block_height = read_drain_height(txn, end_tree_pos)?;
         if !segment_freeze_eligible(tip_height, end_block_height) {

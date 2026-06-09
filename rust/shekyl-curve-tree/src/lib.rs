@@ -59,7 +59,9 @@ pub use segment::{
     leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
-pub use store::{mixed_composition_root, FrozenSegmentRecord, LeafStore, MixedRootError, StoreError};
+pub use store::{
+    mixed_composition_root, FrozenSegmentRecord, LeafStore, MixedRootError, StoreError,
+};
 pub use types::{
     AssembledPath, ChunkLeaf, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
     TreePosition,
