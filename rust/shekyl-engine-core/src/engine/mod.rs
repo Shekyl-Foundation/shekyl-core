@@ -190,10 +190,15 @@ pub mod pending;
 pub mod refresh;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
+pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;
+pub(crate) mod synthetic_tree;
 pub(crate) mod traits;
+pub(crate) mod transaction_submitter;
 pub(crate) mod tx_fee_model;
+#[cfg(test)]
+mod tx_weight_kat;
 pub mod view_material;
 
 #[cfg(test)]
@@ -328,6 +333,7 @@ pub struct Engine<
         WalletGreedyOutputSelector,
         DaemonFeeEstimator,
         fee_snapshot::DaemonFeeSnapshotSource<DaemonClient>,
+        transaction_submitter::DaemonTransactionSubmitter<DaemonClient>,
         LocalLedger,
     >,
     F: PersistenceEngine = WalletFile,

@@ -74,8 +74,7 @@ A branch off `dev` is appropriate when:
 - The change is experimental and may be discarded.
 - The change must be coordinated with other contributors before merging.
 
-In all cases the branch should be named `<author>/<short-description>`
-or `chore/<description>` / `fix/<description>` / `feat/<description>`,
+In all cases the branch should be named `chore/<description>` / `fix/<description>` / `feat/<description>`,
 and should land on `dev` within 5 working days. If it can't, the change
 is too large; break it down.
 

@@ -105,3 +105,72 @@ frozen-signature reopen (rule-26 A1), so **no design round is required**. The
 `FeeEstimator::estimate_fee` trait surface is preserved; PF1/PF2 reshape the
 `FeeEstimationContext` struct and add a sibling capability, both already named
 in the §5 2a-2 row.
+
+---
+
+## 2a-3 pre-flight (Round 0) — sign, wire encode, submit
+
+**Run:** branch `torvaldsl/2a-3-sign-wire-submit` off `dev`, scope = §5 2a-3 row.
+
+### Substrate re-check
+
+| ID | Finding | Disposition pinned |
+|----|---------|-------------------|
+| **PF1** | `SignTransaction` empty marker; `TxToSign` not `Clone` | `SignTransaction { tx: TxToSign }`; `KeyEngine::sign_transaction(tx: TxToSign)` by value across mailbox |
+| **PF2** | Handle → `output_index` co-location | `tx_hash`, `internal_output_index`, `amount` on `TxInputSigningContext`; actor asserts `handle == derive_output_handle(view_sk, tx_hash, index)` |
+| **PF3** | `Change` bare variant | `Change { subaddress_index: SubaddressIndex(0) }` for 2a single-recipient sends |
+| **PF4** | `sign_pqc_auths` API | Verified at workspace pin in `shekyl-tx-builder/src/sign.rs` |
+| **PF5** | `shekyl-oxide` wire surface | `Transaction::V2`, `Proofs`/`PrunableProof`, `Transaction::weight()` at pin |
+| **PF6** | Sync `Signer::sign_transfer` under Tokio | **Reject** `block_on`/`block_in_place`; `Signer::sign_transfer` → `async`; `build_assemble_sync` + async sign in `build` |
+| **PF7** | KAT grid `[1,8]×[1,24]` | Depth-parametric `synthetic_tree` helper (placeholder siblings); full grid in Phase F |
+| **PF8** | C7 key-image single-site | Canonical `KeyImage` on `TxInputSigningContext` from `TransferDetails`; bridge consumes, no `compute_output_key_image` |
+
+### Artifact execution
+
+Baseline commands from §5 2a-3 plan (`cd rust && …`) run before first production commit.
+
+### Verdict
+
+**2a-3 clear to implement.** PF6/PF7/PF8 dispositions pinned above; no design round required.
+
+---
+
+## 2a-3 post-implementation verdict
+
+**Branch:** `torvaldsl/2a-3-sign-wire-submit` (land on `dev` when reviewed).
+
+### Delivered
+
+| Item | Status |
+|------|--------|
+| `wire.rs` + `shekyl-oxide` dep (wire-only import guard) | Done |
+| `sign_bridge` + `KeyActor` one-round-trip sign (C3/C4/F4/F8, C7) | Done |
+| `TxSignatures` reshape; `OutputInfo` `ZeroizeOnDrop` | Done |
+| Async `Signer::sign_transfer`; `build_assemble_sync` split | Done |
+| `TransactionSubmitter` + real `tx_bytes` submit | Done |
+| Non-empty `tx_bytes` on transfer path | Done |
+| `fcmp_proof_size` depth-1 KAT row (`n_in` 1..8) | Done (`kat_fcmp_proof_size_depth1_row`) |
+| `predict_weight == Transaction::weight()` on build path | Done (`build_then_submit_marks_outputs_spent`) |
+
+### PF7 partial (reopening criterion)
+
+Full `[1,8]×[2,24]` `fcmp_proof_size` grid measurement fails above `tree_depth = 1`
+(`Branches::new` on placeholder branch paths). **Disposition:** depth-1 row is
+KAT-pinned in `tx_fee_model.rs`; depth > 1 uses
+`FCMP_PROOF_BYTES_PER_DEPTH_LAYER` extrapolation until CT-5 curve-tree fixtures
+replace the synthetic branch builder. Reopen when depth-parametric synthetic
+trees prove at `tree_depth > 1` (same criterion as plan PF7).
+
+### Artifact execution
+
+| Layer | Result |
+|-------|--------|
+| `cargo test -p shekyl-tx-builder` | pass (incl. wire import guard) |
+| `cargo test -p shekyl-engine-core --lib engine::local_pending_tx` | 19 pass |
+| `cargo test -p shekyl-engine-core --lib kat_fcmp_proof_size_depth1_row` | pass |
+| M3c `engine_derived_bundle_signs_through_tx_builder_end_to_end` | pass |
+
+### Verdict
+
+**2a-3 implementation complete** for the §5 row scope; 2a-4 owns TestDaemon
+build→submit integration and doc closeout.

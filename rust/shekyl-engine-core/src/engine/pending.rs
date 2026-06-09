@@ -490,6 +490,8 @@ impl Default for ReservationTTLConfig {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct InFlightSubmit {
+    /// Serialized signed transaction bytes (for hash / retry).
+    pub tx_bytes: Vec<u8>,
     /// [`SnapshotId`] the reservation was built against;
     /// preserved verbatim from the source `Reservation` at the
     /// `consumer_held → in_flight` transition.

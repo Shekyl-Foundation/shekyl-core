@@ -66,6 +66,8 @@ use shekyl_oxide::generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
+use super::local_keys::LocalKeys;
+use super::sign_bridge;
 use super::traits::key::{
     AccountPublicAddress, KeyEngine, OutputClaim, OutputClaimResult, OutputDetectionInput,
     TxSignatures, TxToSign,
@@ -83,9 +85,8 @@ use super::traits::key::{
 /// The actor's single-threaded message loop serializes access to `keys`.
 #[allow(dead_code)] // Stage 2 wires the handle into Engine in a later step; today: tests only.
 pub(crate) struct KeyActor {
-    /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop`, wiped when the
-    /// actor task ends (and explicitly in `on_stop` as defense-in-depth).
-    keys: AllKeysBlob,
+    /// Wallet key material and derived scalars for signing.
+    local: LocalKeys,
 }
 
 impl Actor for KeyActor {
@@ -94,7 +95,9 @@ impl Actor for KeyActor {
 
     /// Build the actor from the moved-in [`AllKeysBlob`].
     async fn on_start(keys: AllKeysBlob, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(Self { keys })
+        Ok(Self {
+            local: LocalKeys::from_keys_blob(keys),
+        })
     }
 
     /// Fail-stop on panic. This is the kameo default behavior, overridden
@@ -119,7 +122,7 @@ impl Actor for KeyActor {
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
     ) -> Result<(), Self::Error> {
-        self.keys.zeroize();
+        self.local.keys.zeroize();
         Ok(())
     }
 }
@@ -138,18 +141,10 @@ pub(crate) struct ClaimOutput {
     pub input: OutputDetectionInput,
 }
 
-/// Actor message for [`KeyEngine::sign_transaction`].
-///
-/// **Stage 2 carries no payload.** The Stage-1 `sign_transaction` is a stub
-/// (`TxToSign`'s field shape is PR-5-pinned, and the handler returns
-/// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`] without reading
-/// the transaction), so there is nothing to send across the mailbox.
-/// `TxToSign` is not `Clone` and the trait hands a `&TxToSign`; how an owned
-/// transaction crosses the mailbox is a PR-5 decision pinned alongside
-/// `TxToSign`'s final shape. Until then the message is an empty marker — a
-/// faithful representation of the current stub behavior.
-#[allow(dead_code)] // constructed by the handle; today exercised by tests only.
-pub(crate) struct SignTransaction;
+/// Actor message for [`KeyEngine::sign_transaction`] (PF1: owned payload).
+pub(crate) struct SignTransaction {
+    pub tx: TxToSign,
+}
 
 impl Message<ClaimOutput> for KeyActor {
     type Reply = Result<OutputClaimResult, KeyEngineError>;
@@ -170,8 +165,8 @@ impl Message<ClaimOutput> for KeyActor {
         // cryptographic-level rejection maps to `NotMine` per the trait
         // contract, not to a structural error.
         let Ok(recovered) = scan_output_recover(
-            self.keys.view_sk.as_canonical_bytes(),
-            self.keys.ml_kem_dk.as_canonical_bytes(),
+            self.local.keys.view_sk.as_canonical_bytes(),
+            self.local.keys.ml_kem_dk.as_canonical_bytes(),
             &input.ciphertext.x25519,
             &input.ciphertext.ml_kem,
             &input.output_key,
@@ -191,7 +186,7 @@ impl Message<ClaimOutput> for KeyActor {
         // public key (`AllKeysBlob::spend_pk`).
         let recovered_spend_pk =
             SpendPublicKey::from_canonical_bytes(recovered.recovered_spend_key);
-        if recovered_spend_pk != self.keys.spend_pk {
+        if recovered_spend_pk != self.local.keys.spend_pk {
             return Ok(OutputClaimResult::NotMine);
         }
 
@@ -203,7 +198,7 @@ impl Message<ClaimOutput> for KeyActor {
         let Ok(ki_result) = compute_output_key_image(
             &recovered.combined_ss,
             input.output_index,
-            self.keys.spend_sk.as_canonical_bytes(),
+            self.local.keys.spend_sk.as_canonical_bytes(),
             &hp_bytes,
         ) else {
             return Ok(OutputClaimResult::NotMine);
@@ -214,7 +209,7 @@ impl Message<ClaimOutput> for KeyActor {
         // view secret; same `(view_secret, tx_hash, output_index)` -> same
         // handle).
         let handle = derive_output_handle(
-            self.keys.view_sk.as_canonical_bytes(),
+            self.local.keys.view_sk.as_canonical_bytes(),
             &input.tx_hash,
             input.output_index,
         );
@@ -232,17 +227,12 @@ impl Message<ClaimOutput> for KeyActor {
 impl Message<SignTransaction> for KeyActor {
     type Reply = Result<TxSignatures, KeyEngineError>;
 
-    /// Stage 2 stub, equivalent to
-    /// [`LocalKeys::sign_transaction`](super::local_keys::LocalKeys): the
-    /// PR-5-pinned `TxToSign` shape does not yet carry the public per-input
-    /// data and FCMP++ branch context the signing pass needs, so this surface
-    /// is recognized-but-not-bridgeable.
     async fn handle(
         &mut self,
-        _msg: SignTransaction,
+        msg: SignTransaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Err(KeyEngineError::SignTransactionTraitSurfaceIncomplete)
+        sign_bridge::sign_tx(&self.local, &msg.tx)
     }
 }
 
@@ -424,9 +414,9 @@ impl KeyEngine for KeyEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    async fn sign_transaction(&self, _tx: &TxToSign) -> Result<TxSignatures, Self::Error> {
+    async fn sign_transaction(&self, tx: TxToSign) -> Result<TxSignatures, Self::Error> {
         self.actor
-            .ask(SignTransaction)
+            .ask(SignTransaction { tx })
             .await
             .map_err(collapse_send_error)
     }
@@ -669,13 +659,13 @@ mod tests {
         );
     }
 
-    /// Build an empty [`TxToSign`]. `sign_transaction` ignores the transaction
-    /// entirely (Stage-2 stub), so the empty shape suffices to exercise the
-    /// dispatch + error path.
+    /// Minimal [`TxToSign`] for actor dispatch tests (no inputs).
     fn dummy_tx_to_sign() -> TxToSign {
         use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective};
+        use shekyl_address::Network;
         use shekyl_tx_builder::TreeContext;
         TxToSign {
+            network: Network::Mainnet,
             inputs: Vec::new(),
             outputs: Vec::new(),
             fcmp_plus_plus_context: FcmpPlusPlusContext {
@@ -821,24 +811,21 @@ mod tests {
         // sign_transaction against the dead actor is likewise unavailable
         // (not the stub error — the actor never runs the handler).
         let sign_err = handle
-            .sign_transaction(&dummy_tx_to_sign())
+            .sign_transaction(dummy_tx_to_sign())
             .await
             .expect_err("post-death sign fails");
         assert!(matches!(sign_err, KeyEngineError::KeyActorUnavailable));
     }
 
-    // §5.2 test 3 (continued) — sign_transaction on a *live* actor returns the
-    // PR-5 stub error (the actor runs the handler; the surface is incomplete).
+    // §5.2 test 3 (continued) — sign_transaction on a live actor rejects an
+    // empty input list before touching secrets.
     #[tokio::test]
-    async fn sign_transaction_live_returns_stub_error() {
+    async fn sign_transaction_live_rejects_empty_inputs() {
         let handle = KeyEngineHandle::spawn(make_blob(TEST_SEED));
         let err = handle
-            .sign_transaction(&dummy_tx_to_sign())
+            .sign_transaction(dummy_tx_to_sign())
             .await
-            .expect_err("sign_transaction is a stub");
-        assert!(matches!(
-            err,
-            KeyEngineError::SignTransactionTraitSurfaceIncomplete
-        ));
+            .expect_err("empty inputs are rejected");
+        assert!(matches!(err, KeyEngineError::Primitive { .. }));
     }
 }

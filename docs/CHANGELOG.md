@@ -4,6 +4,12 @@
 
 ### Added
 
+- **wallet: Phase 2a-3 sign, wire encode, submit.**
+  `KeyActor`/`LocalKeys` sign bridge, `shekyl-tx-builder` `wire` module,
+  async `Signer::sign_transfer`, `TransactionSubmitter`, non-empty `tx_bytes`,
+  depth-1 `fcmp_proof_size` KAT, and `predict_weight` self-consistency on the
+  build path (`PHASE_2A_SEND_PATH.md` §5 2a-3).
+
 - **docs: Round 4 subaddress design closure (FA-9 / FA-10).**
   New [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) — pit-of-success vs
   adversary, T6/T7, R2-F9 phishing tier. FA-10 cooperative attribution

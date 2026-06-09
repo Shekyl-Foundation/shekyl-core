@@ -143,6 +143,7 @@ pub enum OpenedEngine<
         super::WalletGreedyOutputSelector,
         super::DaemonFeeEstimator,
         super::fee_snapshot::DaemonFeeSnapshotSource<DaemonClient>,
+        super::transaction_submitter::DaemonTransactionSubmitter<DaemonClient>,
         super::LocalLedger,
     >,
 > {
@@ -735,6 +736,11 @@ impl Engine<SoloSigner> {
         let key = super::key_actor::KeyEngineHandle::spawn(keys);
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
         let fee_snapshot_source = super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
+        let submitter = std::sync::Arc::new(
+            super::transaction_submitter::DaemonTransactionSubmitter::new(std::sync::Arc::new(
+                daemon.clone(),
+            )),
+        );
         let pending = super::LocalPendingTx::new(
             // §6 step 4: the signer no longer holds `Arc<AllKeysBlob>`; it
             // carries a `KeyEngineHandle` clone and the future signing path
@@ -743,6 +749,7 @@ impl Engine<SoloSigner> {
             super::WalletGreedyOutputSelector,
             super::DaemonFeeEstimator,
             fee_snapshot_source,
+            submitter,
             std::sync::Arc::clone(&ledger),
             std::sync::Arc::new(super::TracingDiagnosticSink),
             super::pending::ReservationTTLConfig::default(),
@@ -1377,6 +1384,7 @@ mod tests {
                     snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
                     built_at_height: 0,
                     built_at_tip_hash: [0u8; 32],
+                    tx_bytes: vec![0xAB; 64],
                 },
             );
 

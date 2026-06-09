@@ -23,6 +23,7 @@ shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" 
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }

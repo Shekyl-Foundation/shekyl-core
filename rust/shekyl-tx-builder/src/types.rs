@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use shekyl_units::AtomicUnits;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Serde helper: hex-encode/decode `[u8; 32]`.
 pub mod hex_bytes32 {
@@ -280,7 +280,7 @@ impl Drop for SpendInput {
 }
 
 /// A transaction output with the data needed for commitment and ECDH encoding.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct OutputInfo {
     /// Compressed one-time destination key (Ed25519).
     #[serde(with = "hex_bytes32")]
@@ -290,6 +290,7 @@ pub struct OutputInfo {
     /// HKDF-derived commitment mask z where C = z*G + amount*H.
     /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
     #[serde(with = "hex_bytes32")]
+    #[zeroize]
     pub commitment_mask: [u8; 32],
     /// Pre-computed encrypted amount (9 bytes): [0..8] = amount XOR k_amount,
     /// [8] = amount_tag (HKDF-derived integrity byte).

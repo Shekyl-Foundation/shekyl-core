@@ -232,6 +232,18 @@ impl Extra {
         None
     }
 
+    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus per-output KEM blobs.
+    pub fn for_hybrid_transfer(
+        tx_pubkey: EdwardsPoint,
+        kem_ciphertexts: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Extra {
+        let mut fields = vec![ExtraField::PublicKey(tx_pubkey)];
+        for kem in kem_ciphertexts {
+            fields.push(ExtraField::PqcKemCiphertext(kem));
+        }
+        Extra(fields)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn new(key: EdwardsPoint, additional: Vec<EdwardsPoint>) -> Extra {
         let mut res = Extra(Vec::with_capacity(3));

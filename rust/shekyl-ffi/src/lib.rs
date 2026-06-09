@@ -3185,6 +3185,7 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         TxBuilderError::FcmpProveError(_) => -25,
         TxBuilderError::PqcSignError { .. } => -26,
         TxBuilderError::TreeDepthTooLarge(_) => -27,
+        TxBuilderError::WireError(_) => -28,
     }
 }
 
