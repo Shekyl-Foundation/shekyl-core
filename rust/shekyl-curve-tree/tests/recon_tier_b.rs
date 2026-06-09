@@ -79,12 +79,14 @@ fn _drift_canary_client_path() {
     };
     let mut client = CurveTreeClient::new();
     client.ingest_block(block);
-    let _ = client.root_at(0);
+    let root = client.root_at(0);
+    std::hint::black_box(root);
     let reference = ReferenceBlock {
         height: 0,
         curve_tree_root: [0u8; 32],
     };
-    let _ = client.verify_root(&reference);
+    let verify_ok = client.verify_root(&reference).is_ok();
+    std::hint::black_box(verify_ok);
 }
 
 /// Oracle TBD: read C++ `parse_tx_extra` + the wallet coinbase consumer, or add
@@ -125,6 +127,7 @@ fn reorg_with_spend_mixed_leaves() {
 fn scanner_extra_0x07_matches_daemon_on_adversarial_extra() {
     // Scanner parse is `shekyl_scanner::extra::Extra`; validate stage is
     // `recon::extract_leaf_hashes`. Cross-crate seam — no scanner dep here.
-    let _ = extract_leaf_hashes(Some(&[0u8; 33]));
+    let hashes = extract_leaf_hashes(Some(&[0u8; 33]));
+    std::hint::black_box(hashes);
     todo!("Tier B: daemon duplicate/malformed 0x07 oracle pending");
 }
