@@ -42,16 +42,6 @@
 
 using namespace cryptonote;
 
-static bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs)
-{
-    if (proofs.size() != 1)
-        return false;
-    const size_t sz = proofs[0].V.size();
-    if (sz == 0 || sz > BULLETPROOF_PLUS_MAX_OUTPUTS)
-        return false;
-    return true;
-}
-
 template <class TxForwardIt>
 static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt tx_end,
         tx_verification_context& tvc, std::uint8_t hf_version)
@@ -220,7 +210,7 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
             return false;
             break;
         case rct::RCTTypeFcmpPlusPlusPqc:
-            if (!is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+            if (!rct::is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
             {
                 MERROR("Bulletproof_plus does not have canonical form");
                 return false;

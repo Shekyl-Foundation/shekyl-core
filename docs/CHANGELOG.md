@@ -53,7 +53,8 @@
   `verRctSemanticsBondPost` closes `sum(pseudoOuts) + bond_debit = sum(out masks) + fee +
   bond_credit`; commitment sum is verified in `shekyl-archival-retention` via
   `shekyl_archival_verify_bond_post_rct_balance`; Bulletproof+ stays in C++.
-  NIC path routes bond-post txs away from `verRctSemanticsSimple`.
+  Bond-post path enforces canonical BP+ layout when proofs are present, requires a
+  non-zero bond term, and routes away from `verRctSemanticsSimple` in NIC verify.
 
 - **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
   `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with

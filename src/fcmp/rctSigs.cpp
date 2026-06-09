@@ -279,6 +279,12 @@ namespace
             "Mismatched sizes of outPk and rv.enc_amounts");
         CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
             "Mismatched sizes of enc_labels and rv.enc_amounts");
+        if (!rv.p.bulletproofs_plus.empty()
+            && !is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+        {
+          LOG_PRINT_L1("Bond-post bulletproof_plus is not canonical");
+          return false;
+        }
         std::vector<uint8_t> pseudo_flat;
         pseudo_flat.reserve(rv.p.pseudoOuts.size() * 32);
         for (const key &k : rv.p.pseudoOuts)

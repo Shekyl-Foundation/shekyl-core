@@ -133,6 +133,27 @@ TEST(archival_bond_post, rct_balance_includes_bond_credit_term)
   EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, bond_credit));
 }
 
+TEST(archival_bond_post, rct_balance_rejects_noncanonical_bulletproof_layout)
+{
+  constexpr uint64_t bond_debit = 500'000'000;
+
+  rct::rctSig rv{};
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.p.fcmp_pp_proof = {0x01};
+  const rct::key mask_scalar = rct::skGen();
+  rv.outPk.resize(2);
+  rv.outPk[0].mask = rct::commit(bond_debit / 2, mask_scalar);
+  rv.outPk[1].mask = rct::commit(bond_debit / 2, mask_scalar);
+  rv.enc_amounts.resize(2);
+  rv.enc_labels.resize(2);
+  rv.p.pseudoOuts.push_back(rct::commit(0, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
+
+  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, bond_debit));
+}
+
 TEST(archival_bond_post, rct_balance_includes_bond_debit_term)
 {
   constexpr uint64_t bond_debit = 500'000'000;

@@ -327,6 +327,8 @@ Collateral return and reward mint are **independent value flows**.
 4. **Floor equality** — post-connect `bonded_total_atomic == bond_floor(holdings)`.
 5. `P` hybrid signatures on vin.
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
+   When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
+   proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
