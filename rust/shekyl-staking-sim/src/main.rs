@@ -400,8 +400,8 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     }
     eprintln!();
     eprintln!(
-        "{:<32} {:>5} {:>5} {:>5} {:>5} {:>4} {:>4} {:>5} | {}",
-        "scenario", "volR", "fsE", "fsS", "fsT", "dEsc", "dSl", "FSM?", "gate",
+        "{:<32} {:>5} {:>5} {:>5} {:>5} {:>4} {:>4} {:>5} | gate",
+        "scenario", "volR", "fsE", "fsS", "fsT", "dEsc", "dSl", "FSM?",
     );
     for r in &report.scenarios {
         eprintln!(
