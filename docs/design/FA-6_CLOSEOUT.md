@@ -125,11 +125,12 @@ implementation / re-key** remains V3.1 before multisig is user-shippable.
 
 ---
 
-## 6. FA-9 propagation (parallel — Round 4)
+## 6. FA-9 propagation (Round 4 — closed 2026-06-09)
 
-FA-9 is **consensus-invisible** documentation: propagate §4.6–§4.8, R2-F9
-phishing tier, T6 framing **after** this close-out, pit-of-success vs adversary,
-reuse-without-rotation product principle. Owner: Rick Dawson, ClockWorX LLC.
+FA-9 landed in [`docs/THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md):
+§4.6–§4.8, R2-F9 phishing tier, T6 framing post–this close-out,
+pit-of-success vs adversary, reuse-without-rotation product principle (FA-4
+closed via FA-7 / §5.7.8).
 
 FA-9 does **not** reopen FA-6 wire disposition. It explains the settled decision
 to users, auditors, and threat-model readers.
@@ -156,4 +157,5 @@ to users, auditors, and threat-model readers.
 - [x] FA-6b genesis-lock vs no-V3.0-user-leak disambiguation (§5)
 - [x] Consensus-invisible perf deferred with reversion shape (§4)
 - [x] FA-9 scoped to Round 4 parallel (§6)
+- [x] FA-9 landed — `THREAT_MODEL_WALLET.md` (2026-06-09)
 - [ ] Pi scenario B measured `T_meas` filled in `PERFORMANCE_BASELINE.md` (disposition unchanged)
