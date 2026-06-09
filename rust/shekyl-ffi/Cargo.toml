@@ -26,6 +26,7 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `AtomicUnits` amount-newtype (`docs/design/ATOMIC_UNITS_NEWTYPE.md`).
 # FFI structs stay `#[repr(C)] u64`; this is used only to wrap raw `u64` at
 # the `SpendInput`/`sign_transaction` edge (§4.3).

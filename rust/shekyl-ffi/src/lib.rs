@@ -92,6 +92,9 @@ pub mod engine_file_ffi;
 // (Phase 3 onward) by the daemon's difficulty path.
 pub mod difficulty_ffi;
 
+// Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
+pub mod archival_ffi;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

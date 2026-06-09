@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <limits>
 #include <boost/range/adaptor/reversed.hpp>
 
 #include "string_tools.h"
@@ -229,6 +230,28 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     {
       /* nothing to do here */
       miner_tx = true;
+    }
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
+    {
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+    }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+        throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
+      const uint64_t block_height = get_block_height(blk_hash);
+      const uint64_t seb = shekyl_archival_settlement_epoch_blocks();
+      if (seb == 0)
+        throw std::runtime_error("FATAL: settlement epoch blocks is zero");
+      const uint64_t join_epoch = block_height / seb;
+      put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
+        static_cast<uint8_t>(bond.holdings.kind), bond.holdings.shard_ids);
+      const uint64_t bonded_total = get_total_bonded_atomic();
+      if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
+        throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
+      set_total_bonded_atomic(bonded_total + bond.bond_credit);
     }
     else
     {
@@ -445,6 +468,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   m_hardfork->add(blk, prev_height);
 
+  process_archival_slash_at_height(prev_height + 1);
+
   ++num_calls;
 
   return prev_height;
@@ -463,6 +488,7 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // decrements the chain height, so staked-output eligibility checks use the
   // same height that add_block() used when the outputs were inserted.
   const uint64_t removed_block_height = height();
+  revert_archival_slashes_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -589,6 +615,23 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
 
       uint64_t pool_balance = get_staker_pool_balance();
       set_staker_pool_balance(pool_balance + claim.amount);
+    }
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
+    {
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+    }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+      {
+        remove_archival_bond_record(bond.p_canonical_id);
+        const uint64_t bonded_total = get_total_bonded_atomic();
+        if (bond.bond_credit > bonded_total)
+          throw std::runtime_error("FATAL: total_bonded_atomic underflow on bond-post pop");
+        set_total_bonded_atomic(bonded_total - bond.bond_credit);
+      }
     }
   }
 
@@ -1279,6 +1322,71 @@ void BlockchainDB::fixup()
     }
   }
   batch_stop();
+}
+
+bool BlockchainDB::get_archival_bond_hybrid_pubkey(const crypto::hash& /*p_id*/,
+  std::vector<uint8_t>& /*out_pubkey*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_holds_shard(const crypto::hash& /*p_id*/, uint64_t /*shard_id*/,
+  uint64_t /*at_height*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_good_through(const crypto::hash& /*p_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return false;
+}
+
+uint64_t BlockchainDB::archival_bond_join_epoch(const crypto::hash& /*p_id*/) const
+{
+  return std::numeric_limits<uint64_t>::max();
+}
+
+bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, uint64_t /*at_height*/,
+  crypto::hash& /*out_rk*/, uint64_t& /*out_leaf_count*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::get_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
+  uint32_t /*leaf_index_in_segment*/, uint64_t /*at_height*/,
+  std::vector<uint8_t>& /*out_flat_scalars*/) const
+{
+  return false;
+}
+
+void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
+  const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
+  uint8_t /*holdings_kind*/, const std::vector<uint64_t>& /*held_shard_ids*/,
+  const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
+{
+}
+
+void BlockchainDB::remove_archival_bond_record(const crypto::hash& /*p_id*/)
+{
+}
+
+void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*freeze_height*/,
+  const crypto::hash& /*segment_subroot_rk*/, uint64_t /*segment_leaf_count*/)
+{
+}
+
+void BlockchainDB::put_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
+  uint32_t /*leaf_index_in_segment*/, const std::vector<uint8_t>& /*flat_scalars*/)
+{
+}
+
+void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
+{
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)

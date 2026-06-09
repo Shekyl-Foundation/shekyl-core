@@ -3650,8 +3650,10 @@ version = "3.1.0"
 dependencies = [
  "serde_json",
  "sha3",
+ "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-io",
  "thiserror",
 ]
 
@@ -4012,6 +4014,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-chacha",
  "shekyl-consensus",
  "shekyl-crypto-hash",
@@ -4087,6 +4090,7 @@ dependencies = [
  "hex-literal",
  "serde",
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",

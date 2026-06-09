@@ -22,3 +22,6 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 ///
 /// Not yet byte-pinned in gate-2 §3.1; consensus wire lands with the vin serializer.
 pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;
+
+/// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
+pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;

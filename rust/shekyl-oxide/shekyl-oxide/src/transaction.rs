@@ -5,11 +5,19 @@ use std_shims::prelude::*;
 
 use zeroize::Zeroize;
 
+use shekyl_archival_retention::{
+    ArchivalServeCreditResponse, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+};
+
 use crate::{
     fcmp::{bulletproofs::Bulletproof, PrunedProofs},
     io::*,
     primitives::keccak256,
 };
+
+fn wire_error(err: &shekyl_archival_retention::WireError) -> io::Error {
+    io::Error::other(err.to_string())
+}
 
 /// The maximum size for a non-miner transaction.
 pub const MAX_NON_MINER_TRANSACTION_SIZE: usize = 1_000_000;
@@ -39,6 +47,7 @@ const MAX_NON_MINER_TRANSACTION_OUTPUTS: usize =
     MAX_NON_MINER_TRANSACTION_SIZE / NON_MINER_TRANSACTION_OUTPUT_SIZE_LOWER_BOUND;
 
 /// An input in the Shekyl protocol.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Input {
     /// An input for a miner transaction, which is generating new coins.
@@ -65,6 +74,8 @@ pub enum Input {
         /// Prevents double-claim for this range.
         key_image: CompressedPoint,
     },
+    /// Archival serve-credit response (`txin_archival_serve_credit_response`, tag 4).
+    ArchivalServeCreditResponse(ArchivalServeCreditResponse),
 }
 
 impl Input {
@@ -99,6 +110,9 @@ impl Input {
                 write_varint(to_height, w)?;
                 key_image.write(w)
             }
+            Input::ArchivalServeCreditResponse(response) => {
+                response.write(w).map_err(|e| wire_error(&e))
+            }
         }
     }
 
@@ -130,6 +144,11 @@ impl Input {
                 to_height: read_varint(r)?,
                 key_image: CompressedPoint::read(r)?,
             },
+            VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE => {
+                let response =
+                    ArchivalServeCreditResponse::read_payload(r).map_err(|e| wire_error(&e))?;
+                Input::ArchivalServeCreditResponse(response)
+            }
             _ => Err(io::Error::other(
                 "Tried to deserialize unknown/unused input type",
             ))?,

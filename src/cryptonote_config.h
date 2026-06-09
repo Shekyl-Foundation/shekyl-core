@@ -294,6 +294,12 @@ namespace config
   constexpr size_t PQC_HYBRID_SINGLE_SIG_LEN = 3385;
   constexpr size_t PQC_MAX_SIGNATURE_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
 
+  // Archival serve-credit vin (gate-2 §5.1); bounds match shekyl-archival-retention::wire.
+  constexpr size_t ARCHIVAL_LEAF_BYTES = 128;
+  constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
+  constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
+  constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
+
   namespace testnet
   {
     uint16_t const P2P_DEFAULT_PORT = 12021;

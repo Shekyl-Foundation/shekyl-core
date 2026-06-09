@@ -30,7 +30,10 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <algorithm>
+#include <cstring>
 #include <cstdio>
+#include <sstream>
+#include <unordered_set>
 #include <boost/asio/dispatch.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/range/adaptor/reversed.hpp>
@@ -43,6 +46,7 @@
 #include "tx_pqc_verify.h"
 #include "blockchain.h"
 #include "blockchain_db/blockchain_db.h"
+#include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/events.h"
 #include "cryptonote_config.h"
@@ -3295,6 +3299,16 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
       }
       return true;
     }
+    bool operator()(const txin_archival_serve_credit_response& in) const
+    {
+      (void)in;
+      return true;
+    }
+    bool operator()(const txin_archival_bond_post& in) const
+    {
+      (void)in;
+      return true;
+    }
   };
 
   for (const txin_v& in : tx.vin)
@@ -3556,20 +3570,33 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // the FCMP++ membership proof (claims reference staked outputs by global
   // index, not by tree path).
   bool is_stake_claim_only = false;
+  bool is_archival_serve_credit_only = false;
+  bool is_archival_bond_post_tx = false;
+  size_t archival_bond_post_index = 0;
   if (!tx.vin.empty())
   {
     is_stake_claim_only = true;
-    for (const auto& vin : tx.vin)
+    is_archival_serve_credit_only = true;
+    size_t bond_post_count = 0;
+    for (size_t i = 0; i < tx.vin.size(); ++i)
     {
+      const auto& vin = tx.vin[i];
       if (!std::holds_alternative<txin_stake_claim>(vin))
-      {
         is_stake_claim_only = false;
-        break;
+      if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
+        is_archival_serve_credit_only = false;
+      if (std::holds_alternative<txin_archival_bond_post>(vin))
+      {
+        ++bond_post_count;
+        archival_bond_post_index = i;
       }
+      else if (!std::holds_alternative<txin_to_key>(vin) && !std::holds_alternative<txin_gen>(vin))
+        bond_post_count = 2;
     }
+    is_archival_bond_post_tx = (bond_post_count == 1);
   }
 
-  if (tx.version >= 2)
+  if (tx.version >= 2 && !is_archival_serve_credit_only)
   {
     if (tx.vout.size() < 2)
     {
@@ -3639,6 +3666,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   std::vector<std::vector<rct::ctkey>> pubkeys(tx.vin.size());
 
+  // Block connect passes nullptr; steer to stack storage so FCMP++ paths can
+  // always update max reference height without a null check at each write site.
   uint64_t max_used_block_height = 0;
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;
@@ -3647,6 +3676,32 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   {
     // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
     // validation (no membership proof needed for claims).
+  }
+  else if (is_archival_serve_credit_only)
+  {
+    // Serve-credit responses: non-spending archival vins; hybrid signature
+    // lives on the vin (gate-2 §5).
+  }
+  else if (is_archival_bond_post_tx)
+  {
+    for (const auto& txin : tx.vin)
+    {
+      if (!std::holds_alternative<txin_to_key>(txin))
+        continue;
+      const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
+      if (!in_to_key.key_offsets.empty())
+      {
+        MERROR_VER("Archival bond-post spend input has non-empty key_offsets");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+      if (have_tx_keyimg_as_spent(in_to_key.k_image))
+      {
+        MERROR_VER("Archival bond-post key image already spent");
+        tvc.m_double_spend = true;
+        return false;
+      }
+    }
   }
   else if (is_fcmp_pp)
   {
@@ -3694,7 +3749,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       const uint64_t chain_height = m_db->height();
       const size_t num_inputs = tx.vin.size();
 
-      if (tx.pqc_auths.size() != num_inputs)
+      if (!is_archival_serve_credit_only && tx.pqc_auths.size() != num_inputs)
       {
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
           << " pqc_auths count " << tx.pqc_auths.size()
@@ -3703,7 +3758,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         return false;
       }
 
-      if (rv.p.pseudoOuts.size() != num_inputs)
+      if (!is_archival_serve_credit_only && !is_archival_bond_post_tx
+        && rv.p.pseudoOuts.size() != num_inputs)
       {
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
           << " pseudoOuts count " << rv.p.pseudoOuts.size()
@@ -3712,7 +3768,52 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         return false;
       }
 
-      if (is_stake_claim_only)
+      if (is_archival_serve_credit_only)
+      {
+        if (!tx.pqc_auths.empty())
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must not carry pqc_auths (signature is on the vin)");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (!tx.vout.empty() || rv.txnFee != 0)
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must have no outputs and zero fee");
+          tvc.m_verifivation_failed = true;
+          tvc.m_invalid_output = true;
+          return false;
+        }
+        if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty()
+          || !rv.pseudoOuts.empty() || !rv.p.pseudoOuts.empty())
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must not carry RCT output material");
+          tvc.m_verifivation_failed = true;
+          tvc.m_invalid_output = true;
+          return false;
+        }
+        if (!rv.p.fcmp_pp_proof.empty())
+        {
+          MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
+            << " must not carry an FCMP++ membership proof");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        for (size_t i = 0; i < num_inputs; ++i)
+        {
+          const txin_archival_serve_credit_response& resp =
+            std::get<txin_archival_serve_credit_response>(tx.vin[i]);
+          if (!check_archival_serve_credit_input(resp, chain_height))
+          {
+            MERROR_VER("Archival serve-credit validation failed for input " << i);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+      }
+      else if (is_stake_claim_only)
       {
         // ── Stake claim path: bypass FCMP++ proof, validate claims ────
         // Claim txs use RCTTypeFcmpPlusPlusPqc for confidential outputs
@@ -3789,6 +3890,127 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           if (total_claimed > pool_balance)
           {
             MERROR_VER("Total stake claims " << total_claimed << " exceed pool balance " << pool_balance);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+      }
+      else if (is_archival_bond_post_tx)
+      {
+        const txin_archival_bond_post& bond =
+          std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
+        if (!check_archival_bond_post_input(bond))
+        {
+          MERROR_VER("Archival bond-post validation failed");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (tx.pqc_auths[archival_bond_post_index].hybrid_public_key != bond.hybrid_public_key)
+        {
+          MERROR_VER("Archival bond-post hybrid pubkey does not match pqc_auths["
+            << archival_bond_post_index << "]");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        std::vector<size_t> spend_indices;
+        spend_indices.reserve(tx.vin.size());
+        for (size_t i = 0; i < tx.vin.size(); ++i)
+        {
+          if (std::holds_alternative<txin_to_key>(tx.vin[i]))
+            spend_indices.push_back(i);
+        }
+        if (spend_indices.empty())
+        {
+          MERROR_VER("Archival bond-post tx requires at least one txin_to_key funding input");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        const size_t num_spend = spend_indices.size();
+        if (rv.p.pseudoOuts.size() != num_spend)
+        {
+          MERROR_VER("Archival bond-post tx pseudoOuts count " << rv.p.pseudoOuts.size()
+            << " does not match spend input count " << num_spend);
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        uint64_t ref_height = 0;
+        if (!m_db->block_exists(rv.referenceBlock, &ref_height))
+        {
+          MERROR_VER("Archival bond-post tx referenceBlock not found");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+            ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
+        {
+          MERROR_VER("Archival bond-post tx referenceBlock too recent");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+            ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
+        {
+          MERROR_VER("Archival bond-post tx referenceBlock too old");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        *pmax_used_block_height = ref_height;
+
+        std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
+        const uint8_t current_depth = m_db->get_curve_tree_depth();
+        if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
+        {
+          MERROR_VER("Archival bond-post tx curve_trees_tree_depth out of range");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (rv.p.fcmp_pp_proof.empty())
+        {
+          MERROR_VER("Archival bond-post tx has empty FCMP++ proof");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        std::vector<uint8_t> key_images_flat(num_spend * 32);
+        std::vector<uint8_t> pseudo_outs_flat(num_spend * 32);
+        std::vector<uint8_t> pqc_hashes_flat(num_spend * 32);
+        for (size_t j = 0; j < num_spend; ++j)
+        {
+          const size_t i = spend_indices[j];
+          const txin_to_key& in_to_key = std::get<txin_to_key>(tx.vin[i]);
+          memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
+          memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
+          const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
+          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+          {
+            MERROR_VER("Archival bond-post tx pqc leaf hash failed for spend input " << i);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+
+        if (!skip_fcmp_verify)
+        {
+          const uint8_t fcmp_layers = static_cast<uint8_t>(rv.p.curve_trees_tree_depth + 1);
+          const uint8_t fcmp_result = shekyl_fcmp_verify(
+            rv.p.fcmp_pp_proof.data(),
+            rv.p.fcmp_pp_proof.size(),
+            key_images_flat.data(),
+            num_spend,
+            pseudo_outs_flat.data(),
+            num_spend,
+            pqc_hashes_flat.data(),
+            num_spend,
+            tree_root.data(),
+            fcmp_layers,
+            reinterpret_cast<const uint8_t*>(tx_prefix_hash.data));
+          if (fcmp_result != 0)
+          {
+            MERROR_VER("Archival bond-post FCMP++ proof verification failed (code "
+              << (int)fcmp_result << ")");
             tvc.m_verifivation_failed = true;
             return false;
           }
@@ -3939,7 +4161,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // In FCMP++, the verifier cannot identify the creating output (privacy
   // property), so per-output scheme_id binding relies on the leaf hash.
   // As a defense-in-depth measure, assert all inputs agree on scheme_id.
-  if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0]))
+  if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0])
+      && !is_archival_serve_credit_only)
   {
     boost::optional<uint8_t> expected_scheme;
     if (!tx.pqc_auths.empty())
@@ -4387,6 +4610,226 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
   if (claim.amount != computed_reward)
   {
     MERROR_VER("Claim amount " << claim.amount << " does not match computed reward " << computed_reward);
+    return false;
+  }
+
+  return true;
+}
+//------------------------------------------------------------------
+bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+
+  if (bond.hybrid_public_key.empty()
+    || bond.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
+  {
+    MERROR_VER("Archival bond-post hybrid pubkey out of bounds");
+    return false;
+  }
+
+  if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+  {
+    MERROR_VER("Archival bond-post kind " << static_cast<unsigned>(bond.post_kind)
+      << " not wired at genesis (JoinMarket only)");
+    return false;
+  }
+
+  crypto::hash recomputed{};
+  if (!shekyl_archival_p_canonical_id_from_pubkey(
+        bond.hybrid_public_key.data(), bond.hybrid_public_key.size(),
+        reinterpret_cast<uint8_t*>(recomputed.data)))
+  {
+    MERROR_VER("Archival bond-post P_canonical_id recomputation failed");
+    return false;
+  }
+  if (bond.p_canonical_id != recomputed)
+  {
+    MERROR_VER("Archival bond-post p_canonical_id hint mismatch");
+    return false;
+  }
+
+  if (bond.holdings.kind == archival_holdings_kind::ShardSetCompact
+    && bond.holdings.shard_ids.empty())
+  {
+    MERROR_VER("Archival bond-post ShardSetCompact requires at least one shard");
+    return false;
+  }
+  if (bond.holdings.kind == archival_holdings_kind::CompleteTree
+    && !bond.holdings.shard_ids.empty())
+  {
+    MERROR_VER("Archival bond-post CompleteTree must not carry shard ids");
+    return false;
+  }
+
+  if (bond.bond_debit != 0)
+  {
+    MERROR_VER("Archival JoinMarket bond-post must not carry bond_debit");
+    return false;
+  }
+
+  const uint64_t floor = archival_bond_floor(bond.holdings);
+  if (floor == 0)
+  {
+    MERROR_VER("Archival bond-post bond_floor is zero");
+    return false;
+  }
+  if (bond.bonded_total_atomic != floor || bond.bond_credit != floor)
+  {
+    MERROR_VER("Archival bond-post credit/total must equal bond_floor(" << floor << ")");
+    return false;
+  }
+
+  std::vector<uint8_t> existing_pubkey;
+  if (m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey))
+  {
+    MERROR_VER("Archival JoinMarket rejected: bond record already exists for P_id");
+    return false;
+  }
+
+  return true;
+}
+//------------------------------------------------------------------
+bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
+  uint64_t current_height) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+
+  if (resp.path.c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND
+    || resp.path.c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+  {
+    MERROR_VER("Archival serve-credit path layer count exceeds bound");
+    return false;
+  }
+  for (const auto& branch : resp.path.c1_layers)
+  {
+    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+    {
+      MERROR_VER("Archival serve-credit c1 branch scalar count exceeds bound");
+      return false;
+    }
+  }
+  for (const auto& branch : resp.path.c2_layers)
+  {
+    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+    {
+      MERROR_VER("Archival serve-credit c2 branch scalar count exceeds bound");
+      return false;
+    }
+  }
+
+  if (m_db->has_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch))
+  {
+    MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
+    return false;
+  }
+
+  std::vector<uint8_t> bond_pubkey;
+  if (!m_db->get_archival_bond_hybrid_pubkey(resp.p_canonical_id, bond_pubkey))
+  {
+    MERROR_VER("Archival serve-credit rejected: bond record substrate not available for P_id");
+    return false;
+  }
+
+  const uint64_t join_epoch = m_db->archival_bond_join_epoch(resp.p_canonical_id);
+  if (resp.settlement_epoch < join_epoch + 1)
+  {
+    MERROR_VER("Archival serve-credit settlement epoch " << resp.settlement_epoch
+      << " before join epoch " << join_epoch);
+    return false;
+  }
+
+  if (!m_db->archival_bond_good_through(resp.p_canonical_id, resp.settlement_epoch))
+  {
+    MERROR_VER("Archival serve-credit rejected: P not good_through at epoch "
+      << resp.settlement_epoch);
+    return false;
+  }
+
+  const uint64_t h_open = shekyl_archival_epoch_open_height(resp.settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_close_height(resp.settlement_epoch);
+  const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
+  if (current_height > h_close)
+  {
+    MERROR_VER("Archival serve-credit past credit deadline H_close=" << h_close);
+    return false;
+  }
+
+  crypto::hash seal_hash{};
+  try
+  {
+    seal_hash = m_db->get_block_hash_from_height(h_seal);
+  }
+  catch (const std::exception& e)
+  {
+    MERROR_VER("Archival serve-credit: cannot load seal block hash at height " << h_seal
+      << ": " << e.what());
+    return false;
+  }
+
+  const uint64_t h_fire = shekyl_archival_challenge_fire_height(
+    h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
+    reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
+    resp.shard_id, resp.settlement_epoch);
+  if (h_fire == 0)
+  {
+    MERROR_VER("Archival serve-credit: challenge fire height derivation failed");
+    return false;
+  }
+
+  if (!m_db->archival_bond_holds_shard(resp.p_canonical_id, resp.shard_id, h_fire))
+  {
+    MERROR_VER("Archival serve-credit: shard " << resp.shard_id
+      << " not in bond holdings at H_fire=" << h_fire);
+    return false;
+  }
+
+  crypto::hash registry_rk{};
+  uint64_t segment_leaf_count = 0;
+  if (!m_db->get_archival_shard_segment_at_height(resp.shard_id, h_fire, registry_rk, segment_leaf_count))
+  {
+    MERROR_VER("Archival serve-credit: shard registry substrate not available at H_fire="
+      << h_fire);
+    return false;
+  }
+
+  std::vector<uint8_t> leaf_layer_scalars;
+  if (!m_db->get_archival_shard_leaf_layer_scalars(resp.shard_id, resp.leaf_index_in_segment,
+        h_fire, leaf_layer_scalars))
+  {
+    MERROR_VER("Archival serve-credit: leaf-layer scalars unavailable for challenged index");
+    return false;
+  }
+
+  txin_v vin_variant = resp;
+  std::ostringstream oss;
+  binary_archive<true> oar(oss);
+  if (!::do_serialize(oar, vin_variant))
+  {
+    MERROR_VER("Archival serve-credit: failed to serialize vin for FFI verify");
+    return false;
+  }
+  const std::string wire = oss.str();
+  if (wire.empty() || wire[0] != 0x04)
+  {
+    MERROR_VER("Archival serve-credit: unexpected vin wire tag");
+    return false;
+  }
+  shekyl_archival_verify_ctx ctx{};
+  ctx.current_height = current_height;
+  ctx.settlement_epoch = resp.settlement_epoch;
+  memcpy(ctx.block_hash_at_seal, seal_hash.data, 32);
+  memcpy(ctx.registry_segment_subroot_rk, registry_rk.data, 32);
+  ctx.segment_leaf_count = segment_leaf_count;
+  ctx.pqc_pubkey_ptr = bond_pubkey.data();
+  ctx.pqc_pubkey_len = bond_pubkey.size();
+  ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.data();
+  ctx.leaf_layer_scalars_len = leaf_layer_scalars.size();
+
+  const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
+    reinterpret_cast<const uint8_t*>(wire.data() + 1), wire.size() - 1, &ctx);
+  if (verify_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
+  {
+    MERROR_VER("Archival serve-credit FFI verify failed (code " << (int)verify_rc << ")");
     return false;
   }
 
@@ -4916,6 +5359,35 @@ leave:
         bvc.m_verifivation_failed = true;
         return_txs_to_pool();
         return false;
+      }
+    }
+  }
+
+  // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
+  // duplicate (P, shard, E) credits across multiple txs in the same block.
+  {
+    std::unordered_set<std::string> block_serve_credits;
+    block_serve_credits.reserve(txs.size());
+    for (const auto& tx_pair : txs)
+    {
+      for (const auto& vin : tx_pair.first.vin)
+      {
+        if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
+          continue;
+        const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        std::string key(48, '\0');
+        memcpy(key.data(), resp.p_canonical_id.data, 32);
+        const uint64_t shard_id = resp.shard_id;
+        const uint64_t settlement_epoch = resp.settlement_epoch;
+        memcpy(key.data() + 32, &shard_id, sizeof(shard_id));
+        memcpy(key.data() + 40, &settlement_epoch, sizeof(settlement_epoch));
+        if (!block_serve_credits.insert(std::move(key)).second)
+        {
+          MERROR_VER("Block " << id << " has duplicate archival serve-credit (P, shard, E)");
+          bvc.m_verifivation_failed = true;
+          return_txs_to_pool();
+          return false;
+        }
       }
     }
   }

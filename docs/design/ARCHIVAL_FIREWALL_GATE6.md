@@ -117,7 +117,7 @@ must not form a standing correlation channel.
 |-----------|--------|-------------|
 | Settlement-epoch emission cadence (~14 d default) | Emission leg §3 | Batches work claims; reduces drip timing tell |
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` per `P` | Emission leg §3 | Default batch; single-epoch claim = test-only |
-| Per-epoch retention ledger resolution | Archival state / F1 | **Public liveness fingerprint** at epoch granularity |
+| Per-epoch serve-credit ledger resolution | Archival state / F1 | **Public liveness fingerprint** at epoch granularity |
 | `MAX_CLAIM_AGE_W` | Archival state §2.4 | Forfeiture horizon + hot-state bound (not decorrelation — F1 T-A1) |
 
 **E-4 threat (named):** Fine-grained per-epoch retention timeline + shard-set adjacency

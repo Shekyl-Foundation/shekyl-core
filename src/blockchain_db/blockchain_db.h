@@ -1938,12 +1938,54 @@ public:
   virtual void set_staker_pool_balance(uint64_t balance) = 0;
   virtual uint64_t get_staker_pool_balance() const = 0;
 
+  virtual void set_total_bonded_atomic(uint64_t balance) = 0;
+  virtual uint64_t get_total_bonded_atomic() const = 0;
+
   virtual void set_total_burned(uint64_t amount) = 0;
   virtual uint64_t get_total_burned() const = 0;
 
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) = 0;
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
   virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
+
+  // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
+
+  virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const = 0;
+  virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+  virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+
+  // Gate-4 / shard-registry substrate (default: false until implemented).
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
+    std::vector<uint8_t>& out_pubkey) const;
+  virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const;
+  virtual bool archival_bond_good_through(const crypto::hash& p_id,
+    uint64_t settlement_epoch) const;
+  virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const;
+  virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
+    crypto::hash& out_rk, uint64_t& out_leaf_count) const;
+  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, uint64_t at_height,
+    std::vector<uint8_t>& out_flat_scalars) const;
+
+  // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
+  virtual void put_archival_bond_record(const crypto::hash& p_id,
+    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    uint8_t holdings_kind, const std::vector<uint64_t>& held_shard_ids,
+    const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
+  virtual void remove_archival_bond_record(const crypto::hash& p_id);
+  virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
+    const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count);
+  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars);
+
+  /// Gate-2 §6 / gate-4 §4.2: slash scheduler at `H_slash_deadline` (LMDB impl).
+  virtual void process_archival_slash_at_height(uint64_t block_height);
+  /// Revert slash journal rows recorded when `block_height` connected.
+  virtual void revert_archival_slashes_at_height(uint64_t block_height);
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 

@@ -1,0 +1,102 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, are
+// permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice, this list of
+//    conditions and the following disclaimer.
+//
+// 2. Redistributions in binary form must reproduce the above copyright notice, this list
+//    of conditions and the following disclaimer in the documentation and/or other
+//    materials provided with the distribution.
+//
+// 3. Neither the name of the copyright holder nor the names of its contributors may be
+//    used to endorse or promote products derived from this software without specific
+//    prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+// THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#include "gtest/gtest.h"
+
+#include <cstring>
+#include <sstream>
+#include <variant>
+
+#include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "serialization/binary_archive.h"
+#include "shekyl/consensus_constants_generated.h"
+
+using namespace cryptonote;
+
+namespace {
+
+txin_archival_bond_post make_join_market_vin()
+{
+  txin_archival_bond_post bond{};
+  bond.hybrid_public_key.assign(64, 0xAB);
+  memset(&bond.p_canonical_id, 0x11, sizeof(bond.p_canonical_id));
+  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  bond.holdings.shard_ids = {7, 42};
+  bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.bond_credit = bond.bonded_total_atomic;
+  bond.bond_debit = 0;
+  return bond;
+}
+
+} // namespace
+
+TEST(archival_bond_post, vin_deserializes_with_tag_0x05)
+{
+  txin_v vin = make_join_market_vin();
+
+  std::ostringstream oss;
+  binary_archive<true> oar(oss);
+  ASSERT_TRUE(::do_serialize(oar, vin));
+  const std::string wire = oss.str();
+  ASSERT_FALSE(wire.empty());
+  EXPECT_EQ(static_cast<uint8_t>(wire[0]), 0x05u);
+
+  txin_v decoded;
+  binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
+  ASSERT_TRUE(::do_serialize(iar, decoded));
+  ASSERT_TRUE(std::holds_alternative<txin_archival_bond_post>(decoded));
+
+  const auto& out = std::get<txin_archival_bond_post>(decoded);
+  EXPECT_EQ(out.holdings.shard_ids.size(), 2u);
+  EXPECT_EQ(out.holdings.shard_ids[0], 7u);
+  EXPECT_EQ(out.holdings.shard_ids[1], 42u);
+  EXPECT_EQ(out.bond_credit, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  EXPECT_EQ(out.post_kind, static_cast<uint8_t>(archival_bond_post_kind::JoinMarket));
+}
+
+TEST(archival_bond_post, bond_floor_matches_shard_count)
+{
+  archival_holdings_descriptor holdings{};
+  holdings.kind = archival_holdings_kind::ShardSetCompact;
+  holdings.shard_ids = {1, 2, 3};
+  EXPECT_EQ(archival_bond_floor(holdings), 3 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+
+  holdings.kind = archival_holdings_kind::CompleteTree;
+  holdings.shard_ids.clear();
+  EXPECT_EQ(archival_bond_floor(holdings), SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+}
+
+TEST(archival_bond_post, tx_input_mixing_rejects_bond_with_serve_credit)
+{
+  transaction tx{};
+  tx.vin.push_back(make_join_market_vin());
+  tx.vin.push_back(txin_archival_serve_credit_response{});
+  EXPECT_FALSE(check_inputs_types_supported(tx));
+}

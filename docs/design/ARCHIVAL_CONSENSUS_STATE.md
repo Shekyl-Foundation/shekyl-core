@@ -27,14 +27,14 @@ Loud 8c recompute in emission §5.4 **consumes** state this doc defines:
 
 | Emission read | Source in this contract |
 |---------------|-------------------------|
-| `proven_retention(P, shard, E)` | Retention ledger (gate 2) |
+| `serve_credit_bit(P, shard, E)` | Serve-credit ledger (gate 2) |
 | `shard_id`, `g(age)` inputs | Shard registry (gate 2) |
 | `R_market(shard, E)` | Derived view (§3.3) — **not** a separate ν table |
 | `holdings`, `good_through(P, E)` | `ArchivalBondRecord` (gate 4) |
 | `Σwork(E)` | §4.4 accumulator (emission-owned state; inputs from above) |
 
 **8c deferral boundary:** This doc pins **what** verifiers read at recompute time. The
-**proof object** that authorizes flipping a retention bit is a separate deliverable; the
+**proof object** that authorizes flipping a serve-credit bit is a separate deliverable; the
 interface must not change when construction lands.
 
 ---
@@ -51,7 +51,7 @@ construction** — which the honest residual (V3 §1038–1046) already concedes
 The prior gate-3 primitive `ν = H(P_seckey, shard)` existed to count `R_market` without
 revealing which `P` holds a shard. **That privacy goal is incompatible with form C:**
 you cannot group a `P`'s shards to cap them while hiding that they belong to one `P`.
-`R_market(s,E)` collapses to a **plain count** over the public retention ledger keyed by
+`R_market(s,E)` collapses to a **plain count** over the public serve-credit ledger keyed by
 public `P_id`.
 
 **Same dissolution pattern as `N_arch`:** a privacy-preserving primitive carried from the
@@ -68,7 +68,7 @@ is a **different symbol** (foundation-inclusive observability/SLA) and does not 
 **Honest residual — two axes (F1, 2026-06-07).** Dropping ν improves honesty on the
 **holdings** axis with no new exposure beyond the V3 honest residual (shard-set profile).
 On the **timeline** axis, ν's only job was hiding per-`P` counts while leaving
-per-`(P, shard, E)` attribution hidden. Keying the retention ledger by public `P_id`
+per-`(P, shard, E)` attribution hidden. Keying the serve-credit ledger by public `P_id`
 (§3.1) makes the per-`P`, per-shard, per-epoch retention record **publicly attributable**
 at **settlement-epoch resolution**. The residual concedes a public performance profile;
 what changes is temporal resolution — one bit per epoch per held shard. Under L14
@@ -105,8 +105,8 @@ mechanics or gate-4 slash wire.
 serve_credit_bit(P_id, shard_id, E) : bool
 ```
 
-**Legacy field name in emission wire:** `retention_bit` — same semantics; misnomer ("stored
-continuously"). Means **affirmative pass** on epoch on-demand challenge ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0).
+Means **affirmative pass** on epoch on-demand challenge ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0) — not
+continuous storage.
 
 - Set only on **demonstrated response** this epoch — not "bonded and never failed."
 - Challenge metadata stays **gate-2-internal** — not in this contract.
@@ -124,7 +124,7 @@ what bytes a shard is (set-B boundary).
 
 ```text
 R_market(shard_id, E) =
-  |{ P_id : serve_credit_bit(P_id, shard_id, E)   // legacy: retention_bit
+  |{ P_id : serve_credit_bit(P_id, shard_id, E)
          ∧ good_through(P_id, E)
          ∧ P_id ∈ Market }|
 ```
@@ -137,7 +137,7 @@ R_market(shard_id, E) =
   E-close ([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §3.1).
 - **`Market` membership (per epoch `E`):** record exists ∧ `E ≥ E_join + 1` ∧
   `good_through(P,E)` at E-close ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
-  **No retention bits before join** or for epoch `E_join` (partial). Foundation
+  **No serve-credit bits before join** or for epoch `E_join` (partial). Foundation
   `CompleteTree` excluded from `market_R` / `Σwork` (E-2).
 - **Materialization:** may be stored per `(shard_id, E)` at epoch close or computed on
   read from the ledger; semantics are fixed either way.
@@ -175,7 +175,7 @@ Finalized at settlement epoch `E` **close**. Inputs are the three record familie
 arithmetic is owned by [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.0.
 
 **Implementation choice (not consensus-visible):** epoch-close sweep **or** incremental
-per-`P` delta when retention settles (re-cap one `P`, apply delta to `Σwork`) — the
+per-`P` delta when serve-credit state settles (re-cap one `P`, apply delta to `Σwork`) — the
 per-`P` cap is nonlinear. Reorg revert order must match the chosen path (§6).
 
 ---
@@ -190,7 +190,7 @@ them.
    would not. Divergence ⇒ claimers compute different scarcity and `Σwork` stops
    reconciling.
 
-2. **Finalized-and-immutable at E-close** — retention bits and derived `R_market` for
+2. **Finalized-and-immutable at E-close** — serve-credit bits and derived `R_market` for
    `E` are fixed once `E` closes (within the reorg horizon). Per E-3, they are immune to
    **later** slashes via `good_through(E)` evaluated at close. This boundary is **the
    same** as emission §4.5's lagged `Σwork` read — pin together, not separately.
@@ -214,7 +214,7 @@ structure **prunable**:
 
 | Structure | Prune after `tip − W` (settlement epochs) |
 |-----------|---------------------------------------------|
-| Retention ledger rows | Yes |
+| Serve-credit ledger rows | Yes |
 | Derived / stored `R_market` views | Yes |
 | Per-epoch `Σwork(E)` | Yes |
 | Per-`P` `ClaimedEpochSet` entries | Yes (verify rejects ancient `E`) |
@@ -257,7 +257,7 @@ replicated_hot_state ≈
 Mechanics live in [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) (Round 0,
 2026-06-08). Cryptographic disposition: [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
 
-This contract names **outputs only** — `retention_bit`, shard registry fields — not:
+This contract names **outputs only** — `serve_credit_bit`, shard registry fields — not:
 
 - Challenge derivation, response vin, verifier order (gate-2 §3–§5).
 - Slash predicate handoff (gate-2 §6 → gate 4 §4.2).
@@ -302,8 +302,10 @@ integration tests, 8c verifier hookup.
 ### 9.1 Implementation checklist
 
 - [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
-- [ ] Pin `ShardId` + retention-ledger key `(P_id, shard_id, E)` + epoch indexing.
-- [ ] Pin `R_market` snapshot at epoch close (count with `retention ∧ good_through`).
+- [x] Pin serve-credit-ledger key `(P_id, shard_id, E)` — `archival_serve_credit` LMDB
+      (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
+      gate-4-owned.
+- [ ] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
 - [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
       semantics** at `E`-close (§3.4; not scalar `slash_epoch`).
 - [x] Pin `MAX_CLAIM_AGE_W` + retention/reorg split + prune semantics + **drain-vs-forfeiture**

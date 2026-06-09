@@ -8,9 +8,6 @@ constructible per [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENT
 challenge per bonded shard, Merkle opening to `R_k`, consensus verify, slash on miss.
 Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §6.
 
-**Legacy name:** `retention_bit` in emission formulas = **`serve_credit_bit`** (misnomer; means
-"passed this epoch's on-demand check," not "stored continuously").
-
 **Authority chain:**
 
 | Doc | Role |
@@ -71,7 +68,7 @@ post-and-vanish; unpredictable fire time is the service shape.
 
 | Topic | Disposition |
 |-------|-------------|
-| **`serve_credit_bit`** | "Passed epoch on-demand check" — rename from `retention_bit` in prose; emission wire may keep legacy field name until sweep |
+| **`serve_credit_bit`** | "Passed epoch on-demand check" — affirmative response this epoch, not continuous storage |
 | **L15 `R_target` / three-nines** | **Reach/availability** over serving endpoints — not market durability (foundation floor only) |
 | **Market redundancy** | Redundancy of **pseudonyms** ≤ redundancy of **operators**; firewall makes the gap unmeasurable by design — **accepted**; Sybil cost = bond sizing (existing lever), not durability risk |
 | **Organic user fetches** | Actual service (users fetch; **no** per-fetch consensus payment at genesis) |
@@ -287,6 +284,37 @@ SegmentPathOpening {
 **Forbidden on this vin:** mint fields; bond_credit/debit; `claimed_settlement_epochs`
 mutation; FCMP++ membership proof (8c feasibility §6.3).
 
+### 5.1.1 Byte layout (genesis pin)
+
+Vin type tag **`4`** (`txin_archival_serve_credit_response`). Varint discipline matches
+[`shekyl-oxide` `Input`](../../rust/shekyl-oxide/shekyl-oxide/src/transaction.rs) /
+`shekyl-io`. Reference implementation: `shekyl-archival-retention::wire`.
+
+```text
+u8                      vin_type = 4
+[32]                    p_canonical_id
+varint                  shard_id
+varint                  settlement_epoch
+[32]                    segment_subroot_rk
+u32_le                  leaf_index_in_segment
+[128]                   leaf_bytes
+varint                  c1_layer_count
+repeat c1_layer_count:
+  varint                c1_branch_scalar_count   (≤ 256)
+  repeat scalar_count:
+    [32]                selene/helios child scalar
+varint                  c2_layer_count
+repeat c2_layer_count:  (same shape as c1 branches)
+varint                  hybrid_signature_len
+[hybrid_signature_len]  HybridSignature::to_canonical_bytes()
+```
+
+`encode(path)` for §5.2 is the concatenation of the **c1** and **c2** branch sections only
+(layer counts + branch bodies), **not** the leading type tag or identity fields.
+
+**Preimage vs wire:** §5.2 uses `shard_id_le64` and `settlement_epoch_le64` (fixed width);
+on-wire fields use varints. Do not substitute wire bytes for preimage fields.
+
 ### 5.2 Signature preimage
 
 ```text
@@ -395,9 +423,9 @@ verifier treats registry as authoritative at `H_anchor`.
 | Step | Deliverable |
 |------|-------------|
 | 1 | `shekyl-archival-retention` crate — `verify_segment_path`, challenge replay, KAT from `shekyl-curve-tree` fixtures |
-| 2 | C++/Rust `txin_archival_retention_response` deserializer + consensus hook |
-| 3 | Connect bit write to archival LMDB tables (substrate reconciliation) |
-| 4 | Slash scheduler at `H_deadline` (gate-4 hook) |
+| 2 | C++/Rust `txin_archival_serve_credit_response` deserializer + consensus hook |
+| 3 | End-to-end `check_archival_serve_credit_input` integration test (KAT vin + seeded substrate) — **landed** (`archival_serve_credit_integration.cpp`) |
+| 4 | Slash scheduler at `H_slash_deadline` (gate-4 hook) — **landed** (`process_archival_slash_at_height`) |
 | 5 | Gate-6 wallet: construct response + hybrid sign |
 | 6 | Worst-case verify benchmark → confirm no ZK reopen (8c §9.1 criterion 1) |
 
@@ -414,10 +442,21 @@ verifier treats registry as authoritative at `H_anchor`.
 
 **Open (implementation):**
 
-- [ ] Byte-exact serialization + domain labels frozen
-- [ ] KAT vectors (single opening per epoch)
+- [x] Byte-exact serialization + domain labels frozen (`shekyl-archival-retention::wire`, §5.1.1)
+- [x] KAT vectors (`tests/fixtures/gate2_serve_credit_kat_v1.json`, `gate2_serve_credit_kat_vectors`)
 - [x] `shekyl-archival-retention` verify crate (challenge replay + path verify; CT-4 cross-check KAT)
-- [ ] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
+- [x] Emission / consensus field rename sweep (`retention_bit` → `serve_credit_bit`)
+- [x] `txin_archival_serve_credit_response` deserializer (C++ `txin_v` tag 4; `shekyl-oxide` `Input::ArchivalServeCreditResponse`; KAT cross-check)
+
+**Consensus hook (step 2–3):**
+
+- [x] `shekyl-ffi` archival verify (`shekyl_archival_verify_serve_credit_vin`; gate-2 §5.3 steps 4–9)
+- [x] `Blockchain::check_archival_serve_credit_input` + pure archival tx path in `check_tx_inputs`
+- [x] LMDB `serve_credit_bit` write/revert (`archival_serve_credit` subdb; `LMDB_SCHEMA.md`)
+- [x] Gate-4 bond posture + shard-registry LMDB reads (`archival_bond`, `archival_shard_segment`, `archival_shard_leaf`)
+- [x] Gate-4 `txin_archival_bond_post` JoinMarket connect writes bond records (`put_archival_bond_record`, `total_bonded_atomic`; Rebond/Unbond deferred)
+- [x] Slash scheduler at `H_slash_deadline` (`process_archival_slash_at_height`; gate-2 §6 → gate-4 §4.2; `pop_block` revert)
+- [x] Integration test: seeded bond/registry + KAT vin → `check_archival_serve_credit_input` (`gate2_integration_check_archival_serve_credit_input`; fixture `integration` block)
 
 ---
 
@@ -427,12 +466,14 @@ verifier treats registry as authoritative at `H_anchor`.
 |-----|--------------|
 | [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Cryptographic disposition |
 | [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass fossils |
-| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Reads `retention_bit` for `work_P` |
+| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Reads `serve_credit_bit` for `work_P` |
 | [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) | Challenge delivery class |
 
 ---
 
 ## Changelog
 
+- **2026-06-08:** Emission/consensus rename sweep — `retention_bit` / `proven_retention` →
+  `serve_credit_bit` across specs and `shekyl-staking-sim` fingerprint.
 - **2026-06-08:** Round 1 — §0 on-demand serving obligation; `serve_credit_bit`; beacon fire.
 - **2026-06-08:** Round 0 draft — membership wire; ordering fix (review amendment).

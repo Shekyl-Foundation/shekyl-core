@@ -26,8 +26,8 @@ verifiers recompute `reward_P(E)` from public `Σwork`, `R_market`, and bond sta
 ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4).
 
 **Loud 8c** is *serve-credit unforgeability*: an adversary who cannot produce a valid
-opening when the epoch challenge fires must not earn `serve_credit_bit(P, s, E)` (legacy name
-`retention_bit`) and thereby inflate `work_P(E)` / `Σwork(E)`.
+opening when the epoch challenge fires must not earn `serve_credit_bit(P, s, E)` and thereby
+inflate `work_P(E)` / `Σwork(E)`.
 
 | | Old 8a | Loud 8c |
 |---|--------|---------|
@@ -54,7 +54,7 @@ segment `k` (= shard `s`), produce opening `π` consisting of:
    chain / segment registry).
 3. Accept iff response is bound to `P_id` (§5) and within grace (gate 4).
 
-**Effect:** Set `retention_bit(P_id, s, E) := true` (gate-2 write; emission reads at
+**Effect:** Set `serve_credit_bit(P_id, s, E) := true` (gate-2 write; emission reads at
 E-close).
 
 **Soundness (8c — on-demand serving):** At challenge fire, no adversary produces a valid
@@ -280,7 +280,7 @@ independent storage** fork, (c) binding failure at gate-6 firewall.
 |-----|--------------|
 | [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass test surface |
 | [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) | Gate-2 wire + verifier (Round 0) |
-| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | Reads `retention_bit`; §6 gate-2-internal |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | Reads `serve_credit_bit`; §6 gate-2-internal |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge |
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumes bits for `work_P` |
 | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | Segment / `R_k` authority |

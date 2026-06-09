@@ -190,8 +190,130 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
+  struct archival_leaf_bytes
+  {
+    uint8_t data[config::ARCHIVAL_LEAF_BYTES];
 
-  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim> txin_v;
+    bool operator==(const archival_leaf_bytes& o) const
+    {
+      for (size_t i = 0; i < sizeof(data); ++i)
+        if (data[i] != o.data[i])
+          return false;
+      return true;
+    }
+  };
+
+  struct archival_segment_path_opening
+  {
+    std::vector<std::vector<crypto::hash>> c1_layers;
+    std::vector<std::vector<crypto::hash>> c2_layers;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(c1_layers)
+      if (c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+        return false;
+      for (const auto& branch : c1_layers)
+        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+          return false;
+      FIELD(c2_layers)
+      if (c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+        return false;
+      for (const auto& branch : c2_layers)
+        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+          return false;
+    END_SERIALIZE()
+  };
+
+  enum class archival_bond_post_kind : uint8_t
+  {
+    JoinMarket = 0,
+    Rebond = 1,
+    Unbond = 2,
+    HoldingsUpdate = 3,
+  };
+
+  enum class archival_holdings_kind : uint8_t
+  {
+    ShardSetCompact = 0,
+    CompleteTree = 1,
+  };
+
+  struct archival_holdings_descriptor
+  {
+    archival_holdings_kind kind = archival_holdings_kind::ShardSetCompact;
+    std::vector<uint64_t> shard_ids;
+
+    BEGIN_SERIALIZE_OBJECT()
+      uint8_t kind_u8 = static_cast<uint8_t>(kind);
+      FIELD(kind_u8)
+      if (kind_u8 > static_cast<uint8_t>(archival_holdings_kind::CompleteTree))
+        return false;
+      kind = static_cast<archival_holdings_kind>(kind_u8);
+      if (kind == archival_holdings_kind::ShardSetCompact)
+      {
+        FIELD(shard_ids)
+        if (shard_ids.size() > config::ARCHIVAL_MAX_HOLDINGS_SHARDS)
+          return false;
+      }
+      else if (!shard_ids.empty())
+        return false;
+    END_SERIALIZE()
+  };
+
+  // Gate-4 §3.4.1 — archival bond-post vin (tag 0x05).
+  struct txin_archival_bond_post
+  {
+    std::vector<uint8_t> hybrid_public_key;
+    crypto::hash p_canonical_id;
+    uint8_t post_kind;
+    archival_holdings_descriptor holdings;
+    uint64_t bonded_total_atomic;
+    uint64_t bond_credit;
+    uint64_t bond_debit;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(hybrid_public_key)
+      if (hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
+        return false;
+      FIELD(p_canonical_id)
+      FIELD(post_kind)
+      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+        return false;
+      FIELD(holdings)
+      VARINT_FIELD(bonded_total_atomic)
+      VARINT_FIELD(bond_credit)
+      VARINT_FIELD(bond_debit)
+    END_SERIALIZE()
+  };
+
+  // Gate-2 §5.1 — archival serve-credit response vin (tag 0x04).
+  struct txin_archival_serve_credit_response
+  {
+    crypto::hash p_canonical_id;
+    uint64_t shard_id;
+    uint64_t settlement_epoch;
+    crypto::hash segment_subroot_rk;
+    uint32_t leaf_index_in_segment;
+    archival_leaf_bytes leaf_bytes;
+    archival_segment_path_opening path;
+    std::vector<uint8_t> hybrid_signature;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(p_canonical_id)
+      VARINT_FIELD(shard_id)
+      VARINT_FIELD(settlement_epoch)
+      FIELD(segment_subroot_rk)
+      FIELD(leaf_index_in_segment)
+      FIELD(leaf_bytes)
+      FIELD(path)
+      FIELD(hybrid_signature)
+      if (hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
+        return false;
+    END_SERIALIZE()
+  };
+
+
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
 
   typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
 
@@ -579,6 +701,8 @@ namespace cryptonote
       size_t operator()(const txin_to_scripthash& txin) const{return 0;}
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
       size_t operator()(const txin_stake_claim& txin) const {return 1;}
+      size_t operator()(const txin_archival_serve_credit_response& txin) const {return 0;}
+      size_t operator()(const txin_archival_bond_post& txin) const {return 0;}
     };
 
     return std::visit(txin_signature_size_visitor(), tx_in);
@@ -721,12 +845,15 @@ namespace std {
 
 BLOB_SERIALIZER(cryptonote::txout_to_key);
 BLOB_SERIALIZER(cryptonote::txout_to_scripthash);
+BLOB_SERIALIZER(cryptonote::archival_leaf_bytes);
 
 VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0xff);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0x0);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0x1);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x2);
 VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0x3);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x4);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x5);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0x0);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0x1);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0x2);
@@ -740,6 +867,8 @@ VARIANT_TAG(json_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txin_stake_claim, "stake_claim");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
@@ -753,6 +882,8 @@ VARIANT_TAG(debug_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txin_stake_claim, "stake_claim");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");

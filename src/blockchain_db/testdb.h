@@ -35,6 +35,7 @@
 #include <map>
 
 #include "blockchain_db.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 
 namespace cryptonote
 {
@@ -170,6 +171,8 @@ public:
 
   virtual void set_staker_pool_balance(uint64_t balance) override {}
   virtual uint64_t get_staker_pool_balance() const override { return 0; }
+  virtual void set_total_bonded_atomic(uint64_t balance) override {}
+  virtual uint64_t get_total_bonded_atomic() const override { return 0; }
 
   virtual void set_total_burned(uint64_t amount) override {}
   virtual uint64_t get_total_burned() const override { return 0; }
@@ -177,6 +180,16 @@ public:
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override {}
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
   virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
+
+  virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) const override { return false; }
+  virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
+  virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
+
+  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&, uint64_t,
+    uint8_t, const std::vector<uint64_t>&, const std::vector<std::pair<uint64_t, uint64_t>>&) override {}
+  virtual void remove_archival_bond_record(const crypto::hash&) override {}
+  virtual void put_archival_shard_segment(uint64_t, uint64_t, const crypto::hash&, uint64_t) override {}
+  virtual void put_archival_shard_leaf_layer_scalars(uint64_t, uint32_t, const std::vector<uint8_t>&) override {}
 
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex, const uint8_t*) override {}
   virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex) override {}

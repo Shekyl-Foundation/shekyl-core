@@ -39,6 +39,7 @@ impl SharedKeyDerivations {
                 Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } => {
                     u.extend(key_image.to_bytes())
                 }
+                Input::ArchivalServeCreditResponse(_) => {}
             }
         }
         keccak256(u)

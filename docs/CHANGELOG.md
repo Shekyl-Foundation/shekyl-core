@@ -28,6 +28,48 @@
   `SUBADDRESS_UNDER_PQC.md` §10.1. Matrix in `PERFORMANCE_BASELINE.md` §FA-6;
   Pi scenario B capture pending.
 
+- **archival: serve-credit consensus integration test (gate-2 §10 step 3).**
+  `archival_serve_credit_integration.cpp` seeds in-memory archival substrate from KAT fixture
+  `integration` block (CT-2 opening + epoch-0 challenge geometry) and exercises
+  `Blockchain::check_archival_serve_credit_input` end-to-end; duplicate-bit rejection test.
+
+- **archival: slash scheduler at H_slash_deadline (gate-2 §10 step 4 / gate-4 §4.2).**
+  `process_archival_slash_at_height` on block connect applies per-shard floor slash when
+  `challenge_failed`; updates `total_bonded_atomic` / `total_burned`; journal + `pop_block`
+  revert. FFI: `shekyl_archival_challenge_resolution_blocks`,
+  `shekyl_archival_epoch_slash_deadline_height`. CompleteTree slash deferred.
+
+- **archival: JoinMarket bond-post verify and LMDB connect (gate-4 §3.4.1).**
+  `txin_archival_bond_post` wire (`tag 0x05`), `put_archival_bond_record`, and
+  `total_bonded_atomic` on connect/pop; JoinMarket-only at genesis.
+
+- **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
+  `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with
+  `put_*` seeding APIs; serve-credit verifier reads bond posture and registry geometry
+  from LMDB (rejects when substrate is missing). JoinMarket bond-post connect is separate
+  (see entry above); Rebond/Unbond/HoldingsUpdate kinds remain gate-4 deferred.
+
+- **archival: serve-credit consensus hook + LMDB bit (gate-2 §10 steps 2–3).**
+  `shekyl-ffi` `shekyl_archival_verify_serve_credit_vin`; `Blockchain::check_archival_serve_credit_input`
+  and pure archival tx admission in `check_tx_inputs`; `archival_serve_credit` LMDB subdb
+  (`serve_credit_bit` write on connect, revert on `pop_block`).
+
+- **archival: `txin_archival_serve_credit_response` deserializer (gate-2 §10 step 2).**
+  C++ `txin_v` tag `0x04` with path bounds; `shekyl-oxide` `Input::ArchivalServeCreditResponse`
+  delegates to `shekyl-archival-retention::wire`; KAT cross-check in C++ and Rust unit tests.
+
+- **archival: `serve_credit_bit` rename sweep (gate-2 §11).**
+  `retention_bit` / `proven_retention` → `serve_credit_bit` across emission/consensus specs,
+  `WorkClaimVector` field pin, and `shekyl-staking-sim` T-A1 fingerprint helper.
+
+- **archival: gate-2 serve-credit KAT fixture (v1).**
+  `tests/fixtures/gate2_serve_credit_kat_v1.json` tripwires challenge replay, wire bytes,
+  signature preimage, and CT-2 founder opening; regen via `regenerate_gate2_kat_fixture`.
+
+- **archival: serve-credit response vin wire (gate-2 §5.1.1).**
+  `ArchivalServeCreditResponse` encode/decode (vin tag `4`), `encode(path)` for signature
+  preimage, roundtrip + preimage determinism tests in `shekyl-archival-retention::wire`.
+
 - **crypto-pq / engine: primary claim derivation rename (FA-2 residue).**
   `subaddress` → `output_claim`; `subaddress_derivation_scalar` →
   `output_spend_offset_scalar`; `derive_primary_source_secrets_bundle`

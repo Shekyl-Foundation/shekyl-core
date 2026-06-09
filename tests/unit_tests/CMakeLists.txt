@@ -105,6 +105,10 @@ set(unit_tests_sources
   is_hdd.cpp
   aligned.cpp
   staking.cpp
+  archival_serve_credit.cpp
+  archival_serve_credit_integration.cpp
+  archival_bond_post.cpp
+  archival_substrate_lmdb.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp
@@ -150,6 +154,8 @@ if (NOT MSVC)
 endif ()
 
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
+SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
+  -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)

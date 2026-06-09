@@ -166,7 +166,7 @@ fn run_fa6_path(
         .expect_err("wrong tag must reject after decap");
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)] // gate progress/timing ratios; values stay within f64 mantissa
 fn main() {
     let mut scenario = None;
     let mut scan_path = ScanPath::Fa6MlKemDecap;

@@ -443,11 +443,46 @@ private:
   virtual void remove_staker_accrual(uint64_t height) override;
   virtual void set_staker_pool_balance(uint64_t balance) override;
   virtual uint64_t get_staker_pool_balance() const override;
+  virtual void set_total_bonded_atomic(uint64_t balance) override;
+  virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
   virtual uint64_t get_total_burned() const override;
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override;
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;
+
+  virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
+  virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) override;
+  virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) override;
+
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
+    std::vector<uint8_t>& out_pubkey) const override;
+  virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const override;
+  virtual bool archival_bond_good_through(const crypto::hash& p_id,
+    uint64_t settlement_epoch) const override;
+  virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const override;
+  virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
+    crypto::hash& out_rk, uint64_t& out_leaf_count) const override;
+  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, uint64_t at_height,
+    std::vector<uint8_t>& out_flat_scalars) const override;
+
+  virtual void put_archival_bond_record(const crypto::hash& p_id,
+    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    uint8_t holdings_kind, const std::vector<uint64_t>& held_shard_ids,
+    const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
+  virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
+  virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
+    const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count) override;
+  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
+    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars) override;
+
+  virtual void process_archival_slash_at_height(uint64_t block_height) override;
+  virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
@@ -525,7 +560,32 @@ private:
   uint64_t read_tx_prune_next_block_height() const;
   void write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block);
 
+  bool load_archival_bond_value(const crypto::hash& p_id,
+    shekyl::db::ArchivalBondValue& out) const;
+
+  uint64_t get_archival_last_slash_epoch() const;
+  void set_archival_last_slash_epoch(uint64_t settlement_epoch);
+  bool has_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const;
+  void set_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch);
+  void remove_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch);
+  void append_archival_slash_log(uint64_t block_height, uint32_t seq,
+    const shekyl::db::ArchivalSlashRevertValue& entry);
+  bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+    uint64_t settlement_epoch) const;
+  void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
+    uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
+  void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
+    uint32_t& seq);
+
 private:
+  // Prefer the active write txn when present so uncommitted archival bits are visible
+  // during block connect (slash scheduling, same-block idempotency after prior txs).
+  int archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const;
+
   MDB_env* m_env;
 
   MDB_dbi m_blocks;
@@ -558,6 +618,12 @@ private:
 
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
+  MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
+  MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
+  MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars
+  MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
+  MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]
