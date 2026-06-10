@@ -15,9 +15,9 @@ use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_seal_height,
     p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path,
-    ArchivalBondPostVin, ArchivalServeCreditResponse, BondPostKind, ConservationSnapshot,
-    HoldingsDescriptor, HoldingsKind, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
+    ArchivalBondPostVin, ArchivalServeCreditResponse, BondPostError, BondPostKind,
+    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
+    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -218,4 +218,61 @@ fn gate4_lifecycle_kat_vectors() {
     };
     verify_conservation_snapshot(&snapshot).expect("bonded aggregation");
     assert_eq!(snapshot.total_bonded_atomic, join["bond_credit"].as_u64().expect("credit"));
+}
+
+#[test]
+fn gate4_join_rejects_both_bond_terms() {
+    let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
+    let join_wire = decode_hex(kat["join"]["wire_hex"].as_str().expect("join wire"));
+    let mut cursor = Cursor::new(&join_wire[1..]);
+    let mut join_vin =
+        ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
+    join_vin.bond_debit = join_vin.bond_credit;
+    assert_eq!(
+        verify_join_market_bond_post(&join_vin, false),
+        Err(BondPostError::BothTermsNonzero)
+    );
+}
+
+#[test]
+fn gate4_conservation_rejects_aggregation_mismatch() {
+    let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
+    let cons = &kat["conservation_after_join"];
+    let per_p: Vec<u64> = cons["per_p_bonded"]
+        .as_array()
+        .expect("per_p")
+        .iter()
+        .map(|v| v.as_u64().expect("u64"))
+        .collect();
+    let snapshot = ConservationSnapshot {
+        total_bonded_atomic: cons["total_bonded_atomic"].as_u64().expect("total") + 1,
+        per_p_bonded: &per_p,
+        already_generated: None,
+        circulating: None,
+        burned: None,
+    };
+    assert_eq!(
+        verify_conservation_snapshot(&snapshot),
+        Err(ConservationError::BondedAggregationMismatch {
+            total: snapshot.total_bonded_atomic,
+            sum: per_p.iter().sum(),
+        })
+    );
+}
+
+#[test]
+fn gate4_join_wire_p_id_matches_recomputed_pubkey() {
+    let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
+    let serve = &kat["serve_e_first"];
+    let pk_bytes = decode_hex(
+        serve["bond_hybrid_pubkey_hex"]
+            .as_str()
+            .expect("hybrid pk"),
+    );
+    let expected = decode_hex32(
+        kat["join"]["p_canonical_id_hex"]
+            .as_str()
+            .expect("p_id"),
+    );
+    assert_eq!(p_canonical_id_from_hybrid_pubkey(&pk_bytes), expected);
 }

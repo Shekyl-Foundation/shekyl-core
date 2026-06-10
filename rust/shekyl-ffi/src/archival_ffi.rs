@@ -484,35 +484,44 @@ mod tests {
 
         let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
         let shard = 42u64;
-        let ok = unsafe {
+        let verify = |post_kind: u8,
+                      holdings_kind: u8,
+                      shards: Option<&u64>,
+                      shard_len: usize,
+                      total: u64,
+                      credit: u64,
+                      debit: u64,
+                      record_exists: u8| unsafe {
             shekyl_archival_verify_join_market_bond_post(
-                0,
-                0,
-                std::ptr::from_ref(&shard),
-                1,
-                floor,
-                floor,
-                0,
-                0,
+                post_kind,
+                holdings_kind,
+                shards.map_or(std::ptr::null(), |p| std::ptr::from_ref(p)),
+                shard_len,
+                total,
+                credit,
+                debit,
+                record_exists,
             )
         };
-        assert_eq!(ok, SHEKYL_ARCHIVAL_BOND_POST_OK);
 
-        let both = unsafe {
-            shekyl_archival_verify_join_market_bond_post(0, 0, std::ptr::from_ref(&shard), 1, floor, floor, 1, 0)
-        };
-        assert_eq!(both, SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS);
-
-        let exists = unsafe {
-            shekyl_archival_verify_join_market_bond_post(0, 0, std::ptr::from_ref(&shard), 1, floor, floor, 0, 1)
-        };
-        assert_eq!(exists, SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS);
+        assert_eq!(verify(0, 0, Some(&shard), 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_OK);
+        assert_eq!(verify(1, 0, Some(&shard), 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+        assert_eq!(verify(0, 0, None, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
+        assert_eq!(verify(0, 99, Some(&shard), 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
+        assert_eq!(verify(0, 0, None, 0, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY);
+        assert_eq!(verify(0, 1, Some(&shard), 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS);
+        assert_eq!(verify(0, 0, Some(&shard), 1, floor, floor, floor, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS);
+        assert_eq!(verify(0, 0, Some(&shard), 1, 0, 0, 1, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO);
+        assert_eq!(verify(0, 0, Some(&shard), 1, floor + 1, floor + 1, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH);
+        assert_eq!(verify(0, 0, Some(&shard), 1, floor, floor, 0, 1), SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS);
     }
 
     #[test]
     fn serve_credit_epoch_ok_ffi_matches_rust() {
         assert_eq!(shekyl_archival_serve_credit_epoch_ok(0, 0), 0);
         assert_eq!(shekyl_archival_serve_credit_epoch_ok(1, 0), 1);
+        assert_eq!(shekyl_archival_serve_credit_epoch_ok(u64::MAX, u64::MAX - 1), 1);
+        assert_eq!(shekyl_archival_serve_credit_epoch_ok(u64::MAX, u64::MAX), 0);
     }
 
     #[test]

@@ -99,4 +99,98 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn aggregation_holds_for_multiple_p() {
+        let per_p = [750_000_000, 1_500_000_000, 750_000_000];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: 3_000_000_000,
+            per_p_bonded: &per_p,
+            already_generated: None,
+            circulating: None,
+            burned: None,
+        };
+        assert!(verify_conservation_snapshot(&s).is_ok());
+    }
+
+    #[test]
+    fn aggregation_accepts_empty_per_p_when_total_zero() {
+        let per_p: [u64; 0] = [];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: 0,
+            per_p_bonded: &per_p,
+            already_generated: None,
+            circulating: None,
+            burned: None,
+        };
+        assert!(verify_conservation_snapshot(&s).is_ok());
+    }
+
+    #[test]
+    fn supply_law_holds_when_all_fields_present() {
+        let per_p = [750_000_000];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: 750_000_000,
+            per_p_bonded: &per_p,
+            already_generated: Some(1_000_000_000),
+            circulating: Some(200_000_000),
+            burned: Some(50_000_000),
+        };
+        assert!(verify_conservation_snapshot(&s).is_ok());
+    }
+
+    #[test]
+    fn supply_law_rejects_mismatch() {
+        let per_p = [750_000_000];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: 750_000_000,
+            per_p_bonded: &per_p,
+            already_generated: Some(1_000_000_000),
+            circulating: Some(200_000_000),
+            burned: Some(51_000_000),
+        };
+        assert_eq!(
+            verify_conservation_snapshot(&s),
+            Err(ConservationError::SupplyLawMismatch {
+                generated: 1_000_000_000,
+                circulating: 200_000_000,
+                bonded: 750_000_000,
+                burned: 51_000_000,
+            })
+        );
+    }
+
+    #[test]
+    fn supply_law_skipped_when_any_field_missing() {
+        let per_p = [100];
+        let partial = ConservationSnapshot {
+            total_bonded_atomic: 100,
+            per_p_bonded: &per_p,
+            already_generated: Some(1_000),
+            circulating: Some(200),
+            burned: None,
+        };
+        assert!(verify_conservation_snapshot(&partial).is_ok());
+    }
+
+    #[test]
+    fn supply_law_rejects_rhs_overflow() {
+        let per_p = [u64::MAX];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: u64::MAX,
+            per_p_bonded: &per_p,
+            already_generated: Some(u64::MAX),
+            circulating: Some(u64::MAX),
+            burned: Some(1),
+        };
+        assert_eq!(
+            verify_conservation_snapshot(&s),
+            Err(ConservationError::SupplyLawMismatch {
+                generated: u64::MAX,
+                circulating: u64::MAX,
+                bonded: u64::MAX,
+                burned: 1,
+            })
+        );
+    }
 }
