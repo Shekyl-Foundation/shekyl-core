@@ -315,6 +315,27 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, kat.current_height));
 }
 
+TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
+{
+  const IntegrationKat kat = load_integration_kat();
+  txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
+  resp.settlement_epoch = kat.join_epoch;
+
+  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+  seed_substrate(*db, kat, resp);
+
+  BlockchainAndPool bap;
+  cryptonote::Blockchain* bc = &bap.bc;
+  const std::pair<uint8_t, uint64_t> hard_forks[] = {
+    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+  };
+  const cryptonote::test_options test_options = {hard_forks, 5000};
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+}
+
 TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
 {
   const IntegrationKat kat = load_integration_kat();

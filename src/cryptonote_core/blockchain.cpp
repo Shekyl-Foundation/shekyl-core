@@ -4616,6 +4616,40 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
   return true;
 }
 //------------------------------------------------------------------
+namespace
+{
+const char* archival_bond_post_verify_err_string(uint8_t code)
+{
+  switch (code)
+  {
+  case SHEKYL_ARCHIVAL_BOND_POST_OK:
+    return "ok";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR:
+    return "null shard id pointer";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND:
+    return "post_kind not JoinMarket";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY:
+    return "ShardSetCompact requires shards";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS:
+    return "CompleteTree must not carry shard ids";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO:
+    return "JoinMarket bond_debit must be zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS:
+    return "bond_credit and bond_debit both non-zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO:
+    return "bond_floor is zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH:
+    return "bonded_total/bond_credit must equal bond_floor";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS:
+    return "bond record already exists";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
+    return "invalid holdings_kind";
+  default:
+    return "unknown bond-post verify code";
+  }
+}
+} // namespace
+
 bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -4624,13 +4658,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     || bond.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
   {
     MERROR_VER("Archival bond-post hybrid pubkey out of bounds");
-    return false;
-  }
-
-  if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
-  {
-    MERROR_VER("Archival bond-post kind " << static_cast<unsigned>(bond.post_kind)
-      << " not wired at genesis (JoinMarket only)");
     return false;
   }
 
@@ -4648,41 +4675,24 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return false;
   }
 
-  if (bond.holdings.kind == archival_holdings_kind::ShardSetCompact
-    && bond.holdings.shard_ids.empty())
-  {
-    MERROR_VER("Archival bond-post ShardSetCompact requires at least one shard");
-    return false;
-  }
-  if (bond.holdings.kind == archival_holdings_kind::CompleteTree
-    && !bond.holdings.shard_ids.empty())
-  {
-    MERROR_VER("Archival bond-post CompleteTree must not carry shard ids");
-    return false;
-  }
-
-  if (bond.bond_debit != 0)
-  {
-    MERROR_VER("Archival JoinMarket bond-post must not carry bond_debit");
-    return false;
-  }
-
-  const uint64_t floor = archival_bond_floor(bond.holdings);
-  if (floor == 0)
-  {
-    MERROR_VER("Archival bond-post bond_floor is zero");
-    return false;
-  }
-  if (bond.bonded_total_atomic != floor || bond.bond_credit != floor)
-  {
-    MERROR_VER("Archival bond-post credit/total must equal bond_floor(" << floor << ")");
-    return false;
-  }
-
   std::vector<uint8_t> existing_pubkey;
-  if (m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey))
+  const bool record_exists = m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey);
+  const uint64_t* shard_ptr = bond.holdings.shard_ids.empty()
+    ? nullptr
+    : bond.holdings.shard_ids.data();
+  const uint8_t verify_rc = shekyl_archival_verify_join_market_bond_post(
+    bond.post_kind,
+    static_cast<uint8_t>(bond.holdings.kind),
+    shard_ptr,
+    bond.holdings.shard_ids.size(),
+    bond.bonded_total_atomic,
+    bond.bond_credit,
+    bond.bond_debit,
+    record_exists ? 1 : 0);
+  if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
-    MERROR_VER("Archival JoinMarket rejected: bond record already exists for P_id");
+    MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
+      << "): " << archival_bond_post_verify_err_string(verify_rc));
     return false;
   }
 
@@ -4731,10 +4741,11 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
 
   const uint64_t join_epoch = m_db->archival_bond_join_epoch(resp.p_canonical_id);
-  if (resp.settlement_epoch < join_epoch + 1)
+  if (!shekyl_archival_serve_credit_epoch_ok(resp.settlement_epoch, join_epoch))
   {
     MERROR_VER("Archival serve-credit settlement epoch " << resp.settlement_epoch
-      << " before join epoch " << join_epoch);
+      << " before E_first (join_settlement_epoch+1) for join_settlement_epoch "
+      << join_epoch);
     return false;
   }
 

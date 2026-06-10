@@ -1784,6 +1784,35 @@ uint8_t shekyl_archival_verify_bond_post_rct_balance(
     uint64_t bond_credit,
     uint64_t bond_debit);
 
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+#define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY           3
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS 4
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO        5
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS                6
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO                7
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH            8
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS             9
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
+
+/// `record_exists` is 1 when LMDB already stores a bond record for this P_id.
+uint8_t shekyl_archival_verify_join_market_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists);
+
+/// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
+uint8_t shekyl_archival_serve_credit_epoch_ok(
+    uint64_t settlement_epoch,
+    uint64_t join_settlement_epoch);
+
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //

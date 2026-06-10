@@ -20,6 +20,9 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 curve25519-dalek = "4"
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 # CT-4 assembled-path KAT cross-check (gate-2 §10 step 1).
 [dev-dependencies]
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }

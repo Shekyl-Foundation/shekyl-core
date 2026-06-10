@@ -13,9 +13,10 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
-    verify_bond_post_rct_balance, verify_leaf_index, verify_segment_path,
-    ArchivalServeCreditResponse, BondRctBalanceError, WireError, CHALLENGE_RESOLUTION_BLOCKS,
-    SETTLEMENT_EPOCH_BLOCKS,
+    serve_credit_epoch_ok, verify_bond_post_rct_balance, verify_join_market_bond_post,
+    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
+    BondPostError, BondPostKind, BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError,
+    CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -64,6 +65,29 @@ pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
 /// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
 pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
+
+/// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
+pub const SHEKYL_ARCHIVAL_BOND_POST_OK: u8 = 0;
+/// `shard_ids_ptr` was null while `shard_ids_len > 0`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR: u8 = 1;
+/// `post_kind` is not JoinMarket.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND: u8 = 2;
+/// ShardSetCompact with empty shard list.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY: u8 = 3;
+/// CompleteTree carries shard ids.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS: u8 = 4;
+/// JoinMarket bond-post must not carry `bond_debit`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO: u8 = 5;
+/// Both `bond_credit` and `bond_debit` are non-zero (§3.2 term rigidity).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS: u8 = 6;
+/// `bond_floor(holdings)` is zero.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO: u8 = 7;
+/// `bonded_total_atomic` / `bond_credit` do not equal `bond_floor`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH: u8 = 8;
+/// Bond record already exists for `P_canonical_id`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS: u8 = 9;
+/// `holdings_kind` is not a known enum value.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND: u8 = 10;
 
 /// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
 #[repr(C)]
@@ -295,6 +319,86 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     SHEKYL_ARCHIVAL_VERIFY_OK
 }
 
+fn map_bond_post_error(err: BondPostError) -> u8 {
+    match err {
+        BondPostError::PostKindNotJoinMarket => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,
+        BondPostError::ShardSetCompactEmpty => SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY,
+        BondPostError::CompleteTreeWithShardIds => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS
+        }
+        BondPostError::BondDebitNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO,
+        BondPostError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS,
+        BondPostError::BondFloorZero => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO,
+        BondPostError::FloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH,
+        BondPostError::RecordExists => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS,
+    }
+}
+
+fn holdings_kind_from_u8(kind: u8) -> Result<HoldingsKind, u8> {
+    HoldingsKind::from_u8(kind).map_err(|_| SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND)
+}
+
+/// Verify JoinMarket bond-post semantics after C++ hybrid-pubkey and `P_id` checks.
+///
+/// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
+/// `record_exists` is `1` when LMDB already has a bond record for this `P_id`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
+    post_kind: u8,
+    holdings_kind: u8,
+    shard_ids_ptr: *const u64,
+    shard_ids_len: usize,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+    record_exists: u8,
+) -> u8 {
+    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let holdings_kind = match holdings_kind_from_u8(holdings_kind) {
+        Ok(k) => k,
+        Err(code) => return code,
+    };
+    let post_kind = match BondPostKind::from_u8(post_kind) {
+        Ok(k) => k,
+        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,
+    };
+    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
+    };
+    let vin = ArchivalBondPostVin {
+        hybrid_public_key: Vec::new(),
+        p_canonical_id: [0u8; 32],
+        post_kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
+    };
+    match verify_join_market_bond_post(&vin, record_exists != 0) {
+        Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
+        Err(e) => map_bond_post_error(e),
+    }
+}
+
+/// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_serve_credit_epoch_ok(
+    settlement_epoch: u64,
+    join_settlement_epoch: u64,
+) -> u8 {
+    u8::from(serve_credit_epoch_ok(
+        settlement_epoch,
+        join_settlement_epoch,
+    ))
+}
+
 fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
     match err {
         BondRctBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS,
@@ -375,6 +479,85 @@ mod tests {
     fn ffi_rejects_null_context() {
         let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
         assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn bond_post_ffi_maps_each_reject_reason() {
+        use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+        let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+        let shard = 42u64;
+        let verify = |post_kind: u8,
+                      holdings_kind: u8,
+                      shards: Option<&u64>,
+                      shard_len: usize,
+                      total: u64,
+                      credit: u64,
+                      debit: u64,
+                      record_exists: u8| unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                post_kind,
+                holdings_kind,
+                shards.map_or(std::ptr::null(), std::ptr::from_ref),
+                shard_len,
+                total,
+                credit,
+                debit,
+                record_exists,
+            )
+        };
+
+        assert_eq!(
+            verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_OK
+        );
+        assert_eq!(
+            verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+        );
+        assert_eq!(
+            verify(0, 0, None, 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+        );
+        assert_eq!(
+            verify(0, 99, Some(&shard), 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND
+        );
+        assert_eq!(
+            verify(0, 0, None, 0, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY
+        );
+        assert_eq!(
+            verify(0, 1, Some(&shard), 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS
+        );
+        assert_eq!(
+            verify(0, 0, Some(&shard), 1, floor, floor, floor, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS
+        );
+        assert_eq!(
+            verify(0, 0, Some(&shard), 1, 0, 0, 1, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO
+        );
+        assert_eq!(
+            verify(0, 0, Some(&shard), 1, floor + 1, floor + 1, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH
+        );
+        assert_eq!(
+            verify(0, 0, Some(&shard), 1, floor, floor, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
+        );
+    }
+
+    #[test]
+    fn serve_credit_epoch_ok_ffi_matches_rust() {
+        assert_eq!(shekyl_archival_serve_credit_epoch_ok(0, 0), 0);
+        assert_eq!(shekyl_archival_serve_credit_epoch_ok(1, 0), 1);
+        assert_eq!(
+            shekyl_archival_serve_credit_epoch_ok(u64::MAX, u64::MAX - 1),
+            1
+        );
+        assert_eq!(shekyl_archival_serve_credit_epoch_ok(u64::MAX, u64::MAX), 0);
     }
 
     #[test]

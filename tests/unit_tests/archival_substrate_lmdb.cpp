@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "blockchain_db/lmdb/db_lmdb.h"
+#include "blockchain_db/shekyl_types.h"
 
 using namespace cryptonote;
 
@@ -46,6 +47,17 @@ crypto::hash make_hash(uint8_t fill)
   return h;
 }
 
+/// Minimum-length bond LMDB value with a non-v3 version byte.
+///
+/// `ArchivalBondValue::decode` rejects solely on `version != kVersion` once
+/// `len >= 19`; no historical pre-v3 wire layout is load-bearing at genesis.
+std::vector<uint8_t> non_v3_bond_blob(uint8_t version)
+{
+  std::vector<uint8_t> blob(19, 0);
+  blob[0] = version;
+  return blob;
+}
+
 } // namespace
 
 TEST(archival_substrate_lmdb, bond_record_roundtrip)
@@ -55,10 +67,11 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   const std::vector<uint8_t> pubkey = {0x01, 0x02, 0x03, 0x04};
   const std::vector<uint64_t> shards = {7, 42};
   const std::vector<std::pair<uint64_t, uint64_t>> bad = {{5, 6}};
+  const uint64_t bonded_total = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, 3, shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact,
-    shards, bad);
+  db.put_archival_bond_record(p_id, pubkey, 3, bonded_total,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, shards, bad);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -71,6 +84,24 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   EXPECT_TRUE(db.archival_bond_good_through(p_id, 4));
   EXPECT_FALSE(db.archival_bond_good_through(p_id, 3));
   EXPECT_FALSE(db.archival_bond_good_through(p_id, 5));
+
+  shekyl::db::ArchivalBondValue roundtrip{};
+  shekyl::db::ArchivalBondValue written{};
+  written.hybrid_pubkey = pubkey;
+  written.join_settlement_epoch = 3;
+  written.bonded_total_atomic = bonded_total;
+  written.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  written.held_shard_ids = shards;
+  for (const auto& iv : bad)
+  {
+    shekyl::db::ArchivalBondValue::BadInterval entry{};
+    entry.start_epoch = iv.first;
+    entry.end_exclusive = iv.second;
+    written.bad_intervals.push_back(entry);
+  }
+  const std::vector<uint8_t> encoded = written.encode();
+  ASSERT_TRUE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), roundtrip));
+  EXPECT_EQ(roundtrip.bonded_total_atomic, bonded_total);
 
   db.remove_archival_bond_record(p_id);
   fixture.db.batch_stop();
@@ -86,13 +117,63 @@ TEST(archival_substrate_lmdb, complete_tree_bond_holds_any_shard)
   const std::vector<uint8_t> pubkey = {0x05, 0x06};
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, 1, shekyl::db::ArchivalBondValue::kHoldingsCompleteTree,
-    {}, {});
+  db.put_archival_bond_record(p_id, pubkey, 1, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsCompleteTree, {}, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, 0));
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 999, 0));
+}
+
+TEST(archival_substrate_lmdb, bond_reject_legacy_versions)
+{
+  shekyl::db::ArchivalBondValue decoded{};
+
+  const std::vector<uint8_t> v1 = non_v3_bond_blob(1);
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v1.data(), v1.size(), decoded));
+
+  const std::vector<uint8_t> v2 = non_v3_bond_blob(2);
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v2.data(), v2.size(), decoded));
+}
+
+TEST(archival_substrate_lmdb, bond_reject_unknown_version)
+{
+  std::vector<uint8_t> blob = non_v3_bond_blob(1);
+  blob[0] = 99;
+  shekyl::db::ArchivalBondValue decoded{};
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
+}
+
+TEST(archival_substrate_lmdb, bond_v3_reject_truncated_after_join_epoch)
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x01, 0x02};
+  bond.join_settlement_epoch = 7;
+  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {42};
+
+  std::vector<uint8_t> encoded = bond.encode();
+  ASSERT_GT(encoded.size(), 20u);
+  encoded.resize(encoded.size() - 9);
+
+  shekyl::db::ArchivalBondValue decoded{};
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), decoded));
+}
+
+TEST(archival_substrate_lmdb, bond_v3_encode_version_byte)
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x0A};
+  bond.join_settlement_epoch = 1;
+  bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {7, 42};
+
+  const std::vector<uint8_t> encoded = bond.encode();
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalBondValue::kVersion);
 }
 
 TEST(archival_substrate_lmdb, shard_registry_roundtrip)
