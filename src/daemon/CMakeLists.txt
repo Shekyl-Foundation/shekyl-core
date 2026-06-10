@@ -57,6 +57,13 @@ target_link_libraries(daemon
     serialization
     ${EPEE_READLINE}
     version
+    # Force-load libshekyl_daemon_rpc.a *before* the shared FFI link
+    # set so every shekyl_log_* reference resolves from the daemon-rpc
+    # archive's embedded shekyl-logging image (one tracing dispatcher)
+    # rather than the standalone libshekyl_logging.a. See the
+    # SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE comment in cmake/BuildRust.cmake
+    # and the post-link nm gate below.
+    ${SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE}
     ${SHEKYL_FFI_LINK_LIBS}
     ${SHEKYL_DAEMON_RPC_LINK_LIBS}
     rpc
@@ -72,4 +79,22 @@ target_link_libraries(daemon
 set_property(TARGET daemon
   PROPERTY
     OUTPUT_NAME "shekyld")
+
+# Single-tracing-dispatcher gate: the binary must contain exactly one
+# tracing-core GLOBAL_DISPATCH definition. Two copies means the daemon
+# linked both the daemon-rpc-embedded shekyl-logging image and the
+# standalone libshekyl_logging.a — the split-image regression in which
+# shekyl-daemon-rpc tracing events are silently dropped
+# (V3_WALLET_DECISION_LOG.md 2026-06-10). nm runs pre-strip, so the
+# symbol is visible in both debug and release link products.
+if(UNIX)
+  find_program(SHEKYL_NM_EXECUTABLE nm)
+  if(SHEKYL_NM_EXECUTABLE)
+    add_custom_command(TARGET daemon POST_BUILD
+      COMMAND sh -c "count=$(${SHEKYL_NM_EXECUTABLE} \"$0\" | grep -c GLOBAL_DISPATCH || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED: $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi" "$<TARGET_FILE:daemon>"
+      VERBATIM
+      COMMENT "Asserting single tracing GLOBAL_DISPATCH in shekyld")
+  endif()
+endif()
+
 install(TARGETS daemon DESTINATION bin)

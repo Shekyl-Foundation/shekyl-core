@@ -333,3 +333,33 @@ elseif(APPLE)
 else()
     set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
 endif()
+
+# ── Single-Rust-image contract for the daemon ────────────────────────────────
+#
+# `shekyl-daemon-rpc` depends on the `shekyl-logging` crate, so
+# `libshekyl_daemon_rpc.a` carries the `shekyl_log_*` C exports *and* the
+# one `tracing-core` `GLOBAL_DISPATCH` its `tracing::*` macros dispatch
+# through. The daemon must resolve every `shekyl_log_*` reference from
+# that archive — never from the standalone `libshekyl_logging.a` that
+# `SHEKYL_FFI_LINK_LIBS` drags in transitively (epee/cryptonote_basic/
+# cryptonote_core all link it) — otherwise the binary ends up with two
+# dispatcher copies and daemon-rpc's events are silently dropped
+# (V3_WALLET_DECISION_LOG.md 2026-06-10 single-image amendment).
+#
+# Plain archive ordering cannot guarantee this: GNU ld pulls a member
+# only when it defines a currently-undefined symbol, so an early
+# daemon-rpc archive position would satisfy whichever `shekyl_log_*`
+# refs exist at that point and leave the rest (e.g. mlog.o's init refs,
+# which only appear when libepee.a is reached later) to resolve from the
+# trailing standalone logging archive — a split-image mix. Force-loading
+# the daemon-rpc archive defines the full `shekyl_log_*` surface from
+# one image up front; the standalone archive then contributes nothing.
+# The post-link nm gate on the daemon target asserts the result (exactly
+# one GLOBAL_DISPATCH definition).
+if(MSVC)
+    set(SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE "/WHOLEARCHIVE:${SHEKYL_DAEMON_RPC_LIBRARY}" CACHE INTERNAL "Force-load flags for libshekyl_daemon_rpc (daemon only)" FORCE)
+elseif(APPLE)
+    set(SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE "-Wl,-force_load,${SHEKYL_DAEMON_RPC_LIBRARY}" CACHE INTERNAL "Force-load flags for libshekyl_daemon_rpc (daemon only)" FORCE)
+else()
+    set(SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE "-Wl,--whole-archive;${SHEKYL_DAEMON_RPC_LIBRARY};-Wl,--no-whole-archive" CACHE INTERNAL "Force-load flags for libshekyl_daemon_rpc (daemon only)" FORCE)
+endif()
