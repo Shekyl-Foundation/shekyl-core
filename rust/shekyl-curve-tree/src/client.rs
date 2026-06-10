@@ -138,23 +138,31 @@ impl Default for CurveTreeClient {
 }
 
 impl CurveTreeClient {
-    /// An empty client (no blocks ingested). Its root at any reference
-    /// height is the empty-tree root until the first leaf drains.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            store: LeafStore::open_ephemeral().expect("ephemeral leaf store"),
+    /// Open an empty client backed by an ephemeral store.
+    pub fn try_new() -> Result<Self, ClientError> {
+        Ok(Self {
+            store: LeafStore::open_ephemeral().map_err(ClientError::from)?,
             entries: Vec::new(),
             next_gindex: 0,
             drained_through_counts: Vec::new(),
-        }
+        })
+    }
+
+    /// An empty client (no blocks ingested). Its root at any reference
+    /// height is the empty-tree root until the first leaf drains.
+    ///
+    /// Panics if the ephemeral store cannot be opened; production callers
+    /// should use [`Self::try_new`] or [`Self::from_blocks`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::try_new().expect("ephemeral leaf store")
     }
 
     /// Build a client by replaying `blocks` in order from genesis. This is
     /// also the reorg path: re-call with the post-reorg chain to rebuild
     /// (derive-don't-accumulate makes the rollback free).
     pub fn from_blocks(blocks: &[BlockLeaves<'_>]) -> Result<Self, ClientError> {
-        let mut client = Self::new();
+        let mut client = Self::try_new()?;
         client.store.clear()?;
         for block in blocks {
             client.ingest_block(*block)?;
