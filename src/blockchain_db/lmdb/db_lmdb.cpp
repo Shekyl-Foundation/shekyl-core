@@ -5107,7 +5107,8 @@ bool BlockchainLMDB::get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
-  uint8_t holdings_kind, const std::vector<uint64_t>& held_shard_ids,
+  uint64_t bonded_total_atomic, uint8_t holdings_kind,
+  const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -5127,6 +5128,7 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = hybrid_pubkey;
   bond.join_settlement_epoch = join_settlement_epoch;
+  bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;
   bond.held_shard_ids = held_shard_ids;
   bond.bad_intervals.reserve(bad_intervals.size());
@@ -5327,8 +5329,12 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   for (const auto& iv : bond.bad_intervals)
     bad.emplace_back(iv.start_epoch, iv.end_exclusive);
 
+  if (bond.bonded_total_atomic < slashed_amount)
+    throw std::runtime_error("FATAL: per-P bonded_total_atomic underflow on slash");
+  bond.bonded_total_atomic -= slashed_amount;
+
   put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
-    bond.holdings_kind, shards, bad);
+    bond.bonded_total_atomic, bond.holdings_kind, shards, bad);
 
   const uint64_t bonded_total = get_total_bonded_atomic();
   if (slashed_amount > bonded_total)
@@ -5532,8 +5538,10 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     for (const auto& iv : bond.bad_intervals)
       bad.emplace_back(iv.start_epoch, iv.end_exclusive);
 
+    bond.bonded_total_atomic += entry.slashed_amount;
+
     put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
-      bond.holdings_kind, bond.held_shard_ids, bad);
+      bond.bonded_total_atomic, bond.holdings_kind, bond.held_shard_ids, bad);
 
     const uint64_t bonded_total = get_total_bonded_atomic();
     set_total_bonded_atomic(bonded_total + entry.slashed_amount);
