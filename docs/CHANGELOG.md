@@ -4,6 +4,19 @@
 
 ### Added
 
+- **logging/daemon: single-Rust-image tracing contract for `shekyld`.**
+  `shekyl-daemon-rpc` `tracing::*` events are no longer silently dropped
+  (FOLLOWUPS V3.2 item, absorbed into Phase 1): the crate now compiles
+  `shekyl-logging` into `libshekyl_daemon_rpc.a`, the daemon force-loads
+  that archive so every `shekyl_log_*` symbol resolves from one Rust image
+  with one `tracing-core` dispatcher, and a post-link `nm` gate fails the
+  build on regression. New C-ABI export
+  `shekyl_log_install_tracing_forwarder` (decision log 2026-04-25, single-
+  image mechanism amendment 2026-06-10) pins init ordering and idempotency
+  (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls it after
+  `mlog_configure`. State-machine integration test plus C-harness coverage
+  in `shekyl-logging`.
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust

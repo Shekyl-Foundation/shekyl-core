@@ -56,17 +56,19 @@ documented blocker + reversion clause).
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| `shekyl_log_install_tracing_forwarder` in `rust/shekyl-logging/src/ffi.rs` | open | Decision logged (`V3_WALLET_DECISION_LOG.md` 2026-04-25, `:1795`) with exact signature; not implemented. Error-code table in `ffi.rs` ends at `-11`; `SHEKYL_LOG_ERR_ALREADY_INSTALLED` to be allocated `-12` |
-| shekyld calls it after `shekyl_log_init_*` / `mlog_configure` | open | Call site: `src/daemon/main.cpp` after `mlog_configure` (`:336`); declaration added to `src/shekyl/shekyl_log.h` |
-| Idempotent `ALREADY_INSTALLED` / `NOT_INITIALIZED` codes | open | `SHEKYL_LOG_ERR_NOT_INITIALIZED = -9` exists; install-state machine to be added |
+| `shekyl_log_install_tracing_forwarder` in `rust/shekyl-logging/src/ffi.rs` | done | Implemented per decision log 2026-04-25 + single-image mechanism amendment 2026-06-10; `SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12` allocated. State-machine integration test (`tests/tracing_forwarder.rs`) + C-harness arms (`tests/c_ffi.rs`) |
+| shekyld calls it after `shekyl_log_init_*` / `mlog_configure` | done | `src/daemon/main.cpp` immediately after `mlog_configure`; declaration in `src/shekyl/shekyl_log.h` |
+| Idempotent `ALREADY_INSTALLED` / `NOT_INITIALIZED` codes | done | One-shot pin; pre-init failure does not consume the pin (retry-after-init works) |
 
-Implementation note: `rust/shekyl-daemon-rpc/Cargo.toml` depends on
-`tracing` but **not** on `shekyl-logging` — its staticlib image carries a
-dispatcher with no subscriber, which is the "tracing silently dropped"
-bug the forwarder closes. Whether the final C++ link deduplicates
-`tracing-core` across `libshekyl_logging.a` / `libshekyl_daemon_rpc.a` /
-`libshekyl_ffi.a` is verified at the CMake build, not assumed; the
-forwarder PR must build `shekyld` as part of its test gate.
+Implementation note (resolved): the link audit found the pre-change
+`shekyld` carried **two** `tracing-core` `GLOBAL_DISPATCH` copies (one
+per Rust staticlib image), so the original cross-image "forwarder
+install" framing was unimplementable as specified. Landed shape is the
+single-Rust-image contract: `shekyl-daemon-rpc` depends on
+`shekyl-logging` (one merged image), the daemon force-loads
+`libshekyl_daemon_rpc.a` (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE`,
+`cmake/BuildRust.cmake`), and a post-link `nm` gate on the `daemon`
+target asserts exactly one dispatcher. See decision log 2026-06-10.
 
 ### Tests & docs
 
@@ -81,11 +83,12 @@ forwarder PR must build `shekyld` as part of its test gate.
 ## Close-out sequence (per 06-branching.mdc sizing)
 
 1. **PR 1 — this document.** Gap audit, doc-only.
-2. **PR 2 — tracing forwarder.** `shekyl-logging::ffi`
-   `shekyl_log_install_tracing_forwarder` (+ `-12` code, unit tests),
-   `shekyl_log.h` declaration, `src/daemon/main.cpp` call site,
-   `shekyl-daemon-rpc` → `shekyl-logging` dependency if the link audit
-   requires it. Closes the absorbed V3.2 FOLLOWUPS item.
+2. **PR 2 — tracing forwarder.** Landed (`feat/phase1-closeout`):
+   `shekyl-logging::ffi` `shekyl_log_install_tracing_forwarder` (+ `-12`
+   code, tests), `shekyl-daemon-rpc` → `shekyl-logging` dependency
+   (single-image), daemon force-load + `nm` gate, `shekyl_log.h`
+   declaration, `src/daemon/main.cpp` call site. Closes the absorbed
+   V3.2 FOLLOWUPS item per decision log 2026-06-10.
 3. **PR 3 — `change_password` integration test.** Drive
    `WalletFile::rotate_password` on disk for FULL; verify against an
    independent `WalletFile::open`. Closes the FOLLOWUPS V3.0 item.

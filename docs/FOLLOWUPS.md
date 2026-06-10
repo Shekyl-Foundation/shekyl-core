@@ -4321,7 +4321,7 @@ by the rewrite plan's half-day review gate, item 3):
 | --- | --- | --- |
 | Absorbed (already by rewrite plan) | `wallet2.cpp` absorption (2l/2m/2n) | Phase 5 deletion |
 | Absorbed | `WalletPrefs` round-trip property test (2k.a2) | Phase 1 (`RuntimeWalletState` audit) |
-| Absorbed | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) |
+| Landed 2026-06-10 | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) — closed via single-Rust-image link contract, decision log 2026-06-10 |
 | Closed by Phase 5 | `shekyl-cli` key image export binary format (V3.2 below) | Phase 5 — Monero binary format dies with `wallet2.cpp`; air-gapped flow uses `UnsignedTxBundle`/`SignedTxBundle` |
 | Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
 | Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
@@ -5241,6 +5241,20 @@ one place to confirm each item's relationship to the wallet stack.
   [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](
   ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
   Phase 1 deliverables.**
+
+  **Closed 2026-06-10.** Neither of the two shapes sketched above
+  survived implementation: `nm` on the linked `shekyld` showed *two*
+  `tracing-core` `GLOBAL_DISPATCH` copies (one per Rust staticlib
+  image), which no in-process subscriber install can bridge. Landed
+  shape is the single-Rust-image link contract:
+  `shekyl-daemon-rpc` depends on the `shekyl-logging` crate (one
+  merged image, one dispatcher), the daemon force-loads
+  `libshekyl_daemon_rpc.a` ahead of the standalone logging archive,
+  a post-link `nm` gate asserts exactly one dispatcher in `shekyld`,
+  and `shekyl_log_install_tracing_forwarder` (decision log
+  2026-04-25) ships as the runtime ordering/idempotency contract,
+  called from `src/daemon/main.cpp` after `mlog_configure`. See
+  `V3_WALLET_DECISION_LOG.md` 2026-06-10 amendment.
 
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
   deferrals rest on the same "upstream cherry-pick preservation"

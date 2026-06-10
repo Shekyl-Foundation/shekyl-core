@@ -4045,4 +4045,67 @@ disposition); supersedes the §4.2 Round-7 ambient-or-owned text.
 
 ---
 
+## 2026-06-10 — Tracing forwarder mechanism: single-Rust-image link contract (amends 2026-04-25)
+
+**Decision.** The `shekyl_log_install_tracing_forwarder` export keeps
+the 2026-04-25 name, signature, location (`shekyl-logging::ffi`), and
+error-code semantics (`SHEKYL_LOG_OK` / `SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`
+/ `SHEKYL_LOG_ERR_NOT_INITIALIZED`), but the *mechanism* is superseded:
+there is no cross-image forwarding subscriber. Instead:
+
+- `shekyl-daemon-rpc` gains `shekyl-logging` as a crate dependency, so
+  `libshekyl_daemon_rpc.a` is a single Rust image carrying the
+  `shekyl_log_*` C exports and exactly one `tracing-core`
+  `GLOBAL_DISPATCH` shared with the crate's own `tracing::*` macros.
+- The daemon force-loads that archive ahead of the standalone
+  `libshekyl_logging.a` that `SHEKYL_FFI_LINK_LIBS` drags in
+  transitively (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE` in
+  `cmake/BuildRust.cmake`), so every `shekyl_log_*` reference in the
+  binary resolves into the merged image.
+- A post-link `nm` gate on the `daemon` target asserts exactly one
+  `GLOBAL_DISPATCH` definition in `shekyld`; the split-image regression
+  fails the build.
+- The export itself becomes the runtime half of the contract: it pins
+  call ordering (`shekyl_log_init_*` first) and install idempotency.
+  A failed pre-init call does not consume the one-shot pin.
+
+**Why the amendment.** Implementation surfaced that the 2026-04-25
+"forwarder install" framing presupposed one Rust image. Empirically
+(`nm` on the pre-change `shekyld`) the daemon linked *two* staticlib
+images — `libshekyl_logging.a` and `libshekyl_daemon_rpc.a` — each
+with its own `tracing-core` dispatcher copy at a distinct address. No
+in-process subscriber install can bridge two dispatcher statics: the
+forwarder would have installed into whichever image's objects the
+linker happened to pull, leaving the other dark. A cross-image
+event-forwarding bridge (C-ABI re-entry through `shekyl_log_emit`)
+was considered and rejected: it flattens structured fields to strings,
+double-formats, and builds permanent plumbing for a link topology the
+Rust-daemon migration is actively eliminating. Merging the images
+moves the FFI seam in the direction the daemon rewrite is already
+heading — one Rust image per binary, with C++ calling into it — and
+makes the dispatcher question disappear rather than get bridged.
+
+**Consequences.**
+
+- The FOLLOWUPS.md V3.2 item *"`shekyl-daemon-rpc` staticlib:
+  `tracing::*` calls silently dropped"* (absorbed into Phase 1) is
+  closed by this shape.
+- Future Rust staticlib crates linked into C/C++ binaries follow the
+  same pattern: depend on `shekyl-logging` (one image), force-load,
+  nm-gate. The forwarder export is already shared infrastructure; no
+  per-crate symbol is added.
+- Reversion clause: if a future binary genuinely must link two Rust
+  images (e.g., a third-party Rust archive that cannot grow a
+  `shekyl-logging` dependency), the cross-image bridge question
+  reopens via a fresh decision-log entry with that binary's link map
+  as the substrate; the in-place mechanism is not silently extended.
+
+**Reference.** `rust/shekyl-logging/src/ffi.rs`
+(`shekyl_log_install_tracing_forwarder` doc comment),
+`cmake/BuildRust.cmake` (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE`),
+`src/daemon/CMakeLists.txt` (nm gate), `src/daemon/main.cpp`
+(call site after `mlog_configure`).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
