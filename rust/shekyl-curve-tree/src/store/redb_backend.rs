@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use redb::backends::InMemoryBackend;
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
 use crate::store::ops::{full_build_root, mixed_composition_root, recompute_segment_r_k};

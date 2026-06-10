@@ -106,20 +106,19 @@ resolver = "2"
 [workspace.package]
 version = "3.1.0"
 edition = "2021"
-# MSRV binding constraint: `kameo = "=0.20.0"` declares `rust-version
-# = 1.88.0` (verified at source via the crates.io index, 2026-05-29:
-# kameo 0.20.0, msrv 1.88.0, not yanked). This raises the floor above
-# the previous `aes = "0.9"` (edition 2024) driver of 1.85. Per
-# `RANDOMX_V2_PHASE2B_PLAN.md` §9: locking the pin produces a clean
-# "your rustc is too old" message from cargo rather than a cryptic
-# compile failure deep in the dependency graph. CI builds on
-# `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026), so no
-# `rust-toolchain.toml` is added — pinning a fixed channel would
-# change both CI and local build behavior without serving the gate's
-# intent, which is the MSRV *declaration* below. The Guix substrate
-# does not exist today per `RANDOMX_V2_RUST.md` §22 ("forward work");
-# when Guix lands, its rustc must already be ≥ 1.88 to build this
-# workspace.
+# MSRV binding constraints (workspace floor = max of consumers):
+#   - `kameo = "=0.20.0"`: 1.88.0 (crates.io index, 2026-05-29)
+#   - `redb = "4.1.0"` (CT-1 LeafStore): 1.89.0
+#   - `shekyl-pow-randomx`: `Box::new_zeroed_slice` (stable 1.92.0)
+# Workspace pins 1.94.0 to align with `shekyl-gui-wallet/src-tauri/
+# rust-toolchain.toml`. Per `RANDOMX_V2_PHASE2B_PLAN.md` §9: the
+# declared floor produces a clean cargo MSRV error rather than a
+# cryptic compile failure deep in the graph. CI runs an explicit
+# `rust-msrv-gate` job at 1.94.0 in addition to `@stable`; no
+# workspace `rust-toolchain.toml` — the gate is the declaration plus
+# the job, not a pinned local channel. Guix substrate does not exist
+# today per `RANDOMX_V2_RUST.md` §22; when it lands, its rustc must
+# be ≥ MSRV.
 #
 # Enforcement: this declaration is inherited by every first-party crate
 # via `rust-version.workspace = true` in each member's `[package]`. The
@@ -128,7 +127,7 @@ edition = "2021"
 # `rust-version` (literal or `.workspace = true`). Propagating the
 # inherit to all members makes the gate real per-crate rather than a
 # virtual-root annotation; a future bump touches only the value here.
-rust-version = "1.88"
+rust-version = "1.94"
 license = "BSD-3-Clause"
 repository = "https://github.com/radawson/Shekyl"
 
@@ -211,10 +210,11 @@ sha2 = "0.10"
 serde_json = "1"
 
 # CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).
-# Verified at source (redb 2.6.3): `Database::create`, `begin_write`/`begin_read`,
+# Verified at source (redb 4.1.0): `Database::create`, `begin_write`/`begin_read`,
 # `TableDefinition`, `ReadableTable` range scan; public chain data only — no
-# `Zeroize` requirement (`17-dependency-discipline.mdc`).
-redb = "2.6.3"
+# `Zeroize` requirement (`17-dependency-discipline.mdc`). Pre-genesis greenfield:
+# v3 file format only (no v2 migration path).
+redb = "4.1.0"
 
 # `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
 # "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
@@ -223,8 +223,8 @@ redb = "2.6.3"
 # crates.io index 2026-05-29: 0.20.0 is the newest stable (released
 # 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
 # the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
-# this project's topology depends on. MSRV 1.88.0 (reflected in the
-# workspace `rust-version` bump above). Pinned with an exact
+# this project's topology depends on. Crate MSRV 1.88.0 (below the
+# workspace floor). Pinned with an exact
 # patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
 # framework is a coordination-load-bearing dependency where a silent
 # minor bump could alter mailbox/supervision semantics under us.

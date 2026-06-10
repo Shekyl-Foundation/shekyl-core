@@ -6,6 +6,11 @@ fields that downstream commits implement against.
 
 ## Persistence engine: **redb** (locked)
 
+**Pin:** `redb = "4.1.0"` (workspace `[workspace.dependencies]`). Pre-genesis
+greenfield uses v3 file format only (`Database::create`); no v2 migration path.
+Requires rustc ≥ 1.89; workspace MSRV 1.94 covers this and `shekyl-pow-randomx`
+(`Box::new_zeroed_slice`, stable 1.92).
+
 | Factor | Rationale |
 |--------|-----------|
 | **Shekyl-first** | Pure Rust, no C FFI, no MSVC LMDB build risk (`10-shekyl-first.mdc`) |

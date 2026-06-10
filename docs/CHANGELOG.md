@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace MSRV 1.88 → 1.94; CT-1 `redb` 2.6.3 → 4.1.0.**
+  Floor driven by `shekyl-pow-randomx` (`Box::new_zeroed_slice`, stable
+  1.92), `redb` 4.1.0 (1.89), and alignment with
+  `shekyl-gui-wallet` `rust-toolchain.toml` (1.94.0). CI adds
+  `rust-msrv-gate` (`dtolnay/rust-toolchain@1.94.0` +
+  `cargo check --workspace`). Pre-genesis greenfield: redb v3 format only.
+
 ### Added
 
 - **curve-tree: CT-1 LeafStore on redb (Round 1).**
