@@ -249,7 +249,7 @@ impl LeafStore {
             }
             let start = seg_k * e;
             let seg_leaves = read_leaf_bytes_range(txn, start, end_tree_pos + 1)?;
-            let r_k = recompute_segment_r_k(&seg_leaves);
+            let r_k = recompute_segment_r_k(&seg_leaves).map_err(store_mixed_root_err)?;
             let record = FrozenSegmentRecord {
                 r_k,
                 end_tree_pos,
@@ -302,7 +302,8 @@ impl LeafStore {
                     let start = k * e;
                     let end = start + e;
                     let seg_leaves = read_leaf_bytes_range_read(&txn, start, end)?;
-                    frozen_r.push(recompute_segment_r_k(&seg_leaves));
+                    frozen_r
+                        .push(recompute_segment_r_k(&seg_leaves).map_err(store_mixed_root_err)?);
                 }
             }
         }
@@ -312,13 +313,13 @@ impl LeafStore {
             Ok(root) => Ok(root),
             Err(MixedRootError::TailTooShortForLayerJ) => {
                 match read_leaf_bytes_range_read(&txn, 0, leaf_count) {
-                    Ok(all_leaves) => Ok(full_build_root(&all_leaves)),
+                    Ok(all_leaves) => full_build_root(&all_leaves).map_err(store_mixed_root_err),
                     Err(_) => Err(StoreError::CorruptMeta(
                         "mixed root failed with incomplete leaf range (post-prune)",
                     )),
                 }
             }
-            Err(err) => Err(StoreError::MixedComposition(err)),
+            Err(err) => Err(store_mixed_root_err(err)),
         }
     }
 
@@ -678,6 +679,15 @@ fn encode_target(target: &TargetKind) -> u8 {
     }
 }
 
+fn store_mixed_root_err(err: MixedRootError) -> StoreError {
+    match err {
+        MixedRootError::InvalidLeafScalars => {
+            StoreError::CorruptMeta("invalid persisted leaf scalars")
+        }
+        other => StoreError::MixedComposition(other),
+    }
+}
+
 fn decode_target(tag: u8, extra: &[u8]) -> Result<TargetKind, StoreError> {
     Ok(match tag {
         0 => TargetKind::TaggedKey,
@@ -709,6 +719,16 @@ mod tests {
                 target: TargetKind::TaggedKey,
             },
         }
+    }
+
+    #[test]
+    fn root_at_count_rejects_corrupt_leaf_bytes() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let mut entry = sample_entry(0, 0);
+        entry.leaf = [0xff; 128];
+        store.append_drained(&[entry], 1).unwrap();
+        let err = store.root_at_count(1).unwrap_err();
+        assert!(matches!(err, StoreError::CorruptMeta(_)));
     }
 
     #[test]

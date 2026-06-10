@@ -10,7 +10,7 @@
 //! pinned in `docs/design/CT1_ROUND1_PINS.md`.
 
 use shekyl_fcmp::tree::{
-    build_layers, layer_is_selene, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SELENE_CHUNK_WIDTH,
+    layer_is_selene, try_build_layers, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SELENE_CHUNK_WIDTH,
 };
 use shekyl_oxide::DEFAULT_LOCK_WINDOW;
 
@@ -58,8 +58,15 @@ pub fn segment_freeze_eligible(tip_height: u64, end_block_height: u64) -> bool {
 
 /// Recompute segment `k`'s sub-root `R_k` from its `E` leaf scalars.
 pub fn extract_r_k(leaf_scalars: &[[u8; 32]]) -> [u8; 32] {
-    let layers = build_layers(leaf_scalars);
-    layers[usize::from(SEGMENT_LAYER_J)][0]
+    try_extract_r_k(leaf_scalars).expect("valid leaf scalars")
+}
+
+/// Fallible [`extract_r_k`] for persisted bytes on the CT-1 store path.
+pub fn try_extract_r_k(leaf_scalars: &[[u8; 32]]) -> Option<[u8; 32]> {
+    let layers = try_build_layers(leaf_scalars)?;
+    layers
+        .get(usize::from(SEGMENT_LAYER_J))
+        .and_then(|layer| layer.first().copied())
 }
 
 /// Flatten `LeafEntry`-style 128-byte leaves into Selene scalars for `build_layers`.

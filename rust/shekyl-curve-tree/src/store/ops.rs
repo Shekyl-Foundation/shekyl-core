@@ -5,8 +5,10 @@
 
 //! Hot-path root composition: frozen `R_k` + partial tail + `build_upper_layers`.
 
-use crate::segment::{extract_r_k, leaf_bytes_to_scalars, leaves_per_segment, SEGMENT_LAYER_J};
-use shekyl_fcmp::tree::{build_layers, build_upper_layers, promote_to_layer, selene_hash_init};
+use crate::segment::{leaf_bytes_to_scalars, leaves_per_segment, try_extract_r_k, SEGMENT_LAYER_J};
+use shekyl_fcmp::tree::{
+    selene_hash_init, try_build_layers, try_build_upper_layers, try_promote_to_layer,
+};
 
 /// Errors from the mixed-composition root path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +26,8 @@ pub enum MixedRootError {
         /// Actual `tail_leaf_bytes` length supplied by the caller.
         got: usize,
     },
+    /// Persisted leaf bytes failed scalar/point deserialization or hash growth.
+    InvalidLeafScalars,
 }
 
 /// Root at `leaf_count` drained leaves via frozen `R_k` + tail composition.
@@ -58,11 +62,8 @@ pub fn mixed_composition_root(
     // No complete segments yet — mixed composition does not apply.
     if complete == 0 {
         let scalars = leaf_bytes_to_scalars(tail_leaf_bytes);
-        let layers = build_layers(&scalars);
-        return layers
-            .last()
-            .map(|layer| layer[0])
-            .ok_or(MixedRootError::EmptyUpperLayers);
+        let layers = try_build_layers(&scalars).ok_or(MixedRootError::InvalidLeafScalars)?;
+        return root_from_layers(&layers);
     }
 
     let frozen_needed = usize::try_from(complete).expect("complete segment count fits usize");
@@ -76,22 +77,26 @@ pub fn mixed_composition_root(
         initial_layer.extend_from_slice(&tail_layer_j_nodes(tail_leaf_bytes, SEGMENT_LAYER_J)?);
     }
 
-    let upper = build_upper_layers(initial_layer, SEGMENT_LAYER_J);
-    let root_layer = upper.last().ok_or(MixedRootError::EmptyUpperLayers)?;
-    Ok(root_layer[0])
+    let upper = try_build_upper_layers(initial_layer, SEGMENT_LAYER_J)
+        .ok_or(MixedRootError::InvalidLeafScalars)?;
+    root_from_layers(&upper)
 }
 
-/// Full root from contiguous drained leaf bytes (recon oracle path).
-#[must_use]
-pub fn full_build_root(leaf_bytes: &[[u8; 128]]) -> [u8; 32] {
+/// Full root from contiguous drained leaf bytes (store / recon path).
+pub fn full_build_root(leaf_bytes: &[[u8; 128]]) -> Result<[u8; 32], MixedRootError> {
     if leaf_bytes.is_empty() {
-        return selene_hash_init();
+        return Ok(selene_hash_init());
     }
     let scalars = leaf_bytes_to_scalars(leaf_bytes);
-    build_layers(&scalars)
+    let layers = try_build_layers(&scalars).ok_or(MixedRootError::InvalidLeafScalars)?;
+    root_from_layers(&layers)
+}
+
+fn root_from_layers(layers: &[Vec<[u8; 32]>]) -> Result<[u8; 32], MixedRootError> {
+    layers
         .last()
-        .map(|layer| layer[0])
-        .unwrap_or(selene_hash_init())
+        .and_then(|layer| layer.first().copied())
+        .ok_or(MixedRootError::EmptyUpperLayers)
 }
 
 /// Layer-`j` nodes contributed by a partial tail segment.
@@ -109,7 +114,7 @@ fn tail_layer_j_nodes(
     if scalars.is_empty() {
         return Ok(Vec::new());
     }
-    let layers = build_layers(&scalars);
+    let layers = try_build_layers(&scalars).ok_or(MixedRootError::InvalidLeafScalars)?;
     let j_idx = usize::from(j);
     if layers.len() > j_idx {
         return Ok(layers[j_idx].clone());
@@ -118,11 +123,12 @@ fn tail_layer_j_nodes(
     if layers[deepest].is_empty() {
         return Err(MixedRootError::EmptyUpperLayers);
     }
-    let promoted = promote_to_layer(
+    let promoted = try_promote_to_layer(
         layers[deepest].clone(),
         u8::try_from(deepest).expect("tail tree depth fits u8"),
         j,
-    );
+    )
+    .ok_or(MixedRootError::InvalidLeafScalars)?;
     if promoted.is_empty() {
         return Err(MixedRootError::TailTooShortForLayerJ);
     }
@@ -130,16 +136,16 @@ fn tail_layer_j_nodes(
 }
 
 /// Recompute `R_k` for segment `segment_id` from contiguous leaf bytes.
-#[must_use]
-pub fn recompute_segment_r_k(segment_leaf_bytes: &[[u8; 128]]) -> [u8; 32] {
+pub fn recompute_segment_r_k(segment_leaf_bytes: &[[u8; 128]]) -> Result<[u8; 32], MixedRootError> {
     let scalars = leaf_bytes_to_scalars(segment_leaf_bytes);
-    extract_r_k(&scalars)
+    try_extract_r_k(&scalars).ok_or(MixedRootError::InvalidLeafScalars)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::segment::outputs_per_node;
+    use shekyl_fcmp::tree::{build_layers, build_upper_layers};
     use ciphersuite::{
         group::ff::{Field, PrimeField},
         Ciphersuite,
@@ -168,6 +174,12 @@ mod tests {
                 leaf
             })
             .collect()
+    }
+
+    #[test]
+    fn mixed_composition_rejects_invalid_leaf_scalars() {
+        let err = mixed_composition_root(1, &[], &[[0xff; 128]]).unwrap_err();
+        assert_eq!(err, MixedRootError::InvalidLeafScalars);
     }
 
     #[test]
