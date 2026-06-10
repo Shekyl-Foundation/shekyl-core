@@ -56,6 +56,10 @@ pub use challenge::{
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
+pub use consensus_state::{
+    good_through, market_member_at_epoch, r_market_count, shard_work_milli, sigma_work_milli,
+    BadInterval, ServeCreditRow, FOUNDATION_EXCLUDED_FROM_MARKET,
+};
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
@@ -64,13 +68,9 @@ pub use constants::{
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
-pub use consensus_state::{
-    good_through, market_member_at_epoch, r_market_count, sigma_work_milli, shard_work_milli,
-    BadInterval, ServeCreditRow, FOUNDATION_EXCLUDED_FROM_MARKET,
-};
 pub use reward_arithmetic::{
-    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli,
-    BandedCurveParams, WORK_MILLI_SCALE,
+    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
+    WORK_MILLI_SCALE,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{

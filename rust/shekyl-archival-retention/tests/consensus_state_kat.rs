@@ -6,8 +6,8 @@
 //! Consensus-state KAT: `R_market`, `Σwork`, determinism (ARCHIVAL_CONSENSUS_STATE.md).
 
 use shekyl_archival_retention::{
-    curve_milli, good_through, r_market_count, sigma_work_milli, BadInterval, BandedCurveParams,
-    ServeCreditRow, WORK_MILLI_SCALE,
+    curve_milli, r_market_count, sigma_work_milli, BadInterval, BandedCurveParams, ServeCreditRow,
+    WORK_MILLI_SCALE,
 };
 
 const KAT: &str = include_str!("fixtures/consensus_state_kat_v1.json");
@@ -71,9 +71,7 @@ fn consensus_state_kat_v1() {
             .iter()
             .map(|v| v.as_bool().unwrap())
             .collect();
-        let expected_sigma = doc["expected"]["sigma_work_milli"]
-            .as_u64()
-            .expect("sigma");
+        let expected_sigma = doc["expected"]["sigma_work_milli"].as_u64().expect("sigma");
         assert_eq!(sigma_work_milli(&works, &curve, &mask), expected_sigma);
     }
 

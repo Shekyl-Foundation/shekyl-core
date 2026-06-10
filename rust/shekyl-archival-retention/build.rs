@@ -59,6 +59,20 @@ fn main() {
             )
         });
 
+    let expected_plateau_work = plateau_value.checked_mul(2).unwrap_or_else(|| {
+        panic!(
+            "archival_reward_plateau_value_milli overflow in {}",
+            config_path.display()
+        )
+    });
+    if plateau_work != expected_plateau_work {
+        panic!(
+            "archival_reward_plateau_work_milli ({plateau_work}) must equal \
+             2 * archival_reward_plateau_value_milli ({plateau_value}) in {}",
+            config_path.display()
+        );
+    }
+
     let age_weight = map
         .get("archival_reward_age_weight_milli")
         .and_then(serde_json::Value::as_u64)
@@ -72,12 +86,7 @@ fn main() {
     let max_claim_age_w = map
         .get("max_claim_age_w")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
-            panic!(
-                "missing max_claim_age_w in {}",
-                config_path.display()
-            )
-        });
+        .unwrap_or_else(|| panic!("missing max_claim_age_w in {}", config_path.display()));
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("archival_bond_floor_generated.rs");

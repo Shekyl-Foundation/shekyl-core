@@ -17,14 +17,13 @@ pub fn curve_banded(work: f64, plateau_value: f64) -> f64 {
     }
 
     let mut y = 0.0;
-    let mut x = 0.0;
 
-    if work > b1 {
+    let mut x = if work > b1 {
         y += b1;
-        x = b1;
+        b1
     } else {
         return work;
-    }
+    };
 
     if work > b2 {
         y += (b2 - x) * 0.5;

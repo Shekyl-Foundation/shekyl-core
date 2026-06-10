@@ -489,11 +489,17 @@ fn main() {
         return;
     }
 
-    let curve_impl = std::env::args().find_map(|a| {
-        a.strip_prefix("--curve-impl=")
-            .map(|v| if v == "integer" { CurveImpl::Integer } else { CurveImpl::Float })
-    })
-    .unwrap_or(CurveImpl::Float);
+    let curve_impl = std::env::args()
+        .find_map(|a| {
+            a.strip_prefix("--curve-impl=").map(|v| {
+                if v == "integer" {
+                    CurveImpl::Integer
+                } else {
+                    CurveImpl::Float
+                }
+            })
+        })
+        .unwrap_or(CurveImpl::Float);
 
     let mut cfgs: Vec<_> = build_scenarios()
         .into_iter()
@@ -718,8 +724,7 @@ mod tests {
 
         let banded = BandedCurveParams::from_sim_cap_milli(8_000);
         let int_cap = curve_milli(16_000, &banded);
-        let flt_milli =
-            (curve_banded(16.0, 8.0) * WORK_MILLI_SCALE as f64).round() as u64;
+        let flt_milli = (curve_banded(16.0, 8.0) * WORK_MILLI_SCALE as f64).round() as u64;
         assert_eq!(int_cap, flt_milli);
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! No LMDB — fixture/KAT replay only. C++ materialization must match these semantics.
 
-use crate::reward_arithmetic::{curve_milli, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE};
+use crate::reward_arithmetic::{curve_milli, scarcity_milli, BandedCurveParams};
 
 /// Half-open bad-standing interval `[start_epoch, end_exclusive)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

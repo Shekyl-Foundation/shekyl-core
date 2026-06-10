@@ -16,8 +16,9 @@ use shekyl_archival_retention::{
     scarcity_milli, serve_credit_epoch_ok, verify_bond_post_rct_balance,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditResponse, BandedCurveParams, BondPostError, BondPostKind,
-    BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;

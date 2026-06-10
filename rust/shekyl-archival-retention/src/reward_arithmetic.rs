@@ -38,12 +38,7 @@ impl BandedCurveParams {
 #[must_use]
 pub fn g_age_milli(age_milli: u64, age_weight_milli: u64) -> u64 {
     WORK_MILLI_SCALE.saturating_add(
-        mul_div_floor(
-            age_weight_milli,
-            age_milli,
-            WORK_MILLI_SCALE,
-        )
-        .unwrap_or(u64::MAX),
+        mul_div_floor(age_weight_milli, age_milli, WORK_MILLI_SCALE).unwrap_or(u64::MAX),
     )
 }
 
@@ -54,8 +49,12 @@ pub fn scarcity_milli(r_market: u64, age_milli: u64, age_weight_milli: u64) -> u
         return 0;
     }
     let g = g_age_milli(age_milli, age_weight_milli);
-    mul_div_floor(WORK_MILLI_SCALE, g, r_market.saturating_mul(WORK_MILLI_SCALE))
-        .unwrap_or(0)
+    mul_div_floor(
+        WORK_MILLI_SCALE,
+        g,
+        r_market.saturating_mul(WORK_MILLI_SCALE),
+    )
+    .unwrap_or(0)
 }
 
 /// Evaluate banded piecewise-linear `Curve(work_milli)` → credited work milli.
@@ -75,15 +74,14 @@ pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
     }
 
     let mut y = 0u64;
-    let mut x = 0u64;
 
     // segment 1: slope 1.0
-    if work_milli > b1 {
+    let mut x = if work_milli > b1 {
         y = y.saturating_add(b1);
-        x = b1;
+        b1
     } else {
         return work_milli;
-    }
+    };
 
     // segment 2: slope 0.5
     if work_milli > b2 {
