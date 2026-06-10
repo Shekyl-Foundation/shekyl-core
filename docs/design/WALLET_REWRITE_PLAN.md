@@ -4,12 +4,12 @@ overview: "Re-interpret `wallet2.cpp` (and the C++ wallet binaries that ride on 
 todos:
   - id: phase0_closeout
     content: "Phase 0 (6 PRs + half-day review gate): PR 0.1 bookkeeping (defer-header on 2l sub-plan, delete MID_REWIRE_WARNING_WINDOW.active sentinel + rotate bench baseline, add 'Legacy C++ -> Rust rewrite scope' section to FOLLOWUPS.md, create docs/V3_WALLET_DECISION_LOG.md with all initial binding decisions, add CODEOWNERS for docs/test_vectors/** AND tests/kat_*.rs, add branch-protection rule on dev requiring PR for all changes); PR 0.2 mechanical rename shekyl-wallet-file::WalletFileHandle -> WalletFile (shorter name; frees `Wallet` ident for Phase 1 orchestrator; `Handle` suffix was inherited cruft); PR 0.3 shekyld prerequisites audit covering THREE items — (a) instant-mining regtest mode (Phase 6 prereq), (b) get_fee_estimates daemon RPC with named-bucket shape (Phase 2a prereq), (c) fee policy / rules version exposure (does shekyld expose its current fee policy version, either as a field in get_fee_estimates or as a separate RPC; if absent file as daemon-side follow-up but NOT a Phase 0 blocker — V3.0 launches with whatever shekyld has and changes via hardfork); output to docs/SHEKYLD_PREREQUISITES.md (singular file, plural name leaves room for future Phase 0 audits to append); PR 0.4 monero-oxide vendor freshness vs BOTH upstreams (kayabaNerve + Shekyl-Foundation), output to docs/MONERO_OXIDE_VENDOR_STATUS.md, baseline only — do NOT un-pin; PR 0.5 scoped cargo fmt cleanup (five pre-existing fmt-drifted files surfaced by `cargo fmt --all --check`: rust/shekyl-ffi/src/wallet_file_ffi.rs, rust/shekyl-ffi/src/wallet_ledger_ffi.rs, rust/shekyl-scanner/benches/scan_block.rs, rust/shekyl-tx-builder/benches/transfer_e2e.rs, rust/shekyl-wallet-file/src/handle.rs; mechanical `cargo fmt --all` run; verified to be hand-edits that bypassed fmt, not a rustfmt-version disagreement, so no `#[rustfmt::skip]` is warranted; lands before Phase 1 starts so the workspace is fmt-clean baseline for Phase 1 PRs that will need `cargo fmt --check` green; resets the branch-hygiene signal so fmt-check failures aren't normalized on dev for the duration of the rewrite); PR 0.6 mechanical vendor-bump 87acb57 -> 3933664 (Operation A only — sync vendored shekyl-oxide tree to Shekyl-Foundation/monero-oxide fcmp++ HEAD; five commits, none crypto-substantive except 182b648 base58 hardening which gets reviewed against shekyl-address parsing semantics; Operation B = 40-commit upstream merge stays as the un-pin V3.1.x plan, NOT scoped here); then expanded half-day review gate to (1) read PR 0.4 vendor-status findings, (2) read PR 0.3 daemon-side findings, (3) read FOLLOWUPS V3.1+ section to confirm rewrite-touching items are absorbed/cross-linked/closed, (4) confirm cross-cutting locks before any Phase 1 method signature lands, (5) confirm whether any un-merged-upstream commits in PR 0.4's substantive list affects Phase 1 Wallet API shape (cba7117 cypherstack response and 00bafcf HelioseleneField::invert are below the wallet stack's API surface — confirm explicitly)"
-    status: pending
+    status: completed
   - id: phase1_domain_model
-    content: "Phase 1: shekyl-wallet-core::Wallet orchestrator type — composition over god-object; lifecycle (create/open_full/open_view_only/open_hardware_offload/change_password/close); RefreshHandle for cancellable scan; Wallet<SoloSigner|MultisigSigner> shape so V3.1 multisig is a feature flip; RuntimeWalletState audit (keep/rename/fold-into-WalletLedger; default lean fold); answer 'why now / can we do better' for address book, tx_keys, tx_notes, account-vs-subaddress, background sync; lock binding decisions: payment IDs DROPPED, air-gapped flow KEPT but reshaped as UnsignedTxBundle/SignedTxBundle"
-    status: pending
+    content: "Phase 1 CLOSED 2026-06-10 (see docs/design/PHASE_1_ORCHESTRATOR_STATUS.md for the full done-matrix). Landed as shekyl-engine-core::Engine<S: EngineSignerKind> (naming superseded per V3_WALLET_DECISION_LOG.md 2026-04-27 — NOT shekyl-wallet-core::Wallet; production shape Engine<S, D, L, E, R, P, F>): composition over god-object; lifecycle create/open_full/change_password/close; RefreshHandle cancel-on-drop + single-flight slot; apply_scan_result strict merge; PendingTx chain-state pinning + close-refuses-outstanding; primary_address accessor + documented ledger()-guard query patterns; tracing forwarder single-Rust-image contract; RuntimeWalletState folded into (WalletLedger, LedgerIndexes); payment IDs DROPPED, air-gapped flow reshaped as UnsignedTxBundle/SignedTxBundle (Phase 2d). Residue: open_view_only / open_hardware_offload stubs blocked on shekyl-crypto-pq view-only/HW constructors — FOLLOWUPS.md V3.0 entry carries the reversion clause; change_password on-disk tests extend to ViewOnly/HW in the same capability-dispatch commit."
+    status: completed
   - id: phase2_ops_refresh_send
-    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed — orchestrator Wallet methods remain pending Phase 1."
+    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed; orchestrator methods (Engine::refresh / start_refresh / apply_scan_result / build_pending_tx / submit_pending_tx / discard_pending_tx) landed with the Phase 1 closeout (2026-06-10) — remaining 2a residue is tracked in PHASE_2A_SEND_PATH.md §10, not Phase 1."
     status: pending
   - id: phase2_ops_stake_history
     content: "Phase 2b (SUBSTANTIVE): transfer-shaped admission (PHASE_2B §2.4) → reward-emission leg spec → Round 3–4 close-conditions → Stage 3 StakeEngine. One ship target — no entitlement/3C subtree. Blocks Stage 3, not 2a."
@@ -59,6 +59,16 @@ isProject: false
 
 # Shekyl v3 Wallet — Rust Rewrite
 
+> **Naming supersession (2026-04-27, binding):** this plan predates the
+> orchestrator/actor design and still says `shekyl-wallet-core::Wallet`
+> in original prose. The landed naming is
+> `shekyl-engine-core::Engine<S: EngineSignerKind>` and the crates are
+> `shekyl-engine-{core,file,state,rpc,prefs}` — per
+> [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+> ("Wallet<S> renamed to Engine<S>"). Read every remaining
+> `shekyl-wallet-*` / `Wallet::` reference in this plan as
+> `shekyl-engine-*` / `Engine::`. The user-facing term is "engine".
+
 ## Scope and non-goals
 
 - **In scope:** `shekyl-core` only. The Rust wallet stack (`rust/shekyl-wallet-*`, `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-proofs`, `shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-daemon-rpc`) is completed to feature parity with the daily-use surface of `simplewallet` + `wallet_rpc_server`. The C++ `wallet2` stack is deleted.
@@ -92,7 +102,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 ### Gap
 
-- **Wallet domain API:** `shekyl-wallet-core` has stake/unstake/claim transaction builders, but no `Wallet` orchestrator type that composes file + state + prefs + scanner + tx-builder + RPC client into one cohesive surface for binaries to consume. This is the heart of the rewrite.
+- **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md)).
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
 - **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](rust/shekyl-engine-file/) but not exposed as a clean `Wallet::*` API.
@@ -329,6 +339,21 @@ If all five items pass without surfacing new questions, Phase 1 begins.
 
 ## Phase 1 — Wallet domain model
 
+> **Closed 2026-06-10 — naming and structure superseded.** This section
+> is preserved as the original design statement. The landed orchestrator
+> is `shekyl-engine-core::Engine<S: EngineSignerKind>` (production shape
+> `Engine<S, D, L, E, R, P, F>`), **not** `shekyl-wallet-core::Wallet` —
+> binding rename per [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+> (2026-04-27, "Wallet<S> renamed to Engine<S>"); the crates are
+> `shekyl-engine-{core,file,state,rpc,prefs}`. The struct sketch below is
+> the pre-Stage-1 shape; the landed field set (trait-generic engines,
+> `KeyEngineHandle` key actor, `LocalLedger` RwLock state) is documented
+> in `rust/shekyl-engine-core/src/engine/mod.rs`. The deliverable-by-
+> deliverable done/blocked matrix is
+> [`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md).
+> Open residue (View/HW lifecycle bodies) is tracked in
+> [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) with a reversion clause.
+
 The crate is `shekyl-wallet-core`; the type is `Wallet`. The naming collision with the file orchestrator was resolved in Phase 0 (renamed to `WalletFile`).
 
 ### What's a `Wallet`?
@@ -534,7 +559,11 @@ flowchart TD
 (Round 0, 2026-05-31) — PR sequence 2a-1…2a-4. **Engine substrate complete**
 (2026-06): daemon fee snapshot, signing context, wire encode/submit, and
 `TestDaemon` fee-bound build→submit integration on `LocalPendingTx`. **Orchestrator
-Phase 2a** (`Wallet::refresh` / `build_pending_tx` / …) remains **pending Phase 1**.
+methods landed with the Phase 1 closeout** (2026-06-10): `Engine::refresh` /
+`start_refresh` / `apply_scan_result` / `build_pending_tx` / `submit_pending_tx` /
+`discard_pending_tx` ship on `Engine<S>` (see
+[`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md)); remaining 2a
+residue is tracked in `PHASE_2A_SEND_PATH.md` §10.
 
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.
 

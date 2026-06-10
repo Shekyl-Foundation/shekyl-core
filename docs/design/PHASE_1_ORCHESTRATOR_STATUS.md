@@ -1,9 +1,14 @@
 # Phase 1 orchestrator — gap-audit status
 
-Audited at `dev` tip, 2026-06-10. This is the done/open matrix for the
-Phase 1 deliverables in `WALLET_REWRITE_PLAN.md`, read with the binding
-naming decision applied (`shekyl-engine-core::Engine<S>`, not
+Audited at `dev` tip, 2026-06-10; matrix updated through PR 5
+(`feat/phase1-closeout`) the same day. This is the done/open matrix for
+the Phase 1 deliverables in `WALLET_REWRITE_PLAN.md`, read with the
+binding naming decision applied (`shekyl-engine-core::Engine<S>`, not
 `shekyl-wallet-core::Wallet` — `V3_WALLET_DECISION_LOG.md` 2026-04-27).
+
+**Phase 1 status: CLOSED.** Every deliverable is done or explicitly
+blocked with a reversion clause (View/HW lifecycle bodies, FOLLOWUPS
+V3.0 queue).
 
 ## Phase 0 half-day gate — passed
 
@@ -77,8 +82,8 @@ target asserts exactly one dispatcher. See decision log 2026-06-10.
 | Lifecycle round-trips, password rotation, network mismatch, capability dispatch | done | `engine/lifecycle.rs` test module (20 tests): rotation (`:1273`), network mismatch (`:1248` ff.), state-file recovery, capability stubs |
 | `RefreshHandle` cancel semantics | done | see Refresh & scan above |
 | Close with outstanding `PendingTx` → typed error | done | see Pending tx above |
-| `WALLET_REWRITE_PLAN.md` frontmatter todos + Phase 1 naming | open | Frontmatter `phase1_domain_model` still `pending` and still says `shekyl-wallet-core::Wallet`; body `:537` says Phase 2a orchestrator methods "remain pending Phase 1" — stale (landed as `Engine::refresh` / `build_pending_tx` / …). PR 5 below |
-| `CHANGELOG.md` entry for Phase 1 closeout | open | PR 5 below |
+| `WALLET_REWRITE_PLAN.md` frontmatter todos + Phase 1 naming | done | Frontmatter `phase0_closeout` and `phase1_domain_model` marked completed with `Engine` naming; global naming-supersession banner after the plan title; Phase 1 section closeout banner pointing here; Gap-section orchestrator bullet closed; Phase 2a "remain pending Phase 1" prose corrected (orchestrator methods landed) |
+| `CHANGELOG.md` entry for Phase 1 closeout | done | "Unreleased / Added — engine: Phase 1 orchestrator closeout" entry |
 
 ## Close-out sequence (per 06-branching.mdc sizing)
 
@@ -89,15 +94,19 @@ target asserts exactly one dispatcher. See decision log 2026-06-10.
    (single-image), daemon force-load + `nm` gate, `shekyl_log.h`
    declaration, `src/daemon/main.cpp` call site. Closes the absorbed
    V3.2 FOLLOWUPS item per decision log 2026-06-10.
-3. **PR 3 — `change_password` integration test.** Drive
-   `WalletFile::rotate_password` on disk for FULL; verify against an
-   independent `WalletFile::open`. Closes the FOLLOWUPS V3.0 item.
-4. **PR 4 — public query accessors.** Thin `Engine::primary_address()`;
-   document the `ledger()`-based balance/transfers pattern in
-   `engine/mod.rs`. No Phase 2 wrapper scope.
-5. **PR 5 — doc closeout.** `WALLET_REWRITE_PLAN.md` frontmatter +
-   naming reconciliation, FOLLOWUPS absorption marks, `CHANGELOG.md`
-   Phase 1 entry.
+3. **PR 3 — `change_password` integration test.** Landed
+   (`feat/phase1-closeout`): drives `WalletFile::rotate_password` on
+   disk for FULL; verifies against an independent `WalletFile::open`
+   and the rewritten KDF header. Closes the FOLLOWUPS V3.0 item for
+   FULL capability.
+4. **PR 4 — public query accessors.** Landed (`feat/phase1-closeout`):
+   thin `Engine::primary_address()`; `ledger()`-based balance/transfers
+   pattern documented in `engine/mod.rs`. No Phase 2 wrapper scope.
+5. **PR 5 — doc closeout.** Landed (`feat/phase1-closeout`):
+   `WALLET_REWRITE_PLAN.md` frontmatter + naming reconciliation,
+   FOLLOWUPS absorption marks, `CHANGELOG.md` Phase 1 entry. **Phase 1
+   is closed**; the only carried residue is the View/HW lifecycle
+   blocker below.
 
 PRs 2 and 3 are independent and must not be bundled. View/HW lifecycle
 bodies stay blocked on `shekyl-crypto-pq` constructors and are **not**

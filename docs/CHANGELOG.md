@@ -4,6 +4,20 @@
 
 ### Added
 
+- **engine: Phase 1 orchestrator closeout.** The
+  `shekyl-engine-core::Engine<S: EngineSignerKind>` domain orchestrator
+  (lifecycle, refresh + scan merge, pending-tx send lifecycle, query
+  surface, tracing forwarder) is complete per the done-matrix in
+  `docs/design/PHASE_1_ORCHESTRATOR_STATUS.md`.
+  `docs/design/WALLET_REWRITE_PLAN.md` reconciled to the binding
+  `Engine` naming (decision log 2026-04-27): frontmatter `phase0_closeout`
+  and `phase1_domain_model` marked completed, global naming-supersession
+  banner added, Phase 1 section banner points at the status matrix, and
+  the stale "orchestrator methods remain pending Phase 1" Phase 2a prose
+  corrected. Carried residue: `open_view_only` / `open_hardware_offload`
+  bodies stay blocked on `shekyl-crypto-pq` view-only/HW constructors
+  (FOLLOWUPS V3.0 entry holds the reversion clause).
+
 - **engine: `Engine::primary_address()` accessor + Phase 1 query-pattern
   docs.** Thin `&self` accessor assembling the wallet's one reusable
   `ShekylAddress` (End-state 5) from the `KeyActor`'s cached public
