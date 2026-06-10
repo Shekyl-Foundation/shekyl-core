@@ -4744,7 +4744,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   if (!shekyl_archival_serve_credit_epoch_ok(resp.settlement_epoch, join_epoch))
   {
     MERROR_VER("Archival serve-credit settlement epoch " << resp.settlement_epoch
-      << " before join epoch " << join_epoch);
+      << " before E_first (join_settlement_epoch+1) for join_settlement_epoch "
+      << join_epoch);
     return false;
   }
 

@@ -80,8 +80,8 @@ pub fn verify_join_market_bond_post(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
     use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
+    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 
     fn valid_join_vin() -> ArchivalBondPostVin {
         ArchivalBondPostVin {

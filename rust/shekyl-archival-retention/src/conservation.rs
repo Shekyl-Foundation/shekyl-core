@@ -24,6 +24,8 @@ pub struct ConservationSnapshot<'a> {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConservationError {
+    #[error("sum(per_p_bonded) overflowed u64")]
+    BondedSumOverflow,
     #[error("total_bonded_atomic {total} != sum(per_p_bonded) {sum}")]
     BondedAggregationMismatch { total: u64, sum: u64 },
     #[error(
@@ -39,7 +41,12 @@ pub enum ConservationError {
 
 /// Bonded-aggregation identity: `total_bonded_atomic == Σ_P bonded_total_atomic`.
 pub fn verify_conservation_snapshot(s: &ConservationSnapshot<'_>) -> Result<(), ConservationError> {
-    let sum: u64 = s.per_p_bonded.iter().copied().sum();
+    let mut sum = 0u64;
+    for &bonded in s.per_p_bonded {
+        sum = sum
+            .checked_add(bonded)
+            .ok_or(ConservationError::BondedSumOverflow)?;
+    }
     if s.total_bonded_atomic != sum {
         return Err(ConservationError::BondedAggregationMismatch {
             total: s.total_bonded_atomic,
@@ -79,6 +86,22 @@ mod tests {
             burned: None,
         };
         assert!(verify_conservation_snapshot(&s).is_ok());
+    }
+
+    #[test]
+    fn aggregation_rejects_per_p_sum_overflow() {
+        let per_p = [u64::MAX, 1];
+        let s = ConservationSnapshot {
+            total_bonded_atomic: 0,
+            per_p_bonded: &per_p,
+            already_generated: None,
+            circulating: None,
+            burned: None,
+        };
+        assert_eq!(
+            verify_conservation_snapshot(&s),
+            Err(ConservationError::BondedSumOverflow)
+        );
     }
 
     #[test]
