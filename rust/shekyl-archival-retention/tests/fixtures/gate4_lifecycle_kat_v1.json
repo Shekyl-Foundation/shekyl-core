@@ -6,7 +6,47 @@
     "total_bonded_atomic": 750000000
   },
   "description": "Gate-4 §8 phase-1: join bond-post, serve at E_first, bonded-aggregation KAT.",
-  "emission": null,
+  "emission": {
+    "description": "Phase-2: consensus_state replay pin (ARCHIVAL_CONSENSUS_STATE §3.3–§4.5).",
+    "settlement_epoch": 10,
+    "shard_id": 42,
+    "expected": {
+      "r_market": 1,
+      "sigma_work_milli": 4000
+    },
+    "per_p_work_milli": [4000, 0, 12000],
+    "market_mask": [true, false, false],
+    "curve": {
+      "plateau_work_milli": 16000,
+      "plateau_value_milli": 8000
+    },
+    "serve_credit_rows": [
+      {
+        "p_id_hex": "01",
+        "shard_id": 42,
+        "serve_credit": true,
+        "join_epoch": 0,
+        "bad_intervals": [],
+        "foundation": false
+      },
+      {
+        "p_id_hex": "02",
+        "shard_id": 42,
+        "serve_credit": false,
+        "join_epoch": 0,
+        "bad_intervals": [],
+        "foundation": false
+      },
+      {
+        "p_id_hex": "03",
+        "shard_id": 42,
+        "serve_credit": true,
+        "join_epoch": 0,
+        "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }],
+        "foundation": false
+      }
+    ]
+  },
   "format_version": 1,
   "join": {
     "bond_credit": 750000000,
