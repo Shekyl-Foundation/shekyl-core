@@ -73,13 +73,6 @@ pub fn r_market_count(rows: &[ServeCreditRow], shard_id: u64, settlement_epoch: 
         ) {
             continue;
         }
-        if !good_through(
-            row.join_settlement_epoch,
-            settlement_epoch,
-            &row.bad_intervals,
-        ) {
-            continue;
-        }
         n = n.saturating_add(1);
     }
     n

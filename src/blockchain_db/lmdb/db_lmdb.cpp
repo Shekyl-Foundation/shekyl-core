@@ -5627,6 +5627,8 @@ uint64_t BlockchainLMDB::archival_shard_age_milli(uint64_t shard_id,
     return 0;
 
   const uint64_t age_epochs = (close_block_height - segment.freeze_height) / seb;
+  if (age_epochs > std::numeric_limits<uint64_t>::max() / 1000)
+    throw std::runtime_error("FATAL: archival shard age_milli overflow");
   return age_epochs * 1000;
 }
 
@@ -5934,7 +5936,9 @@ void BlockchainLMDB::revert_archival_epoch_close_at_height(uint64_t block_height
   const uint64_t settlement_epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(log_v.mv_data));
   delete_archival_r_market_for_epoch(settlement_epoch);
   delete_archival_sigma_work_for_epoch(settlement_epoch);
-  mdb_del(*m_write_txn, m_archival_epoch_close_log, &log_k, nullptr);
+  const int log_del = mdb_del(*m_write_txn, m_archival_epoch_close_log, &log_k, nullptr);
+  if (log_del && log_del != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete archival_epoch_close_log on pop: ", log_del).c_str()));
 }
 
 uint64_t BlockchainLMDB::get_archival_r_market(uint64_t shard_id,
@@ -5944,8 +5948,12 @@ uint64_t BlockchainLMDB::get_archival_r_market(uint64_t shard_id,
   MDB_val k = key.as_mdb_val();
   MDB_val v;
   const int get_result = archival_db_get(m_archival_r_market, &k, &v);
-  if (get_result != 0 || v.mv_size != 8)
+  if (get_result == MDB_NOTFOUND)
     return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival_r_market: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw std::runtime_error("FATAL: archival_r_market value size mismatch");
   return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
 }
 
@@ -5955,8 +5963,12 @@ uint64_t BlockchainLMDB::get_archival_sigma_work_milli(uint64_t settlement_epoch
   MDB_val k = key.as_mdb_val();
   MDB_val v;
   const int get_result = archival_db_get(m_archival_sigma_work, &k, &v);
-  if (get_result != 0 || v.mv_size != 8)
+  if (get_result == MDB_NOTFOUND)
     return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival_sigma_work: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw std::runtime_error("FATAL: archival_sigma_work value size mismatch");
   return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
 }
 

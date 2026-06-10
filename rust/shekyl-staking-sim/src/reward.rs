@@ -73,14 +73,6 @@ pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f6
 /// `ceil(raw_work / cap)` pseudonyms only while the recovered capped-work is worth
 /// more than `pseudonym_cost`; otherwise it runs a single (capped) pseudonym.
 ///
-/// Work input at which `Curve` reaches its plateau credited value (`p.cap`).
-fn plateau_work(p: &RewardParams) -> f64 {
-    if p.cap <= 0.0 {
-        return 0.0;
-    }
-    p.cap * 2.0
-}
-
 /// Credited work via banded PL `Curve` (REWARD_EMISSION_LEG.md §4.0 form C).
 #[must_use]
 pub fn curve(work: f64, p: &RewardParams) -> f64 {
@@ -97,12 +89,13 @@ pub fn curve(work: f64, p: &RewardParams) -> f64 {
 
 /// Returns `(effective_capped_work, pseudonym_count, split_cost)`.
 fn split_decision(raw_work: f64, price: f64, p: &RewardParams) -> (f64, usize, f64) {
-    let single = curve(raw_work, p);
-    let pw = plateau_work(p);
-    if raw_work <= pw || p.cap <= 0.0 {
-        return (single, 1, 0.0);
+    if p.cap <= 0.0 || raw_work <= 0.0 {
+        return (curve(raw_work, p), 1, 0.0);
     }
-    let m_full = (raw_work / pw).ceil().max(1.0) as usize;
+    let single = curve(raw_work, p);
+    // Upper bound on pseudonyms: concave `Curve` can make splitting profitable below
+    // plateau work (2·cap raw), so size chunks by `cap` not plateau work.
+    let m_full = (raw_work / p.cap).ceil().max(1.0) as usize;
     let per = raw_work / m_full as f64;
     let multi: f64 = (0..m_full).map(|_| curve(per, p)).sum();
     let gain = (multi - single) * price;
@@ -167,5 +160,31 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         pseudonyms,
         price,
         rewards,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_raises_credited_work_below_plateau_work() {
+        let p = RewardParams {
+            budget: 100.0,
+            cap: 8.0,
+            pseudonym_cost: 0.0,
+            age_weight: 0.0,
+            curve_impl: CurveImpl::Float,
+        };
+        let single = curve(12.0, &p);
+        let (eff, m, _) = split_decision(12.0, 1.0, &p);
+        assert!(
+            m >= 2,
+            "expected multi-pseudonym split at raw_work=12, cap=8"
+        );
+        assert!(
+            eff > single,
+            "split credited work {eff} should exceed single {single}"
+        );
     }
 }
