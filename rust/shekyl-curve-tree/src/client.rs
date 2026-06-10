@@ -51,7 +51,7 @@ use crate::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff,
     per_output_h_pqc, root_from_scalars, TxOutputs,
 };
-use crate::store::LeafStore;
+use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
@@ -93,7 +93,7 @@ pub struct BlockLeaves<'a> {
 }
 
 /// Errors the client raises rather than emitting a silent bad proof.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub enum ClientError {
     /// The root reconstructed for `height` did not match the consensus
     /// header root — the integrity gate (§3.3). Refuse to proceed.
@@ -111,6 +111,8 @@ pub enum ClientError {
         /// Compressed output key that was not found among drained leaves.
         output_key: [u8; 32],
     },
+    /// Persistent leaf store failure (I/O or corruption).
+    Store(StoreError),
 }
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
@@ -125,6 +127,9 @@ pub struct CurveTreeClient {
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
     pub(crate) next_gindex: u64,
+    /// Append-only `(drained_through, drained_leaf_count)` cache for O(log n)
+    /// root queries without scanning all leaf candidates each time.
+    drained_through_counts: Vec<(u64, u64)>,
 }
 
 impl Default for CurveTreeClient {
@@ -142,30 +147,27 @@ impl CurveTreeClient {
             store: LeafStore::open_ephemeral().expect("ephemeral leaf store"),
             entries: Vec::new(),
             next_gindex: 0,
+            drained_through_counts: Vec::new(),
         }
     }
 
     /// Build a client by replaying `blocks` in order from genesis. This is
     /// also the reorg path: re-call with the post-reorg chain to rebuild
     /// (derive-don't-accumulate makes the rollback free).
-    #[must_use]
-    pub fn from_blocks(blocks: &[BlockLeaves<'_>]) -> Self {
+    pub fn from_blocks(blocks: &[BlockLeaves<'_>]) -> Result<Self, ClientError> {
         let mut client = Self::new();
-        client
-            .store
-            .clear()
-            .expect("clear leaf store for chain replay");
+        client.store.clear()?;
         for block in blocks {
-            client.ingest_block(*block);
+            client.ingest_block(*block)?;
         }
-        client
+        Ok(client)
     }
 
     /// Ingest one block, resolving `h_pqc` per output, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
     /// ingested in ascending height order from genesis (the gindex is the
     /// cumulative chain position).
-    pub fn ingest_block(&mut self, block: BlockLeaves<'_>) {
+    pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
         // Resolve h_pqc per tx, then collect leaves. `identities` is kept
         // alive across the `collect_block_leaves` call that borrows it.
         let identities: Vec<Vec<OutputIdentity>> = block
@@ -198,15 +200,43 @@ impl CurveTreeClient {
 
         self.next_gindex =
             collect_block_leaves(block.height, &txs, self.next_gindex, &mut self.entries);
-        self.sync_store(block.height);
+        self.sync_store(block.height)
     }
 
-    fn sync_store(&mut self, tip_height: u64) {
+    fn sync_store(&mut self, tip_height: u64) -> Result<(), ClientError> {
         let through = Self::drained_through(tip_height);
         let new_entries = newly_drained_at_cutoff(&self.entries, through);
-        self.store
-            .append_drained(&new_entries, tip_height)
-            .expect("sync leaf store to chain tip");
+        let prev = self
+            .drained_through_counts
+            .last()
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        let added = u64::try_from(new_entries.len()).expect("drain batch fits u64");
+        self.store.append_drained(&new_entries, tip_height)?;
+        self.drained_through_counts.push((through, prev + added));
+        Ok(())
+    }
+
+    fn drained_leaf_count_at(&self, through: u64) -> u64 {
+        if let Some((last_through, _)) = self.drained_through_counts.last() {
+            if through <= *last_through {
+                return match self
+                    .drained_through_counts
+                    .binary_search_by_key(&through, |(t, _)| *t)
+                {
+                    Ok(i) => self.drained_through_counts[i].1,
+                    Err(0) => 0,
+                    Err(i) => self.drained_through_counts[i - 1].1,
+                };
+            }
+        }
+        u64::try_from(
+            self.entries
+                .iter()
+                .filter(|e| e.maturity <= through)
+                .count(),
+        )
+        .expect("drained leaf count fits u64")
     }
 
     /// The drain cutoff for a reference height: a leaf maturing at `m`
@@ -230,11 +260,7 @@ impl CurveTreeClient {
     #[must_use]
     pub fn root_at(&self, reference_height: u64) -> [u8; 32] {
         let through = Self::drained_through(reference_height);
-        let n = self
-            .entries
-            .iter()
-            .filter(|e| e.maturity <= through)
-            .count() as u64;
+        let n = self.drained_leaf_count_at(through);
         self.store.root_at_count(n).unwrap_or_else(|_| {
             let scalars = assemble_leaf_stream(&self.entries, through);
             root_from_scalars(&scalars)
@@ -261,8 +287,14 @@ impl CurveTreeClient {
     /// Number of leaves drained into the tree at `reference_height`.
     #[must_use]
     pub fn drained_leaf_count(&self, reference_height: u64) -> usize {
-        let cutoff = Self::drained_through(reference_height);
-        self.entries.iter().filter(|e| e.maturity <= cutoff).count()
+        usize::try_from(self.drained_leaf_count_at(Self::drained_through(reference_height)))
+            .expect("drained leaf count fits usize")
+    }
+}
+
+impl From<StoreError> for ClientError {
+    fn from(err: StoreError) -> Self {
+        Self::Store(err)
     }
 }
 
@@ -323,7 +355,7 @@ mod tests {
             height: 0,
             txs: &txs,
         }];
-        let client = CurveTreeClient::from_blocks(&blocks);
+        let client = CurveTreeClient::from_blocks(&blocks).unwrap();
 
         // Empty through the maturity height itself...
         assert_eq!(client.root_at(60), selene_hash_init());
@@ -351,7 +383,7 @@ mod tests {
                 txs: &txs1,
             },
         ];
-        let client = CurveTreeClient::from_blocks(&blocks);
+        let client = CurveTreeClient::from_blocks(&blocks).unwrap();
         assert_eq!(client.next_gindex, 2, "two coinbases consume indices 0,1");
         assert_eq!(client.entries.len(), 2);
         assert_eq!(client.entries[0].gindex, 0);
@@ -365,10 +397,12 @@ mod tests {
         let blob = [0x42u8; 32];
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
-        client.ingest_block(BlockLeaves {
-            height: 0,
-            txs: &txs,
-        });
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs,
+            })
+            .unwrap();
         assert_eq!(client.entries.len(), 1);
         assert_eq!(&client.entries[0].leaf[96..128], &[0x42u8; 32]);
     }
@@ -384,7 +418,8 @@ mod tests {
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: 0,
             txs: &txs,
-        }]);
+        }])
+        .unwrap();
         assert_eq!(client.next_gindex, 2, "both vouts consume an index");
         assert_eq!(client.entries.len(), 1, "only the valid output is a leaf");
         assert_eq!(client.entries[0].gindex, 1);
@@ -408,19 +443,22 @@ mod tests {
                 height: 1,
                 txs: &txs1,
             },
-        ]);
+        ])
+        .unwrap();
         let _ = long; // the long chain is what a reorg pops back from.
 
         let rebuilt = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: 0,
             txs: &txs0,
-        }]);
+        }])
+        .unwrap();
         let fresh = {
             let mut c = CurveTreeClient::new();
             c.ingest_block(BlockLeaves {
                 height: 0,
                 txs: &txs0,
-            });
+            })
+            .unwrap();
             c
         };
         assert_eq!(rebuilt.next_gindex, fresh.next_gindex);
@@ -439,14 +477,15 @@ mod tests {
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: 0,
             txs: &txs,
-        }]);
+        }])
+        .unwrap();
 
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
             height: 61,
             curve_tree_root: client.root_at(61),
         };
-        assert_eq!(client.verify_root(&good), Ok(()));
+        assert!(client.verify_root(&good).is_ok());
 
         let bad = ReferenceBlock {
             height: 61,

@@ -71,10 +71,12 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
             leaf_hash_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
-        client.ingest_block(BlockLeaves {
-            height: blk.height,
-            txs: &txs,
-        });
+        client
+            .ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            })
+            .unwrap();
     }
 }
 
@@ -144,7 +146,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
                     height: blk.height,
                     curve_tree_root: blk.root,
                 };
-                assert_eq!(client.verify_root(&reference), Ok(()));
+                assert!(client.verify_root(&reference).is_ok());
             }
         }
     }
@@ -184,10 +186,12 @@ fn store_root_mixed_maturity_drain_order() {
         },
     ];
     let mut client = CurveTreeClient::new();
-    client.ingest_block(BlockLeaves {
-        height: 0,
-        txs: &txs,
-    });
+    client
+        .ingest_block(BlockLeaves {
+            height: 0,
+            txs: &txs,
+        })
+        .unwrap();
 
     let mut recon_entries = Vec::new();
     let identities_cb: Vec<OutputIdentity> = [coinbase]

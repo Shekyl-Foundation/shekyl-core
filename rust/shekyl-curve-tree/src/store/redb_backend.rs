@@ -26,6 +26,7 @@ const META_TABLE: TableDefinition<&str, u64> = TableDefinition::new("meta");
 
 const META_LEAF_COUNT: &str = "leaf_count";
 const META_SYNC_TIP: &str = "sync_tip_height";
+const META_NEXT_FREEZE_SEG: &str = "next_freeze_seg";
 
 /// On-disk record for a frozen segment (`CT1_ROUND1_PINS.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +129,9 @@ impl LeafStore {
             if meta.get(META_SYNC_TIP)?.is_none() {
                 meta.insert(META_SYNC_TIP, &0u64)?;
             }
+            if meta.get(META_NEXT_FREEZE_SEG)?.is_none() {
+                meta.insert(META_NEXT_FREEZE_SEG, &0u64)?;
+            }
         }
         txn.commit()?;
         Ok(())
@@ -187,30 +191,44 @@ impl LeafStore {
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &tip_height)?;
         }
-        Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        {
+            let mut meta = txn.open_table(META_TABLE)?;
+            meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
+        }
         txn.commit()?;
         Ok(())
     }
 
+    /// Scan only from the persisted freeze cursor forward (O(newly eligible)
+    /// per block, not O(total segments)).
     fn maybe_freeze_segments_in_txn(
         txn: &redb::WriteTransaction,
         tip_height: u64,
         leaf_count: u64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<u64, StoreError> {
         let e = leaves_per_segment() as u64;
         let complete_segments = leaf_count / e;
-        for seg_k in 0..complete_segments {
+        let mut next_freeze_seg = {
+            let meta = txn.open_table(META_TABLE)?;
+            let next = meta.get(META_NEXT_FREEZE_SEG)?;
+            next.map(|v| v.value()).unwrap_or(0)
+        };
+        let mut seg_k = next_freeze_seg;
+        while seg_k < complete_segments {
             let segment_id = u32::try_from(seg_k).expect("segment id fits u32");
             {
                 let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
                 if frozen.get(segment_id)?.is_some() {
+                    seg_k += 1;
+                    next_freeze_seg = seg_k;
                     continue;
                 }
             }
             let end_tree_pos = (seg_k + 1) * e - 1;
             let end_block_height = read_drain_height(txn, end_tree_pos)?;
             if !segment_freeze_eligible(tip_height, end_block_height) {
-                continue;
+                break;
             }
             let start = seg_k * e;
             let seg_leaves = read_leaf_bytes_range(txn, start, end_tree_pos + 1)?;
@@ -223,15 +241,21 @@ impl LeafStore {
             };
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             frozen.insert(segment_id, &encode_frozen_segment(&record))?;
+            seg_k += 1;
+            next_freeze_seg = seg_k;
         }
-        Ok(())
+        Ok(next_freeze_seg)
     }
 
     /// Freeze any newly eligible complete segments at `tip_height`.
     pub fn maybe_freeze_segments(&self, tip_height: u64) -> Result<(), StoreError> {
         let leaf_count = self.leaf_count()?;
         let txn = self.db.begin_write()?;
-        Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        {
+            let mut meta = txn.open_table(META_TABLE)?;
+            meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
+        }
         txn.commit()?;
         Ok(())
     }
@@ -273,6 +297,9 @@ impl LeafStore {
     }
 
     /// Truncate leaves and metadata at `pos` (ACID reorg).
+    ///
+    /// Resets [`Self::sync_tip_height`] to `0` (sync invalidated until the next
+    /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let pos = pos.0;
         let current_leaf_count = self.leaf_count()?;
@@ -358,9 +385,12 @@ impl LeafStore {
                 }
             }
         }
+        let next_freeze_seg = recompute_next_freeze_seg(&txn, pos)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &pos)?;
+            meta.insert(META_SYNC_TIP, &0u64)?;
+            meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
         }
         txn.commit()?;
         Ok(())
@@ -429,13 +459,40 @@ impl LeafStore {
     }
 }
 
+fn recompute_next_freeze_seg(
+    txn: &redb::WriteTransaction,
+    leaf_count: u64,
+) -> Result<u64, StoreError> {
+    let e = leaves_per_segment() as u64;
+    let complete_segments = leaf_count / e;
+    let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+    let mut next = 0u64;
+    for seg_k in 0..complete_segments {
+        let segment_id = u32::try_from(seg_k).expect("segment id fits u32");
+        if frozen.get(segment_id)?.is_some() {
+            next = seg_k + 1;
+        } else {
+            break;
+        }
+    }
+    Ok(next)
+}
+
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
     let meta = txn.open_table(LEAF_META_TABLE)?;
     let m = meta
         .get(tree_pos)?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
-    let entry = decode_leaf_meta(m.value())?;
-    Ok(entry.maturity.saturating_add(1))
+    let stored = decode_stored_leaf_meta(m.value())?;
+    Ok(stored.maturity.saturating_add(1))
+}
+
+/// Metadata persisted in `LEAF_META_TABLE` (leaf bytes live in `LEAVES_TABLE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StoredLeafMeta {
+    gindex: u64,
+    maturity: u64,
+    identity: crate::types::OutputIdentity,
 }
 
 fn read_leaf_bytes_range(
@@ -512,7 +569,7 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     buf
 }
 
-fn decode_leaf_meta(buf: &[u8; 192]) -> Result<LeafEntry, StoreError> {
+fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError> {
     let gindex = u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes"));
     let maturity = u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes"));
     let mut output_key = [0u8; 32];
@@ -527,10 +584,9 @@ fn decode_leaf_meta(buf: &[u8; 192]) -> Result<LeafEntry, StoreError> {
     let mut h_pqc = [0u8; 32];
     h_pqc.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
-    Ok(LeafEntry {
+    Ok(StoredLeafMeta {
         gindex,
         maturity,
-        leaf: [0u8; 128],
         identity: crate::types::OutputIdentity {
             output_key,
             commitment,
@@ -647,6 +703,15 @@ mod tests {
             leaves.get(0).unwrap().is_none(),
             "stale pin must not block prune"
         );
+    }
+
+    #[test]
+    fn truncate_invalidates_sync_tip() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store.append_drained(&[sample_entry(0, 0)], 500).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 500);
+        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 0);
     }
 
     #[test]
