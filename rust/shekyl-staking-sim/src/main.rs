@@ -20,6 +20,7 @@
 
 mod agent;
 mod audit;
+mod curve;
 mod failure_confirmation;
 mod fingerprint;
 mod metrics;

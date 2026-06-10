@@ -20,6 +20,7 @@
 //! per-staker cap alone is toothless against Sybil (freely evadable) and the bond is
 //! what carries the limit; the sim embodies it rather than assuming it.
 
+use crate::curve::curve_banded;
 use crate::model::{g_age, World};
 
 #[derive(Debug, Clone)]
@@ -61,24 +62,36 @@ pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f6
 /// `ceil(raw_work / cap)` pseudonyms only while the recovered capped-work is worth
 /// more than `pseudonym_cost`; otherwise it runs a single (capped) pseudonym.
 ///
+/// Work input at which `Curve` reaches its plateau credited value (`p.cap`).
+fn plateau_work(p: &RewardParams) -> f64 {
+    if p.cap <= 0.0 {
+        return 0.0;
+    }
+    p.cap * 2.0
+}
+
+/// Credited work via banded PL `Curve` (REWARD_EMISSION_LEG.md §4.0 form C).
+#[must_use]
+pub fn curve(work: f64, p: &RewardParams) -> f64 {
+    curve_banded(work, p.cap)
+}
+
 /// Returns `(effective_capped_work, pseudonym_count, split_cost)`.
 fn split_decision(raw_work: f64, price: f64, p: &RewardParams) -> (f64, usize, f64) {
-    if raw_work <= p.cap || p.cap <= 0.0 {
-        return (
-            raw_work.min(if p.cap > 0.0 { p.cap } else { raw_work }),
-            1,
-            0.0,
-        );
+    let single = curve(raw_work, p);
+    let pw = plateau_work(p);
+    if raw_work <= pw || p.cap <= 0.0 {
+        return (single, 1, 0.0);
     }
-    // Value of fully crediting the over-cap work vs. running one capped pseudonym.
-    let recovered = raw_work - p.cap; // work beyond a single pseudonym's cap
-    let gain = recovered * price;
-    let m_full = (raw_work / p.cap).ceil().max(1.0);
-    let split_cost = (m_full - 1.0) * p.pseudonym_cost;
+    let m_full = (raw_work / pw).ceil().max(1.0) as usize;
+    let per = raw_work / m_full as f64;
+    let multi: f64 = (0..m_full).map(|_| curve(per, p)).sum();
+    let gain = (multi - single) * price;
+    let split_cost = (m_full.saturating_sub(1)) as f64 * p.pseudonym_cost;
     if gain > split_cost {
-        (raw_work, m_full as usize, split_cost)
+        (multi, m_full, split_cost)
     } else {
-        (p.cap, 1, 0.0)
+        (single, 1, 0.0)
     }
 }
 
