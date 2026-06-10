@@ -1309,6 +1309,111 @@ mod tests {
         .expect("reopen with new password");
     }
 
+    /// FOLLOWUPS V3.0: verify the rotated envelope round-trips against an
+    /// *independently constructed* [`WalletFile::open`] call rather than
+    /// only against [`Engine::open_full`]. This pins the full
+    /// I/O ↔ KDF ↔ AEAD chain at the orchestrator layer: if
+    /// `change_password` left the on-disk envelope in any state the
+    /// wallet-file layer alone cannot decode, this test fails even when
+    /// the orchestrator's own reopen path happens to succeed off cached
+    /// bytes.
+    ///
+    /// Capability coverage: FULL only. ViewOnly / HardwareOffload are
+    /// added when their `open_*` bodies land (see the View/HW lifecycle
+    /// entry in `docs/FOLLOWUPS.md`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_round_trips_via_independent_wallet_file_open() {
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        // Old password must refuse at the wallet-file layer with the
+        // envelope's deliberately-indistinct AEAD failure.
+        let err = WalletFile::open(&fix.base_path, p_old, network, SafetyOverrides::none())
+            .expect_err("old password must refuse at the wallet-file layer");
+        assert!(
+            matches!(
+                err,
+                WalletFileError::Envelope(WalletEnvelopeError::InvalidPasswordOrCorrupt)
+            ),
+            "got {err:?}"
+        );
+
+        // New password opens through the wallet-file layer alone, finds
+        // the persisted state (close saved it), and reports FULL.
+        let (file, outcome) =
+            WalletFile::open(&fix.base_path, p_new, network, SafetyOverrides::none())
+                .expect("independent WalletFile::open with new password");
+        assert_eq!(file.capability(), Capability::Full);
+        assert!(
+            matches!(outcome, shekyl_engine_file::OpenOutcome::StateLoaded(_)),
+            "expected StateLoaded after a clean close, got {outcome:?}"
+        );
+    }
+
+    /// Companion to the round-trip test above: a rotation that also
+    /// changes KDF parameters must rewrite the envelope header so the
+    /// new cost parameters govern subsequent opens. Asserted via
+    /// [`inspect_keys_file`](shekyl_crypto_pq::wallet_envelope::inspect_keys_file)
+    /// on the raw on-disk bytes — open-success alone cannot distinguish
+    /// "new KDF recorded" from "new KDF silently dropped", because
+    /// `open` reads whatever parameters the header declares.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_with_new_kdf_rewrites_envelope_header() {
+        use shekyl_crypto_pq::wallet_envelope::inspect_keys_file;
+        use shekyl_engine_file::paths::keys_path_from;
+
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let created_kdf = params.kdf;
+        // Still minimum-wall-clock, but distinguishable from the
+        // create-time parameters.
+        let rotated_kdf = KdfParams {
+            m_log2: created_kdf.m_log2,
+            t: created_kdf.t + 1,
+            p: created_kdf.p,
+        };
+
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet
+            .change_password(&creds_old, &creds_new, Some(rotated_kdf))
+            .expect("rotate password with new KDF params");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        let keys_bytes =
+            std::fs::read(keys_path_from(&fix.base_path)).expect("read rotated keys file");
+        let header = inspect_keys_file(&keys_bytes).expect("inspect rotated keys file header");
+        assert_eq!(header.kdf.m_log2, rotated_kdf.m_log2);
+        assert_eq!(header.kdf.t, rotated_kdf.t);
+        assert_eq!(header.kdf.p, rotated_kdf.p);
+
+        // And the rewritten header actually governs an independent open.
+        let (file, _outcome) =
+            WalletFile::open(&fix.base_path, p_new, network, SafetyOverrides::none())
+                .expect("independent WalletFile::open after KDF rotation");
+        assert_eq!(file.capability(), Capability::Full);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn open_full_after_state_file_deleted_returns_restored_from_height() {
         let fix = make_create_fixture();

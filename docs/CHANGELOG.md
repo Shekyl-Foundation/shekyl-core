@@ -4,6 +4,18 @@
 
 ### Added
 
+- **engine: `change_password` on-disk integration tests (FULL).**
+  Two lifecycle tests pin the I/O ↔ KDF ↔ AEAD chain at the orchestrator
+  layer (FOLLOWUPS V3.0 item, Phase 1 closeout):
+  `change_password_round_trips_via_independent_wallet_file_open` verifies
+  the rotated envelope through an independently constructed
+  `WalletFile::open` (new password loads state; old password fails with
+  `InvalidPasswordOrCorrupt`), and
+  `change_password_with_new_kdf_rewrites_envelope_header` asserts the
+  rotated Argon2id parameters on the raw on-disk header via
+  `inspect_keys_file`. ViewOnly / HardwareOffload coverage rides the
+  capability-dispatch commit when those `open_*` bodies land.
+
 - **logging/daemon: single-Rust-image tracing contract for `shekyld`.**
   `shekyl-daemon-rpc` `tracing::*` events are no longer silently dropped
   (FOLLOWUPS V3.2 item, absorbed into Phase 1): the crate now compiles

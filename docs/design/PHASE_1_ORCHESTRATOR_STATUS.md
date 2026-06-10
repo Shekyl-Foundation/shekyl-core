@@ -27,7 +27,7 @@ documented blocker + reversion clause).
 |---|---|---|
 | `Engine<S>` composition documented; no god-object drift | done | `rust/shekyl-engine-core/src/engine/mod.rs` module docs: field table, cross-cutting locks honored, seven-generic production shape `Engine<S, D, L, E, R, P, F>` |
 | `open_view_only` / `open_hardware_offload` real bodies | blocked | Stubs return `OpenError::CapabilityNotYetImplemented` (`engine/lifecycle.rs:647`, `:666`). Blocker: `shekyl-crypto-pq` has no view-only / hardware-offload account constructors (`rust/shekyl-crypto-pq/src/account.rs` exposes full-key derivation only). Tracked in `FOLLOWUPS.md` (V3.0 wallet-stack queue). Reopens when the constructors land; re-evaluation shape: lifecycle PR implementing real bodies + capability-dispatch tests |
-| `change_password` integration tests driving `WalletFile::rotate_password` on disk (FULL) | open | `change_password_rewraps_envelope_then_reopen_uses_new_password` (`engine/lifecycle.rs:1273`) verifies rotation via `Engine::open_full` only. The `FOLLOWUPS.md` V3.0 item asks for verification against an independently constructed `WalletFile::open` call. Implementable now — PR 3 below |
+| `change_password` integration tests driving `WalletFile::rotate_password` on disk (FULL) | done | `change_password_round_trips_via_independent_wallet_file_open` and `change_password_with_new_kdf_rewrites_envelope_header` (`engine/lifecycle.rs`, after `:1310`) verify the rotated envelope against an independently constructed `WalletFile::open` and the rewritten KDF header via `inspect_keys_file`. FULL only; ViewOnly / HW extension rides the capability-dispatch commit per the reshaped `FOLLOWUPS.md` entry |
 
 ### Refresh & scan
 

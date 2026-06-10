@@ -971,19 +971,29 @@ sustainability is unaffected by the recalibration.
   is grep-able from the code site, not only from this file. Target:
   V3.0.
 
-- **`Wallet::change_password` integration tests against
-  `WalletFile::rotate_password`.** The lifecycle commit's unit tests
+- ~~**`Wallet::change_password` integration tests against
+  `WalletFile::rotate_password`.**~~ **Landed 2026-06-10 for FULL
+  capability** (Phase 1 closeout). The lifecycle commit's unit tests
   for `change_password` exercise the orchestrator path (rotate, then
   reopen with the new password and refuse the old one) but rely on
   `WalletFile::rotate_password`'s own test coverage for the underlying
-  envelope rewrap correctness. A small integration suite in
-  `shekyl-wallet-core` should drive `change_password` against a real
-  on-disk wallet across all three capabilities (FULL today; ViewOnly /
-  HardwareOffload once their `open_*` bodies land), verifying that the
-  rotated envelope round-trips against an independently-constructed
-  `WalletFile::open` call rather than only against `Wallet::open_full`.
-  This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
-  Target: V3.0.
+  envelope rewrap correctness. Closed by two integration tests in
+  `shekyl-engine-core::engine::lifecycle::tests`:
+  `change_password_round_trips_via_independent_wallet_file_open`
+  (rotate via `Engine::change_password`, close, then open the on-disk
+  pair through an independently-constructed `WalletFile::open` — new
+  password loads state, old password fails with the envelope's
+  `InvalidPasswordOrCorrupt`) and
+  `change_password_with_new_kdf_rewrites_envelope_header` (rotation
+  with `Some(KdfParams)` verified via `inspect_keys_file` on the raw
+  on-disk header, not just open-success). This pins the full
+  I/O ↔ KDF ↔ AEAD chain at the orchestrator layer for FULL.
+  **Remaining scope:** the same two assertions for ViewOnly /
+  HardwareOffload. **Reopen when:** the View/HW lifecycle bodies land
+  (entry above); the capability-dispatch commit that deletes
+  `OpenError::CapabilityNotYetImplemented` extends both tests across
+  capabilities in the same PR. Target for remainder: V3.0 (tracks the
+  View/HW entry).
 
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
