@@ -22,6 +22,15 @@
 
 use crate::curve::curve_banded;
 use crate::model::{g_age, World};
+use shekyl_archival_retention::{curve_milli, BandedCurveParams, WORK_MILLI_SCALE};
+
+/// Reward curve evaluation backend (PR 1.5: integer imports canonical crate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CurveImpl {
+    #[default]
+    Float,
+    Integer,
+}
 
 #[derive(Debug, Clone)]
 pub struct RewardParams {
@@ -37,6 +46,8 @@ pub struct RewardParams {
     pub pseudonym_cost: f64,
     /// Age-weight in `g(age) = 1 + age_weight · age`. `0` = pure `1/R` baseline.
     pub age_weight: f64,
+    /// Float sim path vs `shekyl-archival-retention::reward_arithmetic` (minting code).
+    pub curve_impl: CurveImpl,
 }
 
 /// Raw (uncapped) work for one actor, given current replication counts. The economic
@@ -73,7 +84,15 @@ fn plateau_work(p: &RewardParams) -> f64 {
 /// Credited work via banded PL `Curve` (REWARD_EMISSION_LEG.md §4.0 form C).
 #[must_use]
 pub fn curve(work: f64, p: &RewardParams) -> f64 {
-    curve_banded(work, p.cap)
+    match p.curve_impl {
+        CurveImpl::Float => curve_banded(work, p.cap),
+        CurveImpl::Integer => {
+            let cap_milli = (p.cap * WORK_MILLI_SCALE as f64).round() as u64;
+            let params = BandedCurveParams::from_sim_cap_milli(cap_milli);
+            let work_milli = (work * WORK_MILLI_SCALE as f64).round() as u64;
+            curve_milli(work_milli, &params) as f64 / WORK_MILLI_SCALE as f64
+        }
+    }
 }
 
 /// Returns `(effective_capped_work, pseudonym_count, split_cost)`.

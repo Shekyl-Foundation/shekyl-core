@@ -28,6 +28,7 @@ mod model;
 mod participation;
 mod retrieval;
 mod reward;
+use reward::CurveImpl;
 mod scenarios;
 mod timing_cluster;
 mod transport;
@@ -488,7 +489,13 @@ fn main() {
         return;
     }
 
-    let cfgs: Vec<_> = build_scenarios()
+    let curve_impl = std::env::args().find_map(|a| {
+        a.strip_prefix("--curve-impl=")
+            .map(|v| if v == "integer" { CurveImpl::Integer } else { CurveImpl::Float })
+    })
+    .unwrap_or(CurveImpl::Float);
+
+    let mut cfgs: Vec<_> = build_scenarios()
         .into_iter()
         .filter(|c| {
             axis_filter
@@ -496,6 +503,10 @@ fn main() {
                 .is_none_or(|prefix| c.axis.starts_with(prefix))
         })
         .collect();
+
+    for c in &mut cfgs {
+        c.curve_impl = curve_impl;
+    }
 
     if cfgs.is_empty() {
         eprintln!(
@@ -667,5 +678,48 @@ mod tests {
         // A zero base floor (population at/above decay_pop) stays zero regardless of tilt —
         // the tilt redistributes a floor, it does not create one.
         assert_eq!(foundation_floor_aged(80, 6, 80.0, 0.9, 1.0, dt), 0);
+    }
+
+    #[test]
+    fn reconciliation_curve_float_vs_integer() {
+        use crate::reward::{curve, CurveImpl, RewardParams};
+        use shekyl_archival_retention::WORK_MILLI_SCALE;
+
+        const EPS_CURVE: f64 = 0.002;
+        let params = RewardParams {
+            budget: 100.0,
+            cap: 8.0,
+            pseudonym_cost: 0.05,
+            age_weight: 2.0,
+            curve_impl: CurveImpl::Integer,
+        };
+        let float_params = RewardParams {
+            curve_impl: CurveImpl::Float,
+            ..params.clone()
+        };
+
+        for tenth in 0..=200 {
+            let work = tenth as f64 * 0.1;
+            let int_c = curve(work, &params);
+            let flt_c = curve(work, &float_params);
+            let diff = (int_c - flt_c).abs();
+            assert!(
+                diff <= EPS_CURVE,
+                "work={work}: integer={int_c} float={flt_c} diff={diff}"
+            );
+        }
+        let _ = WORK_MILLI_SCALE;
+    }
+
+    #[test]
+    fn reconciliation_plateau_cross_check() {
+        use crate::curve::curve_banded;
+        use shekyl_archival_retention::{curve_milli, BandedCurveParams, WORK_MILLI_SCALE};
+
+        let banded = BandedCurveParams::from_sim_cap_milli(8_000);
+        let int_cap = curve_milli(16_000, &banded);
+        let flt_milli =
+            (curve_banded(16.0, 8.0) * WORK_MILLI_SCALE as f64).round() as u64;
+        assert_eq!(int_cap, flt_milli);
     }
 }
