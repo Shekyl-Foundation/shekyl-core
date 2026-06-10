@@ -5538,12 +5538,16 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     for (const auto& iv : bond.bad_intervals)
       bad.emplace_back(iv.start_epoch, iv.end_exclusive);
 
+    if (bond.bonded_total_atomic > std::numeric_limits<uint64_t>::max() - entry.slashed_amount)
+      throw std::runtime_error("FATAL: per-P bonded_total_atomic overflow on slash revert");
     bond.bonded_total_atomic += entry.slashed_amount;
 
     put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
       bond.bonded_total_atomic, bond.holdings_kind, bond.held_shard_ids, bad);
 
     const uint64_t bonded_total = get_total_bonded_atomic();
+    if (bonded_total > std::numeric_limits<uint64_t>::max() - entry.slashed_amount)
+      throw std::runtime_error("FATAL: total_bonded_atomic overflow on slash revert");
     set_total_bonded_atomic(bonded_total + entry.slashed_amount);
 
     const uint64_t burned_total = get_total_burned();
