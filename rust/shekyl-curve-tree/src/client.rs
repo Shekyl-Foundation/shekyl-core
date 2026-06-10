@@ -51,9 +51,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::recon::{
-    collect_block_leaves, drained_sorted, extract_leaf_hashes, per_output_h_pqc, TxOutputs,
-};
+use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
@@ -240,25 +238,18 @@ impl CurveTreeClient {
             through
         };
         let stored = self.store.leaf_count()?;
-        let canonical: Vec<LeafEntry> = drained_sorted(&self.entries, target_through)
-            .into_iter()
-            .copied()
-            .collect();
-        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
-        if canonical.len() < stored_usize {
+        let canonical_count = self.drained_count_from_index(target_through);
+        if canonical_count < stored {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
-        let new_entries = canonical[stored_usize..].to_vec();
+        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
+        let new_entries = self.drained_suffix_from_index(target_through, stored_usize);
         if !new_entries.is_empty() || tip_height > store_tip {
             self.store.append_drained(&new_entries, tip_height)?;
         }
-        self.record_drained_count(
-            through,
-            Self::canonical_drained_count(&self.entries, through),
-        );
+        self.record_drained_count(through, self.drained_count_from_index(through));
         if target_through != through {
-            let count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
-            self.record_drained_count(target_through, count);
+            self.record_drained_count(target_through, canonical_count);
         }
         Ok(())
     }
@@ -274,23 +265,32 @@ impl CurveTreeClient {
         }
         let target_through = Self::drained_through(tip_height);
         let stored = self.store.leaf_count()?;
-        let canonical: Vec<LeafEntry> = drained_sorted(&self.entries, target_through)
-            .into_iter()
-            .copied()
-            .collect();
-        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
-        if canonical.len() < stored_usize {
+        let canonical_count = self.drained_count_from_index(target_through);
+        if canonical_count < stored {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
-        let new_entries = canonical[stored_usize..].to_vec();
+        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
+        let new_entries = self.drained_suffix_from_index(target_through, stored_usize);
         self.store.append_drained(&new_entries, tip_height)?;
-        let new_count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
-        self.record_drained_count(target_through, new_count);
+        self.record_drained_count(target_through, canonical_count);
         Ok(())
     }
 
-    fn canonical_drained_count(entries: &[LeafEntry], through: u64) -> u64 {
-        u64::try_from(drained_sorted(entries, through).len()).expect("drained leaf count fits u64")
+    /// Canonical drain-order suffix via [`Self::entries_by_maturity`] (maturity
+    /// ascending; indices within each bucket are appended in `gindex` order).
+    pub(crate) fn drained_suffix_from_index(&self, through: u64, skip: usize) -> Vec<LeafEntry> {
+        let mut remaining_skip = skip;
+        let mut out = Vec::new();
+        for (_, indices) in self.entries_by_maturity.range(..=through) {
+            for &i in indices {
+                if remaining_skip > 0 {
+                    remaining_skip -= 1;
+                    continue;
+                }
+                out.push(self.entries[i]);
+            }
+        }
+        out
     }
 
     /// Upsert `(drained_through, drained_leaf_count)` while keeping the cache
@@ -390,6 +390,7 @@ impl From<StoreError> for ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recon::drained_sorted;
     use shekyl_fcmp::tree::selene_hash_init;
     use shekyl_oxide::COINBASE_LOCK_WINDOW;
 
@@ -417,6 +418,37 @@ mod tests {
             leaf_hash_blob: Some(blob),
             outputs,
         }]
+    }
+
+    #[test]
+    fn drained_suffix_from_index_matches_oracle() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs0 = coinbase_block(&outs, &blob);
+        let txs1 = coinbase_block(&outs, &blob);
+        let client = CurveTreeClient::from_blocks(&[
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
+        ])
+        .unwrap();
+        let through = 61;
+        let oracle: Vec<LeafEntry> = drained_sorted(&client.entries, through)
+            .into_iter()
+            .copied()
+            .collect();
+        for skip in 0..=oracle.len() {
+            assert_eq!(
+                client.drained_suffix_from_index(through, skip),
+                oracle[skip..],
+                "skip={skip}"
+            );
+        }
     }
 
     #[test]

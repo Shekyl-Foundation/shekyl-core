@@ -645,12 +645,14 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
     let maturity = u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes"));
     let mut output_key = [0u8; 32];
     output_key.copy_from_slice(&buf[16..48]);
-    let commitment = if buf[48] == 1 {
-        let mut c = [0u8; 32];
-        c.copy_from_slice(&buf[49..81]);
-        Some(c)
-    } else {
-        None
+    let commitment = match buf[48] {
+        0 => None,
+        1 => {
+            let mut c = [0u8; 32];
+            c.copy_from_slice(&buf[49..81]);
+            Some(c)
+        }
+        _ => return Err(StoreError::CorruptMeta("invalid leaf commitment tag")),
     };
     let mut h_pqc = [0u8; 32];
     h_pqc.copy_from_slice(&buf[81..113]);
@@ -707,6 +709,14 @@ mod tests {
                 target: TargetKind::TaggedKey,
             },
         }
+    }
+
+    #[test]
+    fn decode_leaf_meta_rejects_invalid_commitment_tag() {
+        let mut buf = encode_leaf_meta(&sample_entry(0, 0));
+        buf[48] = 2;
+        let err = decode_stored_leaf_meta(&buf).unwrap_err();
+        assert!(matches!(err, StoreError::CorruptMeta(_)));
     }
 
     #[test]
