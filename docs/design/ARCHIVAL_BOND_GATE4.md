@@ -327,6 +327,8 @@ Collateral return and reward mint are **independent value flows**.
 4. **Floor equality** — post-connect `bonded_total_atomic == bond_floor(holdings)`.
 5. `P` hybrid signatures on vin.
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
+   When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
+   proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
@@ -519,7 +521,7 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
-- [ ] `bond_credit`/`bond_debit` in RCT balance verifier.
+- [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verRctSemanticsBondPost`; NIC path).
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic` (Rebond/Unbond/HoldingsUpdate deferred).
 - [ ] KAT: join → serve `E_first` → paying emit; conservation-law cross-check fixture.
 

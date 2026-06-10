@@ -237,6 +237,16 @@ namespace rct {
         return V_size;
     }
 
+    bool is_canonical_bulletproof_plus_layout(const std::vector<BulletproofPlus> &proofs)
+    {
+        if (proofs.size() != 1)
+            return false;
+        const size_t sz = proofs[0].V.size();
+        if (sz == 0 || sz > BULLETPROOF_PLUS_MAX_OUTPUTS)
+            return false;
+        return true;
+    }
+
     size_t n_bulletproof_plus_amounts(const BulletproofPlus &proof) { return n_bulletproof_amounts_base(proof.L.size(), proof.R.size(), proof.V.size(), BULLETPROOF_PLUS_MAX_OUTPUTS); }
 
     size_t n_bulletproof_plus_amounts(const std::vector<BulletproofPlus> &proofs)

@@ -1765,6 +1765,25 @@ uint8_t shekyl_archival_verify_serve_credit_vin(
     size_t vin_payload_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
+// Bond-post RCT balance (ARCHIVAL_BOND_GATE4.md §3.2)
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK                    0
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR        1
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS      2
+/// Invalid point, non-32-byte-aligned flat buffer, or count*32 overflow.
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT   3
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH    4
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM    5
+
+/// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.
+uint8_t shekyl_archival_verify_bond_post_rct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee,
+    uint64_t bond_credit,
+    uint64_t bond_debit);
+
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //

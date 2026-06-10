@@ -157,6 +157,8 @@ namespace rct {
     size_t n_bulletproof_plus_max_amounts(const BulletproofPlus &proof);
     size_t n_bulletproof_plus_amounts(const std::vector<BulletproofPlus> &proofs);
     size_t n_bulletproof_plus_max_amounts(const std::vector<BulletproofPlus> &proofs);
+    /// Exactly one aggregated BP+ proof with 1..MAX outputs (consensus canonical form).
+    bool is_canonical_bulletproof_plus_layout(const std::vector<BulletproofPlus> &proofs);
 
     // RCT type tags:
     //  RCTTypeNull = coinbase (no confidential data)
