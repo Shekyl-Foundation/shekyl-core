@@ -4145,6 +4145,12 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1+ — Legacy C++ → Rust rewrite scope
 
+- **archival: port remaining bond-post kinds to Rust delegation (gate-4).**
+  JoinMarket verify and `E_first` eligibility delegate to `shekyl-archival-retention`
+  (gate-4 §8 phase-1). **Target:** V3.1 — land with Rebond/Unbond/HoldingsUpdate connect
+  work; each kind gets its own `verify_*_bond_post` surface and FFI error-code cluster,
+  mirroring the JoinMarket audit table. Out of scope for §8 phase-1 by design.
+
 Items captured from the
 [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
 (2026-04-25) when the `wallet-state-promotion` plan halted at 2k.c

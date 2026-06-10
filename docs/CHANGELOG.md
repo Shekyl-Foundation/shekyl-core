@@ -59,6 +59,16 @@
   revert. FFI: `shekyl_archival_challenge_resolution_blocks`,
   `shekyl_archival_epoch_slash_deadline_height`. CompleteTree slash deferred.
 
+- **archival: gate-4 §8 phase-1 lifecycle KAT and Rust-first join verify (bonded-aggregation).**
+  `shekyl-archival-retention`: `bond_floor`, `verify_join_market_bond_post` (incl.
+  both-terms reject), `serve_credit_epoch_ok`, `verify_conservation_snapshot` (audit/KAT
+  only). `gate4_lifecycle_kat_v1.json` exercises join → serve `E_first` and bonded
+  aggregation; paying-emit stub `null`. FFI: `shekyl_archival_verify_join_market_bond_post`
+  (distinct `SHEKYL_ARCHIVAL_BOND_POST_ERR_*` per reject reason),
+  `shekyl_archival_serve_credit_epoch_ok`. `ArchivalBondValue` LMDB v3 stores per-P
+  `bonded_total_atomic`; pre-v3 bond blobs rejected at decode. `blockchain.cpp` delegates
+  join-market semantics and `E_first` lower bound to Rust; hybrid pubkey + `P_id` hint stay C++.
+
 - **archival: JoinMarket bond-post verify and LMDB connect (gate-4 §3.4.1).**
   `txin_archival_bond_post` wire (`tag 0x05`), `put_archival_bond_record`, and
   `total_bonded_atomic` on connect/pop; JoinMarket-only at genesis.
