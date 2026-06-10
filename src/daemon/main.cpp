@@ -334,6 +334,19 @@ int main(int argc, char const * argv[])
       log_file_path = bf::absolute(log_file_path, relative_path_base);
     mlog_configure(log_file_path.string(), true, command_line::get_arg(vm, daemon_args::arg_max_log_file_size), command_line::get_arg(vm, daemon_args::arg_max_log_files));
 
+    // Wire the Rust-side tracing surface into the subscriber that
+    // mlog_configure just installed. Required ordering: init (inside
+    // mlog_configure) first, then install. ALREADY_INSTALLED is the
+    // benign re-configure arm; anything else means daemon-rpc tracing
+    // events would be dropped, which is worth a loud warning but not
+    // an abort (C++-side logging is unaffected).
+    {
+      const int32_t fwd_rc = shekyl_log_install_tracing_forwarder();
+      if (fwd_rc != SHEKYL_LOG_OK && fwd_rc != SHEKYL_LOG_ERR_ALREADY_INSTALLED)
+        std::cerr << "Warning: tracing forwarder install failed (code " << fwd_rc
+                  << "); Rust daemon-rpc log events will be dropped" << std::endl;
+    }
+
     // Set log level
     if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_level))
     {
