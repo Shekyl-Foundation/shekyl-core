@@ -11,6 +11,15 @@ name = "shekyl_daemon_rpc"
 crate-type = ["staticlib", "lib"]
 
 [dependencies]
+# Compiled into libshekyl_daemon_rpc.a so the daemon links a single
+# Rust image carrying one `tracing-core` dispatcher: the C++ side's
+# `shekyl_log_init_*` subscriber is then the same dispatcher this
+# crate's `tracing::*` macros hit. Without this, the daemon links two
+# staticlib images (shekyl_logging + shekyl_daemon_rpc), each with its
+# own `GLOBAL_DISPATCH`, and this crate's events are silently
+# dropped. See V3_WALLET_DECISION_LOG.md 2026-06-10 (single-image
+# amendment) and the nm gate in src/daemon/CMakeLists.txt.
+shekyl-logging = { path = "../shekyl-logging" }
 serde = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

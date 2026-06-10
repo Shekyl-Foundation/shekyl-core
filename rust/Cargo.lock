@@ -3773,6 +3773,7 @@ dependencies = [
  "axum",
  "serde",
  "serde_json",
+ "shekyl-logging",
  "tokio",
  "tower-http",
  "tracing",

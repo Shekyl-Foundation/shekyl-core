@@ -33,6 +33,13 @@
 //! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
 //! restricted-mode enforcement.
 
+// Linked, not called: `shekyl-logging` is a dependency so its objects
+// (the `shekyl_log_*` C exports plus the one shared `tracing-core`
+// dispatcher) are compiled into `libshekyl_daemon_rpc.a`. The daemon
+// force-loads that archive, making the C++-installed subscriber the
+// same dispatcher this crate's `tracing::*` macros dispatch through.
+use shekyl_logging as _;
+
 pub mod core;
 pub mod ffi;
 pub mod ffi_exports;
