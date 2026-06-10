@@ -132,8 +132,9 @@ pub struct CurveTreeClient {
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
     pub(crate) next_gindex: u64,
-    /// Append-only `(drained_through, drained_leaf_count)` cache for O(log n)
-    /// root queries without scanning all leaf candidates each time.
+    /// `(drained_through, drained_leaf_count)` cache keyed by exact cutoff
+    /// heights previously synced or queried. Lookups miss to the maturity
+    /// index rather than interpolating between cached cutoffs.
     drained_through_counts: Vec<(u64, u64)>,
     /// Maturity bucket → indices into [`Self::entries`] for O(bucket) drain
     /// batching on each ingested block.
@@ -310,25 +311,21 @@ impl CurveTreeClient {
     }
 
     fn drained_leaf_count_at(&self, through: u64) -> u64 {
-        if let Some((last_through, _)) = self.drained_through_counts.last() {
-            if through <= *last_through {
-                return match self
-                    .drained_through_counts
-                    .binary_search_by_key(&through, |(t, _)| *t)
-                {
-                    Ok(i) => self.drained_through_counts[i].1,
-                    Err(0) => 0,
-                    Err(i) => self.drained_through_counts[i - 1].1,
-                };
-            }
+        if let Ok(i) = self
+            .drained_through_counts
+            .binary_search_by_key(&through, |(t, _)| *t)
+        {
+            return self.drained_through_counts[i].1;
         }
-        u64::try_from(
-            self.entries
-                .iter()
-                .filter(|e| e.maturity <= through)
-                .count(),
-        )
-        .expect("drained leaf count fits u64")
+        self.drained_count_from_index(through)
+    }
+
+    /// Count leaves with `maturity <= through` via [`Self::entries_by_maturity`].
+    fn drained_count_from_index(&self, through: u64) -> u64 {
+        self.entries_by_maturity
+            .range(..=through)
+            .map(|(_, indices)| u64::try_from(indices.len()).expect("bucket fits u64"))
+            .sum()
     }
 
     /// The drain cutoff for a reference height: a leaf maturing at `m`
@@ -457,6 +454,36 @@ mod tests {
         assert_eq!(CurveTreeClient::drained_through(0), 0);
         assert_eq!(CurveTreeClient::drained_through(1), 0);
         assert_eq!(CurveTreeClient::drained_through(61), 60);
+    }
+
+    #[test]
+    fn drained_leaf_count_sparse_cache_does_not_interpolate() {
+        // `root_at` far ahead leaves a high cutoff in the cache; a later query
+        // at an intermediate reference height must not reuse that entry's count.
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs0 = coinbase_block(&outs, &blob);
+        let txs1 = coinbase_block(&outs, &blob);
+        let mut client = CurveTreeClient::new();
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            })
+            .unwrap();
+        client
+            .ingest_block(BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            })
+            .unwrap();
+        let _ = client.root_at(200).unwrap();
+        assert_eq!(
+            client.drained_leaf_count(61),
+            1,
+            "only the genesis coinbase has drained by height 61"
+        );
+        assert_eq!(client.drained_leaf_count(62), 2);
     }
 
     #[test]
