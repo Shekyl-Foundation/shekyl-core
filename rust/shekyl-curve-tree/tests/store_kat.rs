@@ -16,14 +16,16 @@ use shekyl_curve_tree::{
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
 
 fn decode_hex(s: &str) -> Vec<u8> {
+    assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
         .collect()
 }
 
 fn decode_hex32(s: &str) -> [u8; 32] {
     let v = decode_hex(s);
+    assert_eq!(v.len(), 32, "expected 32 bytes, got {}", v.len());
     let mut a = [0u8; 32];
     a.copy_from_slice(&v);
     a
