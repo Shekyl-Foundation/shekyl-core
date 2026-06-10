@@ -217,6 +217,16 @@ impl CurveTreeClient {
 
     fn sync_store(&mut self, tip_height: u64) -> Result<(), ClientError> {
         let through = Self::drained_through(tip_height);
+        let store_tip = self.store.sync_tip_height()?;
+        if tip_height <= store_tip {
+            // `root_at` may have caught the store up ahead of the ingested tip;
+            // reconcile the cache without regressing sync tip or re-appending.
+            self.record_drained_count(
+                through,
+                Self::canonical_drained_count(&self.entries, through),
+            );
+            return Ok(());
+        }
         let new_entries = newly_drained_at_cutoff(&self.entries, through);
         let prev = self
             .drained_through_counts
@@ -225,14 +235,7 @@ impl CurveTreeClient {
             .unwrap_or(0);
         let added = u64::try_from(new_entries.len()).expect("drain batch fits u64");
         self.store.append_drained(&new_entries, tip_height)?;
-        let new_count = prev + added;
-        if let Some(last) = self.drained_through_counts.last_mut() {
-            if last.0 == through {
-                last.1 = new_count;
-                return Ok(());
-            }
-        }
-        self.drained_through_counts.push((through, new_count));
+        self.record_drained_count(through, prev + added);
         Ok(())
     }
 
@@ -258,15 +261,30 @@ impl CurveTreeClient {
         let new_entries = canonical[stored_usize..].to_vec();
         self.store.append_drained(&new_entries, tip_height)?;
         let new_count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
-        if let Some(last) = self.drained_through_counts.last_mut() {
-            if last.0 == target_through {
-                last.1 = new_count;
-                return Ok(());
-            }
-        }
-        self.drained_through_counts
-            .push((target_through, new_count));
+        self.record_drained_count(target_through, new_count);
         Ok(())
+    }
+
+    fn canonical_drained_count(entries: &[LeafEntry], through: u64) -> u64 {
+        u64::try_from(drained_sorted(entries, through).len()).expect("drained leaf count fits u64")
+    }
+
+    /// Upsert `(drained_through, drained_leaf_count)` while keeping the cache
+    /// sorted by `drained_through` (required after out-of-order `root_at` then
+    /// `ingest_block`).
+    fn record_drained_count(&mut self, through: u64, count: u64) {
+        if let Some(i) = self
+            .drained_through_counts
+            .iter()
+            .position(|(t, _)| *t == through)
+        {
+            self.drained_through_counts[i].1 = count;
+            return;
+        }
+        let i = self
+            .drained_through_counts
+            .partition_point(|(t, _)| *t < through);
+        self.drained_through_counts.insert(i, (through, count));
     }
 
     fn drained_leaf_count_at(&self, through: u64) -> u64 {
@@ -417,6 +435,32 @@ mod tests {
         assert_eq!(CurveTreeClient::drained_through(0), 0);
         assert_eq!(CurveTreeClient::drained_through(1), 0);
         assert_eq!(CurveTreeClient::drained_through(61), 60);
+    }
+
+    #[test]
+    fn root_at_ahead_of_ingest_then_ingest_preserves_root() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs = coinbase_block(&outs, &blob);
+        let mut client = CurveTreeClient::new();
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs,
+            })
+            .unwrap();
+        let root61 = client.root_at(61).unwrap();
+        client
+            .ingest_block(BlockLeaves {
+                height: 1,
+                txs: &txs,
+            })
+            .unwrap();
+        assert_eq!(client.root_at(61).unwrap(), root61);
+        assert_eq!(client.drained_leaf_count(61), 1);
+        for w in client.drained_through_counts.windows(2) {
+            assert!(w[0].0 <= w[1].0, "drained_through cache must stay sorted");
+        }
     }
 
     #[test]

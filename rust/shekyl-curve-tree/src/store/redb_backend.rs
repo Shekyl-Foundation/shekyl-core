@@ -11,7 +11,9 @@ use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
-use crate::store::ops::{full_build_root, mixed_composition_root, recompute_segment_r_k};
+use crate::store::ops::{
+    full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
+};
 use crate::types::{LeafEntry, TargetKind, TreePosition};
 use shekyl_fcmp::tree::selene_hash_init;
 
@@ -62,6 +64,8 @@ pub enum StoreError {
     InvalidTruncate { pos: u64, leaf_count: u64 },
     /// `root_at_count` requested more leaves than are persisted.
     LeafCountOutOfBounds { requested: u64, stored: u64 },
+    /// Mixed-composition root failed for a non-recoverable reason.
+    MixedComposition(MixedRootError),
 }
 
 impl From<redb::Error> for StoreError {
@@ -191,12 +195,17 @@ impl LeafStore {
                 leaf_count += 1;
             }
         }
+        let effective_tip = {
+            let meta = txn.open_table(META_TABLE)?;
+            let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
+            tip_height.max(sync_tip)
+        };
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
-            meta.insert(META_SYNC_TIP, &tip_height)?;
+            meta.insert(META_SYNC_TIP, &effective_tip)?;
         }
-        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, effective_tip, leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
@@ -298,13 +307,18 @@ impl LeafStore {
         let tail = read_leaf_bytes_range_read(&txn, tail_start, leaf_count)?;
         match mixed_composition_root(leaf_count, &frozen_r, &tail) {
             Ok(root) => Ok(root),
-            Err(_) if tail_start == 0 => Ok(full_build_root(&tail)),
-            Err(_) => match read_leaf_bytes_range_read(&txn, 0, leaf_count) {
-                Ok(all_leaves) => Ok(full_build_root(&all_leaves)),
-                Err(_) => Err(StoreError::CorruptMeta(
-                    "mixed root failed with incomplete leaf range (post-prune)",
-                )),
-            },
+            Err(MixedRootError::TailTooShortForLayerJ) if tail_start == 0 => {
+                Ok(full_build_root(&tail))
+            }
+            Err(MixedRootError::TailTooShortForLayerJ) => {
+                match read_leaf_bytes_range_read(&txn, 0, leaf_count) {
+                    Ok(all_leaves) => Ok(full_build_root(&all_leaves)),
+                    Err(_) => Err(StoreError::CorruptMeta(
+                        "mixed root failed with incomplete leaf range (post-prune)",
+                    )),
+                }
+            }
+            Err(err) => Err(StoreError::MixedComposition(err)),
         }
     }
 
@@ -757,6 +771,15 @@ mod tests {
         assert_eq!(store.sync_tip_height().unwrap(), 500);
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), 0);
+    }
+
+    #[test]
+    fn append_drained_sync_tip_is_monotonic() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store.append_drained(&[sample_entry(0, 0)], 100).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 100);
+        store.append_drained(&[], 50).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), 100);
     }
 
     #[test]
