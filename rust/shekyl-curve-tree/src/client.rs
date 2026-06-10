@@ -114,6 +114,16 @@ pub enum ClientError {
     },
     /// Persistent leaf store failure (I/O or corruption).
     Store(StoreError),
+    /// [`CurveTreeClient::ingest_block`] was called with a block height that
+    /// is not the next consecutive height after the prior ingest (including
+    /// duplicates and gaps). The gindex and maturity index assume a full,
+    /// in-order chain replay from genesis.
+    NonConsecutiveBlockHeight {
+        /// Height supplied on this ingest call.
+        got: u64,
+        /// Height required to continue the replay (`0` on the first block).
+        expected: u64,
+    },
 }
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
@@ -137,6 +147,8 @@ pub struct CurveTreeClient {
     /// Maturity bucket → indices into [`Self::entries`] for O(bucket) drain
     /// batching on each ingested block.
     entries_by_maturity: BTreeMap<u64, Vec<usize>>,
+    /// Last block height passed to [`Self::ingest_block`], if any.
+    ingested_tip_height: Option<u64>,
 }
 
 impl Default for CurveTreeClient {
@@ -154,6 +166,7 @@ impl CurveTreeClient {
             next_gindex: 0,
             drained_through_counts: Vec::new(),
             entries_by_maturity: BTreeMap::new(),
+            ingested_tip_height: None,
         })
     }
 
@@ -181,9 +194,20 @@ impl CurveTreeClient {
 
     /// Ingest one block, resolving `h_pqc` per output, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
-    /// ingested in ascending height order from genesis (the gindex is the
-    /// cumulative chain position).
+    /// ingested in strictly consecutive height order from genesis (`0`, `1`,
+    /// `2`, …); gaps, duplicates, and rewinds return
+    /// [`ClientError::NonConsecutiveBlockHeight`].
     pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
+        let expected = self.ingested_tip_height.map_or(0, |last| {
+            last.checked_add(1).expect("chain height fits u64")
+        });
+        if block.height != expected {
+            return Err(ClientError::NonConsecutiveBlockHeight {
+                got: block.height,
+                expected,
+            });
+        }
+
         // Resolve h_pqc per tx, then collect leaves. `identities` is kept
         // alive across the `collect_block_leaves` call that borrows it.
         let identities: Vec<Vec<OutputIdentity>> = block
@@ -223,6 +247,7 @@ impl CurveTreeClient {
                 .or_default()
                 .push(entry_base + offset);
         }
+        self.ingested_tip_height = Some(block.height);
         self.sync_store(block.height)
     }
 
@@ -449,6 +474,49 @@ mod tests {
                 "skip={skip}"
             );
         }
+    }
+
+    #[test]
+    fn ingest_block_rejects_non_consecutive_heights() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs = coinbase_block(&outs, &blob);
+        let block0 = BlockLeaves {
+            height: 0,
+            txs: &txs,
+        };
+        let block1 = BlockLeaves {
+            height: 1,
+            txs: &txs,
+        };
+        let mut client = CurveTreeClient::new();
+
+        assert!(matches!(
+            client.ingest_block(block1),
+            Err(ClientError::NonConsecutiveBlockHeight {
+                got: 1,
+                expected: 0,
+            })
+        ));
+
+        client.ingest_block(block0).unwrap();
+        assert!(matches!(
+            client.ingest_block(block0),
+            Err(ClientError::NonConsecutiveBlockHeight {
+                got: 0,
+                expected: 1,
+            })
+        ));
+        assert!(matches!(
+            client.ingest_block(BlockLeaves {
+                height: 2,
+                txs: &txs,
+            }),
+            Err(ClientError::NonConsecutiveBlockHeight {
+                got: 2,
+                expected: 1,
+            })
+        ));
     }
 
     #[test]

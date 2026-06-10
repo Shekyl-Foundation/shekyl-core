@@ -145,7 +145,6 @@ pub fn recompute_segment_r_k(segment_leaf_bytes: &[[u8; 128]]) -> Result<[u8; 32
 mod tests {
     use super::*;
     use crate::segment::outputs_per_node;
-    use shekyl_fcmp::tree::{build_layers, build_upper_layers};
     use ciphersuite::{
         group::ff::{Field, PrimeField},
         Ciphersuite,
@@ -154,6 +153,7 @@ mod tests {
     use rand_chacha::rand_core::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use shekyl_fcmp::tree::SCALARS_PER_LEAF;
+    use shekyl_fcmp::tree::{build_layers, build_upper_layers};
 
     fn rand_leaves(rng: &mut ChaCha20Rng, n: usize) -> Vec<[u8; 32]> {
         let mut out = Vec::with_capacity(n * SCALARS_PER_LEAF);
