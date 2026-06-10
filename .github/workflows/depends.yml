@@ -119,6 +119,15 @@ jobs:
           rustup target add ${{ matrix.toolchain.rust_target }}
         fi
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    - name: archival determinism KAT (aarch64 cross-test)
+      if: matrix.toolchain.host == 'aarch64-linux-gnu'
+      run: |
+        . "$HOME/.cargo/env"
+        cd rust
+        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+        cargo test --locked -p shekyl-archival-retention \
+          --target aarch64-unknown-linux-gnu \
+          consensus_state_kat determinism_curve_milli_cross_check gate4_lifecycle
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}

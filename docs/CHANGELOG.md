@@ -4,6 +4,15 @@
 
 ### Added
 
+- **archival: consensus state emission read surface (ARCHIVAL_CONSENSUS_STATE).**
+  Integer `reward_arithmetic` + `consensus_state` in `shekyl-archival-retention`;
+  banded float/integer `Curve` in `shekyl-staking-sim` (`--curve-impl=float|integer`);
+  LMDB `archival_r_market` / `archival_sigma_work` epoch-close sweep; partial-slash
+  `bad_interval` F3 fix; KATs (`consensus_state_kat_v1`, gate4 phase-2 `emission`);
+  docs `ARCHIVAL_REWARD_ARITHMETIC.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`;
+  FA-6 Pi scenario B capture in `PERFORMANCE_BASELINE.md`; CI archival reward gates
+  and aarch64 determinism KAT on `depends` ARM v8 job.
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust

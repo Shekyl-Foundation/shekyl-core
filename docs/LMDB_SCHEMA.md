@@ -425,6 +425,44 @@ Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
 
+### `archival_r_market`
+
+Serve-credit-weighted `R_market(shard, E)` snapshot at epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_r_market"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(shard_id) \|\| BE(settlement_epoch)` (16 bytes) |
+| Value | `BE(u64)` count |
+| Writers | `process_archival_epoch_close_at_height` |
+| Readers | `get_archival_r_market` |
+| Reorg | `revert_archival_epoch_close_at_height` deletes epoch materialization |
+
+### `archival_sigma_work`
+
+Per-epoch `Σwork(E)` milli accumulator (`ARCHIVAL_CONSENSUS_STATE.md` §3.5).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_sigma_work"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(settlement_epoch)` (8 bytes) |
+| Value | `BE(u64)` sigma milli |
+| Writers | `process_archival_epoch_close_at_height` |
+| Readers | `get_archival_sigma_work_milli` |
+| Prune | `prune_archival_epochs_before` when `E < tip − W` |
+
+### `archival_epoch_close_log`
+
+Journal: block heights that finalized an epoch (pop revert).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_epoch_close_log"` |
+| Key | `BE(block_height)` |
+| Value | `BE(settlement_epoch)` finalized at close |
+
 ### `archival_shard_segment`
 
 Frozen segment metadata per `shard_id` (gate-2 §9; `CURVE_TREE_CLIENT.md` §7.2).
@@ -848,25 +886,28 @@ General key-value store for database-level metadata.
 | 20 | `archival_shard_leaf` | `BE(shard)\|\|BE(leaf)` | flat scalars | var | `CREATE` only |
 | 21 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
 | 22 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
-| 23 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 24 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 25 | `curve_tree_meta` | string | varies | varies | — |
-| 26 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 27 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
-| 28 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 29 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 30 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 31 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 32 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 33 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 34 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 35 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 36 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 37 | `properties` | string | varies | varies | — |
-| 38 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
-| 39 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
+| 23 | `archival_r_market` | `BE(shard)\|\|BE(E)` | `BE(u64)` count | 8 | `CREATE` only |
+| 24 | `archival_sigma_work` | `BE(E)` | `BE(u64)` sigma milli | 8 | `CREATE` only |
+| 25 | `archival_epoch_close_log` | `BE(block_height)` | `BE(E)` | 8 | `CREATE` only |
+| 26 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
+| 27 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
+| 28 | `curve_tree_meta` | string | varies | varies | — |
+| 29 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
+| 30 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
+| 31 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 32 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 33 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 34 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 35 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 36 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 37 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 38 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 39 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 40 | `properties` | string | varies | varies | — |
+| 41 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
+| 42 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
-Total: **39 sub-databases** (`mdb_env_set_maxdbs(42)` in `db_lmdb.cpp`; 37 active + 2 legacy migration stubs).
+Total: **42 sub-databases** (`mdb_env_set_maxdbs` must accommodate archival epoch-close tables + legacy stubs).
 
 ### Schema v6 → v7 migration (breaking)
 
