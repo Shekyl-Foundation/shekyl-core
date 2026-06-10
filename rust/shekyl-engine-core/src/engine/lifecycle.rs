@@ -1236,6 +1236,37 @@ mod tests {
         assert!(matches!(err, OpenError::IncorrectPassword), "got {err:?}");
     }
 
+    /// Phase 1 query surface: `Engine::primary_address` assembles the
+    /// wallet's one reusable address from the `KeyActor`'s cached
+    /// public projection and the engine's cached network, and the
+    /// result survives an encode → decode round trip through the
+    /// `shekyl-address` codec.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn primary_address_renders_and_round_trips() {
+        use crate::engine::ShekylAddress;
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+        let addr = wallet.primary_address();
+        assert_eq!(addr.network, network);
+
+        let encoded = addr.encode().expect("encode primary address");
+        let decoded = ShekylAddress::decode_for_network(&encoded, network)
+            .expect("decode primary address for the wallet's network");
+        assert_eq!(decoded.spend_key, addr.spend_key);
+        assert_eq!(decoded.view_key, addr.view_key);
+        assert_eq!(decoded.ml_kem_encap_key, addr.ml_kem_encap_key);
+
+        wallet.close(&creds).expect("close");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn open_full_with_wrong_network_returns_network_mismatch() {
         let fix = make_create_fixture();

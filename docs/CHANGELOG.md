@@ -4,6 +4,16 @@
 
 ### Added
 
+- **engine: `Engine::primary_address()` accessor + Phase 1 query-pattern
+  docs.** Thin `&self` accessor assembling the wallet's one reusable
+  `ShekylAddress` (End-state 5) from the `KeyActor`'s cached public
+  projection and the engine's cached network; `ShekylAddress` re-exported
+  from `shekyl-engine-core`. `engine/mod.rs` gains a "Query surface
+  (Phase 1 disposition)" section documenting the `ledger()`-guard
+  balance/transfers patterns and replacing the stale "Constructors land
+  next" block; encode→decode round-trip test included. Phase 2c expands
+  the receive surface (payment requests).
+
 - **engine: `change_password` on-disk integration tests (FULL).**
   Two lifecycle tests pin the I/O ↔ KDF ↔ AEAD chain at the orchestrator
   layer (FOLLOWUPS V3.0 item, Phase 1 closeout):

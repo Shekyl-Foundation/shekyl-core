@@ -48,9 +48,9 @@ documented blocker + reversion clause).
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| `Engine::balance()` or documented pattern | partial | No `Engine::balance()`. Pattern exists: `engine.ledger()` → `LedgerReadGuard` derefs to `&WalletLedger`; balance computed via `shekyl-scanner`'s `LedgerBlockExt::balance(current_height)` (`rust/shekyl-scanner/src/ledger_ext.rs:185`). Bench helpers (`engine_balance_for_bench`) demonstrate the path. Thin orchestrator wrappers are Phase 2 ops per plan §Phase 2 (History/Balance); Phase 1 disposition: document the pattern (this doc + `engine/mod.rs`), defer wrappers to Phase 2 |
-| `Engine::transfers(filter)` or equivalent | partial | Slice access exists: `engine.ledger().ledger.transfers()` (`rust/shekyl-engine-state/src/ledger_block.rs:247`). Filtered query API is Phase 2 (plan §History) |
-| `Engine::primary_address()` via key handle | open | `KeyEngineHandle` caches `AccountPublicAddress` and serves it sync via `KeyEngine::account_public_address` (`engine/key_actor.rs`), but the trait is `pub(crate)` and `Engine` exposes no public accessor — binaries currently have no way to read the wallet address. Thin `Engine::primary_address()` accessor is in Phase 1 scope (Phase 2c expands). PR 4 below |
+| `Engine::balance()` or documented pattern | done (pattern documented) | No `Engine::balance()` by design: a thin wrapper would freeze a signature before the Phase 2 filtered-query design settles. The pattern (`engine.ledger()` guard → `guard.ledger.balance(guard.ledger.height())` via `shekyl_scanner::LedgerBlockExt`) is documented in `engine/mod.rs` §"Query surface (Phase 1 disposition)". Reopen at Phase 2 ops (plan §History/Balance) |
+| `Engine::transfers(filter)` or equivalent | done (pattern documented) | Slice access `engine.ledger().ledger.transfers()` (`rust/shekyl-engine-state/src/ledger_block.rs:247`) documented in the same `engine/mod.rs` section. Filtered query API is Phase 2 (plan §History) |
+| `Engine::primary_address()` via key handle | done | `Engine::primary_address()` (`engine/mod.rs`, accessor block) assembles `ShekylAddress` from the `KeyActor`'s cached public projection (`KeyEngine::account_public_address`, sync, no actor round-trip) plus the cached network; `ShekylAddress` re-exported from `shekyl-engine-core`. Round-trip test `primary_address_renders_and_round_trips` (`engine/lifecycle.rs`). Phase 2c expands the receive surface |
 
 ### Logging (absorbed from V3.2 FOLLOWUPS)
 
