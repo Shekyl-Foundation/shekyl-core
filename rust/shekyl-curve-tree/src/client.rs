@@ -213,7 +213,14 @@ impl CurveTreeClient {
             .unwrap_or(0);
         let added = u64::try_from(new_entries.len()).expect("drain batch fits u64");
         self.store.append_drained(&new_entries, tip_height)?;
-        self.drained_through_counts.push((through, prev + added));
+        let new_count = prev + added;
+        if let Some(last) = self.drained_through_counts.last_mut() {
+            if last.0 == through {
+                last.1 = new_count;
+                return Ok(());
+            }
+        }
+        self.drained_through_counts.push((through, new_count));
         Ok(())
     }
 
@@ -336,6 +343,29 @@ mod tests {
         assert_eq!(client.root_at(0), selene_hash_init());
         assert_eq!(client.root_at(1000), selene_hash_init());
         assert_eq!(client.drained_leaf_count(1000), 0);
+    }
+
+    #[test]
+    fn duplicate_drained_through_updates_cache_in_place() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs = coinbase_block(&outs, &blob);
+        let mut client = CurveTreeClient::new();
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs,
+            })
+            .unwrap();
+        client
+            .ingest_block(BlockLeaves {
+                height: 1,
+                txs: &txs,
+            })
+            .unwrap();
+        assert_eq!(client.drained_through_counts.len(), 1);
+        assert_eq!(client.drained_through_counts[0].0, 0);
+        assert_eq!(client.drained_leaf_count(1), client.drained_leaf_count(2));
     }
 
     #[test]

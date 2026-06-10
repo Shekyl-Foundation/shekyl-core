@@ -6,7 +6,7 @@
 //! Hot-path root composition: frozen `R_k` + partial tail + `build_upper_layers`.
 
 use crate::segment::{extract_r_k, leaf_bytes_to_scalars, leaves_per_segment, SEGMENT_LAYER_J};
-use shekyl_fcmp::tree::{build_layers, build_upper_layers, selene_hash_init};
+use shekyl_fcmp::tree::{build_layers, build_upper_layers, promote_to_layer, selene_hash_init};
 
 /// Errors from the mixed-composition root path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,10 +97,10 @@ pub fn full_build_root(leaf_bytes: &[[u8; 128]]) -> [u8; 32] {
 /// Layer-`j` nodes contributed by a partial tail segment.
 ///
 /// When the tail is too shallow for `build_layers` to reach absolute layer `j`
-/// directly, promote from the tail's deepest built layer via `build_upper_layers`
-/// so mixed composition can still combine frozen `R_k` with the tail's node at
-/// the correct absolute depth (not treat the tail as an independent rooted tree
-/// that must already be `j` layers deep).
+/// directly, promote from the tail's deepest built layer via [`promote_to_layer`]
+/// (not [`build_upper_layers`], which stops at a single-node root) so mixed
+/// composition can combine frozen `R_k` with the tail's nodes at the correct
+/// absolute depth.
 fn tail_layer_j_nodes(
     tail_leaf_bytes: &[[u8; 128]],
     j: u8,
@@ -118,17 +118,15 @@ fn tail_layer_j_nodes(
     if layers[deepest].is_empty() {
         return Err(MixedRootError::EmptyUpperLayers);
     }
-    let upper = build_upper_layers(
+    let promoted = promote_to_layer(
         layers[deepest].clone(),
         u8::try_from(deepest).expect("tail tree depth fits u8"),
+        j,
     );
-    let offset = j_idx
-        .checked_sub(deepest)
-        .ok_or(MixedRootError::TailTooShortForLayerJ)?;
-    upper
-        .get(offset)
-        .cloned()
-        .ok_or(MixedRootError::TailTooShortForLayerJ)
+    if promoted.is_empty() {
+        return Err(MixedRootError::TailTooShortForLayerJ);
+    }
+    Ok(promoted)
 }
 
 /// Recompute `R_k` for segment `segment_id` from contiguous leaf bytes.
@@ -185,8 +183,8 @@ mod tests {
     }
 
     #[test]
-    fn tail_layer_j_promotion_matches_oracle_at_j0() {
-        let j = 0u8;
+    fn tail_layer_j_promotion_matches_oracle_at_j2() {
+        let j = SEGMENT_LAYER_J;
         let e = outputs_per_node(j);
         let mut rng = ChaCha20Rng::from_seed([22u8; 32]);
         for delta in [1usize, e / 3, e - 1] {

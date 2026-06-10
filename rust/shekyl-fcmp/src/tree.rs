@@ -367,6 +367,52 @@ pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> 
     layers
 }
 
+/// Hash upward from `start_layer_idx` until layer `target_layer_idx`, returning
+/// that layer's nodes.
+///
+/// Unlike [`build_upper_layers`], does not treat a single node at layer `>= 1`
+/// as the root — mixed segment composition needs the sub-root at an absolute
+/// depth even when the partial tail is still shallow (`shekyl-curve-tree` CT-1).
+#[must_use]
+pub fn promote_to_layer(
+    mut current: Vec<[u8; 32]>,
+    mut current_layer_idx: u8,
+    target_layer_idx: u8,
+) -> Vec<[u8; 32]> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    while current_layer_idx < target_layer_idx {
+        assert!(
+            !current.is_empty(),
+            "cannot promote an empty layer toward layer {target_layer_idx}"
+        );
+        let built_layer_idx = current_layer_idx.checked_add(1).expect(
+            "curve-tree layer index overflowed u8 (tree depth exceeds any real configuration)",
+        );
+        current = if layer_is_selene(built_layer_idx) {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
+                .collect();
+            scalars
+                .chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("selene node"))
+                .collect()
+        } else {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
+                .collect();
+            scalars
+                .chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c).expect("helios node"))
+                .collect()
+        };
+        current_layer_idx = built_layer_idx;
+    }
+    current
+}
+
 // ---------------------------------------------------------------------------
 // Hash initialization points
 // ---------------------------------------------------------------------------

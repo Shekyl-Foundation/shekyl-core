@@ -426,25 +426,27 @@ impl LeafStore {
                 .map(|r| r.map(|(k, _)| k.value()))
                 .collect::<Result<std::collections::BTreeSet<_>, _>>()?
         };
-        for seg_id in frozen_ids {
-            if pinned.contains(&seg_id) {
-                continue;
-            }
-            let start = u64::from(seg_id) * e;
-            let end = start + e;
+        {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
             let mut owned_tbl = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            for pos in start..end {
-                let leaf_bytes = match leaves.get(pos)? {
-                    Some(leaf) => *leaf.value(),
-                    None => continue,
-                };
-                if owned.contains(&pos) {
-                    owned_tbl.insert(pos, &leaf_bytes)?;
+            for seg_id in frozen_ids {
+                if pinned.contains(&seg_id) {
+                    continue;
                 }
-                leaves.remove(pos)?;
-                drop(leaf_meta.remove(pos)?);
+                let start = u64::from(seg_id) * e;
+                let end = start + e;
+                for pos in start..end {
+                    let leaf_bytes = match leaves.get(pos)? {
+                        Some(leaf) => *leaf.value(),
+                        None => continue,
+                    };
+                    if owned.contains(&pos) {
+                        owned_tbl.insert(pos, &leaf_bytes)?;
+                    }
+                    leaves.remove(pos)?;
+                    drop(leaf_meta.remove(pos)?);
+                }
             }
         }
         txn.commit()?;
