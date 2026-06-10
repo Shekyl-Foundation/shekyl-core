@@ -231,24 +231,35 @@ impl CurveTreeClient {
     fn sync_store(&mut self, tip_height: u64) -> Result<(), ClientError> {
         let through = Self::drained_through(tip_height);
         let store_tip = self.store.sync_tip_height()?;
-        if tip_height <= store_tip {
-            // `root_at` may have caught the store up ahead of the ingested tip;
-            // reconcile the cache without regressing sync tip or re-appending.
-            self.record_drained_count(
-                through,
-                Self::canonical_drained_count(&self.entries, through),
-            );
-            return Ok(());
+        // When `root_at` advanced the store ahead of the ingested tip, new leaves
+        // may already drain under `drained_through(store_tip)` and must still be
+        // appended (`append_drained` keeps `META_SYNC_TIP` monotonic).
+        let target_through = if tip_height <= store_tip {
+            Self::drained_through(store_tip)
+        } else {
+            through
+        };
+        let stored = self.store.leaf_count()?;
+        let canonical: Vec<LeafEntry> = drained_sorted(&self.entries, target_through)
+            .into_iter()
+            .copied()
+            .collect();
+        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
+        if canonical.len() < stored_usize {
+            return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
-        let new_entries = self.newly_drained_at_cutoff(through);
-        let prev = self
-            .drained_through_counts
-            .last()
-            .map(|(_, count)| *count)
-            .unwrap_or(0);
-        let added = u64::try_from(new_entries.len()).expect("drain batch fits u64");
-        self.store.append_drained(&new_entries, tip_height)?;
-        self.record_drained_count(through, prev + added);
+        let new_entries = canonical[stored_usize..].to_vec();
+        if !new_entries.is_empty() || tip_height > store_tip {
+            self.store.append_drained(&new_entries, tip_height)?;
+        }
+        self.record_drained_count(
+            through,
+            Self::canonical_drained_count(&self.entries, through),
+        );
+        if target_through != through {
+            let count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
+            self.record_drained_count(target_through, count);
+        }
         Ok(())
     }
 
@@ -276,16 +287,6 @@ impl CurveTreeClient {
         let new_count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
         self.record_drained_count(target_through, new_count);
         Ok(())
-    }
-
-    /// Leaves that drain when the inclusive cutoff reaches `drained_through`.
-    fn newly_drained_at_cutoff(&self, drained_through: u64) -> Vec<LeafEntry> {
-        let Some(indices) = self.entries_by_maturity.get(&drained_through) else {
-            return Vec::new();
-        };
-        let mut batch: Vec<LeafEntry> = indices.iter().map(|&i| self.entries[i]).collect();
-        batch.sort_by_key(|e| e.gindex);
-        batch
     }
 
     fn canonical_drained_count(entries: &[LeafEntry], through: u64) -> u64 {
@@ -484,6 +485,48 @@ mod tests {
             "only the genesis coinbase has drained by height 61"
         );
         assert_eq!(client.drained_leaf_count(62), 2);
+    }
+
+    #[test]
+    fn ingest_after_store_ahead_appends_retroactive_drains() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs0 = coinbase_block(&outs, &blob);
+        let txs1 = coinbase_block(&outs, &blob);
+        let mut client = CurveTreeClient::new();
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            })
+            .unwrap();
+        let _ = client.root_at(200).unwrap();
+        assert_eq!(client.store.sync_tip_height().unwrap(), 200);
+        assert_eq!(client.store.leaf_count().unwrap(), 1);
+        client
+            .ingest_block(BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            })
+            .unwrap();
+        assert_eq!(
+            client.store.leaf_count().unwrap(),
+            2,
+            "second coinbase must append even though sync tip stayed at 200"
+        );
+        let mut oracle = CurveTreeClient::from_blocks(&[
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
+        ])
+        .unwrap();
+        assert_eq!(client.root_at(200).unwrap(), oracle.root_at(200).unwrap());
+        assert_eq!(client.drained_leaf_count(200), 2);
     }
 
     #[test]
