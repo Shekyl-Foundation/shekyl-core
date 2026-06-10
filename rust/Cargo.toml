@@ -110,7 +110,8 @@ edition = "2021"
 #   - `kameo = "=0.20.0"`: 1.88.0 (crates.io index, 2026-05-29)
 #   - `redb = "4.1.0"` (CT-1 LeafStore): 1.89.0
 #   - `shekyl-pow-randomx`: `Box::new_zeroed_slice` (stable 1.92.0)
-# Workspace pins 1.94.0 to align with `shekyl-gui-wallet/src-tauri/
+# Workspace pins 1.94.0 intentionally (RandomX PoW + CT-1 redb) and
+# aligns with `shekyl-gui-wallet/src-tauri/
 # rust-toolchain.toml`. Per `RANDOMX_V2_PHASE2B_PLAN.md` §9: the
 # declared floor produces a clean cargo MSRV error rather than a
 # cryptic compile failure deep in the graph. CI runs an explicit

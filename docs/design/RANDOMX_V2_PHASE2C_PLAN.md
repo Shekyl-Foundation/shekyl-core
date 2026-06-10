@@ -2178,7 +2178,7 @@ PR-merge gates (CI-enforced):
 
 Rust APIs Phase 2c depends on:
 
-- `Box::new_zeroed_slice` — stable since 1.82 ✓
+- `Box::new_zeroed_slice` — stable since 1.92 ✓
 - `std::array::from_fn` — stable since 1.63 ✓
 - `u64::from_le_bytes`, `f64::from_bits` — stable since 1.0 ✓
 - `core::mem::MaybeUninit::assume_init` — stable since 1.0 ✓

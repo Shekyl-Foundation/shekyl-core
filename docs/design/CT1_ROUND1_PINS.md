@@ -8,8 +8,8 @@ fields that downstream commits implement against.
 
 **Pin:** `redb = "4.1.0"` (workspace `[workspace.dependencies]`). Pre-genesis
 greenfield uses v3 file format only (`Database::create`); no v2 migration path.
-Requires rustc ≥ 1.89; workspace MSRV 1.94 covers this and `shekyl-pow-randomx`
-(`Box::new_zeroed_slice`, stable 1.92).
+Requires rustc ≥ 1.89; workspace MSRV 1.94 is pinned intentionally (RandomX
+PoW + redb); `Box::new_zeroed_slice` (stable 1.92.0) is already covered.
 
 | Factor | Rationale |
 |--------|-----------|
