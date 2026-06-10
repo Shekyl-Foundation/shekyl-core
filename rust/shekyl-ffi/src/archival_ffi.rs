@@ -12,11 +12,12 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
-    serve_credit_epoch_ok, verify_bond_post_rct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    BondPostError, BondPostKind, BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError,
-    CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    challenge_fire_height, challenge_seal_height, curve_milli, p_canonical_id_from_hybrid_pubkey,
+    scarcity_milli, serve_credit_epoch_ok, verify_bond_post_rct_balance,
+    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
+    ArchivalServeCreditResponse, BandedCurveParams, BondPostError, BondPostKind,
+    BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -385,6 +386,25 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
     }
+}
+
+/// Banded PL `Curve(work_milli)` using provisional `consensus_constants.json` pins.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_curve_milli(work_milli: u64) -> u64 {
+    let params = BandedCurveParams::default_provisional();
+    curve_milli(work_milli, &params)
+}
+
+/// Scarcity milli for one shard contribution (`R_market`, `age_milli`).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_scarcity_milli(r_market: u64, age_milli: u64) -> u64 {
+    scarcity_milli(r_market, age_milli, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI)
+}
+
+/// `MAX_CLAIM_AGE_W` (settlement epochs) for prune horizon.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_max_claim_age_w() -> u64 {
+    MAX_CLAIM_AGE_W
 }
 
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).

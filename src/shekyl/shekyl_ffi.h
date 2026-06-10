@@ -1813,6 +1813,11 @@ uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t settlement_epoch,
     uint64_t join_settlement_epoch);
 
+/// Integer reward arithmetic (REWARD_EMISSION_LEG.md §4; provisional band pins).
+uint64_t shekyl_archival_curve_milli(uint64_t work_milli);
+uint64_t shekyl_archival_scarcity_milli(uint64_t r_market, uint64_t age_milli);
+uint64_t shekyl_archival_max_claim_age_w(void);
+
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //

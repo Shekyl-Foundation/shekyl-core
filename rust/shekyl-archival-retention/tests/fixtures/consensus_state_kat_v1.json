@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "description": "ARCHIVAL_CONSENSUS_STATE §3.3 R_market + §4.5 Σwork fixture (pure replay).",
+  "settlement_epoch": 10,
+  "shard_id": 42,
+  "curve": {
+    "plateau_work_milli": 16000,
+    "plateau_value_milli": 8000
+  },
+  "serve_credit_rows": [
+    {
+      "p_id_hex": "01",
+      "shard_id": 42,
+      "serve_credit": true,
+      "join_epoch": 0,
+      "bad_intervals": [],
+      "foundation": false
+    },
+    {
+      "p_id_hex": "02",
+      "shard_id": 42,
+      "serve_credit": false,
+      "join_epoch": 0,
+      "bad_intervals": [],
+      "foundation": false
+    },
+    {
+      "p_id_hex": "03",
+      "shard_id": 42,
+      "serve_credit": true,
+      "join_epoch": 0,
+      "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }],
+      "foundation": false
+    }
+  ],
+  "expected": {
+    "r_market": 1,
+    "sigma_work_milli": 4000
+  },
+  "per_p_work_milli": [4000, 0, 12000],
+  "market_mask": [true, false, false],
+  "curve_cases": [
+    { "work_milli": 0, "capped_milli": 0 },
+    { "work_milli": 4000, "capped_milli": 4000 },
+    { "work_milli": 8000, "capped_milli": 6000 },
+    { "work_milli": 16000, "capped_milli": 8000 },
+    { "work_milli": 32000, "capped_milli": 8000 }
+  ]
+}
