@@ -66,6 +66,9 @@ pub enum StoreError {
     LeafCountOutOfBounds { requested: u64, stored: u64 },
     /// Mixed-composition root failed for a non-recoverable reason.
     MixedComposition(MixedRootError),
+    /// Truncation would retain a prefix with pruned leaf bytes but without
+    /// the frozen `R_k` needed to query it — caller must rebuild the store.
+    TruncatedIntoPrunedRange { pos: u64 },
 }
 
 impl From<redb::Error> for StoreError {
@@ -307,9 +310,6 @@ impl LeafStore {
         let tail = read_leaf_bytes_range_read(&txn, tail_start, leaf_count)?;
         match mixed_composition_root(leaf_count, &frozen_r, &tail) {
             Ok(root) => Ok(root),
-            Err(MixedRootError::TailTooShortForLayerJ) if tail_start == 0 => {
-                Ok(full_build_root(&tail))
-            }
             Err(MixedRootError::TailTooShortForLayerJ) => {
                 match read_leaf_bytes_range_read(&txn, 0, leaf_count) {
                     Ok(all_leaves) => Ok(full_build_root(&all_leaves)),
@@ -336,6 +336,18 @@ impl LeafStore {
             });
         }
         let txn = self.db.begin_write()?;
+        {
+            let e = leaves_per_segment() as u64;
+            if pos > 0 && !pos.is_multiple_of(e) {
+                let leaves = txn.open_table(LEAVES_TABLE)?;
+                let seg_start = ((pos - 1) / e) * e;
+                for p in seg_start..pos {
+                    if leaves.get(p)?.is_none() {
+                        return Err(StoreError::TruncatedIntoPrunedRange { pos: p });
+                    }
+                }
+            }
+        }
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
@@ -771,6 +783,28 @@ mod tests {
         assert_eq!(store.sync_tip_height().unwrap(), 500);
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), 0);
+    }
+
+    #[test]
+    fn truncate_into_pruned_segment_rejects() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = leaves_per_segment();
+        let entries: Vec<_> = (0..e)
+            .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
+            .collect();
+        store.append_drained(&entries, 10_000).unwrap();
+        store.prune_frozen(&[]).unwrap();
+        let pos_in_seg = e / 2;
+        let err = store
+            .truncate_from_tree_position(TreePosition(
+                u64::try_from(pos_in_seg).expect("position fits u64"),
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::TruncatedIntoPrunedRange { pos }
+            if pos < u64::try_from(e).expect("segment size fits u64")
+        ));
     }
 
     #[test]

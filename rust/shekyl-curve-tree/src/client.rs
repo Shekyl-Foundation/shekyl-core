@@ -49,9 +49,10 @@
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
+use std::collections::BTreeMap;
+
 use crate::recon::{
-    collect_block_leaves, drained_sorted, extract_leaf_hashes, newly_drained_at_cutoff,
-    per_output_h_pqc, TxOutputs,
+    collect_block_leaves, drained_sorted, extract_leaf_hashes, per_output_h_pqc, TxOutputs,
 };
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
@@ -134,6 +135,9 @@ pub struct CurveTreeClient {
     /// Append-only `(drained_through, drained_leaf_count)` cache for O(log n)
     /// root queries without scanning all leaf candidates each time.
     drained_through_counts: Vec<(u64, u64)>,
+    /// Maturity bucket → indices into [`Self::entries`] for O(bucket) drain
+    /// batching on each ingested block.
+    entries_by_maturity: BTreeMap<u64, Vec<usize>>,
 }
 
 impl Default for CurveTreeClient {
@@ -150,6 +154,7 @@ impl CurveTreeClient {
             entries: Vec::new(),
             next_gindex: 0,
             drained_through_counts: Vec::new(),
+            entries_by_maturity: BTreeMap::new(),
         })
     }
 
@@ -210,8 +215,15 @@ impl CurveTreeClient {
             })
             .collect();
 
+        let entry_base = self.entries.len();
         self.next_gindex =
             collect_block_leaves(block.height, &txs, self.next_gindex, &mut self.entries);
+        for (offset, entry) in self.entries[entry_base..].iter().enumerate() {
+            self.entries_by_maturity
+                .entry(entry.maturity)
+                .or_default()
+                .push(entry_base + offset);
+        }
         self.sync_store(block.height)
     }
 
@@ -227,7 +239,7 @@ impl CurveTreeClient {
             );
             return Ok(());
         }
-        let new_entries = newly_drained_at_cutoff(&self.entries, through);
+        let new_entries = self.newly_drained_at_cutoff(through);
         let prev = self
             .drained_through_counts
             .last()
@@ -263,6 +275,16 @@ impl CurveTreeClient {
         let new_count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
         self.record_drained_count(target_through, new_count);
         Ok(())
+    }
+
+    /// Leaves that drain when the inclusive cutoff reaches `drained_through`.
+    fn newly_drained_at_cutoff(&self, drained_through: u64) -> Vec<LeafEntry> {
+        let Some(indices) = self.entries_by_maturity.get(&drained_through) else {
+            return Vec::new();
+        };
+        let mut batch: Vec<LeafEntry> = indices.iter().map(|&i| self.entries[i]).collect();
+        batch.sort_by_key(|e| e.gindex);
+        batch
     }
 
     fn canonical_drained_count(entries: &[LeafEntry], through: u64) -> u64 {
