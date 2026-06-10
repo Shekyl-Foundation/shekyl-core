@@ -25,9 +25,11 @@
 //! [`BlockLeaves`]. The client owns everything from there: `h_pqc`
 //! resolution ([`recon::extract_leaf_hashes`] + [`recon::per_output_h_pqc`]),
 //! leaf collection + global-index threading ([`recon::collect_block_leaves`]),
-//! the reference-height → drain-cutoff mapping, root reconstruction, and
-//! the integrity gate (§3.3): a reconstructed root that does not match the
-//! consensus header root is a loud failure, never a silent bad proof.
+//! the reference-height → drain-cutoff mapping, store-backed root
+//! reconstruction ([`LeafStore::root_at_count`], CT-1), and the integrity
+//! gate (§3.3): a reconstructed root that does not match the consensus header
+//! root is a loud failure, never a silent bad proof. Store failures surface as
+//! [`ClientError::Store`] with no replay-oracle fallback.
 //!
 //! ## Reorg (§3.4 / §6, S3-folds-into-S1/S2)
 //!
@@ -40,15 +42,16 @@
 //! ## Not here
 //!
 //! Membership-path assembly is CT-4 ([`crate::assemble`]); the cached
-//! frozen-`R_k` hot path and persistence are CT-1 ([`crate::store`]). This
-//! module is the correctness baseline both are gated behind, rebuilding
-//! from leaves via [`recon::root_from_scalars`] (the CT-2 KAT oracle).
+//! frozen-`R_k` hot path and persistence are CT-1 ([`crate::store`]). The
+//! CT-2 replay oracle ([`recon::root_from_scalars`]) remains the KAT baseline;
+//! production root queries use the store hot path only.
 //!
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
 use crate::recon::{
-    collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff, per_output_h_pqc, TxOutputs,
+    collect_block_leaves, drained_sorted, extract_leaf_hashes, newly_drained_at_cutoff,
+    per_output_h_pqc, TxOutputs,
 };
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
@@ -118,7 +121,9 @@ pub enum ClientError {
 ///
 /// Holds leaf candidates and mirrors drained leaves into the store on each
 /// [`Self::ingest_block`]. Construct with [`Self::from_blocks`] (or
-/// [`Self::new`] + ingest) and reconstruct/verify a root at a reference height.
+/// [`Self::try_new`] + ingest) and reconstruct/verify a root at a reference
+/// height via the persisted [`LeafStore`] hot path ([`Self::root_at`]);
+/// store errors propagate and there is no silent replay-oracle fallback.
 #[derive(Debug)]
 pub struct CurveTreeClient {
     store: LeafStore,
@@ -231,16 +236,36 @@ impl CurveTreeClient {
         Ok(())
     }
 
-    /// Catch the persisted store up to `tip_height` by simulating block
-    /// connections for heights not yet synced. Drain batches depend only on
-    /// maturity cutoff, not block payloads, so root queries ahead of the
-    /// ingested chain tip remain store-backed without an oracle fallback.
+    /// Catch the persisted store up to `tip_height` when a root query runs
+    /// ahead of the ingested chain tip. Appends the canonical drained prefix
+    /// missing from the store in one transaction (freeze eligibility at
+    /// `tip_height`), rather than one txn per intermediate height.
     fn sync_store_to(&mut self, tip_height: u64) -> Result<(), ClientError> {
-        let mut sync_tip = self.store.sync_tip_height()?;
-        while sync_tip < tip_height {
-            sync_tip += 1;
-            self.sync_store(sync_tip)?;
+        let sync_tip = self.store.sync_tip_height()?;
+        if sync_tip >= tip_height {
+            return Ok(());
         }
+        let target_through = Self::drained_through(tip_height);
+        let stored = self.store.leaf_count()?;
+        let canonical: Vec<LeafEntry> = drained_sorted(&self.entries, target_through)
+            .into_iter()
+            .copied()
+            .collect();
+        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
+        if canonical.len() < stored_usize {
+            return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
+        }
+        let new_entries = canonical[stored_usize..].to_vec();
+        self.store.append_drained(&new_entries, tip_height)?;
+        let new_count = u64::try_from(canonical.len()).expect("canonical drain count fits u64");
+        if let Some(last) = self.drained_through_counts.last_mut() {
+            if last.0 == target_through {
+                last.1 = new_count;
+                return Ok(());
+            }
+        }
+        self.drained_through_counts
+            .push((target_through, new_count));
         Ok(())
     }
 

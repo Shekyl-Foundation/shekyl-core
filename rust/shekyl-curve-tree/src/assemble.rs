@@ -8,11 +8,12 @@
 //! Given a drained leaf and the reconstructed tree layers, produce the
 //! [`AssembledPath`] that an FCMP++ membership proof consumes (the full child
 //! chunk of each path node from leaf to root at the reference height). Gated
-//! behind the reconstruct-root baseline ([`crate::recon`]): a path assembled
-//! against a wrong tree is a wrong proof, so assembly applies the integrity
-//! gate (§3.3) before building. The tree is reconstructed once and reused for
-//! both the gate and the path — the top layer node is the root the gate
-//! checks — rather than rebuilding it via [`CurveTreeClient::verify_root`].
+//! behind a correct root at the reference height: a path assembled against a
+//! wrong tree is a wrong proof, so assembly applies the integrity gate (§3.3)
+//! before building. The gate uses the store-backed [`CurveTreeClient::root_at`]
+//! hot path (CT-1); branch extraction rebuilds layers from replay-held
+//! [`CurveTreeClient::entries`] via [`assemble_leaf_stream`] (CT-4), because
+//! pruned frozen segments may not retain a complete drained byte stream.
 //!
 //! ## Path layout (pinned to the FCMP++ prover at source)
 //!
@@ -67,10 +68,10 @@ impl CurveTreeClient {
     ) -> Result<AssembledPath, ClientError> {
         let cutoff = Self::drained_through(reference.height);
 
-        // Integrity gate via `root_at` (store-backed hot path, CT-1). Path
-        // extraction stays on replay-derived `entries` (CT-4); the store may
-        // prune non-owned leaves from frozen segments without retaining a
-        // complete drained stream for assembly.
+        // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
+        // (CT-1), no replay-oracle fallback; (2) path branches — replay
+        // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
+        // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
         let got = self.root_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {

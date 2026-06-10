@@ -381,11 +381,14 @@ pub fn promote_to_layer(
 ) -> Vec<[u8; 32]> {
     const ZERO: [u8; 32] = [0u8; 32];
 
+    if current.is_empty() || current_layer_idx >= target_layer_idx {
+        return current;
+    }
+
     while current_layer_idx < target_layer_idx {
-        assert!(
-            !current.is_empty(),
-            "cannot promote an empty layer toward layer {target_layer_idx}"
-        );
+        if current.is_empty() {
+            break;
+        }
         let built_layer_idx = current_layer_idx.checked_add(1).expect(
             "curve-tree layer index overflowed u8 (tree depth exceeds any real configuration)",
         );
@@ -781,5 +784,10 @@ mod tests {
         let s_d8 = proof_size(1, 8);
         let s_d16 = proof_size(1, 16);
         assert!(s_d16 > s_d8, "deeper tree should produce larger proof");
+    }
+
+    #[test]
+    fn promote_to_layer_empty_input_is_no_op() {
+        assert!(promote_to_layer(Vec::new(), 0, 2).is_empty());
     }
 }
