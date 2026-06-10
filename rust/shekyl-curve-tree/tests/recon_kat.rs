@@ -342,7 +342,7 @@ fn client_path_matches_recon_path() {
                 })
                 .unwrap();
             assert_eq!(
-                client.root_at(blk.height),
+                client.root_at(blk.height).expect("store hot path"),
                 *recon_root,
                 "client/recon divergence at height {}",
                 blk.height,

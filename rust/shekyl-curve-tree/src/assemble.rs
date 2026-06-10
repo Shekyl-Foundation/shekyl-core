@@ -60,7 +60,7 @@ impl CurveTreeClient {
     /// and [`ClientError::OutputNotDrained`] if `id` is not a drained leaf at
     /// the reference height.
     pub fn assemble_path(
-        &self,
+        &mut self,
         id: &OutputIdentity,
         reference: &ReferenceBlock,
         reference_block_hash: [u8; 32],
@@ -71,7 +71,7 @@ impl CurveTreeClient {
         // extraction stays on replay-derived `entries` (CT-4); the store may
         // prune non-owned leaves from frozen segments without retaining a
         // complete drained stream for assembly.
-        let got = self.root_at(reference.height);
+        let got = self.root_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
                 height: reference.height,

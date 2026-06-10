@@ -48,8 +48,7 @@
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff,
-    per_output_h_pqc, root_from_scalars, TxOutputs,
+    collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff, per_output_h_pqc, TxOutputs,
 };
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
@@ -224,6 +223,19 @@ impl CurveTreeClient {
         Ok(())
     }
 
+    /// Catch the persisted store up to `tip_height` by simulating block
+    /// connections for heights not yet synced. Drain batches depend only on
+    /// maturity cutoff, not block payloads, so root queries ahead of the
+    /// ingested chain tip remain store-backed without an oracle fallback.
+    fn sync_store_to(&mut self, tip_height: u64) -> Result<(), ClientError> {
+        let mut sync_tip = self.store.sync_tip_height()?;
+        while sync_tip < tip_height {
+            sync_tip += 1;
+            self.sync_store(sync_tip)?;
+        }
+        Ok(())
+    }
+
     fn drained_leaf_count_at(&self, through: u64) -> u64 {
         if let Some((last_through, _)) = self.drained_through_counts.last() {
             if through <= *last_through {
@@ -260,26 +272,25 @@ impl CurveTreeClient {
         reference_height.saturating_sub(1)
     }
 
-    /// Reconstruct the curve-tree root as committed in the header at
-    /// `reference_height`. The empty tree (no drained leaves) is the
-    /// `selene_hash_init` sentinel, not `build_layers(&[])`
-    /// (`CT2_DRAIN_ORDER.md` §5).
-    #[must_use]
-    pub fn root_at(&self, reference_height: u64) -> [u8; 32] {
+    /// Reconstruct the curve-tree root via the persisted [`LeafStore`] hot path.
+    ///
+    /// The empty tree (no drained leaves) is the `selene_hash_init` sentinel,
+    /// not `build_layers(&[])` (`CT2_DRAIN_ORDER.md` §5). Errors from the
+    /// store propagate — there is no silent fallback to the replay oracle, so
+    /// KATs and callers gate the CT-1 hot path rather than masking corruption.
+    pub fn root_at(&mut self, reference_height: u64) -> Result<[u8; 32], ClientError> {
+        self.sync_store_to(reference_height)?;
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
-        self.store.root_at_count(n).unwrap_or_else(|_| {
-            let scalars = assemble_leaf_stream(&self.entries, through);
-            root_from_scalars(&scalars)
-        })
+        self.store.root_at_count(n).map_err(ClientError::from)
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`
     /// must byte-equal the consensus header `curve_tree_root`. Returns
     /// [`ClientError::RootMismatch`] otherwise — the wallet refuses to
     /// build a proof against a tree it cannot reproduce.
-    pub fn verify_root(&self, reference: &ReferenceBlock) -> Result<(), ClientError> {
-        let got = self.root_at(reference.height);
+    pub fn verify_root(&mut self, reference: &ReferenceBlock) -> Result<(), ClientError> {
+        let got = self.root_at(reference.height)?;
         if got == reference.curve_tree_root {
             Ok(())
         } else {
@@ -339,9 +350,9 @@ mod tests {
 
     #[test]
     fn empty_client_root_is_empty_tree() {
-        let client = CurveTreeClient::new();
-        assert_eq!(client.root_at(0), selene_hash_init());
-        assert_eq!(client.root_at(1000), selene_hash_init());
+        let mut client = CurveTreeClient::new();
+        assert_eq!(client.root_at(0).unwrap(), selene_hash_init());
+        assert_eq!(client.root_at(1000).unwrap(), selene_hash_init());
         assert_eq!(client.drained_leaf_count(1000), 0);
     }
 
@@ -385,13 +396,13 @@ mod tests {
             height: 0,
             txs: &txs,
         }];
-        let client = CurveTreeClient::from_blocks(&blocks).unwrap();
+        let mut client = CurveTreeClient::from_blocks(&blocks).unwrap();
 
         // Empty through the maturity height itself...
-        assert_eq!(client.root_at(60), selene_hash_init());
+        assert_eq!(client.root_at(60).unwrap(), selene_hash_init());
         assert_eq!(client.drained_leaf_count(60), 0);
         // ...non-empty from the next block.
-        assert_ne!(client.root_at(61), selene_hash_init());
+        assert_ne!(client.root_at(61).unwrap(), selene_hash_init());
         assert_eq!(client.drained_leaf_count(61), 1);
         assert_eq!(COINBASE_LOCK_WINDOW as u64, 60);
     }
@@ -477,12 +488,12 @@ mod tests {
         .unwrap();
         let _ = long; // the long chain is what a reorg pops back from.
 
-        let rebuilt = CurveTreeClient::from_blocks(&[BlockLeaves {
+        let mut rebuilt = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: 0,
             txs: &txs0,
         }])
         .unwrap();
-        let fresh = {
+        let mut fresh = {
             let mut c = CurveTreeClient::new();
             c.ingest_block(BlockLeaves {
                 height: 0,
@@ -495,7 +506,11 @@ mod tests {
         assert_eq!(rebuilt.entries, fresh.entries);
         // Roots agree at every height the shorter chain covers.
         for h in 0..=200u64 {
-            assert_eq!(rebuilt.root_at(h), fresh.root_at(h), "height {h}");
+            assert_eq!(
+                rebuilt.root_at(h).unwrap(),
+                fresh.root_at(h).unwrap(),
+                "height {h}"
+            );
         }
     }
 
@@ -504,7 +519,7 @@ mod tests {
         let outs = [coinbase_raw()];
         let blob = [0x07u8; 32];
         let txs = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[BlockLeaves {
+        let mut client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: 0,
             txs: &txs,
         }])
@@ -513,7 +528,7 @@ mod tests {
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
             height: 61,
-            curve_tree_root: client.root_at(61),
+            curve_tree_root: client.root_at(61).unwrap(),
         };
         assert!(client.verify_root(&good).is_ok());
 
@@ -529,7 +544,7 @@ mod tests {
             }) => {
                 assert_eq!(height, 61);
                 assert_eq!(expected, [0xFFu8; 32]);
-                assert_eq!(got, client.root_at(61));
+                assert_eq!(got, client.root_at(61).unwrap());
             }
             other => panic!("expected RootMismatch, got {other:?}"),
         }

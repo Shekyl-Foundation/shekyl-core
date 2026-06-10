@@ -79,7 +79,7 @@ fn _drift_canary_client_path() {
     };
     let mut client = CurveTreeClient::new();
     client.ingest_block(block).unwrap();
-    let root = client.root_at(0);
+    let root = client.root_at(0).expect("store hot path");
     std::hint::black_box(root);
     let reference = ReferenceBlock {
         height: 0,
