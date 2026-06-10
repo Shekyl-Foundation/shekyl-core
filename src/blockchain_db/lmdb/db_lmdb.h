@@ -484,6 +484,11 @@ private:
 
   virtual void process_archival_slash_at_height(uint64_t block_height) override;
   virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
+  virtual void process_archival_epoch_close_at_height(uint64_t block_height) override;
+  virtual void revert_archival_epoch_close_at_height(uint64_t block_height) override;
+  virtual uint64_t get_archival_r_market(uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
+  virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
@@ -581,6 +586,11 @@ private:
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
+  void prune_archival_epochs_before(uint64_t prune_below_epoch);
+  void delete_archival_r_market_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  uint64_t archival_shard_age_milli(uint64_t shard_id, uint64_t close_block_height) const;
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible
@@ -625,6 +635,9 @@ private:
   MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
+  MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
+  MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
+  MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

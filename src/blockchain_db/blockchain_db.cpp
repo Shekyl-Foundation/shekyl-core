@@ -470,6 +470,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   m_hardfork->add(blk, prev_height);
 
   process_archival_slash_at_height(prev_height + 1);
+  process_archival_epoch_close_at_height(prev_height + 1);
 
   ++num_calls;
 
@@ -490,6 +491,7 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // same height that add_block() used when the outputs were inserted.
   const uint64_t removed_block_height = height();
   revert_archival_slashes_at_height(removed_block_height);
+  revert_archival_epoch_close_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -1389,6 +1391,25 @@ void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
 
 void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
 {
+}
+
+void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+uint64_t BlockchainDB::get_archival_r_market(uint64_t /*shard_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return 0;
+}
+
+uint64_t BlockchainDB::get_archival_sigma_work_milli(uint64_t /*settlement_epoch*/) const
+{
+  return 0;
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)
