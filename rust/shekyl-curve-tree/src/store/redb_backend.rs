@@ -28,6 +28,9 @@ const META_LEAF_COUNT: &str = "leaf_count";
 const META_SYNC_TIP: &str = "sync_tip_height";
 const META_NEXT_FREEZE_SEG: &str = "next_freeze_seg";
 
+/// Peak memory bound when truncating large leaf ranges during reorg.
+const TRUNCATE_DELETE_BATCH: usize = 256;
+
 /// On-disk record for a frozen segment (`CT1_ROUND1_PINS.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrozenSegmentRecord {
@@ -57,6 +60,8 @@ pub enum StoreError {
     CorruptMeta(&'static str),
     /// Truncation position exceeds the stored leaf count.
     InvalidTruncate { pos: u64, leaf_count: u64 },
+    /// `root_at_count` requested more leaves than are persisted.
+    LeafCountOutOfBounds { requested: u64, stored: u64 },
 }
 
 impl From<redb::Error> for StoreError {
@@ -265,6 +270,13 @@ impl LeafStore {
         if leaf_count == 0 {
             return Ok(selene_hash_init());
         }
+        let stored = self.leaf_count()?;
+        if leaf_count > stored {
+            return Err(StoreError::LeafCountOutOfBounds {
+                requested: leaf_count,
+                stored,
+            });
+        }
         let e = leaves_per_segment() as u64;
         let complete = leaf_count / e;
         let txn = self.db.begin_read()?;
@@ -313,35 +325,19 @@ impl LeafStore {
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            let to_remove: Vec<u64> = leaves
-                .range(pos..)?
-                .map(|r| r.map(|(k, _)| k.value()))
-                .collect::<Result<Vec<_>, _>>()?;
-            for key in to_remove {
-                leaves.remove(key)?;
-                drop(leaf_meta.remove(key)?);
-            }
+            delete_u64_range_batched(&mut leaves, &mut leaf_meta, pos)?;
         }
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
             if pos == 0 {
-                let to_remove: Vec<u32> = frozen
-                    .iter()?
-                    .map(|r| r.map(|(k, _)| k.value()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for key in to_remove {
-                    frozen.remove(key)?;
-                }
+                delete_u32_keys_batched(&mut frozen, 0)?;
             } else {
                 let max_segment = (pos - 1) / e;
-                let to_remove: Vec<u32> = frozen
-                    .range(u32::try_from(max_segment + 1).expect("segment range fits u32")..)?
-                    .map(|r| r.map(|(k, _)| k.value()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for key in to_remove {
-                    frozen.remove(key)?;
-                }
+                delete_u32_keys_batched(
+                    &mut frozen,
+                    u32::try_from(max_segment + 1).expect("segment range fits u32"),
+                )?;
                 // Drop frozen segment that partially overlaps the truncation boundary.
                 if !pos.is_multiple_of(e) {
                     let partial_id = (pos - 1) / e;
@@ -351,34 +347,19 @@ impl LeafStore {
         }
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            let to_remove: Vec<u64> = owned
-                .range(pos..)?
-                .map(|r| r.map(|(k, _)| k.value()))
-                .collect::<Result<Vec<_>, _>>()?;
-            for key in to_remove {
-                owned.remove(key)?;
-            }
+            delete_u64_keys_batched(&mut owned, pos)?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
             if pos == 0 {
-                let to_remove: Vec<u32> = pinned
-                    .iter()?
-                    .map(|r| r.map(|(k, _)| k.value()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for key in to_remove {
-                    pinned.remove(key)?;
-                }
+                delete_u32_keys_batched(&mut pinned, 0)?;
             } else {
                 let max_segment = (pos - 1) / e;
-                let to_remove: Vec<u32> = pinned
-                    .range(u32::try_from(max_segment + 1).expect("segment range fits u32")..)?
-                    .map(|r| r.map(|(k, _)| k.value()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for key in to_remove {
-                    pinned.remove(key)?;
-                }
+                delete_u32_keys_batched(
+                    &mut pinned,
+                    u32::try_from(max_segment + 1).expect("segment range fits u32"),
+                )?;
                 if !pos.is_multiple_of(e) {
                     let partial_id = (pos - 1) / e;
                     pinned.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
@@ -459,6 +440,68 @@ impl LeafStore {
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         Ok(frozen.get(id.0)?.map(|v| decode_frozen_segment(v.value())))
     }
+}
+
+fn delete_u64_keys_batched<V: redb::Value>(
+    table: &mut redb::Table<'_, u64, V>,
+    start: u64,
+) -> Result<(), StoreError> {
+    loop {
+        let batch: Vec<u64> = table
+            .range(start..)?
+            .take(TRUNCATE_DELETE_BATCH)
+            .map(|r| r.map(|(k, _)| k.value()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if batch.is_empty() {
+            break;
+        }
+        for key in batch {
+            table.remove(key)?;
+        }
+    }
+    Ok(())
+}
+
+fn delete_u64_range_batched(
+    leaves: &mut redb::Table<'_, u64, &[u8; 128]>,
+    leaf_meta: &mut redb::Table<'_, u64, &[u8; 192]>,
+    start: u64,
+) -> Result<(), StoreError> {
+    loop {
+        let batch: Vec<u64> = leaves
+            .range(start..)?
+            .take(TRUNCATE_DELETE_BATCH)
+            .map(|r| r.map(|(k, _)| k.value()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if batch.is_empty() {
+            break;
+        }
+        for key in batch {
+            leaves.remove(key)?;
+            drop(leaf_meta.remove(key)?);
+        }
+    }
+    Ok(())
+}
+
+fn delete_u32_keys_batched<V: redb::Value>(
+    table: &mut redb::Table<'_, u32, V>,
+    start: u32,
+) -> Result<(), StoreError> {
+    loop {
+        let batch: Vec<u32> = table
+            .range(start..)?
+            .take(TRUNCATE_DELETE_BATCH)
+            .map(|r| r.map(|(k, _)| k.value()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if batch.is_empty() {
+            break;
+        }
+        for key in batch {
+            table.remove(key)?;
+        }
+    }
+    Ok(())
 }
 
 fn recompute_next_freeze_seg(
@@ -714,6 +757,20 @@ mod tests {
         assert_eq!(store.sync_tip_height().unwrap(), 500);
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.sync_tip_height().unwrap(), 0);
+    }
+
+    #[test]
+    fn root_at_count_rejects_request_beyond_stored() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store.append_drained(&[sample_entry(0, 0)], 1).unwrap();
+        let err = store.root_at_count(2).unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::LeafCountOutOfBounds {
+                requested: 2,
+                stored: 1
+            }
+        ));
     }
 
     #[test]
