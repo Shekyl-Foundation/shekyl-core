@@ -47,54 +47,15 @@ crypto::hash make_hash(uint8_t fill)
   return h;
 }
 
-void append_be64(std::vector<uint8_t>& out, uint64_t v)
+/// Minimum-length bond LMDB value with a non-v3 version byte.
+///
+/// `ArchivalBondValue::decode` rejects solely on `version != kVersion` once
+/// `len >= 19`; no historical pre-v3 wire layout is load-bearing at genesis.
+std::vector<uint8_t> non_v3_bond_blob(uint8_t version)
 {
-  for (int i = 7; i >= 0; --i)
-    out.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
-}
-
-void append_be32(std::vector<uint8_t>& out, uint32_t v)
-{
-  for (int i = 3; i >= 0; --i)
-    out.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
-}
-
-/// Pre-v3 bond blob (version 1): no holdings_kind byte, no bonded_total_atomic.
-std::vector<uint8_t> encode_legacy_bond_v1()
-{
-  const std::vector<uint8_t> pubkey = {0x01, 0x02, 0x03, 0x04};
-  const uint64_t join_epoch = 3;
-  const std::vector<uint64_t> shards = {7, 42};
-
-  std::vector<uint8_t> out;
-  out.push_back(1);
-  out.push_back(0);
-  out.push_back(static_cast<uint8_t>(pubkey.size()));
-  out.insert(out.end(), pubkey.begin(), pubkey.end());
-  append_be64(out, join_epoch);
-  append_be32(out, static_cast<uint32_t>(shards.size()));
-  for (const uint64_t shard : shards)
-    append_be64(out, shard);
-  append_be32(out, 0);
-  return out;
-}
-
-/// Pre-v3 bond blob (version 2): holdings_kind present, no bonded_total_atomic.
-std::vector<uint8_t> encode_legacy_bond_v2()
-{
-  const std::vector<uint8_t> pubkey = {0x05, 0x06};
-  const uint64_t join_epoch = 1;
-
-  std::vector<uint8_t> out;
-  out.push_back(2);
-  out.push_back(0);
-  out.push_back(static_cast<uint8_t>(pubkey.size()));
-  out.insert(out.end(), pubkey.begin(), pubkey.end());
-  append_be64(out, join_epoch);
-  out.push_back(shekyl::db::ArchivalBondValue::kHoldingsCompleteTree);
-  append_be32(out, 0);
-  append_be32(out, 0);
-  return out;
+  std::vector<uint8_t> blob(19, 0);
+  blob[0] = version;
+  return blob;
 }
 
 } // namespace
@@ -169,16 +130,16 @@ TEST(archival_substrate_lmdb, bond_reject_legacy_versions)
 {
   shekyl::db::ArchivalBondValue decoded{};
 
-  const std::vector<uint8_t> v1 = encode_legacy_bond_v1();
+  const std::vector<uint8_t> v1 = non_v3_bond_blob(1);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v1.data(), v1.size(), decoded));
 
-  const std::vector<uint8_t> v2 = encode_legacy_bond_v2();
+  const std::vector<uint8_t> v2 = non_v3_bond_blob(2);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v2.data(), v2.size(), decoded));
 }
 
 TEST(archival_substrate_lmdb, bond_reject_unknown_version)
 {
-  std::vector<uint8_t> blob = encode_legacy_bond_v1();
+  std::vector<uint8_t> blob = non_v3_bond_blob(1);
   blob[0] = 99;
   shekyl::db::ArchivalBondValue decoded{};
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
