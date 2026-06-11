@@ -31,7 +31,6 @@ fips204 = "0.4.6"
 fips203 = "=0.4.3"
 hkdf = "0.12"
 sha2 = "0.10"
-subtle = "2"
 blake2 = "0.10"
 # BIP-39 (English) mnemonic <-> entropy conversion and PBKDF2-HMAC-SHA512 seed
 # derivation. We depend on rust-bitcoin's crate for its battle-tested handling

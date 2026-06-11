@@ -3753,7 +3753,6 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-generators",
  "shekyl-primitives",
- "subtle",
  "thiserror",
  "x25519-dalek",
  "zeroize",

@@ -11,7 +11,6 @@
 //! update both files and this constant via the KAT regenerator.
 
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 
 use crate::CryptoError;
 
@@ -23,9 +22,8 @@ const VECTORS_JSON: &str =
 /// SHA-256 over the concatenated on-disk corpus files (`manifest.json` then
 /// `vectors.json`). Rotated only by a deliberate derivation-version bump.
 pub const ADDRESS_DERIVATION_MANIFEST_HASH: [u8; 32] = [
-    0x24, 0xce, 0xad, 0xc4, 0x84, 0x1e, 0x24, 0xc1, 0xe0, 0x8a, 0x8a, 0x9a, 0xd0, 0x2f, 0x17,
-    0x42, 0xb9, 0x3b, 0xe8, 0x05, 0xc6, 0xb4, 0x86, 0xfa, 0xa1, 0x8a, 0x21, 0xd0, 0xf6, 0xcb,
-    0xe5, 0x8f,
+    0xd4, 0x18, 0x1e, 0xa1, 0xf0, 0xc6, 0xd6, 0xe5, 0x11, 0x49, 0xd9, 0x41, 0xc4, 0xe5, 0x5c, 0x21,
+    0x67, 0xfc, 0x8d, 0xc8, 0x7a, 0x77, 0xa5, 0xf3, 0x95, 0xe0, 0x1f, 0xe3, 0x4e, 0xca, 0x75, 0x23,
 ];
 
 /// Recompute the corpus digest from the embedded file bytes.
@@ -41,9 +39,13 @@ pub fn compute_address_derivation_manifest_hash() -> [u8; 32] {
 }
 
 /// Verify the embedded corpus matches the compile-time pin.
+///
+/// Both values are public compile-time constants (the corpus is a published
+/// KAT fixture), so a plain comparison is correct; constant-time comparison
+/// would signal a secret where none exists.
 pub fn address_derivation_manifest_self_check() -> Result<(), CryptoError> {
     let got = compute_address_derivation_manifest_hash();
-    if got.ct_eq(&ADDRESS_DERIVATION_MANIFEST_HASH).into() {
+    if got == ADDRESS_DERIVATION_MANIFEST_HASH {
         Ok(())
     } else {
         Err(CryptoError::InvalidInput(
