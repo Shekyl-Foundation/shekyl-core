@@ -4,6 +4,16 @@
 
 ### Added
 
+- **crypto-pq: ADDRESS_DERIVATION_V1 freeze hardening (enforcement only).**
+  Published CODEOWNERS-protected KAT corpus at
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/` with
+  `kat_address_derivation_v1.rs` consumer; wired
+  `scripts/lint_cpp_clamp_ban.sh` into the `rust-audit-and-test` CI job;
+  added `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire in
+  `address_derivation_freeze.rs`, `shekyl-cli derivation-freeze-self-check`,
+  and C FFI `shekyl_address_derivation_manifest_self_check()`. Zero
+  semantic changes to the frozen v1 derivation pipeline in `account.rs`.
+
 - **docs: 2026-06-10 doc sweep — key-signature freeze anchored, completed
   archive consolidated, stale references repaired.**
   Retroactive decision-log entry for the frozen v1 seed→address pipeline

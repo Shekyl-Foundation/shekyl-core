@@ -4116,16 +4116,19 @@ per-output or account PQC secrets* — rejected per
 `master_seed_64`.
 
 **Residues (tracked, not blocking the freeze).** Three hardening
-accessories from the plan's acceptance criteria are open in
-`docs/FOLLOWUPS.md` (V3.0 queue, filed 2026-06-10): the dedicated
-CODEOWNERS-protected `ADDRESS_DERIVATION_V1` KAT corpus (vectors
-currently live inline in `account.rs`, outside the
-`docs/test_vectors/**` protection), CI wiring for
+accessories from the plan's acceptance criteria **landed 2026-06-03**
+(`chore/address-derivation-v1-freeze`): the CODEOWNERS-protected
+`docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus +
+`kat_address_derivation_v1.rs`, CI wiring for
 `scripts/lint_cpp_clamp_ban.sh`, and the
-`ADDRESS_DERIVATION_MANIFEST_HASH` freeze tripwire
-(`docs/MID_REWIRE_HARDENING.md`). The pipeline bytes themselves are
-frozen as of this entry; those items harden the freeze's enforcement,
-not its definition.
+`ADDRESS_DERIVATION_MANIFEST_HASH` tripwire
+(`address_derivation_freeze.rs`, `shekyl-cli derivation-freeze-self-check`,
+C FFI `shekyl_address_derivation_manifest_self_check()`). Still
+deferred: `MID_REWIRE_HARDENING.md` §6.4 tuple extension hashing
+`(format_version, block_versions, payload_version)`; full
+`generate-genesis-address` CLI (genesis ceremony tooling). The pipeline
+bytes themselves remain frozen as of the 2026-06-10 entry; the landed
+items harden enforcement, not definition.
 
 **Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
 (authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;

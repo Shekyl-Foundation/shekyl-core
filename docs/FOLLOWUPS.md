@@ -47,44 +47,27 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
-  corpus (2026-06-10 doc sweep).** The frozen v1 pipeline's Tier-1/Tier-2
-  derivation vectors live **inline** in
-  `rust/shekyl-crypto-pq/src/account.rs` `#[cfg(test)]` modules, and the
-  module docstring claims they are "pinned in CI by the
-  `ADDRESS_DERIVATION_V1` KAT suite" — but no
-  `docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus or `kat_*.rs`
-  consumer exists, so the vectors sit **outside** the
-  `docs/test_vectors/**` + `/rust/**/tests/kat_*.rs` CODEOWNERS
-  protection that the freeze plan intended (compare
-  `KEM_DERIVE_V1_KAT.json` and `WALLET_FILE_FORMAT_V1/`, which have it).
-  Extract the inline vectors into a published
-  `docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus consumed by a
-  dedicated `kat_address_derivation_v1.rs` test, or amend the docstring
-  to stop naming a corpus that doesn't exist and extend CODEOWNERS to
-  the inline-test file. **Target: V3.0 (pre-genesis; the corpus is the
-  freeze's enforcement surface).** Cross-link: decision-log
-  "Key & signature stabilization" entry (2026-06-10).
+- **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
+  corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on branch
+  `chore/address-derivation-v1-freeze`: published
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/{manifest.json,vectors.json}`
+  and `rust/shekyl-crypto-pq/tests/kat_address_derivation_v1.rs` with an
+  `#[ignore]` regenerator; Tier-2 golden tests removed from inline
+  `account.rs` tests.
 
-- **Derivation-freeze hardening: wire `scripts/lint_cpp_clamp_ban.sh`
-  into CI (2026-06-10 doc sweep).** The clamp-ban lint script exists and
-  is green locally, but no workflow under `.github/workflows/` invokes
-  it, so the `36-secret-locality.mdc` clamping ban is enforced by
-  convention only. Add it to the build or consensus-invariants workflow
-  (one step). **Target: V3.0.** Cross-link: decision-log
-  "Key & signature stabilization" entry (2026-06-10);
-  `stabilize_key_signature` acceptance criterion "Clamping-ban lint is
-  green".
+- **~~Derivation-freeze hardening: wire `scripts/lint_cpp_clamp_ban.sh`
+  into CI (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on branch
+  `chore/address-derivation-v1-freeze`: `rust-audit-and-test` job in
+  `.github/workflows/build.yml` runs the clamp-ban lint on every PR.
 
-- **Derivation-freeze hardening: `ADDRESS_DERIVATION_MANIFEST_HASH`
-  freeze tripwire (2026-06-10 doc sweep).** The
-  `docs/MID_REWIRE_HARDENING.md` extension — embed the KAT-manifest
-  SHA-256 in the binary and have `shekyl-cli generate-genesis-address
-  --self-check` recompute and compare it — is specified but not
-  implemented (no `ADDRESS_DERIVATION_MANIFEST_HASH` symbol exists
-  outside that doc). Depends on the dedicated KAT corpus item above
-  (the manifest hashes the corpus). **Target: V3.0 (lands with or after
-  the corpus; before genesis-address regeneration is declared final).**
+- **~~Derivation-freeze hardening: `ADDRESS_DERIVATION_MANIFEST_HASH`
+  freeze tripwire (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on
+  branch `chore/address-derivation-v1-freeze`:
+  `rust/shekyl-crypto-pq/src/address_derivation_freeze.rs` pins the corpus
+  SHA-256; `shekyl-cli derivation-freeze-self-check` and C FFI
+  `shekyl_address_derivation_manifest_self_check()` expose the offline
+  check. Full `generate-genesis-address` deferred; MID_REWIRE_HARDENING
+  §6.4 tuple extension still deferred.
 
 - **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc
   sweep).** `docs/USER_GUIDE.md` still documents the legacy C++ CLI
