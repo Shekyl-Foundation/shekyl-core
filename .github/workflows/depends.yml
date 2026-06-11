@@ -119,7 +119,7 @@ jobs:
           rustup target add ${{ matrix.toolchain.rust_target }}
         fi
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-    - name: archival determinism KAT (aarch64 cross-compile)
+    - name: archival KAT tests compile for aarch64 (no-run; no qemu on runner)
       if: matrix.toolchain.host == 'aarch64-linux-gnu'
       run: |
         . "$HOME/.cargo/env"

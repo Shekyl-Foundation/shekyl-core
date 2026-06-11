@@ -17,10 +17,15 @@ if rg 'f64' rust/shekyl-archival-retention/src/reward_arithmetic.rs >/dev/null 2
 fi
 
 # Mint gate: no live emission vin crediting outputs (provisional bands).
-if rg -n 'reward_P|archival.*emission.*mint|mint.*archival.*reward' src/fcmp src/cryptonote_core \
-  --glob '*.cpp' --glob '*.h' 2>/dev/null | rg -v 'TODO|FOLLOWUP|comment' >/dev/null; then
+MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
+MINT_EXCLUDE='TODO|FOLLOWUP|comment'
+if rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core \
+  --glob '*.cpp' --glob '*.h' 2>/dev/null | rg -v "$MINT_EXCLUDE" >/dev/null; then
   echo "FAIL: possible live archival reward mint path in C++ (grep hit)" >&2
-  rg -n 'reward_P|archival.*emission' src/fcmp src/cryptonote_core --glob '*.cpp' --glob '*.h' 2>/dev/null || true
+  # Diagnostic: same pattern and exclusion as the gate, so the printed hits
+  # are exactly the ones that tripped it.
+  rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core --glob '*.cpp' --glob '*.h' 2>/dev/null \
+    | rg -v "$MINT_EXCLUDE" || true
   FAIL=1
 fi
 

@@ -159,10 +159,7 @@ fi
 echo
 
 # ----------------------------------------------------------------------
-# Result summary.
-# ----------------------------------------------------------------------
-# ----------------------------------------------------------------------
-# 4. Archival reward gates (mint + integer arithmetic).
+# Invariant 4: archival reward gates (mint + integer arithmetic).
 # ----------------------------------------------------------------------
 echo "[4/4] Archival reward gates"
 if ! scripts/ci/check_archival_reward_gates.sh; then
@@ -172,6 +169,9 @@ else
 fi
 echo
 
+# ----------------------------------------------------------------------
+# Result summary.
+# ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
