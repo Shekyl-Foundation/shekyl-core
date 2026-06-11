@@ -465,7 +465,68 @@ the metric it needs. Specified when iteration 1 closes.
   `stake_ratio` / circulating-supply assumptions in macro sim at the **same severity**
   as per-reward proof aggregate (close-condition ii). Does locked supply collapse
   toward `bond_rate × shards × population` once principal lock no longer contributes?
-  Macro; couples to `shekyl-economics-sim`.
+  Macro; couples to `shekyl-economics-sim`. **Scoped 2026-06-11 — see
+  §*Iteration-5 scope* below.**
+
+### Iteration-5 scope — gate-7 locked-supply re-pricing (scoped 2026-06-11, not yet built)
+
+**Decision it informs (the only output that matters):** §2.4 close-condition (iii) — is
+admission principal **load-bearing for locked supply** (pin `ADMISSION_MIN_ATOMIC` as a
+consensus constant, emission verify keeps the `admission_proof` branch per emission §7.2/§7.4)
+or is the bond the sufficient sole sink (**bonds-only**: delete the branch and the constant's
+consensus role; `MIN` survives only as gate-6 funding-hygiene policy)? Per emission §10.2 the
+verification path *branches* on this — the decision is structural, not a tuning knob.
+
+**Instrument:** macro `shekyl-economics-sim` (per the build decision below: iterations 3/5 run
+macro, not agent-based). The build work is one structural change plus scenarios:
+
+1. **Replace the asserted `stake_ratio` input** (`SimParams.stake.get_stake_ratio`, an
+   exogenous closure) **with a derived archival-lock model**:
+   `locked(t) = bonded(t) [+ admission(t)]` where
+   `bonded(t) = bond_floor × Σ_P |holdings_P(t)|` — driven by deterministic shard-count
+   growth (chain history per block; the L12 frontier-growth shape) times an `N_P` population
+   path taken from the **L11 lean-equilibrium attractor** outputs (`bondA` trajectories:
+   fill, trim, and fee-era-thinned arms), **not** a free parameter.
+2. **Two admission arms** per scenario: **(A) bonds-only** — admission contributes 0 at
+   steady state (ordinary transfer spendable post-first-emission, emission §159);
+   **(B) hard lock** — `+ MIN × N_P(t)` with `MIN` swept over a small grid (order-of
+   magnitude around `ARCHIVAL_BOND_FLOOR`).
+3. **Scenario grid:** the existing emission-schedule scenarios × {A, B×MIN-grid} ×
+   `N_P` envelope {lean ≈ bondA 79, thick ≈ 154, fee-era-thin ≈ 17–62 (L13 servo band)}.
+
+**Inputs — all already pinned (which is why this is buildable now):** `bond_rate* = 0.75`
+(iteration-2 fine sweep); `ARCHIVAL_BOND_FLOOR` (gate-4 §8.1); `W = 26`, `SEB = 10_000`
+(timing cluster — claim cadence bounds in-flight unclaimed value, a second-order term the
+model may carry or note as noise); shard growth = block growth (deterministic). The A4
+duration pin is **not** an input: duration moves churn, not the locked *amount*.
+
+**Outputs (metrics the close criteria read):** locked-supply trajectory (absolute and % of
+circulating) over the ~30-yr mining-era horizon (timeframe 2); Δ vs. the current asserted
+`stake_ratio` scenarios on the three published macro gauges — `staker_yield`, burn servo
+behavior, release factor; the collapse check (does arm A's locked supply degenerate to
+`bond_rate × shards × N_P` and is that level macro-material?); arm-B sensitivity (the
+smallest `MIN` whose trajectory differs measurably from arm A).
+
+**Close criteria (named in advance, per `21-reversion-clause-discipline.mdc`):**
+
+- **(iii) closes bonds-only** iff arm A keeps all three macro gauges within the tolerance
+  bands the existing economics scenarios already treat as healthy, across the full `N_P`
+  envelope — i.e. admission lock is demonstrably **not** load-bearing for supply.
+- **(iii) closes hard-lock** iff arm A breaches a gauge band that some arm-B `MIN` restores;
+  pin `ADMISSION_MIN_ATOMIC` at the smallest such `MIN` (least capital-exclusion per
+  priority-2-adjacent admission-cost concerns in gate-6 §2.5).
+- **Indeterminate** (gauges insensitive to both arms at every `N_P`) resolves **bonds-only**
+  — an admission lock that does no measurable macro work is pure optionality debt and the
+  smaller consensus surface wins.
+
+**Severity:** same as close-condition (ii), per `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 — gate 7
+is not optional resilience; Stage 3 emission code stays gated on it.
+
+**Deliverables:** `gate7_*` scenarios in `shekyl-economics-sim` (gated; legacy scenarios
+byte-identical per the iteration-3 discipline); a §*Gate 7 iteration-5* findings section in
+this doc + a gate-7 ledger row; dispositions recorded in emission §10.2 (branch kept or
+deleted), `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
+(bond-funding obligation references the surviving arm).
 
 ## Build decision — confirmed: separate `shekyl-staking-sim` crate
 

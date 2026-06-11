@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **archival: 2B design dispositions — bond-duration shape, `ClaimedEpochSet`
+  encoding, gate-7 iteration-5 scope (2026-06-11).** Three Phase-2B design
+  closures, docs-only: (1) bond retention-commitment **shape pinned
+  age-scaled-constant** at the sim-exercised plateau arm
+  (`BOND_DURATION_BASE_EPOCHS = 4`, `BOND_DURATION_AGE_SCALE = 4`, numerics
+  provisional until testnet `fetch_latency_per_unit`; `STAKER_ARCHIVAL_SIM.md`
+  §L10-hardening disposition, `ARCHIVAL_TIMING_CONSTANTS.md` §1,
+  `ARCHIVAL_BOND_GATE4.md` §3.4); (2) **`ClaimedEpochSet` encoding decided**
+  under `W = 26` — inline sorted absolute-epoch list on `ArchivalBondValue`
+  (v3 → v4 at the implementing PR), bitmap / separate-table / DUPSORT /
+  roaring rejected with reversion clause (`REWARD_EMISSION_LEG.md` §6.3,
+  `PHASE_2B_FSM_RETOOL.md` P2B-3); (3) **iteration-5 gate-7 locked-supply
+  re-pricing sim scoped** — derived archival-lock model replacing the
+  asserted `stake_ratio` in `shekyl-economics-sim`, two admission arms,
+  named close criteria for §2.4 close-condition (iii)
+  (`STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope).
+
 ### Changed
 
 - **archival: epoch-close consensus computation moved to Rust (PR 123).**

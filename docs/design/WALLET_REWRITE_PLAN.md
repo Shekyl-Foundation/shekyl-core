@@ -18,7 +18,7 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — Layer 1 emission spec closed. ARCHIVAL_CONSENSUS_STATE.md in progress. Parallel: FSM retool. Layer 2: margin-robustness band (not point giniW). Remaining: FcmpMembershipOnly, gate 7, byte aggregate (ii)."
+    content: "Phase 2b design — Layer 1 emission spec closed; consensus-state schema landed. Decided 2026-06-11: bond-duration shape (age-scaled-constant, base 4 / scale 4 provisional; sim L10) + ClaimedEpochSet encoding (inline sorted list on ArchivalBondValue v4; emission §6.3). Iteration-5 gate-7 sim scoped (STAKER_ARCHIVAL_SIM §Iteration-5 scope). Remaining: run iteration 5 → close (iii); FcmpMembershipOnly; byte aggregate (ii); margin-robustness band."
     status: in_progress
   - id: phase2b_gate6_p_registration
     content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain."
