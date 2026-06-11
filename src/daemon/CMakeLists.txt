@@ -97,11 +97,29 @@ endif()
 # image's tracing events are silently dropped
 # (V3_WALLET_DECISION_LOG.md 2026-06-10). nm runs pre-strip, so the
 # symbol is visible in both debug and release link products.
+#
+# nm selection: cross builds emit non-host object formats (the depends
+# Cross-Mac builds link Mach-O on a Linux host), which the host GNU nm
+# rejects with "file format not recognized" — a false 0-count. Prefer
+# the toolchain's own nm (CMAKE_NM; for depends Darwin this is the
+# cctools <triple>-nm), fall back to PATH nm, and try candidates until
+# one can actually parse the binary. A parse failure across all
+# candidates fails the build loudly — the gate never silently skips.
 if(UNIX)
+  set(_shekyl_nm_candidates)
+  foreach(_cand IN ITEMS "${CMAKE_NM}" "${_CMAKE_TOOLCHAIN_PREFIX}nm")
+    if(EXISTS "${_cand}")
+      list(APPEND _shekyl_nm_candidates "${_cand}")
+    endif()
+  endforeach()
   find_program(SHEKYL_NM_EXECUTABLE nm)
   if(SHEKYL_NM_EXECUTABLE)
+    list(APPEND _shekyl_nm_candidates "${SHEKYL_NM_EXECUTABLE}")
+  endif()
+  list(REMOVE_DUPLICATES _shekyl_nm_candidates)
+  if(_shekyl_nm_candidates)
     add_custom_command(TARGET daemon POST_BUILD
-      COMMAND sh -c "count=$(${SHEKYL_NM_EXECUTABLE} \"$0\" | grep -c GLOBAL_DISPATCH || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED: $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi" "$<TARGET_FILE:daemon>"
+      COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep -c GLOBAL_DISPATCH || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "$<TARGET_FILE:daemon>" ${_shekyl_nm_candidates}
       VERBATIM
       COMMENT "Asserting single tracing GLOBAL_DISPATCH in shekyld")
   endif()
