@@ -7873,6 +7873,47 @@ one place to confirm each item's relationship to the wallet stack.
   Engine architecture: actor model with staged migration*
   §"Future-version benefits enabled by actor architecture".
 
+- **Typed `Leaf` for the 128-byte curve-tree leaf tuple (spawned
+  2026-06-10, PR #121 review round).** The consensus leaf tuple
+  `[O][I][C][h_pqc]` crosses four crates as a bare `[u8; 128]`:
+  `shekyl-fcmp` builds it; `shekyl-curve-tree` persists and flattens it
+  (`LeafEntry.leaf`, `segment.rs::leaf_bytes_to_scalars`, redb
+  `LEAVES_TABLE`); `shekyl-archival-retention` carries it in `wire.rs`;
+  `shekyl-ffi` slices it from C buffers. Per `20-rust-vs-cpp-policy.mdc`
+  a cryptographic contract wants type enforcement, and a `Leaf` newtype
+  with `scalars(&self) -> [[u8; 32]; SCALARS_PER_LEAF]` would make
+  shape/capacity bugs structurally impossible (cf. the PR #121
+  `leaf_bytes_to_scalars` over-reservation, fixed in `ed351932f`).
+
+  **Rejected for V3** per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):
+  the bare array is load-bearing at three boundaries (redb's `Value`
+  impl is free on byte arrays; the C ABI cannot carry newtypes; the
+  archival wire format is bytes by definition), the KAT lattice
+  (`store_kat` / `assemble_kat` / `upper_layers_kat` / gate-2) already
+  gates wrong-stream bugs byte-exactly, only two production
+  flatten sites exist (`segment.rs`, `leaf_bytes_are_canonical`), and
+  leaves are public material — no `35-secure-memory.mdc` /
+  `36-secret-locality.mdc` typing pressure.
+
+  *Reopening criteria:* (a) a third production flatten/unflatten site
+  appears; (b) a wrong-shape bug escapes the KAT lattice; (c) the V4
+  lattice transition rewrites the leaf tuple — the anchor case: two
+  coexisting leaf layouts are a genuine type-confusion hazard, and the
+  type becomes load-bearing rather than ceremonial. *Re-evaluation
+  shape:* dedicated chore PR introducing the type in `shekyl-fcmp` (the
+  producer crate) and converting consumers; under (c), part of the V4
+  leaf-layout design rounds.
+
+  *Bounded interim option (no criteria required):* a derived
+  `pub const LEAF_BYTES: usize = SCALARS_PER_LEAF * 32;` in
+  `shekyl-fcmp::tree`, used as `[u8; LEAF_BYTES]` at signatures
+  (~22 sites) — same type, zero runtime change, makes the 128 ↔ 4×32
+  tie visible at every signature and turns future layout drift into
+  compile errors. Standalone chore if wanted before V4.
+
+  *Target:* **V4** (criterion (c)), or earlier if (a)/(b) fire.
+
 ---
 
 ## V5+ — long-tier staker upgradability
