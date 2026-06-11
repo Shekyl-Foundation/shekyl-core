@@ -1024,6 +1024,10 @@ bool shekyl_account_public_address_check(
     const uint8_t* pqc_public_key_ptr,
     const uint8_t* view_pub_ptr);
 
+/// Offline tripwire: verify the linked Rust staticlib's ADDRESS_DERIVATION_V1
+/// KAT corpus matches the compile-time manifest hash pin. No secrets touched.
+bool shekyl_address_derivation_manifest_self_check(void);
+
 // ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
 
 /// Incrementally grow a Selene-layer chunk hash (leaf layer + even internal layers).

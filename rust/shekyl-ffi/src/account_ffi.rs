@@ -810,6 +810,13 @@ pub unsafe extern "C" fn shekyl_account_public_address_check(
     ok
 }
 
+/// Offline tripwire: verify the linked `shekyl-crypto-pq` corpus matches the
+/// compile-time `ADDRESS_DERIVATION_MANIFEST_HASH` pin. Does not touch secrets.
+#[no_mangle]
+pub extern "C" fn shekyl_address_derivation_manifest_self_check() -> bool {
+    shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

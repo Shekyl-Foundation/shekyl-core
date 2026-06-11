@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check;
 use shekyl_crypto_pq::account::{
     self, check_pqc_public_key_matches_view, derive_kem_d_z, derive_spend_wide, derive_view_wide,
     generate_account_from_bip39, generate_account_from_raw_seed, ml_kem_chacha_seed_from_d_z,
@@ -282,6 +283,7 @@ fn run_tier2(v: &Tier2Vector) {
 
 #[test]
 fn kat_address_derivation_v1_vectors() {
+    address_derivation_manifest_self_check().expect("corpus manifest hash pin");
     let file: VectorsFile =
         serde_json::from_str(VECTORS_JSON).expect("vectors.json must parse");
     for v in &file.tier1 {
@@ -533,7 +535,7 @@ fn kat_regenerate_address_derivation_v1() {
     fs::write(&vectors_path, format!("{vectors_pretty}\n")).expect("write vectors.json");
 
     let vectors_hash = Sha256::digest(vectors_pretty.as_bytes());
-    let manifest = serde_json::json!({
+    let manifest_body = serde_json::json!({
         "_comment": [
             "Tier-1/Tier-2 Known Answer Test fixtures for ADDRESS_DERIVATION_V1.",
             "Tier-1 pins intermediate derivation steps; Tier-2 pins end-to-end",
@@ -553,11 +555,25 @@ fn kat_regenerate_address_derivation_v1() {
         "tier1_count": tier1.len(),
         "tier2_count": tier2.len()
     });
-    let manifest_pretty = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
+    let manifest_pretty = serde_json::to_string_pretty(&manifest_body).expect("serialize manifest");
     let manifest_path = dir.join("manifest.json");
-    fs::write(&manifest_path, format!("{manifest_pretty}\n")).expect("write manifest.json");
+    let manifest_on_disk = format!("{manifest_pretty}\n");
+    fs::write(&manifest_path, &manifest_on_disk).expect("write manifest.json");
+
+    let mut corpus_hasher = Sha256::new();
+    corpus_hasher.update(manifest_on_disk.as_bytes());
+    corpus_hasher.update(vectors_pretty.as_bytes());
+    corpus_hasher.update(b"\n");
+    let corpus_hash = corpus_hasher.finalize();
 
     eprintln!("wrote {}", vectors_path.display());
     eprintln!("wrote {}", manifest_path.display());
     eprintln!("vectors_sha256_hex = {}", hex::encode(vectors_hash));
+    eprintln!(
+        "corpus_sha256_hex (manifest+vectors on-disk) = {}",
+        hex::encode(corpus_hash)
+    );
+    eprintln!(
+        "update ADDRESS_DERIVATION_MANIFEST_HASH in address_derivation_freeze.rs"
+    );
 }
