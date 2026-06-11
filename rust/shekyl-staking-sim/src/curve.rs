@@ -2,9 +2,12 @@
 
 /// Provisional banded plateau-cap: slopes `[1.0, 0.5, 0.25, 0]` on work bands
 /// `[0, cap/2, cap, 2·cap]` with plateau credited value `cap`.
+///
+/// Non-finite or non-positive inputs credit zero, matching the integer
+/// backend's `cap_f64_to_milli`/`work_f64_to_milli` mapping.
 #[must_use]
 pub fn curve_banded(work: f64, plateau_value: f64) -> f64 {
-    if work <= 0.0 || plateau_value <= 0.0 {
+    if !work.is_finite() || !plateau_value.is_finite() || work <= 0.0 || plateau_value <= 0.0 {
         return 0.0;
     }
     let plateau_work = plateau_value * 2.0;

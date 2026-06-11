@@ -106,20 +106,18 @@ fn cap_f64_to_milli(cap: f64) -> u64 {
 }
 
 /// Credited work via banded PL `Curve` (REWARD_EMISSION_LEG.md §4.0 form C).
+///
+/// Zero/invalid `cap` credits zero on both backends, matching the canonical
+/// `curve_milli` (a zero plateau is a degenerate curve, not an uncapped
+/// pass-through) and the float `curve_banded`.
 #[must_use]
 pub fn curve(work: f64, p: &RewardParams) -> f64 {
     match p.curve_impl {
         CurveImpl::Float => curve_banded(work, p.cap),
         CurveImpl::Integer => {
-            if p.cap <= 0.0 || !p.cap.is_finite() {
-                // No cap: credited work equals raw work (milli round-trip).
-                return work_f64_to_milli(work) as f64 / WORK_MILLI_SCALE as f64;
-            }
-            let cap_milli = cap_f64_to_milli(p.cap);
-            if cap_milli == 0 {
-                return work_f64_to_milli(work) as f64 / WORK_MILLI_SCALE as f64;
-            }
-            let params = BandedCurveParams::from_sim_cap_milli(cap_milli);
+            // cap_f64_to_milli maps non-finite/non-positive caps to 0, and
+            // curve_milli credits 0 for a zero plateau — no special-casing.
+            let params = BandedCurveParams::from_sim_cap_milli(cap_f64_to_milli(p.cap));
             let work_milli = work_f64_to_milli(work);
             curve_milli(work_milli, &params) as f64 / WORK_MILLI_SCALE as f64
         }
@@ -225,5 +223,52 @@ mod tests {
             eff > single,
             "split credited work {eff} should exceed single {single}"
         );
+    }
+
+    /// Zero/invalid cap credits zero on *both* backends (canonical `curve_milli`
+    /// semantics: degenerate plateau, not uncapped pass-through).
+    #[test]
+    fn degenerate_cap_credits_zero_on_both_backends() {
+        for cap in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            for curve_impl in [CurveImpl::Float, CurveImpl::Integer] {
+                let p = RewardParams {
+                    budget: 100.0,
+                    cap,
+                    pseudonym_cost: 0.0,
+                    age_weight: 0.0,
+                    curve_impl,
+                };
+                assert_eq!(
+                    curve(12.0, &p),
+                    0.0,
+                    "cap={cap} backend={curve_impl:?} must credit zero"
+                );
+            }
+        }
+    }
+
+    /// Float and Integer backends agree to milli precision across the banded
+    /// curve (pre-plateau, mid-band, and plateau region).
+    #[test]
+    fn backends_agree_to_milli_precision() {
+        for work in [0.5, 2.0, 4.0, 6.0, 12.0, 16.0, 50.0] {
+            let float_p = RewardParams {
+                budget: 100.0,
+                cap: 8.0,
+                pseudonym_cost: 0.0,
+                age_weight: 0.0,
+                curve_impl: CurveImpl::Float,
+            };
+            let int_p = RewardParams {
+                curve_impl: CurveImpl::Integer,
+                ..float_p.clone()
+            };
+            let f = curve(work, &float_p);
+            let i = curve(work, &int_p);
+            assert!(
+                (f - i).abs() < 2e-3,
+                "work={work}: float {f} vs integer {i} diverge beyond milli rounding"
+            );
+        }
     }
 }
