@@ -15,7 +15,7 @@ use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
 use crate::types::{LeafEntry, TargetKind, TreePosition};
-use shekyl_fcmp::tree::selene_hash_init;
+use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
 const LEAVES_TABLE: TableDefinition<u64, &[u8; 128]> = TableDefinition::new("leaves");
 const LEAF_META_TABLE: TableDefinition<u64, &[u8; 192]> = TableDefinition::new("leaf_meta");
@@ -69,6 +69,14 @@ pub enum StoreError {
     /// Truncation would retain a prefix with pruned leaf bytes but without
     /// the frozen `R_k` needed to query it — caller must rebuild the store.
     TruncatedIntoPrunedRange { pos: u64 },
+    /// `append_drained` was handed leaf bytes that are not four canonical
+    /// Selene scalars. Rejected at write time so invalid bytes can never
+    /// poison the persisted stream (they would otherwise surface only later
+    /// as a root-composition failure).
+    InvalidLeafBytes {
+        /// Index of the offending entry within the append batch.
+        batch_index: usize,
+    },
 }
 
 impl From<redb::Error> for StoreError {
@@ -178,6 +186,11 @@ impl LeafStore {
 
     /// Append newly drained leaves and advance sync tip in one ACID write txn.
     ///
+    /// Each entry's leaf bytes are validated as four canonical Selene scalars
+    /// before insertion ([`StoreError::InvalidLeafBytes`]); the transaction
+    /// aborts on the first invalid entry, so a bad batch never partially
+    /// lands.
+    ///
     /// When `entries` is empty, still updates `META_SYNC_TIP` and re-evaluates
     /// segment-freeze eligibility so height-lagged freezes advance on blocks
     /// where no new leaves drain.
@@ -191,7 +204,10 @@ impl LeafStore {
         if !entries.is_empty() {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            for entry in entries {
+            for (batch_index, entry) in entries.iter().enumerate() {
+                if !leaf_bytes_are_canonical(&entry.leaf) {
+                    return Err(StoreError::InvalidLeafBytes { batch_index });
+                }
                 let pos = leaf_count;
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
@@ -266,8 +282,14 @@ impl LeafStore {
 
     /// Freeze any newly eligible complete segments at `tip_height`.
     pub fn maybe_freeze_segments(&self, tip_height: u64) -> Result<(), StoreError> {
-        let leaf_count = self.leaf_count()?;
         let txn = self.db.begin_write()?;
+        // Leaf count is read inside the write txn so the freeze scan and its
+        // commit see one consistent snapshot (no check/use gap).
+        let leaf_count = {
+            let meta = txn.open_table(META_TABLE)?;
+            let v = meta.get(META_LEAF_COUNT)?;
+            v.map(|g| g.value()).unwrap_or(0)
+        };
         let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
@@ -282,7 +304,13 @@ impl LeafStore {
         if leaf_count == 0 {
             return Ok(selene_hash_init());
         }
-        let stored = self.leaf_count()?;
+        let txn = self.db.begin_read()?;
+        // Bounds check and leaf reads share the one read txn (one snapshot).
+        let stored = {
+            let meta = txn.open_table(META_TABLE)?;
+            let v = meta.get(META_LEAF_COUNT)?;
+            v.map(|g| g.value()).unwrap_or(0)
+        };
         if leaf_count > stored {
             return Err(StoreError::LeafCountOutOfBounds {
                 requested: leaf_count,
@@ -291,7 +319,6 @@ impl LeafStore {
         }
         let e = leaves_per_segment() as u64;
         let complete = leaf_count / e;
-        let txn = self.db.begin_read()?;
         let mut frozen_r: Vec<[u8; 32]> = Vec::new();
         {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -329,14 +356,20 @@ impl LeafStore {
     /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let pos = pos.0;
-        let current_leaf_count = self.leaf_count()?;
+        let txn = self.db.begin_write()?;
+        // Bounds check inside the write txn (one snapshot); returning early
+        // drops the uncommitted txn, which aborts it.
+        let current_leaf_count = {
+            let meta = txn.open_table(META_TABLE)?;
+            let v = meta.get(META_LEAF_COUNT)?;
+            v.map(|g| g.value()).unwrap_or(0)
+        };
         if pos > current_leaf_count {
             return Err(StoreError::InvalidTruncate {
                 pos,
                 leaf_count: current_leaf_count,
             });
         }
-        let txn = self.db.begin_write()?;
         {
             let e = leaves_per_segment() as u64;
             if pos > 0 && !pos.is_multiple_of(e) {
@@ -404,7 +437,13 @@ impl LeafStore {
         Ok(())
     }
 
-    /// Pin segment `id` so `prune_frozen` retains its full leaf bytes.
+    /// Pin segment `id` so [`Self::prune_frozen`] retains its full leaf bytes.
+    ///
+    /// Pin before pruning any segment whose full chunk contents may be needed
+    /// later (root queries below the frozen boundary, or store-backed branch
+    /// reads). Path assembly today rebuilds branches from the client's
+    /// replay-held entries, so pruning does not break it; pinning is the
+    /// store-level escape hatch if that ever changes.
     pub fn pin_segment(&self, id: SegmentId) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         {
@@ -415,7 +454,14 @@ impl LeafStore {
         Ok(())
     }
 
-    /// Prune non-owned leaves of frozen segments to `R_k`, retaining owned chunks.
+    /// Prune frozen, unpinned segments down to their `R_k` records.
+    ///
+    /// Leaf bytes at `owned_positions` are copied into the owned-identities
+    /// table before removal — the owned *leaf record* is retained, not the
+    /// surrounding chunk. Root composition over a pruned segment uses the
+    /// frozen `R_k`; anything needing a pruned segment's full chunk contents
+    /// must have pinned it first ([`Self::pin_segment`]). All leaf bytes are
+    /// reconstructible by chain replay regardless.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
         let owned: std::collections::BTreeSet<u64> = owned_positions.iter().map(|p| p.0).collect();
         let txn = self.db.begin_write()?;
@@ -548,6 +594,18 @@ fn recompute_next_freeze_seg(
         }
     }
     Ok(next)
+}
+
+/// Whether `leaf` is four canonical Selene scalars, judged by the same
+/// primitive the root hot path uses (`hash_grow_selene` fails on any
+/// non-canonical child scalar). One Selene hash per leaf — negligible next
+/// to the root recomputation each appended leaf already participates in.
+fn leaf_bytes_are_canonical(leaf: &[u8; 128]) -> bool {
+    let mut scalars = [[0u8; 32]; SCALARS_PER_LEAF];
+    for (scalar, chunk) in scalars.iter_mut().zip(leaf.chunks_exact(32)) {
+        scalar.copy_from_slice(chunk);
+    }
+    hash_grow_selene(&selene_hash_init(), 0, &[0u8; 32], &scalars).is_some()
 }
 
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
@@ -722,13 +780,25 @@ mod tests {
     }
 
     #[test]
-    fn root_at_count_rejects_corrupt_leaf_bytes() {
+    fn append_drained_rejects_non_canonical_leaf_bytes() {
+        // Invalid scalars are rejected at write time (loud failure at the
+        // storage boundary), and the failed batch leaves no partial state.
         let store = LeafStore::open_ephemeral().unwrap();
-        let mut entry = sample_entry(0, 0);
-        entry.leaf = [0xff; 128];
-        store.append_drained(&[entry], 1).unwrap();
-        let err = store.root_at_count(1).unwrap_err();
-        assert!(matches!(err, StoreError::CorruptMeta(_)));
+        let mut bad = sample_entry(1, 0);
+        bad.leaf = [0xff; 128];
+        let err = store
+            .append_drained(&[sample_entry(0, 0), bad], 1)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::InvalidLeafBytes { batch_index: 1 }
+        ));
+        assert_eq!(
+            store.leaf_count().unwrap(),
+            0,
+            "aborted batch must not partially land"
+        );
+        assert_eq!(store.sync_tip_height().unwrap(), 0);
     }
 
     #[test]
