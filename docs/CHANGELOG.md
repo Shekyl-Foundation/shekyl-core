@@ -4,6 +4,23 @@
 
 ### Added
 
+- **economics-sim: gate-7 locked-supply re-pricing built and run — §2.4 (iii)
+  resolves bonds-only (2026-06-11).** Iteration 5 per the
+  `STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope: `ArchivalLockModel` in
+  `shekyl-economics-sim` derives locked supply from the consensus pins
+  (compile-tied to `shekyl-archival-retention::ARCHIVAL_BOND_FLOOR_ATOMIC` /
+  `SETTLEMENT_EPOCH_BLOCKS`), denominating `stake_ratio` and the burn input
+  against **consensus circulating** per the pinned build constraint; eleven
+  `gate7_*` scenarios behind `--gate7` (arm A across the `N_P` envelope +
+  shard-geometry sensitivity, arm B `MIN` grid, volume-stress pair, asserted
+  comparators); legacy eight-scenario output verified **byte-identical**.
+  Result: derived lock collapses to `bond_floor × R × shards(t)` at
+  `lock/circ ≤ 10⁻⁴` in every arm; all three macro gauges insensitive to
+  both arms at every `N_P` → the pre-named indeterminate criterion resolves
+  **bonds-only** (gate-7 ledger row G7; cross-doc spec edits pending
+  maintainer sign-off). Corollary FOLLOWUP (V3.1): the `(1 + stake_ratio)`
+  factor in `calc_burn_pct` is effectively inert in V3.
+
 - **archival: 2B design dispositions — bond-duration shape, `ClaimedEpochSet`
   encoding, gate-7 iteration-5 scope (2026-06-11).** Three Phase-2B design
   closures, docs-only: (1) bond retention-commitment **shape pinned

@@ -2537,6 +2537,21 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
+  (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
+  re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
+  §*Gate 7 iteration-5 — results*) showed the derived V3 archival lock holds
+  `stake_ratio` at 10⁻⁷–10⁻⁴ of `SCALE`, so the `stake_factor` term in
+  `shekyl-economics::burn::calc_burn_pct` is effectively inert — it was
+  designed for the retired tier-staking model, whose 5–35 % asserted ratios
+  inflated burn ~22 % in the legacy sim scenarios. Decide: keep (inert but
+  harmless; preserves the lever if a future lock class materializes) or
+  delete (smaller consensus surface per `15-deletion-and-debt.mdc`). This is
+  consensus burn math — it needs its own review against `00-mission.mdc`,
+  not a ride-along edit. Target: V3.1. *Reopen sooner if:* any V3.0 change
+  introduces a lock class large enough to move `stake_ratio` above ~10⁻³ of
+  `SCALE` (the gate-7 reversion threshold).
+
 - **Typed epoch/height parameters across the archival FFI (spawned PR 123,
   2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,
   settlement_epoch, …)` takes two adjacent `u64`s; the PR 123 C++ rewire

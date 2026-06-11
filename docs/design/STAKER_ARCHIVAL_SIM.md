@@ -468,7 +468,7 @@ the metric it needs. Specified when iteration 1 closes.
   Macro; couples to `shekyl-economics-sim`. **Scoped 2026-06-11 — see
   §*Iteration-5 scope* below.**
 
-### Iteration-5 scope — gate-7 locked-supply re-pricing (scoped 2026-06-11, not yet built)
+### Iteration-5 scope — gate-7 locked-supply re-pricing (scoped 2026-06-11; built and run same day — results in §*Gate 7 iteration-5 — results*)
 
 **Decision it informs (the only output that matters):** §2.4 close-condition (iii) — is
 admission principal **load-bearing for locked supply** (pin `ADMISSION_MIN_ATOMIC` as a
@@ -539,6 +539,88 @@ byte-identical per the iteration-3 discipline); a §*Gate 7 iteration-5* finding
 this doc + a gate-7 ledger row; dispositions recorded in emission §10.2 (branch kept or
 deleted), `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
 (bond-funding obligation references the surviving arm).
+
+### Gate 7 iteration-5 — results (2026-06-11)
+
+**Instrument as built.** `ArchivalLockModel` in `shekyl-economics-sim::engine`, gated via
+`ScenarioConfig.archival_lock` (`None` on every legacy scenario — the default eight-scenario
+output was verified **byte-identical** by diffing the old-binary and new-binary JSON). The
+model's constants are **compile-tied to the consensus pins** (crate dependency on
+`shekyl-archival-retention`: `ARCHIVAL_BOND_FLOOR_ATOMIC`, `SETTLEMENT_EPOCH_BLOCKS`) rather
+than re-asserted locally. Per the pinned build constraint above, the derived `stake_ratio`
+and the burn input both denominate against **consensus circulating** (prev-block
+`already_generated`), composed through the shared `calc_stake_ratio` +
+`calc_burn_pct_from_activity` helpers — the same composition the C4 recorder and the engine
+use. Eleven scenarios run via `--gate7`: arm A across the `N_P` envelope
+{lean 79 / R = 6, thick 154 / R = 6, fee-era-thin 40 / R = 4} plus a 10×-denser
+shard-geometry sensitivity arm (geometry is not yet consensus-pinned); arm B `MIN` grid
+{1×, 100×, 10 000×} the bond floor at lean; a volume-stress pair (20 %/yr growth) for arm A
+and the largest arm-B `MIN`; and two asserted-schedule comparators on the same 30-year
+horizon.
+
+**Locked-supply trajectory (the collapse check: confirmed, and the level is
+macro-immaterial).** Arm A's locked supply degenerates exactly to
+`bond_floor × R × shards(t)` as predicted: **117 coins** at year 0 → **3 546 coins** at year
+29 against ~4.18 B circulating (`lock/circ` 2.3 × 10⁻⁷ → 8.5 × 10⁻⁷). The 10×-denser
+geometry arm reaches 35 474 coins (8.5 × 10⁻⁶). The largest arm-B `MIN` (10 000× floor =
+7 500 coins × `N_P` = 79) reaches **593 k coins ≈ 1.4 × 10⁻⁴** of circulating. Every arm is
+three-plus orders of magnitude below the ~10⁻³ band where the burn servo's `stake_factor`
+would begin to register at `SCALE` resolution.
+
+**Gauge reads (all three insensitive to both arms at every `N_P`).**
+
+| arm | burn % (yr 0 / 9 / 29) | release | net infl % (yr 9 / 29) | burned 30 yr (coins) |
+|---|---|---|---|---|
+| A lean / thick (R = 6) | 5.89 / 35.72 / 48.84 | 1.000 | 5.63 / 0.31 | 10 941 937 |
+| A thin (R = 4, N_P = 40) | identical | identical | identical | identical |
+| A lean, 10× dense shards | identical | identical | identical | +41 (+4 × 10⁻⁴ %) |
+| B 1× / 100× MIN | identical | identical | identical | identical |
+| B 10 000× MIN | identical | identical | identical | +2 023 (+0.0185 %) |
+| A lean, growth | 5.89 / 89.98 / 90.00 (cap) | 1.300 | 4.69 / −0.74 | 496.6 M |
+| B 10 000×, growth | identical at cap | identical | identical | +3 082 (+6 × 10⁻⁴ %) |
+| comparator (asserted 5→35 %) | 6.18 / 42.83 / 65.71 | 1.000 | 5.63 / 0.30 | 14 086 259 |
+
+The burn trajectory is identical to the cent across every arm-A and arm-B variant; the
+release factor is volume-driven only (1.000 / 1.300) and never moves; net inflation is
+identical. Under volume stress both arms clamp at the 90 % burn cap — indistinguishable.
+The `staker_yield` gauge reads ~7 000 %/yr at lean because the income side
+(`staker_pool_share` × burn + emission share) is unchanged while the capital base collapsed
+~five orders of magnitude; that is a reward-arithmetic observation (income *distribution*
+is governed by gate-5 serve-credit weighting, not by this gauge), not a stability breach.
+
+**The re-pricing itself (Δ vs. the asserted comparator).** The legacy 5 %→35 % schedules
+overstated burn through `calc_burn_pct`'s `(1 + stake_ratio)` factor: comparator total
+burned 14.09 M coins vs. arm A 10.94 M (**−22.3 %**); final-year burn 65.71 % vs. 48.84 %.
+The servo remains healthy without the stake term — `burn_base_rate` + √volume +
+supply-ratio drive it to 48.8 % at steady state and to the cap under load, identically in
+both arms. Corollary recorded to `docs/FOLLOWUPS.md`: the `(1 + stake_ratio)` term in
+`calc_burn_pct` is **effectively inert in V3** (derived ratios 10⁻⁷–10⁻⁴ ≪ `SCALE`); it was
+designed for the retired tier-staking model, and whether it stays (inert but harmless) or
+goes (smaller consensus surface) is a consensus-parameter question for its own review, not
+gate 7.
+
+**Close-criteria application (named in advance, applied mechanically).** The gauges are
+insensitive to both arms at every `N_P` — the **indeterminate branch** of the §scope close
+criteria, which **resolves bonds-only**: an admission lock that does no measurable macro
+work is pure optionality debt, and the smaller consensus surface wins. (The first branch
+reads the same way — arm A stays within every band the legacy scenarios treat as healthy —
+so both applicable readings converge on bonds-only.)
+
+**Disposition — gate 7 closes; §2.4 close-condition (iii) resolves bonds-only.**
+Admission principal is demonstrably **not** load-bearing for locked supply: emission verify
+drops the `admission_proof` branch (emission §10.2), `ADMISSION_MIN_ATOMIC` loses its
+consensus role, and `MIN` survives only as gate-6 §2.5 funding-hygiene policy. The
+cross-doc spec edits (emission §10.2, `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + §6,
+gate-6 §2.5) are consensus-surface changes and land on explicit maintainer sign-off of this
+disposition, per `05-system-thinking.mdc` (the criteria were named in advance; the
+structural edit still gets a human eye before the branch is deleted).
+
+**Reversion clause (per `21-reversion-clause-discipline.mdc`):** reopen gate 7 iff (a)
+`ARCHIVAL_BOND_FLOOR` or the shard geometry is re-pinned upward by ≥ 3 orders of magnitude
+combined (the level at which `lock/circ` enters the ≥ 10⁻³ band where the gauges begin to
+move), or (b) a V3.x consensus change introduces a new archival-side lock class this model
+does not carry. Re-evaluation shape: re-run the `--gate7` set against the new pins and
+re-apply the same named close criteria; no new design round needed unless a gauge moves.
 
 ## Build decision — confirmed: separate `shekyl-staking-sim` crate
 
@@ -2521,6 +2603,7 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
 | T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; gate-3 + rotation) | **CLOSED.** Instrument + qual firewall wargame complete. Scarcity-spread → unique portfolios; primary firewall holds lifetime `T_obs` under wallet defaults. | **Conditionally finally accepted.** Form-C reopen not triggered. [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9. |
+| G7 | **Locked-supply re-pricing / admission principal** (gate 7; PHASE_2B §2.4 close-condition (iii)) | Iteration-5 run (2026-06-11; §*Gate 7 iteration-5 — results*): derived archival lock collapses to `bond_floor × R × shards(t)` — 117 → 3 546 coins over 30 yr, `lock/circ ≤ 8.5×10⁻⁷` (10⁻⁵ even at 10× denser shard geometry; 1.4×10⁻⁴ at arm-B `MIN = 10 000×` floor). All three macro gauges (burn servo, release factor, net inflation) **insensitive to both arms at every `N_P`** — burn identical to the cent; both arms clamp identically at the 90 % cap under load. Δ vs. the asserted comparator: legacy schedules overstated burn −22.3 % via the now-inert `(1 + stake_ratio)` factor (FOLLOWUPS item). | **RESOLVED — bonds-only** per the pre-named indeterminate criterion (admission lock does no measurable macro work; smaller consensus surface wins). Cross-doc spec edits (emission §10.2 branch deletion, PHASE_2B §2.4 (iii) + §6, gate-6 §2.5) land on maintainer sign-off. **Reversion:** reopen iff bond floor / shard geometry re-pin ≥ 3 OOM upward combined, or a new archival lock class lands; re-run `--gate7`, re-apply criteria. |
 
 ### Robustness-sweep verdicts (which findings are structural)
 
