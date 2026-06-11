@@ -4,6 +4,19 @@
 
 ### Added
 
+- **archival: Layer-2 margin-robustness band scoped (2026-06-11).** The last
+  open 2B design item (`STAKER_ARCHIVAL_SIM.md` §Layer-2 margin-robustness
+  band — scope; L1/L2 ledger rows updated; `REWARD_EMISSION_LEG.md` §1.2 #4).
+  Decomposes the `giniW ≈ 0.599` grazing reading before sweeping: the whale
+  gauges have wide margins (`max_actor_share ≈ 0.011` vs 0.20; `wB4 ≈ 0.12`)
+  and the ~0.59 baseline is the lean L11 attractor's intrinsic inequality
+  (entry-until-breakeven leanness + `g(age)` incumbency premium + windowed
+  churn flicker), not whale capture. Sweep: `g ∈ {1.5–4.0}` × pin rows at
+  `bond_rate = 0.75` + budget cross {100–200} pricing the gate-1/7 purse as
+  the spread lever. Three named outcomes: seal as-is, re-anchor the gate on
+  direct whale gauges (metric re-derivation, not threshold relaxation), or
+  pull the declining-tail `Curve` (V3 reserve).
+
 - **docs: `ECONOMY_EXPLAINED.md` — plain-language economy walkthrough
   (2026-06-11).** Human-friendly explainer of the four control loops (emission
   curve, release multiplier, adaptive burn, staker emission share) with worked

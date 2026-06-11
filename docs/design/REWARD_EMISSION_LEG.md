@@ -128,7 +128,14 @@ changes what is next:
    "find the `g(age)` that passes" to **margin-robustness across the operating band**
    with whale-trend bounded throughout. If the band cannot clear with comfortable
    margin, the declining-tail `Curve` reserve (V3) widens the pocket — do not seal
-   `bond 0.75` + `g` on a single `giniW = 0.599` model reading.
+   `bond 0.75` + `g` on a single `giniW = 0.599` model reading. **Scoped
+   2026-06-11** (`STAKER_ARCHIVAL_SIM.md` §*Layer-2 margin-robustness band — scope*):
+   the grazing reading decomposes as lean-attractor intrinsic inequality
+   (~0.593 with no whale present; whale adds ~0.001 against `max_actor_share ≈
+   0.011` vs the 0.20 bar) — the sweep tests whether that decomposition holds
+   across the `g` band, with three named outcomes (seal as-is / re-anchor the gate
+   on the direct whale gauges / pull the `Curve` reserve) and a budget cross
+   pricing the gate-1/7 purse as the spread lever (`budget → bondA → giniW`).
 
 **Genuinely unblocked:** §3–§7 FSM retool (principal form, reward-reception state);
 gate 6 firewall rigor; V3 form **C** reconciliation.
