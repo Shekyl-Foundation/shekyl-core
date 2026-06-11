@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Phase-1 Electrum-words-removal cross-boundary zeroization residency
-// invariant tests per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §7.4 +
-// Phase 1 work-item 9 (`docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md`).
+// invariant tests per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §7.4 +
+// Phase 1 work-item 9 (`docs/completed/ELECTRUM_WORDS_REMOVAL_PLAN.md`).
 //
 // Test discipline boundary
 // ------------------------

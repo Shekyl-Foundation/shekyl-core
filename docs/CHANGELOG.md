@@ -32,11 +32,60 @@
   `META_LEAF_COUNT` inside the operating transaction (single-snapshot, no
   check/use gap).
 
+- **docs: 2026-06-10 doc sweep — key-signature freeze anchored, completed
+  archive consolidated, stale references repaired.**
+  Retroactive decision-log entry for the frozen v1 seed→address pipeline
+  (`V3_WALLET_DECISION_LOG.md`, from Cursor plan
+  `stabilize_key_signature_15d8e48a`; landed 2026-04-22, `f46ddaf56`).
+  `FCMP_PLUS_PLUS.md` "Wallet Restore from Seed" rewritten against the
+  landed pipeline (old 32-byte HKDF diagram and `transfer_details`
+  stored-secret restore copy removed); `USER_GUIDE.md` seed copy fixed to
+  24-word BIP-39 + opt-in passphrase (Electrum Phase-6 residue).
+  `ATOMIC_UNITS_NEWTYPE.md` and `PRIMARY_CLAIM_DERIVATION_RENAME.md`
+  archived to `docs/completed/`; the 104 references broken by the earlier
+  DAA/Electrum moves to `docs/completed/` repaired repo-wide (source
+  comments, CI workflow headers, consensus-constants JSON, workspace
+  rules, docs). Four FOLLOWUPS V3.0 items filed: dedicated
+  `ADDRESS_DERIVATION_V1` KAT corpus, `lint_cpp_clamp_ban.sh` CI wiring,
+  `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire, USER_GUIDE Rust-CLI
+  realignment. CODEOWNERS freeze-spec path fixed to
+  `WALLET_FILE_FORMAT_V1.md`; machine-local `.cursor/plans/` links in
+  active docs repointed to in-repo continuations.
+
+- **docs: FOLLOWUPS realigned to the Phase 2b retool; two fired
+  deferral triggers re-dispositioned.** The Decision-3C staking-subtree
+  entry is superseded (3C / `h_bind` / 5-scalar leaf are docs-only per
+  `PHASE_2B_STAKE_LIFECYCLE.md` §2.4; entitlement stack is a deletion
+  target), with its claim-nullifier backstop note retired alongside
+  (dedup is now the per-`P` claimed-epoch bitmap). `AtomicUnits::mul_div_rem`'s
+  reopening criterion re-anchored from `entitlement.rs` to the rebased
+  reward-emission arithmetic (PR #123 surface); the confidential
+  stake-UTXO transfer entry re-anchored to the bond model. Freshness:
+  FA-2 (#112) / FA-8 (#113) marked merged (2026-06-08); Stage 3
+  blocks-on updated (Stage 2 merged; subaddress round resolved; Phase 2b
+  gate list cited); Phase 2b planning-session entry gains a status note
+  (claim-centric FSM scope superseded by the retool). Per
+  `21-reversion-clause-discipline.mdc`, the two "pre Stage 1 PR 4
+  kickoff" items whose triggers fired are re-dispositioned:
+  `wallet2_ffi_create_wallet` / `on_create_wallet` cleanup is superseded
+  by the Phase 5 wholesale deletion (reopens on new consumers or Phase 5
+  slipping past stressnet), and the `epee::wipeable_string` mlock
+  residual is committed as documented-not-mitigated until Phase 5 under
+  the same named reopening criteria.
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust
   vocabulary effective now across FFI; no rename PR pre-Phase 5. Updates
   `FOLLOWUPS.md` and `STRUCTURAL_TODO.md`.
+
+- **engine: Phase 2a-4 — TestDaemon fee-bound build→submit; engine send substrate
+  complete.** `daemon_fee_estimator_maps_test_daemon_priority_tiers` and Custom
+  sanity-ceiling unit tests; output locks reserved before async sign with
+  `release_build_reservation` on sign failure; integration tests for daemon-derived
+  `tx.fee`, submit dedup, missing key-image rejection, and reserved-output blocking.
+  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4; orchestrator Phase 2a
+  remains pending Phase 1 (`WALLET_REWRITE_PLAN.md`).
 
 - **wallet: Phase 2a-3 sign, wire encode, submit.**
   `KeyActor`/`LocalKeys` sign bridge, `shekyl-tx-builder` `wire` module,
@@ -79,9 +128,26 @@
   revert. FFI: `shekyl_archival_challenge_resolution_blocks`,
   `shekyl_archival_epoch_slash_deadline_height`. CompleteTree slash deferred.
 
+- **archival: gate-4 §8 phase-1 lifecycle KAT and Rust-first join verify (bonded-aggregation).**
+  `shekyl-archival-retention`: `bond_floor`, `verify_join_market_bond_post` (incl.
+  both-terms reject), `serve_credit_epoch_ok`, `verify_conservation_snapshot` (audit/KAT
+  only). `gate4_lifecycle_kat_v1.json` exercises join → serve `E_first` and bonded
+  aggregation; paying-emit stub `null`. FFI: `shekyl_archival_verify_join_market_bond_post`
+  (distinct `SHEKYL_ARCHIVAL_BOND_POST_ERR_*` per reject reason),
+  `shekyl_archival_serve_credit_epoch_ok`. `ArchivalBondValue` LMDB v3 stores per-P
+  `bonded_total_atomic`; pre-v3 bond blobs rejected at decode. `blockchain.cpp` delegates
+  join-market semantics and `E_first` lower bound to Rust; hybrid pubkey + `P_id` hint stay C++.
+
 - **archival: JoinMarket bond-post verify and LMDB connect (gate-4 §3.4.1).**
   `txin_archival_bond_post` wire (`tag 0x05`), `put_archival_bond_record`, and
   `total_bonded_atomic` on connect/pop; JoinMarket-only at genesis.
+
+- **archival: bond-post RCT balance verifier (gate-4 §3.2 / §3.5 step 6).**
+  `verRctSemanticsBondPost` closes `sum(pseudoOuts) + bond_debit = sum(out masks) + fee +
+  bond_credit`; commitment sum is verified in `shekyl-archival-retention` via
+  `shekyl_archival_verify_bond_post_rct_balance`; Bulletproof+ stays in C++.
+  Bond-post path enforces canonical BP+ layout when proofs are present, requires a
+  non-zero bond term, and routes away from `verRctSemanticsSimple` in NIC verify.
 
 - **archival: bond + shard-registry LMDB substrate (gate-2 §5.3 steps 2, 6–7).**
   `archival_bond`, `archival_shard_segment`, and `archival_shard_leaf` subdbs with

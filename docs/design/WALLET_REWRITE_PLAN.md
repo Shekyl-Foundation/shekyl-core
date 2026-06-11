@@ -9,7 +9,7 @@ todos:
     content: "Phase 1: shekyl-wallet-core::Wallet orchestrator type — composition over god-object; lifecycle (create/open_full/open_view_only/open_hardware_offload/change_password/close); RefreshHandle for cancellable scan; Wallet<SoloSigner|MultisigSigner> shape so V3.1 multisig is a feature flip; RuntimeWalletState audit (keep/rename/fold-into-WalletLedger; default lean fold); answer 'why now / can we do better' for address book, tx_keys, tx_notes, account-vs-subaddress, background sync; lock binding decisions: payment IDs DROPPED, air-gapped flow KEPT but reshaped as UnsignedTxBundle/SignedTxBundle"
     status: pending
   - id: phase2_ops_refresh_send
-    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3)"
+    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed — orchestrator Wallet methods remain pending Phase 1."
     status: pending
   - id: phase2_ops_stake_history
     content: "Phase 2b (SUBSTANTIVE): transfer-shaped admission (PHASE_2B §2.4) → reward-emission leg spec → Round 3–4 close-conditions → Stage 3 StakeEngine. One ship target — no entitlement/3C subtree. Blocks Stage 3, not 2a."
@@ -68,7 +68,7 @@ isProject: false
 ## Locked design (from prior plans, do not re-litigate)
 
 - **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
-- **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq` per [stabilize_key_signature_15d8e48a](../plans/stabilize_key_signature_15d8e48a.plan.md).
+- **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq`; binding surface anchored in the [decision log](../V3_WALLET_DECISION_LOG.md) "Key & signature stabilization" entry (2026-06-10, from Cursor plan `stabilize_key_signature_15d8e48a`).
 - **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
 - **Genesis-affecting wire lock before stressnet (Phase 7.7):** Any change that alters genesis block bytes — including FA-6 `view_tag` re-key (`docs/design/FA-6_VIEW_TAG_ML_KEM.md`) — must land on `dev` and genesis must be regenerated **before** the Phase 7.7 stressnet genesis is cut. A stressnet built on pre-FA-6 tags does not exercise the mainnet wallet scan wire format and cannot serve as the representative 4-week privacy/wire validation gate. Track genesis-affecting PRs explicitly in release/stressnet planning; the FA-6 spec is correctly scoped to FA-6 internals and does not own this sequencing, but the program plan does.
@@ -531,8 +531,10 @@ flowchart TD
 ---
 
 **Phase 2a implementation spec:** [`docs/design/PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
-(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4, definition of done, daemon/sign/build
-wiring against the landed `LocalPendingTx` / `KeyActor` substrate.
+(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4. **Engine substrate complete**
+(2026-06): daemon fee snapshot, signing context, wire encode/submit, and
+`TestDaemon` fee-bound build→submit integration on `LocalPendingTx`. **Orchestrator
+Phase 2a** (`Wallet::refresh` / `build_pending_tx` / …) remains **pending Phase 1**.
 
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.
 

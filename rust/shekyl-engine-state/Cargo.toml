@@ -37,7 +37,7 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-staking = { path = "../shekyl-staking" }
-# `AtomicUnits` amount newtype (docs/design/ATOMIC_UNITS_NEWTYPE.md). The
+# `AtomicUnits` amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md). The
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
 # stays fork-`u64` and converts at the `commitment_bytes` serializer edge.
 shekyl-units = { path = "../shekyl-units" }

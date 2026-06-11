@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Phase-1 Electrum-words-removal BIP-39 round-trip tests per
-// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §7.3 + Phase 1 work-item 8
-// (`docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md`).
+// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §7.3 + Phase 1 work-item 8
+// (`docs/completed/ELECTRUM_WORDS_REMOVAL_PLAN.md`).
 //
 // Scope:
 //
@@ -376,7 +376,7 @@ TEST(wallet_bip39, keyfile_roundtrip_preserves_bip39_entropy)
 TEST(wallet_bip39, keyfile_on_disk_is_encrypted_no_plaintext_entropy)
 {
     // V4 keyfile-encryption-envelope on-disk inspection per
-    // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §V4. The keyfile's
+    // `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §V4. The keyfile's
     // `bip39_entropy` field is JSON-hex inside an xchacha20-encrypted
     // envelope; on-disk the only surface is ciphertext. This test
     // creates a wallet, persists it, reads the .keys file byte-for-

@@ -452,7 +452,7 @@ impl Wallet2 {
 
         // Phase B: sign (pure Rust, no FFI crossing).
         // `fee` arrives as a raw JSON number from the prepare response; wrap it
-        // at the `AtomicUnits` edge (`docs/design/ATOMIC_UNITS_NEWTYPE.md` §4.5).
+        // at the `AtomicUnits` edge (`docs/completed/ATOMIC_UNITS_NEWTYPE.md` §4.5).
         let proofs = shekyl_tx_builder::sign_transaction(
             tx_prefix_hash,
             &inputs,

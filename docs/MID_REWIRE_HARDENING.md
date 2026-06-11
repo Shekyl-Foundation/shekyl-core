@@ -402,7 +402,7 @@ baseline-update-on-merge workflow has run successfully at least once
 **Status.** **CLOSED** as of 2026-04-25. Sentinel
 `docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` deleted in PR 0.1
 of the
-[shekyl-v3-wallet-rust-rewrite plan](../../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).
+[shekyl-v3-wallet-rust-rewrite plan](./design/WALLET_REWRITE_PLAN.md).
 The original closure trigger was the 2m-cache commit; that commit is
 no longer scheduled because 2l/2m/2n were absorbed into the Rust
 rewrite (which deletes `wallet2.cpp` wholesale at Phase 5 instead of

@@ -1990,7 +1990,7 @@ per `15-deletion-and-debt.mdc`).
 - [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) — LWMA-1 multi-phase
   plan template; companion to this doc's
   [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
-- [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) — RandomX v2
+- [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) — RandomX v2
   substrate doc; "no version dispatch" disposition template.
 
 ### Phase 0 Mission Audit substrate

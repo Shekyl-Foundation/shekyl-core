@@ -2,7 +2,7 @@
   "_comment_": [
     "Phase 2 byte-offset disambiguation anchors for the pinned `.body` of",
     "zawy12/difficulty-algorithms#3 captured in `zawy12_issue_3_lwma1.md`.",
-    "Per `docs/design/DAA_LWMA1_PLAN.md` §3 Phase 2 §497-577. Pins LWMA-1's",
+    "Per `docs/completed/DAA_LWMA1_PLAN.md` §3 Phase 2 §497-577. Pins LWMA-1's",
     "and LWMA-3's reference-function definitions against upstream reordering",
     "or content insertion that would shift line numbers in the pinned body.",
     "",

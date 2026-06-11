@@ -38,8 +38,8 @@ using namespace cryptonote;
 // the deleted CryptoNote DAA against `DIFFICULTY_TARGET_V1`) was removed
 // in Phase 4 of the LWMA-1 migration along with `gen_block_invalid_nonce`
 // and `gen_block_invalid_binary_format` — both tests' generators
-// depended on the helper. See `docs/design/DAA_LWMA1.md` §9.1 / drift F3
-// in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3, and rule
+// depended on the helper. See `docs/completed/DAA_LWMA1.md` §9.1 / drift F3
+// in `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3, and rule
 // `60-no-monero-legacy.mdc`.
 
 #define BLOCK_VALIDATION_INIT_GENERATE()                                                \

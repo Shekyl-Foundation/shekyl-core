@@ -2,7 +2,8 @@
 
 This document consolidates the Phase 0 audit of `shekyld` (the Shekyl
 daemon) against the prerequisites declared by the
-[V3 wallet Rust rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).
+[V3 wallet Rust rewrite plan](./design/WALLET_REWRITE_PLAN.md) (in-repo
+continuation of the original `shekyl_v3_wallet_rust_rewrite` Cursor plan).
 The plan's later phases assume specific daemon-side capabilities; this
 document records what exists, what does not, and what (if anything)
 must be filed as a separate daemon-side follow-up before the
@@ -154,7 +155,7 @@ first non-genesis block.
 The Python functional tests under `tests/functional_tests/` were
 deleted outright in the Phase 2 of the Electrum-words removal
 series (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`)
-per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
 Phase 2 work item 9 (reassessed). The harness invoked binaries
 named `monerod` and `monero-wallet-rpc` (which do not exist in the
 Shekyl tree — the renamed binaries are `shekyld` and

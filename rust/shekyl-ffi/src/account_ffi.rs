@@ -202,7 +202,7 @@ pub unsafe extern "C" fn shekyl_bip39_mnemonic_from_entropy(
 ///
 /// This is the inverse of [`shekyl_bip39_mnemonic_from_entropy`] and the
 /// primitive behind the wallet keyfile's persisted entropy field
-/// (`m_bip39_entropy` per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10):
+/// (`m_bip39_entropy` per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10):
 /// the JSON-restore-from-phrase path calls this FFI to extract the entropy
 /// bytes for `store_keys`-encrypted persistence; `query_key("mnemonic")`
 /// later calls [`shekyl_bip39_mnemonic_from_entropy`] on the persisted

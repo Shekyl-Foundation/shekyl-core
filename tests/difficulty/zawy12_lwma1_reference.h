@@ -22,7 +22,7 @@
 //
 // This file is consumed by tests/difficulty/lwma1_cross_check.cpp as
 // the canonical-LWMA-1 byte-equality reference for the §8.1 monotonic-
-// timestamp vectors of docs/design/DAA_LWMA1.md. For the out-of-sequence
+// timestamp vectors of docs/completed/DAA_LWMA1.md. For the out-of-sequence
 // vectors (§8.1 vectors 6 and 7), see
 // tests/difficulty/shekyl_lwma1_hybrid_reference.h instead -- canonical
 // LWMA-1 deliberately differs from Shekyl's running-max + symmetric-

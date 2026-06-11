@@ -885,7 +885,7 @@ bool shekyl_bip39_mnemonic_from_entropy(
 /// `out32_ptr`. The inverse of `shekyl_bip39_mnemonic_from_entropy` above;
 /// used by the wallet keyfile JSON-restore path to extract the entropy
 /// bytes for `store_keys`-encrypted persistence in `m_bip39_entropy`. See
-/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
+/// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
 /// rationale.
 bool shekyl_bip39_mnemonic_to_entropy(
     const uint8_t* words_ptr,
@@ -1765,11 +1765,59 @@ uint8_t shekyl_archival_verify_serve_credit_vin(
     size_t vin_payload_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
+// Bond-post RCT balance (ARCHIVAL_BOND_GATE4.md §3.2)
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK                    0
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR        1
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS      2
+/// Invalid point, non-32-byte-aligned flat buffer, or count*32 overflow.
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT   3
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH    4
+#define SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM    5
+
+/// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.
+uint8_t shekyl_archival_verify_bond_post_rct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee,
+    uint64_t bond_credit,
+    uint64_t bond_debit);
+
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+#define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY           3
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS 4
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO        5
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS                6
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO                7
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH            8
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS             9
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
+
+/// `record_exists` is 1 when LMDB already stores a bond record for this P_id.
+uint8_t shekyl_archival_verify_join_market_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists);
+
+/// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
+uint8_t shekyl_archival_serve_credit_epoch_ok(
+    uint64_t settlement_epoch,
+    uint64_t join_settlement_epoch);
+
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //
 // Single function: `shekyl_difficulty_lwma1_next`. Wraps the
-// `shekyl-difficulty` crate's `lwma1_next` per `docs/design/DAA_LWMA1.md`
+// `shekyl-difficulty` crate's `lwma1_next` per `docs/completed/DAA_LWMA1.md`
 // §5.3 and §6.1. The C-ABI difficulty type is `struct shekyl_u128`
 // (two u64 halves, little-endian) per Round 5's ABI disposition --
 // Rust `u128`'s C ABI was target-dependent until rustc 1.77 and the

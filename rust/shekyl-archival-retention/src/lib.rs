@@ -25,15 +25,23 @@
 
 #![deny(unsafe_code)]
 
+pub mod bond_floor;
+pub mod bond_post;
+pub mod bond_rct_balance;
 pub mod bond_wire;
 pub mod challenge;
+pub mod conservation;
 pub mod constants;
 pub mod error;
 pub mod hash;
 pub mod id;
 pub mod path;
+pub mod serve_eligibility;
 pub mod wire;
 
+pub use bond_floor::{bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
+pub use bond_post::{verify_join_market_bond_post, BondPostError};
+pub use bond_rct_balance::{verify_bond_post_rct_balance, BondRctBalanceError};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
@@ -43,6 +51,7 @@ pub use challenge::{
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
+pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
@@ -50,6 +59,7 @@ pub use constants::{
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
+pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{
     encode_path, ArchivalServeCreditResponse, WireError, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };

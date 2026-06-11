@@ -23,7 +23,7 @@ members = [
     "shekyl-address",
     "shekyl-difficulty",
 
-    # Foundational monetary-amount newtype (docs/design/ATOMIC_UNITS_NEWTYPE.md)
+    # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 
     # Vendored monero-oxide protocol crates

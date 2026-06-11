@@ -327,6 +327,8 @@ Collateral return and reward mint are **independent value flows**.
 4. **Floor equality** — post-connect `bonded_total_atomic == bond_floor(holdings)`.
 5. `P` hybrid signatures on vin.
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
+   When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
+   proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
@@ -519,9 +521,22 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
-- [ ] `bond_credit`/`bond_debit` in RCT balance verifier.
+- [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verRctSemanticsBondPost`; NIC path).
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic` (Rebond/Unbond/HoldingsUpdate deferred).
-- [ ] KAT: join → serve `E_first` → paying emit; conservation-law cross-check fixture.
+- [x] **KAT phase-1 (bonded-aggregation sub-invariant only):** `gate4_lifecycle_kat_v1.json` +
+      `gate4_lifecycle_kat.rs` — join wire, serve at `E_first`, `verify_conservation_snapshot`
+      on `total_bonded == Σ_P bonded_total`. **Three qualifiers on closure:**
+      (1) bonded-aggregation identity only, not the full supply law;
+      (2) KAT-covered in Rust tests, not consensus-enforced per connect;
+      (3) paying-emit leg and full `already_generated == circulating + bonded + burned`
+      deferred to emission phase-0.
+- [ ] KAT phase-2: paying-emit vin + full supply-law cross-check (blocked on emission leg).
+
+**Rust-first disposition (gate-4 §8 slice):** new bond-post semantic rules live in
+`shekyl-archival-retention`; C++ `blockchain.cpp` retains hybrid-pubkey bounds,
+`P_canonical_id` recompute (pinned stay-C++), LMDB `record_exists`, and thin FFI
+delegation. `ArchivalBondValue` LMDB encoding is v3-only at connect; pre-v3 bond
+blobs are rejected at decode (pre-genesis posture: reset data-dir).
 
 ### 8.1 `bond_floor(holdings)` (G4-7)
 

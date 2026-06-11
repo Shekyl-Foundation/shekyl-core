@@ -528,8 +528,7 @@ private:
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 2;
-    static constexpr uint8_t kVersionLegacy = 1;
+    static constexpr uint8_t kVersion = 3;
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
@@ -543,6 +542,8 @@ struct ArchivalBondValue {
 
     std::vector<uint8_t> hybrid_pubkey;
     uint64_t join_settlement_epoch = 0;
+    /// Per-P bonded balance (gate-4 §4.1); must equal `bond_floor(holdings)` post-connect.
+    uint64_t bonded_total_atomic = 0;
     /// `kHoldingsShardSetCompact` or `kHoldingsCompleteTree` (gate-4 §3.4.1).
     uint8_t holdings_kind = kHoldingsShardSetCompact;
     std::vector<uint64_t> held_shard_ids;
@@ -563,7 +564,7 @@ struct ArchivalBondValue {
         }
 
         std::vector<uint8_t> out;
-        out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 4 + held_shard_ids.size() * 8
+        out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 8 + 1 + 4 + held_shard_ids.size() * 8
             + 4 + bad_intervals.size() * 16);
         out.push_back(kVersion);
         const uint16_t pk_len = static_cast<uint16_t>(hybrid_pubkey.size());
@@ -572,6 +573,8 @@ struct ArchivalBondValue {
         out.insert(out.end(), hybrid_pubkey.begin(), hybrid_pubkey.end());
         for (int i = 7; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
+        for (int i = 7; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((bonded_total_atomic >> (i * 8)) & 0xFF));
         out.push_back(holdings_kind);
         const uint32_t holdings_count = static_cast<uint32_t>(held_shard_ids.size());
         for (int i = 3; i >= 0; --i)
@@ -601,32 +604,25 @@ struct ArchivalBondValue {
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
         const uint8_t version = p[off++];
-        if (version != kVersion && version != kVersionLegacy)
+        if (version != kVersion)
             return false;
         if (off + 2 > len)
             return false;
         const uint16_t pk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
         off += 2;
-        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 > len)
+        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 + 8 + 1 > len)
             return false;
         out.hybrid_pubkey.assign(p + off, p + off + pk_len);
         off += pk_len;
         out.join_settlement_epoch = load_be64(p + off);
         off += 8;
-        if (version == kVersion)
+        out.bonded_total_atomic = load_be64(p + off);
+        off += 8;
+        out.holdings_kind = p[off++];
+        if (out.holdings_kind != kHoldingsShardSetCompact
+            && out.holdings_kind != kHoldingsCompleteTree)
         {
-            if (off >= len)
-                return false;
-            out.holdings_kind = p[off++];
-            if (out.holdings_kind != kHoldingsShardSetCompact
-                && out.holdings_kind != kHoldingsCompleteTree)
-            {
-                return false;
-            }
-        }
-        else
-        {
-            out.holdings_kind = kHoldingsShardSetCompact;
+            return false;
         }
         if (off + 4 > len)
             return false;

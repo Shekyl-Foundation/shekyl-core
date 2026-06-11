@@ -327,4 +327,47 @@ mod tests {
             );
         }
     }
+
+    /// PHASE_2A_SEND_PATH.md §8.1 — priority tiers map to distinct daemon rates.
+    #[tokio::test]
+    async fn daemon_fee_estimator_maps_test_daemon_priority_tiers() {
+        use crate::engine::fee_snapshot::{DaemonFeeSnapshotSource, FeeSnapshotSource};
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+
+        let daemon = std::sync::Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+        daemon.set_fee_estimates(FeeEstimates {
+            economy: FeeRate::new(1, 1).expect("economy rate"),
+            standard: FeeRate::new(10, 1).expect("standard rate"),
+            priority: FeeRate::new(100, 1).expect("priority rate"),
+            quantization_mask: 1,
+        });
+
+        let snapshot = DaemonFeeSnapshotSource::from_arc(std::sync::Arc::clone(&daemon))
+            .fetch()
+            .await
+            .expect("fee snapshot fetch");
+        let ledger = dummy_context();
+        let base = FeeEstimationContext {
+            ledger: &ledger,
+            recipient_count: 1,
+            input_count: 1,
+            output_count: 2,
+            fee_snapshot: snapshot,
+            tree_depth: 1,
+        };
+
+        let economy = DaemonFeeEstimator
+            .estimate_fee(FeePriority::Economy, &base)
+            .expect("economy fee");
+        let standard = DaemonFeeEstimator
+            .estimate_fee(FeePriority::Standard, &base)
+            .expect("standard fee");
+        let priority = DaemonFeeEstimator
+            .estimate_fee(FeePriority::Priority, &base)
+            .expect("priority fee");
+
+        assert!(economy > AtomicUnits::ZERO);
+        assert!(standard > economy);
+        assert!(priority > standard);
+    }
 }
