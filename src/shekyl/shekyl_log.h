@@ -150,10 +150,19 @@ int32_t shekyl_log_init_file(
 /// without the async buffer. Safe to call multiple times.
 void shekyl_log_shutdown(void);
 
-/// Verify that `tracing` events from Rust staticlib crates linked
-/// into this binary (currently shekyl-daemon-rpc) route into the
-/// subscriber installed by the most recent `shekyl_log_init_*` call,
-/// and pin the install as a one-shot.
+/// Pin the tracing-forwarder call ordering (init first) and install
+/// idempotency as a process-global one-shot.
+///
+/// This call does NOT verify event routing at runtime. Under the
+/// single-Rust-image contract there is nothing to forward between:
+/// `tracing` events from Rust staticlib crates linked into this
+/// binary (currently shekyl-daemon-rpc) reach the subscriber
+/// installed by `shekyl_log_init_*` because the daemon links exactly
+/// one Rust image with one tracing dispatcher. That property is
+/// enforced at link time (force-load of libshekyl_daemon_rpc.a plus
+/// the post-link nm gate in src/daemon/CMakeLists.txt), not by this
+/// call. See V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10
+/// single-image amendment.
 ///
 /// Call after `mlog_configure` (which runs `shekyl_log_init_*`).
 /// Returns `SHEKYL_LOG_OK` on the first successful install,
@@ -161,13 +170,6 @@ void shekyl_log_shutdown(void);
 /// SIGHUP-style re-configure path lands here), and
 /// `SHEKYL_LOG_ERR_NOT_INITIALIZED` when no successful init preceded
 /// the call (the one-shot is not consumed; retry after init).
-///
-/// The cross-image half of the contract — the daemon linking exactly
-/// one Rust image so there is exactly one tracing dispatcher — is
-/// enforced at link time (force-load of libshekyl_daemon_rpc.a plus
-/// the post-link nm gate in src/daemon/CMakeLists.txt), not by this
-/// call. See V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10
-/// single-image amendment.
 int32_t shekyl_log_install_tracing_forwarder(void);
 
 // -----------------------------------------------------------------

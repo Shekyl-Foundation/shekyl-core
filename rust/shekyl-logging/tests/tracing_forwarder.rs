@@ -31,6 +31,13 @@ use shekyl_logging::ffi::{
 
 #[test]
 fn forwarder_install_state_machine() {
+    // An ambient SHEKYL_LOG (e.g. `off`) would override the
+    // stderr_only(INFO) fallback below and break the final
+    // `enabled!(ERROR)` assertion. Clear it for determinism, matching
+    // the sibling integration tests (file_sink.rs, defaults.rs).
+    // SAFETY: integration tests run one file per process.
+    unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
+
     // Before any init: typed failure, and the one-shot pin must not
     // be consumed (the post-init install below must still succeed).
     // SAFETY: no pointer parameters on any call in this test.

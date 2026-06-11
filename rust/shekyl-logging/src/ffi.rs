@@ -363,10 +363,8 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
 // Tracing forwarder (single-image verification contract)
 // -----------------------------------------------------------------
 
-/// Verify that `tracing` events emitted by Rust staticlib crates
-/// linked into this binary (currently `shekyl-daemon-rpc`) route
-/// into the subscriber installed by the most recent successful
-/// `shekyl_log_init_*` call.
+/// Pin the tracing-forwarder call ordering (init first) and install
+/// idempotency as a process-global one-shot.
 ///
 /// # What this actually does
 ///

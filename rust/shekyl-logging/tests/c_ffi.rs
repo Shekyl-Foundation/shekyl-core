@@ -50,8 +50,8 @@ const C_HARNESS: &str = r##"
 #define SHEKYL_LOG_OK         0
 #define SHEKYL_LOG_ERR_ALREADY_INIT (-1)
 
-extern int  shekyl_log_init_stderr(uint8_t fallback_level);
-extern int  shekyl_log_install_tracing_forwarder(void);
+extern int32_t shekyl_log_init_stderr(uint8_t fallback_level);
+extern int32_t shekyl_log_install_tracing_forwarder(void);
 extern void shekyl_log_shutdown(void);
 extern _Bool shekyl_log_level_enabled(
     uint8_t level,
@@ -64,7 +64,7 @@ extern void shekyl_log_emit(
     const char *func_ptr,   size_t func_len,
     const char *msg_ptr,    size_t msg_len);
 extern size_t shekyl_log_get_categories(char *out_ptr, size_t out_cap);
-extern int    shekyl_log_set_categories(
+extern int32_t shekyl_log_set_categories(
     const char *spec_ptr, size_t spec_len,
     uint8_t fallback_level);
 extern size_t shekyl_log_last_error_message(char *out_ptr, size_t out_cap);
@@ -268,7 +268,13 @@ fn c_harness_links_and_runs_against_staticlib() {
         compile_and_link_harness(&c_src, &static_lib, &exe, &cc_path).expect("invoke C compiler");
     assert!(status.success(), "C compiler+linker failed: {status}");
 
+    // The harness asserts `enabled=1` for INFO under the
+    // stderr_only(INFO) fallback; an ambient SHEKYL_LOG (e.g. `off`)
+    // inherited by the subprocess would override that filter and fail
+    // the assertion nondeterministically. Scope the removal to the
+    // child env rather than mutating this process's environment.
     let output = Command::new(&exe)
+        .env_remove(shekyl_logging::SHEKYL_LOG_ENV)
         .output()
         .expect("run compiled harness exe");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
