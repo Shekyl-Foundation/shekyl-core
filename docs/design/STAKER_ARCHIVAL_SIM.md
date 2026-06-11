@@ -494,6 +494,18 @@ macro, not agent-based). The build work is one structural change plus scenarios:
 3. **Scenario grid:** the existing emission-schedule scenarios × {A, B×MIN-grid} ×
    `N_P` envelope {lean ≈ bondA 79, thick ≈ 154, fee-era-thin ≈ 17–62 (L13 servo band)}.
 
+**Pinned build constraint — circulating-supply definition (2026-06-11).** The sim's
+modeling loop (`engine.rs`) computes `circulating = already_generated − total_burned`;
+the **consensus burn-site quantity** is prev-block `already_generated` alone (the input
+`validate_miner_transaction` actually feeds `calc_burn_pct`; see
+`shekyl-economics-sim::record` §5.3-R1 note and `STAGE_1_PR_7_ECONOMICS_ENGINE.md`
+§5.3/§608–612 — the C4 recorder already records the consensus quantity for exactly this
+reason). The gate-7 wiring must follow the recorder, not the modeling loop: the derived
+`stake_ratio` fed to `calc_burn_pct` denominates against **consensus circulating**
+(`ag_start`), while emitted-minus-burned remains a reporting-only gauge. Otherwise the
+re-priced burn trajectory diverges from what consensus will compute and the close
+criteria read a sim artifact instead of the chain's arithmetic.
+
 **Inputs — all already pinned (which is why this is buildable now):** `bond_rate* = 0.75`
 (iteration-2 fine sweep); `ARCHIVAL_BOND_FLOOR` (gate-4 §8.1); `W = 26`, `SEB = 10_000`
 (timing cluster — claim cadence bounds in-flight unclaimed value, a second-order term the
