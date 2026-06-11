@@ -47,6 +47,57 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
+  corpus (2026-06-10 doc sweep).** The frozen v1 pipeline's Tier-1/Tier-2
+  derivation vectors live **inline** in
+  `rust/shekyl-crypto-pq/src/account.rs` `#[cfg(test)]` modules, and the
+  module docstring claims they are "pinned in CI by the
+  `ADDRESS_DERIVATION_V1` KAT suite" — but no
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus or `kat_*.rs`
+  consumer exists, so the vectors sit **outside** the
+  `docs/test_vectors/**` + `/rust/**/tests/kat_*.rs` CODEOWNERS
+  protection that the freeze plan intended (compare
+  `KEM_DERIVE_V1_KAT.json` and `WALLET_FILE_FORMAT_V1/`, which have it).
+  Extract the inline vectors into a published
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus consumed by a
+  dedicated `kat_address_derivation_v1.rs` test, or amend the docstring
+  to stop naming a corpus that doesn't exist and extend CODEOWNERS to
+  the inline-test file. **Target: V3.0 (pre-genesis; the corpus is the
+  freeze's enforcement surface).** Cross-link: decision-log
+  "Key & signature stabilization" entry (2026-06-10).
+
+- **Derivation-freeze hardening: wire `scripts/lint_cpp_clamp_ban.sh`
+  into CI (2026-06-10 doc sweep).** The clamp-ban lint script exists and
+  is green locally, but no workflow under `.github/workflows/` invokes
+  it, so the `36-secret-locality.mdc` clamping ban is enforced by
+  convention only. Add it to the build or consensus-invariants workflow
+  (one step). **Target: V3.0.** Cross-link: decision-log
+  "Key & signature stabilization" entry (2026-06-10);
+  `stabilize_key_signature` acceptance criterion "Clamping-ban lint is
+  green".
+
+- **Derivation-freeze hardening: `ADDRESS_DERIVATION_MANIFEST_HASH`
+  freeze tripwire (2026-06-10 doc sweep).** The
+  `docs/MID_REWIRE_HARDENING.md` extension — embed the KAT-manifest
+  SHA-256 in the binary and have `shekyl-cli generate-genesis-address
+  --self-check` recompute and compare it — is specified but not
+  implemented (no `ADDRESS_DERIVATION_MANIFEST_HASH` symbol exists
+  outside that doc). Depends on the dedicated KAT corpus item above
+  (the manifest hashes the corpus). **Target: V3.0 (lands with or after
+  the corpus; before genesis-address regeneration is declared final).**
+
+- **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc
+  sweep).** `docs/USER_GUIDE.md` still documents the legacy C++ CLI
+  surface (`--restore-deterministic-wallet`, `--generate-from-*-key`
+  flag family, interactive `[wallet]:` commands) while the Rust
+  `shekyl-cli` ships a different command shape (`restore <filename>
+  <seed...>`, subcommand model). The 2026-06-10 sweep fixed the
+  seed-format copy (24-word BIP-39, passphrase opt-in, no
+  encrypted-seed); the full command-surface rewrite is deferred to the
+  wallet-rewrite Phase 5/6 cutover when the Rust CLI becomes the shipped
+  binary. **Target: V3.0 (rewrite Phase 6 docs gate,
+  `docs/design/WALLET_REWRITE_PLAN.md`).**
+
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29,
   post–PR #88; economics-trait update 2026-05-31, post–PR #94).** The
   §8.1 critical-path chain is landed on `dev`:
@@ -4152,8 +4203,9 @@ sustainability is unaffected by the recalibration.
   mirroring the JoinMarket audit table. Out of scope for §8 phase-1 by design.
 
 Items captured from the
-[shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
-(2026-04-25) when the `wallet-state-promotion` plan halted at 2k.c
+[shekyl-v3-wallet-rust-rewrite plan](./design/WALLET_REWRITE_PLAN.md)
+(2026-04-25; in-repo continuation of the original Cursor plan) when the
+`wallet-state-promotion` plan halted at 2k.c
 on the basis that further `wallet2.cpp` rewires generate audit
 surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
@@ -4344,7 +4396,9 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
   `wallet-state-promotion` plan's
-  [2l cache rewire](../.cursor/plans/2l-cache-rewire_80a08559.plan.md)
+  2l cache rewire (Cursor plan `2l-cache-rewire_80a08559`, absorbed —
+  see the deferral note in
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md))
   (sub-commits 2l.b, 2l.c, 2l.d, 2l.e), 2m-keys (legacy keys-side
   ser/des deletion), 2m-cache (legacy boost-cache deletion), and 2n
   (transitional `pub use ... as WalletState` alias deletion) are
@@ -4617,7 +4671,7 @@ one place to confirm each item's relationship to the wallet stack.
     re-evaluation regardless). Cross-links: PR 0.4 audit
     [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md);
     PR 0.6 vendor-bump in the rewrite plan
-    [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).**
+    [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md).**
 
 - **`shekyl_difficulty_lwma1_next` FFI shim allocates `Vec<u128>` per
   call.** Surfaced 2026-05-18 (Phase 2 PR
@@ -5238,8 +5292,7 @@ one place to confirm each item's relationship to the wallet stack.
   codebase is cleaner than solving it for the wallet rewrite and
   re-solving it for the daemon. **Re-target: V3.1 / Phase 1 of wallet
   rewrite (was V3.2). Cross-link: rewrite plan
-  [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](
-  ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phase 1 deliverables.**
 
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both

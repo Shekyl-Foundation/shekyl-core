@@ -2,7 +2,8 @@
 
 This document consolidates the Phase 0 audit of `shekyld` (the Shekyl
 daemon) against the prerequisites declared by the
-[V3 wallet Rust rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).
+[V3 wallet Rust rewrite plan](./design/WALLET_REWRITE_PLAN.md) (in-repo
+continuation of the original `shekyl_v3_wallet_rust_rewrite` Cursor plan).
 The plan's later phases assume specific daemon-side capabilities; this
 document records what exists, what does not, and what (if anything)
 must be filed as a separate daemon-side follow-up before the

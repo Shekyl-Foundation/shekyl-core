@@ -1,7 +1,8 @@
 # Monero-oxide vendor status
 
 Audit produced for **PR 0.4** of the `shekyl_v3_wallet_rust_rewrite` plan
-(see `.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md` Phase 0).
+(see [`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
+Phase 0; in-repo continuation of the original Cursor plan).
 Vendor-bump portion executed by **PR 0.6** on the same day; see
 "PR 0.6 vendor-bump execution" below.
 
