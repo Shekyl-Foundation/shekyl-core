@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Tier-1/Tier-2 Known Answer Test fixtures for ADDRESS_DERIVATION_V1.",
+    "Tier-1 pins intermediate derivation steps; Tier-2 pins end-to-end",
+    "account material from generate_account_from_* / rederive_account.",
+    "Regenerate only on a deliberate, documented derivation-version bump:",
+    "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v1 -- --ignored --nocapture",
+    "",
+    "ML-KEM keygen uses fips203 =0.4.3 with the SHA3-ChaCha intermediary",
+    "(see account.rs module doc). Tier-3 BIP-39 wordlist/PBKDF2 vectors",
+    "live in rust/shekyl-crypto-pq/src/bip39.rs tests; Tier-4 KEM derive",
+    "vectors live in KEM_DERIVE_V1_KAT.json (derivation.rs inline KAT)."
+  ],
+  "derivation_version": "v1",
+  "fips203_pin": "=0.4.3",
+  "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v1 -- --ignored --nocapture",
+  "tier1_count": 7,
+  "tier2_count": 5,
+  "vectors_sha256_hex": "a6034de5fbdba419f49c35f074c50b9c1bc28df24372d76e3f836a9eff4b2839"
+}
