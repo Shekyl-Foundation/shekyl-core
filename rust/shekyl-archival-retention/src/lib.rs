@@ -57,8 +57,11 @@ pub use challenge::{
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
 pub use consensus_state::{
-    good_through, market_member_at_epoch, r_market_count, shard_work_milli, sigma_work_milli,
-    BadInterval, ServeCreditRow, FOUNDATION_EXCLUDED_FROM_MARKET,
+    epoch_close_compute, epoch_close_due_at_height, good_through, market_member_at_epoch,
+    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height, shard_age_milli,
+    shard_work_milli, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
+    EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
+    FOUNDATION_EXCLUDED_FROM_MARKET,
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{

@@ -45,5 +45,37 @@
     { "work_milli": 8000, "capped_milli": 6000 },
     { "work_milli": 16000, "capped_milli": 8000 },
     { "work_milli": 32000, "capped_milli": 8000 }
-  ]
+  ],
+  "epoch_close": {
+    "description": "Composed epoch_close_compute replay: membership, R_market counting, held-shard intersection, age weighting, Σwork. Values derived from §3.3/§3.5 by hand: g(age)=1000+age_weight·age/1000; scarcity=floor(1000·g/(R·1000)); curve below first band is identity.",
+    "settlement_epoch": 10,
+    "close_block_height": 110000,
+    "settlement_epoch_blocks": 10000,
+    "age_weight_milli": 500,
+    "bonds": [
+      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [42, 43] },
+      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }], "held_shard_ids": [42] },
+      { "join_epoch": 9, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [43] },
+      { "join_epoch": 0, "complete_tree": true, "bad_intervals": [], "held_shard_ids": [] },
+      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [44] }
+    ],
+    "shards": [
+      { "shard_id": 42, "has_segment": true, "freeze_height": 70000 },
+      { "shard_id": 43, "has_segment": true, "freeze_height": 105000 },
+      { "shard_id": 44, "has_segment": false, "freeze_height": 0 }
+    ],
+    "credit_pairs": [
+      { "bond": 0, "shard": 0 },
+      { "bond": 0, "shard": 1 },
+      { "bond": 1, "shard": 0 },
+      { "bond": 2, "shard": 1 },
+      { "bond": 3, "shard": 0 },
+      { "bond": 4, "shard": 2 },
+      { "bond": 2, "shard": 0 }
+    ],
+    "expected": {
+      "r_market_by_shard": [2, 2, 1],
+      "sigma_work_milli": 3500
+    }
+  }
 }

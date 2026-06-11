@@ -6,8 +6,9 @@
 //! Consensus-state KAT: `R_market`, `Σwork`, determinism (ARCHIVAL_CONSENSUS_STATE.md).
 
 use shekyl_archival_retention::{
-    curve_milli, r_market_count, sigma_work_milli, BadInterval, BandedCurveParams, ServeCreditRow,
-    WORK_MILLI_SCALE,
+    curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
+    BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    ServeCreditRow, WORK_MILLI_SCALE,
 };
 
 const KAT: &str = include_str!("fixtures/consensus_state_kat_v1.json");
@@ -82,6 +83,97 @@ fn consensus_state_kat_v1() {
             assert_eq!(curve_milli(work, &curve), want, "work_milli={work}");
         }
     }
+
+    // Composed epoch-close replay — the exact computation the daemon delegates
+    // through `shekyl_archival_epoch_close_compute`.
+    let ec = &doc["epoch_close"];
+    assert!(
+        !ec.is_null(),
+        "fixture must carry the composed epoch_close section"
+    );
+
+    struct BondOwned {
+        join: u64,
+        complete: bool,
+        bad: Vec<BadInterval>,
+        held: Vec<u64>,
+    }
+    let bonds_owned: Vec<BondOwned> = ec["bonds"]
+        .as_array()
+        .expect("bonds")
+        .iter()
+        .map(|b| BondOwned {
+            join: b["join_epoch"].as_u64().expect("join_epoch"),
+            complete: b["complete_tree"].as_bool().expect("complete_tree"),
+            bad: b["bad_intervals"]
+                .as_array()
+                .expect("bad_intervals")
+                .iter()
+                .map(|iv| BadInterval {
+                    start_epoch: iv["start"].as_u64().expect("start"),
+                    end_exclusive: iv["end_exclusive"].as_u64().expect("end_exclusive"),
+                })
+                .collect(),
+            held: b["held_shard_ids"]
+                .as_array()
+                .expect("held_shard_ids")
+                .iter()
+                .map(|v| v.as_u64().expect("shard id"))
+                .collect(),
+        })
+        .collect();
+    let bonds: Vec<EpochCloseBond<'_>> = bonds_owned
+        .iter()
+        .map(|b| EpochCloseBond {
+            join_settlement_epoch: b.join,
+            is_foundation_complete_tree: b.complete,
+            bad_intervals: &b.bad,
+            held_shard_ids: &b.held,
+        })
+        .collect();
+    let shards: Vec<EpochCloseShard> = ec["shards"]
+        .as_array()
+        .expect("shards")
+        .iter()
+        .map(|s| EpochCloseShard {
+            shard_id: s["shard_id"].as_u64().expect("shard_id"),
+            has_segment: s["has_segment"].as_bool().expect("has_segment"),
+            freeze_height: s["freeze_height"].as_u64().expect("freeze_height"),
+        })
+        .collect();
+    let pairs: Vec<CreditPair> = ec["credit_pairs"]
+        .as_array()
+        .expect("credit_pairs")
+        .iter()
+        .map(|p| CreditPair {
+            bond_idx: usize::try_from(p["bond"].as_u64().expect("bond idx")).unwrap(),
+            shard_idx: usize::try_from(p["shard"].as_u64().expect("shard idx")).unwrap(),
+        })
+        .collect();
+
+    let out = epoch_close_compute(&EpochCloseInputs {
+        settlement_epoch: ec["settlement_epoch"].as_u64().expect("epoch"),
+        close_block_height: ec["close_block_height"].as_u64().expect("close height"),
+        settlement_epoch_blocks: ec["settlement_epoch_blocks"].as_u64().expect("seb"),
+        age_weight_milli: ec["age_weight_milli"].as_u64().expect("age weight"),
+        curve,
+        bonds: &bonds,
+        shards: &shards,
+        credit_pairs: &pairs,
+    })
+    .expect("well-formed fixture indices");
+
+    let want_r: Vec<u64> = ec["expected"]["r_market_by_shard"]
+        .as_array()
+        .expect("r_market_by_shard")
+        .iter()
+        .map(|v| v.as_u64().expect("count"))
+        .collect();
+    let want_sigma = ec["expected"]["sigma_work_milli"]
+        .as_u64()
+        .expect("sigma_work_milli");
+    assert_eq!(out.r_market_by_shard, want_r);
+    assert_eq!(out.sigma_work_milli, want_sigma);
 }
 
 #[test]
