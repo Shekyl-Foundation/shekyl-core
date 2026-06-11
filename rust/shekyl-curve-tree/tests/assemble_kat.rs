@@ -114,10 +114,12 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
             leaf_hash_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
-        client.ingest_block(BlockLeaves {
-            height: blk.height,
-            txs: &txs,
-        });
+        client
+            .ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            })
+            .unwrap();
     }
     client
 }

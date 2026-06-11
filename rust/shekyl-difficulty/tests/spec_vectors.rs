@@ -1,5 +1,5 @@
 //! Integration tests against the §8.1 test corpus of
-//! `docs/design/DAA_LWMA1.md`.
+//! `docs/completed/DAA_LWMA1.md`.
 //!
 //! Each vector here is transcribed from the empirical-confirmation
 //! step in the Phase 0 pre-flight harness

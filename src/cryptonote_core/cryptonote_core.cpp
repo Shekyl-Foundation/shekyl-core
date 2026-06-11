@@ -1836,10 +1836,10 @@ namespace cryptonote
     // for the {5400, 3600, 1800, 1200, 600}-second windows assume
     // SHEKYL_DAA_TARGET_SECONDS == 120. If T ever changes, both the
     // threshold and the expected counts must be re-derived per
-    // docs/design/DAA_LWMA1.md §11, not silently scaled. The regression
+    // docs/completed/DAA_LWMA1.md §11, not silently scaled. The regression
     // test that pins this calibration lives at
     // tests/unit_tests/stall_detection_calibration.cpp; see
-    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
+    // docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
     static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
         "Stall-detection calibration: the 1/7200 false-positive "
         "threshold and the {45, 30, 15, 10, 5} expected-block counts "

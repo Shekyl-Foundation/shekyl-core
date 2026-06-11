@@ -272,8 +272,8 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 ./shekyl-cli --generate-new-wallet /path/to/mywallet
 ```
 
-You will be prompted for a password and a language for your mnemonic seed.
-The wallet generates a 25-word seed phrase -- **write it down on paper
+You will be prompted for a password. The wallet generates a 24-word
+BIP-39 seed phrase (English wordlist) -- **write it down on paper
 immediately**. This seed is the only way to recover your funds if your
 wallet file is lost.
 
@@ -288,7 +288,8 @@ Your wallet is automatically a V3 wallet with full post-quantum key material
     --restore-height 100000
 ```
 
-You will be prompted to enter your 25 words. The `--restore-height` flag
+You will be prompted to enter your 24 BIP-39 words (and your passphrase,
+if you opted in to one at creation). The `--restore-height` flag
 tells the wallet to skip scanning blocks before that height, which is much
 faster. If you don't know the exact height, use `--restore-date 2026-03-15`
 to estimate it.
@@ -894,8 +895,8 @@ All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 
 ### Your mnemonic seed
 
-Your 25-word seed phrase is the **only** way to recover your wallet.
-No company, no foundation, no developer can recover it for you.
+Your 24-word BIP-39 seed phrase is the **only** way to recover your
+wallet. No company, no foundation, no developer can recover it for you.
 
 To display it inside the wallet:
 
@@ -903,11 +904,10 @@ To display it inside the wallet:
 [wallet]: seed
 ```
 
-For an encrypted version (requires the wallet password to decode):
-
-```
-[wallet]: encrypted_seed
-```
+If you opted in to a BIP-39 passphrase at creation time, the seed words
+alone are not sufficient -- you must also retain the passphrase. There
+is no on-device "encrypted seed" variant; the passphrase is never
+stored.
 
 **Write your seed on paper. Store it offline. Never share it.**
 
@@ -1152,7 +1152,7 @@ Behavior changes to be aware of when upgrading:
 | **Hybrid signature** | Two signatures on every transaction: Ed25519 (classical) and ML-DSA-65 (quantum-resistant). |
 | **Key images** | Cryptographic markers that prevent double-spending. Exported from full wallets to track spends in view-only wallets. |
 | **KDF rounds** | Key derivation function iterations; higher values make wallet password brute-forcing harder. |
-| **Mnemonic seed** | The 25 words that fully restore your wallet. Treat as a master password you can never change. |
+| **Mnemonic seed** | The 24 BIP-39 words that fully restore your wallet (plus your passphrase, if you opted in to one). Treat as a master password you can never change. |
 | **ML-DSA-65** | A quantum-resistant signature algorithm standardized by NIST (FIPS 204). |
 | **Privacy** | FCMP++ proofs, stealth addresses, and per-output PQC keys (hybrid X25519 + ML-KEM-768) hide who sends, who receives, and how much. Automatic. |
 | **Pruning** | Removing old prunable transaction data to reduce storage. The node can still verify new blocks. |

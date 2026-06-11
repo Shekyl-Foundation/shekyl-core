@@ -11,7 +11,7 @@
 //! `#![deny(unsafe_code)]` crate that holds the LWMA-1 logic); this
 //! module is the `unsafe` boundary that translates raw pointers and
 //! decomposed `u128` halves into the safe-Rust slice/`u128` API per
-//! `docs/design/DAA_LWMA1.md` §6.1.
+//! `docs/completed/DAA_LWMA1.md` §6.1.
 //!
 //! # `ShekylU128` ABI
 //!

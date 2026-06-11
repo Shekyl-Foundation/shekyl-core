@@ -36,7 +36,7 @@ PR description will reuse verbatim.
   defines the four-criterion test. LWMA-1 Phase 4 is the rule's
   first invocation per its "Approved invocations" section.
 - **CI invariant pattern.**
-  [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §7.1 (symbol
+  [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §7.1 (symbol
   isolation) and §7.2 (no-C-ABI in verifier crate) are the shape
   the Phase 4 invariants 8/9/10 (per plan) mirror. RandomX v2
   Phase 2f has not landed; Phase 4 creates the workflow file

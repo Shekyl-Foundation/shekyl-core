@@ -4108,4 +4108,94 @@ makes the dispatcher question disappear rather than get bridged.
 
 ---
 
+## 2026-06-10 — Key & signature stabilization: the frozen v1 seed→address pipeline (retroactive anchor)
+
+**Decision.** The full seed → address derivation pipeline is frozen as
+**v1** and is a pure function of `(seed input, network, seed format)`.
+Landed 2026-04-22 (`f46ddaf56`, "land v1 account-derivation Rust
+foundation + FFI surface") from the `stabilize_key_signature_15d8e48a`
+plan; this entry is the retroactive decision-log anchor so the binding
+surface survives the plan document. The frozen surface:
+
+- **Per-network seed policy.** Mainnet/stagenet: BIP-39 24-word English
+  mnemonic (NFKD-normalized PBKDF2-HMAC-SHA512 @ 2048 iterations →
+  64 bytes), passphrase **opt-in only** (defaults to empty, never
+  stored). Testnet/fakechain: raw 32-byte seed, no mnemonic printed.
+  Network-inappropriate seed flags are rejected at argument parse.
+- **Normalization.** `master_seed_64 = HKDF-SHA-512(salt =
+  "shekyl-seed-normalize-v1", ikm = seed-input output, L = 64)`.
+  `master_seed_64` is format-independent on disk and is the **only**
+  secret the wallet file persists (`docs/WALLET_FILE_FORMAT_V1.md`).
+- **Sub-derivations.** HKDF-SHA-512 with salt
+  `"shekyl-master-derive-v1-<network>-<format>"` and info strings
+  `shekyl-ed25519-spend` / `shekyl-ed25519-view` / `shekyl-ml-kem-768`,
+  each expanded to **64 bytes**.
+- **Scalar construction.** Ed25519 secrets via
+  `Scalar::from_bytes_mod_order_wide` (wide reduce, uniform
+  distribution), **unclamped**. RFC 7748 clamping is banned repo-wide
+  (`36-secret-locality.mdc`; `scripts/lint_cpp_clamp_ban.sh`); the view
+  scalar is reused as the Montgomery scalar at ECDH sites
+  (`docs/POST_QUANTUM_CRYPTOGRAPHY.md` "DH Semantics").
+- **Deterministic ML-KEM-768 keygen.** `chacha_seed =
+  SHA3-256("shekyl-mlkem-chacha-seed" || d_z)` →
+  `ChaCha20Rng::from_seed` → `ml_kem_768::KG::try_keygen_with_rng`. The
+  SHA3→ChaCha intermediary commits all 64 bytes of `d_z` and exists only
+  because `fips203 = "=0.4.3"` does not expose FIPS 203 §7.1
+  `KeyGen_internal(d, z)`; when upstream lands it, the swap shifts no
+  consumer-visible bytes (tracked in `docs/FOLLOWUPS.md`).
+- **Single source of truth.** `rust/shekyl-crypto-pq/src/account.rs`.
+  C++ receives derived material exclusively over FFI
+  (`shekyl_account_rederive`, `shekyl_kem_keypair_from_master_seed`,
+  the BIP-39 surface); no C++ site hashes, reduces, slices, or
+  transforms secret bytes ("Rust owns secrets",
+  `36-secret-locality.mdc`).
+- **Wallet-open contract.** Every open rederives the keypair set from
+  `master_seed_64` and verifies the recomputed classical address against
+  the AAD-bound expected-address bytes; the six wallet-open failure
+  modes are distinct typed errors (`docs/WALLET_FILE_FORMAT_V1.md`).
+
+**Rationale.** Pre-freeze, address generation was
+non-deterministic across restores (ML-KEM keypairs were generated with
+ambient randomness and persisted, so seed-only restore could not
+reproduce the address), derivation logic was split across C++ and Rust,
+and 32-byte `from_bytes_mod_order` carried a (negligible but
+audit-visible) distribution bias. Genesis address regeneration was
+blocked on exactly this freeze. Determinism + single-source-of-truth +
+network/format domain separation close all three, and the KAT tiers pin
+the bytes (Tier-1/2 derivation vectors inline in `account.rs`, Tier-3
+BIP-39 official vectors in `bip39.rs`, Tier-4
+`docs/test_vectors/KEM_DERIVE_V1_KAT.json` + `WALLET_FILE_FORMAT_V1/`).
+
+**Alternatives rejected.** (a) *Electrum 25-word seeds* — removed
+wholesale (`docs/completed/ELECTRUM_WORDS_REMOVAL.md`); BIP-39 is the
+only mnemonic format. (b) *32-byte HKDF expansions with
+`from_bytes_mod_order`* — rejected for the distribution-bias caveat; 64
+bytes + wide reduce is frozen. (c) *RFC 7748 clamping* — rejected;
+already-reduced Ed25519 scalars would be mutated by clamping, and the
+small-subgroup concern clamping addresses is handled structurally
+(`POST_QUANTUM_CRYPTOGRAPHY.md` "DH Semantics"). (d) *Persisting derived
+per-output or account PQC secrets* — rejected per
+`16-architectural-inheritance.mdc`; everything rederives from
+`master_seed_64`.
+
+**Residues (tracked, not blocking the freeze).** Three hardening
+accessories from the plan's acceptance criteria are open in
+`docs/FOLLOWUPS.md` (V3.0 queue, filed 2026-06-10): the dedicated
+CODEOWNERS-protected `ADDRESS_DERIVATION_V1` KAT corpus (vectors
+currently live inline in `account.rs`, outside the
+`docs/test_vectors/**` protection), CI wiring for
+`scripts/lint_cpp_clamp_ban.sh`, and the
+`ADDRESS_DERIVATION_MANIFEST_HASH` freeze tripwire
+(`docs/MID_REWIRE_HARDENING.md`). The pipeline bytes themselves are
+frozen as of this entry; those items harden the freeze's enforcement,
+not its definition.
+
+**Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
+(authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;
+`docs/design/WALLET_REWRITE_PLAN.md` §"Key signature";
+`.cursor/rules/36-secret-locality.mdc`; plan of record
+`stabilize_key_signature_15d8e48a` (Cursor plan, decisions merged here).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

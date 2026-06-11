@@ -34,7 +34,7 @@ KEYS_INTEGER = {
     "fcmp_reference_block_min_age": "u64",
     "fcmp_reference_block_max_age": "u64",
     "rct_type_fcmp_plus_plus_pqc": "u8",
-    # LWMA-1 difficulty adjustment, docs/design/DAA_LWMA1.md §4.
+    # LWMA-1 difficulty adjustment, docs/completed/DAA_LWMA1.md §4.
     # All u64 so the generated header has uniform `UINT64_C(...)`
     # emission shape across the DAA window-shape constants. C++
     # consumers (Phase 4) cast at the call site where a narrower
@@ -146,14 +146,14 @@ def main() -> int:
 #define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
     {emit("rct_type_fcmp_plus_plus_pqc")}
 
-// LWMA-1 difficulty adjustment parameters per docs/design/DAA_LWMA1.md
+// LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md
 // §4. Generated alongside the FCMP/RCT constants because both subsets
 // share the cross-language-drift threat model (Bug 3 of the 2026-05-05
 // audit). The Rust mirror lives in rust/shekyl-difficulty's build.rs;
 // the Phase 4 C++ cutover replaces inherited `DIFFICULTY_TARGET_V2`,
 // `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`, and
 // `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` with the symbols below per
-// docs/design/DAA_LWMA1_PLAN.md Phase 4. Until Phase 4 lands, these
+// docs/completed/DAA_LWMA1_PLAN.md Phase 4. Until Phase 4 lands, these
 // macros are emitted but have no C++ consumer.
 #define SHEKYL_DAA_WINDOW_N \
     {emit("daa_window_n")}

@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-difficulty"
-description = "LWMA-1 difficulty adjustment for Shekyl (docs/design/DAA_LWMA1.md)"
+description = "LWMA-1 difficulty adjustment for Shekyl (docs/completed/DAA_LWMA1.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

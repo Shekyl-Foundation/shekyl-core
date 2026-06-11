@@ -227,7 +227,7 @@ namespace tools
   class wallet_keys_unlocker;
 
   // Forward declarations for the Phase-1 BIP-39 restore-from-phrase
-  // access surface per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1.
+  // access surface per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1.
   // `wallet_args_options` (defined in `wallet2.cpp`'s `namespace tools`
   // body) and `generate_from_json` (likewise defined in `wallet2.cpp`)
   // are forward-declared here so the friend declaration inside
@@ -1044,7 +1044,7 @@ namespace tools
      * which is populated when the wallet was created via the BIP-39
      * JSON-restore-from-phrase path (the orchestration block inlined
      * into `tools::generate_from_json` per
-     * `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1) and unset for
+     * `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1) and unset for
      * wallets created via the raw-seed / restore-from-keys / device
      * paths per §4.10 "The field is not set during".
      *
@@ -1790,7 +1790,7 @@ namespace tools
     // `load_keys` for the encrypted-blob ser/de path). The phrase itself
     // is never persisted in long-lived state; `query_key("mnemonic")`
     // regenerates it on demand via `shekyl_bip39_mnemonic_from_entropy`.
-    // See `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the entropy-
+    // See `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the entropy-
     // persistence rationale and the `m_bip39_entropy` field-shape
     // disposition (32-byte fixed-length scrubbed array under mlock; the
     // canonical source-of-truth for the wallet's BIP-39 phrase), and

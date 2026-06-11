@@ -306,7 +306,7 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
 
     if (!validate_wallet_path(wallet_path, w))
         return w->last_error_code;
-    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // Phase 1 hard-error per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
     // §4.3: the `language` parameter is meaningless under BIP-39
     // (the wordlist is English-only and selected by the protocol,
     // not by the caller). The parameter is preserved at this Phase
@@ -482,7 +482,7 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "address is required");
         return nullptr;
     }
-    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // Phase 1 hard-error per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
     // §4.3: the `language` parameter is meaningless under BIP-39
     // (English-only wordlist; protocol-selected). Empty / nullptr /
     // zero-length is the only accepted value. Phase 3 drops the
@@ -652,7 +652,7 @@ char* wallet2_ffi_query_key(wallet2_handle* w, const char* key_type)
         std::string key_value;
 
         if (strcmp(key_type, "mnemonic") == 0) {
-            // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+            // Phase 1 rewire per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
             // §4.5: the dispatch reads the persisted 32-byte BIP-39
             // entropy via `wallet2::bip39_entropy()` and calls
             // `shekyl_bip39_mnemonic_from_entropy` directly. The

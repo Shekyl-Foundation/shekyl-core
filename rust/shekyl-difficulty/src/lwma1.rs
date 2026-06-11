@@ -1,6 +1,6 @@
 //! LWMA-1 next-difficulty computation.
 //!
-//! Direct, verbatim transcription of `docs/design/DAA_LWMA1.md` §5.3
+//! Direct, verbatim transcription of `docs/completed/DAA_LWMA1.md` §5.3
 //! into safe Rust. Every step is annotated with the spec step number;
 //! audit reviews should be able to read `§5.3 step 1..=9` against the
 //! body of [`lwma1_next`] line-for-line.
@@ -28,7 +28,7 @@ use crate::consts::{GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS};
 use crate::error::Error;
 
 /// LWMA-1 next-difficulty computation per
-/// `docs/design/DAA_LWMA1.md` §5.3.
+/// `docs/completed/DAA_LWMA1.md` §5.3.
 ///
 /// # Inputs
 ///

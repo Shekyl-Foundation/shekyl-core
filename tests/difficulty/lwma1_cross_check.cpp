@@ -7,7 +7,7 @@
 /// @brief Cross-language byte-equality harness for the LWMA-1 difficulty
 ///        algorithm.
 ///
-/// Iterates the §8.1 test corpus of `docs/design/DAA_LWMA1.md` and asserts
+/// Iterates the §8.1 test corpus of `docs/completed/DAA_LWMA1.md` and asserts
 /// the documented cross-implementation relations between:
 ///
 ///  - The canonical zawy12 LWMA-1 reference (MIT-licensed, vendored as
@@ -22,7 +22,7 @@
 ///    (`rust/shekyl-ffi/src/difficulty_ffi.rs`, wrapping
 ///    `rust/shekyl-difficulty/src/lwma1.rs`).
 ///
-/// Per-vector expectations follow `docs/design/DAA_LWMA1.md` §3 and §8.1:
+/// Per-vector expectations follow `docs/completed/DAA_LWMA1.md` §3 and §8.1:
 ///
 ///  - Monotonic-timestamp vectors (1-5): canonical ≡ hybrid ≡ Rust
 ///    (byte-equal).

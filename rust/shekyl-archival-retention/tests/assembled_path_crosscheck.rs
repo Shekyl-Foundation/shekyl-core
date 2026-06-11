@@ -105,10 +105,12 @@ fn assembled_path_verifies_as_segment_opening() {
             leaf_hash_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
-        client.ingest_block(BlockLeaves {
-            height: blk.height,
-            txs: &txs,
-        });
+        client
+            .ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            })
+            .unwrap();
     }
 
     let tip = blocks.last().expect("non-empty chain");

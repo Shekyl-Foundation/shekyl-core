@@ -1051,7 +1051,7 @@ fn alloc_zeroed_scratchpad() -> Box<[u8]> {
     // is a valid value (every `u8` from 0 to 255 is well-defined; 0 is
     // trivially in-range). `Box::new_zeroed_slice(len)` allocates `len`
     // contiguous `MaybeUninit<u8>` cells and zero-initializes them per its
-    // stabilized contract (Rust 1.82+; current MSRV 1.85), so converting
+    // stabilized contract (Rust 1.92+; workspace MSRV 1.94), so converting
     // `Box<[MaybeUninit<u8>]>` to `Box<[u8]>` via `assume_init` is sound
     // because every byte is a valid `u8` value. The length invariant
     // (`RANDOMX_SCRATCHPAD_L3` cells) is checked at the caller via the

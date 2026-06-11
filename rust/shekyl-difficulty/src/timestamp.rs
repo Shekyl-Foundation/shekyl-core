@@ -1,5 +1,5 @@
 //! Coupled timestamp validation predicates per
-//! `docs/design/DAA_LWMA1.md` §5.5.
+//! `docs/completed/DAA_LWMA1.md` §5.5.
 //!
 //! These are predicates rather than value-producing transforms — per
 //! §2.5, they live in `shekyl-difficulty` because the FTL and MTP

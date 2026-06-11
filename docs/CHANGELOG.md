@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace MSRV 1.88 → 1.94; CT-1 `redb` 2.6.3 → 4.1.0.**
+  Intentional 1.94.0 pin for RandomX PoW + CT-1 `redb` 4.1.0 (rustc ≥
+  1.89), aligned with `shekyl-gui-wallet` `rust-toolchain.toml`.
+  `shekyl-pow-randomx` uses `Box::new_zeroed_slice` (stable 1.92.0). CI adds
+  `rust-msrv-gate` (`dtolnay/rust-toolchain@1.94.0` +
+  `cargo check --workspace`). Pre-genesis greenfield: redb v3 format only.
+
 ### Added
 
 - **engine: Phase 1 orchestrator closeout.** The
@@ -52,6 +61,66 @@
   (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls it after
   `mlog_configure`. State-machine integration test plus C-harness coverage
   in `shekyl-logging`.
+
+- **curve-tree: CT-1 LeafStore on redb (Round 1).**
+  `LeafStore` persists drained leaves and frozen segment metadata (`R_k`,
+  `end_block_height`) in redb; height-gated segment freeze, ACID reorg
+  truncate, pin/prune seam, and `mixed_composition_root` hot path with
+  full-rebuild fallback. `CurveTreeClient` mirrors drained leaves on ingest.
+  Tier-A `store_kat`, `upper_layers_kat`, and unchanged `recon_kat` /
+  `assemble_kat`. Pins: `CT1_ROUND1_PINS.md`, close-out
+  `CT1_ROUND1_CLOSEOUT.md`.
+
+  Robustness sweep (`CT1_ROUND1_CLOSEOUT.md` §5): `root_at` /
+  `verify_root` / `assemble_path` are `&self` queries bounded by the
+  ingested chain tip (`ClientError::ReferenceBeyondIngestedTip`); the
+  ahead-of-ingest store catch-up machinery is deleted, making the drained
+  mirror append-only by construction and the freeze clock drivable only by
+  ingested heights. `append_drained` rejects non-canonical Selene scalars
+  at write time (`StoreError::InvalidLeafBytes`); store bounds checks read
+  `META_LEAF_COUNT` inside the operating transaction (single-snapshot, no
+  check/use gap).
+
+- **docs: 2026-06-10 doc sweep — key-signature freeze anchored, completed
+  archive consolidated, stale references repaired.**
+  Retroactive decision-log entry for the frozen v1 seed→address pipeline
+  (`V3_WALLET_DECISION_LOG.md`, from Cursor plan
+  `stabilize_key_signature_15d8e48a`; landed 2026-04-22, `f46ddaf56`).
+  `FCMP_PLUS_PLUS.md` "Wallet Restore from Seed" rewritten against the
+  landed pipeline (old 32-byte HKDF diagram and `transfer_details`
+  stored-secret restore copy removed); `USER_GUIDE.md` seed copy fixed to
+  24-word BIP-39 + opt-in passphrase (Electrum Phase-6 residue).
+  `ATOMIC_UNITS_NEWTYPE.md` and `PRIMARY_CLAIM_DERIVATION_RENAME.md`
+  archived to `docs/completed/`; the 104 references broken by the earlier
+  DAA/Electrum moves to `docs/completed/` repaired repo-wide (source
+  comments, CI workflow headers, consensus-constants JSON, workspace
+  rules, docs). Four FOLLOWUPS V3.0 items filed: dedicated
+  `ADDRESS_DERIVATION_V1` KAT corpus, `lint_cpp_clamp_ban.sh` CI wiring,
+  `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire, USER_GUIDE Rust-CLI
+  realignment. CODEOWNERS freeze-spec path fixed to
+  `WALLET_FILE_FORMAT_V1.md`; machine-local `.cursor/plans/` links in
+  active docs repointed to in-repo continuations.
+
+- **docs: FOLLOWUPS realigned to the Phase 2b retool; two fired
+  deferral triggers re-dispositioned.** The Decision-3C staking-subtree
+  entry is superseded (3C / `h_bind` / 5-scalar leaf are docs-only per
+  `PHASE_2B_STAKE_LIFECYCLE.md` §2.4; entitlement stack is a deletion
+  target), with its claim-nullifier backstop note retired alongside
+  (dedup is now the per-`P` claimed-epoch bitmap). `AtomicUnits::mul_div_rem`'s
+  reopening criterion re-anchored from `entitlement.rs` to the rebased
+  reward-emission arithmetic (PR #123 surface); the confidential
+  stake-UTXO transfer entry re-anchored to the bond model. Freshness:
+  FA-2 (#112) / FA-8 (#113) marked merged (2026-06-08); Stage 3
+  blocks-on updated (Stage 2 merged; subaddress round resolved; Phase 2b
+  gate list cited); Phase 2b planning-session entry gains a status note
+  (claim-centric FSM scope superseded by the retool). Per
+  `21-reversion-clause-discipline.mdc`, the two "pre Stage 1 PR 4
+  kickoff" items whose triggers fired are re-dispositioned:
+  `wallet2_ffi_create_wallet` / `on_create_wallet` cleanup is superseded
+  by the Phase 5 wholesale deletion (reopens on new consumers or Phase 5
+  slipping past stressnet), and the `epee::wipeable_string` mlock
+  residual is committed as documented-not-mitigated until Phase 5 under
+  the same named reopening criteria.
 
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`

@@ -83,8 +83,8 @@
 // `SHEKYL_DAA_MTP_WINDOW`). The inherited CryptoNote `DIFFICULTY_*`
 // `#define`s (V1/V2 targets, WINDOW/LAG/CUT/BLOCKS_COUNT, the
 // V1 BLOCKS_ESTIMATE_TIMESPAN alias) were deleted in Phase 4 of the
-// LWMA-1 migration; see `docs/design/DAA_LWMA1.md` §9.2 and the
-// `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
+// LWMA-1 migration; see `docs/completed/DAA_LWMA1.md` §9.2 and the
+// `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
 
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   SHEKYL_DAA_TARGET_SECONDS * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
