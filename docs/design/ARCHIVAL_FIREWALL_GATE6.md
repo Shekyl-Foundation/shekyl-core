@@ -175,6 +175,20 @@ join-Market (gate 4) is the **only** consensus-checked funding obligation on `P`
 funding minimum or ramp shape is therefore **this layer's policy alone**, owned here
 end-to-end; nothing upstream constrains it.
 
+**Policy pin (2026-06-11): no funding minimum, at any layer.** The wallet imposes **no
+minimum** on principal→`P` transfers. Rationale, by surface: *consensus* — admission
+amounts do no consensus work (gate 7); *Sybil pricing* — market identities are priced
+by `bond_floor × shards` at join-Market, not by `P`'s balance; *economics* — the
+gate-7 sim showed admission-side locks macro-immaterial at every tested magnitude;
+*privacy* — stake-in amounts are confidential (ordinary FCMP++ transfer), so a
+prescribed minimum is unobservable on-chain and does no firewall work — this layer's
+real threats are funding **shape and timing** (lump-vs-ramp, join-Market adjacency),
+which a minimum does not address. A floor with no load-bearing surface is optionality
+debt. **Reversion (rule 21):** reopen iff a named gate-6 threat or V3.x consensus
+change makes an amount floor load-bearing (e.g., a future emission rule that reads
+`P`-balance, or a demonstrated dust-funding attack on wallet scan performance);
+re-evaluation is a §2.5 round with the threat named, not a reflex re-derivation.
+
 **Open disposition (joint with gate 4 join-Market):** **fund-from-earnings ramp** vs lump
 initial bond vs mixed — wallet hygiene spec, not consensus rule. Consensus sees bond
 sufficiency at join-Market; **how** `P` acquired collateral and **when** join-Market

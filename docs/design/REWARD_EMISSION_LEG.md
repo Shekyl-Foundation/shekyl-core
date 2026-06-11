@@ -656,10 +656,11 @@ verify rule.
 **Resolved 2026-06-11 (§10.2):** gate 7 closed close-condition (iii) **bonds-only**, so
 the optional amount proof this section held open is **deleted, not gated**: no
 `admission_proof` vin field (§5.3), no `ADMISSION_MIN` branch in `backing_ok` (§7.2), no
-admission-threshold verify step (§7.1). `ADMISSION_MIN_ATOMIC` has **no consensus role**;
-a funding minimum survives only as **gate-6 §2.5 bond-funding hygiene policy** (wallet
-side, non-consensus). Reinstatement requires the gate-7 reversion clause
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7) to fire.
+admission-threshold verify step (§7.1). `ADMISSION_MIN_ATOMIC` has **no consensus role**,
+and gate-6 §2.5 pins **no wallet-policy minimum either** — there is no funding minimum
+at any layer. Reinstatement requires the gate-7 reversion clause
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7) or the gate-6 §2.5
+reversion clause to fire.
 
 **Wallet FSM implication:** Stage 3 manages **ordinary-transfer funding** of `P`, not
 `C_stake` openings or claim-pending state. See §11.
@@ -741,8 +742,8 @@ indeterminate criterion resolves **bonds-only**. Consequences executed in this s
 - `admission_proof` removed from the vin (§5.3) and the verify order (§7.1).
 - `backing_ok` loses the `Σ amount ≥ ADMISSION_MIN_ATOMIC` conjunct (§7.2).
 - §7.4's optional amount proof is deleted, not gated.
-- `ADMISSION_MIN_ATOMIC` is **not a consensus constant**; a funding minimum survives
-  only as gate-6 §2.5 bond-funding hygiene policy (wallet-side).
+- `ADMISSION_MIN_ATOMIC` is **not a consensus constant**; gate-6 §2.5 additionally
+  pins **no wallet-policy minimum** (no funding minimum at any layer).
 
 **Reversion:** reopen only per the gate-7 reversion clause (bond floor / shard geometry
 re-pinned ≥ 3 OOM upward combined, or a new archival lock class lands); re-evaluation is
@@ -758,9 +759,9 @@ Not consensus — orients Stage 3 (Layer 3 FSM retool):
 rescan, `C_stake` admission openings.
 
 **Add:** `P` lifecycle (HKDF derivation, multi-`P` hygiene), **ordinary-transfer
-funding** of `P` (no consensus minimum; gate-6 §2.5 hygiene policy governs amounts),
-off-chain announce-before-anchor, reward reception (loud amounts), bond post/slash
-reaction.
+funding** of `P` (no minimum at any layer — gate-6 §2.5 pin; funding shape/timing
+hygiene still applies), off-chain announce-before-anchor, reward reception (loud
+amounts), bond post/slash reaction.
 
 1. Gate 6: announce `P` + present backing off-chain; ensure recognized before first emission.
 2. Wait until settlement epoch `E` closes (or batch unclaimed `E…`); apply §4.5 accumulator rule.

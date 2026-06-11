@@ -609,7 +609,8 @@ so both applicable readings converge on bonds-only.)
 **Disposition — gate 7 closes; §2.4 close-condition (iii) resolves bonds-only.**
 Admission principal is demonstrably **not** load-bearing for locked supply: emission verify
 drops the `admission_proof` branch (emission §10.2), `ADMISSION_MIN_ATOMIC` loses its
-consensus role, and `MIN` survives only as gate-6 §2.5 funding-hygiene policy. The
+consensus role, and gate-6 §2.5 subsequently pinned **no wallet-policy minimum either**
+(no funding minimum at any layer; shape/timing hygiene only). The
 cross-doc spec edits (emission §10.2 + `admission_proof`/§7.4 deletion,
 `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + staking-form admission row, gate-6 §2.5
 sole-owner note, `V3_STAKER_ARCHIVAL.md` admission bullet) **landed 2026-06-11 on

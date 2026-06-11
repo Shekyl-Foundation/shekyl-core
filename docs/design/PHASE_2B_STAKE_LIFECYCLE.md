@@ -120,8 +120,9 @@ ledger G7) derived the bond-locked sole sink and showed it macro-immaterial
 (`lock/circ ≤ 10⁻⁴` in every arm; burn servo / release factor / net inflation
 insensitive to both admission arms at every `N_P`). Admission has **no consensus
 role**: no `ADMISSION_MIN_ATOMIC` constant, no `admission_proof`, no threshold verify
-step ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.2). A funding minimum
-survives only as gate-6 §2.5 wallet hygiene. Reopen per the G7 reversion clause only.
+step ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.2). Gate-6 §2.5 pins **no
+wallet-policy minimum either** — no funding minimum at any layer. Reopen per the G7 /
+gate-6 §2.5 reversion clauses only.
 
 **Bond-funding firewall (residual):** bond is now `P`'s central collateral; lump
 principal→`P` bond funding is a correlation channel — weigh **fund-from-earnings
@@ -520,8 +521,8 @@ where not superseded below.
 **Principal (§2.4 — admission wire closed bonds-only, 2026-06-11):**
 
 - Stake-in: principal → **`P`** stealth outputs on **main tree** (ordinary FCMP++
-  transfer); **no consensus minimum** (gate 7 closed bonds-only — emission §10.2);
-  funding amounts governed by gate-6 §2.5 hygiene policy only.
+  transfer); **no minimum at any layer** (gate 7 closed bonds-only — emission §10.2;
+  gate-6 §2.5 no-minimum policy pin); funding shape/timing hygiene per gate-6 §2.5.
 - Unstake: `P` drains to principal via **decorrelated** FCMP++ spends (SAL key images
   at terminal leg only).
 

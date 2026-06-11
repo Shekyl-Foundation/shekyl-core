@@ -16,7 +16,11 @@
   any funding minimum (wallet hygiene, non-consensus);
   `V3_STAKER_ARCHIVAL.md` admission bullet updated. `ADMISSION_MIN_ATOMIC` is
   **not a consensus constant**; reinstatement only via the G7 reversion
-  clause (`STAKER_ARCHIVAL_SIM.md` ledger).
+  clause (`STAKER_ARCHIVAL_SIM.md` ledger). Follow-up pin (same day,
+  maintainer direction): gate-6 §2.5 pins **no wallet-policy minimum
+  either** — no funding minimum at any layer (consensus, economics, Sybil
+  pricing, and privacy surfaces each examined; none is load-bearing on an
+  amount floor; reversion clause names the reopening threats).
 
 - **economics-sim: gate-7 locked-supply re-pricing built and run — §2.4 (iii)
   resolves bonds-only (2026-06-11).** Iteration 5 per the
