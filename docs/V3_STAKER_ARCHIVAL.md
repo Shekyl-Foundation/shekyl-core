@@ -755,9 +755,12 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
 
 - **`P` is an independent keypair, HKDF-derived from the wallet seed** — not an
   algebraic offset of the principal key; dual scan (principal + `P`).
-- **Admission principal (optional economics):** soft transfer of `≥ ADMISSION_MIN` to
-  `P` on the main tree — **not** consensus unspent enforcement; Decision **3C**
-  staking subtree is **not** shipped for genesis.
+- **Admission funding (no consensus role — gate 7 closed bonds-only 2026-06-11):**
+  ordinary transfer to `P` on the main tree with **no consensus minimum**
+  ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §10.2;
+  [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) ledger G7); funding
+  amounts are gate-6 §2.5 wallet hygiene only. Decision **3C** staking subtree is
+  **not** shipped for genesis.
 - **Off-chain backing before first reward:** `P` must be a known, serving, backed
   archiver **before** earning — peers present/observe backing off-chain; otherwise
   spam or ignored challenges. The **first on-chain reward emission** anchors bond

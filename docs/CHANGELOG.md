@@ -4,6 +4,20 @@
 
 ### Added
 
+- **archival: gate-7 bonds-only disposition executed across specs (2026-06-11).**
+  Cross-document spec edits landing PHASE_2B §2.4 close-condition (iii) on
+  maintainer sign-off: `REWARD_EMISSION_LEG.md` deletes the admission branch
+  (no `admission_proof` vin field §5.3, no admission-threshold verify step
+  §7.1, `backing_ok` loses the `Σ ≥ ADMISSION_MIN_ATOMIC` conjunct §7.2, §7.4
+  amount proof deleted-not-gated, §10.2 records the closure + reversion
+  pointer); `PHASE_2B_STAKE_LIFECYCLE.md` closes §2.4 (iii), the staking-form
+  admission row, the §2.3 principal wire, and the reward-leg threshold-proof
+  bill item; `ARCHIVAL_FIREWALL_GATE6.md` §2.5 becomes the **sole owner** of
+  any funding minimum (wallet hygiene, non-consensus);
+  `V3_STAKER_ARCHIVAL.md` admission bullet updated. `ADMISSION_MIN_ATOMIC` is
+  **not a consensus constant**; reinstatement only via the G7 reversion
+  clause (`STAKER_ARCHIVAL_SIM.md` ledger).
+
 - **economics-sim: gate-7 locked-supply re-pricing built and run — §2.4 (iii)
   resolves bonds-only (2026-06-11).** Iteration 5 per the
   `STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope: `ArchivalLockModel` in
@@ -17,8 +31,8 @@
   Result: derived lock collapses to `bond_floor × R × shards(t)` at
   `lock/circ ≤ 10⁻⁴` in every arm; all three macro gauges insensitive to
   both arms at every `N_P` → the pre-named indeterminate criterion resolves
-  **bonds-only** (gate-7 ledger row G7; cross-doc spec edits pending
-  maintainer sign-off). Corollary FOLLOWUP (V3.1): the `(1 + stake_ratio)`
+  **bonds-only** (gate-7 ledger row G7; cross-doc spec edits landed same day —
+  see entry above). Corollary FOLLOWUP (V3.1): the `(1 + stake_ratio)`
   factor in `calc_burn_pct` is effectively inert in V3.
 
 - **archival: 2B design dispositions — bond-duration shape, `ClaimedEpochSet`

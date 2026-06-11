@@ -107,17 +107,21 @@ challenge or get spammed). First on-chain reward emission **anchors** bond +
 claimed-epoch state; it does not replace prior peer-visible backing.
 
 **Soft admission + intra-epoch window:** between settlement-epoch emissions (~14
-days at default cadence), backing is not re-verified on-chain; `P` may spend
-admission principal after a payout and serve **unbacked** until the next emission.
+days at default cadence), backing is not re-verified on-chain; `P` may spend its
+funding outputs after a payout and serve **unbacked** until the next emission.
 This is acceptable **only because the bond** enforces honesty in that window —
-challenge failure slashes bond regardless of admission state. **Bond, not
+challenge failure slashes bond regardless of `P`'s UTXO state. **Bond, not
 stake-tree, is the maintained anchor.**
 
-**Admission principal — gate 7 reopen:** dropping or softening the admission lock is
-not a footnote ("monetary sink weakens") — it **re-prices** the V3 economy when
-bond-locked supply becomes the **sole** locked-supply sink. Flag explicitly to
-[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) iteration 5 / gate 7 at the
-same severity as per-reward aggregate sizing.
+**Admission principal — gate 7 RESOLVED bonds-only (2026-06-11):** the re-pricing was
+run at full severity, not waved through — iteration 5
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Gate 7 iteration-5 — results*,
+ledger G7) derived the bond-locked sole sink and showed it macro-immaterial
+(`lock/circ ≤ 10⁻⁴` in every arm; burn servo / release factor / net inflation
+insensitive to both admission arms at every `N_P`). Admission has **no consensus
+role**: no `ADMISSION_MIN_ATOMIC` constant, no `admission_proof`, no threshold verify
+step ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.2). A funding minimum
+survives only as gate-6 §2.5 wallet hygiene. Reopen per the G7 reversion clause only.
 
 **Bond-funding firewall (residual):** bond is now `P`'s central collateral; lump
 principal→`P` bond funding is a correlation channel — weigh **fund-from-earnings
@@ -128,14 +132,14 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 | # | Condition | Disposition |
 |---|-----------|-------------|
 | (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — Layer 1 **closed** at spec; implement blocked on [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (contract **pinned**; gate 3 ν dissolved) |
-| (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii) |
-| (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | Bonds-only vs soft MIN transfer; not "optional resilience" |
+| (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii); **open** |
+| (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | **CLOSED bonds-only (2026-06-11)** — iteration-5 sim, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7; emission §10.2 executed |
 
 **Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) — Layer 1
 closed (2026-06-07). **Archival read contract:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 **pinned** (gate 3 ν dissolved; `MAX_CLAIM_AGE_W` shape pinned). FSM retool (§3–§7)
-**unblocked** in parallel. **Next:** implement schema + timing cluster codegen;
-close (ii)–(iii).
+**unblocked** in parallel. **(iii) closed bonds-only (2026-06-11).** **Next:** close (ii)
+(per-reward byte aggregate).
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -465,7 +469,7 @@ are archival-internal (interface only).
 
 | Item | Gate / anchor | Notes |
 |------|---------------|-------|
-| **Admission principal** | **Open — Round 4 + gate 7** | Soft MIN transfer to `P` vs bonds-only; **re-prices locked supply** — not optional |
+| **Admission principal** | **CLOSED bonds-only — gate 7 (2026-06-11)** | Iteration-5 sim: lock macro-immaterial, gauges insensitive to both arms ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) G7); no consensus minimum |
 | **Reward emission wire** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** | Membership-only backing + public work payload + mint; epoch dedup on bond record |
 | **Off-chain backing presentation** | Gate 6 | Peers see backing before first on-chain emission |
 | **Per-shard bond lifecycle + slash hook** | Gate 4 (**pinned**); intra-epoch honesty anchor | Slash independent of admission spend |
@@ -513,11 +517,11 @@ Authoritative economics/identity spec:
 Principal carry-forward pins still in [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
 where not superseded below.
 
-**Principal (§2.4 — admission wire open):**
+**Principal (§2.4 — admission wire closed bonds-only, 2026-06-11):**
 
 - Stake-in: principal → **`P`** stealth outputs on **main tree** (ordinary FCMP++
-  transfer); optional `≥ ADMISSION_MIN` economics-only lock — **not** consensus
-  unspent enforcement.
+  transfer); **no consensus minimum** (gate 7 closed bonds-only — emission §10.2);
+  funding amounts governed by gate-6 §2.5 hygiene policy only.
 - Unstake: `P` drains to principal via **decorrelated** FCMP++ spends (SAL key images
   at terminal leg only).
 
@@ -541,8 +545,9 @@ wallet §5 forward-rebuild adapts.
 **Retired for genesis:** 3C subtree; §6.4 claim wire; `G_S` / `G_arch` / `N_arch`
 emission tags; cleartext stake/claim C++ paths.
 
-**Open before Stage 3:** archival consensus state schema; §2.4 **(ii)–(iii)**;
-reward-emission **implementation** (after schema); `P` HKDF (gate 6); `Σwork` hook (gate 1).
+**Open before Stage 3:** archival consensus state schema; §2.4 **(ii)** ((iii) closed
+bonds-only 2026-06-11); reward-emission **implementation** (after schema); `P` HKDF
+(gate 6); `Σwork` hook (gate 1).
 
 ### 2.4 Transfer-shaped admission (leading genesis form)
 
@@ -572,8 +577,8 @@ on-chain.
 2. **Membership-only control** — prove knowledge of spend secret **without**
    publishing `x·Hp(O)` (subtraction from `FcmpPlusPlus::verify` — gap today at
    `shekyl-oxide/.../fcmp/fcmp++/src/lib.rs`).
-3. **Threshold proof** (optional) — controlled value `≥ ADMISSION_MIN` if admission
-   principal retained for economics.
+3. ~~Threshold proof~~ — **deleted**: gate 7 closed bonds-only (2026-06-11); no
+   `ADMISSION_MIN` controlled-value clause (emission §7.4/§10.2).
 4. **No published dedup tag** — double-claim prevention is
    `bond.claimed_settlement_epochs.check_and_set(E)` on the consensus bond record
    (encoding: [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6.3;
@@ -585,7 +590,7 @@ tag. **`R_market`** is ledger-derived (gate 3 dissolved).
 #### Soft admission and the intra-epoch window
 
 Backing is verified at **settlement-epoch cadence**, not every block. Between
-emissions, `P` may spend admission principal; service may be **unbacked** for up to
+emissions, `P` may spend its funding outputs; service may be **unbacked** for up to
 ~one epoch. **Load-bearing safety argument:** challenge failures slash **bond**
 regardless of whether admission outputs remain unspent. Spec must state this
 explicitly — it is why soft admission + bond is sound.
@@ -619,10 +624,11 @@ image; reward leg does not.
 #### Round 3–4 ratification gates
 
 See revision note 2026-06 — conditions (i) reward-emission spec with state dedup,
-(ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing.
+(ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing
+(**closed bonds-only 2026-06-11**).
 
 **Spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) + [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md).
-Schema pin + (ii) sim + (iii) admission principal remain before Stage 3 emission code.
+Schema pin + (ii) sim remain before Stage 3 emission code; (iii) executed in emission §10.2.
 
 ---
 
@@ -1945,7 +1951,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **Dual-wargamer synthesis executed (2026-06-05, §7.5.3).** Confirmed/sharpened the §7.5 dispositions, added adversary **A5** (economic/rational), split inflation **T8 → 8a entitlement-soundness + 8b band-declaration binding**, and surfaced **top finding F0** (the claim anonymity set is the `{tier × creation-window}` cohort — confirmed at source).
 - [x] **F0 reveal-vs-ZK resolved at source (2026-06-05, §7.5.3 / §6.4).** `tier` (u8) and `creation_height` (u64) are **cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8); the verifier recomputes `h_bind` and the multiplier from them (§6.4.3). Revealed-by-design and **load-bearing for inflation-safety** (single revealed `tier` excludes tier-forgery; the 3C-over-3A "no new primitive" win) — hiding them re-opens 3C-vs-3A, so L4 is V4 co-design, not a v1 bolt-on. Claim↔claim linkage is therefore **deterministic exact-match**, cohort `→ 1` at cold start.
 - [x] **F0 baseline-budget calibration (2026-06-05, §7.5.3).** Priced F0 against the staking-exposure budget the project accepted *before* confidential staking: F0 is the **same category** of cost (staking is the exposed overlay; spend path untouched; core promise intact), exceeding baseline only in **scale-resistance** (block-granular `{tier × exact-height}` cohort does not dilute with growth — a steady-state, not just cold-start, thinness) and **targeted-cascade**. Marginal delta over the realistic already-linkable counterfactual (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor — **most penalizing the privacy-conscious staker**. **De-escalates the decision.**
-- [ ] **Round 3–4 design closure — transfer-shaped substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified; **(2)** §2.4 close-conditions (i)–(iii) — reward-emission spec (state dedup, no published tag), per-reward aggregate sim, admission principal + gate 7 re-pricing; **(3)** Tier 1 soundness step 3; **(4)** entitlement / 3C / F0 bucketing explicitly **not** genesis. **Next:** reward-emission leg spec. Stage 3 gated on closure + Rounds 4–5.
+- [ ] **Round 3–4 design closure — transfer-shaped substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified; **(2)** §2.4 close-conditions (i)–(iii) — reward-emission spec (state dedup, no published tag), per-reward aggregate sim, admission principal + gate 7 re-pricing (**(i) closed at spec; (iii) closed bonds-only 2026-06-11; (ii) open**); **(3)** Tier 1 soundness step 3; **(4)** entitlement / 3C / F0 bucketing explicitly **not** genesis. **Next:** reward-emission leg spec. Stage 3 gated on closure + Rounds 4–5.
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))
 

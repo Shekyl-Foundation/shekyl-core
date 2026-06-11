@@ -167,6 +167,14 @@ drain; change-output handling on bond-funding transfers.
 **Goal:** Posting per-shard bonds does not become a **principal→`P` correlation channel**
 (lump funding from a fresh principal output immediately before first emission).
 
+**Gate-7 input (closed bonds-only, 2026-06-11):** there is **no consensus admission
+minimum** — `ADMISSION_MIN_ATOMIC` was deleted from the emission leg
+([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.2;
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7). Bond sufficiency at
+join-Market (gate 4) is the **only** consensus-checked funding obligation on `P`. Any
+funding minimum or ramp shape is therefore **this layer's policy alone**, owned here
+end-to-end; nothing upstream constrains it.
+
 **Open disposition (joint with gate 4 join-Market):** **fund-from-earnings ramp** vs lump
 initial bond vs mixed — wallet hygiene spec, not consensus rule. Consensus sees bond
 sufficiency at join-Market; **how** `P` acquired collateral and **when** join-Market
