@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **archival: epoch-close consensus computation moved to Rust (PR 123).**
+  All epoch-close arithmetic — market membership, scarcity, curve, shard age,
+  `R_market` / `Σwork` aggregation — now lives in
+  `shekyl-archival-retention::consensus_state::epoch_close_compute` and crosses
+  the FFI as one coarse `shekyl_archival_epoch_close_compute` call. The C++
+  LMDB sweep (`process_archival_epoch_close_at_height`) is gather/store only;
+  C++ copies of the consensus logic (`archival_shard_age_milli`,
+  `ArchivalBondValue::good_through`, in-sweep membership/aggregation) are
+  deleted, as are the fine-grained FFI exports they consumed
+  (`shekyl_archival_curve_milli`, `shekyl_archival_scarcity_milli`,
+  `shekyl_archival_max_claim_age_w`, `shekyl_archival_settlement_epoch_blocks`).
+  Epoch timing exports (`settlement_epoch_at_height`, `epoch_close_due`,
+  `prune_below_epoch`) and `shekyl_archival_good_through` replace them. KAT
+  `consensus_state_kat_v1.json` gains an `epoch_close` section; LMDB
+  gather/store/revert covered by `epoch_close_gather_compute_store_revert`.
+  Sim integer/float curve backends harmonized: degenerate caps credit zero.
+  Fixes pre-existing LMDB cursor bug in `delete_archival_*` loops
+  (`MDB_GET_CURRENT` after delete of last record).
+
 - **ci: PR pushes no longer double-run workflows.** `build.yml` and
   `randomx-v2-differential.yml` triggered on both an unrestricted
   `push` and `pull_request`, so every push to an open PR ran every job
@@ -21,6 +40,15 @@
   `cargo check --workspace`). Pre-genesis greenfield: redb v3 format only.
 
 ### Added
+
+- **archival: consensus state emission read surface (ARCHIVAL_CONSENSUS_STATE).**
+  Integer `reward_arithmetic` + `consensus_state` in `shekyl-archival-retention`;
+  banded float/integer `Curve` in `shekyl-staking-sim` (`--curve-impl=float|integer`);
+  LMDB `archival_r_market` / `archival_sigma_work` epoch-close sweep; partial-slash
+  `bad_interval` F3 fix; KATs (`consensus_state_kat_v1`, gate4 phase-2 `emission`);
+  docs `ARCHIVAL_REWARD_ARITHMETIC.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`;
+  FA-6 Pi scenario B capture in `PERFORMANCE_BASELINE.md`; CI archival reward gates
+  and aarch64 determinism KAT on `depends` ARM v8 job.
 
 - **curve-tree: CT-1 LeafStore on redb (Round 1).**
   `LeafStore` persists drained leaves and frozen segment metadata (`R_k`,

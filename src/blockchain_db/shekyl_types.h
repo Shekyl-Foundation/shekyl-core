@@ -401,6 +401,61 @@ private:
     std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
 };
 
+// ─── ArchivalRMarketKey / ArchivalSigmaWorkKey (ARCHIVAL_CONSENSUS_STATE §3.3, §3.5)
+
+static constexpr size_t kArchivalRMarketKeySize = 16;   // BE(shard_id) || BE(E)
+static constexpr size_t kArchivalSigmaWorkKeySize = 8;   // BE(E)
+static constexpr size_t kArchivalEpochCloseLogKeySize = 8; // BE(block_height)
+
+class ArchivalRMarketKey {
+public:
+    ArchivalRMarketKey(uint64_t shard_id, uint64_t settlement_epoch) noexcept
+    {
+        store_be64(bytes_.data(), shard_id);
+        store_be64(bytes_.data() + 8, settlement_epoch);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalRMarketKeySize> bytes_{};
+};
+
+class ArchivalSigmaWorkKey {
+public:
+    explicit ArchivalSigmaWorkKey(uint64_t settlement_epoch) noexcept
+    {
+        store_be64(bytes_.data(), settlement_epoch);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalSigmaWorkKeySize> bytes_{};
+};
+
+class ArchivalEpochCloseLogKey {
+public:
+    explicit ArchivalEpochCloseLogKey(uint64_t block_height) noexcept
+    {
+        store_be64(bytes_.data(), block_height);
+    }
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
+private:
+    std::array<uint8_t, kArchivalEpochCloseLogKeySize> bytes_{};
+};
+
 // ─── ArchivalSlashLogKey / ArchivalSlashRevertValue ───────────────────────
 //
 // Per-block journal for gate-4 slash revert on `pop_block` (gate-2 §8).
@@ -663,22 +718,8 @@ struct ArchivalBondValue {
         return true;
     }
 
-    [[nodiscard]] bool good_through(uint64_t settlement_epoch) const noexcept
-    {
-        if (settlement_epoch < join_settlement_epoch + 1)
-            return false;
-        for (const BadInterval& iv : bad_intervals)
-        {
-            if (settlement_epoch < iv.start_epoch)
-                continue;
-            if (iv.end_exclusive == std::numeric_limits<uint64_t>::max()
-                || settlement_epoch < iv.end_exclusive)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
+    // good_through(P, E) is consensus semantics and lives in Rust only
+    // (shekyl-archival-retention::good_through, via shekyl_archival_good_through).
 
     [[nodiscard]] bool holds_shard(uint64_t shard_id) const noexcept
     {

@@ -24,6 +24,7 @@
 
 #include "blockchain_db/shekyl_types.h"
 #include "blockchain_db/testdb.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -158,7 +159,20 @@ public:
     uint64_t settlement_epoch) const override
   {
     const auto it = m_bonds.find(p_id);
-    return it != m_bonds.end() && it->second.good_through(settlement_epoch);
+    if (it == m_bonds.end())
+      return false;
+    // Same FFI path production uses: good_through lives in Rust only.
+    std::vector<uint64_t> intervals_flat;
+    intervals_flat.reserve(it->second.bad_intervals.size() * 2);
+    for (const auto& iv : it->second.bad_intervals)
+    {
+      intervals_flat.push_back(iv.start_epoch);
+      intervals_flat.push_back(iv.end_exclusive);
+    }
+    return shekyl_archival_good_through(it->second.join_settlement_epoch,
+      settlement_epoch,
+      intervals_flat.empty() ? nullptr : intervals_flat.data(),
+      intervals_flat.size() / 2) != 0;
   }
 
   uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const override

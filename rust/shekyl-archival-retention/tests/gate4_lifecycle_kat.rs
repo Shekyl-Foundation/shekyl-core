@@ -13,11 +13,11 @@ use std::io::Cursor;
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
-    serve_credit_epoch_ok, verify_conservation_snapshot, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    BondPostError, BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor,
-    HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
-    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    r_market_count, serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
+    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
+    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
+    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -89,8 +89,118 @@ fn build_gate4_document() -> Value {
             "total_bonded_atomic": ARCHIVAL_BOND_FLOOR_ATOMIC,
             "per_p_bonded": [ARCHIVAL_BOND_FLOOR_ATOMIC],
         },
-        "emission": null,
+        "emission": {
+            "description": "Phase-2: consensus_state replay pin (ARCHIVAL_CONSENSUS_STATE §3.3–§4.5).",
+            "settlement_epoch": 10,
+            "shard_id": 42,
+            "expected": {
+                "r_market": 1,
+                "sigma_work_milli": 4000
+            },
+            "per_p_work_milli": [4000, 0, 12000],
+            "market_mask": [true, false, false],
+            "curve": {
+                "plateau_work_milli": 16000,
+                "plateau_value_milli": 8000
+            },
+            "serve_credit_rows": [
+                {
+                    "p_id_hex": "01",
+                    "shard_id": 42,
+                    "serve_credit": true,
+                    "join_epoch": 0,
+                    "bad_intervals": [],
+                    "foundation": false
+                },
+                {
+                    "p_id_hex": "02",
+                    "shard_id": 42,
+                    "serve_credit": false,
+                    "join_epoch": 0,
+                    "bad_intervals": [],
+                    "foundation": false
+                },
+                {
+                    "p_id_hex": "03",
+                    "shard_id": 42,
+                    "serve_credit": true,
+                    "join_epoch": 0,
+                    "bad_intervals": [{ "start": 8, "end_exclusive": u64::MAX }],
+                    "foundation": false
+                }
+            ]
+        },
     })
+}
+
+fn gate4_emission_phase2_vectors(emission: &Value) {
+    let curve = BandedCurveParams {
+        plateau_work_milli: emission["curve"]["plateau_work_milli"]
+            .as_u64()
+            .expect("plateau_work"),
+        plateau_value_milli: emission["curve"]["plateau_value_milli"]
+            .as_u64()
+            .expect("plateau_value"),
+    };
+    let e = emission["settlement_epoch"].as_u64().expect("epoch");
+    let shard = emission["shard_id"].as_u64().expect("shard");
+
+    let rows: Vec<ServeCreditRow> = emission["serve_credit_rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|r| {
+            let bad: Vec<BadInterval> = r["bad_intervals"]
+                .as_array()
+                .map(|ivs| {
+                    ivs.iter()
+                        .map(|iv| BadInterval {
+                            start_epoch: iv["start"].as_u64().unwrap_or(0),
+                            end_exclusive: iv["end_exclusive"].as_u64().unwrap_or(u64::MAX),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut p_id = [0u8; 32];
+            let hex = r["p_id_hex"].as_str().unwrap_or("00");
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            p_id[..bytes.len().min(32)].copy_from_slice(&bytes[..bytes.len().min(32)]);
+            ServeCreditRow {
+                p_id,
+                shard_id: r["shard_id"].as_u64().unwrap_or(shard),
+                serve_credit: r["serve_credit"].as_bool().unwrap_or(false),
+                join_settlement_epoch: r["join_epoch"].as_u64().unwrap_or(0),
+                bad_intervals: bad,
+                is_foundation: r["foundation"].as_bool().unwrap_or(false),
+            }
+        })
+        .collect();
+
+    let expected = &emission["expected"];
+    assert_eq!(
+        r_market_count(&rows, shard, e),
+        expected["r_market"].as_u64().expect("r_market")
+    );
+
+    let works: Vec<u64> = emission["per_p_work_milli"]
+        .as_array()
+        .expect("works")
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    let mask: Vec<bool> = emission["market_mask"]
+        .as_array()
+        .expect("mask")
+        .iter()
+        .map(|v| v.as_bool().unwrap())
+        .collect();
+    assert_eq!(
+        sigma_work_milli(&works, &curve, &mask),
+        expected["sigma_work_milli"].as_u64().expect("sigma")
+    );
 }
 
 #[test]
@@ -107,7 +217,9 @@ fn regenerate_gate4_lifecycle_fixture() {
 fn gate4_lifecycle_kat_vectors() {
     let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
     assert_eq!(kat["format_version"].as_u64(), Some(1));
-    assert!(kat["emission"].is_null());
+    let emission = &kat["emission"];
+    assert!(emission.is_object());
+    gate4_emission_phase2_vectors(emission);
 
     let join = &kat["join"];
     let join_wire = decode_hex(join["wire_hex"].as_str().expect("join wire"));

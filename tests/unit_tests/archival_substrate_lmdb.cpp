@@ -199,3 +199,69 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
   ASSERT_TRUE(db.get_archival_shard_leaf_layer_scalars(42, 1234, 100, out_scalars));
   EXPECT_EQ(out_scalars, scalars);
 }
+
+// Storage-flow coverage for the gather → Rust compute → store epoch-close
+// sweep. Exact R_market / Σwork arithmetic is pinned by the Rust KAT
+// (consensus_state_kat_v1.json §epoch_close); this test asserts the LMDB
+// orchestration: row gathering, missing-bond skips, stale-epoch filtering,
+// persistence, revert, and replay determinism.
+TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  // SETTLEMENT_EPOCH_BLOCKS is KAT-pinned at 10000; epoch E closes when the
+  // first block of epoch E+1 connects.
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 1;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+
+  const crypto::hash p1 = make_hash(0x51);
+  const crypto::hash p2 = make_hash(0x52);
+  const crypto::hash p_missing = make_hash(0x53);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, 0, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_bond_record(p2, pubkey, 0, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
+
+  // Aged segment for shard 7; shard 9 stays segment-less (age 0).
+  db.put_archival_shard_segment(7, 0, make_hash(0x60), 26000);
+
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+  // Credit row without a bond record: gathered row is skipped, not fatal.
+  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch);
+  // Credit row for a different epoch: filtered by the cursor pass.
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1);
+
+  // Non-boundary heights are no-ops.
+  db.process_archival_epoch_close_at_height(close_height - 1);
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 2u);
+  EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch + 1), 0u);
+  const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
+  EXPECT_GT(sigma, 0u);
+
+  db.revert_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 0u);
+  EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 0u);
+  EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), 0u);
+
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 2u);
+  EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
+  EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
+}
