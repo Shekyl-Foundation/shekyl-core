@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **archival: epoch-close consensus computation moved to Rust (PR 123).**
+  All epoch-close arithmetic — market membership, scarcity, curve, shard age,
+  `R_market` / `Σwork` aggregation — now lives in
+  `shekyl-archival-retention::consensus_state::epoch_close_compute` and crosses
+  the FFI as one coarse `shekyl_archival_epoch_close_compute` call. The C++
+  LMDB sweep (`process_archival_epoch_close_at_height`) is gather/store only;
+  C++ copies of the consensus logic (`archival_shard_age_milli`,
+  `ArchivalBondValue::good_through`, in-sweep membership/aggregation) are
+  deleted, as are the fine-grained FFI exports they consumed
+  (`shekyl_archival_curve_milli`, `shekyl_archival_scarcity_milli`,
+  `shekyl_archival_max_claim_age_w`, `shekyl_archival_settlement_epoch_blocks`).
+  Epoch timing exports (`settlement_epoch_at_height`, `epoch_close_due`,
+  `prune_below_epoch`) and `shekyl_archival_good_through` replace them. KAT
+  `consensus_state_kat_v1.json` gains an `epoch_close` section; LMDB
+  gather/store/revert covered by `epoch_close_gather_compute_store_revert`.
+  Sim integer/float curve backends harmonized: degenerate caps credit zero.
+  Fixes pre-existing LMDB cursor bug in `delete_archival_*` loops
+  (`MDB_GET_CURRENT` after delete of last record).
+
 ### Added
 
 - **archival: consensus state emission read surface (ARCHIVAL_CONSENSUS_STATE).**

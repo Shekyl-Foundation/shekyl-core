@@ -306,7 +306,9 @@ integration tests, 8c verifier hookup.
       (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
       gate-4-owned.
 - [x] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
-      LMDB `archival_r_market`; sweep in `process_archival_epoch_close_at_height`.
+      LMDB `archival_r_market`; sweep in `process_archival_epoch_close_at_height` —
+      gather/store only; arithmetic in Rust `epoch_close_compute`
+      ([`ARCHIVAL_REWARD_ARITHMETIC.md`](ARCHIVAL_REWARD_ARITHMETIC.md) §Crate surface).
 - [x] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
       semantics** at `E`-close (§3.4; partial-slash F3 `bad_interval` append).
 - [x] Pin `MAX_CLAIM_AGE_W` + retention/reorg split + prune semantics + **drain-vs-forfeiture**

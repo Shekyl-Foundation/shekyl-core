@@ -8,8 +8,19 @@
 | Component | Location | Role |
 |-----------|----------|------|
 | `reward_arithmetic` | `rust/shekyl-archival-retention/src/reward_arithmetic.rs` | Integer `Curve`, `g(age)`, scarcity, `Σwork` helpers — **no `f64`** (`#![deny(clippy::float_arithmetic)]`) |
-| `consensus_state` | `rust/shekyl-archival-retention/src/consensus_state.rs` | Pure `R_market` / `good_through` replay for KATs |
-| FFI | `shekyl_archival_curve_milli`, `shekyl_archival_scarcity_milli` | C++ epoch-close sweep |
+| `consensus_state` | `rust/shekyl-archival-retention/src/consensus_state.rs` | Pure `R_market` / `good_through` / `shard_age` / epoch-timing replay + `epoch_close_compute` (whole-epoch aggregation) |
+| FFI | `shekyl_archival_epoch_close_compute` (+ `good_through`, `epoch_close_due`, `prune_below_epoch` helpers) | C++ epoch-close sweep: gather rows → one coarse compute call → store results |
+
+**Boundary (PR 123):** all consensus arithmetic — market membership, scarcity,
+curve, shard age, `R_market` / `Σwork` aggregation — lives in
+`shekyl-archival-retention` and crosses the FFI as a single
+`shekyl_archival_epoch_close_compute` call. The C++ LMDB layer
+(`process_archival_epoch_close_at_height`) is a storage adapter: it reads
+serve-credit / bond / segment rows, marshals them, and persists the returned
+`R_market` and `Σwork` values. Fine-grained arithmetic FFI exports
+(`curve_milli`, `scarcity_milli`, `max_claim_age_w`, `settlement_epoch_blocks`)
+were deleted with their C++ callers; per `25-rust-architecture.mdc` coarse
+FFI discipline, no per-row arithmetic crosses the boundary.
 
 Constants are emitted from `config/consensus_constants.json` via `shekyl-archival-retention/build.rs`:
 
@@ -21,6 +32,8 @@ Constants are emitted from `config/consensus_constants.json` via `shekyl-archiva
 ## Economic tolerance (pinned ε)
 
 Integer path is **canonical** for minting. Float sim (`shekyl-staking-sim`) is exploration / cross-check.
+Degenerate caps (`cap ≤ 0`, non-finite) credit **zero** on both backends, matching
+`curve_milli`'s zero-plateau guard — a missing cap is a degenerate curve, not uncapped pass-through.
 
 | Metric | Tolerance | Test |
 |--------|-----------|------|
@@ -47,4 +60,6 @@ No emission vin may credit outputs under provisional bands until final band revi
 
 ## Shard age
 
-`archival_shard_age_milli(shard, close_height)` derives age from `freeze_height` in `archival_shard_segment` and `SETTLEMENT_EPOCH_BLOCKS`. Inputs `g(age)` at epoch close.
+`consensus_state::shard_age_milli(freeze_height, close_height)` derives age from the
+`archival_shard_segment` `freeze_height` and `SETTLEMENT_EPOCH_BLOCKS`, and feeds `g(age)`
+inside `epoch_close_compute`. C++ passes `freeze_height` through; it does not compute age.

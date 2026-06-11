@@ -2401,7 +2401,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
-- **Confidential-staking wallet Round 3 wargame residuals (Phase 2b §7.5.2).**
+- **Typed epoch/height parameters across the archival FFI (spawned PR 123,
+  2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,
+  settlement_epoch, …)` takes two adjacent `u64`s; the PR 123 C++ rewire
+  initially transposed them and compiled clean — caught only by the
+  `bond_record_roundtrip` unit test. Same hazard class as the curve-tree
+  leaf-tuple typing disposition (PR 121): adjacent same-width integers
+  carrying different consensus meanings. Scope: introduce
+  `SettlementEpoch(u64)` / `BlockHeight(u64)` newtypes inside
+  `shekyl-archival-retention::consensus_state` (Rust-side call sites get
+  compile-time checking; the C ABI stays `uint64_t` — C++ callers are a
+  deletion target per the wallet rewrite, so no C-side typing investment).
+  Target: V3.1, bundled with the next consensus_state-touching PR rather
+  than as a standalone churn PR. *Reopen sooner if:* another transposition
+  bug surfaces at this boundary before V3.1.
   The Round 3 threat-model-exhaustion + wider-substrate wargame
   ([`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5,
   executed 2026-06-05) dispositioned every T/G item; seven carry **V3.1**
