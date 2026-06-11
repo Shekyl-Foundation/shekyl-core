@@ -668,6 +668,8 @@ jobs:
       - name: Bech32m address encoding tests
         working-directory: rust
         run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: C++ clamp-ban lint (address-freeze)
+        run: bash scripts/lint_cpp_clamp_ban.sh
       - name: "CI grep gate: no shekyl_y in C++ source"
         run: |
           if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
