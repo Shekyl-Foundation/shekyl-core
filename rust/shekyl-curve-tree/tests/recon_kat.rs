@@ -295,10 +295,12 @@ fn client_reconstructs_consensus_root_at_every_height() {
                 leaf_hash_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
-            client.ingest_block(BlockLeaves {
-                height: blk.height,
-                txs: &txs,
-            });
+            client
+                .ingest_block(BlockLeaves {
+                    height: blk.height,
+                    txs: &txs,
+                })
+                .unwrap();
             let reference = ReferenceBlock {
                 height: blk.height,
                 curve_tree_root: blk.root,
@@ -333,12 +335,14 @@ fn client_path_matches_recon_path() {
                 leaf_hash_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
-            client.ingest_block(BlockLeaves {
-                height: blk.height,
-                txs: &txs,
-            });
+            client
+                .ingest_block(BlockLeaves {
+                    height: blk.height,
+                    txs: &txs,
+                })
+                .unwrap();
             assert_eq!(
-                client.root_at(blk.height),
+                client.root_at(blk.height).expect("store hot path"),
                 *recon_root,
                 "client/recon divergence at height {}",
                 blk.height,

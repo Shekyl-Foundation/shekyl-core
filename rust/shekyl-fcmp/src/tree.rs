@@ -257,20 +257,25 @@ pub fn helios_point_to_selene_scalar(helios_point: &[u8; 32]) -> Option<[u8; 32]
 /// property, proven within Rust by the `curve_tree_freeze` integration test and
 /// end-to-end by CT-2's KAT against a real header root.
 ///
+/// Fallible variant of [`build_layers`]: returns `None` when any leaf scalar or
+/// intermediate node fails deserialization or hash growth (e.g. corrupted
+/// persisted bytes on the CT-1 store path).
+pub fn try_build_layers(leaf_scalars: &[[u8; 32]]) -> Option<Vec<Vec<[u8; 32]>>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let leaf_nodes: Vec<[u8; 32]> = leaf_scalars
+        .chunks(LEAF_CHUNK_SCALARS)
+        .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+        .collect::<Option<Vec<_>>>()?;
+    try_build_upper_layers(leaf_nodes, 0)
+}
+
 /// Returns `vec![vec![]]` for an empty input; callers handle the empty tree. The
 /// point↔scalar conversions are total for legitimately-occurring nodes (asserted
 /// by the `node_conversions_are_total` test), so the internal `expect`s do not
 /// fire on valid leaf sets.
 pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
-    const ZERO: [u8; 32] = [0u8; 32];
-
-    let leaf_nodes: Vec<[u8; 32]> = leaf_scalars
-        .chunks(LEAF_CHUNK_SCALARS)
-        .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
-        .collect();
-    // The leaf layer is layer 0 (Selene); `build_upper_layers` is given that
-    // layer along with its own index (0) and builds layer 1 upward.
-    build_upper_layers(leaf_nodes, 0)
+    try_build_layers(leaf_scalars).expect("valid leaf scalars")
 }
 
 /// Hash a layer of nodes up to the root, returning every layer from
@@ -304,67 +309,107 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
 ///   `build_layers`).
 ///
 /// In the non-empty cases the root is `result.last()[0]`.
-pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
+pub fn try_build_upper_layers(
+    initial_layer: Vec<[u8; 32]>,
+    start_layer_idx: u8,
+) -> Option<Vec<Vec<[u8; 32]>>> {
     const ZERO: [u8; 32] = [0u8; 32];
 
     let mut layers = vec![initial_layer];
-    // Index of the layer currently on top of `layers` (initially `initial_layer`).
     let mut current_layer_idx = start_layer_idx;
     loop {
-        let top_len = layers.last().expect("layers non-empty").len();
-        // Empty tree: a zero-node structure. The caller (`build_layers`)
-        // handles the empty-tree root (`selene_hash_init`); return as-is.
+        let top_len = layers.last()?.len();
         if top_len == 0 {
             break;
         }
-        // A single node at a layer *above* the leaf layer is the root. The
-        // leaf layer (Selene, layer 0) is NEVER itself the root: the daemon's
-        // `grow_curve_tree` (`db_lmdb.cpp`) seeds its propagation loop with the
-        // leaf chunk, builds the layer-1 Helios node, and only *then* checks
-        // its root-stop condition — so a 1..=`SELENE_CHUNK_WIDTH`-leaf tree
-        // roots at the layer-1 Helios node, not the layer-0 Selene node. The
-        // wallet's reconstruction must reproduce this consensus convention
-        // (pinned by CT-2's reconstruct-root KAT against a real header root,
-        // `docs/design/CT2_DRAIN_ORDER.md` §5). Hence the stop condition is
-        // "single node at layer ≥ 1", not "single node".
         if top_len == 1 && current_layer_idx >= 1 {
             break;
         }
-        // The layer about to be built sits one level above the current top.
-        // `checked_add` makes overflow an explicit panic rather than a release-
-        // mode wrap that would silently flip the Selene/Helios parity. Real
-        // trees are only a handful of layers deep (branching factor in the tens
-        // to low hundreds), so this is unreachable in practice and guards only
-        // against a pathological `start_layer_idx`.
-        let built_layer_idx = current_layer_idx.checked_add(1).expect(
-            "curve-tree layer index overflowed u8 (tree depth exceeds any real configuration)",
-        );
-        let prev = layers.last().expect("layers non-empty");
+        let built_layer_idx = current_layer_idx.checked_add(1)?;
+        let prev = layers.last()?;
         let next: Vec<[u8; 32]> = if layer_is_selene(built_layer_idx) {
-            // even layer (Selene): children are x-coords of the Helios pts below
             let scalars: Vec<[u8; 32]> = prev
                 .iter()
-                .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
-                .collect();
+                .map(helios_point_to_selene_scalar)
+                .collect::<Option<Vec<_>>>()?;
             scalars
                 .chunks(SELENE_CHUNK_WIDTH)
-                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("selene node"))
-                .collect()
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
         } else {
-            // odd layer (Helios): children are x-coords of the Selene pts below
             let scalars: Vec<[u8; 32]> = prev
                 .iter()
-                .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
-                .collect();
+                .map(selene_point_to_helios_scalar)
+                .collect::<Option<Vec<_>>>()?;
             scalars
                 .chunks(HELIOS_CHUNK_WIDTH)
-                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c).expect("helios node"))
-                .collect()
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
         };
         layers.push(next);
         current_layer_idx = built_layer_idx;
     }
-    layers
+    Some(layers)
+}
+
+pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
+    try_build_upper_layers(initial_layer, start_layer_idx).expect("valid layer nodes")
+}
+
+/// Hash upward from `start_layer_idx` until layer `target_layer_idx`, returning
+/// that layer's nodes.
+///
+/// Unlike [`build_upper_layers`], does not treat a single node at layer `>= 1`
+/// as the root — mixed segment composition needs the sub-root at an absolute
+/// depth even when the partial tail is still shallow (`shekyl-curve-tree` CT-1).
+#[must_use]
+pub fn try_promote_to_layer(
+    mut current: Vec<[u8; 32]>,
+    mut current_layer_idx: u8,
+    target_layer_idx: u8,
+) -> Option<Vec<[u8; 32]>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    if current.is_empty() || current_layer_idx >= target_layer_idx {
+        return Some(current);
+    }
+
+    while current_layer_idx < target_layer_idx {
+        if current.is_empty() {
+            break;
+        }
+        let built_layer_idx = current_layer_idx.checked_add(1)?;
+        current = if layer_is_selene(built_layer_idx) {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(helios_point_to_selene_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(selene_point_to_helios_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        };
+        current_layer_idx = built_layer_idx;
+    }
+    Some(current)
+}
+
+#[must_use]
+pub fn promote_to_layer(
+    current: Vec<[u8; 32]>,
+    current_layer_idx: u8,
+    target_layer_idx: u8,
+) -> Vec<[u8; 32]> {
+    try_promote_to_layer(current, current_layer_idx, target_layer_idx).expect("valid layer nodes")
 }
 
 // ---------------------------------------------------------------------------
@@ -735,5 +780,10 @@ mod tests {
         let s_d8 = proof_size(1, 8);
         let s_d16 = proof_size(1, 16);
         assert!(s_d16 > s_d8, "deeper tree should produce larger proof");
+    }
+
+    #[test]
+    fn promote_to_layer_empty_input_is_no_op() {
+        assert!(promote_to_layer(Vec::new(), 0, 2).is_empty());
     }
 }

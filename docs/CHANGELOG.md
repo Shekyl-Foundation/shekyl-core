@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace MSRV 1.88 → 1.94; CT-1 `redb` 2.6.3 → 4.1.0.**
+  Intentional 1.94.0 pin for RandomX PoW + CT-1 `redb` 4.1.0 (rustc ≥
+  1.89), aligned with `shekyl-gui-wallet` `rust-toolchain.toml`.
+  `shekyl-pow-randomx` uses `Box::new_zeroed_slice` (stable 1.92.0). CI adds
+  `rust-msrv-gate` (`dtolnay/rust-toolchain@1.94.0` +
+  `cargo check --workspace`). Pre-genesis greenfield: redb v3 format only.
+
 ### Added
 
 - **crypto-pq: ADDRESS_DERIVATION_V1 freeze hardening (enforcement only).**
@@ -16,6 +25,25 @@
   derivation-freeze-self-check` as the operator surface (no C FFI
   export: no C++ consumer exists). Zero semantic changes to the frozen
   v1 derivation pipeline in `account.rs`.
+
+- **curve-tree: CT-1 LeafStore on redb (Round 1).**
+  `LeafStore` persists drained leaves and frozen segment metadata (`R_k`,
+  `end_block_height`) in redb; height-gated segment freeze, ACID reorg
+  truncate, pin/prune seam, and `mixed_composition_root` hot path with
+  full-rebuild fallback. `CurveTreeClient` mirrors drained leaves on ingest.
+  Tier-A `store_kat`, `upper_layers_kat`, and unchanged `recon_kat` /
+  `assemble_kat`. Pins: `CT1_ROUND1_PINS.md`, close-out
+  `CT1_ROUND1_CLOSEOUT.md`.
+
+  Robustness sweep (`CT1_ROUND1_CLOSEOUT.md` §5): `root_at` /
+  `verify_root` / `assemble_path` are `&self` queries bounded by the
+  ingested chain tip (`ClientError::ReferenceBeyondIngestedTip`); the
+  ahead-of-ingest store catch-up machinery is deleted, making the drained
+  mirror append-only by construction and the freeze clock drivable only by
+  ingested heights. `append_drained` rejects non-canonical Selene scalars
+  at write time (`StoreError::InvalidLeafBytes`); store bounds checks read
+  `META_LEAF_COUNT` inside the operating transaction (single-snapshot, no
+  check/use gap).
 
 - **docs: 2026-06-10 doc sweep — key-signature freeze anchored, completed
   archive consolidated, stale references repaired.**

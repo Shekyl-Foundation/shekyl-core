@@ -157,10 +157,10 @@ scanner-`Extra`-parsed `0x07` blob), resolves `h_pqc`, threads the global
 output index (derive-don't-accumulate; reorg = rebuild via `from_blocks`),
 owns the reference-height → drain-cutoff mapping (`drained_through = H − 1`),
 and applies the §3.3 integrity gate (`verify_root`). The Tier-A KAT now also
-runs end-to-end through this production path. `store` (frozen-`R_k` cache and
-persistence) and `assemble` (membership-path extraction) remain pending; the
-§3.5 `select_reference_block` / `assemble_path` surface layers onto
-`CurveTreeClient` when those land.
+runs end-to-end through this production path. `assemble` (membership-path
+extraction) is **landed** (CT-4). `store` (frozen-`R_k` cache and persistence,
+CT-1) Round 1 closed on `redb` per [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md) and
+[`CT1_ROUND1_CLOSEOUT.md`](./CT1_ROUND1_CLOSEOUT.md).
 
 ### 3.3 Integrity model (load-bearing)
 
@@ -188,9 +188,18 @@ subtree-aligned segments are **reorg-frozen**, and the rollback unit is the acti
 frontier segment, not "up to the last 10k checkpoint." The store tracks
 `(height, leaf_count, R_k)` per segment, rolls back only the frontier on
 divergence, and re-syncs forward. **Freeze-lag:** a segment is not frozen/pruned
-until buried beyond max plausible reorg depth (in position terms, ≥ the positions
-drained over `SPENDABLE_AGE` + margin) — the active frontier stays unpruned and
-absorbs reorg churn, and freezing lags the tip. The reference block at
+until buried beyond max plausible reorg depth in **block** terms:
+
+```text
+tip_height − segment.end_block_height ≥ SPENDABLE_AGE + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
+```
+
+(`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`, same numeric value as
+`ARCHIVAL_REORG_DEPTH_BLOCKS`; height-gated, not position-gated — see
+[`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).) `frozen_segments` records
+`end_block_height` (when the segment's newest leaf entered the tree) and
+`frozen_at_height` (when the freeze was applied). The active frontier stays
+unpruned and absorbs reorg churn; freezing lags the tip. The reference block at
 `tip − REF_ANCHOR_AGE` (§5) is within this unfrozen frontier by construction; a
 reorg deeper than the margin forces ref-block re-selection (§5.3).
 
@@ -332,11 +341,17 @@ thing** — not heed-vs-LMDB. If a single KV engine is chosen for everything, th
 **heed** (LMDB format/semantics, mmap zero-copy, single-writer fits the one sync
 task) vs **redb** (pure-Rust, no C/FFI, `10-shekyl-first.mdc`-aligned, no
 pre-sized map) is the real choice — but decided on this store, not as a referendum
-on the daemon's engine. **Disposition:** decided in CT-1 with this framing; the
-default leaning is flat-mmap-array + sidecar unless the metadata side proves to
-want a KV engine. (Dependency-discipline: heed and redb are *not* current
-workspace deps; either is a new dependency to justify at CT-1, and the flat-mmap
-default needs none.)
+on the daemon's engine.
+
+**CT-1 outcome (locked):** **`redb`** — pure-Rust ACID transactional store for
+the greenfield wallet `LeafStore`. Rationale: Shekyl-first (no LMDB FFI),
+automatic file growth (no `map_size` correctness hazard), single write txn for
+reorg atomicity. Valid transactional-store choice is ACID + oracle-validated
+leaf encoding; **not** daemon `curve_tree_leaves` layout parity. heed is out of
+scope for CT-1. Operational note: prune-to-`R_k` may leave elevated on-disk
+footprint until pages are reused (cosmetic only). Reversion clause: reopen only
+on measured hot-path regression vs flat-mmap **and** a flat-mmap + sidecar
+design that preserves ACID reorg atomicity. See [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).
 
 ---
 
@@ -1103,9 +1118,11 @@ canonical tree under replacement at both deepen boundaries.
    of frozen segments to `R_k` but keeps owned-output chunks forever; staker pins
    full shards. The `LeafStore` API must expose both without a V3.x restructure —
    confirm the pin/prune seam is in CT-1's type design, not deferred.
-10. **Freeze-lag depth (§3.4).** Pin the position-margin beyond which a segment
-    freezes/prunes (≥ positions drained over `SPENDABLE_AGE` + margin); confirm
-    against max plausible reorg depth.
+10. **Freeze-lag depth (§3.4). CLOSED (CT-1 Round 1).** Margin is
+    `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720` (`ARCHIVAL_REORG_DEPTH_BLOCKS`,
+    block counts). Gate is **height-based:**
+    `tip_height − end_block_height ≥ SPENDABLE_AGE + 720`. Not position-based.
+    Pinned in [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).
 11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
     Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
     anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
@@ -1145,8 +1162,8 @@ canonical tree under replacement at both deepen boundaries.
 | PR | Scope | Key files |
 |----|-------|-----------|
 | **CT-0** | **Gate spike — DONE, G1 PASSES.** 19-test harness (+1 `#[ignore]`) proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
-| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). **Factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers`** so the wallet's steady-state from-cached-`R_k` hot path hashes frozen sub-roots up the upper layers via the *same* function (single-composition end-to-end, not just from-leaves; §7.7). LeafStore engine decision (flat-mmap vs heed/redb). | new crate, `shekyl-fcmp::tree` |
-| **CT-2** | **Round 1 closed** — see [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Reconstruct-root KAT (`recon_kat.rs`) + production client path (`client.rs`) over `ct2_tier_a.json`: Rust root == C++ header root at every height on `main`, `reorg_deep`, `reorg_shallow`. Tier A pins empty-window boundary (`last_empty=60`, `first_drain=61`), coinbase `+60`, undeepen via `reorg_deep` (fork 140), freeze-lag via shallow reorg. Tier B `#[ignore]` scaffold in `recon_tier_b.rs`. CT-4 `assemble` landed ahead of schedule. Remaining: CT-1 `store`, CT-3 sync, CT-5 engine wiring. | `recon`, `client`, `assemble`, `tests/recon_kat.rs`, `tests/recon_tier_b.rs` |
+| **CT-1** | **Round 1 closed** — see [`CT1_ROUND1_CLOSEOUT.md`](CT1_ROUND1_CLOSEOUT.md). `LeafStore` on **redb** (`CT1_ROUND1_PINS.md`): subtree-aligned segment cache keyed by `R_k` (pin/prune seam, §7.6), height-gated freeze (`end_block_height`), canonical 4×32 Selene-scalar leaf encoding, `build_upper_layers` mixed-composition hot path + `upper_layers_kat`, ACID reorg truncate, `store_kat` Tier A. `CurveTreeClient` mirrors drained leaves into the store on ingest. Remaining: on-disk path wiring (CT-3/CT-5), full-segment freeze KAT at `j=2` scale. | `shekyl-curve-tree/store`, `tests/store_kat.rs`, `tests/upper_layers_kat.rs` |
+| **CT-2** | **Round 1 closed** — see [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Reconstruct-root KAT (`recon_kat.rs`) + production client path (`client.rs`) over `ct2_tier_a.json`: Rust root == C++ header root at every height on `main`, `reorg_deep`, `reorg_shallow`. Tier A pins empty-window boundary (`last_empty=60`, `first_drain=61`), coinbase `+60`, undeepen via `reorg_deep` (fork 140), freeze-lag via shallow reorg. Tier B `#[ignore]` scaffold in `recon_tier_b.rs`. CT-4 `assemble` and CT-1 `store` landed ahead of schedule. Remaining: CT-3 sync, CT-5 engine wiring. | `recon`, `client`, `assemble`, `tests/recon_kat.rs`, `tests/recon_tier_b.rs` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |

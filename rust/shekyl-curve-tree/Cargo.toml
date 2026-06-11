@@ -21,6 +21,7 @@ license.workspace = true
 # matches `20-rust-vs-cpp-policy.mdc` / `25-rust-architecture.mdc`
 # layering and the wallet/mobile consumption surface.
 [dependencies]
+redb = { workspace = true }
 # Canonical curve-tree composition primitives: `construct_leaf`,
 # `build_layers` (Round-1 root oracle), `build_upper_layers` (CT-1 hot
 # path), `selene_hash_init` (empty-tree root). Shared with the daemon
@@ -45,6 +46,9 @@ serde_json = "1"
 # `gen_ct2_fixture.py` from a regtest daemon). Test-only; not in the
 # wallet/mobile production graph.
 [dev-dependencies]
+ciphersuite = "0.4"
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+rand_chacha = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

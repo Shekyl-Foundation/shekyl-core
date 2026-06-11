@@ -8,11 +8,12 @@
 //! Given a drained leaf and the reconstructed tree layers, produce the
 //! [`AssembledPath`] that an FCMP++ membership proof consumes (the full child
 //! chunk of each path node from leaf to root at the reference height). Gated
-//! behind the reconstruct-root baseline ([`crate::recon`]): a path assembled
-//! against a wrong tree is a wrong proof, so assembly applies the integrity
-//! gate (§3.3) before building. The tree is reconstructed once and reused for
-//! both the gate and the path — the top layer node is the root the gate
-//! checks — rather than rebuilding it via [`CurveTreeClient::verify_root`].
+//! behind a correct root at the reference height: a path assembled against a
+//! wrong tree is a wrong proof, so assembly applies the integrity gate (§3.3)
+//! before building. The gate uses the store-backed [`CurveTreeClient::root_at`]
+//! hot path (CT-1); branch extraction rebuilds layers from replay-held
+//! [`CurveTreeClient::entries`] via [`assemble_leaf_stream`] (CT-4), because
+//! pruned frozen segments may not retain a complete drained byte stream.
 //!
 //! ## Path layout (pinned to the FCMP++ prover at source)
 //!
@@ -39,7 +40,7 @@ use crate::recon::{assemble_leaf_stream, drained_sorted};
 use crate::types::{AssembledPath, ChunkLeaf, OutputIdentity, ReferenceBlock, TreeContext};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
-    selene_hash_init, selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
+    selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
 };
 
 impl CurveTreeClient {
@@ -67,23 +68,11 @@ impl CurveTreeClient {
     ) -> Result<AssembledPath, ClientError> {
         let cutoff = Self::drained_through(reference.height);
 
-        // Build the tree once and reuse it for both the integrity gate and
-        // path extraction. `verify_root` would rebuild it (root_at →
-        // build_layers) and then assembly would rebuild it again — two full
-        // reconstructions of the most expensive work on the spend path. The
-        // layer stack here *is* the integrity gate: its top node is the root
-        // we compare against the consensus header.
-        let stream = assemble_leaf_stream(&self.entries, cutoff);
-        let layers = build_layers(&stream);
-
-        // Never assemble against a tree we cannot reproduce (§3.3). Mirror
-        // `recon::root_from_scalars`: the empty tree is the `selene_hash_init`
-        // sentinel, not `build_layers(&[])`'s empty top layer.
-        let got = if stream.is_empty() {
-            selene_hash_init()
-        } else {
-            layers.last().expect("build_layers yields ≥1 layer")[0]
-        };
+        // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
+        // (CT-1), no replay-oracle fallback; (2) path branches — replay
+        // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
+        // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
+        let got = self.root_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
                 height: reference.height,
@@ -91,6 +80,9 @@ impl CurveTreeClient {
                 got,
             });
         }
+
+        let stream = assemble_leaf_stream(&self.entries, cutoff);
+        let layers = build_layers(&stream);
 
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
