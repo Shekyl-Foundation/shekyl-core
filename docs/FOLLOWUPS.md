@@ -48,26 +48,41 @@ sustainability is unaffected by the recalibration.
 ## V3.0 — wallet stack greenfield Rust rewrite
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
-  corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on branch
+  corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published
   `docs/test_vectors/ADDRESS_DERIVATION_V1/{manifest.json,vectors.json}`
   and `rust/shekyl-crypto-pq/tests/kat_address_derivation_v1.rs` with an
   `#[ignore]` regenerator; Tier-2 golden tests removed from inline
-  `account.rs` tests.
+  `account.rs` tests. The consumer also verifies the manifest's
+  self-describing fields (`vectors_sha256_hex` = `sha256sum
+  vectors.json`, tier counts) and asserts pairwise Tier-2 account
+  distinctness (network/format/passphrase separation).
 
 - **~~Derivation-freeze hardening: wire `scripts/lint_cpp_clamp_ban.sh`
-  into CI (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on branch
+  into CI (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: `rust-audit-and-test` job in
   `.github/workflows/build.yml` runs the clamp-ban lint on every PR.
 
 - **~~Derivation-freeze hardening: `ADDRESS_DERIVATION_MANIFEST_HASH`
-  freeze tripwire (2026-06-10 doc sweep).~~** **CLOSED 2026-06-03** on
+  freeze tripwire (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on
   branch `chore/address-derivation-v1-freeze`:
   `rust/shekyl-crypto-pq/src/address_derivation_freeze.rs` pins the corpus
-  SHA-256; `shekyl-cli derivation-freeze-self-check` and C FFI
-  `shekyl_address_derivation_manifest_self_check()` expose the offline
-  check. Full `generate-genesis-address` deferred; MID_REWIRE_HARDENING
-  §6.4 tuple extension still deferred.
+  SHA-256; `shekyl-cli derivation-freeze-self-check` exposes the offline
+  check. No C FFI export: no C++ consumer exists, and an uncalled export
+  is deleted per `15-deletion-and-debt.mdc`; re-add when a named C++
+  caller (genesis ceremony tooling or a wallet2 startup check) lands.
+
+- **Genesis ceremony tooling: `generate-genesis-address` CLI
+  (2026-06-11 derivation-freeze closeout).** The freeze tripwire landed
+  as a standalone `shekyl-cli derivation-freeze-self-check` subcommand;
+  the genesis-address generator that the ceremony will wrap around it
+  (generate the genesis address from ceremony entropy, run the
+  derivation-freeze self-check as a precondition, emit the address +
+  audit transcript) does not exist yet. Must land before the genesis
+  ceremony, together with `docs/MID_REWIRE_HARDENING.md` §6.4's
+  freeze-manifest tuple extension (`format_version`, `block_versions`,
+  `payload_version`), which lands "with the freeze commit" per that
+  spec. **Target: V3.0 (pre-genesis; blocks the genesis ceremony).**
 
 - **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc
   sweep).** `docs/USER_GUIDE.md` still documents the legacy C++ CLI

@@ -4116,19 +4116,24 @@ per-output or account PQC secrets* — rejected per
 `master_seed_64`.
 
 **Residues (tracked, not blocking the freeze).** Three hardening
-accessories from the plan's acceptance criteria **landed 2026-06-03**
+accessories from the plan's acceptance criteria **landed 2026-06-11**
 (`chore/address-derivation-v1-freeze`): the CODEOWNERS-protected
 `docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus +
-`kat_address_derivation_v1.rs`, CI wiring for
-`scripts/lint_cpp_clamp_ban.sh`, and the
+`kat_address_derivation_v1.rs` (the consumer also verifies the
+manifest's self-describing fields and Tier-2 account distinctness),
+CI wiring for `scripts/lint_cpp_clamp_ban.sh`, and the
 `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire
-(`address_derivation_freeze.rs`, `shekyl-cli derivation-freeze-self-check`,
-C FFI `shekyl_address_derivation_manifest_self_check()`). Still
-deferred: `MID_REWIRE_HARDENING.md` §6.4 tuple extension hashing
-`(format_version, block_versions, payload_version)`; full
-`generate-genesis-address` CLI (genesis ceremony tooling). The pipeline
-bytes themselves remain frozen as of the 2026-06-10 entry; the landed
-items harden enforcement, not definition.
+(`address_derivation_freeze.rs`, `shekyl-cli
+derivation-freeze-self-check`). No C FFI export ships: no C++ consumer
+exists, so the export was deleted per `15-deletion-and-debt.mdc`;
+re-add when a named C++ caller (genesis ceremony tooling or a wallet2
+startup check) lands. Still deferred, tracked in `docs/FOLLOWUPS.md`
+§"Genesis ceremony tooling" (target V3.0): full
+`generate-genesis-address` CLI, and `MID_REWIRE_HARDENING.md` §6.4
+tuple extension hashing `(format_version, block_versions,
+payload_version)`. The pipeline bytes themselves remain frozen as of
+the 2026-06-10 entry; the landed items harden enforcement, not
+definition.
 
 **Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
 (authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;
