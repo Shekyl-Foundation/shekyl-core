@@ -36,7 +36,7 @@ shekyl-economics = { path = "../shekyl-economics" }
 # digest already uses; promotes the transitive dep to direct.
 blake2 = { workspace = true }
 shekyl-address = { path = "../shekyl-address" }
-# `AtomicUnits` amount-newtype (`docs/design/ATOMIC_UNITS_NEWTYPE.md`).
+# `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
 # Replaces raw `u64` on the engine's amount-bearing surfaces
 # (`TxRecipient`/`PendingTx` fees, `OutputClaim` secret amount,
 # `OutputSelector`/`FeeEstimator` targets, claim/multisig-intent amounts).

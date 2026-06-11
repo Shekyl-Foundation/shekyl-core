@@ -707,7 +707,7 @@ instance of a recurring shape: an adversarially-stronger
 disposition supersedes an aesthetically-preferred one once a
 threat-model pass surfaces a memory-exhaustion or DoS-amplification
 class the cleaner shape opens. The first instance is the LWMA-1
-time-source disposition (`docs/design/DAA_LWMA1.md` §§2.4–2.5):
+time-source disposition (`docs/completed/DAA_LWMA1.md` §§2.4–2.5):
 the local-time-only choice supersedes the peer-time-derived
 shape that was structurally elegant ("the network self-governs
 time as well as difficulty") but adversarially weak under a

@@ -110,7 +110,7 @@ namespace
   // on any non-zero return code.
   //
   // `chain_height` semantics match the spec
-  // (docs/design/DAA_LWMA1.md §5.3): the height of the chain tip (the
+  // (docs/completed/DAA_LWMA1.md §5.3): the height of the chain tip (the
   // most recent block already on chain). The FFI's genesis short-circuit
   // fires when `chain_height < SHEKYL_DAA_WINDOW_N`, returning
   // `SHEKYL_DAA_GENESIS_DIFFICULTY` without inspecting the input
@@ -998,7 +998,7 @@ bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orph
   return false;
 }
 //------------------------------------------------------------------
-// LWMA-1 next-difficulty (per docs/design/DAA_LWMA1.md §5.3). Aggregates
+// LWMA-1 next-difficulty (per docs/completed/DAA_LWMA1.md §5.3). Aggregates
 // timestamps and cumulative_difficulties for the last
 // `SHEKYL_DAA_WINDOW_N + 1` blocks (or zero entries when the chain has
 // fewer than `SHEKYL_DAA_WINDOW_N` blocks — the FFI genesis short-circuit

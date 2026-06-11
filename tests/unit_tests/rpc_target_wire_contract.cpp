@@ -58,7 +58,7 @@
 // JSON parsers MUST tolerate it but offline grep-based monitoring relies
 // on the canonical form.
 //
-// See docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the migration
+// See docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the migration
 // bridge rationale.
 
 #include "gtest/gtest.h"

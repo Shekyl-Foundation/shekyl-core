@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause AND MIT
 //
 // Shekyl LWMA-1 with running-max + signed-solvetime + symmetric ±6*T
-// clamp step 2/3 — the C++ form of docs/design/DAA_LWMA1.md §5.3
+// clamp step 2/3 — the C++ form of docs/completed/DAA_LWMA1.md §5.3
 // step 2/3. Canonical LWMA-1 portions (genesis short-circuit, step 5
 // minimum-L floor, step 6 avg_D, step 7 overflow guard + 99/200 bias,
 // step 8 rounding) are byte-identical to canonical zawy12 LWMA-1
@@ -25,7 +25,7 @@
 //
 // This file is consumed by tests/difficulty/lwma1_cross_check.cpp as
 // the byte-equality reference for the §8.1 out-of-sequence vectors
-// (vectors 6 and 7 of docs/design/DAA_LWMA1.md §8.1) where canonical
+// (vectors 6 and 7 of docs/completed/DAA_LWMA1.md §8.1) where canonical
 // LWMA-1 and Shekyl's refinement diverge. For monotonic vectors
 // (1-5), the canonical reference in zawy12_lwma1_reference.h is also
 // byte-equal to this one; the harness checks both for completeness.

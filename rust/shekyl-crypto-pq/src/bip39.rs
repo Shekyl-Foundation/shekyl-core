@@ -138,7 +138,7 @@ pub fn mnemonic_to_pbkdf2_seed(
 /// plus an 8-bit checksum. This entry point is the Shekyl-side primitive
 /// behind the `shekyl_bip39_mnemonic_to_entropy` FFI added by the
 /// Electrum-words removal Phase 1 atomic commit per
-/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10. The wallet keyfile
+/// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10. The wallet keyfile
 /// persists the entropy (not the phrase); `query_key("mnemonic")`
 /// regenerates the phrase from the persisted entropy on demand.
 ///

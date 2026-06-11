@@ -1,7 +1,7 @@
 //! Error taxonomy for the LWMA-1 algorithm.
 //!
 //! The variants mirror the FFI error codes documented in
-//! `docs/design/DAA_LWMA1.md` §6.1 (ERR_NULL_PTR / ERR_INVALID_COUNT /
+//! `docs/completed/DAA_LWMA1.md` §6.1 (ERR_NULL_PTR / ERR_INVALID_COUNT /
 //! ERR_OVERFLOW / ERR_INTERNAL) modulo the Rust-safe-API boundary:
 //! - `ERR_NULL_PTR` is structurally absent in safe Rust (slices cannot
 //!   be null).
@@ -19,7 +19,7 @@ pub enum Error {
     /// `chain_height >= N` but the input window does not contain
     /// exactly `N + 1` entries (or the two slices disagree in length).
     /// Maps to `ERR_INVALID_COUNT` (-2) at the FFI boundary per
-    /// `docs/design/DAA_LWMA1.md` §6.1.
+    /// `docs/completed/DAA_LWMA1.md` §6.1.
     InvalidCount,
     /// A consensus invariant was violated by the inputs — typically a
     /// non-monotonic cumulative-difficulty sequence, or arithmetic

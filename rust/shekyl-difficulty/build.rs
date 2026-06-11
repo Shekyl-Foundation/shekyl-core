@@ -8,9 +8,9 @@
 //! pattern mirrors `rust/shekyl-engine-core/build.rs`; the per-crate
 //! `build.rs` (rather than centralizing in `shekyl-engine-core/build.rs`)
 //! is the Round 3 disposition recorded in
-//! `docs/design/DAA_LWMA1_PLAN.md` Phase 1 — extending the engine-core
+//! `docs/completed/DAA_LWMA1_PLAN.md` Phase 1 — extending the engine-core
 //! build script would break this crate's leaf property (zero internal
-//! workspace deps per `docs/design/DAA_LWMA1.md` §2.1).
+//! workspace deps per `docs/completed/DAA_LWMA1.md` §2.1).
 //!
 //! Per Round 3 (DAA_LWMA1.md §4): only the window-shape constants are
 //! emitted here — `N`, `T_SECONDS`, `FTL_SECONDS`, `MTP_WINDOW`,

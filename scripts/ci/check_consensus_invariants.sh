@@ -4,8 +4,8 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Consensus-invariant checks — Phase 4 of `docs/design/DAA_LWMA1_PLAN.md`
-# work-items 8, 9, 10 (`docs/design/DAA_LWMA1.md` §7).
+# Consensus-invariant checks — Phase 4 of `docs/completed/DAA_LWMA1_PLAN.md`
+# work-items 8, 9, 10 (`docs/completed/DAA_LWMA1.md` §7).
 #
 # Three invariants verified at source level (binary-level `nm` checks
 # require building the C++ daemon and are deferred to a separate

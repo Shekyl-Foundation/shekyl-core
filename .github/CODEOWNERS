@@ -30,7 +30,7 @@ docs/test_vectors/WALLET_FILE_FORMAT_V1/**  @Shekyl-Foundation/maintainers
 # -----------------------------------------------------------------
 docs/POST_QUANTUM_CRYPTOGRAPHY.md      @Shekyl-Foundation/maintainers
 docs/FCMP_PLUS_PLUS.md                 @Shekyl-Foundation/maintainers
-docs/WALLET_FILE_FORMAT.md             @Shekyl-Foundation/maintainers
+docs/WALLET_FILE_FORMAT_V1.md          @Shekyl-Foundation/maintainers
 docs/SIGNING.md                        @Shekyl-Foundation/maintainers
 
 # -----------------------------------------------------------------

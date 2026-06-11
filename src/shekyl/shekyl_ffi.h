@@ -885,7 +885,7 @@ bool shekyl_bip39_mnemonic_from_entropy(
 /// `out32_ptr`. The inverse of `shekyl_bip39_mnemonic_from_entropy` above;
 /// used by the wallet keyfile JSON-restore path to extract the entropy
 /// bytes for `store_keys`-encrypted persistence in `m_bip39_entropy`. See
-/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
+/// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
 /// rationale.
 bool shekyl_bip39_mnemonic_to_entropy(
     const uint8_t* words_ptr,
@@ -1901,7 +1901,7 @@ uint8_t shekyl_archival_epoch_close_compute(
 // LWMA-1 difficulty-adjustment FFI surface
 //
 // Single function: `shekyl_difficulty_lwma1_next`. Wraps the
-// `shekyl-difficulty` crate's `lwma1_next` per `docs/design/DAA_LWMA1.md`
+// `shekyl-difficulty` crate's `lwma1_next` per `docs/completed/DAA_LWMA1.md`
 // §5.3 and §6.1. The C-ABI difficulty type is `struct shekyl_u128`
 // (two u64 halves, little-endian) per Round 5's ABI disposition --
 // Rust `u128`'s C ABI was target-dependent until rustc 1.77 and the

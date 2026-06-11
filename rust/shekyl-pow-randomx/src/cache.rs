@@ -119,8 +119,8 @@ fn alloc_zeroed_cache_blocks(len: usize) -> Box<[Block]> {
     // `[u64; 128]` with no `repr(C)` divergence and no `Drop` impl. All-zeroes
     // is a valid bit pattern for `[u64; 128]` because zero is a valid `u64`.
     // `Box::new_zeroed_slice(len)` allocates `len` Block-sized regions and
-    // zero-initializes them per its stabilized contract (Rust 1.82+; current
-    // MSRV 1.85); converting `Box<[MaybeUninit<Block>]>` to `Box<[Block]>`
+    // zero-initializes them per its stabilized contract (Rust 1.92+; workspace
+    // MSRV 1.94); converting `Box<[MaybeUninit<Block>]>` to `Box<[Block]>`
     // via `assume_init` is sound because the zero bit pattern is a valid
     // `Block` value. The length invariant is checked at the caller via the
     // `debug_assert_eq!` in [`Cache::derive`] per §5.11.2.

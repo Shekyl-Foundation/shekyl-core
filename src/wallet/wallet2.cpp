@@ -239,7 +239,7 @@ namespace
 
 namespace tools {
 // Phase-1 BIP-39 restore-from-phrase access surface per
-// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The struct lives in
+// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The struct lives in
 // `namespace tools` rather than the anonymous namespace at this TU's
 // file scope so that `class wallet2` can `friend
 // tools::generate_from_json(...)` in `wallet2.h` (the friend declaration
@@ -534,7 +534,7 @@ std::optional<tools::password_container> get_password(const boost::program_optio
 // `tools::generate_from_json` lives in `namespace tools` (not the anonymous
 // namespace above) so that `class tools::wallet2` can grant it friendship
 // in `wallet2.h` for the Phase-1 BIP-39 restore-from-phrase access surface
-// per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The friend
+// per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The friend
 // declaration's unqualified name lookup resolves to `tools::generate_from_json`,
 // not to a TU-local anonymous-namespace function; thus the function must
 // live in `namespace tools` for the friendship to take effect. See the
@@ -622,7 +622,7 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
     if (field_seed_found)
     {
       // Phase 1 atomic-deliverable BIP-39 rewire per
-      // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.5.1 Surface A and
+      // `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.5.1 Surface A and
       // §4.10.1. The JSON `seed` field is interpreted as a 24-word
       // BIP-39 English mnemonic; the JSON `seed_passphrase` field is
       // consumed *inside* the BIP-39 PBKDF2-HMAC-SHA512 derivation by
@@ -635,7 +635,7 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
       // `tests/unit_tests/wallet_storage.cpp:42-144`.
       //
       // V6 25-word UX hint per
-      // `docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md` §Phase 1 work-
+      // `docs/completed/ELECTRUM_WORDS_REMOVAL_PLAN.md` §Phase 1 work-
       // item 10: count whitespace-separated tokens in `field_seed`;
       // if exactly 25, surface a hint pointing at the BIP-39
       // requirement before the bare validation error. The check is
@@ -713,7 +713,7 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
 
     // No deprecated-wallet detection: Phase 1 atomically retires the
     // Electrum-words subsystem from the JSON-restore path
-    // (`docs/design/ELECTRUM_WORDS_REMOVAL.md` §6.1 — "BIP-39 from
+    // (`docs/completed/ELECTRUM_WORDS_REMOVAL.md` §6.1 — "BIP-39 from
     // genesis, no legacy seed-format compatibility branch").
     // 25-word phrases are caught earlier by the V6 UX-hint guard.
 
@@ -726,7 +726,7 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
       if (restore_from_bip39)
       {
         // Phase 1 atomic-deliverable BIP-39 orchestration per
-        // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 + §4.5.1
+        // `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 + §4.5.1
         // Surface A, inlined here (rather than wrapped in a
         // `wallet2::generate_from_bip39` member) per §4.10.1 and the
         // CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144`.
@@ -1554,7 +1554,7 @@ bool wallet2::is_deterministic() const
 bool wallet2::get_seed(epee::wipeable_string& /*electrum_words*/, const epee::wipeable_string& /*passphrase*/) const
 {
   // Phase 1 atomic-deliverable: `wallet2::get_seed` is left dead-but-
-  // extant per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §6 / Phase 4
+  // extant per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §6 / Phase 4
   // Commit A disposition. The only call sites — the FFI dispatch
   // branch at `wallet2_ffi.cpp:643` and the equivalent
   // `wallet_rpc_server.cpp` `query_key("mnemonic")` handler — were
@@ -4986,7 +4986,7 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   }
 
   // Persist `m_bip39_entropy` (32 bytes, hex-encoded) when set, per
-  // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10. The hex encoding
+  // `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10. The hex encoding
   // is for keyfile JSON readability; the entropy bytes themselves are
   // inside the xchacha20-encrypted envelope (the whole JSON is
   // encrypted below at the `xchacha20(buffer...)` call), so the on-
@@ -5553,7 +5553,7 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     {
       set_seed_language(field_seed_language);
     }
-    // Phase 1 BIP-39 entropy load (`docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // Phase 1 BIP-39 entropy load (`docs/completed/ELECTRUM_WORDS_REMOVAL.md`
     // §4.10 + §V4). Wallets created via `generate_from_bip39` write
     // the field; wallets created via raw-seed / from-keys / hardware
     // paths leave the field absent and `m_bip39_entropy` stays at

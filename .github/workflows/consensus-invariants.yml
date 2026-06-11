@@ -4,7 +4,7 @@
 # BSD-3-Clause
 #
 # Consensus-invariants gate — verifies, at source level, that the
-# LWMA-1 cutover (Phase 4 of `docs/design/DAA_LWMA1_PLAN.md`) and
+# LWMA-1 cutover (Phase 4 of `docs/completed/DAA_LWMA1_PLAN.md`) and
 # subsequent consensus-affecting deletions remain swept:
 #
 #   1. No live consumers of the deleted CryptoNote DAA functions

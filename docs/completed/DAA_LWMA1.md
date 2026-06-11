@@ -101,7 +101,7 @@ backward compatibility: no `DIFFICULTY_LAG`, no `DIFFICULTY_CUT`, no
 
 **Sibling track.** LWMA-1 ships **independently of and in parallel
 with** the RandomX v2 PoW migration documented in
-[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). The two are
+[`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md). The two are
 math-orthogonal — RandomX v2 changes the hash function; LWMA-1 changes
 the difficulty adjustment that operates on `(timestamps,
 cumulative_difficulties)`. Each is a separable Phase 0 → cutover
@@ -1085,14 +1085,14 @@ zawy12 attributes to LWMA-3 in
 prose ("a different method is used in LWMA-3 and LWMA-4 so
 developers do not need to do work outside the algorithm"); the
 literal canonical LWMA-3 code in
-[`docs/design/refs/zawy12_issue_3_lwma1.md`](./refs/zawy12_issue_3_lwma1.md)
+[`docs/design/refs/zawy12_issue_3_lwma1.md`](../design/refs/zawy12_issue_3_lwma1.md)
 lines 360–370 of the pinned `.body` implements running-max
 equivalence via `previous_timestamp = this_timestamp` after a
 `previous_timestamp+1` floor, but does **not** allow signed
 solvetimes or symmetric clamping (those are the Shekyl
 refinements). The executable form of the Shekyl design is
 documented in
-[`docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`](./refs/shekyl_lwma1_running_max_symmetric_clamp.md)
+[`docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`](../design/refs/shekyl_lwma1_running_max_symmetric_clamp.md)
 and is the documented disposition against the September 2018
 selfish-mine attack class from zawy12 issue #24 (see §1.3 and
 §5.5):
@@ -1326,7 +1326,7 @@ verbatim and reaches the same number by construction.
 **Phase 1 pre-flight verification (executed at Phase 0 close,
 2026-05-18).** The canonical reference C++ implementation
 (transcribed verbatim from
-[`docs/design/refs/zawy12_issue_3_lwma1.md`](./refs/zawy12_issue_3_lwma1.md)
+[`docs/design/refs/zawy12_issue_3_lwma1.md`](../design/refs/zawy12_issue_3_lwma1.md)
 LWMA1_() lines 77–119 of the pinned `.body`) was compiled and
 run against the §8.1 stable-hashrate vector with `N = 90`,
 `T = 120`, `avg_D = 1_000_000`, `timestamps[i] = 1_700_000_000 +
@@ -2916,7 +2916,7 @@ yet have a design doc — the consumer becomes a stateless Rust
 **block-validator actor**. The validator's shape, following the
 pattern established by the wallet-side `STAGE_1_*` engine
 extractions (DaemonEngine, LedgerEngine, RefreshEngine in
-[`docs/design/STAGE_1_PR_*`](./STAGE_1_PR_1_DAEMON_ENGINE.md)),
+[`docs/design/STAGE_1_PR_*`](../design/STAGE_1_PR_1_DAEMON_ENGINE.md)),
 is:
 
 1. Receives `(block_header, parent_chain_handle)` from its caller.
@@ -2954,7 +2954,7 @@ crate exists, it consumes the transform; the transform's signature
 ## Cross-references
 
 - [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) — phased plan.
-- [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) — sibling PoW
+- [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) — sibling PoW
   migration; orthogonal at the math level, similar architectural
   shape. §3 spec-as-source-of-truth, §7 isolation invariants, §9
   consensus-constant typing, §13 explicit non-goals, §23 reviewer
@@ -2965,7 +2965,7 @@ crate exists, it consumes the transform; the transform's signature
   for the LWMA-1 numeric constants (§4).
 - [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md)
   — audit that motivated the JSON-authority pattern.
-- [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./STAGE_1_PR_1_DAEMON_ENGINE.md)
+- [`STAGE_1_PR_1_DAEMON_ENGINE.md`](../design/STAGE_1_PR_1_DAEMON_ENGINE.md)
   and sibling `STAGE_1_PR_*` docs — wallet-side engine-extraction
   pattern referenced by §17.
 - [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)

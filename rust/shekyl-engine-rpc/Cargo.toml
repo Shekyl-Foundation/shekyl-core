@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 serde = { workspace = true }
 serde_json = "1"
-# `AtomicUnits` amount-newtype (`docs/design/ATOMIC_UNITS_NEWTYPE.md`).
+# `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
 # `TransferDestination.amount` carries it; `#[serde(transparent)]` keeps the
 # JSON-RPC wire format a bare number (§4.5).
 shekyl-units = { path = "../shekyl-units" }

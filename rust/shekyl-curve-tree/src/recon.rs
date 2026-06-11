@@ -185,6 +185,23 @@ pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafE
     drained
 }
 
+/// Leaves that enter the drained set when the inclusive cutoff advances to
+/// `drained_through`.
+///
+/// During monotonic block ingest, `drained_through` increases by at most one
+/// per block; these are exactly the leaves with `maturity == drained_through`
+/// (all lower maturities were persisted on prior blocks). Sorted by `gindex`
+/// within the maturity class so append order matches canonical drain order.
+#[must_use]
+pub fn newly_drained_at_cutoff(entries: &[LeafEntry], drained_through: u64) -> Vec<LeafEntry> {
+    let mut batch: Vec<&LeafEntry> = entries
+        .iter()
+        .filter(|e| e.maturity == drained_through)
+        .collect();
+    batch.sort_by_key(|e| e.gindex);
+    batch.into_iter().copied().collect()
+}
+
 /// Assemble the flat leaf-scalar stream for all leaves drained by
 /// `drained_through`, in canonical drain order `(maturity, gindex)` (S2).
 /// The result feeds [`shekyl_fcmp::tree::build_layers`].
@@ -394,5 +411,31 @@ mod tests {
         let scalars = assemble_leaf_stream(&entries, 70);
         // Two drained leaves → 8 scalars (the maturity-71 leaf excluded).
         assert_eq!(scalars.len(), 2 * SCALARS_PER_LEAF);
+    }
+
+    #[test]
+    fn incremental_drain_batches_match_drained_sorted_prefix() {
+        let id = coinbase_output();
+        let leaf = try_build_leaf(&id).expect("valid leaf");
+        let entries = vec![
+            LeafEntry {
+                gindex: 0,
+                maturity: 60,
+                leaf,
+                identity: id,
+            },
+            LeafEntry {
+                gindex: 1,
+                maturity: 10,
+                leaf,
+                identity: id,
+            },
+        ];
+        let mut incremental = Vec::new();
+        for through in 0..=60u64 {
+            incremental.extend(newly_drained_at_cutoff(&entries, through));
+        }
+        let oracle: Vec<LeafEntry> = drained_sorted(&entries, 60).into_iter().copied().collect();
+        assert_eq!(incremental, oracle);
     }
 }
