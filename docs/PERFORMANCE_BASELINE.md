@@ -818,13 +818,14 @@ Archive captures under
 |------|----------|----------|--------|-------------|----------------|
 | fa6 | smoke | — | 271,505 | default | informational |
 | fa6 | A | 550.4 s | 273,023 | default | **fail** |
-| fa6 | B | *(pending)* | ~273,000 (extrap.) | — | **fail** (expected) |
+| fa6 | B | 140,265 s (~39.0 h) | 266,683.88 | `-C target-cpu=cortex-a72` | **fail** |
 | classical | smoke | — | 639,791 | `-C target-cpu=cortex-a72` | informational |
 | classical | A | 1,289.9 s | 639,834 | `-C target-cpu=cortex-a72` | **fail** |
 | classical | B | *(pending)* | ~640,000 (extrap.) | — | **fail** (expected) |
 
-Replace B *(pending)* rows with measured `T_meas` when overnight capture
-completes; disposition unchanged.
+Scenario B measured capture:
+`docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt`.
+Classical B row remains *(pending)* until captured.
 
 ### Laptop reference (le7560, x86_64, `rustc` 1.95.0 — ceilings not reachable)
 

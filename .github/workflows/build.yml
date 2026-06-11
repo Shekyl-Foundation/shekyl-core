@@ -2,6 +2,11 @@ name: ci/gh-actions/cli
 
 on:
   push:
+    # dev/main only. PR branches are covered by the pull_request event
+    # (which tests the PR merged into its base — the stronger signal);
+    # an unrestricted push trigger double-runs every job on each push
+    # to an open PR. Branches without a PR get CI by opening a draft PR.
+    branches: [dev, main]
     paths-ignore:
       - 'docs/**'
       - '**/README.md'

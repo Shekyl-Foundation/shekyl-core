@@ -305,13 +305,17 @@ integration tests, 8c verifier hookup.
 - [x] Pin serve-credit-ledger key `(P_id, shard_id, E)` — `archival_serve_credit` LMDB
       (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
       gate-4-owned.
-- [ ] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
-- [ ] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
-      semantics** at `E`-close (§3.4; not scalar `slash_epoch`).
+- [x] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
+      LMDB `archival_r_market`; sweep in `process_archival_epoch_close_at_height` —
+      gather/store only; arithmetic in Rust `epoch_close_compute`
+      ([`ARCHIVAL_REWARD_ARITHMETIC.md`](ARCHIVAL_REWARD_ARITHMETIC.md) §Crate surface).
+- [x] Pin `good_through` encoding — bonded/slashed/re-bond **event log with interval
+      semantics** at `E`-close (§3.4; partial-slash F3 `bad_interval` append).
 - [x] Pin `MAX_CLAIM_AGE_W` + retention/reorg split + prune semantics + **drain-vs-forfeiture**
       (timing cluster 2026-06-07)
       joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
-- [ ] Pin `Σwork(E)` finalization (sweep vs incremental) + reorg revert order (emission §8).
+- [x] Pin `Σwork(E)` finalization (epoch-close sweep) + reorg revert order (emission §8).
+      LMDB `archival_sigma_work`; `revert_archival_epoch_close_at_height` after slash revert.
 - [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.
 - [ ] Retention-proof construction bytes (8c) — may follow interface pin.
 - [ ] KAT: emission recompute against fixture ledger state.

@@ -1745,7 +1745,6 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
     size_t hybrid_pubkey_len,
     uint8_t* out_p_id);
 
-uint64_t shekyl_archival_settlement_epoch_blocks(void);
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_resolution_blocks(void);
@@ -1812,6 +1811,91 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t settlement_epoch,
     uint64_t join_settlement_epoch);
+
+// ---------------------------------------------------------------------------
+// Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,
+// §3.5). The daemon gathers raw LMDB rows and delegates the entire consensus
+// computation — membership, R_market counting, age weighting, scarcity, curve,
+// Σwork — to Rust in one coarse call (40-ffi-discipline.mdc). C++ performs no
+// consensus arithmetic.
+
+/// `good_through(P, E)` from bond fields (§3.4 interval semantics).
+/// `bad_intervals_ptr` is `2 × bad_intervals_len` u64s — flattened
+/// `(start_epoch, end_exclusive)` pairs. Returns 0 (fail-closed) on malformed input.
+uint8_t shekyl_archival_good_through(
+    uint64_t join_settlement_epoch,
+    uint64_t settlement_epoch,
+    const uint64_t* bad_intervals_ptr,
+    size_t bad_intervals_len);
+
+/// Settlement epoch containing `block_height` (bond-connect join epoch).
+uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
+
+/// Returns 1 and writes the settlement epoch whose close is processed at
+/// `block_height`; 0 (no write) at height 0 or non-boundary heights.
+uint8_t shekyl_archival_epoch_close_due(
+    uint64_t block_height,
+    uint64_t* out_settlement_epoch);
+
+/// Returns 1 and writes the prune horizon (`tip_epoch - MAX_CLAIM_AGE_W`) when
+/// the chain is older than the claim window at `block_height`; 0 otherwise.
+uint8_t shekyl_archival_prune_below_epoch(
+    uint64_t block_height,
+    uint64_t* out_prune_below_epoch);
+
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE   3
+
+/// One gathered bond. Layout must match `ShekylArchivalEpochCloseBond` in
+/// `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_epoch_close_bond
+{
+  uint64_t join_settlement_epoch;
+  /// Flattened (start_epoch, end_exclusive) pairs; `2 * bad_intervals_len` u64s.
+  const uint64_t* bad_intervals_ptr;
+  /// Pair count (not u64 count).
+  size_t bad_intervals_len;
+  const uint64_t* held_shard_ids_ptr;
+  size_t held_shard_ids_len;
+  uint8_t is_foundation_complete_tree;
+};
+
+/// One gathered shard-registry row. Layout must match
+/// `ShekylArchivalEpochCloseShard` in `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_epoch_close_shard
+{
+  uint64_t shard_id;
+  uint64_t freeze_height;
+  /// 0 when no frozen segment row exists (shard age is then zero).
+  uint8_t has_segment;
+};
+
+/// One serve-credit row as indices into the bond/shard gather arrays.
+/// Layout must match `ShekylArchivalCreditPair` in `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_credit_pair
+{
+  size_t bond_idx;
+  size_t shard_idx;
+};
+
+/// Full epoch-close computation. Writes `R_market` per input shard to
+/// `out_r_market_ptr` (`shards_len` u64s) and `Σwork(E)` milli to
+/// `out_sigma_work_milli_ptr`. Outputs are zeroed before computation; a
+/// non-zero return never leaves stale values. Credit pairs must be distinct
+/// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
+uint8_t shekyl_archival_epoch_close_compute(
+    uint64_t settlement_epoch,
+    uint64_t close_block_height,
+    const struct shekyl_archival_epoch_close_bond* bonds_ptr,
+    size_t bonds_len,
+    const struct shekyl_archival_epoch_close_shard* shards_ptr,
+    size_t shards_len,
+    const struct shekyl_archival_credit_pair* credit_pairs_ptr,
+    size_t credit_pairs_len,
+    uint64_t* out_r_market_ptr,
+    uint64_t* out_sigma_work_milli_ptr);
 
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface

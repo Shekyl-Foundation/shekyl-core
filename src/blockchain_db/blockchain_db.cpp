@@ -242,10 +242,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
         throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
       const uint64_t block_height = get_block_height(blk_hash);
-      const uint64_t seb = shekyl_archival_settlement_epoch_blocks();
-      if (seb == 0)
-        throw std::runtime_error("FATAL: settlement epoch blocks is zero");
-      const uint64_t join_epoch = block_height / seb;
+      const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
       put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
         bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
         bond.holdings.shard_ids);
@@ -470,6 +467,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   m_hardfork->add(blk, prev_height);
 
   process_archival_slash_at_height(prev_height + 1);
+  process_archival_epoch_close_at_height(prev_height + 1);
 
   ++num_calls;
 
@@ -490,6 +488,7 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // same height that add_block() used when the outputs were inserted.
   const uint64_t removed_block_height = height();
   revert_archival_slashes_at_height(removed_block_height);
+  revert_archival_epoch_close_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -1389,6 +1388,25 @@ void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
 
 void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
 {
+}
+
+void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+uint64_t BlockchainDB::get_archival_r_market(uint64_t /*shard_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return 0;
+}
+
+uint64_t BlockchainDB::get_archival_sigma_work_milli(uint64_t /*settlement_epoch*/) const
+{
+  return 0;
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)

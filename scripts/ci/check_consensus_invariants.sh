@@ -85,7 +85,7 @@ build_glob_excludes() {
 # ----------------------------------------------------------------------
 # Invariant 1: no live consumers of deleted DAA functions.
 # ----------------------------------------------------------------------
-echo "[1/3] Symbol-isolation: next_difficulty / next_difficulty_64"
+echo "[1/4] Symbol-isolation: next_difficulty / next_difficulty_64"
 
 mapfile -t glob_excludes < <(build_glob_excludes)
 
@@ -112,7 +112,7 @@ echo
 # ----------------------------------------------------------------------
 # Invariant 2: no C-ABI declarations in shekyl-difficulty.
 # ----------------------------------------------------------------------
-echo "[2/3] No-C-ABI in rust/shekyl-difficulty/src/"
+echo "[2/4] No-C-ABI in rust/shekyl-difficulty/src/"
 
 if rg --type rust \
       -n \
@@ -134,7 +134,7 @@ echo
 # ----------------------------------------------------------------------
 # Invariant 3: no orphaned references to deleted #defines.
 # ----------------------------------------------------------------------
-echo "[3/3] No-orphaned-magic-numbers: DIFFICULTY_* / FTL / MTP legacy"
+echo "[3/4] No-orphaned-magic-numbers: DIFFICULTY_* / FTL / MTP legacy"
 
 DELETED_DEFINES='DIFFICULTY_TARGET_V[12]|DIFFICULTY_WINDOW|DIFFICULTY_LAG|DIFFICULTY_CUT|DIFFICULTY_BLOCKS_COUNT|DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN|CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT|BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW|CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1'
 
@@ -159,10 +159,21 @@ fi
 echo
 
 # ----------------------------------------------------------------------
+# Invariant 4: archival reward gates (mint + integer arithmetic).
+# ----------------------------------------------------------------------
+echo "[4/4] Archival reward gates"
+if ! scripts/ci/check_archival_reward_gates.sh; then
+  FAIL=1
+else
+  echo "      OK"
+fi
+echo
+
+# ----------------------------------------------------------------------
 # Result summary.
 # ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (3/3)"
+echo "consensus-invariants: PASS (4/4)"

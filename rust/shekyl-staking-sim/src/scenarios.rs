@@ -20,7 +20,7 @@ use crate::participation::{
 use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
 };
-use crate::reward::{evaluate, RewardParams};
+use crate::reward::{evaluate, CurveImpl, RewardParams};
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
 
@@ -55,6 +55,7 @@ pub struct SimConfig {
     pub cap: f64,
     pub pseudonym_cost: f64,
     pub age_weight: f64,
+    pub curve_impl: CurveImpl,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
@@ -511,6 +512,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         cap: cfg.cap,
         pseudonym_cost: cfg.pseudonym_cost,
         age_weight: cfg.age_weight,
+        curve_impl: cfg.curve_impl,
     };
     let ap = AgentParams {
         storage_unit_cost: cfg.storage_unit_cost,
@@ -1207,6 +1209,7 @@ fn baseline() -> SimConfig {
         cap: 8.0,
         pseudonym_cost: 0.05,
         age_weight: 2.0,
+        curve_impl: CurveImpl::Float,
         storage_unit_cost: 0.03,
         bond_rate: 2.0,      // mid
         bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)
