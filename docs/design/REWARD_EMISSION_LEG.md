@@ -435,19 +435,44 @@ check_and_set(E): bool
 
 **Encoding (genesis pin):** Per-`P` **sparse set of absolute settlement-epoch indices**
 `E`. Consensus-visible semantics only; **not** the retired 2-byte **relative** `u16`
-mask from tier-bounded stake claims. **Concrete encoding deferred until `W` is pinned**
-([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-3; joint with F1/F4).
+mask from tier-bounded stake claims.
+
+**Concrete encoding (decided 2026-06-11, `W = 26` pinned):** an **inline field on
+`ArchivalBondValue`** — strictly-increasing list of absolute epoch indices, `u32` count +
+`u64` BE per entry, hard cap **32** entries (`W = 26` plus reorg slack; cap violation is a
+decode error like the existing `kMax*` bounds). `ArchivalBondValue` bumps **v3 → v4**; v3
+rejected at decode per the pre-genesis posture (no migration; reset data-dir). Pruning to
+`E > tip_settled − W` rides the existing §6.6 forfeiture sweep and is an optimization only —
+correctness comes from E-3 forfeiture rejecting out-of-window claims *before* dedup is
+consulted, so a stale entry can never enable or block a valid claim. Why inline, not the
+alternatives:
+
+- **Emission verify reads the bond record anyway** (`good_through`, `E_join`); one decode
+  covers the whole ≤15-epoch batch. A separate table costs up to 15 point reads per vin on
+  the verify hot path plus its own `pop_block` revert plumbing; inline reverts atomically
+  with the record rewrite the reorg path already performs.
+- **Size is a non-issue:** ≤ 26×8 = 208 bytes against a record already carrying a ~2 KB
+  hybrid pubkey, and the counted-vector shape matches `held_shard_ids` / `bad_intervals`
+  precedent.
 
 **Rejected encoding options (pre-genesis):**
 
+- **Fixed bitmap over `(tip − W, tip]`** (`u32` fits `W = 26`) — requires a base-epoch
+  rebase as the window slides (per-record mutation at epoch close, or lazy-rebase logic
+  whose failure mode is exactly the double-claim-after-window-slide bug the relative mask
+  was retired for); saves ~200 bytes per record, which is noise.
+- **Separate LMDB table, composite key `P_canonical_id ‖ BE(E)`** (the
+  `archival_serve_credit` precedent) — viable but strictly worse here: see hot-path and
+  revert-plumbing costs above.
 - **LMDB `MDB_DUPSORT` dup-keys `(P_id, E)`** — collides with Shekyl composite-key
   discipline ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md): no DUPSORT on Shekyl-native tables).
-  Use composite key `P_canonical_id ‖ BE(E)` or equivalent without DUPSORT.
-- **Roaring bitmap** — defer unless `W` proves large enough to justify dependency
+- **Roaring bitmap** — dependency unjustified at `W = 26`
   ([`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)).
 
-**Candidate shapes (post-`W`):** sorted epoch list pruned to `E ≥ tip − W`; or fixed bitmap
-over the `(tip − W, tip]` window when `W` is small.
+**Reversion clause:** reopen the encoding (bitmap or separate table re-enter) only if `W`
+is re-pinned above ~64 epochs (inline cap stops being trivially bounded) or if measured
+emission-verify cost shows record decode dominating; re-evaluation is a constants-cluster
+amendment plus this section, not a semantics change.
 
 **Why not reuse the u16 relative mask:** Stake claims were bounded to ≤15 epochs over
 a **tier lock window**. Archival `P` accrues settlement epochs **without a tier lock

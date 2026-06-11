@@ -118,9 +118,10 @@ bound is **`W`** not tier window.
 
 ### Disposition
 
-1. **Shape:** absolute sparse set of settlement-epoch indices `E` (sorted list or bitmap over
-   `(tip − W, tip]` window) — semantics pinned emission §6.3; **encoding TBD until `W` pinned**
-   (joint with F1/F4 epoch-length / forfeiture).
+1. **Shape:** absolute sparse set of settlement-epoch indices `E` — semantics pinned emission
+   §6.3. **Encoding decided (2026-06-11, `W = 26`):** inline sorted absolute-epoch list on
+   `ArchivalBondValue` (v3 → v4), `u32` count + `u64` BE entries, cap 32; bitmap and
+   separate-table options rejected with reversion clause — see emission §6.3.
 2. **Reject for genesis encoding options:**
    - **LMDB `dup-keys (P_id, E)`** — collides with Shekyl composite-key discipline
      ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md): curve-tree tables explicitly **no `MDB_DUPSORT`**).
