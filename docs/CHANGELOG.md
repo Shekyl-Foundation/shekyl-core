@@ -41,6 +41,63 @@
 
 ### Added
 
+- **engine: Phase 1 orchestrator closeout.** The
+  `shekyl-engine-core::Engine<S: EngineSignerKind>` domain orchestrator
+  (lifecycle, refresh + scan merge, pending-tx send lifecycle, query
+  surface, tracing forwarder) is complete per the done-matrix in
+  `docs/design/PHASE_1_ORCHESTRATOR_STATUS.md`.
+  `docs/design/WALLET_REWRITE_PLAN.md` reconciled to the binding
+  `Engine` naming (decision log 2026-04-27): frontmatter `phase0_closeout`
+  and `phase1_domain_model` marked completed, global naming-supersession
+  banner added, Phase 1 section banner points at the status matrix, and
+  the stale "orchestrator methods remain pending Phase 1" Phase 2a prose
+  corrected. Carried residue: `open_view_only` / `open_hardware_offload`
+  bodies stay blocked on `shekyl-crypto-pq` view-only/HW constructors
+  (FOLLOWUPS V3.0 entry holds the reversion clause).
+
+- **engine: `Engine::primary_address()` accessor + Phase 1 query-pattern
+  docs.** Thin `&self` accessor assembling the wallet's one reusable
+  `ShekylAddress` (End-state 5) from the `KeyActor`'s cached public
+  projection and the engine's cached network; `ShekylAddress` re-exported
+  from `shekyl-engine-core`. `engine/mod.rs` gains a "Query surface
+  (Phase 1 disposition)" section documenting the `ledger()`-guard
+  balance/transfers patterns and replacing the stale "Constructors land
+  next" block; encode→decode round-trip test included. Phase 2c expands
+  the receive surface (payment requests).
+
+- **engine: `change_password` on-disk integration tests (FULL).**
+  Two lifecycle tests pin the I/O ↔ KDF ↔ AEAD chain at the orchestrator
+  layer (FOLLOWUPS V3.0 item, Phase 1 closeout):
+  `change_password_round_trips_via_independent_wallet_file_open` verifies
+  the rotated envelope through an independently constructed
+  `WalletFile::open` (new password loads state; old password fails with
+  `InvalidPasswordOrCorrupt`), and
+  `change_password_with_new_kdf_rewrites_envelope_header` asserts the
+  rotated Argon2id parameters on the raw on-disk header via
+  `inspect_keys_file`. ViewOnly / HardwareOffload coverage rides the
+  capability-dispatch commit when those `open_*` bodies land.
+
+- **logging: single-Rust-image tracing contract, per binary.**
+  Rust `tracing::*` events are no longer silently dropped (FOLLOWUPS V3.2
+  item, absorbed into Phase 1): every binary now links exactly one Rust
+  static archive carrying the `shekyl_log_*` C ABI and one `tracing-core`
+  dispatcher shared by all Rust call sites. `shekyl-ffi` folds in
+  `shekyl-logging`, making `libshekyl_ffi.a` the wallet-side image; the
+  new link-image crate `shekyl-daemon-image` (`shekyl-ffi` +
+  `shekyl-daemon-rpc`, no logic) is the daemon's image, selected per
+  binary by a generator expression in `cmake/BuildRust.cmake`
+  (`SHEKYL_RUST_IMAGE_DAEMON` target property). The standalone
+  `libshekyl_logging.a` link and the force-load
+  (`WHOLEARCHIVE`/`--whole-archive`) machinery are deleted — with one
+  image per binary there is no resolution race to arbitrate (the MSVC
+  `LNK1104` flag-parsing failure goes with it). A post-link `nm` gate
+  fails the `shekyld` build on any second `GLOBAL_DISPATCH`. New C-ABI
+  export `shekyl_log_install_tracing_forwarder` (decision log 2026-04-25;
+  mechanism amendments 2026-06-10, 2026-06-11) pins init ordering and
+  idempotency (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls
+  it after `mlog_configure`. State-machine integration test plus
+  C-harness coverage in `shekyl-logging`.
+
 - **crypto-pq: ADDRESS_DERIVATION_V1 freeze hardening (enforcement only).**
   Published CODEOWNERS-protected KAT corpus at
   `docs/test_vectors/ADDRESS_DERIVATION_V1/` with a
@@ -134,8 +191,10 @@
   sanity-ceiling unit tests; output locks reserved before async sign with
   `release_build_reservation` on sign failure; integration tests for daemon-derived
   `tx.fee`, submit dedup, missing key-image rejection, and reserved-output blocking.
-  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4; orchestrator Phase 2a
-  remains pending Phase 1 (`WALLET_REWRITE_PLAN.md`).
+  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4. The orchestrator
+  Phase 2a methods, pending Phase 1 when this landed, shipped with the
+  Phase 1 closeout above; remaining 2a residue is tracked in
+  `PHASE_2A_SEND_PATH.md` §10.
 
 - **wallet: Phase 2a-3 sign, wire encode, submit.**
   `KeyActor`/`LocalKeys` sign bridge, `shekyl-tx-builder` `wire` module,

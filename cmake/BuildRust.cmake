@@ -190,7 +190,7 @@ endif()
 # that live outside `rust/` (e.g. test vectors under `docs/`, `config/*.json`)
 # are not tracked here. Those are test/doc inputs that affect test binaries and
 # rustdoc, not the linked production archives this file builds (shekyl-ffi,
-# shekyl-logging, shekyl-daemon-rpc), whose `include_*!` uses are confined to
+# shekyl-daemon-image), whose `include_*!` uses are confined to
 # `#[cfg(test)]`. A tracked change still triggers a cargo run, and cargo's own
 # fingerprinting then re-checks the full input set and decides whether to
 # rewrite each archive (so a no-op change does not force a C++ relink).
@@ -211,7 +211,15 @@ set(_shekyl_rust_deps
     "${RUST_SOURCE_DIR}/Cargo.lock"
 )
 
-# ── shekyl-ffi (crypto, staking, economics — linked by all targets) ──────────
+# ── shekyl-ffi (crypto, staking, economics, logging — the wallet-side image) ─
+#
+# `shekyl-ffi` folds in the `shekyl-logging` crate (see its Cargo.toml), so
+# `libshekyl_ffi.a` carries the full `shekyl_log_*` C ABI consumed by
+# `contrib/epee/include/misc_log_ex.h` alongside the crypto/wallet FFI — one
+# Rust image, one `tracing-core` GLOBAL_DISPATCH, per the single-image
+# contract (V3_WALLET_DECISION_LOG.md). There is no standalone
+# `libshekyl_logging.a` in the link anywhere; a second archive would carry a
+# second dispatcher and silently drop the other image's tracing events.
 
 add_custom_command(
     OUTPUT ${SHEKYL_FFI_LIBRARY}
@@ -220,7 +228,7 @@ add_custom_command(
         -p shekyl-ffi
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     DEPENDS ${_shekyl_rust_deps}
-    COMMENT "${_rust_comment} (shekyl-ffi + shekyl-fcmp)"
+    COMMENT "${_rust_comment} (shekyl-ffi + shekyl-fcmp + shekyl-logging)"
     VERBATIM
 )
 
@@ -232,104 +240,69 @@ set_target_properties(shekyl_ffi PROPERTIES
 )
 add_dependencies(shekyl_ffi shekyl_rust)
 
-if(UNIX AND NOT APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-elseif(APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-else()
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-endif()
-
-# ── shekyl-logging (tracing subscriber + C ABI for misc_log_ex.h) ───────────
+# ── shekyl-daemon-image (shekyl-ffi + shekyl-daemon-rpc — the daemon image) ──
 #
-# Built from the same workspace as shekyl-ffi, just via `-p shekyl-logging`,
-# so this reuses the same target-triple / cross-env setup resolved above.
-# Every C++ target that includes `src/shekyl/shekyl_log.h` (i.e. every TU
-# that transitively pulls in `contrib/epee/include/misc_log_ex.h`) links
-# against `libshekyl_logging.a` (Cargo's default `lib<crate_name>.a`
-# naming for the `shekyl-logging` crate) — which is effectively the
-# whole project once the easylogging++ shim is retired. We expose it
-# as the CMake IMPORTED target `shekyl_log` (short name, matches the
-# header it mirrors) and append that target to `SHEKYL_FFI_LINK_LIBS`
-# so existing consumers pick it up transparently;
-# duplicate Rust-runtime symbols across the two archives are resolved by
-# rustc's weak-symbol emission (same pattern that already lets
-# `shekyl_daemon_rpc` coexist with `shekyl_ffi` in the daemon binary).
+# The daemon needs the wallet-side FFI surface *plus* the Axum RPC server.
+# Linking those as two archives would embed two `tracing-core` dispatchers,
+# so `rust/shekyl-daemon-image` builds both crates into one staticlib with a
+# unified Cargo graph (one dispatcher; see that crate's docs).
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
-    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/libshekyl_logging.a")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_image.a")
 elseif(MSVC)
-    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/shekyl_logging.lib")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/shekyl_daemon_image.lib")
 else()
-    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/libshekyl_logging.a")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_image.a")
 endif()
 
 add_custom_command(
-    OUTPUT ${SHEKYL_LOG_LIBRARY}
+    OUTPUT ${SHEKYL_DAEMON_IMAGE_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-logging
+        -p shekyl-daemon-image
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     DEPENDS ${_shekyl_rust_deps}
-    COMMENT "${_rust_comment} (shekyl-logging)"
+    COMMENT "${_rust_comment} (shekyl-daemon-image: shekyl-ffi + shekyl-daemon-rpc)"
     VERBATIM
 )
 
-add_custom_target(shekyl_log_rust ALL DEPENDS ${SHEKYL_LOG_LIBRARY})
+add_custom_target(shekyl_daemon_image_rust ALL DEPENDS ${SHEKYL_DAEMON_IMAGE_LIBRARY})
 
-add_library(shekyl_log STATIC IMPORTED GLOBAL)
-set_target_properties(shekyl_log PROPERTIES
-    IMPORTED_LOCATION ${SHEKYL_LOG_LIBRARY}
+add_library(shekyl_daemon_image STATIC IMPORTED GLOBAL)
+set_target_properties(shekyl_daemon_image PROPERTIES
+    IMPORTED_LOCATION ${SHEKYL_DAEMON_IMAGE_LIBRARY}
 )
-add_dependencies(shekyl_log shekyl_log_rust)
+add_dependencies(shekyl_daemon_image shekyl_daemon_image_rust)
 
-# Fold shekyl_log into the shared FFI link set so every C++ target that
-# pulls in SHEKYL_FFI_LINK_LIBS automatically resolves the new log FFI
-# symbols. Keeping the platform-specific system-library tail (pthread/dl,
-# Security/CoreFoundation, ws2_32/userenv/bcrypt/ntdll) at the end of the
-# list preserves the left-to-right link-order semantics that GNU ld cares
-# about for static archives.
-if(UNIX AND NOT APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-elseif(APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-else()
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-endif()
-
-# ── shekyl-daemon-rpc (Axum server — linked only by the daemon target) ──────
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
-    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_rpc.a")
-elseif(MSVC)
-    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/shekyl_daemon_rpc.lib")
-else()
-    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_rpc.a")
-endif()
-
-add_custom_command(
-    OUTPUT ${SHEKYL_DAEMON_RPC_LIBRARY}
-    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
-        ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-daemon-rpc --lib
-    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-    DEPENDS ${_shekyl_rust_deps}
-    COMMENT "${_rust_comment} (shekyl-daemon-rpc)"
-    VERBATIM
-)
-
-add_custom_target(shekyl_daemon_rpc_rust ALL DEPENDS ${SHEKYL_DAEMON_RPC_LIBRARY})
-
-add_library(shekyl_daemon_rpc STATIC IMPORTED GLOBAL)
-set_target_properties(shekyl_daemon_rpc PROPERTIES
-    IMPORTED_LOCATION ${SHEKYL_DAEMON_RPC_LIBRARY}
-)
-add_dependencies(shekyl_daemon_rpc shekyl_daemon_rpc_rust)
+# ── Per-binary Rust image selection ──────────────────────────────────────────
+#
+# Single-Rust-image contract: every binary links exactly ONE Rust archive.
+# Wallet-side binaries link `shekyl_ffi`; the daemon links
+# `shekyl_daemon_image` (the superset). Never both — identical strong
+# `shekyl_*` symbols in two archives would let the linker mix members from
+# both images and split the tracing dispatcher again.
+#
+# `SHEKYL_FFI_LINK_LIBS` propagates transitively through static libraries
+# (cryptonote_basic / cryptonote_core list it in target_link_libraries), so
+# the daemon inherits the Rust archive regardless of its own link line. The
+# generator expression below performs the per-binary dispatch at
+# link-line-generation time: `$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>`
+# with no target argument evaluates against the *head* target of the link
+# (the final binary), so a target that sets that property — only the daemon
+# — resolves every occurrence of the Rust archive in its link closure to
+# `shekyl_daemon_image`, and everything else resolves to `shekyl_ffi`.
+# The post-link nm gate in src/daemon/CMakeLists.txt asserts the result
+# (exactly one GLOBAL_DISPATCH definition in shekyld).
+#
+# The platform tail (pthread/dl, Security/CoreFoundation,
+# ws2_32/userenv/bcrypt/ntdll) stays at the end of the list to preserve the
+# left-to-right link-order semantics GNU ld applies to static archives.
+set(_shekyl_rust_image "$<IF:$<BOOL:$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>>,shekyl_daemon_image,shekyl_ffi>")
 
 if(UNIX AND NOT APPLE)
-    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;pthread;dl" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 elseif(APPLE)
-    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 else()
-    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 endif()
