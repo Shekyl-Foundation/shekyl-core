@@ -11,6 +11,7 @@ name = "shekyl-cli"
 path = "src/main.rs"
 
 [dependencies]
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-engine-rpc = { path = "../shekyl-engine-rpc", features = ["rust-scanner", "native-sign"] }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"

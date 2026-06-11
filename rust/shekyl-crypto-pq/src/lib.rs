@@ -48,6 +48,7 @@ compile_error!(
 );
 
 pub mod account;
+pub mod address_derivation_freeze;
 pub mod bip39;
 pub mod derivation;
 pub mod error;

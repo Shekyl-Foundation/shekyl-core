@@ -41,6 +41,19 @@
 
 ### Added
 
+- **crypto-pq: ADDRESS_DERIVATION_V1 freeze hardening (enforcement only).**
+  Published CODEOWNERS-protected KAT corpus at
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/` with a
+  `kat_address_derivation_v1.rs` consumer that verifies the manifest's
+  self-describing fields (`vectors_sha256_hex` = `sha256sum
+  vectors.json`, tier counts) and Tier-2 account distinctness; wired
+  `scripts/lint_cpp_clamp_ban.sh` into the `rust-audit-and-test` CI job;
+  added `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire in
+  `address_derivation_freeze.rs` with `shekyl-cli
+  derivation-freeze-self-check` as the operator surface (no C FFI
+  export: no C++ consumer exists). Zero semantic changes to the frozen
+  v1 derivation pipeline in `account.rs`.
+
 - **archival: consensus state emission read surface (ARCHIVAL_CONSENSUS_STATE).**
   Integer `reward_arithmetic` + `consensus_state` in `shekyl-archival-retention`;
   banded float/integer `Curve` in `shekyl-staking-sim` (`--curve-impl=float|integer`);
