@@ -315,8 +315,20 @@ post-release** within `W`.
 |--------|----------|---------|
 | Release cooldown | ~one grace window after last serve | When collateral may **Unbond** |
 | Backlog claim (`W`) | `MAX_CLAIM_AGE_W` epochs | When reward epochs **forfeit** (E-3) |
+| Retention commitment | `bond_duration(age)` per shard (below) | When a held shard may be **voluntarily dropped** |
 
 Collateral return and reward mint are **independent value flows**.
+
+**Retention-commitment horizon (sim L9/L10; decided 2026-06-11).** Each held shard carries a
+minimum commitment of `bond_duration(age) = BOND_DURATION_BASE_EPOCHS · (1 +
+BOND_DURATION_AGE_SCALE · age)` settlement epochs from acquisition (normalized shard age
+`age ∈ [0,1]`; constants in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1,
+shape pinned / numerics provisional). Before the horizon elapses, the shard is ineligible for
+voluntary drop via `HoldingsUpdate` (V3.1 wire) or `Unbond`-with-remaining-holdings; slash and
+full exit (`Unbond` of the entire record after release cooldown) are unaffected — duration
+deters *shard-drop while staying*, not capital flight
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L10 hardening* disposition and
+reversion clause).
 
 ### 3.5 Verify order (consensus) — bond-post tx
 

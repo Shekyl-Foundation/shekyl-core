@@ -32,6 +32,14 @@ rewrite → P2B-6 §7 threat re-center → **this cluster's values** (sim-backed
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh | Gate-4 §5, P2B-5 |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Unbond` (settlement epochs) | Gate-4 §3.4–§4.3 |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (gate-2 interface) | Worst-case slash challenge window (blocks) | Gate-2 (interface) |
+| `BOND_DURATION_BASE_EPOCHS` | **4** (provisional¹) | Flat floor of per-shard retention-commitment horizon (settlement epochs) | Gate-4; sim L9/L10 |
+| `BOND_DURATION_AGE_SCALE` | **4** (provisional¹) | Age multiplier: `bond_duration(age) = BASE · (1 + SCALE·age)`, `age ∈ [0,1]` normalized shard age | Gate-4; sim L9/L10 |
+
+¹ **Shape pinned, numerics provisional (2026-06-11).** Shape is **age-scaled-constant**
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L10 hardening* disposition); the numeric
+pair is the sim-exercised H2 plateau arm and is re-confirmed or re-pinned when testnet measures
+`fetch_latency_per_unit`. Drift within the plateau band (scale ∈ [2,8]) amends this table only;
+a shape change requires the L10 reversion clause.
 
 **Derived (not independent constants):**
 
@@ -51,6 +59,7 @@ epoch ≈ **13.9 days** (~2 weeks).
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | ~**24 hours** |
 | `RELEASE_COOLDOWN_EPOCHS` = 2 | ~**28 days** |
 | `CHALLENGE_RESOLUTION_BLOCKS` = 10_000 | ~**13.9 days** (one SEB) |
+| `bond_duration` range (base 4, scale 4) | ~**8 weeks** (youngest deep) → ~**9 months** (oldest) |
 
 ### 1.1 Reorg depth vs retention horizon (load-bearing split)
 
