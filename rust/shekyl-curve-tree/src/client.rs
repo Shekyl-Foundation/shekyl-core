@@ -51,9 +51,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::recon::{
-    collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff, per_output_h_pqc, TxOutputs,
-};
+use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
@@ -305,8 +303,8 @@ impl CurveTreeClient {
     /// `META_SYNC_TIP` to at least `sync_tip_height`.
     ///
     /// `ingest_tip` is `Some` on the per-block ingest path so steady-state sync
-    /// can append only the newly-drained maturity bucket
-    /// ([`newly_drained_at_cutoff`]) instead of re-scanning the full prefix.
+    /// can append only the newly-drained maturity bucket via
+    /// [`Self::newly_drained_from_index`] instead of re-scanning the full prefix.
     fn sync_store_append(
         &mut self,
         target_through: u64,
@@ -327,7 +325,7 @@ impl CurveTreeClient {
             return self.rebuild_store_drained_prefix(target_through, sync_tip_height);
         }
         let new_entries = if self.incremental_drain_on_ingest(ingest_tip, target_through) {
-            newly_drained_at_cutoff(&self.entries, target_through)
+            self.newly_drained_from_index(target_through)
         } else {
             self.drained_suffix_from_index(target_through, stored_usize)
         };
@@ -376,6 +374,18 @@ impl CurveTreeClient {
         self.store
             .append_drained(&entries, sync_tip_height)
             .map_err(ClientError::from)
+    }
+
+    /// Leaves that newly drain when the inclusive cutoff advances to
+    /// `drained_through`, via the maturity index only (O(bucket)).
+    ///
+    /// On monotonic ingest, `drained_through` increases by at most one per
+    /// block; indices within each bucket are appended in `gindex` order.
+    pub(crate) fn newly_drained_from_index(&self, drained_through: u64) -> Vec<LeafEntry> {
+        self.entries_by_maturity
+            .get(&drained_through)
+            .map(|indices| indices.iter().map(|&i| self.entries[i]).collect())
+            .unwrap_or_default()
     }
 
     /// Canonical drain-order suffix via [`Self::entries_by_maturity`] (maturity
@@ -492,7 +502,7 @@ impl From<StoreError> for ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recon::drained_sorted;
+    use crate::recon::{drained_sorted, newly_drained_at_cutoff};
     use shekyl_fcmp::tree::selene_hash_init;
     use shekyl_oxide::COINBASE_LOCK_WINDOW;
 
@@ -520,6 +530,32 @@ mod tests {
             leaf_hash_blob: Some(blob),
             outputs,
         }]
+    }
+
+    #[test]
+    fn newly_drained_from_index_matches_oracle() {
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let txs0 = coinbase_block(&outs, &blob);
+        let txs1 = coinbase_block(&outs, &blob);
+        let client = CurveTreeClient::from_blocks(&[
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
+        ])
+        .unwrap();
+        for through in 0..=61u64 {
+            assert_eq!(
+                client.newly_drained_from_index(through),
+                newly_drained_at_cutoff(&client.entries, through),
+                "through={through}"
+            );
+        }
     }
 
     #[test]
