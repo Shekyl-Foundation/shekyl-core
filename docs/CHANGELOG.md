@@ -4,6 +4,13 @@
 
 ### Added
 
+- **docs: `ECONOMY_EXPLAINED.md` — plain-language economy walkthrough
+  (2026-06-11).** Human-friendly explainer of the four control loops (emission
+  curve, release multiplier, adaptive burn, staker emission share) with worked
+  numerical examples from the gate-7 sim run and the L11 attractor tables.
+  Carries the CALIBRATION caveat (coefficients provisional per
+  `DESIGN_CONCEPTS.md`). Linked from `PUBLIC_NARRATIVE_FAQ.md`.
+
 - **archival: §2.4 close-condition (ii) closed — per-reward proof aggregate
   (2026-06-11).** Worked byte sweep (`STAKER_ARCHIVAL_SIM.md` §Close-condition
   (ii), ledger row AGG; `REWARD_EMISSION_LEG.md` §10.1): per-emission tx

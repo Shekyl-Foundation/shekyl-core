@@ -8,6 +8,10 @@ Legal/regulatory framing for foundation archival lives in
 `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — counsel review required
 before genesis.
 
+For a plain-language walkthrough of how the PoW + PoS economy regulates
+itself — emission, release pacing, adaptive burn, staker rewards, with worked
+numerical examples — see [`ECONOMY_EXPLAINED.md`](ECONOMY_EXPLAINED.md).
+
 ---
 
 ## Positioning statement
