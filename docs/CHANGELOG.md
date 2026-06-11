@@ -23,6 +23,15 @@
   Fixes pre-existing LMDB cursor bug in `delete_archival_*` loops
   (`MDB_GET_CURRENT` after delete of last record).
 
+- **ci: PR pushes no longer double-run workflows.** `build.yml` and
+  `randomx-v2-differential.yml` triggered on both an unrestricted
+  `push` and `pull_request`, so every push to an open PR ran every job
+  twice (and merge-from-dev pushes spuriously fired path-filtered
+  workflows the PR never touched). Their `push` triggers are now
+  restricted to `dev`/`main` (post-merge validation); PR branches are
+  covered by the `pull_request` event alone, which tests the PR merged
+  into its base. Branches without an open PR get CI via a draft PR.
+
 - **Workspace MSRV 1.88 → 1.94; CT-1 `redb` 2.6.3 → 4.1.0.**
   Intentional 1.94.0 pin for RandomX PoW + CT-1 `redb` 4.1.0 (rustc ≥
   1.89), aligned with `shekyl-gui-wallet` `rust-toolchain.toml`.
