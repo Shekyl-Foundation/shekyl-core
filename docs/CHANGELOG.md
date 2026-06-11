@@ -24,6 +24,27 @@
   `WALLET_FILE_FORMAT_V1.md`; machine-local `.cursor/plans/` links in
   active docs repointed to in-repo continuations.
 
+- **docs: FOLLOWUPS realigned to the Phase 2b retool; two fired
+  deferral triggers re-dispositioned.** The Decision-3C staking-subtree
+  entry is superseded (3C / `h_bind` / 5-scalar leaf are docs-only per
+  `PHASE_2B_STAKE_LIFECYCLE.md` §2.4; entitlement stack is a deletion
+  target), with its claim-nullifier backstop note retired alongside
+  (dedup is now the per-`P` claimed-epoch bitmap). `AtomicUnits::mul_div_rem`'s
+  reopening criterion re-anchored from `entitlement.rs` to the rebased
+  reward-emission arithmetic (PR #123 surface); the confidential
+  stake-UTXO transfer entry re-anchored to the bond model. Freshness:
+  FA-2 (#112) / FA-8 (#113) marked merged (2026-06-08); Stage 3
+  blocks-on updated (Stage 2 merged; subaddress round resolved; Phase 2b
+  gate list cited); Phase 2b planning-session entry gains a status note
+  (claim-centric FSM scope superseded by the retool). Per
+  `21-reversion-clause-discipline.mdc`, the two "pre Stage 1 PR 4
+  kickoff" items whose triggers fired are re-dispositioned:
+  `wallet2_ffi_create_wallet` / `on_create_wallet` cleanup is superseded
+  by the Phase 5 wholesale deletion (reopens on new consumers or Phase 5
+  slipping past stressnet), and the `epee::wipeable_string` mlock
+  residual is committed as documented-not-mitigated until Phase 5 under
+  the same named reopening criteria.
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust

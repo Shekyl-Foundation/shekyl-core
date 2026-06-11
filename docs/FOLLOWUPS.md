@@ -1186,14 +1186,14 @@ sustainability is unaffected by the recalibration.
   `58407f565`). **FA-2 subaddress deletion**
   ([#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)):
   End-state 5 scanner, bookkeeping v3, ledger v5, `WALLET_LEDGER_FORMAT_VERSION`
-  5 — open PR, lands on `dev` before FA-8. **FA-8 payment requests +
+  5 — **merged to `dev` 2026-06-08**. **FA-8 payment requests +
   cooperative attribution**
   ([#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)): bookkeeping
   v4, ledger v6, `ReceiveAttribution`, inbound merge matching, `shekyl-address`
   URI parse, outbound `construct_output_labeled` + C++ send-path hook; product
   flag `operational.cooperative_payment_requests` / env
-  `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` (default off) — stacked on FA-2, lands
-  after #112 merges. **Does not
+  `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` (default off) — **merged to `dev`
+  2026-06-08**. **Does not
   block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
   (Phase 2c / 4b, not cleanup):** Rust cooperative outbound in `build_pending_tx`;
   `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry enforcement;
@@ -1373,6 +1373,16 @@ sustainability is unaffected by the recalibration.
   before Stage 3, so the stake state machine and `WalletLedger` persistence are
   designed against a settled recipient/subaddress model.
 
+  *Status (2026-06-10).* In flight as
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) (+
+  [`PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)). The claim-centric
+  state list in *Scope* above (`Claimable`; `claim` returning `PendingTx`) is
+  superseded by the retool — claim wire retired; rewards are emission-paid
+  against the bond record; the `StakeState` FSM re-spec is pending per that
+  doc's §3. Remaining before Stage 3, per its §"Open before Stage 3": archival
+  consensus-state schema (PR #123), §2.4 close-conditions (ii)–(iii),
+  reward-emission implementation, `P` HKDF (gate 6), `Σwork` hook (gate 1).
+
   *Target:* before the first Stage 3 / Phase 2b commit.
 
   *Definition of done:* a Phase 2b stake-lifecycle design doc whose spec the
@@ -1400,11 +1410,13 @@ sustainability is unaffected by the recalibration.
   and lets Phase 2b's design surface inform Stage 4 sequencing.
 
   *Blocks on:* (1) Stage 2 `KeyEngine` migration complete (validates
-  the pattern) — RESOLVED, pending merge to `dev`; (2) the **Phase 2b
-  planning session** row above (stake state-machine shape); (3) the
-  **subaddress-under-PQC design round** above (sequenced before Stage 3
-  per the 2026-05-31 decision, so Phase 2b designs against a settled
-  subaddress model).
+  the pattern) — RESOLVED, merged to `dev`; (2) the **Phase 2b
+  planning session** row above (stake state-machine shape) — design doc
+  in flight; remaining gates per `PHASE_2B_STAKE_LIFECYCLE.md`
+  §"Open before Stage 3" (archival consensus-state schema / PR #123,
+  §2.4 close-conditions (ii)–(iii), reward-emission implementation,
+  gate 6, gate 1); (3) the **subaddress-under-PQC design round** above —
+  RESOLVED (End-state 5 ship decision; rounds closed 2026-06-09).
 
   *Target:* as the first major commit in Phase 2b.
 
@@ -1422,39 +1434,35 @@ sustainability is unaffected by the recalibration.
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
 
-- **Confidential staking subtree + 5-scalar leaf (Decision 3C — spawned 2026-06-04).**
-  Decision 3 closed on **3C** ([`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
-  §6.4.3), which spawns this **bounded state/ops** deliverable (not a novel pre-genesis crypto
-  primitive — 3A's non-membership obligation was rejected). Scope: separate staking curve
-  tree (own root, deferred insertion, LMDB tables); 5-scalar / 160-byte leaf
-  `{O, I, C, h_pqc, h_bind}`; `SCALARS_PER_LEAF` const → per-tree parameter; 5th-position
-  Selene NUMS generator under the cbindgen consensus-constant guard + KAT; `h_bind`
-  hash-to-field canonical/collision-safe KAT; cross-tree stake/unstake `pop_block` atomicity;
-  entitlement FS domain `shekyl-stake-entitlement-v1` + bounded-remainder relation. Amends
-  [`docs/FCMP_PLUS_PLUS.md`](FCMP_PLUS_PLUS.md) §15.
+- ~~**Confidential staking subtree + 5-scalar leaf (Decision 3C — spawned 2026-06-04).**~~
+  **SUPERSEDED 2026-06-10 by the Phase 2b retool.** The rebased stake design pins
+  **3C / `h_bind` / the 5-scalar leaf as design-docs-only — never ship for genesis** —
+  and deletes the surfaces this deliverable existed to serve: the claim wire
+  (`txin_stake_claim_v2`, cleartext `txin_stake_claim`) and the entitlement stack
+  (`entitlement.rs` / `tiers.rs` / `rewards.rs` are deletion targets). Genesis staking
+  uses main-tree stealth outputs with membership-only control on the reward leg; no
+  separate staking subtree exists. See
+  [`docs/design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
+  §2.4 "Delete — dead code, not adapted" + §"Retired for genesis";
+  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3 is
+  retained as historical substrate. Original scope (separate staking curve tree with
+  own root + LMDB tables; 160-byte `{O, I, C, h_pqc, h_bind}` leaf; `SCALARS_PER_LEAF`
+  per-tree parameterization; 5th-position Selene NUMS generator + KATs; cross-tree
+  `pop_block` atomicity; entitlement FS domain + bounded-remainder relation) is
+  preserved in git history at this entry's 2026-06-04 introduction.
 
-  *Blocks on:* nothing (decision closed); pairs with the confidential claim verifier impl.
+  *Backstop note superseded with the entry.* The claim-window nullifier-pruning
+  dependency recorded here rode on the active stake-claim nullifier set; under the
+  retool, claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch`, `N_arch`) do not ship —
+  reward double-claim dedup is the per-`P` claimed-epoch bitmap on the bond record,
+  which reverts with `pop_block` — so no global claim-nullifier set exists to bound
+  or prune.
 
-  *Target:* **V3.0 pre-genesis** — bounded, reviewable state engineering; lands with the
-  Stage 3 claim verifier.
-
-  *Definition of done:* staking subtree + 5-scalar leaf implemented with consensus-constant
-  KATs; verifier does subtree membership + `h_bind` arithmetic; witness header
-  `[O][I][C][h_pqc][x][y][z][a]` confirmed untouched; `AUDIT_SCOPE.md` vectors updated
-  (drop `τ·H_t`/historical-root, add `h_bind`/creation + bounded-remainder).
-
-  *Backstop dependency to flag if a nullifier-set-bounded-state / pruning workstream
-  opens (spawned 2026-06-04, Phase 2b §3.4):* the wallet's runtime-only
-  `claim_pending_epochs` model leans on the **active stake-claim nullifier set** as the
-  double-claim source of truth — a forgotten in-flight claim self-heals because a
-  duplicate is rejected at consensus. That backstop is **orthogonal to shard archival**
-  (`V3_STAKER_ARCHIVAL.md` prunes historical membership-reference data —
-  `assemble_tree_path_for_output` paths — not the active nullifier set). It *would* be
-  load-bearing for any future nullifier-set bounding/pruning: the safe boundary is
-  **only out-of-claim-window nullifiers are prunable** (once an epoch's claim window
-  closes, no valid claim can re-spend it, so its nullifier can leave the active set
-  without opening a double-claim). Different conversation; recorded here so the
-  dependency is on file if that workstream opens.
+  *Reopening criterion:* a workstream reviving a separate staking subtree or claim
+  wire (e.g. a V4 lattice-era staking redesign) re-derives from
+  `CONFIDENTIAL_STAKING.md` §6.4.3 as historical substrate via its own design rounds —
+  not by reviving this entry. *Re-evaluation shape:* that workstream's own spec-first
+  design rounds per `05-system-thinking.mdc`.
 
 - ~~**`AtomicUnits` amount-newtype — interim PR before broad wallet wiring (spawned
   2026-06-05, Phase 2b §6 sign-off).**~~ **CLOSED 2026-06-05 by the `AtomicUnits`
@@ -1488,6 +1496,18 @@ sustainability is unaffected by the recalibration.
   internal and the primitive earns its place. *Re-evaluation shape:* design round of the
   reward-path migration PR. *Target:* **V3.0 pre-genesis**, paired with that migration.
 
+  *Re-anchor (2026-06-10, Phase 2b retool).* `entitlement.rs::reward_and_remainder`
+  and `rewards.rs` — the u128-native split sites the criterion above pointed at — are
+  deletion targets under the retool
+  ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4); the
+  proportional reward arithmetic is being rebuilt as the rebased reward-emission /
+  archival-consensus-state surface (epoch-close reward splits, PR #123). The reopening
+  criterion re-anchors there: introduce an owned `AtomicUnits::mul_div_rem` when that
+  rebased arithmetic carries `AtomicUnits` and its u128 intermediate becomes an
+  `AtomicUnits` internal. *Re-evaluation shape:* design round of the reward-emission
+  implementation PR. *Target:* unchanged — **V3.0 pre-genesis**, paired with that
+  landing.
+
 - **Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units`
   single source (spawned 2026-06-05 by the `AtomicUnits` interim PR).** `shekyl-units` is
   now the canonical Rust owner of the `coin = 10^9` / `display_decimal_point = 9`
@@ -1518,21 +1538,29 @@ sustainability is unaffected by the recalibration.
   format changes are cheapest before there are clients to migrate.
 
 - **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
-  FCMP spend of staked principal + re-insert as staked output — **not** receipt-token
+  FCMP spend of bonded principal + re-stake as a bonded output — **not** receipt-token
   liquid staking (public fungible receipts remain out of scope). **`creation_height` is
-  inherited** across transfer (accrual window follows the original bond). **Decision 3C**
-  (consensus-stamped `h_bind` at first inclusion) requires spend continuity for
-  `(tier, creation)` in the new staking-subtree leaf — a naive fresh consensus stamp would
-  reset the window. Spec:
+  inherited** across transfer (accrual window follows the original bond).
+
+  *Re-anchored 2026-06-10 (Phase 2b retool).* The 3C-specific mechanics this entry
+  originally cited (consensus-stamped `h_bind` spend continuity in a staking-subtree
+  leaf; a claim verifier accepting re-inserted leaves) are retired — 3C and the claim
+  wire are docs-only / deleted per
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4. The
+  product question survives unchanged: move bonded principal without resetting the
+  accrual window. It re-derives against the rebased substrate (bond records +
+  main-tree stealth outputs + per-`P` claimed-epoch bitmap), where the open design
+  question becomes how a transfer carries `creation` forward in the bond record
+  rather than how a subtree leaf re-stamps `h_bind`. Historical substrate:
   [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3
   transfer note.
 
-  *Blocks on:* confidential claim verifier + staking subtree on `dev`.
+  *Blocks on:* Stage 3 `StakeEngine` + the rebased bond/reward-emission path on `dev`.
 
-  *Target:* **V3.2** wallet surface (after Stage 3 `StakeEngine` + claim path land).
+  *Target:* **V3.2** wallet surface (unchanged).
 
-  *Definition of done:* wallet + consensus spec for staked-output FCMP spend with
-  creation inheritance; claim verifier accepts re-inserted leaves; no receipt-token mint.
+  *Definition of done:* wallet + consensus spec for bonded-principal FCMP spend with
+  creation inheritance under the rebased bond model; no receipt-token mint.
 
 - **Stage 4 — Remaining-subsystem migrations.** Migrate
   `LedgerEngine`, `RefreshEngine`, `PendingTxEngine`,
@@ -2122,6 +2150,32 @@ sustainability is unaffected by the recalibration.
   [`ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 disposition reopens.
 
+  **Re-disposition (2026-06-10) — trigger fired; standalone cleanup
+  superseded by the wallet-rewrite Phase 5 deletion.** Stage 1 PR 4
+  landed without this cleanup, so the criterion above has fired; this
+  paragraph is the explicit re-justification it demands. The standalone
+  cleanup (a new `wallet2_ffi_create_wallet_from_bip39` + two delete
+  sites) is **rejected**: both entry points' homes —
+  `wallet2_ffi.{h,cpp}` and `wallet_rpc_server*.{h,cpp}` — are deleted
+  wholesale by the Phase 5 single commit
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5),
+  and authoring a *new* C++ FFI entry whose deletion is already
+  scheduled is itself the dead-code-creation shape
+  `15-deletion-and-debt.mdc` rejects. Until then the surface stays
+  reachable-but-loud (Mainnet/Stagenet calls reject at
+  `account.cpp`'s raw-seed restriction; nothing silently corrupts) —
+  acceptable pre-genesis posture, since production wallet creation is
+  the Rust BIP-39 path. **Reopening criteria:** (a) a new consumer
+  wires to `wallet2_ffi_create_wallet` / `on_create_wallet` before
+  Phase 5 — the disposition reopens at that PR's review; (b) Phase 5
+  slips past stressnet start while `shekyl-engine-rpc`'s legacy bridge
+  (`rust/shekyl-engine-rpc/src/engine.rs` create-wallet call site) is
+  a stressnet-exposed surface — the BIP-39-aware FFI ships then as a
+  bounded stopgap. *Re-evaluation shape:* the introducing PR's review
+  for (a); the stressnet-readiness review for (b). *Target:* closed by
+  the Phase 5 deletion commit, or at whichever reopening criterion
+  fires first.
+
   **Cross-references.**
   [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp)
   (`wallet2_ffi_create_wallet` definition);
@@ -2193,6 +2247,30 @@ sustainability is unaffected by the recalibration.
   longer pending bounded closure) and the substrate amendment
   is reopened to either commit to the residual permanently or
   schedule the cleanup to a different bounded milestone.
+
+  **Re-disposition (2026-06-10) — trigger fired; residual committed
+  until the Phase 5 deletion.** Stage 1 PR 4 landed without the
+  allocator cleanup, so the criterion above has fired; per its own
+  terms, the residual is re-recorded against a different bounded
+  milestone. The phrase-string transit buffers this entry hardens
+  exist only on the C++ BIP-39 FFI path (`wallet2_ffi` seed-phrase
+  ingestion; `query_key("mnemonic")` regeneration), which the
+  wallet-rewrite Phase 5 single commit deletes wholesale
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5).
+  `epee::wipeable_string` itself survives Phase 5 in the daemon, but
+  the surviving uses are outside this entry's seed-material scope.
+  The `ELECTRUM_WORDS_REMOVAL.md` §4.8 residual is therefore
+  **committed as documented-not-mitigated for the remaining life of
+  the C++ wallet path** (exposure stays bounded: microsecond-scale
+  transit windows; `m_bip39_entropy` independently mlocked).
+  **Reopening criteria:** (a) Phase 5 slips past stressnet start
+  while the C++ wallet path is a stressnet-exposed surface — the
+  mlock-backed allocator lands then; (b) a new C++ consumer routes
+  seed or passphrase material through `wipeable_string` before
+  Phase 5 — the allocator lands at that PR. *Re-evaluation shape:*
+  the stressnet-readiness review for (a); the introducing PR's
+  review for (b). *Target:* retired by the Phase 5 deletion commit,
+  or implemented at whichever reopening criterion fires first.
 
   **Cross-references.**
   [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)
