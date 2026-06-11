@@ -3780,13 +3780,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-daemon-image"
+version = "3.1.0"
+dependencies = [
+ "shekyl-daemon-rpc",
+ "shekyl-ffi",
+]
+
+[[package]]
 name = "shekyl-daemon-rpc"
 version = "3.1.0"
 dependencies = [
  "axum",
  "serde",
  "serde_json",
- "shekyl-logging",
  "tokio",
  "tower-http",
  "tracing",
@@ -4044,6 +4051,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
+ "shekyl-logging",
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",

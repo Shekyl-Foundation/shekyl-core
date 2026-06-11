@@ -36,6 +36,16 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
+# Single-Rust-image contract: every binary links exactly one Rust archive,
+# and that archive must carry the `shekyl_log_*` exports plus the one
+# `tracing-core` GLOBAL_DISPATCH that this crate graph's `tracing::*`
+# macros dispatch through. Folding shekyl-logging into shekyl-ffi makes
+# `libshekyl_ffi.a` that single image for wallet-side binaries; without
+# it, the forwarder installs into a standalone logging image while
+# engine/fcmp events dispatch into this image's dispatcher and are
+# silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
+# and the nm gate in src/daemon/CMakeLists.txt.
+shekyl-logging = { path = "../shekyl-logging" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

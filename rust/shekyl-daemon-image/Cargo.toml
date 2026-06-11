@@ -1,0 +1,28 @@
+[package]
+name = "shekyl-daemon-image"
+description = "Single Rust link image for the shekyld binary (shekyl-ffi + shekyl-daemon-rpc)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_daemon_image"
+crate-type = ["staticlib"]
+
+# This crate is a link-image artifact, not a code-level component: it
+# exists solely so that `shekyld` links exactly one Rust static archive
+# containing the full FFI surface (crypto/wallet/logging via shekyl-ffi)
+# plus the daemon RPC server, and therefore exactly one `tracing-core`
+# GLOBAL_DISPATCH. Cargo unifies the dependency graph, so every
+# `tracing::*` call site in either subtree dispatches through the one
+# subscriber the C++ side installs via `shekyl_log_init_*` /
+# `shekyl_log_install_tracing_forwarder`. See
+# V3_WALLET_DECISION_LOG.md (single-image contract) and the post-link
+# nm gate in src/daemon/CMakeLists.txt.
+[dependencies]
+shekyl-ffi = { path = "../shekyl-ffi" }
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+
+[lints]
+workspace = true

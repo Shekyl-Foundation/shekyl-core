@@ -49,18 +49,26 @@
   `inspect_keys_file`. ViewOnly / HardwareOffload coverage rides the
   capability-dispatch commit when those `open_*` bodies land.
 
-- **logging/daemon: single-Rust-image tracing contract for `shekyld`.**
-  `shekyl-daemon-rpc` `tracing::*` events are no longer silently dropped
-  (FOLLOWUPS V3.2 item, absorbed into Phase 1): the crate now compiles
-  `shekyl-logging` into `libshekyl_daemon_rpc.a`, the daemon force-loads
-  that archive so every `shekyl_log_*` symbol resolves from one Rust image
-  with one `tracing-core` dispatcher, and a post-link `nm` gate fails the
-  build on regression. New C-ABI export
-  `shekyl_log_install_tracing_forwarder` (decision log 2026-04-25, single-
-  image mechanism amendment 2026-06-10) pins init ordering and idempotency
-  (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls it after
-  `mlog_configure`. State-machine integration test plus C-harness coverage
-  in `shekyl-logging`.
+- **logging: single-Rust-image tracing contract, per binary.**
+  Rust `tracing::*` events are no longer silently dropped (FOLLOWUPS V3.2
+  item, absorbed into Phase 1): every binary now links exactly one Rust
+  static archive carrying the `shekyl_log_*` C ABI and one `tracing-core`
+  dispatcher shared by all Rust call sites. `shekyl-ffi` folds in
+  `shekyl-logging`, making `libshekyl_ffi.a` the wallet-side image; the
+  new link-image crate `shekyl-daemon-image` (`shekyl-ffi` +
+  `shekyl-daemon-rpc`, no logic) is the daemon's image, selected per
+  binary by a generator expression in `cmake/BuildRust.cmake`
+  (`SHEKYL_RUST_IMAGE_DAEMON` target property). The standalone
+  `libshekyl_logging.a` link and the force-load
+  (`WHOLEARCHIVE`/`--whole-archive`) machinery are deleted — with one
+  image per binary there is no resolution race to arbitrate (the MSVC
+  `LNK1104` flag-parsing failure goes with it). A post-link `nm` gate
+  fails the `shekyld` build on any second `GLOBAL_DISPATCH`. New C-ABI
+  export `shekyl_log_install_tracing_forwarder` (decision log 2026-04-25;
+  mechanism amendments 2026-06-10, 2026-06-11) pins init ordering and
+  idempotency (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls
+  it after `mlog_configure`. State-machine integration test plus
+  C-harness coverage in `shekyl-logging`.
 
 - **curve-tree: CT-1 LeafStore on redb (Round 1).**
   `LeafStore` persists drained leaves and frozen segment metadata (`R_k`,

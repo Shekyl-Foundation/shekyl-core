@@ -68,12 +68,16 @@ documented blocker + reversion clause).
 Implementation note (resolved): the link audit found the pre-change
 `shekyld` carried **two** `tracing-core` `GLOBAL_DISPATCH` copies (one
 per Rust staticlib image), so the original cross-image "forwarder
-install" framing was unimplementable as specified. Landed shape is the
-single-Rust-image contract: `shekyl-daemon-rpc` depends on
-`shekyl-logging` (one merged image), the daemon force-loads
-`libshekyl_daemon_rpc.a` (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE`,
+install" framing was unimplementable as specified — and the wallet-side
+binaries had the same split (`libshekyl_ffi.a` + standalone
+`libshekyl_logging.a`). Landed shape is the per-binary single-Rust-image
+contract: `shekyl-ffi` folds in `shekyl-logging` (the wallet-side
+image), the link-image crate `rust/shekyl-daemon-image` combines
+`shekyl-ffi` + `shekyl-daemon-rpc` (the daemon image, selected by the
+`SHEKYL_RUST_IMAGE_DAEMON` generator expression in
 `cmake/BuildRust.cmake`), and a post-link `nm` gate on the `daemon`
-target asserts exactly one dispatcher. See decision log 2026-06-10.
+target asserts exactly one dispatcher. See decision log 2026-06-10 and
+the 2026-06-11 mechanism amendment.
 
 ### Tests & docs
 
@@ -90,10 +94,11 @@ target asserts exactly one dispatcher. See decision log 2026-06-10.
 1. **PR 1 — this document.** Gap audit, doc-only.
 2. **PR 2 — tracing forwarder.** Landed (`feat/phase1-closeout`):
    `shekyl-logging::ffi` `shekyl_log_install_tracing_forwarder` (+ `-12`
-   code, tests), `shekyl-daemon-rpc` → `shekyl-logging` dependency
-   (single-image), daemon force-load + `nm` gate, `shekyl_log.h`
-   declaration, `src/daemon/main.cpp` call site. Closes the absorbed
-   V3.2 FOLLOWUPS item per decision log 2026-06-10.
+   code, tests), per-binary single-Rust-image link topology
+   (`shekyl-ffi` folds in `shekyl-logging`; `shekyl-daemon-image` is the
+   daemon's image) + `nm` gate, `shekyl_log.h` declaration,
+   `src/daemon/main.cpp` call site. Closes the absorbed V3.2 FOLLOWUPS
+   item per decision log 2026-06-10 / 2026-06-11.
 3. **PR 3 — `change_password` integration test.** Landed
    (`feat/phase1-closeout`): drives `WalletFile::rotate_password` on
    disk for FULL; verifies against an independent `WalletFile::open`

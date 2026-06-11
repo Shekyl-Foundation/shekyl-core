@@ -33,12 +33,12 @@
 //! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
 //! restricted-mode enforcement.
 
-// Linked, not called: `shekyl-logging` is a dependency so its objects
-// (the `shekyl_log_*` C exports plus the one shared `tracing-core`
-// dispatcher) are compiled into `libshekyl_daemon_rpc.a`. The daemon
-// force-loads that archive, making the C++-installed subscriber the
-// same dispatcher this crate's `tracing::*` macros dispatch through.
-use shekyl_logging as _;
+// This crate's `tracing::*` events reach the C++-installed subscriber
+// because the daemon links exactly one Rust image
+// (`rust/shekyl-daemon-image`, which combines this crate with
+// `shekyl-ffi`'s logging surface into one archive with one
+// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
+// (single-image contract, 2026-06-11 amendment).
 
 pub mod core;
 pub mod ffi;

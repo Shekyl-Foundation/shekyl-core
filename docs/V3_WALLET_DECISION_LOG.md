@@ -4198,4 +4198,79 @@ not its definition.
 
 ---
 
+## 2026-06-11 — Single-Rust-image contract: per-binary image selection (amends 2026-06-10)
+
+**Decision.** The single-Rust-image contract from the 2026-06-10
+amendment stands, but its *mechanism* and *scope* are superseded:
+
+- **Scope extends to every binary, not just the daemon.** `nm` against
+  the pre-change archives showed wallet-side binaries had the same
+  split-image defect the daemon did: `SHEKYL_FFI_LINK_LIBS` linked both
+  `libshekyl_ffi.a` (engine/fcmp `tracing::*` call sites, one
+  dispatcher) and the standalone `libshekyl_logging.a` (subscriber +
+  forwarder, a second dispatcher). A forwarder installed through the
+  logging image could never see engine events. `shekyl-ffi` now folds
+  in `shekyl-logging` as a crate dependency, so `libshekyl_ffi.a` is
+  the complete wallet-side image (146 `shekyl_*` exports incl. the 11
+  `shekyl_log_*`, exactly one `GLOBAL_DISPATCH`). The standalone
+  `libshekyl_logging.a` CMake build is deleted.
+- **The daemon's image is a dedicated link-image crate.**
+  `rust/shekyl-daemon-image` (staticlib only, no logic) depends on
+  `shekyl-ffi` + `shekyl-daemon-rpc`; Cargo unifies the graph into one
+  image with one dispatcher. It replaces the daemon-rpc staticlib +
+  force-load arrangement.
+- **Force-load (`WHOLEARCHIVE`/`-force_load`/`--whole-archive`) is
+  deleted.** It existed to win a symbol-resolution race between two
+  archives that both defined `shekyl_log_*`; with one archive per
+  binary there is no race. (It was also the MSVC CI failure:
+  `/WHOLEARCHIVE:` passed through `target_link_libraries` is
+  misparsed as a library path → `LNK1104`.)
+- **Per-binary image selection is a link-time generator expression.**
+  `SHEKYL_FFI_LINK_LIBS` propagates transitively through static C++
+  libraries, so the daemon would inherit `shekyl_ffi` regardless of its
+  own link line. The Rust-archive entry in that list is now
+  `$<IF:$<BOOL:$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>>,shekyl_daemon_image,shekyl_ffi>`,
+  evaluated against the head target of each link line: the daemon (the
+  only target setting that property) resolves every occurrence to
+  `shekyl_daemon_image`; everything else resolves to `shekyl_ffi`.
+  Verified by inspection of the generated link lines (`shekyld` links
+  exactly one Rust archive; wallet binaries link only
+  `libshekyl_ffi.a`) and by the unchanged post-link `nm` gate.
+
+**Why the amendment.** The 2026-06-10 mechanism (force-load the
+daemon-rpc archive ahead of the standalone logging archive) treated the
+symptom — which archive wins resolution — rather than the cause: two
+images in one binary. It failed on MSVC at the linker-flag level, and
+it left the wallet-side split-image defect in place. Deleting the
+second image per binary removes the failure class instead of arbitrating
+it; this is the architectural-integrity-now disposition
+(`16-architectural-inheritance.mdc`) applied to link topology. It also
+moves in the direction the Rust-daemon migration is heading: the
+per-binary Rust image grows; the C++ side shrinks.
+
+**Consequences.**
+
+- Functionality gain, not just a CI fix: engine/fcmp `tracing::*`
+  events inside wallet binaries and the daemon now reach the
+  C++-installed subscriber; previously they dispatched into a
+  subscriber-less dispatcher and were dropped.
+- Future Rust crates that need linking into a binary join that
+  binary's image crate (wallet side: a `shekyl-ffi` dependency; daemon:
+  `shekyl-daemon-image`); they do not get their own staticlib link
+  entry. The 2026-06-10 "depend on shekyl-logging, force-load, nm-gate"
+  pattern guidance is superseded by "join the image".
+- The nm gate currently covers `shekyld` only. Extending it to
+  wallet-side binaries is filed in `docs/FOLLOWUPS.md` (V3.0 queue).
+- Reversion clause unchanged from 2026-06-10: a binary that genuinely
+  cannot share an image reopens the cross-image question via a fresh
+  decision-log entry with that binary's link map as substrate.
+
+**Reference.** `rust/shekyl-daemon-image/src/lib.rs` (crate docs),
+`rust/shekyl-ffi/src/lib.rs` (`pub use shekyl_logging` comment),
+`cmake/BuildRust.cmake` (per-binary image selection),
+`src/daemon/CMakeLists.txt` (`SHEKYL_RUST_IMAGE_DAEMON` property + nm
+gate).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

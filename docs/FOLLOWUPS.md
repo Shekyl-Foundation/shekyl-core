@@ -47,6 +47,18 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
+  single-image amendment).** The per-binary Rust-image selection in
+  `cmake/BuildRust.cmake` structurally gives every binary one Rust
+  archive, but the post-link `nm` gate asserting exactly one
+  `tracing-core` `GLOBAL_DISPATCH` runs only on the `daemon` target.
+  Factor the gate into a CMake function and apply it to the wallet-side
+  executables (`shekyl-wallet-cli`, `shekyl-wallet-rpc`) so a future
+  link-topology regression on those binaries fails the build instead of
+  silently dropping their engine tracing events. **Target: V3.0 (the
+  gate is the contract's enforcement surface).** Cross-link:
+  decision-log single-image entries (2026-06-10, 2026-06-11).
+
 - **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
   consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while
   [`config/consensus_constants.json`](../config/consensus_constants.json)
@@ -5392,19 +5404,20 @@ one place to confirm each item's relationship to the wallet stack.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phase 1 deliverables.**
 
-  **Closed 2026-06-10.** Neither of the two shapes sketched above
-  survived implementation: `nm` on the linked `shekyld` showed *two*
-  `tracing-core` `GLOBAL_DISPATCH` copies (one per Rust staticlib
-  image), which no in-process subscriber install can bridge. Landed
-  shape is the single-Rust-image link contract:
-  `shekyl-daemon-rpc` depends on the `shekyl-logging` crate (one
-  merged image, one dispatcher), the daemon force-loads
-  `libshekyl_daemon_rpc.a` ahead of the standalone logging archive,
-  a post-link `nm` gate asserts exactly one dispatcher in `shekyld`,
+  **Closed 2026-06-10 (mechanism amended 2026-06-11).** Neither of the
+  two shapes sketched above survived implementation: `nm` on the linked
+  `shekyld` showed *two* `tracing-core` `GLOBAL_DISPATCH` copies (one
+  per Rust staticlib image), which no in-process subscriber install can
+  bridge — and the wallet binaries carried the same split. Landed shape
+  is the per-binary single-Rust-image link contract: `shekyl-ffi` folds
+  in `shekyl-logging` (wallet-side image), the link-image crate
+  `rust/shekyl-daemon-image` combines `shekyl-ffi` + `shekyl-daemon-rpc`
+  (daemon image, selected per binary in `cmake/BuildRust.cmake`), a
+  post-link `nm` gate asserts exactly one dispatcher in `shekyld`,
   and `shekyl_log_install_tracing_forwarder` (decision log
   2026-04-25) ships as the runtime ordering/idempotency contract,
   called from `src/daemon/main.cpp` after `mlog_configure`. See
-  `V3_WALLET_DECISION_LOG.md` 2026-06-10 amendment.
+  `V3_WALLET_DECISION_LOG.md` 2026-06-10 + 2026-06-11 amendments.
 
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
   deferrals rest on the same "upstream cherry-pick preservation"

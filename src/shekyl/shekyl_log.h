@@ -155,14 +155,15 @@ void shekyl_log_shutdown(void);
 ///
 /// This call does NOT verify event routing at runtime. Under the
 /// single-Rust-image contract there is nothing to forward between:
-/// `tracing` events from Rust staticlib crates linked into this
-/// binary (currently shekyl-daemon-rpc) reach the subscriber
-/// installed by `shekyl_log_init_*` because the daemon links exactly
-/// one Rust image with one tracing dispatcher. That property is
-/// enforced at link time (force-load of libshekyl_daemon_rpc.a plus
-/// the post-link nm gate in src/daemon/CMakeLists.txt), not by this
-/// call. See V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10
-/// single-image amendment.
+/// `tracing` events from Rust crates linked into this binary reach
+/// the subscriber installed by `shekyl_log_init_*` because every
+/// binary links exactly one Rust image with one tracing dispatcher
+/// (wallet side: libshekyl_ffi.a; daemon: libshekyl_daemon_image.a).
+/// That property is enforced at link time (per-binary image selection
+/// in cmake/BuildRust.cmake plus the post-link nm gate in
+/// src/daemon/CMakeLists.txt), not by this call. See
+/// V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10/2026-06-11
+/// single-image amendments.
 ///
 /// Call after `mlog_configure` (which runs `shekyl_log_init_*`).
 /// Returns `SHEKYL_LOG_OK` on the first successful install,

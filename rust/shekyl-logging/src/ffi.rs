@@ -369,14 +369,13 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
 /// # What this actually does
 ///
 /// Decision log 2026-04-25 named this export a "forwarder install".
-/// The 2026-06-10 amendment (single-image variant) supersedes the
-/// mechanism: there is nothing to forward *between*, because the
-/// daemon links exactly one Rust image — `shekyl-daemon-rpc` compiles
-/// `shekyl-logging` (and therefore one shared `tracing-core` and one
-/// global dispatcher) into `libshekyl_daemon_rpc.a`, and the daemon's
-/// link line force-loads that archive ahead of `libshekyl_logging.a`.
-/// Under that contract the `shekyl_log_init_*` subscriber *is* the
-/// dispatcher that `shekyl-daemon-rpc`'s `tracing::*` macros hit.
+/// The 2026-06-10/2026-06-11 amendments (single-image contract)
+/// supersede the mechanism: there is nothing to forward *between*,
+/// because every binary links exactly one Rust image — this crate is
+/// compiled into `libshekyl_ffi.a` (wallet side) or
+/// `libshekyl_daemon_image.a` (daemon), so the one shared
+/// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
+/// subscriber and every `tracing::*` macro in the image's crate graph.
 ///
 /// This function is the runtime half of that contract: it pins the
 /// call-ordering invariant (init first) and gives the C++ caller a
