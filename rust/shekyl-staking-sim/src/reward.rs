@@ -134,7 +134,9 @@ fn split_decision(raw_work: f64, price: f64, p: &RewardParams) -> (f64, usize, f
     // plateau work (2·cap raw), so size chunks by `cap` not plateau work.
     let m_full = (raw_work / p.cap).ceil().max(1.0) as usize;
     let per = raw_work / m_full as f64;
-    let multi: f64 = (0..m_full).map(|_| curve(per, p)).sum();
+    // Each of the m_full pseudonyms credits the identical curve(per); multiply
+    // rather than summing m_full equal terms (faster, no accumulated rounding).
+    let multi = m_full as f64 * curve(per, p);
     let gain = (multi - single) * price;
     let split_cost = (m_full.saturating_sub(1)) as f64 * p.pseudonym_cost;
     if gain > split_cost {

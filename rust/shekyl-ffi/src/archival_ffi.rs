@@ -573,17 +573,17 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     if (bonds_ptr.is_null() && bonds_len > 0)
         || (shards_ptr.is_null() && shards_len > 0)
         || (credit_pairs_ptr.is_null() && credit_pairs_len > 0)
-        || (out_r_market_ptr.is_null() && shards_len > 0)
         || out_sigma_work_milli_ptr.is_null()
     {
         return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
     }
 
-    unsafe {
-        *out_sigma_work_milli_ptr = 0;
-        if shards_len > 0 {
-            std::ptr::write_bytes(out_r_market_ptr, 0, shards_len);
+    unsafe { *out_sigma_work_milli_ptr = 0 };
+    if shards_len > 0 {
+        if out_r_market_ptr.is_null() {
+            return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
         }
+        unsafe { std::ptr::write_bytes(out_r_market_ptr, 0, shards_len) };
     }
 
     let raw_bonds: &[ShekylArchivalEpochCloseBond] = if bonds_len == 0 {

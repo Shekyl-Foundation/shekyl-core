@@ -691,7 +691,9 @@ mod tests {
         use crate::reward::{curve, CurveImpl, RewardParams};
         use shekyl_archival_retention::WORK_MILLI_SCALE;
 
-        const EPS_CURVE: f64 = 0.002;
+        // Two milli quanta: one for the integer backend's milli rounding, one
+        // for the float→milli conversion of the comparison input.
+        const EPS_CURVE: f64 = 2.0 / WORK_MILLI_SCALE as f64;
         let params = RewardParams {
             budget: 100.0,
             cap: 8.0,
@@ -714,7 +716,6 @@ mod tests {
                 "work={work}: integer={int_c} float={flt_c} diff={diff}"
             );
         }
-        let _ = WORK_MILLI_SCALE;
     }
 
     #[test]
