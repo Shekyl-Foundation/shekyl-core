@@ -30,16 +30,21 @@ pub mod bond_post;
 pub mod bond_rct_balance;
 pub mod bond_wire;
 pub mod challenge;
+pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
 pub mod error;
 pub mod hash;
 pub mod id;
 pub mod path;
+pub mod reward_arithmetic;
 pub mod serve_eligibility;
 pub mod wire;
 
-pub use bond_floor::{bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
+pub use bond_floor::{
+    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
+};
 pub use bond_post::{verify_join_market_bond_post, BondPostError};
 pub use bond_rct_balance::{verify_bond_post_rct_balance, BondRctBalanceError};
 pub use bond_wire::{
@@ -51,6 +56,13 @@ pub use challenge::{
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
+pub use consensus_state::{
+    epoch_close_compute, epoch_close_due_at_height, good_through, market_member_at_epoch,
+    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height, shard_age_milli,
+    shard_work_milli, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
+    EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
+    FOUNDATION_EXCLUDED_FROM_MARKET,
+};
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
@@ -59,6 +71,10 @@ pub use constants::{
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
+pub use reward_arithmetic::{
+    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
+    WORK_MILLI_SCALE,
+};
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{
     encode_path, ArchivalServeCreditResponse, WireError, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,

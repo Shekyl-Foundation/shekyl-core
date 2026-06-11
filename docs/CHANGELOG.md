@@ -4,6 +4,34 @@
 
 ### Changed
 
+- **archival: epoch-close consensus computation moved to Rust (PR 123).**
+  All epoch-close arithmetic — market membership, scarcity, curve, shard age,
+  `R_market` / `Σwork` aggregation — now lives in
+  `shekyl-archival-retention::consensus_state::epoch_close_compute` and crosses
+  the FFI as one coarse `shekyl_archival_epoch_close_compute` call. The C++
+  LMDB sweep (`process_archival_epoch_close_at_height`) is gather/store only;
+  C++ copies of the consensus logic (`archival_shard_age_milli`,
+  `ArchivalBondValue::good_through`, in-sweep membership/aggregation) are
+  deleted, as are the fine-grained FFI exports they consumed
+  (`shekyl_archival_curve_milli`, `shekyl_archival_scarcity_milli`,
+  `shekyl_archival_max_claim_age_w`, `shekyl_archival_settlement_epoch_blocks`).
+  Epoch timing exports (`settlement_epoch_at_height`, `epoch_close_due`,
+  `prune_below_epoch`) and `shekyl_archival_good_through` replace them. KAT
+  `consensus_state_kat_v1.json` gains an `epoch_close` section; LMDB
+  gather/store/revert covered by `epoch_close_gather_compute_store_revert`.
+  Sim integer/float curve backends harmonized: degenerate caps credit zero.
+  Fixes pre-existing LMDB cursor bug in `delete_archival_*` loops
+  (`MDB_GET_CURRENT` after delete of last record).
+
+- **ci: PR pushes no longer double-run workflows.** `build.yml` and
+  `randomx-v2-differential.yml` triggered on both an unrestricted
+  `push` and `pull_request`, so every push to an open PR ran every job
+  twice (and merge-from-dev pushes spuriously fired path-filtered
+  workflows the PR never touched). Their `push` triggers are now
+  restricted to `dev`/`main` (post-merge validation); PR branches are
+  covered by the `pull_request` event alone, which tests the PR merged
+  into its base. Branches without an open PR get CI via a draft PR.
+
 - **Workspace MSRV 1.88 → 1.94; CT-1 `redb` 2.6.3 → 4.1.0.**
   Intentional 1.94.0 pin for RandomX PoW + CT-1 `redb` 4.1.0 (rustc ≥
   1.89), aligned with `shekyl-gui-wallet` `rust-toolchain.toml`.
@@ -69,6 +97,28 @@
   idempotency (`SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`); `shekyld` calls
   it after `mlog_configure`. State-machine integration test plus
   C-harness coverage in `shekyl-logging`.
+
+- **crypto-pq: ADDRESS_DERIVATION_V1 freeze hardening (enforcement only).**
+  Published CODEOWNERS-protected KAT corpus at
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/` with a
+  `kat_address_derivation_v1.rs` consumer that verifies the manifest's
+  self-describing fields (`vectors_sha256_hex` = `sha256sum
+  vectors.json`, tier counts) and Tier-2 account distinctness; wired
+  `scripts/lint_cpp_clamp_ban.sh` into the `rust-audit-and-test` CI job;
+  added `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire in
+  `address_derivation_freeze.rs` with `shekyl-cli
+  derivation-freeze-self-check` as the operator surface (no C FFI
+  export: no C++ consumer exists). Zero semantic changes to the frozen
+  v1 derivation pipeline in `account.rs`.
+
+- **archival: consensus state emission read surface (ARCHIVAL_CONSENSUS_STATE).**
+  Integer `reward_arithmetic` + `consensus_state` in `shekyl-archival-retention`;
+  banded float/integer `Curve` in `shekyl-staking-sim` (`--curve-impl=float|integer`);
+  LMDB `archival_r_market` / `archival_sigma_work` epoch-close sweep; partial-slash
+  `bad_interval` F3 fix; KATs (`consensus_state_kat_v1`, gate4 phase-2 `emission`);
+  docs `ARCHIVAL_REWARD_ARITHMETIC.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`;
+  FA-6 Pi scenario B capture in `PERFORMANCE_BASELINE.md`; CI archival reward gates
+  and aarch64 determinism KAT on `depends` ARM v8 job.
 
 - **curve-tree: CT-1 LeafStore on redb (Round 1).**
   `LeafStore` persists drained leaves and frozen segment metadata (`R_k`,

@@ -3,7 +3,7 @@
 # Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.5.1-§5.5.3 + §5.5.6
 # + §6.6/§6.7.5 + §6.8 cadence:
 #
-# * Per-PR + push + workflow_dispatch + every scheduled cron:
+# * Per-PR + push (dev/main) + workflow_dispatch + every scheduled cron:
 #   `structural-validate` — builds the C reference's `librandomx.a` via
 #   the submodule's own CMakeLists, then runs the Rust workspace's
 #   structural gates against the differential harness crate
@@ -43,6 +43,12 @@ name: randomx-v2-differential
 
 on:
   push:
+    # dev/main only: PR branches are covered by the pull_request event.
+    # An unrestricted push trigger double-runs on PR pushes, and fires
+    # spuriously on merge-from-dev pushes (the push diff is computed
+    # against the previous branch tip, so it matches paths the PR never
+    # touched).
+    branches: [dev, main]
     paths:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
@@ -101,7 +107,7 @@ jobs:
     # job's full setup twice on Monday at 06:00 UTC.
     name: 'structural: build + cargo test (T9-T15, T17)'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     steps:
       - uses: actions/checkout@v5

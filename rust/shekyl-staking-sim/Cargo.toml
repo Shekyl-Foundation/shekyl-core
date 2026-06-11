@@ -17,3 +17,4 @@ description = "Agent-based staker-archival coverage simulation (docs/design/STAK
 [dependencies]
 serde = { workspace = true }
 serde_json = "1"
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }

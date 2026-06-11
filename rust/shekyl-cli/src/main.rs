@@ -18,11 +18,27 @@ pub mod resolve;
 pub mod session;
 pub mod validate;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "shekyl-cli", about = "Shekyl interactive CLI engine", version)]
 pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[command(flatten)]
+    repl: ReplArgs,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Offline check that the embedded ADDRESS_DERIVATION_V1 corpus matches
+    /// the compile-time manifest hash pin (release / genesis tooling).
+    DerivationFreezeSelfCheck,
+}
+
+#[derive(Parser)]
+pub struct ReplArgs {
     /// Daemon address (host:port or full URL)
     #[arg(long, default_value = "localhost:11028")]
     daemon_address: String,
@@ -64,12 +80,30 @@ pub struct Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // stderr-only, WARN default. CLI never writes a file sink: this is an
-    // interactive TTY tool and surprise `~/.shekyl/logs/` writes would be
-    // a footgun. Users who want a file redirect `2>` themselves.
-    let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
-
     let cli = Cli::parse();
+
+    if matches!(cli.command, Some(Commands::DerivationFreezeSelfCheck)) {
+        return run_derivation_freeze_self_check();
+    }
+
+    run_repl(cli.repl)
+}
+
+fn run_derivation_freeze_self_check() -> Result<(), Box<dyn std::error::Error>> {
+    match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
+        Ok(()) => {
+            println!("ADDRESS_DERIVATION_V1 corpus OK");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("derivation freeze self-check failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
     let nettype = match cli.network.as_str() {
         "testnet" => 1u8,

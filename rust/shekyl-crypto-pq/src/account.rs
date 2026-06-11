@@ -851,58 +851,11 @@ mod tests {
         assert!(rederive_account(&seed, DerivationNetwork::Testnet, SeedFormat::Bip39).is_err());
     }
 
-    /// Primary functional guarantee for BIP-39 wallet creation on Mainnet.
-    ///
-    /// **There is no equivalent of this test at the C++ `wallet2` layer
-    /// by design.** The `wallet2`-level `generate_from_bip39` wrapper does
-    /// not exist; new BIP-39 wallet creation will happen via the Rust
-    /// wallet path post-migration. See:
-    ///
-    /// - `docs/FOLLOWUPS.md` §"V3.1+ Legacy C++ → Rust rewrite scope"
-    ///   entry on `wallet2 has no generate_from_bip39 entry point` for
-    ///   the architectural decision and rationale.
-    /// - `tests/unit_tests/wallet_storage.cpp`'s
-    ///   `has_generate_from_bip39_wallet2_member` `static_assert` for
-    ///   the CI tripwire that defends the decision against drift.
-    /// - `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` (Bug 4)
-    ///   for the discovery context.
-    ///
-    /// If you reach this test looking for "where is BIP-39 wallet
-    /// creation tested?", the answer is here, not in C++. If you reach
-    /// it because you're about to add a C++ `wallet2` wrapper for BIP-39,
-    /// read the FOLLOWUPS entry first.
-    #[test]
-    fn generate_from_bip39_mainnet_roundtrips_to_rederive() {
-        let entropy = [0u8; 32];
-        let words = bip39::mnemonic_from_entropy(&entropy).unwrap();
-
-        let (seed, blob_a) =
-            generate_account_from_bip39(&words, "", DerivationNetwork::Mainnet).unwrap();
-        let blob_b =
-            rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
-
-        assert_eq!(blob_a.spend_pk, blob_b.spend_pk);
-        assert_eq!(blob_a.view_pk, blob_b.view_pk);
-        assert_eq!(blob_a.ml_kem_ek, blob_b.ml_kem_ek);
-        assert_eq!(blob_a.pqc_public_key, blob_b.pqc_public_key);
-        assert_eq!(
-            blob_a.classical_address_bytes,
-            blob_b.classical_address_bytes
-        );
-    }
-
-    #[test]
-    fn generate_from_raw_seed_testnet_roundtrips_to_rederive() {
-        let raw = [0xAAu8; 32];
-        let (seed, blob_a) =
-            generate_account_from_raw_seed(&raw, DerivationNetwork::Testnet).unwrap();
-        let blob_b =
-            rederive_account(&seed, DerivationNetwork::Testnet, SeedFormat::Raw32).unwrap();
-
-        assert_eq!(blob_a.spend_pk, blob_b.spend_pk);
-        assert_eq!(blob_a.view_pk, blob_b.view_pk);
-        assert_eq!(blob_a.pqc_public_key, blob_b.pqc_public_key);
-    }
+    // Tier-2 golden vectors (mainnet/stagenet BIP-39, testnet Raw32, passphrase
+    // separation) live in `docs/test_vectors/ADDRESS_DERIVATION_V1/vectors.json`
+    // and are exercised by `tests/kat_address_derivation_v1.rs`. BIP-39 wallet
+    // creation has no C++ `wallet2` equivalent by design — see FOLLOWUPS
+    // "wallet2 has no generate_from_bip39 entry point".
 
     #[test]
     fn generate_from_bip39_rejects_non_mainnet_stagenet() {
@@ -917,19 +870,6 @@ mod tests {
         let raw = [0u8; 32];
         assert!(generate_account_from_raw_seed(&raw, DerivationNetwork::Mainnet).is_err());
         assert!(generate_account_from_raw_seed(&raw, DerivationNetwork::Stagenet).is_err());
-    }
-
-    #[test]
-    fn different_passphrases_yield_different_accounts() {
-        let entropy = [0x55u8; 32];
-        let words = bip39::mnemonic_from_entropy(&entropy).unwrap();
-
-        let (_, a) = generate_account_from_bip39(&words, "", DerivationNetwork::Mainnet).unwrap();
-        let (_, b) =
-            generate_account_from_bip39(&words, "TREZOR", DerivationNetwork::Mainnet).unwrap();
-
-        assert_ne!(a.spend_pk, b.spend_pk);
-        assert_ne!(a.view_pk, b.view_pk);
     }
 
     #[test]

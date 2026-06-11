@@ -1987,6 +1987,12 @@ public:
   virtual void process_archival_slash_at_height(uint64_t block_height);
   /// Revert slash journal rows recorded when `block_height` connected.
   virtual void revert_archival_slashes_at_height(uint64_t block_height);
+  /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
+  virtual void process_archival_epoch_close_at_height(uint64_t block_height);
+  /// Revert epoch-close materialization when `block_height` is popped.
+  virtual void revert_archival_epoch_close_at_height(uint64_t block_height);
+  virtual uint64_t get_archival_r_market(uint64_t shard_id, uint64_t settlement_epoch) const;
+  virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 

@@ -37,6 +37,7 @@
 #include <memory>  // std::unique_ptr
 #include <cstring>  // memcpy
 #include <map>
+#include <unordered_map>
 #include <array>
 
 // `disable_ntfs_compression` below calls `DeviceIoControl` with
@@ -290,6 +291,9 @@ const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
 const char* const LMDB_ARCHIVAL_SHARD_LEAF = "archival_shard_leaf";
 const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
 const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
+const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
+const char* const LMDB_ARCHIVAL_SIGMA_WORK = "archival_sigma_work";
+const char* const LMDB_ARCHIVAL_EPOCH_CLOSE_LOG = "archival_epoch_close_log";
 
 const char* const LMDB_PENDING_TREE_LEAVES = "pending_tree_leaves";
 const char* const LMDB_PENDING_TREE_DRAIN = "pending_tree_drain";
@@ -1637,6 +1641,12 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_slash_applied");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_LOG, MDB_CREATE, m_archival_slash_log,
     "Failed to open db handle for m_archival_slash_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
+    "Failed to open db handle for m_archival_r_market");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
+    "Failed to open db handle for m_archival_sigma_work");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_EPOCH_CLOSE_LOG, MDB_CREATE, m_archival_epoch_close_log,
+    "Failed to open db handle for m_archival_epoch_close_log");
 
   // INVARIANT: Shekyl curve-tree state uses composite keys. No DUPSORT.
   // If you're reaching for MDB_DUPSORT, stop and use a composite key instead.
@@ -5035,6 +5045,33 @@ bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_
   return bond.holds_shard(shard_id);
 }
 
+namespace {
+
+// Flatten BadInterval records into the [start, end_exclusive, ...] pair
+// layout expected by the Rust FFI. Storage adapter only; the interval
+// semantics live in shekyl-archival-retention.
+std::vector<uint64_t> archival_bad_intervals_flat(const shekyl::db::ArchivalBondValue& bond)
+{
+  std::vector<uint64_t> flat;
+  flat.reserve(bond.bad_intervals.size() * 2);
+  for (const auto& iv : bond.bad_intervals)
+  {
+    flat.push_back(iv.start_epoch);
+    flat.push_back(iv.end_exclusive);
+  }
+  return flat;
+}
+
+bool archival_bond_good_through_ffi(const shekyl::db::ArchivalBondValue& bond,
+  uint64_t settlement_epoch)
+{
+  const std::vector<uint64_t> intervals = archival_bad_intervals_flat(bond);
+  return shekyl_archival_good_through(bond.join_settlement_epoch, settlement_epoch,
+    intervals.empty() ? nullptr : intervals.data(), intervals.size() / 2) != 0;
+}
+
+} // namespace
+
 bool BlockchainLMDB::archival_bond_good_through(const crypto::hash& p_id,
   uint64_t settlement_epoch) const
 {
@@ -5044,7 +5081,7 @@ bool BlockchainLMDB::archival_bond_good_through(const crypto::hash& p_id,
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
     return false;
-  return bond.good_through(settlement_epoch);
+  return archival_bond_good_through_ffi(bond, settlement_epoch);
 }
 
 uint64_t BlockchainLMDB::archival_bond_join_epoch(const crypto::hash& p_id) const
@@ -5258,9 +5295,9 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
   const crypto::hash& p_id, const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
   uint64_t settlement_epoch) const
 {
-  if (settlement_epoch < bond.join_settlement_epoch + 1)
-    return false;
-  if (!bond.good_through(settlement_epoch))
+  // good_through covers both the join-epoch gate and bad-interval exclusion
+  // (ARCHIVAL_INCENTIVES §3.4); computed in Rust.
+  if (!archival_bond_good_through_ffi(bond, settlement_epoch))
     return false;
   if (has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch))
     return false;
@@ -5322,6 +5359,10 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     if (it == shards.end())
       return;
     shards.erase(it);
+    shekyl::db::ArchivalBondValue::BadInterval iv{};
+    iv.start_epoch = settlement_epoch;
+    iv.end_exclusive = std::numeric_limits<uint64_t>::max();
+    bond.bad_intervals.push_back(iv);
   }
 
   std::vector<std::pair<uint64_t, uint64_t>> bad;
@@ -5531,6 +5572,13 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     else if (!bond.holds_shard(entry.shard_id))
     {
       bond.held_shard_ids.push_back(entry.shard_id);
+      bond.bad_intervals.erase(
+        std::remove_if(bond.bad_intervals.begin(), bond.bad_intervals.end(),
+          [&](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
+            return iv.start_epoch == entry.settlement_epoch
+              && iv.end_exclusive == std::numeric_limits<uint64_t>::max();
+          }),
+        bond.bad_intervals.end());
     }
 
     std::vector<std::pair<uint64_t, uint64_t>> bad;
@@ -5570,6 +5618,364 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
         set_archival_last_slash_epoch(epoch_marker - 1);
     }
   }
+}
+
+void BlockchainLMDB::delete_archival_r_market_for_epoch(uint64_t settlement_epoch)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_r_market, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_r_market cursor for delete: ", rc).c_str()));
+
+  // After mdb_cursor_del the cursor carries C_DEL: the next MDB_NEXT yields
+  // the item that moved into the deleted slot, so one op-rotating loop
+  // visits every row exactly once (same pattern in all archival delete loops).
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalRMarketKeySize)
+      throw std::runtime_error("FATAL: archival_r_market key size mismatch on delete");
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 8);
+    if (epoch == settlement_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_r_market row: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_r_market cursor error on delete: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::delete_archival_r_market_before_epoch(uint64_t prune_below_epoch)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_r_market, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_r_market cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalRMarketKeySize)
+      throw std::runtime_error("FATAL: archival_r_market key size mismatch on prune");
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 8);
+    if (epoch < prune_below_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_r_market row on prune: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_r_market cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch)
+{
+  shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  const int result = mdb_del(*m_write_txn, m_archival_sigma_work, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete archival_sigma_work row: ", result).c_str()));
+}
+
+void BlockchainLMDB::delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_sigma_work, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_sigma_work cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalSigmaWorkKeySize)
+      throw std::runtime_error("FATAL: archival_sigma_work key size mismatch on prune");
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
+    if (epoch < prune_below_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_sigma_work row on prune: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_sigma_work cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_serve_credit, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+      throw std::runtime_error("FATAL: archival_serve_credit key size mismatch on prune");
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 40);
+    if (epoch < prune_below_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_serve_credit row on prune: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_serve_credit cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
+{
+  if (prune_below_epoch == 0)
+    return;
+
+  delete_archival_serve_credit_before_epoch(prune_below_epoch);
+  delete_archival_r_market_before_epoch(prune_below_epoch);
+  delete_archival_sigma_work_before_epoch(prune_below_epoch);
+}
+
+void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  uint64_t settlement_epoch = 0;
+  if (!shekyl_archival_epoch_close_due(block_height, &settlement_epoch))
+    return;
+
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival epoch close requires active write txn");
+
+  // Gather phase: storage reads only. One pass over the serve-credit rows
+  // for the settlement epoch collects the (bond, shard) pairs plus the
+  // distinct bond and shard-segment records they reference. All consensus
+  // semantics (market membership, scarcity, curve, r/sigma aggregation)
+  // are computed in Rust via shekyl_archival_epoch_close_compute.
+  struct GatheredBond
+  {
+    shekyl::db::ArchivalBondValue value;
+    std::vector<uint64_t> bad_intervals_flat;
+  };
+  std::vector<GatheredBond> bonds;
+  // SIZE_MAX marks a P with no decodable bond record so its rows are
+  // skipped without re-reading the bond table.
+  std::unordered_map<crypto::hash, size_t> bond_index;
+  std::vector<uint64_t> shard_ids;
+  std::vector<shekyl_archival_epoch_close_shard> shards;
+  std::map<uint64_t, size_t> shard_index;
+  std::vector<shekyl_archival_credit_pair> pairs;
+
+  MDB_cursor* credit_cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_serve_credit, &credit_cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for epoch close: ", rc).c_str()));
+
+  MDB_val ck, cv;
+  rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_FIRST);
+  while (rc == 0)
+  {
+    if (ck.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+      throw std::runtime_error("FATAL: archival_serve_credit key size mismatch at epoch close");
+
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(ck.mv_data) + 40);
+    if (epoch == settlement_epoch)
+    {
+      crypto::hash p_id{};
+      std::memcpy(p_id.data, ck.mv_data, 32);
+      const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(ck.mv_data) + 32);
+
+      auto bond_it = bond_index.find(p_id);
+      if (bond_it == bond_index.end())
+      {
+        shekyl::db::ArchivalBondValue bond{};
+        size_t idx = std::numeric_limits<size_t>::max();
+        if (load_archival_bond_value(p_id, bond))
+        {
+          idx = bonds.size();
+          GatheredBond gathered;
+          gathered.bad_intervals_flat = archival_bad_intervals_flat(bond);
+          gathered.value = std::move(bond);
+          bonds.push_back(std::move(gathered));
+        }
+        bond_it = bond_index.emplace(p_id, idx).first;
+      }
+      if (bond_it->second != std::numeric_limits<size_t>::max())
+      {
+        auto shard_it = shard_index.find(shard_id);
+        if (shard_it == shard_index.end())
+        {
+          shekyl_archival_epoch_close_shard shard{};
+          shard.shard_id = shard_id;
+          shard.freeze_height = 0;
+          shard.has_segment = 0;
+
+          shekyl::db::ArchivalShardKey skey(shard_id);
+          MDB_val sk = skey.as_mdb_val();
+          MDB_val sv;
+          const int seg_rc = archival_db_get(m_archival_shard_segment, &sk, &sv);
+          if (seg_rc && seg_rc != MDB_NOTFOUND)
+            throw0(DB_ERROR(lmdb_error("Failed to get archival_shard_segment at epoch close: ", seg_rc).c_str()));
+          if (seg_rc == 0)
+          {
+            shekyl::db::ArchivalShardSegmentValue segment{};
+            if (!shekyl::db::ArchivalShardSegmentValue::decode(sv.mv_data, sv.mv_size, segment))
+              throw std::runtime_error("FATAL: archival_shard_segment decode failed at epoch close");
+            shard.freeze_height = segment.freeze_height;
+            shard.has_segment = 1;
+          }
+
+          shard_it = shard_index.emplace(shard_id, shards.size()).first;
+          shard_ids.push_back(shard_id);
+          shards.push_back(shard);
+        }
+        pairs.push_back({ bond_it->second, shard_it->second });
+      }
+    }
+    rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_NEXT);
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_serve_credit cursor error at epoch close: ", rc).c_str()));
+  mdb_cursor_close(credit_cur);
+
+  // Compute phase: single coarse FFI call into shekyl-archival-retention.
+  std::vector<shekyl_archival_epoch_close_bond> bond_ffi;
+  bond_ffi.reserve(bonds.size());
+  for (const GatheredBond& gathered : bonds)
+  {
+    shekyl_archival_epoch_close_bond b{};
+    b.join_settlement_epoch = gathered.value.join_settlement_epoch;
+    b.is_foundation_complete_tree = gathered.value.is_complete_tree() ? 1 : 0;
+    b.held_shard_ids_ptr = gathered.value.held_shard_ids.empty()
+      ? nullptr : gathered.value.held_shard_ids.data();
+    b.held_shard_ids_len = gathered.value.held_shard_ids.size();
+    b.bad_intervals_ptr = gathered.bad_intervals_flat.empty()
+      ? nullptr : gathered.bad_intervals_flat.data();
+    b.bad_intervals_len = gathered.bad_intervals_flat.size() / 2;
+    bond_ffi.push_back(b);
+  }
+
+  std::vector<uint64_t> r_market(shards.size(), 0);
+  uint64_t sigma_work_milli = 0;
+  const uint8_t compute_rc = shekyl_archival_epoch_close_compute(
+    settlement_epoch, block_height,
+    bond_ffi.empty() ? nullptr : bond_ffi.data(), bond_ffi.size(),
+    shards.empty() ? nullptr : shards.data(), shards.size(),
+    pairs.empty() ? nullptr : pairs.data(), pairs.size(),
+    r_market.empty() ? nullptr : r_market.data(), &sigma_work_milli);
+  if (compute_rc != SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK)
+    throw std::runtime_error("FATAL: archival epoch close compute failed (rc="
+      + std::to_string(static_cast<unsigned>(compute_rc)) + ")");
+
+  // Store phase: persist the Rust-computed results.
+  for (size_t i = 0; i < shards.size(); ++i)
+  {
+    if (r_market[i] == 0)
+      continue;
+    uint8_t val_be[8];
+    shekyl::db::store_be64(val_be, r_market[i]);
+    shekyl::db::ArchivalRMarketKey rkey(shard_ids[i], settlement_epoch);
+    MDB_val rk = rkey.as_mdb_val();
+    MDB_val rv = { sizeof(val_be), val_be };
+    const int put_rc = mdb_put(*m_write_txn, m_archival_r_market, &rk, &rv, 0);
+    if (put_rc)
+      throw0(DB_ERROR(lmdb_error("Failed to put archival_r_market: ", put_rc).c_str()));
+  }
+
+  uint8_t sigma_be[8];
+  shekyl::db::store_be64(sigma_be, sigma_work_milli);
+  shekyl::db::ArchivalSigmaWorkKey sigma_key(settlement_epoch);
+  MDB_val sk = sigma_key.as_mdb_val();
+  MDB_val sv = { sizeof(sigma_be), sigma_be };
+  const int sigma_put = mdb_put(*m_write_txn, m_archival_sigma_work, &sk, &sv, 0);
+  if (sigma_put)
+    throw0(DB_ERROR(lmdb_error("Failed to put archival_sigma_work: ", sigma_put).c_str()));
+
+  uint8_t epoch_be[8];
+  shekyl::db::store_be64(epoch_be, settlement_epoch);
+  shekyl::db::ArchivalEpochCloseLogKey log_key(block_height);
+  MDB_val log_k = log_key.as_mdb_val();
+  MDB_val log_v = { sizeof(epoch_be), epoch_be };
+  const int log_put = mdb_put(*m_write_txn, m_archival_epoch_close_log, &log_k, &log_v, 0);
+  if (log_put)
+    throw0(DB_ERROR(lmdb_error("Failed to put archival_epoch_close_log: ", log_put).c_str()));
+
+  uint64_t prune_below = 0;
+  if (shekyl_archival_prune_below_epoch(block_height, &prune_below))
+    prune_archival_epochs_before(prune_below);
+}
+
+void BlockchainLMDB::revert_archival_epoch_close_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival epoch close revert requires active write txn");
+
+  shekyl::db::ArchivalEpochCloseLogKey log_key(block_height);
+  MDB_val log_k = log_key.as_mdb_val();
+  MDB_val log_v;
+  const int log_get = mdb_get(*m_write_txn, m_archival_epoch_close_log, &log_k, &log_v);
+  if (log_get == MDB_NOTFOUND)
+    return;
+  if (log_get)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival_epoch_close_log on pop: ", log_get).c_str()));
+  if (log_v.mv_size != 8)
+    throw std::runtime_error("FATAL: archival_epoch_close_log value size mismatch on pop");
+
+  const uint64_t settlement_epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(log_v.mv_data));
+  delete_archival_r_market_for_epoch(settlement_epoch);
+  delete_archival_sigma_work_for_epoch(settlement_epoch);
+  const int log_del = mdb_del(*m_write_txn, m_archival_epoch_close_log, &log_k, nullptr);
+  if (log_del && log_del != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete archival_epoch_close_log on pop: ", log_del).c_str()));
+}
+
+uint64_t BlockchainLMDB::get_archival_r_market(uint64_t shard_id,
+  uint64_t settlement_epoch) const
+{
+  shekyl::db::ArchivalRMarketKey key(shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int get_result = archival_db_get(m_archival_r_market, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+    return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival_r_market: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw std::runtime_error("FATAL: archival_r_market value size mismatch");
+  return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
+}
+
+uint64_t BlockchainLMDB::get_archival_sigma_work_milli(uint64_t settlement_epoch) const
+{
+  shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int get_result = archival_db_get(m_archival_sigma_work, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+    return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival_sigma_work: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw std::runtime_error("FATAL: archival_sigma_work value size mismatch");
+  return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
 }
 
 void BlockchainLMDB::put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
