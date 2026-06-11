@@ -63,8 +63,8 @@ namespace cryptonote
     // Difficulty-adjustment selection: LWMA-1 is the canonical
     // post-genesis DAA. The inherited CryptoNote cut-windowed-average
     // `next_difficulty` and `next_difficulty_64` were deleted in Phase 4
-    // of the LWMA-1 migration (`docs/design/DAA_LWMA1.md` §9.1, drift
-    // F6 in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2). Consumers
+    // of the LWMA-1 migration (`docs/completed/DAA_LWMA1.md` §9.1, drift
+    // F6 in `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2). Consumers
     // call `shekyl_difficulty_lwma1_next` via two pieces that live
     // together but distinctly:
     //

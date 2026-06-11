@@ -51,7 +51,7 @@ To run the same tests on a release build, replace `debug` with `release`.
 
 The Monero-inherited `tests/functional_tests/` Python+C++ harness was
 deleted as part of the Phase 2 Electrum-words removal (see
-`docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md`). It targeted
+`docs/completed/ELECTRUM_WORDS_REMOVAL_PLAN.md`). It targeted
 `monerod` / `monero-wallet-rpc` binary names that do not exist in
 Shekyl, restored wallets via a 25-word Electrum seed (the
 `restore_deterministic_wallet` JSON-RPC method removed in Phase 2),

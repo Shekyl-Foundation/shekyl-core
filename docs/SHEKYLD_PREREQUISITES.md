@@ -154,7 +154,7 @@ first non-genesis block.
 The Python functional tests under `tests/functional_tests/` were
 deleted outright in the Phase 2 of the Electrum-words removal
 series (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`)
-per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
 Phase 2 work item 9 (reassessed). The harness invoked binaries
 named `monerod` and `monero-wallet-rpc` (which do not exist in the
 Shekyl tree — the renamed binaries are `shekyld` and

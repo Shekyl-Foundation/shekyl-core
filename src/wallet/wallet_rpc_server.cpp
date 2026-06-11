@@ -2204,7 +2204,7 @@ namespace tools
 
       if (req.key_type.compare("mnemonic") == 0)
       {
-        // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+        // Phase 1 rewire per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
         // §4.5: the dispatch reads the persisted 32-byte BIP-39
         // entropy via `wallet2::bip39_entropy()` and calls
         // `shekyl_bip39_mnemonic_from_entropy` directly. The legacy

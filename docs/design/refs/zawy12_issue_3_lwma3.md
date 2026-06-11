@@ -19,7 +19,7 @@ the canonical source, not a corrected version. The canonical pin is
 `zawy12_issue_3_lwma1.md`; if the two diverge, the pin wins and this
 file is regenerated from it.
 
-Per `docs/design/DAA_LWMA1.md` §3, this file is not load-bearing for
+Per `docs/completed/DAA_LWMA1.md` §3, this file is not load-bearing for
 the cross-check harness -- the cross-check uses canonical `LWMA1_()`
 for monotonic-input vectors and the Shekyl-composed hybrid reference
 (`docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`) for

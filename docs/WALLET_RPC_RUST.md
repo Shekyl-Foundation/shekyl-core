@@ -235,7 +235,7 @@ FROST multisig is handled by native Rust handlers, see below):
 > this surface as well; at that point the count drops to 87.
 > Until then, this table is the source of truth for the FFI
 > dispatcher's coverage. See
-> [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+> [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
 > Phase 2 / Phase 3 for the multi-surface sequencing.
 
 | Category | Methods |

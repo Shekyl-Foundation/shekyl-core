@@ -18,7 +18,7 @@
 // (docs/design/refs/zawy12_issue_3_lwma1.md), lines 77-119.
 //
 // Inputs (§8.1 "perfectly stable hashrate" vector, base-anchored per
-// Round 13 §8.1 convention; see docs/design/DAA_LWMA1.md §8.1 and
+// Round 13 §8.1 convention; see docs/completed/DAA_LWMA1.md §8.1 and
 // the README.md in this directory):
 //   N = 90, T = 120, B = 1_700_000_000 (Unix-epoch base)
 //   timestamps[i] = B + i*T for i in 0..=N   (strictly monotonic, delta=T)

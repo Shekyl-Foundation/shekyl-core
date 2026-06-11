@@ -29,7 +29,7 @@ isProject: false
 ## Sequencing rationale
 
 LWMA-1 is **independent** of the RandomX v2 PoW migration described
-in [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md). The two are math-
+in [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md). The two are math-
 orthogonal — RandomX v2 changes the PoW hash function; LWMA-1 changes
 the difficulty-adjustment algorithm that operates on `(timestamp,
 cumulative_difficulty)` tuples. Neither constrains the other. There is
@@ -812,8 +812,8 @@ contract.
 
 **Panic safety.** The FFI shim wraps the Rust call in
 `std::panic::catch_unwind` per the RandomX v2 plan's error taxonomy
-framing ([`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §17 /
-[`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) Phase 2e); any
+framing ([`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §17 /
+[`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) Phase 2e); any
 uncaught panic maps to `ERR_INTERNAL`.
 
 **Phase 3 merge gate.** The FFI surface compiles and links cleanly
@@ -991,7 +991,7 @@ count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):
    and the RandomX v2 PR adds to it.
 9. **No-C-ABI invariant in `shekyl-difficulty`.** Same
    three-pattern grep as RandomX v2's `shekyl-pow-randomx`
-   invariant ([`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §7.2):
+   invariant ([`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §7.2):
    `#\[(?:unsafe\(\s*)?no_mangle(?:\s*\))?\]`,
    `\bextern\s+"C"\s+fn\b`,
    `#\[(?:unsafe\(\s*)?export_name\b`. Same workflow file.
@@ -1037,7 +1037,7 @@ RandomX v2 PR adds to it.
 
 **No-C-ABI invariant in `shekyl-difficulty`.** Same three-pattern
 grep as RandomX v2's `shekyl-pow-randomx` invariant
-([`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §7.2):
+([`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §7.2):
 `#\[(?:unsafe\(\s*)?no_mangle(?:\s*\))?\]`,
 `\bextern\s+"C"\s+fn\b`, `#\[(?:unsafe\(\s*)?export_name\b`. Same
 workflow file.
@@ -1374,9 +1374,9 @@ addressed prior to Round 9 review:
 ## Cross-references
 
 - [`DAA_LWMA1.md`](./DAA_LWMA1.md) — the companion design doc.
-- [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — sibling sequencing
+- [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) — sibling sequencing
   precedent; this plan's phased shape mirrors its structure.
-- [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) — §3 spec source of
+- [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) — §3 spec source of
   truth, §7 isolation invariants, §9 typed consensus constants,
   §17 FFI error taxonomy. These patterns are reused.
 - [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)

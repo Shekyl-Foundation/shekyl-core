@@ -1469,7 +1469,7 @@ namespace cryptonote
     // JSON-RPC surface. The literal 120 (seconds per block) is pinned by
     // the contract. The round-trip regression test that pins the wire
     // bytes lives at tests/unit_tests/rpc_target_wire_contract.cpp; see
-    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the rationale.
+    // docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the rationale.
     static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
         "RPC wire contract: mining_status.block_target carries the block "
         "target time in seconds; 120 is pinned by the public JSON-RPC "

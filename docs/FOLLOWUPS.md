@@ -1694,8 +1694,8 @@ sustainability is unaffected by the recalibration.
   average with LWMA-1 (sequencing trigger: A-4/A-5/A-7/A-8 PoW
   workstream PR; pre-genesis).**~~ **CLOSED 2026-05-18 by the LWMA-1
   Phase 4 C++ cutover (`feat/daa-lwma1-phase4`).** The four-phase
-  migration spec'd in [`docs/design/DAA_LWMA1_PLAN.md`](design/DAA_LWMA1_PLAN.md)
-  and [`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) is fully
+  migration spec'd in [`docs/completed/DAA_LWMA1_PLAN.md`](completed/DAA_LWMA1_PLAN.md)
+  and [`docs/completed/DAA_LWMA1.md`](completed/DAA_LWMA1.md) is fully
   landed on `dev`:
   - Phase 0 (design): `dev` SHA `b0eb29b` (2026-05-15), spec +
     integration plan.
@@ -2029,7 +2029,7 @@ sustainability is unaffected by the recalibration.
   `query_key("mnemonic")` post-creation returns the §4.10 hard
   error). This is a callable-but-mainnet-broken FFI surface that
   the Electrum-words-removal series leaves in place per
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10's "Why `wallet2_ffi_create_wallet`'s mainnet-broken
   state is out of B-1 scope" sub-paragraph: the brokenness
   derives from the raw-seed restriction in `account.cpp`, not
@@ -2062,13 +2062,13 @@ sustainability is unaffected by the recalibration.
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
   If the cleanup slips past Stage 1 PR 4 kickoff without
   explicit re-justification, the
-  [§6.1 "Keep Electrum-words for backward compat"](./design/ELECTRUM_WORDS_REMOVAL.md#61-keep-electrum-words-for-backward-compat-rejected)
+  [§6.1 "Keep Electrum-words for backward compat"](./completed/ELECTRUM_WORDS_REMOVAL.md#61-keep-electrum-words-for-backward-compat-rejected)
   rejection-shape recurs (callable-but-discouraged surface that
   creates a permanent attack surface), the
   [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc) §"The
   'cost-benefit-defer-to-later' anti-pattern" classification
   fires, and the
-  [`ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 disposition reopens.
 
   **Cross-references.**
@@ -2081,7 +2081,7 @@ sustainability is unaffected by the recalibration.
   brokenness);
   [`rust/shekyl-engine-rpc/src/ffi.rs`](../rust/shekyl-engine-rpc/src/ffi.rs)
   (in-tree Rust consumer that needs the new FFI rewire);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 (substrate disposition).
 
   *Audit-doc link.* Surfaced during Electrum-words-removal
@@ -2107,7 +2107,7 @@ sustainability is unaffected by the recalibration.
   swap-eligible during the brief window between user input and
   BIP-39 normalization and during `query_key("mnemonic")`
   regeneration. Earlier substrate text in
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.8 claimed `wipeable_string` was mlock-wrapped on the C++
   side; that claim was factually incorrect and has been
   corrected in the substrate-amendment PR that produced this
@@ -2153,7 +2153,7 @@ sustainability is unaffected by the recalibration.
   allocator wrapper);
   [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
   §"OS-level protection" (canonical mitigation discipline);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.8 (corrected substrate disposition).
 
   *Audit-doc link.* Surfaced during Electrum-words-removal
@@ -2663,7 +2663,7 @@ sustainability is unaffected by the recalibration.
   outright in Phase 2 of the Electrum-words removal series
   (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`).
   Pre-flight investigation (recorded in
-  [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+  [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
   Phase 2 work item 9 reassessed) found four blockers that
   flipped the disposition from migrate to delete: (a) the harness
   invoked `monerod` / `monero-wallet-rpc` binaries that don't
@@ -4254,7 +4254,7 @@ its wake.
 
   **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
   cutover. Cross-references: PR #58 (Phase 2 RPC deletion);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §2.4 G1; commit `255ea0abb` (`wallet-rpc: drop seed-recovery
   branch from stop_background_sync`).
 
@@ -4629,7 +4629,7 @@ one place to confirm each item's relationship to the wallet stack.
   layout, align 8) to `&[u128]` (align 16) violates Rust's slice
   alignment invariant; the materialized copy is unavoidable under
   the Round 5 ABI choice
-  ([`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) §6.1).
+  ([`docs/completed/DAA_LWMA1.md`](completed/DAA_LWMA1.md) §6.1).
 
   **Performance impact.** ~1.5 KiB per call (`91 × 16` bytes),
   satisfied from the system allocator's small-object freelist.
@@ -7870,7 +7870,7 @@ one place to confirm each item's relationship to the wallet stack.
   Electrum-words, or any other mnemonic scheme. They belong to
   the hardware-wallet integration workstream, which does not
   yet have a substrate document. Per
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10's "Hardware-wallet BIP-39 derivation parity"
   sub-paragraph, B-1 does not introduce the question and does
   not resolve it.
@@ -7919,7 +7919,7 @@ one place to confirm each item's relationship to the wallet stack.
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.12 (cSHAKE-256 pipeline that's downstream of BIP-39 in
   Shekyl's host-side derivation);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 ("Hardware-wallet BIP-39 derivation parity"
   forward-reference sub-paragraph);
   the PQC multisig hardware-wallet integration entry above
