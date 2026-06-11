@@ -39,9 +39,9 @@ rebasing*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4;
 | Reorg atomicity | §8 |
 | Nothing on the wire **forces** a published dedup tag | §5.3, §9 |
 
-Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) is **not** closed
-here; §10.1 names the hook. Close-condition **(iii)** **closed bonds-only (2026-06-11)**
-via the gate-7 iteration-5 sim — see §10.2.
+Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) **closed
+(2026-06-11)** via the worked byte sweep — see §10.1. Close-condition **(iii)** **closed
+bonds-only (2026-06-11)** via the gate-7 iteration-5 sim — see §10.2.
 
 ### 1.1 Design sequencing (four layers, gated)
 
@@ -50,7 +50,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 | Layer | Scope | Gate |
 |-------|--------|------|
 | **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) implementation (contract pinned). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema impl. |
-| **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7; byte aggregate (ii). | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
+| **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). Remaining: margin-robustness band. | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
 
@@ -713,22 +713,23 @@ refresh claimed-epoch cache; `Bonded` → `AdmissionPending` on join-Market reve
 
 ## 10. Hooks for remaining close-conditions
 
-### 10.1 Close-condition (ii) — proof aggregate
+### 10.1 Close-condition (ii) — proof aggregate: CLOSED (2026-06-11)
 
-Per-emission vin size is dominated by:
+**Resolved by the worked byte sweep**
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Close-condition (ii)*, ledger row
+AGG). Per-emission size is dominated by **constant-size crypto** (hybrid pubkey + two
+ML-DSA-65 auths + FCMP++ membership ≈ 15 kB), not the work claim
+(`|epochs| × portfolio × 13 B` — ≤ 780 B/epoch at year-30 lean portfolio). At a 20 kB
+per-emission margin, the aggregate across the `N_P` envelope {40, 79, 154} amortizes to
+**80–310 B/block = 0.027–0.103 %** of the 300 kB penalty-free zone; single-tx max
+(15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero
+spreading. The wire as specced is confirmed: `SETTLEMENT_EPOCH_BLOCKS = 10_000` and
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` stand as pinned (§3); no format change.
 
-- `|settlement_epochs| × |shard_entries| × sizeof(ShardWorkEntry)`
-- `+ sizeof(MembershipOnlyBacking)` per FCMP++ input (gate 2 + curve tree depth)
-
-Sim sweep (`STAKER_ARCHIVAL_SIM.md` adjustment ledger) should use:
-
-```text
-N_P ≈ active market archivers at settlement boundary
-cadence = SETTLEMENT_EPOCH_BLOCKS
-bytes_per_emission ≈ f(holdings shards, FCMP proof size)
-```
-
-This spec **pins cadence** (§3) so (ii) can run; it does not size proofs.
+**Caveat carried:** `FcmpMembershipOnly` is sized at 1-input `FcmpPlusPlus` order until
+built (it proves strictly less). **Reversion:** reopen iff the built proof exceeds 3×
+that estimate, the `N_P` envelope re-pins above ~1 500, or the epoch re-pins below
+1 000 blocks; re-evaluation is a sweep re-run with measured sizes.
 
 ### 10.2 Close-condition (iii) — admission principal: CLOSED bonds-only (2026-06-11)
 
@@ -787,7 +788,8 @@ amounts), bond post/slash reaction.
 - [ ] KAT vectors: minimal valid emission + double-claim reject + work mismatch reject.
 - [ ] Update `AUDIT_SCOPE.md` §staking — entitlement out, emission in.
 - [x] Layer 2: gate-7 admission re-pricing sweep — **closed bonds-only 2026-06-11** (§10.2).
-- [ ] Layer 2 remaining: per-reward byte aggregate (§10.1).
+- [x] Layer 2: per-reward byte aggregate — **closed 2026-06-11** (§10.1; ≤ 0.11 % of
+      penalty-free zone across the `N_P` envelope).
 
 ---
 

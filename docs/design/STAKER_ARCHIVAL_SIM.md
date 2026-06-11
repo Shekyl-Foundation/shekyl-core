@@ -624,6 +624,79 @@ move), or (b) a V3.x consensus change introduces a new archival-side lock class 
 does not carry. Re-evaluation shape: re-run the `--gate7` set against the new pins and
 re-apply the same named close criteria; no new design round needed unless a gauge moves.
 
+## Close-condition (ii) — per-reward proof aggregate (2026-06-11)
+
+PHASE_2B §2.4 close-condition (ii): is the per-reward backing-proof aggregate at target
+`N_P` × settlement-epoch cadence compatible with block space? Unlike gate 7 this has no
+feedback dynamics — every term is a pinned constant or a sim-banked envelope value — so
+the instrument is a worked byte sweep, mechanically checkable, not a dynamic run.
+
+**Inputs (all pinned or banked):** `SETTLEMENT_EPOCH_BLOCKS = 10_000`,
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` (emission §3); `daa_target_seconds = 120`
+(`config/consensus_constants.json`) → epoch ≈ 13.9 days, ≈ 262 800 blocks/yr; shard
+geometry `shards(t) = height / 10_000` with `R = 6` (G7 model); `N_P` envelope
+{thin 40 (R = 4), lean 79, thick 154} (L11/L13); penalty-free block zone 300 000 B
+(`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
+
+**Per-emission vin terms (emission §5.3/§10.1; doc-estimated sizes, sources named):**
+
+| Term | Size | Source |
+|---|---|---|
+| `P_pubkey` (hybrid canonical: Ed25519 32 + ML-DSA-65 pk 1 952) | ≈ 2.0 kB | FIPS 204 / `shekyl-crypto-pq` |
+| `holdings` (ShardSetCompact, 8 B/shard × portfolio) | 0.2–0.6 kB | gate-4 §encoding |
+| `settlement_epochs` (8 B × \|E\|) | 8–120 B | emission §5.3 |
+| `work_claim` (\|E\| × portfolio × 13 B; `ShardWorkEntry` = id 8 + bit 1 + milli 4) | see sweep | emission §5.4 |
+| `backing` (`MembershipOnlyBacking`, 1-input FCMP++ order) | ≈ 2.5 kB | `FCMP_PLUS_PLUS.md` §proof-size |
+| `pqc_auth` ×2 inputs (Ed25519 64 + ML-DSA-65 sig 3 309) | ≈ 6.8 kB | FIPS 204 |
+| fee input (FCMP++ marginal) + 2 vouts (KEM blob 1 120 ea + BP+ + ecdh/outPk) | ≈ 5.5 kB | `FCMP_PLUS_PLUS.md` §4 |
+
+Typical single-epoch emission tx ≈ **17–19 kB**, dominated by constant-size crypto
+(hybrid keys/sigs + FCMP++), **not** by the work claim. Per-archiver portfolio
+`R × shards(t) / N_P` at year 30 (shards ≈ 788): lean ≈ 60 entries → work claim
+**780 B/epoch** — under 5 % of the tx. Round to **20 kB** for margin.
+
+**The sweep (aggregate per settlement epoch = `N_P` × 20 kB, amortized over 10 000 blocks):**
+
+| Arm | Aggregate / epoch | Amortized / block | % of 300 kB zone |
+|---|---|---|---|
+| thin (`N_P` = 40) | 0.8 MB | 80 B | 0.027 % |
+| lean (`N_P` = 79) | 1.6 MB | 160 B | 0.053 % |
+| thick (`N_P` = 154) | 3.1 MB | 310 B | 0.103 % |
+
+**Bound checks beyond the mean:**
+
+- **Single-tx max** (15-epoch batch × year-30 lean portfolio): work claim
+  60 × 13 × 15 ≈ 11.7 kB + constant crypto ≈ **29 kB** — ~5× under a
+  half-penalty-zone tx ceiling (~150 kB).
+- **Boundary burst** (every archiver claims in the first blocks after the epoch
+  closes, zero spreading): thick = 3.1 MB ÷ 300 kB/block ≈ **11 blocks (~22 min)**
+  to drain at penalty-free throughput alone; gate-6 jitter policy spreads it further
+  as a privacy side effect.
+- **Verifier cost:** `N_P` membership-only FCMP++ verifications per 10 000 blocks —
+  one to two orders below ordinary-transfer load at any plausible tx volume.
+- **Growth dependence:** only `work_claim` grows with chain age (linear in
+  `shards/N_P`); at year 100 (~2 600 shards, lean portfolio ≈ 197) it is still
+  ≈ 2.6 kB/epoch against ≈ 15 kB constant crypto. The aggregate scales with `N_P`,
+  not chain age — and `N_P` is economically self-limiting (L11 attractor).
+
+**Disposition — close-condition (ii) CLOSES.** The per-reward proof aggregate is
+**≤ 0.11 % of penalty-free block space amortized across the entire `N_P` envelope**,
+with bounded single-tx size, a self-draining boundary burst, and no compounding growth
+term. Even a uniform 2× error on every doc-estimated size leaves the aggregate ≤ 0.21 %.
+No emission-wire change is needed; `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` and
+`SETTLEMENT_EPOCH_BLOCKS = 10_000` are confirmed as pinned.
+
+**Honest caveat:** `MembershipOnlyBacking` is a not-yet-built sibling of
+`FcmpPlusPlus::verify`; its size is assumed at 1-input `FcmpPlusPlus` order (it proves
+strictly less — membership without key-image emission). The 2× margin read covers it.
+
+**Reversion clause (rule 21):** reopen (ii) iff (a) the built `FcmpMembershipOnly`
+proof exceeds 3× the 1-input `FcmpPlusPlus` estimate, (b) the `N_P` envelope re-pins
+above ~1 500 (the level at which thick-arm amortized load crosses 1 % of the zone), or
+(c) `SETTLEMENT_EPOCH_BLOCKS` is re-pinned below 1 000. Re-evaluation shape: re-run
+this sweep with measured sizes — a table update, not a design round, unless a bound
+check fails.
+
 ## Build decision — confirmed: separate `shekyl-staking-sim` crate
 
 A **new crate `shekyl-staking-sim`** (agent-based) for iterations 1, 2, 4; macro
@@ -2582,9 +2655,10 @@ where a decision is provisional.
 ratification requires three sim/design close-conditions at **equal severity**: **(ii)**
 per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence; **(iii)**
 admission-principal decision with **gate 7** locked-supply re-pricing when bonds become
-the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned:**
-`SETTLEMENT_EPOCH_BLOCKS = 10_000`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` per
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §3 — add proof-size sweep axis next.
+the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) CLOSED (2026-06-11):**
+worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`) across the `N_P` envelope — aggregate
+≤ 0.11 % of penalty-free block space; see §*Close-condition (ii)* and ledger row AGG.
 
 | # | Question (gate) | Evidence | Candidate adjustment / disposition |
 |---|---|---|---|
@@ -2606,6 +2680,7 @@ the sole sink. Iteration 5 below is the gate-7 instrument. **(ii) cadence pinned
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
 | T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; gate-3 + rotation) | **CLOSED.** Instrument + qual firewall wargame complete. Scarcity-spread → unique portfolios; primary firewall holds lifetime `T_obs` under wallet defaults. | **Conditionally finally accepted.** Form-C reopen not triggered. [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9. |
 | G7 | **Locked-supply re-pricing / admission principal** (gate 7; PHASE_2B §2.4 close-condition (iii)) | Iteration-5 run (2026-06-11; §*Gate 7 iteration-5 — results*): derived archival lock collapses to `bond_floor × R × shards(t)` — 117 → 3 546 coins over 30 yr, `lock/circ ≤ 8.5×10⁻⁷` (10⁻⁵ even at 10× denser shard geometry; 1.4×10⁻⁴ at arm-B `MIN = 10 000×` floor). All three macro gauges (burn servo, release factor, net inflation) **insensitive to both arms at every `N_P`** — burn identical to the cent; both arms clamp identically at the 90 % cap under load. Δ vs. the asserted comparator: legacy schedules overstated burn −22.3 % via the now-inert `(1 + stake_ratio)` factor (FOLLOWUPS item). | **RESOLVED — bonds-only** per the pre-named indeterminate criterion (admission lock does no measurable macro work; smaller consensus surface wins). Cross-doc spec edits **landed 2026-06-11** (emission §10.2 branch deletion, PHASE_2B §2.4 (iii) + admission row, gate-6 §2.5, V3_STAKER_ARCHIVAL). **Reversion:** reopen iff bond floor / shard geometry re-pin ≥ 3 OOM upward combined, or a new archival lock class lands; re-run `--gate7`, re-apply criteria. |
+| AGG | **Per-reward proof aggregate** (PHASE_2B §2.4 close-condition (ii); emission §10.1) | Worked byte sweep (2026-06-11; §*Close-condition (ii)*) — no feedback dynamics, every term pinned or banked. Typical emission tx ≈ 17–19 kB, dominated by constant-size hybrid crypto (ML-DSA-65 sig 3.3 kB ×2, hybrid pk 2 kB, FCMP++ ~2.5 kB), not the work claim (≤ 780 B/epoch at year-30 lean portfolio ≈ 60 shards). Aggregate at 20 kB margin: thin/lean/thick = 80/160/310 B per block amortized = **0.027/0.053/0.103 %** of the 300 kB penalty-free zone. Single-tx max (15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero spreading; only `work_claim` grows with chain age (2.6 kB/epoch at year 100 — still < 15 kB constant term). | **RESOLVED — (ii) closes; wire confirmed as pinned.** ≤ 0.11 % amortized across the envelope (≤ 0.21 % at uniform 2× size error). `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` + `SETTLEMENT_EPOCH_BLOCKS = 10_000` confirmed. Caveat: `FcmpMembershipOnly` size assumed at 1-input `FcmpPlusPlus` order (proves strictly less). **Reversion:** reopen iff built proof > 3× estimate, `N_P` envelope re-pins above ~1 500, or epoch re-pins below 1 000 blocks; re-evaluation = re-run sweep with measured sizes. |
 
 ### Robustness-sweep verdicts (which findings are structural)
 

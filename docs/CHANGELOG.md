@@ -4,6 +4,19 @@
 
 ### Added
 
+- **archival: §2.4 close-condition (ii) closed — per-reward proof aggregate
+  (2026-06-11).** Worked byte sweep (`STAKER_ARCHIVAL_SIM.md` §Close-condition
+  (ii), ledger row AGG; `REWARD_EMISSION_LEG.md` §10.1): per-emission tx
+  ≈ 17–19 kB dominated by constant-size hybrid crypto, not the work claim;
+  aggregate at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
+  `MAX = 15`) amortizes to 80–310 B/block = **0.027–0.103 %** of the 300 kB
+  penalty-free zone across the `N_P` envelope {40, 79, 154}; single-tx max
+  ≈ 29 kB; boundary burst self-drains in ≈ 11 blocks; no compounding growth
+  term. Wire confirmed as specced — no format change. Reversion clause:
+  built `FcmpMembershipOnly` > 3× estimate, `N_P` > ~1 500, or epoch
+  < 1 000 blocks. **All three PHASE_2B §2.4 close-conditions are now
+  resolved**; Stage 3 gates on schema implementation + gate-6 soundness.
+
 - **archival: gate-7 bonds-only disposition executed across specs (2026-06-11).**
   Cross-document spec edits landing PHASE_2B §2.4 close-condition (iii) on
   maintainer sign-off: `REWARD_EMISSION_LEG.md` deletes the admission branch

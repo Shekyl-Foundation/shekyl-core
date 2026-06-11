@@ -133,14 +133,15 @@ ramp** vs lump initial bond in gate 6 / wallet hygiene.
 | # | Condition | Disposition |
 |---|-----------|-------------|
 | (i) | Reward dedup = per-`P` claimed-epoch state on bond record; **no published tag** | **[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)** — Layer 1 **closed** at spec; implement blocked on [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (contract **pinned**; gate 3 ν dissolved) |
-| (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | Sim gate — same severity as (iii); **open** |
+| (ii) | Per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence | **CLOSED (2026-06-11)** — worked byte sweep, ≤ 0.11 % of penalty-free zone across the `N_P` envelope ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger AGG; emission §10.1) |
 | (iii) | Admission-principal decision + **gate 7 locked-supply re-pricing** | **CLOSED bonds-only (2026-06-11)** — iteration-5 sim, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7; emission §10.2 executed |
 
 **Reward-emission spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) — Layer 1
 closed (2026-06-07). **Archival read contract:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 **pinned** (gate 3 ν dissolved; `MAX_CLAIM_AGE_W` shape pinned). FSM retool (§3–§7)
-**unblocked** in parallel. **(iii) closed bonds-only (2026-06-11).** **Next:** close (ii)
-(per-reward byte aggregate).
+**unblocked** in parallel. **(ii) and (iii) both closed 2026-06-11** (byte aggregate;
+bonds-only). **All three §2.4 close-conditions resolved** — Stage 3 now gates on the
+archival-state schema implementation + gate-6 soundness only.
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -476,10 +477,10 @@ are archival-internal (interface only).
 | **Per-shard bond lifecycle + slash hook** | Gate 4 (**pinned**); intra-epoch honesty anchor | Slash independent of admission spend |
 | **Reward receipt + unstake drain** | Gate 6 | Stealth outputs; **decorrelated** principal return |
 | **Firewall hooks** | Gate 6 | Separate circuits; stake↔`P` timing decoupling; bond-funding hygiene |
-| **Per-reward proof aggregate** | Sim (close-condition ii) | `N_P` × settlement-epoch cadence |
+| **Per-reward proof aggregate** | **CLOSED (2026-06-11)** — sim ledger AGG | ≤ 0.11 % of penalty-free zone at `N_P` × cadence; wire confirmed |
 | `StakeEngine` + orchestrator API | Round 4 | stake-in / bond / emit-reward / drain / unstake |
 | Threat model | §7 (after reward-emission spec) | Soft admission window explicit; bond-as-anchor |
-| Stage 3 DoD | §10 | Blocked on §2.4 close-conditions |
+| Stage 3 DoD | §10 | §2.4 close-conditions all resolved (2026-06-11); blocked on schema implementation + gate-6 soundness |
 
 **Discipline:** for each staking interface, ask whether **exactly one** archival-internal
 decision is load-bearing on it; pull only that decision forward. Most plausible pinch:
@@ -546,8 +547,8 @@ wallet §5 forward-rebuild adapts.
 **Retired for genesis:** 3C subtree; §6.4 claim wire; `G_S` / `G_arch` / `N_arch`
 emission tags; cleartext stake/claim C++ paths.
 
-**Open before Stage 3:** archival consensus state schema; §2.4 **(ii)** ((iii) closed
-bonds-only 2026-06-11); reward-emission **implementation** (after schema); `P` HKDF
+**Open before Stage 3:** archival consensus state schema ((ii) and (iii) both closed
+2026-06-11); reward-emission **implementation** (after schema); `P` HKDF
 (gate 6); `Σwork` hook (gate 1).
 
 ### 2.4 Transfer-shaped admission (leading genesis form)
@@ -624,12 +625,14 @@ image; reward leg does not.
 
 #### Round 3–4 ratification gates
 
-See revision note 2026-06 — conditions (i) reward-emission spec with state dedup,
-(ii) sim aggregate at `N_P` × cadence, (iii) admission principal + gate 7 re-pricing
-(**closed bonds-only 2026-06-11**).
+See revision note 2026-06 — conditions (i) reward-emission spec with state dedup
+(**closed at spec**), (ii) sim aggregate at `N_P` × cadence (**closed 2026-06-11**,
+ledger AGG), (iii) admission principal + gate 7 re-pricing (**closed bonds-only
+2026-06-11**).
 
 **Spec:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) + [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md).
-Schema pin + (ii) sim remain before Stage 3 emission code; (iii) executed in emission §10.2.
+**All three close-conditions resolved.** Schema **implementation** remains before
+Stage 3 emission code; (ii) recorded in emission §10.1, (iii) executed in emission §10.2.
 
 ---
 
@@ -1952,7 +1955,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **Dual-wargamer synthesis executed (2026-06-05, §7.5.3).** Confirmed/sharpened the §7.5 dispositions, added adversary **A5** (economic/rational), split inflation **T8 → 8a entitlement-soundness + 8b band-declaration binding**, and surfaced **top finding F0** (the claim anonymity set is the `{tier × creation-window}` cohort — confirmed at source).
 - [x] **F0 reveal-vs-ZK resolved at source (2026-06-05, §7.5.3 / §6.4).** `tier` (u8) and `creation_height` (u64) are **cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8); the verifier recomputes `h_bind` and the multiplier from them (§6.4.3). Revealed-by-design and **load-bearing for inflation-safety** (single revealed `tier` excludes tier-forgery; the 3C-over-3A "no new primitive" win) — hiding them re-opens 3C-vs-3A, so L4 is V4 co-design, not a v1 bolt-on. Claim↔claim linkage is therefore **deterministic exact-match**, cohort `→ 1` at cold start.
 - [x] **F0 baseline-budget calibration (2026-06-05, §7.5.3).** Priced F0 against the staking-exposure budget the project accepted *before* confidential staking: F0 is the **same category** of cost (staking is the exposed overlay; spend path untouched; core promise intact), exceeding baseline only in **scale-resistance** (block-granular `{tier × exact-height}` cohort does not dilute with growth — a steady-state, not just cold-start, thinness) and **targeted-cascade**. Marginal delta over the realistic already-linkable counterfactual (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor — **most penalizing the privacy-conscious staker**. **De-escalates the decision.**
-- [ ] **Round 3–4 design closure — transfer-shaped substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified; **(2)** §2.4 close-conditions (i)–(iii) — reward-emission spec (state dedup, no published tag), per-reward aggregate sim, admission principal + gate 7 re-pricing (**(i) closed at spec; (iii) closed bonds-only 2026-06-11; (ii) open**); **(3)** Tier 1 soundness step 3; **(4)** entitlement / 3C / F0 bucketing explicitly **not** genesis. **Next:** reward-emission leg spec. Stage 3 gated on closure + Rounds 4–5.
+- [ ] **Round 3–4 design closure — transfer-shaped substrate (2026-06).** Close on: **(1)** F-ARCHIVAL gate-list ratified; **(2)** §2.4 close-conditions (i)–(iii) — reward-emission spec (state dedup, no published tag), per-reward aggregate sim, admission principal + gate 7 re-pricing (**all three closed 2026-06-11**: (i) at spec, (ii) byte sweep ledger AGG, (iii) bonds-only ledger G7); **(3)** Tier 1 soundness step 3; **(4)** entitlement / 3C / F0 bucketing explicitly **not** genesis. **Next:** reward-emission leg spec. Stage 3 gated on closure + Rounds 4–5.
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))
 
