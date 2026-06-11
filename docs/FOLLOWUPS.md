@@ -47,6 +47,19 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5,
+  2026-06-11).** Target: V3.0, with the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9). `assemble` reads the in-memory entry vec
+  (`rust/shekyl-curve-tree/src/assemble.rs:84-89`); whole-tree-in-memory is
+  correct at Tier-A scale and wrong at mainnet scale. CT-3 keeps the
+  in-memory vec as the V3.0 assembly substrate (resume rebuilds it from the
+  store) and must not foreclose store-backed assembly — the store already
+  persists `owned_identities`. **Reopening trigger:** the prune-policy PR
+  (minimal wallets prune non-owned leaves of frozen segments) lands, at
+  which point in-memory-only assembly breaks for pruned wallets by
+  construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
+  R1-Q6.
+
 - **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
   consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while
   [`config/consensus_constants.json`](../config/consensus_constants.json)

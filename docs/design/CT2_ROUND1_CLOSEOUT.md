@@ -106,6 +106,17 @@ Bootstrap FCMP++ spend proves membership against a **coinbase-only** curve tree 
 the Tier A fixture shape. Real-root path integration is **CT-5** (engine wiring),
 not Round 1.
 
+**Tier B ordering note (2026-06-11).** The §8.2 reversion criterion ("2A's
+send path can mint a regular (and staked) output on a regtest fixture") is
+**not** met by 2a-4's `TestDaemon` integration: that path uses synthetic
+`TreeContext`/membership paths against a Rust mock, and a real regtest daemon
+rejects synthetic proofs. Minting a real non-coinbase output requires real
+local path assembly — i.e. **CT-3 (persistent sync,
+[`CT3_SYNC.md`](./CT3_SYNC.md)) + CT-5 (engine wiring)** ahead of the Tier B
+fixture, plus stake-tx minting for the staked case. Tier B therefore orders
+**after** CT-5, exactly as the §8.2 acyclicity argument predicts; the
+deferral remains bounded by the spend path, not gating it.
+
 ---
 
 ## 6. Explicitly not Round 1

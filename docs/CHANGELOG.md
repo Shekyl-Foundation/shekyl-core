@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **curve-tree: CT-3 design Round 1 opened (`docs/design/CT3_SYNC.md`).**
+  Pre-flight substrate audit (pinned citations) of the persistent-client
+  gap: CT-1/CT-2 landed persistence and KAT-verified block-derived
+  reconstruction, but no path opens on disk, resumes, or rolls back a reorg
+  without genesis replay. Round 1 questions with proposed dispositions:
+  block-derived forward sync confirmed as default (the parent §6 reversion
+  criterion fired — bulk-leaf RPC repositioned to post-prune refetch +
+  archival, deferrable pre-genesis), pending-candidate persistence (long
+  stake tier locks 150k blocks; tail re-scan on resume is unbounded),
+  transactional reorg rollback via maturity binary-search +
+  `truncate_from_tree_position`, source-seam trait deferred with its first
+  consumer. Parent `CURVE_TREE_CLIENT.md` §8 #6 / §9 CT-3 row updated;
+  store-backed assembly routed to `FOLLOWUPS.md` (V3.0, rides prune
+  policy).
+
 ### Changed
 
 - **archival: epoch-close consensus computation moved to Rust (PR 123).**
