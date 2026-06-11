@@ -22,6 +22,16 @@
   `assemble_kat`. Pins: `CT1_ROUND1_PINS.md`, close-out
   `CT1_ROUND1_CLOSEOUT.md`.
 
+  Robustness sweep (`CT1_ROUND1_CLOSEOUT.md` §5): `root_at` /
+  `verify_root` / `assemble_path` are `&self` queries bounded by the
+  ingested chain tip (`ClientError::ReferenceBeyondIngestedTip`); the
+  ahead-of-ingest store catch-up machinery is deleted, making the drained
+  mirror append-only by construction and the freeze clock drivable only by
+  ingested heights. `append_drained` rejects non-canonical Selene scalars
+  at write time (`StoreError::InvalidLeafBytes`); store bounds checks read
+  `META_LEAF_COUNT` inside the operating transaction (single-snapshot, no
+  check/use gap).
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust
