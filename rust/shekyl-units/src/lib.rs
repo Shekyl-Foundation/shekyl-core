@@ -7,7 +7,7 @@
 //!
 //! [`AtomicUnits`] wraps a `u64` of **atomic units** (the chain's smallest
 //! denomination; `10^9` atomic units = 1 SKL — see
-//! `docs/design/ATOMIC_UNITS_NEWTYPE.md`). It replaces raw `u64` on the
+//! `docs/completed/ATOMIC_UNITS_NEWTYPE.md`). It replaces raw `u64` on the
 //! wallet's money path to remove two inherited bug classes by construction:
 //!
 //! 1. **Silent wrap.** There are no `Add`/`Sub`/`Mul`/`Div` operator impls and

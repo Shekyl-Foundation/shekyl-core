@@ -1469,7 +1469,7 @@ sustainability is unaffected by the recalibration.
   multisig signed-hash sites, FFI `#[repr(C)]`, postcard `commitment_bytes`, the verified
   JSON-number RPC field). The CLI's inherited `10^12` `format_amount`/`parse_amount` is
   reconciled to `10^9` through the newtype. Design + complete edge inventory:
-  [`docs/design/ATOMIC_UNITS_NEWTYPE.md`](design/ATOMIC_UNITS_NEWTYPE.md). Spawned the
+  [`docs/completed/ATOMIC_UNITS_NEWTYPE.md`](completed/ATOMIC_UNITS_NEWTYPE.md). Spawned the
   three follow-ups below.
 
 - **Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned

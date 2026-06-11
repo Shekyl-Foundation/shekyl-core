@@ -21,7 +21,7 @@
 //!
 //! Senders target `D`; signing uses `m₀`. That mismatch is CryptoNote
 //! inheritance, not multi-address. See
-//! `docs/design/PRIMARY_CLAIM_DERIVATION_RENAME.md` §1.
+//! `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md` §1.
 //!
 //! ## Genesis lock
 //!

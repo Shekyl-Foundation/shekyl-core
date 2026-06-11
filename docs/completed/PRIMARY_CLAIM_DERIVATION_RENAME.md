@@ -5,10 +5,10 @@ implementation on branch `chore/primary-claim-rename`.
 
 **Binding decisions (do not relitigate).**
 
-- [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) — Subaddresses dropped
+- [`WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md) — Subaddresses dropped
   at V3.0 (End-state 5); one primary per account; payment requests (FA-8)
   for merchant attribution.
-- [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7 — closed
+- [`SUBADDRESS_UNDER_PQC.md`](../design/SUBADDRESS_UNDER_PQC.md) §5.7 — closed
   R2-F2; no `create_subaddress` at V3.0.
 - [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) — 2026-06-07
   End-state 5 entry supersedes flat `SubaddressIndex` product surface.
@@ -124,7 +124,7 @@ rg -n 'cryptonight|CryptoNight' src/ docs/ → 59 lines
 
 Per `60-no-monero-legacy.mdc`, PoW residue is tracked in
 [`CPP_INHERITANCE_INVENTORY.md`](../CPP_INHERITANCE_INVENTORY.md) and
-[`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) Phase 3c — **not** mixed into
+[`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) Phase 3c — **not** mixed into
 this rename unless a drive-by is &lt;10 lines (it is not: 59 hits).
 
 **FOLLOWUPS disposition:** record “CryptoNight vocabulary purge” as existing
@@ -304,9 +304,9 @@ at this doc / `SUBADDRESS_UNDER_PQC.md`.
 
 ## 8. Documentation updates (PR E)
 
-- [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) — inventory bullet: replace
+- [`WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md) — inventory bullet: replace
   `SubaddressIndex` with “primary claim derivation (`output_claim`)”.
-- [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) — add §5.7.13 pointer
+- [`SUBADDRESS_UNDER_PQC.md`](../design/SUBADDRESS_UNDER_PQC.md) — add §5.7.13 pointer
   to this doc as implementation hygiene post-R2-F2.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md) — close / annotate “subaddress vocabulary
   residue” when PR E lands.

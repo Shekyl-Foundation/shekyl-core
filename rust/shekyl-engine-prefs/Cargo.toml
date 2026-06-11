@@ -53,7 +53,7 @@ rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 
 # `AtomicUnits` amount newtype for the coin-selection / RPC-credit amount
-# fields (docs/design/ATOMIC_UNITS_NEWTYPE.md). TOML stays byte-identical
+# fields (docs/completed/ATOMIC_UNITS_NEWTYPE.md). TOML stays byte-identical
 # via `#[serde(transparent)]`.
 shekyl-units = { path = "../shekyl-units" }
 
