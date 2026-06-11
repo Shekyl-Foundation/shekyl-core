@@ -64,8 +64,10 @@
   sanity-ceiling unit tests; output locks reserved before async sign with
   `release_build_reservation` on sign failure; integration tests for daemon-derived
   `tx.fee`, submit dedup, missing key-image rejection, and reserved-output blocking.
-  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4; orchestrator Phase 2a
-  remains pending Phase 1 (`WALLET_REWRITE_PLAN.md`).
+  Doc closeout in `PHASE_2A_SEND_PATH.md` / audit §2a-4. The orchestrator
+  Phase 2a methods, pending Phase 1 when this landed, shipped with the
+  Phase 1 closeout above; remaining 2a residue is tracked in
+  `PHASE_2A_SEND_PATH.md` §10.
 
 - **wallet: Phase 2a-3 sign, wire encode, submit.**
   `KeyActor`/`LocalKeys` sign bridge, `shekyl-tx-builder` `wire` module,
