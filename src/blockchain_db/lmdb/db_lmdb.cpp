@@ -5878,11 +5878,21 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
       if (it == r_market_by_shard.end() || it->second == 0)
         continue;
       const uint64_t age_milli = archival_shard_age_milli(shard_id, block_height);
-      work_p_milli += shekyl_archival_scarcity_milli(it->second, age_milli);
+      const uint64_t scarcity = shekyl_archival_scarcity_milli(it->second, age_milli);
+      if (work_p_milli > std::numeric_limits<uint64_t>::max() - scarcity)
+        work_p_milli = std::numeric_limits<uint64_t>::max();
+      else
+        work_p_milli += scarcity;
     }
 
     if (work_p_milli > 0)
-      sigma_work_milli += shekyl_archival_curve_milli(work_p_milli);
+    {
+      const uint64_t credited = shekyl_archival_curve_milli(work_p_milli);
+      if (sigma_work_milli > std::numeric_limits<uint64_t>::max() - credited)
+        sigma_work_milli = std::numeric_limits<uint64_t>::max();
+      else
+        sigma_work_milli += credited;
+    }
 
     rc = mdb_cursor_get(bond_cur, &bk, &bv, MDB_NEXT);
   }

@@ -17,7 +17,8 @@ use shekyl_archival_retention::{
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditResponse, BandedCurveParams, BondPostError, BondPostKind,
     BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -389,10 +390,13 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     }
 }
 
-/// Banded PL `Curve(work_milli)` using provisional `consensus_constants.json` pins.
+/// Banded PL `Curve(work_milli)` using `consensus_constants.json` pins from build.rs.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_curve_milli(work_milli: u64) -> u64 {
-    let params = BandedCurveParams::default_provisional();
+    let params = BandedCurveParams {
+        plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+        plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+    };
     curve_milli(work_milli, &params)
 }
 

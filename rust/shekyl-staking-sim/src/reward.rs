@@ -73,15 +73,54 @@ pub fn raw_work(world: &World, actor: usize, r: &[usize], age_weight: f64) -> f6
 /// `ceil(raw_work / cap)` pseudonyms only while the recovered capped-work is worth
 /// more than `pseudonym_cost`; otherwise it runs a single (capped) pseudonym.
 ///
+/// Convert sim `work` to milli-units; non-finite and negative inputs map to `0`.
+fn work_f64_to_milli(work: f64) -> u64 {
+    if !work.is_finite() || work <= 0.0 {
+        return 0;
+    }
+    let scaled = work * WORK_MILLI_SCALE as f64;
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return 0;
+    }
+    if scaled >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        scaled.round() as u64
+    }
+}
+
+/// Convert sim `cap` to plateau-value milli; invalid caps map to `0`.
+fn cap_f64_to_milli(cap: f64) -> u64 {
+    if !cap.is_finite() || cap <= 0.0 {
+        return 0;
+    }
+    let scaled = cap * WORK_MILLI_SCALE as f64;
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return 0;
+    }
+    if scaled >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        scaled.round() as u64
+    }
+}
+
 /// Credited work via banded PL `Curve` (REWARD_EMISSION_LEG.md §4.0 form C).
 #[must_use]
 pub fn curve(work: f64, p: &RewardParams) -> f64 {
     match p.curve_impl {
         CurveImpl::Float => curve_banded(work, p.cap),
         CurveImpl::Integer => {
-            let cap_milli = (p.cap * WORK_MILLI_SCALE as f64).round() as u64;
+            if p.cap <= 0.0 || !p.cap.is_finite() {
+                // No cap: credited work equals raw work (milli round-trip).
+                return work_f64_to_milli(work) as f64 / WORK_MILLI_SCALE as f64;
+            }
+            let cap_milli = cap_f64_to_milli(p.cap);
+            if cap_milli == 0 {
+                return work_f64_to_milli(work) as f64 / WORK_MILLI_SCALE as f64;
+            }
             let params = BandedCurveParams::from_sim_cap_milli(cap_milli);
-            let work_milli = (work * WORK_MILLI_SCALE as f64).round() as u64;
+            let work_milli = work_f64_to_milli(work);
             curve_milli(work_milli, &params) as f64 / WORK_MILLI_SCALE as f64
         }
     }
