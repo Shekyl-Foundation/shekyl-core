@@ -282,7 +282,7 @@ impl CurveTreeClient {
     fn sync_store(&mut self, tip_height: u64) -> Result<(), ClientError> {
         let through = Self::drained_through(tip_height);
         let stored = self.store.leaf_count()?;
-        let canonical = self.drained_count_from_index(through);
+        let canonical = self.canonical_drained_count_on_ingest(through);
         if canonical < stored {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
@@ -352,6 +352,41 @@ impl CurveTreeClient {
         } else {
             self.drained_through_counts.insert(i, (through, count));
         }
+    }
+
+    /// Canonical drained count at `through` on the consecutive-ingest path,
+    /// computed incrementally from the previous block's cached cutoff (O(1))
+    /// instead of a full maturity-index scan — the scan is O(buckets) per
+    /// block, which makes long-chain ingest O(height²) overall.
+    ///
+    /// Soundness: an output created at block `h` matures no earlier than
+    /// `h + DEFAULT_LOCK_WINDOW` ([`crate::recon::maturity_height`]), so the
+    /// block being ingested can never add entries at maturities `<=` its own
+    /// drain cutoff `h - 1`. Therefore:
+    /// - same cutoff as the previous sync (the repeated genesis cutoff `0`):
+    ///   the count is unchanged;
+    /// - cutoff advanced by one: previous count plus the newly-final bucket,
+    ///   which is complete by the same maturity bound.
+    ///
+    /// Any other cache shape (first block, or a prior store error that
+    /// skipped [`Self::record_drained_count`]) falls back to the full scan.
+    fn canonical_drained_count_on_ingest(&self, through: u64) -> u64 {
+        let canonical = match self.drained_through_counts.last() {
+            Some(&(t, count)) if t == through => count,
+            Some(&(t, count)) if t.checked_add(1) == Some(through) => {
+                let bucket = self.entries_by_maturity.get(&through).map_or(0, |indices| {
+                    u64::try_from(indices.len()).expect("bucket fits u64")
+                });
+                count + bucket
+            }
+            _ => self.drained_count_from_index(through),
+        };
+        debug_assert_eq!(
+            canonical,
+            self.drained_count_from_index(through),
+            "incremental drained count diverged from the maturity index at through={through}"
+        );
+        canonical
     }
 
     fn drained_leaf_count_at(&self, through: u64) -> u64 {
@@ -680,6 +715,56 @@ mod tests {
         for w in client.drained_through_counts.windows(2) {
             assert!(w[0].0 <= w[1].0, "drained_through cache must stay sorted");
         }
+    }
+
+    #[test]
+    fn incremental_drained_count_matches_index_on_mixed_chain() {
+        // Every block carries a coinbase (m = h+60) and a regular output
+        // (m = h+11), so once both schedules overlap each maturity bucket
+        // holds two entries from two different blocks. The O(1) incremental
+        // count in sync_store must agree with the maturity-index scan at
+        // every cutoff (the ingest-path debug_assert also checks each step).
+        let cb = coinbase_raw();
+        let regular = RawOutput {
+            output_key: ED25519_BASEPOINT,
+            commitment: Some(ED25519_BASEPOINT),
+            target: TargetKind::TaggedKey,
+        };
+        let blob = [0x07u8; 32];
+        let cb_outs = [cb];
+        let reg_outs = [regular];
+        let mut client = CurveTreeClient::new();
+        for height in 0..=100u64 {
+            let txs = [
+                TxLeafInputs {
+                    is_miner: true,
+                    leaf_hash_blob: Some(&blob),
+                    outputs: &cb_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    leaf_hash_blob: Some(&blob),
+                    outputs: &reg_outs,
+                },
+            ];
+            client
+                .ingest_block(BlockLeaves { height, txs: &txs })
+                .unwrap();
+        }
+        for reference in 0..=100u64 {
+            let through = CurveTreeClient::drained_through(reference);
+            assert_eq!(
+                client.drained_leaf_count_at(through),
+                client.drained_count_from_index(through),
+                "reference={reference}"
+            );
+        }
+        // Both maturity schedules are live in the drained set.
+        assert_eq!(
+            u64::try_from(client.drained_leaf_count(100)).unwrap(),
+            client.drained_count_from_index(99)
+        );
+        assert!(client.drained_leaf_count(100) > 0);
     }
 
     #[test]
