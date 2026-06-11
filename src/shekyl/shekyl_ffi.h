@@ -1745,7 +1745,6 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
     size_t hybrid_pubkey_len,
     uint8_t* out_p_id);
 
-uint64_t shekyl_archival_settlement_epoch_blocks(void);
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_resolution_blocks(void);
@@ -1812,11 +1811,6 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t settlement_epoch,
     uint64_t join_settlement_epoch);
-
-/// Integer reward arithmetic (REWARD_EMISSION_LEG.md §4; provisional band pins).
-uint64_t shekyl_archival_curve_milli(uint64_t work_milli);
-uint64_t shekyl_archival_scarcity_milli(uint64_t r_market, uint64_t age_milli);
-uint64_t shekyl_archival_max_claim_age_w(void);
 
 // ---------------------------------------------------------------------------
 // Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,

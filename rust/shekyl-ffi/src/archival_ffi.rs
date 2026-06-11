@@ -12,16 +12,15 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, curve_milli, epoch_close_compute,
-    epoch_close_due_at_height, good_through, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, scarcity_milli, serve_credit_epoch_ok, settlement_epoch_at_height,
-    verify_bond_post_rct_balance, verify_join_market_bond_post, verify_leaf_index,
-    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse, BadInterval,
-    BandedCurveParams, BondPostError, BondPostKind, BondRctBalanceError, CreditPair,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, WireError,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    challenge_fire_height, challenge_seal_height, epoch_close_compute, epoch_close_due_at_height,
+    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
+    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_rct_balance,
+    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
+    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
+    BondRctBalanceError, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -156,12 +155,6 @@ pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
         std::ptr::copy_nonoverlapping(pid.as_ptr(), out_p_id, 32);
     }
     1
-}
-
-/// Global settlement-epoch block span (`SETTLEMENT_EPOCH_BLOCKS`).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
-    SETTLEMENT_EPOCH_BLOCKS
 }
 
 /// First block of settlement epoch `E` (`H_open`).
@@ -390,28 +383,6 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
     }
-}
-
-/// Banded PL `Curve(work_milli)` using `consensus_constants.json` pins from build.rs.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_curve_milli(work_milli: u64) -> u64 {
-    let params = BandedCurveParams {
-        plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-        plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    };
-    curve_milli(work_milli, &params)
-}
-
-/// Scarcity milli for one shard contribution (`R_market`, `age_milli`).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_scarcity_milli(r_market: u64, age_milli: u64) -> u64 {
-    scarcity_milli(r_market, age_milli, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI)
-}
-
-/// `MAX_CLAIM_AGE_W` (settlement epochs) for prune horizon.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_max_claim_age_w() -> u64 {
-    MAX_CLAIM_AGE_W
 }
 
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
@@ -788,7 +759,7 @@ mod tests {
 
     #[test]
     fn ffi_constants_match_timing_cluster() {
-        assert_eq!(shekyl_archival_settlement_epoch_blocks(), 10_000);
+        assert_eq!(SETTLEMENT_EPOCH_BLOCKS, 10_000);
         assert_eq!(shekyl_archival_epoch_open_height(100), 1_000_000);
         assert_eq!(shekyl_archival_epoch_close_height(100), 1_009_999);
     }
@@ -954,7 +925,7 @@ mod tests {
 
     #[test]
     fn epoch_timing_ffi_boundaries() {
-        let seb = shekyl_archival_settlement_epoch_blocks();
+        let seb = SETTLEMENT_EPOCH_BLOCKS;
         let mut epoch = u64::MAX;
         assert_eq!(
             unsafe { shekyl_archival_epoch_close_due(0, ptr::from_mut(&mut epoch)) },
