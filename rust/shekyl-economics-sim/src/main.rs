@@ -9,7 +9,7 @@ mod record;
 mod scenarios;
 
 use engine::{run_scenario, ScenarioResult, SimParams};
-use scenarios::all_scenarios;
+use scenarios::{all_scenarios, gate7_scenarios};
 use std::io::Write;
 
 /// Runs all economics simulation scenarios and writes results as JSON to stdout.
@@ -18,9 +18,18 @@ use std::io::Write;
 /// Human-readable progress and summaries go to **stderr** via `eprintln!`.
 /// This lets callers do `cargo run -p shekyl-economics-sim > results.json`
 /// while still seeing progress on the terminal.
+///
+/// `--gate7` runs the gate-7 locked-supply re-pricing set
+/// (`STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope) instead of the legacy
+/// eight; the default invocation stays byte-identical.
 fn main() {
     let params = SimParams::default();
-    let configs = all_scenarios(&params);
+    let gate7 = std::env::args().any(|a| a == "--gate7");
+    let configs = if gate7 {
+        gate7_scenarios(&params)
+    } else {
+        all_scenarios(&params)
+    };
 
     let mut results: Vec<ScenarioResult> = Vec::new();
 
@@ -49,5 +58,9 @@ fn main() {
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(json.as_bytes()).expect("write failed");
     stdout.write_all(b"\n").expect("write failed");
-    eprintln!("\nAll 8 scenarios complete. JSON written to stdout.");
+    if gate7 {
+        eprintln!("\nGate-7 scenario set complete. JSON written to stdout.");
+    } else {
+        eprintln!("\nAll 8 scenarios complete. JSON written to stdout.");
+    }
 }
