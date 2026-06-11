@@ -61,7 +61,7 @@ impl CurveTreeClient {
     /// and [`ClientError::OutputNotDrained`] if `id` is not a drained leaf at
     /// the reference height.
     pub fn assemble_path(
-        &mut self,
+        &self,
         id: &OutputIdentity,
         reference: &ReferenceBlock,
         reference_block_hash: [u8; 32],

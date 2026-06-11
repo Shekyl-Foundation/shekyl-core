@@ -172,7 +172,7 @@ fn recompute_root(path: &AssembledPath) -> [u8; 32] {
 }
 
 /// Assemble `target`'s path at `reference` and run all three checks.
-fn check_path(client: &mut CurveTreeClient, target: &OutputIdentity, reference: &ReferenceBlock) {
+fn check_path(client: &CurveTreeClient, target: &OutputIdentity, reference: &ReferenceBlock) {
     let path = client
         .assemble_path(target, reference, [0u8; 32])
         .expect("assemble path for a drained coinbase output");
@@ -215,7 +215,7 @@ fn check_path(client: &mut CurveTreeClient, target: &OutputIdentity, reference: 
 #[test]
 fn assembled_path_recomputes_to_consensus_root() {
     let blocks = main_chain();
-    let mut client = client_over(&blocks);
+    let client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -240,14 +240,14 @@ fn assembled_path_recomputes_to_consensus_root() {
             .find(|b| b.height == target_height)
             .unwrap_or_else(|| panic!("block {target_height} in fixture"));
         let target = coinbase_identity(block);
-        check_path(&mut client, &target, &reference);
+        check_path(&client, &target, &reference);
     }
 }
 
 #[test]
 fn assemble_path_rejects_undrained_output() {
     let blocks = main_chain();
-    let mut client = client_over(&blocks);
+    let client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -269,7 +269,7 @@ fn assemble_path_rejects_undrained_output() {
 #[test]
 fn assemble_path_rejects_root_mismatch() {
     let blocks = main_chain();
-    let mut client = client_over(&blocks);
+    let client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let founder = coinbase_identity(&blocks[0]);

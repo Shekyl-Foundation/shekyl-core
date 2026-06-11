@@ -196,6 +196,23 @@ fn store_root_mixed_maturity_drain_order() {
             txs: &txs,
         })
         .unwrap();
+    // Extend the chain to height 61 with real single-coinbase blocks (the
+    // production shape) so the reference height is within the ingested chain.
+    // Their coinbases mature at 62..=121 and are not drained at through=60,
+    // so the drained set stays the two block-0 outputs.
+    for height in 1..=61u64 {
+        let txs_cb = [TxLeafInputs {
+            is_miner: true,
+            leaf_hash_blob: Some(&blob_cb),
+            outputs: &[coinbase],
+        }];
+        client
+            .ingest_block(BlockLeaves {
+                height,
+                txs: &txs_cb,
+            })
+            .unwrap();
+    }
 
     let mut recon_entries = Vec::new();
     let identities_cb: Vec<OutputIdentity> = [coinbase]
