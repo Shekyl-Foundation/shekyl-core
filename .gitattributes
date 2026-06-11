@@ -1,2 +1,6 @@
 .git* export-ignore
 cmake/Version.cmake export-subst
+# KAT corpora are byte-load-bearing fixtures (ADDRESS_DERIVATION_V1 is
+# hash-pinned via include_str! in address_derivation_freeze.rs). Never
+# apply EOL conversion: working-tree bytes must equal committed bytes.
+docs/test_vectors/** -text

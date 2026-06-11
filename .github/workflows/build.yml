@@ -506,7 +506,8 @@ jobs:
       - name: update apt
         run: apt update
       - name: install dependencies
-        run: apt -y install build-essential git curl pkg-config libssl-dev
+        # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
+        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
       - name: configure git

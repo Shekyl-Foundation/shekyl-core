@@ -9,6 +9,10 @@
 //! `docs/test_vectors/ADDRESS_DERIVATION_V1/manifest.json` followed by
 //! `vectors.json` (no separator). Any deliberate corpus rotation must
 //! update both files and this constant via the KAT regenerator.
+//!
+//! Byte stability across checkouts is guaranteed by the repository-level
+//! `.gitattributes` pin (`docs/test_vectors/** -text`), which disables EOL
+//! conversion so `include_str!` sees the committed bytes on every platform.
 
 use sha2::{Digest, Sha256};
 
