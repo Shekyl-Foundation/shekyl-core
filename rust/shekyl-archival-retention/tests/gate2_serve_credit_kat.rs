@@ -272,10 +272,12 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
             leaf_hash_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
-        client.ingest_block(BlockLeaves {
-            height: blk.height,
-            txs: &txs,
-        });
+        client
+            .ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            })
+            .unwrap();
     }
     let tip = blocks.last().expect("non-empty");
     let reference = ReferenceBlock {

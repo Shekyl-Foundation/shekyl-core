@@ -57,6 +57,10 @@ pub struct OutputIdentity {
     pub target: TargetKind,
 }
 
+/// Dense tree position in drain order (`(maturity, gindex)` sort).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct TreePosition(pub u64);
+
 /// A drained tree leaf: its global output index, its maturity height, the
 /// 128-byte curve-tree leaf (`{O.x, I.x, C.x, h_pqc}`), and the public
 /// output identity it was built from. Tree position is determined by drain

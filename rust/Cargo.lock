@@ -3188,6 +3188,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3761,6 +3770,10 @@ dependencies = [
 name = "shekyl-curve-tree"
 version = "3.1.0"
 dependencies = [
+ "ciphersuite",
+ "helioselene",
+ "rand_chacha 0.3.1",
+ "redb",
  "serde_json",
  "shekyl-fcmp",
  "shekyl-oxide",

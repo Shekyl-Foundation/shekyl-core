@@ -473,6 +473,26 @@ jobs:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
 
+  rust-msrv-gate:
+    name: "Rust: MSRV gate (1.94)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: cargo check at declared MSRV
+        working-directory: rust
+        # Compiles every workspace crate except the differential harness,
+        # which needs a CMake-built C RandomX install and has its own
+        # workflow. Same exclusion shape as `rust-audit-and-test`'s test
+        # step — the MSRV gate asserts the declared floor builds, not
+        # that every integration test runs at MSRV.
+        run: cargo check --locked --workspace --exclude shekyl-randomx-differential
+
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     runs-on: ubuntu-latest

@@ -135,7 +135,7 @@ impl Default for Program {
 /// `Box::new_zeroed_slice(N)` followed by `assume_init`, which is
 /// what `crate::vm::alloc_zeroed_scratchpad` does. Both paths
 /// route through the global allocator's `alloc_zeroed` (per the
-/// Rust 1.82+ stabilization of `Box::new_zeroed_slice`); on
+/// Rust 1.92+ stabilization of `Box::new_zeroed_slice`); on
 /// contemporary x86-64 allocators (system glibc, mimalloc,
 /// jemalloc) the cost is dominated by the kernel's
 /// zero-page-mapping `mmap` path on cold allocations and the
@@ -161,8 +161,8 @@ fn bench_vmstate_alloc_scratchpad_zeroed(c: &mut Criterion) {
         b.iter(|| {
             // `Box::new_zeroed_slice(N)` + `assume_init` is the
             // exact pattern `crate::vm::alloc_zeroed_scratchpad`
-            // uses (stable since Rust 1.82; the crate's MSRV is
-            // 1.85). The unsafe block is the bench-side mirror of
+            // uses (stable since Rust 1.92; workspace MSRV 1.94). The
+            // unsafe block is the bench-side mirror of
             // the production carve-out's unsafe block — same
             // safety reasoning applies (every `u8` bit pattern is
             // valid; `Box::new_zeroed_slice(len)` zero-initializes
@@ -174,7 +174,7 @@ fn bench_vmstate_alloc_scratchpad_zeroed(c: &mut Criterion) {
             // value 0..=255 is in range; 0 is trivially valid).
             // `Box::new_zeroed_slice(len)` allocates `len` contiguous
             // `MaybeUninit<u8>` cells and zero-initializes them per its
-            // stabilized contract (Rust 1.82+; MSRV 1.85). Converting
+            // stabilized contract (Rust 1.92+; MSRV 1.94). Converting
             // `Box<[MaybeUninit<u8>]>` to `Box<[u8]>` via `assume_init`
             // is therefore sound. Mirrors the SAFETY comment on
             // `crate::vm::alloc_zeroed_scratchpad` per the
