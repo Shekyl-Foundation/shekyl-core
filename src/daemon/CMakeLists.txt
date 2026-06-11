@@ -106,16 +106,24 @@ endif()
 # one can actually parse the binary. A parse failure across all
 # candidates fails the build loudly — the gate never silently skips.
 if(UNIX)
+  # Resolve each candidate through find_program so bare tool names
+  # (a user-set CMAKE_NM=llvm-nm, or a name-only _CMAKE_TOOLCHAIN_PREFIX
+  # from a non-depends toolchain) are looked up on PATH instead of being
+  # dropped by an absolute-path-only existence check. The depends Darwin
+  # toolchain sets an absolute-path prefix, which find_program also
+  # accepts verbatim.
   set(_shekyl_nm_candidates)
-  foreach(_cand IN ITEMS "${CMAKE_NM}" "${_CMAKE_TOOLCHAIN_PREFIX}nm")
-    if(EXISTS "${_cand}")
-      list(APPEND _shekyl_nm_candidates "${_cand}")
+  foreach(_cand IN ITEMS "${CMAKE_NM}" "${_CMAKE_TOOLCHAIN_PREFIX}nm" "nm")
+    if(_cand STREQUAL "")
+      continue()
+    endif()
+    unset(_shekyl_nm_resolved CACHE)
+    find_program(_shekyl_nm_resolved NAMES "${_cand}")
+    if(_shekyl_nm_resolved)
+      list(APPEND _shekyl_nm_candidates "${_shekyl_nm_resolved}")
     endif()
   endforeach()
-  find_program(SHEKYL_NM_EXECUTABLE nm)
-  if(SHEKYL_NM_EXECUTABLE)
-    list(APPEND _shekyl_nm_candidates "${SHEKYL_NM_EXECUTABLE}")
-  endif()
+  unset(_shekyl_nm_resolved CACHE)
   list(REMOVE_DUPLICATES _shekyl_nm_candidates)
   if(_shekyl_nm_candidates)
     add_custom_command(TARGET daemon POST_BUILD

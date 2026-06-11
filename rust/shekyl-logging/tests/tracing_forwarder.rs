@@ -6,11 +6,14 @@
 //! State-machine coverage for `shekyl_log_install_tracing_forwarder`.
 //!
 //! The forwarder export is the runtime half of the single-Rust-image
-//! logging contract (decision log 2026-04-25, amended 2026-06-10):
-//! `shekyl-daemon-rpc` compiles `shekyl-logging` into its own
-//! staticlib so the daemon carries exactly one `tracing-core`
-//! dispatcher, and this export pins the C++ call ordering
-//! (`shekyl_log_init_*` first) plus install idempotency.
+//! logging contract (decision log 2026-04-25, amended 2026-06-10 and
+//! 2026-06-11): every binary links exactly one Rust static archive —
+//! `libshekyl_ffi.a` for wallet-side binaries (this crate is a
+//! `shekyl-ffi` dependency), `libshekyl_daemon_image.a` for the daemon
+//! (`shekyl-daemon-image` = `shekyl-ffi` + the rlib-only
+//! `shekyl-daemon-rpc`) — so each binary carries exactly one
+//! `tracing-core` dispatcher, and this export pins the C++ call
+//! ordering (`shekyl_log_init_*` first) plus install idempotency.
 //!
 //! This is an integration test (own process) rather than a unit test
 //! because the install pin and `INITIALIZED` flag are process-global
