@@ -399,9 +399,11 @@ pub extern "C" fn shekyl_archival_serve_credit_epoch_ok(
 
 /// `good_through(P, E)` from bond fields (ARCHIVAL_CONSENSUS_STATE.md §3.4 interval semantics).
 ///
-/// `bad_intervals_ptr` is `2 × bad_intervals_len` little-endian `u64`s — flattened
-/// `(start_epoch, end_exclusive)` pairs. Returns `0` (fail-closed) on a null
-/// pointer with nonzero length or on pair-count overflow.
+/// `bad_intervals_ptr` is `2 × bad_intervals_len` `u64` values — flattened
+/// `(start_epoch, end_exclusive)` pairs. The buffer is typed (`*const u64`),
+/// so no byte-order applies; callers pass in-memory `u64`s, not serialized
+/// bytes. Returns `0` (fail-closed) on a null pointer with nonzero length or
+/// on pair-count overflow.
 ///
 /// # Safety
 ///
