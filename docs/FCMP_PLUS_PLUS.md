@@ -773,19 +773,51 @@ the secret key — no secret material is returned.
 
 ### Wallet Restore from Seed
 
-The wallet master seed derives three sub-keys:
+Key derivation follows the frozen v1 pipeline implemented in
+`rust/shekyl-crypto-pq/src/account.rs` (the single source of truth; see
+the crate docstring for the full diagram and the
+`docs/V3_WALLET_DECISION_LOG.md` key-signature freeze entry for the
+rationale). In outline:
 
 ```text
-spend_key   = HKDF-Expand(master, "shekyl-spend", 32)
-view_key    = HKDF-Expand(master, "shekyl-view", 32)
-ml_kem_key  = HKDF-Expand(master, "shekyl-ml-kem", 32)
+seed input            mainnet/stagenet: BIP-39 24-word mnemonic
+                        (NFKD, PBKDF2-HMAC-SHA512 @ 2048 iters -> 64 B;
+                         passphrase opt-in, defaults to empty)
+                      testnet/fakechain: raw 32-byte seed
+
+master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
+                                   ikm=seed-input output, L=64)
+                      (the only secret the wallet file persists)
+
+salt                = "shekyl-master-derive-v1-<network>-<format>"
+spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ed25519-spend", L=64)
+view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ed25519-view",  L=64)
+d_z                 = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ml-kem-768",    L=64)
+
+spend_sk, view_sk   = Scalar::from_bytes_mod_order_wide(...)   (unclamped)
+ml_kem_768 (ek,dk)  = keygen(ChaCha20Rng::from_seed(
+                        SHA3-256("shekyl-mlkem-chacha-seed" || d_z)))
 ```
 
-On restore, the wallet scans the chain for owned outputs (using classical
-stealth address derivation), then rederives the PQC keypair for each output
-using the stored combined shared secret (`m_combined_shared_secret` in
-`transfer_details`). The function `rederive_all_pqc_keys()` handles this
-during the first refresh after restore.
+All key material — classical and PQC — is therefore a pure function of
+the master seed, the network, and the seed format. On wallet open the
+full keypair set is rederived from `master_seed_64` via
+`shekyl_account_rederive`, and the recomputed classical address is
+checked against the wallet file's expected-address bytes (see
+`docs/WALLET_FILE_FORMAT_V1.md` for the failure taxonomy).
+
+On restore, the wallet re-scans the chain for owned outputs. Per-output
+PQC shared secrets are recomputed during the scan by decapsulating with
+the account-level ML-KEM decapsulation key; nothing per-output needs to
+be present in the wallet file for restore to succeed. (The legacy C++
+`wallet2` scan path still caches a per-output combined shared secret in
+`transfer_details` as an implementation detail; that cache — and
+`wallet2.cpp` itself — is a deletion target at Phase 5 of
+`docs/design/WALLET_REWRITE_PLAN.md` and is not part of this
+specification.)
 
 ---
 
@@ -1194,8 +1226,8 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
 | `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `rctSigs.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
-| PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
-| Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
+| PQC key rederivation from stored secret | **Done** (legacy C++ scan cache; deletion target at rewrite Phase 5) | `wallet2.cpp` |
+| Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
