@@ -10,7 +10,7 @@
 //! pinned in `docs/design/CT1_ROUND1_PINS.md`.
 
 use shekyl_fcmp::tree::{
-    layer_is_selene, try_build_layers, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SELENE_CHUNK_WIDTH,
+    layer_is_selene, try_build_layers, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
 use shekyl_oxide::DEFAULT_LOCK_WINDOW;
 
@@ -72,7 +72,10 @@ pub fn try_extract_r_k(leaf_scalars: &[[u8; 32]]) -> Option<[u8; 32]> {
 /// Flatten `LeafEntry`-style 128-byte leaves into Selene scalars for `build_layers`.
 #[must_use]
 pub fn leaf_bytes_to_scalars(leaves: &[[u8; 128]]) -> Vec<[u8; 32]> {
-    let mut scalars = Vec::with_capacity(leaves.len() * LEAF_CHUNK_SCALARS);
+    // Each 128-byte leaf yields exactly `SCALARS_PER_LEAF` (4) 32-byte scalars;
+    // `LEAF_CHUNK_SCALARS` is per Selene *chunk* and would over-reserve by
+    // `SELENE_CHUNK_WIDTH`x on large leaf sets.
+    let mut scalars = Vec::with_capacity(leaves.len() * SCALARS_PER_LEAF);
     for leaf in leaves {
         for chunk in leaf.chunks_exact(32) {
             let mut s = [0u8; 32];
