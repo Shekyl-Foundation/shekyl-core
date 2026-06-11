@@ -51,7 +51,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
+use crate::recon::{
+    collect_block_leaves, extract_leaf_hashes, newly_drained_at_cutoff, per_output_h_pqc, TxOutputs,
+};
 use crate::store::{LeafStore, StoreError};
 use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
@@ -149,6 +151,10 @@ pub struct CurveTreeClient {
     entries_by_maturity: BTreeMap<u64, Vec<usize>>,
     /// Last block height passed to [`Self::ingest_block`], if any.
     ingested_tip_height: Option<u64>,
+    /// Canonical `(maturity, gindex)` of the last leaf mirrored into the store.
+    /// Used to detect when a later ingest would require inserting before the
+    /// persisted append-only prefix (after an ahead-of-ingest [`Self::root_at`]).
+    last_synced_drained_key: Option<(u64, u64)>,
 }
 
 impl Default for CurveTreeClient {
@@ -167,6 +173,7 @@ impl CurveTreeClient {
             drained_through_counts: Vec::new(),
             entries_by_maturity: BTreeMap::new(),
             ingested_tip_height: None,
+            last_synced_drained_key: None,
         })
     }
 
@@ -256,25 +263,22 @@ impl CurveTreeClient {
         let store_tip = self.store.sync_tip_height()?;
         // When `root_at` advanced the store ahead of the ingested tip, new leaves
         // may already drain under `drained_through(store_tip)` and must still be
-        // appended (`append_drained` keeps `META_SYNC_TIP` monotonic).
+        // mirrored (`append_drained` keeps `META_SYNC_TIP` monotonic). If a later
+        // ingest introduces a lower-maturity drain, append-only catch-up is
+        // insufficient — [`Self::sync_store_append`] rebuilds the prefix.
         let target_through = if tip_height <= store_tip {
             Self::drained_through(store_tip)
         } else {
             through
         };
-        let stored = self.store.leaf_count()?;
-        let canonical_count = self.drained_count_from_index(target_through);
-        if canonical_count < stored {
-            return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
-        }
-        let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
-        let new_entries = self.drained_suffix_from_index(target_through, stored_usize);
-        if !new_entries.is_empty() || tip_height > store_tip {
-            self.store.append_drained(&new_entries, tip_height)?;
-        }
+        let sync_tip_height = tip_height.max(store_tip);
+        self.sync_store_append(target_through, sync_tip_height, Some(tip_height))?;
         self.record_drained_count(through, self.drained_count_from_index(through));
         if target_through != through {
-            self.record_drained_count(target_through, canonical_count);
+            self.record_drained_count(
+                target_through,
+                self.drained_count_from_index(target_through),
+            );
         }
         Ok(())
     }
@@ -289,16 +293,89 @@ impl CurveTreeClient {
             return Ok(());
         }
         let target_through = Self::drained_through(tip_height);
+        self.sync_store_append(target_through, tip_height, None)?;
+        self.record_drained_count(
+            target_through,
+            self.drained_count_from_index(target_through),
+        );
+        Ok(())
+    }
+
+    /// Mirror drained leaves through `target_through` into the store and advance
+    /// `META_SYNC_TIP` to at least `sync_tip_height`.
+    ///
+    /// `ingest_tip` is `Some` on the per-block ingest path so steady-state sync
+    /// can append only the newly-drained maturity bucket
+    /// ([`newly_drained_at_cutoff`]) instead of re-scanning the full prefix.
+    fn sync_store_append(
+        &mut self,
+        target_through: u64,
+        sync_tip_height: u64,
+        ingest_tip: Option<u64>,
+    ) -> Result<(), ClientError> {
         let stored = self.store.leaf_count()?;
         let canonical_count = self.drained_count_from_index(target_through);
         if canonical_count < stored {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
+        if stored == canonical_count {
+            self.store.append_drained(&[], sync_tip_height)?;
+            return Ok(());
+        }
         let stored_usize = usize::try_from(stored).expect("stored leaf count fits usize");
-        let new_entries = self.drained_suffix_from_index(target_through, stored_usize);
-        self.store.append_drained(&new_entries, tip_height)?;
-        self.record_drained_count(target_through, canonical_count);
+        if self.must_rebuild_store_prefix(target_through, stored_usize) {
+            return self.rebuild_store_drained_prefix(target_through, sync_tip_height);
+        }
+        let new_entries = if self.incremental_drain_on_ingest(ingest_tip, target_through) {
+            newly_drained_at_cutoff(&self.entries, target_through)
+        } else {
+            self.drained_suffix_from_index(target_through, stored_usize)
+        };
+        if let Some(last) = new_entries.last() {
+            self.last_synced_drained_key = Some((last.maturity, last.gindex));
+        }
+        self.store.append_drained(&new_entries, sync_tip_height)?;
         Ok(())
+    }
+
+    /// True when the next canonical leaf would sort before the persisted tail,
+    /// so append-only catch-up would corrupt drain order.
+    fn must_rebuild_store_prefix(&self, target_through: u64, stored_skip: usize) -> bool {
+        if stored_skip == 0 {
+            return false;
+        }
+        let Some((lm, lg)) = self.last_synced_drained_key else {
+            return false;
+        };
+        self.drained_suffix_from_index(target_through, stored_skip)
+            .first()
+            .is_some_and(|e| (e.maturity, e.gindex) <= (lm, lg))
+    }
+
+    /// Steady monotonic ingest: one block height → at most one new drain cutoff.
+    fn incremental_drain_on_ingest(&self, ingest_tip: Option<u64>, target_through: u64) -> bool {
+        let Some(h) = ingest_tip else {
+            return false;
+        };
+        let Ok(store_tip) = self.store.sync_tip_height() else {
+            return false;
+        };
+        h > store_tip && target_through == Self::drained_through(h)
+    }
+
+    /// Wipe and replay the canonical drained prefix (reorg-safe correctness
+    /// path when ahead-of-ingest `root_at` left an append-only tail).
+    fn rebuild_store_drained_prefix(
+        &mut self,
+        through: u64,
+        sync_tip_height: u64,
+    ) -> Result<(), ClientError> {
+        self.store.clear().map_err(ClientError::from)?;
+        let entries = self.drained_suffix_from_index(through, 0);
+        self.last_synced_drained_key = entries.last().map(|e| (e.maturity, e.gindex));
+        self.store
+            .append_drained(&entries, sync_tip_height)
+            .map_err(ClientError::from)
     }
 
     /// Canonical drain-order suffix via [`Self::entries_by_maturity`] (maturity
@@ -627,6 +704,66 @@ mod tests {
         .unwrap();
         assert_eq!(client.root_at(200).unwrap(), oracle.root_at(200).unwrap());
         assert_eq!(client.drained_leaf_count(200), 2);
+    }
+
+    #[test]
+    fn ahead_root_then_mixed_maturity_ingest_rebuilds_store_order() {
+        // Block 0 coinbase (m=60) alone, then `root_at` far ahead, then block 1
+        // adds a lower-maturity regular output (m=11). Append-only catch-up would
+        // place m=11 after m=60; rebuild must replay the canonical prefix.
+        let outs_cb = [coinbase_raw()];
+        let regular = RawOutput {
+            output_key: ED25519_BASEPOINT,
+            commitment: Some(ED25519_BASEPOINT),
+            target: TargetKind::TaggedKey,
+        };
+        let blob0 = [0x01u8; 32];
+        let blob1_cb = [0x02u8; 32];
+        let blob1_reg = [0x03u8; 32];
+        let txs0 = coinbase_block(&outs_cb, &blob0);
+        let txs1 = [
+            TxLeafInputs {
+                is_miner: true,
+                leaf_hash_blob: Some(&blob1_cb),
+                outputs: &outs_cb,
+            },
+            TxLeafInputs {
+                is_miner: false,
+                leaf_hash_blob: Some(&blob1_reg),
+                outputs: &[regular],
+            },
+        ];
+        let mut client = CurveTreeClient::new();
+        client
+            .ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            })
+            .unwrap();
+        let _ = client.root_at(200).unwrap();
+        assert_eq!(client.store.leaf_count().unwrap(), 1);
+        client
+            .ingest_block(BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            })
+            .unwrap();
+        let mut oracle = CurveTreeClient::from_blocks(&[
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            client.root_at(62).unwrap(),
+            oracle.root_at(62).unwrap(),
+            "rebuild after ahead-of-ingest root_at must restore canonical drain order"
+        );
     }
 
     #[test]
