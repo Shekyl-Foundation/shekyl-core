@@ -5639,10 +5639,14 @@ void BlockchainLMDB::delete_archival_r_market_for_epoch(uint64_t settlement_epoc
   if (rc)
     throw0(DB_ERROR(lmdb_error("Failed to open archival_r_market cursor for delete: ", rc).c_str()));
 
+  // After mdb_cursor_del the cursor carries C_DEL: the next MDB_NEXT yields
+  // the item that moved into the deleted slot, so one op-rotating loop
+  // visits every row exactly once (same pattern in all archival delete loops).
   MDB_val k, v;
-  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
-  while (rc == 0)
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
+    op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalRMarketKeySize)
       throw std::runtime_error("FATAL: archival_r_market key size mismatch on delete");
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 8);
@@ -5651,12 +5655,7 @@ void BlockchainLMDB::delete_archival_r_market_for_epoch(uint64_t settlement_epoc
       rc = mdb_cursor_del(cur, 0);
       if (rc)
         throw0(DB_ERROR(lmdb_error("Failed to delete archival_r_market row: ", rc).c_str()));
-      rc = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
-      if (rc == MDB_NOTFOUND)
-        break;
-      continue;
     }
-    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_r_market cursor error on delete: ", rc).c_str()));
@@ -5671,9 +5670,10 @@ void BlockchainLMDB::delete_archival_r_market_before_epoch(uint64_t prune_below_
     throw0(DB_ERROR(lmdb_error("Failed to open archival_r_market cursor for prune: ", rc).c_str()));
 
   MDB_val k, v;
-  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
-  while (rc == 0)
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
+    op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalRMarketKeySize)
       throw std::runtime_error("FATAL: archival_r_market key size mismatch on prune");
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 8);
@@ -5682,12 +5682,7 @@ void BlockchainLMDB::delete_archival_r_market_before_epoch(uint64_t prune_below_
       rc = mdb_cursor_del(cur, 0);
       if (rc)
         throw0(DB_ERROR(lmdb_error("Failed to delete archival_r_market row on prune: ", rc).c_str()));
-      rc = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
-      if (rc == MDB_NOTFOUND)
-        break;
-      continue;
     }
-    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_r_market cursor error on prune: ", rc).c_str()));
@@ -5711,9 +5706,10 @@ void BlockchainLMDB::delete_archival_sigma_work_before_epoch(uint64_t prune_belo
     throw0(DB_ERROR(lmdb_error("Failed to open archival_sigma_work cursor for prune: ", rc).c_str()));
 
   MDB_val k, v;
-  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
-  while (rc == 0)
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
+    op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalSigmaWorkKeySize)
       throw std::runtime_error("FATAL: archival_sigma_work key size mismatch on prune");
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
@@ -5722,12 +5718,7 @@ void BlockchainLMDB::delete_archival_sigma_work_before_epoch(uint64_t prune_belo
       rc = mdb_cursor_del(cur, 0);
       if (rc)
         throw0(DB_ERROR(lmdb_error("Failed to delete archival_sigma_work row on prune: ", rc).c_str()));
-      rc = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
-      if (rc == MDB_NOTFOUND)
-        break;
-      continue;
     }
-    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_sigma_work cursor error on prune: ", rc).c_str()));
@@ -5742,9 +5733,10 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
     throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for prune: ", rc).c_str()));
 
   MDB_val k, v;
-  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
-  while (rc == 0)
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
+    op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
       throw std::runtime_error("FATAL: archival_serve_credit key size mismatch on prune");
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 40);
@@ -5753,12 +5745,7 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
       rc = mdb_cursor_del(cur, 0);
       if (rc)
         throw0(DB_ERROR(lmdb_error("Failed to delete archival_serve_credit row on prune: ", rc).c_str()));
-      rc = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
-      if (rc == MDB_NOTFOUND)
-        break;
-      continue;
     }
-    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_serve_credit cursor error on prune: ", rc).c_str()));
