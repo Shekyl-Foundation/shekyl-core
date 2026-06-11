@@ -13,4 +13,4 @@ updated by the `ci/benchmarks` workflow on every push to
 - `baseline.iai.snapshot` — raw iai-callgrind stdout
   corresponding to the same capture.
 
-Current source commit: `e4eda29bf8edc60b9a47a4f2951f698e924cbef1`.
+Current source commit: `1aa7b83c2010a9ee07742363a0b75744f432557d`.
