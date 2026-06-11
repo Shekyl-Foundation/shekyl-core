@@ -4,6 +4,26 @@
 
 ### Added
 
+- **docs: 2026-06-10 doc sweep — key-signature freeze anchored, completed
+  archive consolidated, stale references repaired.**
+  Retroactive decision-log entry for the frozen v1 seed→address pipeline
+  (`V3_WALLET_DECISION_LOG.md`, from Cursor plan
+  `stabilize_key_signature_15d8e48a`; landed 2026-04-22, `f46ddaf56`).
+  `FCMP_PLUS_PLUS.md` "Wallet Restore from Seed" rewritten against the
+  landed pipeline (old 32-byte HKDF diagram and `transfer_details`
+  stored-secret restore copy removed); `USER_GUIDE.md` seed copy fixed to
+  24-word BIP-39 + opt-in passphrase (Electrum Phase-6 residue).
+  `ATOMIC_UNITS_NEWTYPE.md` and `PRIMARY_CLAIM_DERIVATION_RENAME.md`
+  archived to `docs/completed/`; the 104 references broken by the earlier
+  DAA/Electrum moves to `docs/completed/` repaired repo-wide (source
+  comments, CI workflow headers, consensus-constants JSON, workspace
+  rules, docs). Four FOLLOWUPS V3.0 items filed: dedicated
+  `ADDRESS_DERIVATION_V1` KAT corpus, `lint_cpp_clamp_ban.sh` CI wiring,
+  `ADDRESS_DERIVATION_MANIFEST_HASH` tripwire, USER_GUIDE Rust-CLI
+  realignment. CODEOWNERS freeze-spec path fixed to
+  `WALLET_FILE_FORMAT_V1.md`; machine-local `.cursor/plans/` links in
+  active docs repointed to in-repo continuations.
+
 - **docs: confidential-tx surface naming pin (`CT_SURFACE_NAMING_PIN.md`).**
   Records disposition for inherited `rct::` / `rctSigs` naming: `ct_signatures`
   alias is partial fix; verifier → `ct_semantics` at `wallet2` cutover; Rust
