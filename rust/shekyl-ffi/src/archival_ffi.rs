@@ -12,11 +12,13 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, curve_milli, p_canonical_id_from_hybrid_pubkey,
-    scarcity_milli, serve_credit_epoch_ok, verify_bond_post_rct_balance,
-    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BandedCurveParams, BondPostError, BondPostKind,
-    BondRctBalanceError, HoldingsDescriptor, HoldingsKind, WireError,
+    challenge_fire_height, challenge_seal_height, curve_milli, epoch_close_compute,
+    epoch_close_due_at_height, good_through, p_canonical_id_from_hybrid_pubkey,
+    prune_below_epoch_at_height, scarcity_milli, serve_credit_epoch_ok, settlement_epoch_at_height,
+    verify_bond_post_rct_balance, verify_join_market_bond_post, verify_leaf_index,
+    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse, BadInterval,
+    BandedCurveParams, BondPostError, BondPostKind, BondRctBalanceError, CreditPair,
+    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, WireError,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
@@ -424,6 +426,297 @@ pub extern "C" fn shekyl_archival_serve_credit_epoch_ok(
     ))
 }
 
+/// `good_through(P, E)` from bond fields (ARCHIVAL_CONSENSUS_STATE.md §3.4 interval semantics).
+///
+/// `bad_intervals_ptr` is `2 × bad_intervals_len` little-endian `u64`s — flattened
+/// `(start_epoch, end_exclusive)` pairs. Returns `0` (fail-closed) on a null
+/// pointer with nonzero length or on pair-count overflow.
+///
+/// # Safety
+///
+/// When `bad_intervals_len > 0`, `bad_intervals_ptr` must address
+/// `2 × bad_intervals_len` valid `u64`s for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_good_through(
+    join_settlement_epoch: u64,
+    settlement_epoch: u64,
+    bad_intervals_ptr: *const u64,
+    bad_intervals_len: usize,
+) -> u8 {
+    let Some(bad) = (unsafe { gather_bad_intervals(bad_intervals_ptr, bad_intervals_len) }) else {
+        return 0;
+    };
+    u8::from(good_through(join_settlement_epoch, settlement_epoch, &bad))
+}
+
+/// Settlement epoch containing `block_height` (bond-connect join epoch derivation).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_at_height(block_height: u64) -> u64 {
+    settlement_epoch_at_height(block_height)
+}
+
+/// Returns `1` and writes the settlement epoch whose close is processed at
+/// `block_height`; `0` (no write) at height 0, non-boundary heights, or null out.
+///
+/// # Safety
+///
+/// `out_settlement_epoch` must be a valid writable `u64` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_epoch_close_due(
+    block_height: u64,
+    out_settlement_epoch: *mut u64,
+) -> u8 {
+    if out_settlement_epoch.is_null() {
+        return 0;
+    }
+    match epoch_close_due_at_height(block_height) {
+        Some(epoch) => {
+            unsafe { *out_settlement_epoch = epoch };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Returns `1` and writes the prune horizon (`tip_epoch − MAX_CLAIM_AGE_W`) when the
+/// chain is older than the claim window at `block_height`; `0` (no write) otherwise.
+///
+/// # Safety
+///
+/// `out_prune_below_epoch` must be a valid writable `u64` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_prune_below_epoch(
+    block_height: u64,
+    out_prune_below_epoch: *mut u64,
+) -> u8 {
+    if out_prune_below_epoch.is_null() {
+        return 0;
+    }
+    match prune_below_epoch_at_height(block_height, MAX_CLAIM_AGE_W) {
+        Some(below) => {
+            unsafe { *out_prune_below_epoch = below };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Epoch-close computation succeeded.
+pub const SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK: u8 = 0;
+/// A required pointer was null (or null with nonzero length).
+pub const SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR: u8 = 1;
+/// A per-bond interval pair count overflowed `usize`.
+pub const SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW: u8 = 2;
+/// A credit pair referenced a bond/shard index outside the gather arrays.
+pub const SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE: u8 = 3;
+
+/// One gathered bond for `shekyl_archival_epoch_close_compute`.
+///
+/// Layout must match `struct shekyl_archival_epoch_close_bond` in `shekyl_ffi.h`.
+#[repr(C)]
+pub struct ShekylArchivalEpochCloseBond {
+    pub join_settlement_epoch: u64,
+    /// Flattened `(start_epoch, end_exclusive)` pairs; `2 × bad_intervals_len` u64s.
+    pub bad_intervals_ptr: *const u64,
+    /// Pair count (not u64 count).
+    pub bad_intervals_len: usize,
+    pub held_shard_ids_ptr: *const u64,
+    pub held_shard_ids_len: usize,
+    pub is_foundation_complete_tree: u8,
+}
+
+/// One gathered shard-registry row for `shekyl_archival_epoch_close_compute`.
+///
+/// Layout must match `struct shekyl_archival_epoch_close_shard` in `shekyl_ffi.h`.
+#[repr(C)]
+pub struct ShekylArchivalEpochCloseShard {
+    pub shard_id: u64,
+    pub freeze_height: u64,
+    /// `0` when no frozen segment row exists (shard age is then zero).
+    pub has_segment: u8,
+}
+
+/// One serve-credit row as indices into the bond/shard gather arrays.
+///
+/// Layout must match `struct shekyl_archival_credit_pair` in `shekyl_ffi.h`.
+#[repr(C)]
+pub struct ShekylArchivalCreditPair {
+    pub bond_idx: usize,
+    pub shard_idx: usize,
+}
+
+/// Decode a flattened `(start, end_exclusive)` interval buffer; `None` on
+/// null-with-length or pair-count overflow.
+unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<BadInterval>> {
+    if pair_len == 0 {
+        return Some(Vec::new());
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    let flat_len = pair_len.checked_mul(2)?;
+    let flat = unsafe { std::slice::from_raw_parts(ptr, flat_len) };
+    Some(
+        flat.chunks_exact(2)
+            .map(|pair| BadInterval {
+                start_epoch: pair[0],
+                end_exclusive: pair[1],
+            })
+            .collect(),
+    )
+}
+
+/// Full epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3, §3.5).
+///
+/// The daemon gathers raw LMDB rows — distinct credit-bearing bonds, the shards
+/// they credited, and the credit pairs — and receives `R_market` per shard plus
+/// the finalized `Σwork(E)` milli value. All consensus arithmetic (membership,
+/// counting, age weighting, scarcity, curve, saturation) runs in
+/// `shekyl-archival-retention` against pinned `consensus_constants.json` values;
+/// C++ performs storage orchestration only (`40-ffi-discipline.mdc` coarse-call rule).
+///
+/// `out_r_market_ptr` must address `shards_len` writable `u64`s; outputs are
+/// zeroed before computation so a failure never leaves stale values.
+///
+/// # Safety
+///
+/// All pointers must satisfy their stated lengths for the duration of the call:
+/// `bonds_ptr[0..bonds_len]`, `shards_ptr[0..shards_len]`,
+/// `credit_pairs_ptr[0..credit_pairs_len]`, `out_r_market_ptr[0..shards_len]`,
+/// and each bond's interval/held buffers per its embedded lengths.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
+    settlement_epoch: u64,
+    close_block_height: u64,
+    bonds_ptr: *const ShekylArchivalEpochCloseBond,
+    bonds_len: usize,
+    shards_ptr: *const ShekylArchivalEpochCloseShard,
+    shards_len: usize,
+    credit_pairs_ptr: *const ShekylArchivalCreditPair,
+    credit_pairs_len: usize,
+    out_r_market_ptr: *mut u64,
+    out_sigma_work_milli_ptr: *mut u64,
+) -> u8 {
+    if (bonds_ptr.is_null() && bonds_len > 0)
+        || (shards_ptr.is_null() && shards_len > 0)
+        || (credit_pairs_ptr.is_null() && credit_pairs_len > 0)
+        || (out_r_market_ptr.is_null() && shards_len > 0)
+        || out_sigma_work_milli_ptr.is_null()
+    {
+        return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
+    }
+
+    unsafe {
+        *out_sigma_work_milli_ptr = 0;
+        if shards_len > 0 {
+            std::ptr::write_bytes(out_r_market_ptr, 0, shards_len);
+        }
+    }
+
+    let raw_bonds: &[ShekylArchivalEpochCloseBond] = if bonds_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(bonds_ptr, bonds_len) }
+    };
+    let raw_shards: &[ShekylArchivalEpochCloseShard] = if shards_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(shards_ptr, shards_len) }
+    };
+    let raw_pairs: &[ShekylArchivalCreditPair] = if credit_pairs_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(credit_pairs_ptr, credit_pairs_len) }
+    };
+
+    struct GatheredBond<'a> {
+        join: u64,
+        complete: bool,
+        bad: Vec<BadInterval>,
+        held: &'a [u64],
+    }
+    let mut gathered: Vec<GatheredBond<'_>> = Vec::with_capacity(raw_bonds.len());
+    for bond in raw_bonds {
+        let Some(bad) =
+            (unsafe { gather_bad_intervals(bond.bad_intervals_ptr, bond.bad_intervals_len) })
+        else {
+            return if bond.bad_intervals_ptr.is_null() {
+                SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR
+            } else {
+                SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW
+            };
+        };
+        let held: &[u64] = if bond.held_shard_ids_len == 0 {
+            &[]
+        } else if bond.held_shard_ids_ptr.is_null() {
+            return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
+        } else {
+            unsafe { std::slice::from_raw_parts(bond.held_shard_ids_ptr, bond.held_shard_ids_len) }
+        };
+        gathered.push(GatheredBond {
+            join: bond.join_settlement_epoch,
+            complete: bond.is_foundation_complete_tree != 0,
+            bad,
+            held,
+        });
+    }
+
+    let bonds: Vec<EpochCloseBond<'_>> = gathered
+        .iter()
+        .map(|b| EpochCloseBond {
+            join_settlement_epoch: b.join,
+            is_foundation_complete_tree: b.complete,
+            bad_intervals: &b.bad,
+            held_shard_ids: b.held,
+        })
+        .collect();
+    let shards: Vec<EpochCloseShard> = raw_shards
+        .iter()
+        .map(|s| EpochCloseShard {
+            shard_id: s.shard_id,
+            has_segment: s.has_segment != 0,
+            freeze_height: s.freeze_height,
+        })
+        .collect();
+    let pairs: Vec<CreditPair> = raw_pairs
+        .iter()
+        .map(|p| CreditPair {
+            bond_idx: p.bond_idx,
+            shard_idx: p.shard_idx,
+        })
+        .collect();
+
+    let inputs = EpochCloseInputs {
+        settlement_epoch,
+        close_block_height,
+        settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+        curve: BandedCurveParams {
+            plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+            plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+        },
+        bonds: &bonds,
+        shards: &shards,
+        credit_pairs: &pairs,
+    };
+    let result = match epoch_close_compute(&inputs) {
+        Ok(r) => r,
+        Err(_) => return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE,
+    };
+
+    unsafe {
+        if shards_len > 0 {
+            std::ptr::copy_nonoverlapping(
+                result.r_market_by_shard.as_ptr(),
+                out_r_market_ptr,
+                shards_len,
+            );
+        }
+        *out_sigma_work_milli_ptr = result.sigma_work_milli;
+    }
+    SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
+}
+
 fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
     match err {
         BondRctBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS,
@@ -634,5 +927,255 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE);
+    }
+
+    #[test]
+    fn good_through_ffi_matches_interval_semantics() {
+        // Open-ended slash at epoch 11: good before, bad from 11 on.
+        let flat = [11u64, u64::MAX];
+        let good = |e: u64| unsafe { shekyl_archival_good_through(0, e, flat.as_ptr(), 1) };
+        assert_eq!(good(10), 1);
+        assert_eq!(good(11), 0);
+        // Pre-E_first epochs are not good.
+        assert_eq!(
+            unsafe { shekyl_archival_good_through(5, 5, std::ptr::null(), 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { shekyl_archival_good_through(5, 6, std::ptr::null(), 0) },
+            1
+        );
+        // Null with nonzero length fails closed.
+        assert_eq!(
+            unsafe { shekyl_archival_good_through(0, 10, std::ptr::null(), 1) },
+            0
+        );
+    }
+
+    #[test]
+    fn epoch_timing_ffi_boundaries() {
+        let seb = shekyl_archival_settlement_epoch_blocks();
+        let mut epoch = u64::MAX;
+        assert_eq!(
+            unsafe { shekyl_archival_epoch_close_due(0, ptr::from_mut(&mut epoch)) },
+            0
+        );
+        assert_eq!(
+            unsafe { shekyl_archival_epoch_close_due(seb, ptr::from_mut(&mut epoch)) },
+            1
+        );
+        assert_eq!(epoch, 0);
+        assert_eq!(
+            unsafe { shekyl_archival_epoch_close_due(seb + 1, ptr::from_mut(&mut epoch)) },
+            0
+        );
+
+        assert_eq!(shekyl_archival_settlement_epoch_at_height(seb - 1), 0);
+        assert_eq!(shekyl_archival_settlement_epoch_at_height(seb), 1);
+
+        let w = MAX_CLAIM_AGE_W;
+        let mut below = u64::MAX;
+        assert_eq!(
+            unsafe { shekyl_archival_prune_below_epoch(w * seb, ptr::from_mut(&mut below)) },
+            0
+        );
+        assert_eq!(
+            unsafe { shekyl_archival_prune_below_epoch((w + 1) * seb, ptr::from_mut(&mut below)) },
+            1
+        );
+        assert_eq!(below, 1);
+    }
+
+    #[test]
+    fn epoch_close_compute_ffi_full_pipeline() {
+        // Two members share shard 7; one slashed bond and one foundation
+        // complete-tree contribute neither market count nor work.
+        let held = [7u64];
+        let slashed = [0u64, u64::MAX];
+        let bonds = [
+            ShekylArchivalEpochCloseBond {
+                join_settlement_epoch: 0,
+                bad_intervals_ptr: ptr::null(),
+                bad_intervals_len: 0,
+                held_shard_ids_ptr: held.as_ptr(),
+                held_shard_ids_len: held.len(),
+                is_foundation_complete_tree: 0,
+            },
+            ShekylArchivalEpochCloseBond {
+                join_settlement_epoch: 0,
+                bad_intervals_ptr: ptr::null(),
+                bad_intervals_len: 0,
+                held_shard_ids_ptr: held.as_ptr(),
+                held_shard_ids_len: held.len(),
+                is_foundation_complete_tree: 0,
+            },
+            ShekylArchivalEpochCloseBond {
+                join_settlement_epoch: 0,
+                bad_intervals_ptr: slashed.as_ptr(),
+                bad_intervals_len: 1,
+                held_shard_ids_ptr: held.as_ptr(),
+                held_shard_ids_len: held.len(),
+                is_foundation_complete_tree: 0,
+            },
+            ShekylArchivalEpochCloseBond {
+                join_settlement_epoch: 0,
+                bad_intervals_ptr: ptr::null(),
+                bad_intervals_len: 0,
+                held_shard_ids_ptr: ptr::null(),
+                held_shard_ids_len: 0,
+                is_foundation_complete_tree: 1,
+            },
+        ];
+        let shards = [ShekylArchivalEpochCloseShard {
+            shard_id: 7,
+            freeze_height: 0,
+            has_segment: 1,
+        }];
+        let pairs = [
+            ShekylArchivalCreditPair {
+                bond_idx: 0,
+                shard_idx: 0,
+            },
+            ShekylArchivalCreditPair {
+                bond_idx: 1,
+                shard_idx: 0,
+            },
+            ShekylArchivalCreditPair {
+                bond_idx: 2,
+                shard_idx: 0,
+            },
+            ShekylArchivalCreditPair {
+                bond_idx: 3,
+                shard_idx: 0,
+            },
+        ];
+        let mut r_market = [u64::MAX; 1];
+        let mut sigma = u64::MAX;
+        let code = unsafe {
+            shekyl_archival_epoch_close_compute(
+                5,
+                5 * SETTLEMENT_EPOCH_BLOCKS,
+                bonds.as_ptr(),
+                bonds.len(),
+                shards.as_ptr(),
+                shards.len(),
+                pairs.as_ptr(),
+                pairs.len(),
+                r_market.as_mut_ptr(),
+                ptr::from_mut(&mut sigma),
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+        assert_eq!(r_market, [2]);
+
+        // Cross-check against the pure crate computation with the same pins.
+        let bad: Vec<BadInterval> = vec![BadInterval {
+            start_epoch: 0,
+            end_exclusive: u64::MAX,
+        }];
+        let rust_bonds = [
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+                held_shard_ids: &held,
+            },
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+                held_shard_ids: &held,
+            },
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &bad,
+                held_shard_ids: &held,
+            },
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: true,
+                bad_intervals: &[],
+                held_shard_ids: &[],
+            },
+        ];
+        let rust_shards = [EpochCloseShard {
+            shard_id: 7,
+            has_segment: true,
+            freeze_height: 0,
+        }];
+        let rust_pairs: Vec<CreditPair> = (0..4)
+            .map(|bond_idx| CreditPair {
+                bond_idx,
+                shard_idx: 0,
+            })
+            .collect();
+        let expected = epoch_close_compute(&EpochCloseInputs {
+            settlement_epoch: 5,
+            close_block_height: 5 * SETTLEMENT_EPOCH_BLOCKS,
+            settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            curve: BandedCurveParams {
+                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+            },
+            bonds: &rust_bonds,
+            shards: &rust_shards,
+            credit_pairs: &rust_pairs,
+        })
+        .unwrap();
+        assert_eq!(sigma, expected.sigma_work_milli);
+        assert!(
+            sigma > 0,
+            "two members with work must produce nonzero Σwork"
+        );
+    }
+
+    #[test]
+    fn epoch_close_compute_ffi_rejects_bad_indices_and_zeroes_outputs() {
+        let shards = [ShekylArchivalEpochCloseShard {
+            shard_id: 7,
+            freeze_height: 0,
+            has_segment: 1,
+        }];
+        let pairs = [ShekylArchivalCreditPair {
+            bond_idx: 3,
+            shard_idx: 0,
+        }];
+        let mut r_market = [u64::MAX; 1];
+        let mut sigma = u64::MAX;
+        let code = unsafe {
+            shekyl_archival_epoch_close_compute(
+                5,
+                5 * SETTLEMENT_EPOCH_BLOCKS,
+                ptr::null(),
+                0,
+                shards.as_ptr(),
+                shards.len(),
+                pairs.as_ptr(),
+                pairs.len(),
+                r_market.as_mut_ptr(),
+                ptr::from_mut(&mut sigma),
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE);
+        assert_eq!(r_market, [0], "failure path must not leave stale outputs");
+        assert_eq!(sigma, 0);
+
+        let code = unsafe {
+            shekyl_archival_epoch_close_compute(
+                5,
+                5 * SETTLEMENT_EPOCH_BLOCKS,
+                ptr::null(),
+                0,
+                shards.as_ptr(),
+                shards.len(),
+                pairs.as_ptr(),
+                pairs.len(),
+                ptr::null_mut(),
+                ptr::from_mut(&mut sigma),
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR);
     }
 }
