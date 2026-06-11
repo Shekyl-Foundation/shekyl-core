@@ -592,7 +592,6 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
-  uint64_t archival_shard_age_milli(uint64_t shard_id, uint64_t close_block_height) const;
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible

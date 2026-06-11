@@ -718,22 +718,8 @@ struct ArchivalBondValue {
         return true;
     }
 
-    [[nodiscard]] bool good_through(uint64_t settlement_epoch) const noexcept
-    {
-        if (settlement_epoch < join_settlement_epoch + 1)
-            return false;
-        for (const BadInterval& iv : bad_intervals)
-        {
-            if (settlement_epoch < iv.start_epoch)
-                continue;
-            if (iv.end_exclusive == std::numeric_limits<uint64_t>::max()
-                || settlement_epoch < iv.end_exclusive)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
+    // good_through(P, E) is consensus semantics and lives in Rust only
+    // (shekyl-archival-retention::good_through, via shekyl_archival_good_through).
 
     [[nodiscard]] bool holds_shard(uint64_t shard_id) const noexcept
     {
