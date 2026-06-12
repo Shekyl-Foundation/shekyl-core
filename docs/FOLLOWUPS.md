@@ -1577,9 +1577,9 @@ sustainability is unaffected by the recalibration.
   *Backstop note superseded with the entry.* The claim-window nullifier-pruning
   dependency recorded here rode on the active stake-claim nullifier set; under the
   retool, claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch`, `N_arch`) do not ship —
-  reward double-claim dedup is the per-`P` claimed-epoch bitmap on the bond record,
-  which reverts with `pop_block` — so no global claim-nullifier set exists to bound
-  or prune.
+  reward double-claim dedup is the per-`P` claimed-epoch set on the bond record
+  (`ArchivalBondValue` v4, landed 2026-06-12), which reverts with `pop_block` — so no
+  global claim-nullifier set exists to bound or prune.
 
   *Reopening criterion:* a workstream reviving a separate staking subtree or claim
   wire (e.g. a V4 lattice-era staking redesign) re-derives from
@@ -1672,7 +1672,7 @@ sustainability is unaffected by the recalibration.
   [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4. The
   product question survives unchanged: move bonded principal without resetting the
   accrual window. It re-derives against the rebased substrate (bond records +
-  main-tree stealth outputs + per-`P` claimed-epoch bitmap), where the open design
+  main-tree stealth outputs + per-`P` claimed-epoch set), where the open design
   question becomes how a transfer carries `creation` forward in the bond record
   rather than how a subtree leaf re-stamps `h_bind`. Historical substrate:
   [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3

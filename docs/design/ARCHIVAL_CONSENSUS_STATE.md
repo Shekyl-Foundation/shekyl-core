@@ -1,11 +1,12 @@
 # Archival consensus state — emission read contract (genesis)
 
-**Status:** **Gating spec — contract pinned (2026-06-07).** The reward-emission leg
-([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)) is structurally closed at Layer 1
-but **un-implementable** until this schema is **implemented**. Tier-1 **8c
-retention-proof unforgeability** (construction bytes) may still defer relative to Phase 2b
-wallet work; the **consensus interface** — what state emission reads, how it is keyed,
-how it prunes — **cannot**.
+**Status:** **Contract pinned (2026-06-07); schema implemented (2026-06-12).** The
+reward-emission leg ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)) is structurally
+closed at Layer 1 and its consensus-state reads now have an implemented substrate
+(`ArchivalBondValue` v4 closed the last delta — §8). Tier-1 **8c retention-proof
+unforgeability** (construction bytes) may still defer relative to Phase 2b wallet work;
+the **consensus interface** — what state emission reads, how it is keyed, how it
+prunes — is implemented.
 
 **Scope:** Consensus LMDB (or equivalent) tables, keying, invariants, and growth bounds
 for everything the emission leg **consumes** (does not write except `ClaimedEpochSet`
@@ -242,7 +243,7 @@ structure **prunable**:
 | Serve-credit ledger rows | Yes |
 | Derived / stored `R_market` views | Yes |
 | Per-epoch `Σwork(E)` | Yes |
-| Per-`P` `ClaimedEpochSet` entries | Yes (verify rejects ancient `E`) |
+| Per-`P` `ClaimedEpochSet` entries | Yes — **prune-on-insert in the dedup helper** (emission §6.3; `claimed_epochs_check_and_set` drops entries `< C − W`), not a separate sweep |
 
 **Tradeoff (consensus-visible):** A `P` offline (or deliberately lapsing) longer than `W`
 **forfeits** older unclaimed epochs. `W` couples **state growth** against **forfeiture
@@ -317,8 +318,11 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
 | **Numeric `W`** | **Pinned** — timing cluster split (retention vs reorg depth) |
 
-**Blocked on implementation of this schema:** emission vin, `work_P` recompute, bond-record
-integration tests, 8c verifier hookup.
+**Schema implemented (2026-06-12):** `ArchivalBondValue` v4 lands the last schema delta —
+inline `ClaimedEpochSet` (windowed dedup in `shekyl-archival-retention::claimed_epochs`)
+and `first_paying_emission_height` (emission §6.2/§6.3; `LMDB_SCHEMA.md`
+§`archival_bond`). **Formerly blocked on it, now unblocked:** emission vin, `work_P`
+recompute, bond-record integration tests, 8c verifier hookup.
 
 ---
 

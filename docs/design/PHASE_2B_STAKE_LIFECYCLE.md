@@ -141,7 +141,10 @@ closed (2026-06-07). **Archival read contract:** [`ARCHIVAL_CONSENSUS_STATE.md`]
 **pinned** (gate 3 ν dissolved; `MAX_CLAIM_AGE_W` shape pinned). FSM retool (§3–§7)
 **unblocked** in parallel. **(ii) and (iii) both closed 2026-06-11** (byte aggregate;
 bonds-only). **All three §2.4 close-conditions resolved** — Stage 3 now gates on the
-archival-state schema implementation + gate-6 soundness only.
+archival-state schema implementation + gate-6 soundness only. **Schema half landed
+(2026-06-12):** `ArchivalBondValue` v4 (inline `ClaimedEpochSet` + windowed dedup in
+`shekyl-archival-retention::claimed_epochs`, `first_paying_emission_height`) — emission
+§6.2/§6.3, P2B-3. Stage 3 remaining gate: gate-6 soundness.
 
 ### 2026-06-02 — confidential principal redesign (partial carry-over)
 
@@ -161,8 +164,9 @@ Superseded for **reward path**; retained for **principal machinery**:
 (reserve-DLEQ, bounded-remainder, `entitlement.rs`); tier machinery; exact-yield
 from secret weight × public rate; `band` + `band_sum` servo on the reward path.
 Claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch` / `N_arch`) **do not** ship;
-reward dedup is bond-record epoch bitmap (§2.4); `R_market` derived from retention
-ledger (no wallet-minted ν).
+reward dedup is the bond-record claimed-epoch set (§2.4; emission §6.3 — sorted
+absolute list, not a bitmap); `R_market` derived from retention ledger (no
+wallet-minted ν).
 
 ---
 

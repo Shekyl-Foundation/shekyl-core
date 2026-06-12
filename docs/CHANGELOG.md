@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Added
+
+- **archival: `ArchivalBondValue` v4 — inline `ClaimedEpochSet` +
+  `first_paying_emission_height` (2026-06-12).** Implements the schema
+  half of the Stage-3 gate per `REWARD_EMISSION_LEG.md` §6.2/§6.3
+  (encoding pinned 2026-06-11; P2B-3). The LMDB codec
+  (`blockchain_db/shekyl_types.h`) appends the windowed claimed-epoch
+  set (`u32` count + `u64` BE entries) and the set-once
+  `first_paying_emission_height` (sentinel `0` = unset, unreachable —
+  no emission pays before the first settlement epoch closes); v3 is
+  decode-rejected per the pre-genesis posture. Decode invariants: cap
+  `W + 6` (= 32, §6.3 pin), strict monotone order, span ≤ `W`; the cap
+  derives from `max_claim_age_w` in `config/consensus_constants.json`,
+  newly wired into the C++ generator (`SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W`).
+  The dedup semantics live in Rust only
+  (`shekyl-archival-retention::claimed_epochs`), per the C++-deletion
+  direction and the `good_through` precedent: window maintenance is part
+  of `check_and_set` (prunes entries below `current − W` on insert),
+  closing the review round's liveness finding — insert-only semantics
+  would have a continuously-claiming honest `P` overflow the cap at
+  ~epoch 33. FFI surface deferred to its first caller (emission vin).
+  Also lands the §4.5 / consensus-state §4-invariant-2 joint
+  finalization-boundary pin (`Σwork(E)` materializes at the boundary
+  block `(E+1)·SEB` connect; citing emissions valid strictly above it;
+  reorg-safe by pop ordering). Docs: `LMDB_SCHEMA.md` v4 layout,
+  `ARCHIVAL_CONSENSUS_STATE.md` §8/§9.1 schema-implemented status,
+  emission-leg §1.1/§6.2/§6.3/§12, `PHASE_2B_FSM_RETOOL.md` P2B-3
+  landed, `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 gate line (Stage 3 now
+  gates on gate-6 soundness only), `FcmpMembershipOnly` proof-type
+  domain-separation requirement made load-bearing (§7.2).
+
 ### Fixed
 
 - **sim: sole-source window tick moved to end-of-epoch (PR #126 Copilot
