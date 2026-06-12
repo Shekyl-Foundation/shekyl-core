@@ -204,6 +204,22 @@ them.
    **later** slashes via `good_through(E)` evaluated at close. This boundary is **the
    same** as emission §4.5's lagged `Σwork` read — pin together, not separately.
 
+   > **Joint finalization-boundary pin (2026-06-12, with emission §4.5).** Epoch `E`
+   > covers heights `[E·SEB, (E+1)·SEB)`; its close materializes during the connect of
+   > the **boundary block** `h_close(E) = (E+1)·SEB`
+   > (`epoch_close_due_at_height`; sweep runs at the end of `add_block`, after the
+   > block's own transactions are stored). An emission citing `E` is therefore valid
+   > only in blocks **strictly above** `h_close(E)`: the boundary block's transactions
+   > validate before the sweep runs, so the stored `Σwork(E)` row does not yet exist
+   > there, and the §5.4 loud recompute rejects on the missing row — no fallback
+   > recompute. Reorg soundness is by construction: every citing emission sits strictly
+   > above `h_close(E)`, so a pop sequence removes all of them before
+   > `revert_archival_epoch_close_at_height` definalizes `E` at `h_close(E)` (per-height
+   > revert order: slash revert → epoch-close revert → block removal). A revert can
+   > never strand a connected emission citing a definalized epoch. The `W` window
+   > (§5; emission §6.6) is necessary but not sufficient — row existence is the citing
+   > gate.
+
 3. **Canonical stable `shard_id`** — same shard, same id, for all `P` and all time;
    otherwise holdings cannot be matched across emissions (§6.4 "compatible holdings").
 
@@ -325,7 +341,9 @@ integration tests, 8c verifier hookup.
       joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
 - [x] Pin `Σwork(E)` finalization (epoch-close sweep) + reorg revert order (emission §8).
       LMDB `archival_sigma_work`; `revert_archival_epoch_close_at_height` after slash revert.
-- [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.
+- [x] Pin finalization boundary **jointly** with emission §4.5 lagged read (2026-06-12,
+      §4 invariant 2: close materializes at boundary block `(E+1)·SEB` connect; citing
+      emissions valid strictly above it; reorg-safe by pop ordering).
 - [ ] Retention-proof construction bytes (8c) — may follow interface pin.
 - [ ] KAT: emission recompute against fixture ledger state.
 

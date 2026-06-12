@@ -321,7 +321,18 @@ epoch — determinism over slash-order-dependent denominator surgery.
 
 **Boundary rules (gate 1 seal — small):** Late emitters after epoch close use the same
 stored `Σwork(E)`; no wallet-local recompute. Reorg: revert finalization and accumulator
-with epoch disconnect ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2.3).
+with epoch disconnect ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §4
+invariant 2).
+
+**Finalization boundary (joint pin, 2026-06-12 — with consensus-state §4 invariant 2):**
+`Σwork(E)` materializes during the connect of the boundary block `h_close(E) =
+(E+1)·SETTLEMENT_EPOCH_BLOCKS`, after that block's own transactions are stored. An
+emission citing `E` is valid only in blocks **strictly above** `h_close(E)`; in the
+boundary block itself the stored row does not yet exist and the §5.4 loud recompute
+rejects on the missing row. "Settlement epoch `E+1` or later" in the lagged-read
+paragraph above carries this one-block refinement at the epoch's first height. Reorg
+revert cannot strand a citing emission: all citing emissions sit strictly above
+`h_close(E)` and are popped before the finalization reverts.
 
 **Named reopen (not carried as live fork):** **Claimed-only** denominator — full budget
 to claimers, but requires two-phase / provisional+true-up machinery and inflation-bound
