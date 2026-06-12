@@ -419,11 +419,35 @@ Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 | LMDB name | `"archival_bond"` |
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
-| Value | versioned `ArchivalBondValue` blob (v3 only at genesis: hybrid pubkey, `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals; v1/v2 decode rejected) |
+| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
 | Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
 | Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
+
+v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11):
+
+```text
+u8  version (= 4)
+u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)
+u64 BE join_settlement_epoch
+u64 BE bonded_total_atomic
+u8  holdings_kind (0 = shard set, 1 = CompleteTree)
+u32 BE holdings_count ‖ u64 BE shard ids      (≤ 4096)
+u32 BE bad_interval_count ‖ (u64 BE start, u64 BE end_exclusive) pairs (≤ 256)
+u32 BE claimed_count ‖ u64 BE claimed epochs  (≤ 32 = W + 6, strictly
+                                               increasing, span ≤ W)
+u64 BE first_paying_emission_height
+```
+
+`first_paying_emission_height` sentinel `0` = unset; unreachable as a real
+value because no emission can pay before the first settlement epoch closes at
+height `SETTLEMENT_EPOCH_BLOCKS` (10_000). Claimed-set mutation semantics
+(windowed dedup `check_and_set`, prune below `current − W`) are consensus
+rules and live in Rust only (`shekyl-archival-retention::claimed_epochs`); the
+codec stores and validates the at-rest shape. The cap and span bounds derive
+from `max_claim_age_w` in `config/consensus_constants.json`
+(`SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W`).
 
 ### `archival_r_market`
 

@@ -1,11 +1,12 @@
 # Archival consensus state — emission read contract (genesis)
 
-**Status:** **Gating spec — contract pinned (2026-06-07).** The reward-emission leg
-([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)) is structurally closed at Layer 1
-but **un-implementable** until this schema is **implemented**. Tier-1 **8c
-retention-proof unforgeability** (construction bytes) may still defer relative to Phase 2b
-wallet work; the **consensus interface** — what state emission reads, how it is keyed,
-how it prunes — **cannot**.
+**Status:** **Contract pinned (2026-06-07); schema implemented (2026-06-12).** The
+reward-emission leg ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)) is structurally
+closed at Layer 1 and its consensus-state reads now have an implemented substrate
+(`ArchivalBondValue` v4 closed the last delta — §8). Tier-1 **8c retention-proof
+unforgeability** (construction bytes) may still defer relative to Phase 2b wallet work;
+the **consensus interface** — what state emission reads, how it is keyed, how it
+prunes — is implemented.
 
 **Scope:** Consensus LMDB (or equivalent) tables, keying, invariants, and growth bounds
 for everything the emission leg **consumes** (does not write except `ClaimedEpochSet`
@@ -204,6 +205,22 @@ them.
    **later** slashes via `good_through(E)` evaluated at close. This boundary is **the
    same** as emission §4.5's lagged `Σwork` read — pin together, not separately.
 
+   > **Joint finalization-boundary pin (2026-06-12, with emission §4.5).** Epoch `E`
+   > covers heights `[E·SEB, (E+1)·SEB)`; its close materializes during the connect of
+   > the **boundary block** `h_close(E) = (E+1)·SEB`
+   > (`epoch_close_due_at_height`; sweep runs at the end of `add_block`, after the
+   > block's own transactions are stored). An emission citing `E` is therefore valid
+   > only in blocks **strictly above** `h_close(E)`: the boundary block's transactions
+   > validate before the sweep runs, so the stored `Σwork(E)` row does not yet exist
+   > there, and the §5.4 loud recompute rejects on the missing row — no fallback
+   > recompute. Reorg soundness is by construction: every citing emission sits strictly
+   > above `h_close(E)`, so a pop sequence removes all of them before
+   > `revert_archival_epoch_close_at_height` definalizes `E` at `h_close(E)` (per-height
+   > revert order: slash revert → epoch-close revert → block removal). A revert can
+   > never strand a connected emission citing a definalized epoch. The `W` window
+   > (§5; emission §6.6) is necessary but not sufficient — row existence is the citing
+   > gate.
+
 3. **Canonical stable `shard_id`** — same shard, same id, for all `P` and all time;
    otherwise holdings cannot be matched across emissions (§6.4 "compatible holdings").
 
@@ -226,7 +243,7 @@ structure **prunable**:
 | Serve-credit ledger rows | Yes |
 | Derived / stored `R_market` views | Yes |
 | Per-epoch `Σwork(E)` | Yes |
-| Per-`P` `ClaimedEpochSet` entries | Yes (verify rejects ancient `E`) |
+| Per-`P` `ClaimedEpochSet` entries | Yes — **prune-on-insert in the dedup helper** (emission §6.3; `claimed_epochs_check_and_set` drops entries `< C − W`), not a separate sweep |
 
 **Tradeoff (consensus-visible):** A `P` offline (or deliberately lapsing) longer than `W`
 **forfeits** older unclaimed epochs. `W` couples **state growth** against **forfeiture
@@ -301,8 +318,11 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | **ν dissolution** | **Pinned** — corpus synced (2026-06-07) |
 | **Numeric `W`** | **Pinned** — timing cluster split (retention vs reorg depth) |
 
-**Blocked on implementation of this schema:** emission vin, `work_P` recompute, bond-record
-integration tests, 8c verifier hookup.
+**Schema implemented (2026-06-12):** `ArchivalBondValue` v4 lands the last schema delta —
+inline `ClaimedEpochSet` (windowed dedup in `shekyl-archival-retention::claimed_epochs`)
+and `first_paying_emission_height` (emission §6.2/§6.3; `LMDB_SCHEMA.md`
+§`archival_bond`). **Formerly blocked on it, now unblocked:** emission vin, `work_P`
+recompute, bond-record integration tests, 8c verifier hookup.
 
 ---
 
@@ -325,7 +345,9 @@ integration tests, 8c verifier hookup.
       joint check with `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` (§5; emission §3, §6.6 W pin).
 - [x] Pin `Σwork(E)` finalization (epoch-close sweep) + reorg revert order (emission §8).
       LMDB `archival_sigma_work`; `revert_archival_epoch_close_at_height` after slash revert.
-- [ ] Pin finalization boundary **jointly** with emission §4.5 lagged read.
+- [x] Pin finalization boundary **jointly** with emission §4.5 lagged read (2026-06-12,
+      §4 invariant 2: close materializes at boundary block `(E+1)·SEB` connect; citing
+      emissions valid strictly above it; reorg-safe by pop ordering).
 - [ ] Retention-proof construction bytes (8c) — may follow interface pin.
 - [ ] KAT: emission recompute against fixture ledger state.
 

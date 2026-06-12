@@ -30,6 +30,7 @@ pub mod bond_post;
 pub mod bond_rct_balance;
 pub mod bond_wire;
 pub mod challenge;
+pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
@@ -55,6 +56,10 @@ pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
+};
+pub use claimed_epochs::{
+    claimed_epochs_check_and_set, claimed_epochs_contains, ClaimedEpochsError,
+    MAX_CLAIMED_EPOCH_ENTRIES,
 };
 pub use consensus_state::{
     epoch_close_compute, epoch_close_due_at_height, good_through, market_member_at_epoch,

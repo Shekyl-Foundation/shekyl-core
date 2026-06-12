@@ -122,6 +122,9 @@ bound is **`W`** not tier window.
    §6.3. **Encoding decided (2026-06-11, `W = 26`):** inline sorted absolute-epoch list on
    `ArchivalBondValue` (v3 → v4), `u32` count + `u64` BE entries, cap 32; bitmap and
    separate-table options rejected with reversion clause — see emission §6.3.
+   **Landed (2026-06-12):** v4 codec in `blockchain_db/shekyl_types.h` with decode
+   invariants (cap, strict monotone, span ≤ `W`); windowed dedup semantics in
+   `shekyl-archival-retention::claimed_epochs` (`LMDB_SCHEMA.md` §`archival_bond`).
 2. **Reject for genesis encoding options:**
    - **LMDB `dup-keys (P_id, E)`** — collides with Shekyl composite-key discipline
      ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md): curve-tree tables explicitly **no `MDB_DUPSORT`**).

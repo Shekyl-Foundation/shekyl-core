@@ -50,7 +50,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 
 | Layer | Scope | Gate |
 |-------|--------|------|
-| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) implementation (contract pinned). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema impl. |
+| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Schema substrate implemented (2026-06-12):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §8 — `ArchivalBondValue` v4 closed the last delta. Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; emission vin now gates on `FcmpMembershipOnly`, not schema. |
 | **2 — Economic keystone** | **Margin-robustness gate closed** (§1.2 #4, 2026-06-11): band run confirmed the decomposition — spread gate **re-anchored on direct whale gauges** (`mxSW`, `wB4`, per-band seats; `gini_actor` → trend); **`g` sealed as band `[1.5, 2.5]`, target `≈ 2`** (`g ≥ 3.0` fails coloc coverage at any purse); purse confirmed as spread lever. `Curve` reserve not triggered (stays V3). Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). | Layer 2 fully closed; reversion clauses live in the sim doc results section. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
@@ -321,7 +321,18 @@ epoch — determinism over slash-order-dependent denominator surgery.
 
 **Boundary rules (gate 1 seal — small):** Late emitters after epoch close use the same
 stored `Σwork(E)`; no wallet-local recompute. Reorg: revert finalization and accumulator
-with epoch disconnect ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §2.3).
+with epoch disconnect ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §4
+invariant 2).
+
+**Finalization boundary (joint pin, 2026-06-12 — with consensus-state §4 invariant 2):**
+`Σwork(E)` materializes during the connect of the boundary block `h_close(E) =
+(E+1)·SETTLEMENT_EPOCH_BLOCKS`, after that block's own transactions are stored. An
+emission citing `E` is valid only in blocks **strictly above** `h_close(E)`; in the
+boundary block itself the stored row does not yet exist and the §5.4 loud recompute
+rejects on the missing row. "Settlement epoch `E+1` or later" in the lagged-read
+paragraph above carries this one-block refinement at the epoch's first height. Reorg
+revert cannot strand a citing emission: all citing emissions sit strictly above
+`h_close(E)` and are popped before the finalization reverts.
 
 **Named reopen (not carried as live fork):** **Claimed-only** denominator — full budget
 to claimers, but requires two-phase / provisional+true-up machinery and inflation-bound
@@ -443,28 +454,53 @@ ArchivalBondRecord {
 }
 ```
 
+**`first_paying_emission_height` invariants (landed with v4, 2026-06-12):**
+**set-once** — immutable after first write; the emission PR's connect path is the only
+writer and inherits this invariant rather than inventing it. At-rest encoding uses
+sentinel `0` for unset (`Option` collapses to a bare `u64`): `0` is unreachable as a
+real value because no emission can pay before the first settlement epoch closes at
+height `SETTLEMENT_EPOCH_BLOCKS` (10_000) — same named-sentinel-with-stated-
+unreachability discipline as `enc_label`.
+
 ### 6.3 `ClaimedEpochSet` — dedup semantics (amends wallet `EpochSet` reuse)
 
-**Semantics** (relocated from wallet `claimed_epochs` / §3.3.2):
+**Semantics** (relocated from wallet `claimed_epochs` / §3.3.2; window maintenance
+folded in per the v4-schema review round, 2026-06-12):
 
 ```text
-check_and_set(E): bool
-  // returns false if E already claimed; else inserts E and returns true
+check_and_set(E, C): Result<bool>      // C = current settlement epoch
+  // E ≥ C            → error NotSettled (only closed epochs claimable, §4.5)
+  // E < C − W        → error Expired   (forfeited, §6.6)
+  // else: prune entries < C − W, then
+  //   return false if E already claimed; else insert E in order, return true
 ```
+
+Window maintenance is **part of the dedup semantics**, not a separate sweep:
+insert-only semantics plus the 32-entry cap would have a continuously-claiming
+honest `P` hit the encode-side cap at ~epoch 33. The prune is safe by
+construction — a pruned epoch is unclaimable under `W` (§6.6), and
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (720) ≪ `SETTLEMENT_EPOCH_BLOCKS` (10_000), so no
+processable reorg can resurrect a pruned entry's claimability. This makes
+**span ≤ `W`** (newest − oldest) an at-rest decode invariant alongside the cap
+and strict monotone order.
 
 **Encoding (genesis pin):** Per-`P` **sparse set of absolute settlement-epoch indices**
 `E`. Consensus-visible semantics only; **not** the retired 2-byte **relative** `u16`
 mask from tier-bounded stake claims.
 
-**Concrete encoding (decided 2026-06-11, `W = 26` pinned):** an **inline field on
-`ArchivalBondValue`** — strictly-increasing list of absolute epoch indices, `u32` count +
-`u64` BE per entry, hard cap **32** entries (`W = 26` plus reorg slack; cap violation is a
-decode error like the existing `kMax*` bounds). `ArchivalBondValue` bumps **v3 → v4**; v3
-rejected at decode per the pre-genesis posture (no migration; reset data-dir). Pruning to
-`E > tip_settled − W` rides the existing §6.6 forfeiture sweep and is an optimization only —
-correctness comes from E-3 forfeiture rejecting out-of-window claims *before* dedup is
-consulted, so a stale entry can never enable or block a valid claim. Why inline, not the
-alternatives:
+**Concrete encoding (decided 2026-06-11, `W = 26` pinned; landed 2026-06-12):** an
+**inline field on `ArchivalBondValue`** — strictly-increasing list of absolute epoch
+indices, `u32` count + `u64` BE per entry, hard cap **32** entries (`W = 26` plus reorg
+slack; cap, order, and span violations are decode errors like the existing `kMax*`
+bounds). `ArchivalBondValue` bumps **v3 → v4**; v3 rejected at decode per the
+pre-genesis posture (no migration; reset data-dir). Pruning is **in the dedup helper**
+(see semantics above), not a separate sweep — the earlier ride-the-forfeiture-sweep
+disposition was reopened and closed by the v4-schema review round (insert-only was a
+liveness bomb for honest continuous claimers). Landed split: codec + at-rest
+invariants in `blockchain_db/shekyl_types.h` (`SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W` from
+the JSON authority); dedup semantics in Rust only
+(`shekyl-archival-retention::claimed_epochs`), FFI surface deferred to its first
+caller (the emission vin). Why inline, not the alternatives:
 
 - **Emission verify reads the bond record anyway** (`good_through`, `E_join`); one decode
   covers the whole ≤15-epoch batch. A separate table costs up to 15 point reads per vin on
@@ -652,6 +688,14 @@ proves spend authority **without** producing a key image consumed by the spent s
 Today's `FcmpPlusPlus::verify` **must gain** a per-input mode flag or sibling type;
 reward emission is the first consumer.
 
+**Proof-type domain separation (load-bearing, pinned 2026-06-12):** subtraction from
+the full verify path creates a proof-type confusion surface — a membership-only proof
+must **not** verify where a full `FcmpPlusPlus` proof (key image included) is required,
+or this leg's relaxation leaks into the spend path. The verify API carries **distinct
+transcript domain separation binding the proof type**, and the emission vin's verify
+demands the membership-only tag specifically. This is a construction requirement on
+the `FcmpMembershipOnly` PR, not an implied property.
+
 **Independence:** Backing outputs are **main-tree** leaves, not staking-subtree (3C
 deleted).
 
@@ -797,13 +841,20 @@ amounts), bond post/slash reaction.
 
 ## 12. Implementation checklist (pre-code)
 
-- [ ] **Pin gate 2/3 archival-state schema** — [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (blocks all emission implementation).
-- [ ] Pin `MAX_CLAIM_AGE_W` + prune rules (joint with schema).
-- [ ] Seal §4.5 boundary/reorg at gate 1 (lagged §4.4 read; slash stays in denominator).
+- [x] **Pin gate 2/3 archival-state schema** — [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
+      pinned 2026-06-07; **implemented 2026-06-12** (`ArchivalBondValue` v4 closed the
+      last delta).
+- [x] Pin `MAX_CLAIM_AGE_W` + prune rules (joint with schema) — pinned 2026-06-07;
+      prune-on-insert landed in `claimed_epochs_check_and_set` (§6.3, 2026-06-12).
+- [x] Seal §4.5 boundary/reorg at gate 1 — joint finalization-boundary pin 2026-06-12
+      (§4.5; consensus-state §4 invariant 2); slash stays in denominator per E-3.
 - [ ] Add `SETTLEMENT_EPOCH_BLOCKS`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` to
-      `config/consensus_constants.json` + generators.
+      `config/consensus_constants.json` + generators (in JSON since 2026-06-07;
+      `max_claim_age_w` wired into the C++ generator 2026-06-12; the other two wire
+      at their consumers).
 - [ ] C++ / Rust vin deserializer for `txin_archival_reward_emission`.
-- [ ] `ArchivalBondRecord` LMDB table + `pop_block` revert.
+- [x] `ArchivalBondRecord` LMDB table + `pop_block` revert — `archival_bond`
+      (`LMDB_SCHEMA.md`), v4 with claimed-epoch set + `first_paying_emission_height`.
 - [ ] **`FcmpMembershipOnly::verify`** in `shekyl-oxide` FCMP++ crate (line-441 gap).
 - [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim`, `C_stake` admission paths.
 - [ ] KAT vectors: minimal valid emission + double-claim reject + work mismatch reject.
