@@ -18,7 +18,7 @@ todos:
     content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
   - id: phase2b_reward_emission_spec
-    content: "Phase 2b design — Layer 1 emission spec closed. ARCHIVAL_CONSENSUS_STATE.md in progress. Parallel: FSM retool. Layer 2: margin-robustness band (not point giniW). Remaining: FcmpMembershipOnly, gate 7, byte aggregate (ii)."
+    content: "Phase 2b design — Layer 1 emission spec closed; consensus-state schema landed. Decided 2026-06-11: bond-duration shape (age-scaled-constant; sim L10) + ClaimedEpochSet encoding (inline list, ArchivalBondValue v4). Iteration-5 gate-7 RUN: all gauges insensitive → (iii) CLOSED bonds-only (ledger G7); cross-doc spec edits LANDED 2026-06-11 (emission §10.2 + admission_proof/§7.4 deletion, PHASE_2B §2.4 (iii) closed, gate-6 §2.5 sole-owner note + no-minimum policy pin, V3_STAKER_ARCHIVAL). Byte aggregate (ii) CLOSED same day (worked sweep, ledger AGG: ≤ 0.11 % of penalty-free zone across the N_P envelope) — ALL THREE §2.4 close-conditions resolved. Layer-2 margin-robustness band RUN + CLOSED 2026-06-11 (layer2_* axes): decomposition confirmed (giniW tracks leanness, whale gauges flat ≥11× margin) → spread gate re-anchored on direct whale gauges, g sealed as band [1.5,2.5] target ≈2 (g≥3.0 fails coloc coverage at any purse), Curve reserve untriggered, bond 0.75 pin stands; 2026-06-07 gate4 readings superseded by banded-Curve substrate drift (Finding 0); g-units normalization gap → FOLLOWUPS V3.0. Remaining: FcmpMembershipOnly; schema implementation."
     status: in_progress
   - id: phase2b_gate6_p_registration
     content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain."
@@ -450,7 +450,7 @@ gates: **gate 6 soundness** + Round 3–5 on rebased substrate + principal-wire 
 
 | Layer | Ship at genesis | Retired / never-ship |
 |-------|-----------------|----------------------|
-| Principal | Main-tree FCMP++ transfer principal ↔ **`P`** (optional `ADMISSION_MIN`); decorrelated unstake drain | `txout_to_staked_key`, 3C subtree, cleartext watermark |
+| Principal | Main-tree FCMP++ transfer principal ↔ **`P`** (no consensus minimum — gate 7 closed bonds-only); decorrelated unstake drain | `txout_to_staked_key`, 3C subtree, cleartext watermark, `ADMISSION_MIN_ATOMIC` |
 | Reward accounting | Public work under **`P`**; **reward emission** (special leg) to stealth | Entitlement claims; `txin_stake_claim`; F0 (**dissolved**) |
 | Reward dedup | Per-`P` claimed-epoch bitmap on **bond record** | `N_arch` / `G_arch` published tags |
 | Privacy (reward path) | **Gate 6 firewall** (unbuilt) + bond-funding hygiene | Hidden entitlement amounts |

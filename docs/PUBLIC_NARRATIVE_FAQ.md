@@ -8,6 +8,10 @@ Legal/regulatory framing for foundation archival lives in
 `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — counsel review required
 before genesis.
 
+For a plain-language walkthrough of how the PoW + PoS economy regulates
+itself — emission, release pacing, adaptive burn, staker rewards, with worked
+numerical examples — see [`ECONOMY_EXPLAINED.md`](ECONOMY_EXPLAINED.md).
+
 ---
 
 ## Positioning statement
@@ -131,6 +135,21 @@ disclosed floor** (a decentralization regression), not silent data loss — prov
 operators monitor market coverage (see disclosure doc). Fee-era economics may shift
 how fast the market rebounds; terminal subsidy targets **decentralization margin**,
 not durability survival.
+
+This is a load-bearing answer, not a comfort line. Crash-scenario simulations
+showed that a deep market trough can briefly empty **every market copy** of some
+old shards even when market coverage later recovers in full. Because the
+foundation archive is complete and held permanently, no scenario in the grid
+loses data — those shards become **foundation-only** until the market re-seeds
+from the foundation, and the measured cost is an availability window (in the
+worst recovering crash, up to ~10 epochs of foundation-only retrieval for the
+affected shards, bounded by the foundation's seeding bandwidth). Two honest
+implications follow. First, through a crash trough the durability of
+irreplaceable history rests on **one disclosed organization**, which is why
+foundation treasury policy is required to be diversified rather than
+token-denominated — the backstop must not shrink in the crisis it exists to
+absorb. Second, foundation seeding capacity is an availability commitment,
+sized from the same simulations.
 
 ### What should exchanges and institutions record?
 

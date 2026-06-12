@@ -3823,6 +3823,7 @@ version = "3.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-economics",
 ]
 

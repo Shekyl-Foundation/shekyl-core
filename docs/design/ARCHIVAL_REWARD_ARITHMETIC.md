@@ -26,7 +26,7 @@ Constants are emitted from `config/consensus_constants.json` via `shekyl-archiva
 
 - `archival_reward_plateau_value_milli` (8000)
 - `archival_reward_plateau_work_milli` (16000)
-- `archival_reward_age_weight_milli` (1000)
+- `archival_reward_age_weight_milli` (2000 — sealed target `g* ≈ 2`, band `[1500, 2500]`; see §Shard age)
 - `max_claim_age_w` (26)
 
 ## Economic tolerance (pinned ε)
@@ -60,6 +60,34 @@ No emission vin may credit outputs under provisional bands until final band revi
 
 ## Shard age
 
-`consensus_state::shard_age_milli(freeze_height, close_height)` derives age from the
-`archival_shard_segment` `freeze_height` and `SETTLEMENT_EPOCH_BLOCKS`, and feeds `g(age)`
-inside `epoch_close_compute`. C++ passes `freeze_height` through; it does not compute age.
+`consensus_state::shard_age_milli(close_height, freeze_height, settlement_epoch_blocks)`
+derives age from the `archival_shard_segment` `freeze_height` and
+`SETTLEMENT_EPOCH_BLOCKS`, and feeds `g(age)` inside `epoch_close_compute`. C++ passes
+`freeze_height` through; it does not compute age.
+
+**Normalization (pinned 2026-06-11, Layer-2 band run).** Age is a **relative depth
+fraction**, not a raw epoch count:
+
+```text
+age_epochs   = floor((close_height − freeze_height) / SETTLEMENT_EPOCH_BLOCKS)
+chain_epochs = floor(close_height / SETTLEMENT_EPOCH_BLOCKS)
+age_milli    = floor(age_epochs · 1000 / chain_epochs)        ∈ [0, 1000]
+```
+
+`g(age) = 1 + age_weight · age` therefore spans exactly `[1, 1 + age_weight]` for the
+life of the chain: the chain-genesis band carries a constant `(1 + age_weight)×` premium
+over hot, and the premium *ratio* never drifts. This is the scale-free shape the Layer-2
+margin-robustness band run validated
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Layer-2 margin-robustness band —
+results*) — the sim's `g = 1 + w·age` runs on age normalized to `[0, 1]`, and the sealed
+operating band `w ∈ [1.5, 2.5]` (target `≈ 2`) is in those units. The prior raw-epoch
+form made `g` grow without bound (`g ≈ 700·w` for a 10-year shard at
+`SEB = 10 000`), concentrating `Σwork` onto oldest-band holders over mission
+timeframes — a shape no sim run ever validated and exactly the whale-capture surface
+Layer 2 gates. Mapping: `archival_reward_age_weight_milli = 2000` ⇔ sealed target
+`g* ≈ 2`; the calibration-band freedom is `[1500, 2500]` (per the sealed band), value
+retunable on stressnet evidence within the band without re-running the design round.
+
+Edge semantics: zero before the segment freezes past the close height, zero before the
+first settlement epoch completes (`chain_epochs = 0` — everything is hot at genesis),
+and `age_epochs ≤ chain_epochs` by construction so the fraction never exceeds 1000.

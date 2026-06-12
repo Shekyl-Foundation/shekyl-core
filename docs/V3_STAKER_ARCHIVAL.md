@@ -205,6 +205,66 @@ service rendezvous for the fetch leg). They provide:
 - **Fee-era backstop** — always present when the market thins (replaces
   L12 **decaying** floor — see gate-list item 5 amendment below).
 
+**Retention vs internal redundancy vs serving participation (authority
+pin — swan-4, 2026-06-11).** Three distinct properties travel under the
+word "floor"; conflating them produced the swan-2/-3 extinction
+over-claim and is named here so it cannot recur:
+
+1. **Retention (the guarantee).** Every active genesis `CompleteTree`
+   seat holds **all of B + C, permanently** — complete over all deep
+   history, held continuously, **no sunset** (per this gate-list's
+   item 5: foundation withdrawal is rejected as mutable-governance +
+   gap risk). Consequence: a market-side replica count of **zero on
+   any shard is never data loss** — it is a transition to
+   **foundation-as-sole-source**, an availability state. Simulation
+   reads that count market holder-set wipe-outs (`extT`/`shkExt` in
+   `STAKER_ARCHIVAL_SIM.md` §L17) measure this availability exposure,
+   not irrecoverability.
+2. **Internal redundancy (foundation operations).** The guarantee's
+   own durability is `N_active = 3` replica-complete trees across
+   diverse providers and jurisdictions (the "many nines" managed-archive
+   number above), plus the W4 treasury requirement that
+   floor-operating reserves be crisis-uncorrelated with the token
+   price. This is ops policy with authority, not consensus code.
+   **Domain diversity is part of the requirement, not a deployment
+   detail:** during a sole-source window the shard's availability *is*
+   the foundation's uptime with effective domain count 1 in the L15
+   sense unless the `N_active` seats are placed across distinct failure
+   domains — internal redundancy counts toward the diversity floor only
+   if the three seats are domain-diverse; otherwise the L17
+   "degraded, foundation as sole source" verdicts are degraded further
+   than the rows imply. **Seeding capacity is sized at the crisis
+   multiple, not steady state:** provision re-seed bandwidth at **~4×
+   the steady-state seeding flow** (the swan-4 `reseed_rate = 12` arm —
+   halves sole-source exposure *and* cuts trough wipe-out count 40 → 10
+   by interrupting the cascade; `STAKER_ARCHIVAL_SIM.md` §L17
+   Finding 4). Surge seeding is the foundation's own action, not a
+   consensus rule an adversary can trigger, so the static-margin
+   objection to adaptive enforcement
+   (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.3) does not apply.
+3. **Serving participation (the modeled floor).** The sim's
+   `floor_replicas` / `floor_decay_pop` / `foundation_floor_aged`
+   knobs model how many **serving** replicas the floor contributes to
+   coverage and retrieval latency — an availability lever. The L13
+   "~57 % backstop" and the L17 floor-on arms are serving-layer
+   measurements; they size degraded-retrieval exposure, **not** the
+   retention guarantee, which holds regardless of the serving
+   schedule.
+
+**The threat model this concentrates.** For irreplaceable history the
+durability backstop of record is **one organization**: correlated
+infrastructure loss across the `N_active` seats, seizure, and
+dissolution over mission timeframes 2–3 are the binding failure
+modes — no privacy cost (chain data is public), but a single point the
+market architecture otherwise exists to avoid. Mitigations are the
+disclosed-backstop posture (`FOUNDATION_ARCHIVAL_DISCLOSURE.md`),
+jurisdiction/provider diversity in §2, and the market trajectory
+dwarfing the floor. **Reversion clause:** the no-sunset pin is the
+substrate; if it is ever reopened (foundation-independence becomes a
+design goal), the swan-3 W12/W13 questions — deep-set completeness of
+any successor mechanism, mid-deep-modal trough exposure — re-activate
+at that design round and are parked here against it, not deleted.
+
 **Accountability.** Foundation archivers are **registered and
 challengeable** — public challenge pass/fail is the accountability
 mechanism. They are **fully excluded from archival reward claims** (no
@@ -755,9 +815,12 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
 
 - **`P` is an independent keypair, HKDF-derived from the wallet seed** — not an
   algebraic offset of the principal key; dual scan (principal + `P`).
-- **Admission principal (optional economics):** soft transfer of `≥ ADMISSION_MIN` to
-  `P` on the main tree — **not** consensus unspent enforcement; Decision **3C**
-  staking subtree is **not** shipped for genesis.
+- **Admission funding (no consensus role — gate 7 closed bonds-only 2026-06-11):**
+  ordinary transfer to `P` on the main tree with **no consensus minimum**
+  ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §10.2;
+  [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) ledger G7) and **no
+  wallet-policy minimum** (gate-6 §2.5 pin) — funding shape/timing hygiene only.
+  Decision **3C** staking subtree is **not** shipped for genesis.
 - **Off-chain backing before first reward:** `P` must be a known, serving, backed
   archiver **before** earning — peers present/observe backing off-chain; otherwise
   spam or ignored challenges. The **first on-chain reward emission** anchors bond
