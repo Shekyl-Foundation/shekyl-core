@@ -1,7 +1,9 @@
 # CT-3 — persistent delta sync, reorg rollback, source seam (design — Round 1 open)
 
-**Status:** Pre-flight substrate audit complete (2026-06-11). Round 1
-questions enumerated with proposed dispositions; no production code yet.
+**Status:** Pre-flight substrate audit complete (2026-06-11). **Round 1
+review pass complete (2026-06-11, §3.7):** R1-Q1/Q4/Q5/Q6 endorsed;
+R1-Q2/Q3 **amended** (two-class rollback + `creation_height`, F4 as
+sharpened); findings F6–F9 routed. No production code yet.
 
 **Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-3 row:
 "Source-agnostic bulk-segment fetch + delta sync + per-segment root verify
@@ -39,6 +41,10 @@ V4 are a re-sync, not a migration (pre-genesis discount inherited by design).
    (corruption detection) via `recompute_segment_r_k` (landed CT-1).
 5. **Source seam.** The trait boundary that makes segment refetch
    peer-pluggable (§4 R1-Q5) — the seam only; no network implementation.
+6. **Restore-from-seed (trivial case, enumerated for totality — F8).** No
+   store on disk → fresh genesis replay through the normal ingest path.
+   The R1-Q1 refetch path later accelerates it; restore is also the first
+   future consumer of the R1-Q5 seam.
 
 ### Out of scope
 
@@ -59,7 +65,14 @@ V4 are a re-sync, not a migration (pre-genesis discount inherited by design).
   (extend `recon_kat.rs` / `store_kat.rs` over `ct2_tier_a.json`).
 - Reorg KAT: the CT-2 `reorg_deep` chain replayed through the **persistent
   rollback path** (truncate + re-sync, not `from_blocks` rebuild) matches the
-  oracle at every post-fork height.
+  oracle at every post-fork height, **and** the post-rollback pending set
+  equals the fresh-build pending set (amended R1-Q3 invariant — `reorg_deep`
+  contains class-(b) leaves by construction, F4).
+- Partition-boundary KAT (store-only, synthetic): fabricated multi-leaf
+  equal-maturity runs; truncation lands on the **first** position of the run
+  (F7 — Tier A is one coinbase per block and never exercises the boundary).
+- The parent-checklist structural no-secrets test (§4.1/§4.2 disjointness)
+  extends explicitly over the new pending-candidates table (F6).
 - Resume KAT: pending candidates across a restart produce byte-identical
   drain order vs an unbroken run (the 150k-block staked-maturity case is the
   adversarial shape, §3 F3).
@@ -105,16 +118,69 @@ Audit pin: `chore/ct3-sync-design` branch point off `dev`, 2026-06-11.
   re-scan: the staked maturity class reaches 150,000 blocks (S6). Pending
   candidates must persist (R1-Q2). This falsifies the implicit Round-0
   assumption that drained-leaf persistence suffices.
-- **F4.** Rollback-by-height needs a height→tree-position mapping. S8 shows
-  it is derivable (maturity is monotone non-decreasing in position), so no
-  new table is strictly required — verify the binary-search disposition at
-  impl (B6: confirm `leaf_meta` byte layout actually exposes maturity).
+- **F4 (sharpened, Round 1 review 2026-06-11).** The truncation partition
+  stands: drain order makes maturity monotone non-decreasing in position
+  (S8), so "first drained position with `maturity > fork_height`" is
+  binary-searchable over `leaf_meta` (B6: confirm the byte layout exposes
+  maturity at impl). But the truncated rows split into **two classes** the
+  original three-step rollback did not distinguish:
+
+  - **(a)** outputs *created* in orphaned blocks (`creation_height >
+    fork_height`) — delete entirely;
+  - **(b)** outputs created on the **shared prefix** (`creation_height ≤
+    fork_height`) whose maturity > fork — drained on the orphaned suffix,
+    still valid after rollback, and **must re-enter the pending table**.
+    Truncation alone loses them; on re-sync the first new-branch block past
+    such a leaf's maturity drains a short batch, the recomputed root misses
+    the header root, and the §3.3 loud failure forces exactly the genesis
+    `from_blocks` replay CT-3 exists to eliminate — a guaranteed liveness
+    break on every post-maturity-boundary deep reorg.
+
+  Neither class is computable from the original R1-Q2 row shape: maturity is
+  **not invertible** to creation height — the lock offset varies by class
+  (coinbase +60 / regular +10, `shekyl-oxide/src/lib.rs:30-33`; stake tiers
+  1000/25000/150000 blocks, `config/economics_params.json` via
+  `shekyl_stake_lock_blocks`), and the post-restart client has no ingest
+  history to consult. One field fixes both: persist
+  `creation_height` (8 bytes/row) in pending rows **and** `leaf_meta`
+  (R1-Q2/R1-Q3 amended). Tier A `reorg_deep` contains class (b) by
+  construction (coinbase minted at 81–140 matures at 141–200: created on
+  the shared prefix, drained on the orphaned suffix), so the persistent-path
+  reorg KAT goes red without this — caught at disposition rather than as
+  red-KAT archaeology in CT-3c.
 - **F5.** `assemble` reads the in-memory entry vec (`assemble.rs:84-89`);
   whole-tree-in-memory is fine at Tier-A scale and wrong at mainnet scale.
   Store-backed assembly is **not** CT-3 (it belongs with the prune-policy
   work, parent §8 #9) — recorded in `FOLLOWUPS.md` with a V3.0 target so it
   is not silently lost. CT-3 must not foreclose it (the store already holds
   `owned_identities`, S10).
+- **F6 (Round 1 review).** The pending table introduces `identity` into
+  persisted state. The parent checklist's structural no-secrets test
+  (§4.1/§4.2 disjointness) extends explicitly over the new table — one
+  assertion, closes the quiet-erosion path.
+- **F7 (Round 1 review).** The F4 partition search is correct as stated, but
+  Tier A is one coinbase leaf per block — **equal-maturity runs never occur
+  in the fixture**, so the partition-point boundary is unexercised by every
+  consensus-fixture KAT in the DoD. CT-3a is store-only and needs no
+  consensus fixture: a synthetic `store_kat` case with fabricated multi-leaf
+  equal-maturity runs asserts truncation lands on the **first** of the run.
+  Same off-by-one class CT-2 pinned with `last_empty=60`/`first_drain=61`
+  rather than interior heights; same discipline.
+- **F8 (Round 1 review).** §1's lifecycle enumeration gains
+  restore-from-seed for totality (scope item 6). Resolves trivially today
+  (no store → fresh genesis replay); the R1-Q1 refetch path is the future
+  accelerator and restore is the first future consumer of the R1-Q5 seam.
+- **F9 (Round 1 review; B6-class, source-confirmed).** A truncate crossing a
+  frozen-but-unpruned segment boundary (reorg deeper than
+  `SPENDABLE_AGE + 720` on an archiver holding full leaves) must also roll
+  back `frozen_segments`, or the resume `R_k` recheck recomputes against
+  stale freeze records. **Confirmed at source:** the landed primitive
+  deletes frozen rows above the boundary *and* the partially-overlapping
+  segment, recomputes the freeze cursor, and resets the sync tip in the
+  same transaction (`redb_backend.rs:390-407, 429-434`). Residual for
+  CT-3c: assert the resume recheck runs against post-rollback records
+  (§5 addenda). Beyond the plausible-reorg bound, loud failure is
+  acceptable; silent stale metadata is not.
 
 ---
 
@@ -143,14 +209,23 @@ pruned-segment refetch becomes load-bearing before genesis (prune policy
 ships in V3.0 and field use shows refetch demand). Re-evaluation shape: new
 round in this doc + `SHEKYLD_PREREQUISITES.md` entry for the endpoint.
 
+**Deferral artifact (Round 1 review):** the deferral itself leaves a tracked
+record now, not only under the reversion path — a `FOLLOWUPS.md` row binds
+the `get_curve_tree_leaves` endpoint + its §6 KAT to the prune-policy work,
+so the owed endpoint is not recorded solely as prose inside a closed design
+round.
+
 ### R1-Q2 — Resume semantics: persist pending candidates
 
-**Proposed disposition:** add a pending-candidates table to the CT-1 store
-schema (entries carry `(gindex, maturity, leaf, identity)` — same shape as
-`leaf_meta` rows, keyed by gindex). `ingest_block` writes drained **and**
-pending deltas in one redb transaction; resume reads both and rebuilds
-`entries_by_maturity` in memory. Schema change is pre-genesis (no migration
-code; `rm -rf` is the upgrade path per `15-deletion-and-debt.mdc`).
+**Disposition (amended Round 1 review):** add a pending-candidates table to
+the CT-1 store schema — entries carry
+`(gindex, maturity, creation_height, leaf, identity)`, keyed by gindex —
+and add `creation_height` to `leaf_meta` rows (8 bytes/row; F4: maturity is
+not invertible to creation height, and the rollback partition filter needs
+it). `ingest_block` writes drained **and** pending deltas in one redb
+transaction; resume reads both and rebuilds `entries_by_maturity` in
+memory. Schema change is pre-genesis (no migration code; `rm -rf` is the
+upgrade path per `15-deletion-and-debt.mdc`).
 
 **Rejected alternative:** tail re-scan on resume — unbounded by S6/F3 (150k
 blocks), and it couples client resume to block availability, which the
@@ -158,17 +233,35 @@ refresh layer does not guarantee backwards.
 
 ### R1-Q3 — Reorg rollback for the persistent client
 
-**Proposed disposition:** rollback = three store operations in one
-transaction: (1) binary-search the first drained position with
-`maturity > fork_height` (F4) and `truncate_from_tree_position` there;
-(2) delete pending candidates with `gindex` above the fork's last assigned
-index; (3) reset `sync_tip_height` to `fork_height`. Then re-sync forward via
-normal `ingest_block` as the refresh layer re-delivers the new branch.
+**Disposition (amended Round 1 review):** rollback = three store operations
+in **one write transaction**:
+
+1. binary-search the first drained position with `maturity > fork_height`
+   (F4 partition) and truncate there, **migrating the truncated rows from
+   drained into the pending table** (not deleting them);
+2. delete pending rows where `creation_height > fork_height` — this catches
+   class (a) uniformly, whether the orphaned-block output was still pending
+   or had drained and was migrated in step 1;
+3. reset `sync_tip_height` to `fork_height`.
+
+Class (b) falls out by composition: migrated in step 1, survives the step-2
+filter, re-drains in correct `(maturity, gindex)` order on re-sync. No
+watermark table, no class-specific lock arithmetic. Then re-sync forward via
+normal `ingest_block` as the refresh layer delivers the new branch.
 `from_blocks` full rebuild remains the KAT/test path; the production path
 never requires raw blocks below the fork.
 
-**Invariant to assert:** post-rollback (root at every height ≤ fork) ==
-(fresh-build root) — the CT-2 `reorg_deep` oracle pins this.
+**Impl note (single-txn requirement):** the landed
+`truncate_from_tree_position` is a self-contained write transaction that
+resets the sync tip to 0 (`redb_backend.rs:357-438`). The rollback is
+therefore one new store-level operation (e.g. `rollback_to_fork`), not a
+composition of three public calls — a CT-3a schema gate (§4).
+
+**Invariants to assert:** post-rollback (root at every height ≤ fork) ==
+(fresh-build root), **and** post-rollback pending set == fresh-build pending
+set. The CT-2 `reorg_deep` oracle pins both: it replays past a re-drain
+boundary, so the resume KAT's byte-identical-drain-order check implies the
+pending-set equality.
 
 **`TruncatedIntoPrunedRange` interaction (S7):** pre-prune wallets cannot hit
 it; once prune ships, a reorg deeper than a pruned frontier forces the R1-Q1
@@ -214,13 +307,41 @@ This bounds CT-3 to lifecycle work without restructuring `assemble`. The
 mainnet-scale store-backed assembly question rides the prune-policy item in
 `FOLLOWUPS.md` (F5 routing).
 
+### 3.7 Round 1 review log (2026-06-11)
+
+Full reviewer pass against this artifact plus parent §3.3/§3.4, §6, §7, §8
+and `CT2_ROUND1_CLOSEOUT.md`. Outcomes:
+
+- **Endorsed as written:** R1-Q1 (the §6 reversion clause fired on its named
+  criterion — the mechanism working as designed), R1-Q4 (named B9 reopening
+  trigger; `owned_identities`-first bound is real), R1-Q5 (B3-consistent;
+  privacy property structural in the trait signature), R1-Q6 (hard
+  disposition, FOLLOWUPS-routed with V3.0 target).
+- **Amended:** R1-Q2 and R1-Q3 — the Round-1 blocker. The original rollback
+  lost class-(b) leaves (created on the shared prefix, drained on the
+  orphaned suffix), and the original row shape could not compute the
+  orphaned-creation watermark (maturity not invertible to creation height).
+  Fixed with one schema field (`creation_height`) and the rewritten
+  three-step single-txn rollback (F4 sharpened; R1-Q2/R1-Q3 above).
+- **New findings routed:** F6 (no-secrets test over pending table), F7
+  (synthetic equal-maturity partition KAT), F8 (restore-from-seed scope
+  totality), F9 (freeze-aware truncate — source-confirmed, residual recheck
+  in CT-3c), plus the R1-Q1 deferral artifact (FOLLOWUPS row for the
+  deferred endpoint + KAT).
+- **Checked and orthogonal:** `F1_TA3_TA7_LIFETIME_WINDOW.md`
+  (archival-pseudonym workstream) — nothing there bears on these
+  dispositions.
+
+Round 1 dispositions are now closed pending implementation; reopening per
+the closure rule is on substrate findings, not sequential numbering.
+
 ---
 
 ## 4. PR decomposition (provisional; `06-branching.mdc` sized)
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-3a** | Store schema: pending-candidates table + height→position lookup; resume read path (`LeafStore` only, no client change); KATs | `store/redb_backend.rs`, `tests/store_kat.rs` |
+| **CT-3a** | Store schema: pending-candidates table (with `creation_height`) + `creation_height` in `leaf_meta`; resume read path (`LeafStore` only, no client change). **Schema gates (binding):** CT-3c's full read/write patterns land as 3a acceptance criteria — maturity partition search, drained→pending row migration, `creation_height` filter, single-txn `rollback_to_fork` op — so 3c never reaches back into a landed 3a. KATs include the F7 synthetic equal-maturity partition-boundary case | `store/redb_backend.rs`, `tests/store_kat.rs` |
 | **CT-3b** | Client lifecycle: `open(path)` constructor, resume (rebuild in-memory state from store), delta `ingest_block`; restart round-trip KAT | `client.rs`, `tests/recon_kat.rs` |
 | **CT-3c** | Reorg rollback: fork-point search + transactional rollback + re-sync; `reorg_deep` persistent-path KAT; frozen-`R_k` resume recheck | `client.rs`, `store/`, `tests/` |
 | **CT-3d** | Doc closeout: parent §8/§9 status updates, `CT3_ROUND1_CLOSEOUT.md` (or pins), CHANGELOG, FOLLOWUPS routing (F5) | docs |
@@ -239,7 +360,9 @@ skip them: store-corruption → forged root (S9 recheck must cover resume),
 malicious reorg signal → rollback DoS (fork-height validation), pending-table
 poisoning across restart (drain-order divergence ↔ the CT-2 KAT is the net),
 refetch-source lying (parent §7.3 — only if R1-Q5's trait lands with a
-consumer).
+consumer), stale freeze records after a boundary-crossing truncate (F9 —
+source-confirmed freeze-aware at `redb_backend.rs:390-407`; CT-3c asserts
+the resume `R_k` recheck runs against post-rollback records).
 
 ---
 

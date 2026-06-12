@@ -17,7 +17,16 @@
   `truncate_from_tree_position`, source-seam trait deferred with its first
   consumer. Parent `CURVE_TREE_CLIENT.md` §8 #6 / §9 CT-3 row updated;
   store-backed assembly routed to `FOLLOWUPS.md` (V3.0, rides prune
-  policy).
+  policy). **Round 1 review (same day):** R1-Q1/Q4/Q5/Q6 endorsed;
+  R1-Q2/Q3 amended — the original rollback lost still-valid leaves created
+  on the shared prefix but drained on the orphaned suffix, and maturity is
+  not invertible to creation height, so pending rows and `leaf_meta` gain
+  `creation_height` and the rollback becomes truncate-with-migration →
+  creation-height filter → tip reset in one transaction. New findings F6–F9
+  routed (no-secrets test over the pending table, synthetic equal-maturity
+  partition KAT, restore-from-seed scope totality, freeze-aware truncate
+  source-confirmed); deferred `get_curve_tree_leaves` endpoint + KAT now a
+  tracked `FOLLOWUPS.md` row bound to prune policy.
 
 ### Changed
 

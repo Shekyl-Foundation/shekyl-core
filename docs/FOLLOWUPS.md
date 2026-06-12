@@ -60,6 +60,19 @@ sustainability is unaffected by the recalibration.
   construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
   R1-Q6.
 
+- **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
+  artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
+  post-prune segment refetch. CT-3 Round 1 confirmed block-derived forward
+  sync as the default (the §6 reversion criterion fired: CT-2 landed the
+  drain replication, KAT-verified), repositioning the bulk-leaf RPC to
+  non-forward catch-up + archival. The C++ endpoint and its §6
+  reconstruct-root KAT (`SHEKYLD_PREREQUISITES.md` shape) land with the
+  prune-policy PR, which makes refetch reachable. **Reopening trigger:**
+  either R1-Q1 reversion criterion (forward-sync latency budget breach;
+  pre-genesis refetch demand) pulls it earlier. See
+  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
+
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   single-image amendment).** The per-binary Rust-image selection in
   `cmake/BuildRust.cmake` structurally gives every binary one Rust
