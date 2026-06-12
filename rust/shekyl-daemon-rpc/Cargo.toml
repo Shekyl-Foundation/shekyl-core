@@ -6,9 +6,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+# rlib only: this crate is never linked as its own staticlib. It reaches
+# the daemon inside the single Rust image built by
+# `rust/shekyl-daemon-image` (one archive, one `tracing-core`
+# dispatcher; see V3_WALLET_DECISION_LOG.md single-image contract and
+# the nm gate in src/daemon/CMakeLists.txt).
 [lib]
 name = "shekyl_daemon_rpc"
-crate-type = ["staticlib", "lib"]
+crate-type = ["lib"]
 
 [dependencies]
 serde = { workspace = true }

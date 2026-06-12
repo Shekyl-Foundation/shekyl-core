@@ -1,9 +1,14 @@
 # Phase 1 orchestrator — gap-audit status
 
-Audited at `dev` tip, 2026-06-10. This is the done/open matrix for the
-Phase 1 deliverables in `WALLET_REWRITE_PLAN.md`, read with the binding
-naming decision applied (`shekyl-engine-core::Engine<S>`, not
+Audited at `dev` tip, 2026-06-10; matrix updated through PR 5
+(`feat/phase1-closeout`) the same day. This is the done/open matrix for
+the Phase 1 deliverables in `WALLET_REWRITE_PLAN.md`, read with the
+binding naming decision applied (`shekyl-engine-core::Engine<S>`, not
 `shekyl-wallet-core::Wallet` — `V3_WALLET_DECISION_LOG.md` 2026-04-27).
+
+**Phase 1 status: CLOSED.** Every deliverable is done or explicitly
+blocked with a reversion clause (View/HW lifecycle bodies, FOLLOWUPS
+V3.0 queue).
 
 ## Phase 0 half-day gate — passed
 
@@ -27,7 +32,7 @@ documented blocker + reversion clause).
 |---|---|---|
 | `Engine<S>` composition documented; no god-object drift | done | `rust/shekyl-engine-core/src/engine/mod.rs` module docs: field table, cross-cutting locks honored, seven-generic production shape `Engine<S, D, L, E, R, P, F>` |
 | `open_view_only` / `open_hardware_offload` real bodies | blocked | Stubs return `OpenError::CapabilityNotYetImplemented` (`engine/lifecycle.rs:647`, `:666`). Blocker: `shekyl-crypto-pq` has no view-only / hardware-offload account constructors (`rust/shekyl-crypto-pq/src/account.rs` exposes full-key derivation only). Tracked in `FOLLOWUPS.md` (V3.0 wallet-stack queue). Reopens when the constructors land; re-evaluation shape: lifecycle PR implementing real bodies + capability-dispatch tests |
-| `change_password` integration tests driving `WalletFile::rotate_password` on disk (FULL) | open | `change_password_rewraps_envelope_then_reopen_uses_new_password` (`engine/lifecycle.rs:1273`) verifies rotation via `Engine::open_full` only. The `FOLLOWUPS.md` V3.0 item asks for verification against an independently constructed `WalletFile::open` call. Implementable now — PR 3 below |
+| `change_password` integration tests driving `WalletFile::rotate_password` on disk (FULL) | done | `change_password_round_trips_via_independent_wallet_file_open` and `change_password_with_new_kdf_rewrites_envelope_header` (`engine/lifecycle.rs`, after `:1310`) verify the rotated envelope against an independently constructed `WalletFile::open` and the rewritten KDF header via `inspect_keys_file`. FULL only; ViewOnly / HW extension rides the capability-dispatch commit per the reshaped `FOLLOWUPS.md` entry |
 
 ### Refresh & scan
 
@@ -48,25 +53,31 @@ documented blocker + reversion clause).
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| `Engine::balance()` or documented pattern | partial | No `Engine::balance()`. Pattern exists: `engine.ledger()` → `LedgerReadGuard` derefs to `&WalletLedger`; balance computed via `shekyl-scanner`'s `LedgerBlockExt::balance(current_height)` (`rust/shekyl-scanner/src/ledger_ext.rs:185`). Bench helpers (`engine_balance_for_bench`) demonstrate the path. Thin orchestrator wrappers are Phase 2 ops per plan §Phase 2 (History/Balance); Phase 1 disposition: document the pattern (this doc + `engine/mod.rs`), defer wrappers to Phase 2 |
-| `Engine::transfers(filter)` or equivalent | partial | Slice access exists: `engine.ledger().ledger.transfers()` (`rust/shekyl-engine-state/src/ledger_block.rs:247`). Filtered query API is Phase 2 (plan §History) |
-| `Engine::primary_address()` via key handle | open | `KeyEngineHandle` caches `AccountPublicAddress` and serves it sync via `KeyEngine::account_public_address` (`engine/key_actor.rs`), but the trait is `pub(crate)` and `Engine` exposes no public accessor — binaries currently have no way to read the wallet address. Thin `Engine::primary_address()` accessor is in Phase 1 scope (Phase 2c expands). PR 4 below |
+| `Engine::balance()` or documented pattern | done (pattern documented) | No `Engine::balance()` by design: a thin wrapper would freeze a signature before the Phase 2 filtered-query design settles. The pattern (`engine.ledger()` guard → `guard.ledger.balance(guard.ledger.height())` via `shekyl_scanner::LedgerBlockExt`) is documented in `engine/mod.rs` §"Query surface (Phase 1 disposition)". Reopen at Phase 2 ops (plan §History/Balance) |
+| `Engine::transfers(filter)` or equivalent | done (pattern documented) | Slice access `engine.ledger().ledger.transfers()` (`rust/shekyl-engine-state/src/ledger_block.rs:247`) documented in the same `engine/mod.rs` section. Filtered query API is Phase 2 (plan §History) |
+| `Engine::primary_address()` via key handle | done | `Engine::primary_address()` (`engine/mod.rs`, accessor block) assembles `ShekylAddress` from the `KeyActor`'s cached public projection (`KeyEngine::account_public_address`, sync, no actor round-trip) plus the cached network; `ShekylAddress` re-exported from `shekyl-engine-core`. Round-trip test `primary_address_renders_and_round_trips` (`engine/lifecycle.rs`). Phase 2c expands the receive surface |
 
 ### Logging (absorbed from V3.2 FOLLOWUPS)
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| `shekyl_log_install_tracing_forwarder` in `rust/shekyl-logging/src/ffi.rs` | open | Decision logged (`V3_WALLET_DECISION_LOG.md` 2026-04-25, `:1795`) with exact signature; not implemented. Error-code table in `ffi.rs` ends at `-11`; `SHEKYL_LOG_ERR_ALREADY_INSTALLED` to be allocated `-12` |
-| shekyld calls it after `shekyl_log_init_*` / `mlog_configure` | open | Call site: `src/daemon/main.cpp` after `mlog_configure` (`:336`); declaration added to `src/shekyl/shekyl_log.h` |
-| Idempotent `ALREADY_INSTALLED` / `NOT_INITIALIZED` codes | open | `SHEKYL_LOG_ERR_NOT_INITIALIZED = -9` exists; install-state machine to be added |
+| `shekyl_log_install_tracing_forwarder` in `rust/shekyl-logging/src/ffi.rs` | done | Implemented per decision log 2026-04-25 + single-image mechanism amendment 2026-06-10; `SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12` allocated. State-machine integration test (`tests/tracing_forwarder.rs`) + C-harness arms (`tests/c_ffi.rs`) |
+| shekyld calls it after `shekyl_log_init_*` / `mlog_configure` | done | `src/daemon/main.cpp` immediately after `mlog_configure`; declaration in `src/shekyl/shekyl_log.h` |
+| Idempotent `ALREADY_INSTALLED` / `NOT_INITIALIZED` codes | done | One-shot pin; pre-init failure does not consume the pin (retry-after-init works) |
 
-Implementation note: `rust/shekyl-daemon-rpc/Cargo.toml` depends on
-`tracing` but **not** on `shekyl-logging` — its staticlib image carries a
-dispatcher with no subscriber, which is the "tracing silently dropped"
-bug the forwarder closes. Whether the final C++ link deduplicates
-`tracing-core` across `libshekyl_logging.a` / `libshekyl_daemon_rpc.a` /
-`libshekyl_ffi.a` is verified at the CMake build, not assumed; the
-forwarder PR must build `shekyld` as part of its test gate.
+Implementation note (resolved): the link audit found the pre-change
+`shekyld` carried **two** `tracing-core` `GLOBAL_DISPATCH` copies (one
+per Rust staticlib image), so the original cross-image "forwarder
+install" framing was unimplementable as specified — and the wallet-side
+binaries had the same split (`libshekyl_ffi.a` + standalone
+`libshekyl_logging.a`). Landed shape is the per-binary single-Rust-image
+contract: `shekyl-ffi` folds in `shekyl-logging` (the wallet-side
+image), the link-image crate `rust/shekyl-daemon-image` combines
+`shekyl-ffi` + `shekyl-daemon-rpc` (the daemon image, selected by the
+`SHEKYL_RUST_IMAGE_DAEMON` generator expression in
+`cmake/BuildRust.cmake`), and a post-link `nm` gate on the `daemon`
+target asserts exactly one dispatcher. See decision log 2026-06-10 and
+the 2026-06-11 mechanism amendment.
 
 ### Tests & docs
 
@@ -75,26 +86,32 @@ forwarder PR must build `shekyld` as part of its test gate.
 | Lifecycle round-trips, password rotation, network mismatch, capability dispatch | done | `engine/lifecycle.rs` test module (20 tests): rotation (`:1273`), network mismatch (`:1248` ff.), state-file recovery, capability stubs |
 | `RefreshHandle` cancel semantics | done | see Refresh & scan above |
 | Close with outstanding `PendingTx` → typed error | done | see Pending tx above |
-| `WALLET_REWRITE_PLAN.md` frontmatter todos + Phase 1 naming | open | Frontmatter `phase1_domain_model` still `pending` and still says `shekyl-wallet-core::Wallet`; body `:537` says Phase 2a orchestrator methods "remain pending Phase 1" — stale (landed as `Engine::refresh` / `build_pending_tx` / …). PR 5 below |
-| `CHANGELOG.md` entry for Phase 1 closeout | open | PR 5 below |
+| `WALLET_REWRITE_PLAN.md` frontmatter todos + Phase 1 naming | done | Frontmatter `phase0_closeout` and `phase1_domain_model` marked completed with `Engine` naming; global naming-supersession banner after the plan title; Phase 1 section closeout banner pointing here; Gap-section orchestrator bullet closed; Phase 2a "remain pending Phase 1" prose corrected (orchestrator methods landed) |
+| `CHANGELOG.md` entry for Phase 1 closeout | done | "Unreleased / Added — engine: Phase 1 orchestrator closeout" entry |
 
 ## Close-out sequence (per 06-branching.mdc sizing)
 
 1. **PR 1 — this document.** Gap audit, doc-only.
-2. **PR 2 — tracing forwarder.** `shekyl-logging::ffi`
-   `shekyl_log_install_tracing_forwarder` (+ `-12` code, unit tests),
-   `shekyl_log.h` declaration, `src/daemon/main.cpp` call site,
-   `shekyl-daemon-rpc` → `shekyl-logging` dependency if the link audit
-   requires it. Closes the absorbed V3.2 FOLLOWUPS item.
-3. **PR 3 — `change_password` integration test.** Drive
-   `WalletFile::rotate_password` on disk for FULL; verify against an
-   independent `WalletFile::open`. Closes the FOLLOWUPS V3.0 item.
-4. **PR 4 — public query accessors.** Thin `Engine::primary_address()`;
-   document the `ledger()`-based balance/transfers pattern in
-   `engine/mod.rs`. No Phase 2 wrapper scope.
-5. **PR 5 — doc closeout.** `WALLET_REWRITE_PLAN.md` frontmatter +
-   naming reconciliation, FOLLOWUPS absorption marks, `CHANGELOG.md`
-   Phase 1 entry.
+2. **PR 2 — tracing forwarder.** Landed (`feat/phase1-closeout`):
+   `shekyl-logging::ffi` `shekyl_log_install_tracing_forwarder` (+ `-12`
+   code, tests), per-binary single-Rust-image link topology
+   (`shekyl-ffi` folds in `shekyl-logging`; `shekyl-daemon-image` is the
+   daemon's image) + `nm` gate, `shekyl_log.h` declaration,
+   `src/daemon/main.cpp` call site. Closes the absorbed V3.2 FOLLOWUPS
+   item per decision log 2026-06-10 / 2026-06-11.
+3. **PR 3 — `change_password` integration test.** Landed
+   (`feat/phase1-closeout`): drives `WalletFile::rotate_password` on
+   disk for FULL; verifies against an independent `WalletFile::open`
+   and the rewritten KDF header. Closes the FOLLOWUPS V3.0 item for
+   FULL capability.
+4. **PR 4 — public query accessors.** Landed (`feat/phase1-closeout`):
+   thin `Engine::primary_address()`; `ledger()`-based balance/transfers
+   pattern documented in `engine/mod.rs`. No Phase 2 wrapper scope.
+5. **PR 5 — doc closeout.** Landed (`feat/phase1-closeout`):
+   `WALLET_REWRITE_PLAN.md` frontmatter + naming reconciliation,
+   FOLLOWUPS absorption marks, `CHANGELOG.md` Phase 1 entry. **Phase 1
+   is closed**; the only carried residue is the View/HW lifecycle
+   blocker below.
 
 PRs 2 and 3 are independent and must not be bundled. View/HW lifecycle
 bodies stay blocked on `shekyl-crypto-pq` constructors and are **not**

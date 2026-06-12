@@ -70,7 +70,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::raw::c_char;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 
 use tracing::Level;
@@ -132,6 +132,8 @@ pub const SHEKYL_LOG_ERR_NOT_INITIALIZED: i32 = -9;
 pub const SHEKYL_LOG_ERR_INVALID_UTF8: i32 = -10;
 /// Installing the global subscriber failed.
 pub const SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL: i32 = -11;
+/// The tracing forwarder was already installed in this process.
+pub const SHEKYL_LOG_ERR_ALREADY_INSTALLED: i32 = -12;
 
 // -----------------------------------------------------------------
 // Global state
@@ -150,6 +152,13 @@ struct FfiState {
 }
 
 static FFI_STATE: OnceLock<Mutex<FfiState>> = OnceLock::new();
+
+/// One-shot pin for `shekyl_log_install_tracing_forwarder`. Flipped
+/// exactly once per process; later calls observe it and return
+/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`] so a hot-reload path
+/// (`SIGHUP` re-running `mlog_configure`) can distinguish "first
+/// install" from "already wired" without treating either as failure.
+static FORWARDER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -348,6 +357,60 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
             let _ = state.guard.take();
         }
     }
+}
+
+// -----------------------------------------------------------------
+// Tracing forwarder (single-image verification contract)
+// -----------------------------------------------------------------
+
+/// Pin the tracing-forwarder call ordering (init first) and install
+/// idempotency as a process-global one-shot.
+///
+/// # What this actually does
+///
+/// Decision log 2026-04-25 named this export a "forwarder install".
+/// The 2026-06-10/2026-06-11 amendments (single-image contract)
+/// supersede the mechanism: there is nothing to forward *between*,
+/// because every binary links exactly one Rust image — this crate is
+/// compiled into `libshekyl_ffi.a` (wallet side) or
+/// `libshekyl_daemon_image.a` (daemon), so the one shared
+/// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
+/// subscriber and every `tracing::*` macro in the image's crate graph.
+///
+/// This function is the runtime half of that contract: it pins the
+/// call-ordering invariant (init first) and gives the C++ caller a
+/// typed success/already/not-initialized signal. The link-time half —
+/// "exactly one `tracing-core` dispatcher in the binary" — cannot be
+/// observed from inside any single Rust image and is enforced by the
+/// post-link `nm` gate on the `daemon` target (one
+/// `GLOBAL_DISPATCH` symbol; see `src/daemon/CMakeLists.txt`).
+///
+/// Idempotent: a second call after a successful first returns
+/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`]. Calling before a successful
+/// `shekyl_log_init_*` returns [`SHEKYL_LOG_ERR_NOT_INITIALIZED`]
+/// and does *not* consume the one-shot pin — the caller may retry
+/// after init.
+///
+/// # Safety
+///
+/// No pointer parameters, so no pointer-validity obligations.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
+    if !crate::INITIALIZED.load(Ordering::SeqCst) {
+        set_last_error(
+            "shekyl_log_install_tracing_forwarder: no successful \
+             shekyl_log_init_* call preceded this install",
+        );
+        return SHEKYL_LOG_ERR_NOT_INITIALIZED;
+    }
+    if FORWARDER_INSTALLED.swap(true, Ordering::SeqCst) {
+        set_last_error(
+            "shekyl_log_install_tracing_forwarder: forwarder already \
+             installed in this process",
+        );
+        return SHEKYL_LOG_ERR_ALREADY_INSTALLED;
+    }
+    SHEKYL_LOG_OK
 }
 
 // -----------------------------------------------------------------

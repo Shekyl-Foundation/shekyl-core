@@ -143,14 +143,39 @@
 //! single-flight `&mut self` borrow that enforces no concurrent
 //! refresh.
 //!
-//! # Constructors land next
+//! # Query surface (Phase 1 disposition)
 //!
-//! This commit defines the struct and its accessor surface only. The
-//! six lifecycle methods (`create`, `open_full`, `open_view_only`,
-//! `open_hardware_offload`, `change_password`, `close`) and the
-//! [`RefreshHandle`], `PendingTx`, and `ScanResult` types each land in
-//! their own follow-up commits on this same Phase 1 branch. Splitting
-//! along behavioral seams keeps each commit reviewable on its own.
+//! Phase 1 deliberately ships a *thin* public query surface; rich
+//! filtered queries (`transfers(filter)`, history pagination, balance
+//! breakdowns) are Phase 2 operations per
+//! `docs/design/WALLET_REWRITE_PLAN.md` §Phase 2 (History / Balance).
+//! Until those land, binaries query through three stable patterns:
+//!
+//! - **Address** — [`Engine::primary_address`] returns the wallet's
+//!   one reusable [`ShekylAddress`] (End-state 5; no subaddresses).
+//!   Render with `.encode()` / `.encode_classical_display()`.
+//! - **Balance** — borrow the ledger and project the scanner-derived
+//!   [`LedgerBlock`](shekyl_engine_state::LedgerBlock) through the
+//!   scanner's extension trait:
+//!
+//!   ```ignore
+//!   use shekyl_scanner::LedgerBlockExt;
+//!   let guard = engine.ledger(); // derefs to &WalletLedger
+//!   let balance = guard.ledger.balance(guard.ledger.height());
+//!   drop(guard);
+//!   ```
+//!
+//! - **Transfers** — the same borrow exposes the persisted transfer
+//!   slice directly: `engine.ledger().ledger.transfers()`.
+//!
+//! [`Engine::ledger`] returns a [`LedgerReadGuard`] (an RAII read
+//! guard that derefs to [`shekyl_engine_state::WalletLedger`]); hold
+//! it for the minimum span and never across an `.await` — writers
+//! (refresh merge, pending-tx mutators) block while any reader is
+//! live. The guard-based pattern is the documented Phase 1 answer to
+//! "where is `Engine::balance()`?": a thin wrapper would freeze a
+//! signature before the Phase 2 filtered-query design settles, so the
+//! pattern is documented instead (reopen at Phase 2 ops).
 
 pub mod capability;
 pub(crate) mod chain_economics_source;
@@ -223,6 +248,11 @@ pub use local_ledger::LocalLedger;
 pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
 pub use network::Network;
+// Re-exported so binary-layer consumers of [`Engine::primary_address`]
+// can name the return type without a direct `shekyl-address` dependency,
+// mirroring the `Network` re-export above.
+pub use shekyl_address::ShekylAddress;
+
 pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
 };
@@ -698,6 +728,44 @@ impl<
     /// construction; stable for the life of the open wallet.
     pub fn capability(&self) -> Capability {
         self.capability
+    }
+
+    /// The wallet's primary receive address (End-state 5: one reusable
+    /// primary address per account; no subaddresses at V3.0 — see
+    /// `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7).
+    ///
+    /// Assembled from the `KeyActor`'s cached public projection
+    /// (`KeyEngine::account_public_address` — sync, no actor
+    /// round-trip, no secret material) and the engine's cached
+    /// [`Network`]. Infallible and O(1) apart from the byte copies;
+    /// render with [`ShekylAddress::encode`] (full three-segment form)
+    /// or [`ShekylAddress::encode_classical_display`] (short display
+    /// form).
+    ///
+    /// Phase 2c expands the receive surface with payment requests
+    /// (`create_payment_request` / `list_payment_requests`); this
+    /// accessor is the Phase 1 substrate that binaries need to show
+    /// the wallet address at all.
+    pub fn primary_address(&self) -> ShekylAddress {
+        use crate::engine::traits::key::KeyEngine;
+
+        let addr = self.key.account_public_address();
+
+        // `classical_address_bytes` is `version || spend_pk || view_pk`
+        // (65 bytes) and `pqc_public_key` is `x25519_pk || ml_kem_ek`
+        // (32 + 1184 bytes), both byte-identical to the `AllKeysBlob`
+        // fields they were projected from at `KeyEngineHandle::spawn`
+        // (see `shekyl_crypto_pq::account::AllKeysBlob`). The encoded
+        // address format carries the 1184-byte ML-KEM encapsulation
+        // key only (`shekyl_address::PQC_PAYLOAD_LEN`); the leading
+        // 32-byte x25519 public key is not part of the address.
+        let mut spend_key = [0u8; 32];
+        spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
+        let mut view_key = [0u8; 32];
+        view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
+        let ml_kem_encap_key = addr.pqc_public_key[32..].to_vec();
+
+        ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
     }
 
     /// Borrow the [`PersistenceEngine`] implementor.
