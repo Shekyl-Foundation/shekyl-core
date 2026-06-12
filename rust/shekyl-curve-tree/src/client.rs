@@ -50,6 +50,7 @@
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
@@ -135,6 +136,22 @@ pub enum ClientError {
         /// Ingested chain tip (`None` when no block has been ingested).
         ingested_tip: Option<u64>,
     },
+    /// [`CurveTreeClient::open`] found a store whose drained tables have
+    /// been pruned (`prune_frozen` dropped non-owned leaf bytes), so the
+    /// in-memory entry vec cannot be rebuilt element-wise and every root
+    /// query would silently undercount. Pruned-store resume is the F5
+    /// store-backed-assembly work (rides the prune-policy item in
+    /// `CT3_SYNC.md` §5); until that lands the V3.0 client never prunes,
+    /// so this is unreachable through production writes — it fires only
+    /// on a store produced by something other than this client. Reopen
+    /// (replace this error with a store-backed resume path) when F5
+    /// lands; until then loud refusal beats a wrong root.
+    ResumeFromPrunedStore {
+        /// Drained positions the store has assigned (`leaf_count`).
+        stored: u64,
+        /// Drained rows actually readable (post-prune survivors).
+        readable: u64,
+    },
 }
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
@@ -190,6 +207,111 @@ impl CurveTreeClient {
     #[must_use]
     pub fn new() -> Self {
         Self::try_new().expect("ephemeral leaf store")
+    }
+
+    /// Open (or create) a client backed by the persistent store at `path`
+    /// and resume from its contents — **no genesis replay** (`CT3_SYNC.md`
+    /// §3.1 / R1-Q2). The store's schema-version guard fires here
+    /// ([`StoreError::SchemaVersionMismatch`] for CT-1/CT-2 and
+    /// CT-3a-window stores; pre-genesis disposition is delete and
+    /// re-sync). An empty store on disk is the restore-from-seed trivial
+    /// case (F8): resume yields an empty client ready for genesis ingest.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ClientError> {
+        let store = LeafStore::open(path).map_err(ClientError::from)?;
+        Self::resume(store)
+    }
+
+    /// Rebuild the in-memory client state from a store's persisted tables.
+    ///
+    /// **Resume order invariant (B4):** the rebuilt [`Self::entries`] vec
+    /// is element-wise identical to a continuous run's `entries` at the
+    /// same tip. A continuous run appends in creation order, which is
+    /// gindex-ascending (`collect_block_leaves` assigns gindex in block
+    /// order; blocks are ingested in height order; gindex is monotone
+    /// across blocks), so the union of the drained rows (tree-position
+    /// order) and pending rows (gindex order) is merged into one
+    /// gindex-sorted vec. `entries_by_maturity` is then built by scanning
+    /// that vec in order, so each bucket's index list is gindex-ascending —
+    /// matching fresh-build drain order within a maturity bucket.
+    ///
+    /// `next_gindex = max(persisted gindex) + 1` (0 when empty) is
+    /// absolute-exact on any chain whose root the wallet can verify:
+    /// consensus admits only tagged-key and staked-key outputs (both
+    /// leaf-eligible) and every output carries a commitment slot, so
+    /// gindex is dense over leaves. For the defensively-mirrored
+    /// leaf-ineligible class (unreachable on a consensus-valid block) the
+    /// guarantee degrades to order-isomorphism with the consensus leaf
+    /// index, which is the only property the `(maturity, gindex)` drain
+    /// tiebreak consumes.
+    ///
+    /// `drained_through_counts` is left empty: a resumed client rides the
+    /// maturity-index-scan fallback ([`Self::drained_count_from_index`])
+    /// for cutoffs at or below the resume tip — a small standing perf
+    /// divergence from a continuous client, fine under the R1-Q6 V3.0
+    /// memory model and exercised directly by the restart round-trip KAT.
+    ///
+    /// The resume tip is [`LeafStore::sync_tip_height`]; a store with no
+    /// rows and tip 0 is indistinguishable from never-synced (the meta
+    /// cell defaults to 0) and resumes as fresh (`ingested_tip_height =
+    /// None`). On a real chain block 0's coinbase always contributes
+    /// pending rows, so the ambiguity binds only on a synthetic empty
+    /// block 0, where re-ingesting it is idempotent.
+    ///
+    /// Fails with [`ClientError::ResumeFromPrunedStore`] when drained rows
+    /// have been pruned (`leaf_count` exceeds the readable rows): the
+    /// in-memory vec would undercount and every root query would be
+    /// silently wrong. Unreachable through this client's own writes (the
+    /// V3.0 client never prunes); store-backed resume over pruned stores
+    /// is the F5 work.
+    fn resume(store: LeafStore) -> Result<Self, ClientError> {
+        let stored = store.leaf_count().map_err(ClientError::from)?;
+        let drained = store.read_drained_entries().map_err(ClientError::from)?;
+        let readable = u64::try_from(drained.len()).expect("drained row count fits u64");
+        if readable != stored {
+            return Err(ClientError::ResumeFromPrunedStore { stored, readable });
+        }
+        let pending = store.read_pending_candidates().map_err(ClientError::from)?;
+        let tip = store.sync_tip_height().map_err(ClientError::from)?;
+
+        let mut entries: Vec<LeafEntry> = drained;
+        entries.extend(pending);
+        entries.sort_by_key(|entry| entry.gindex);
+        for pair in entries.windows(2) {
+            // A gindex lives in exactly one of {drained, pending}; a
+            // duplicate across the union is store corruption, not a
+            // mergeable state.
+            if pair[1].gindex <= pair[0].gindex {
+                return Err(StoreError::CorruptMeta(
+                    "duplicate gindex across drained and pending tables",
+                )
+                .into());
+            }
+        }
+
+        let mut entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>> = BTreeMap::new();
+        for (i, entry) in entries.iter().enumerate() {
+            entries_by_maturity
+                .entry(entry.maturity)
+                .or_default()
+                .push(i);
+        }
+        let next_gindex = entries.last().map_or(0, |entry| {
+            entry.gindex.0.checked_add(1).expect("gindex fits u64")
+        });
+        let ingested_tip_height = if entries.is_empty() && tip == BlockHeight(0) {
+            None
+        } else {
+            Some(tip.0)
+        };
+
+        Ok(Self {
+            store,
+            entries,
+            next_gindex,
+            drained_through_counts: Vec::new(),
+            entries_by_maturity,
+            ingested_tip_height,
+        })
     }
 
     /// Build a client by replaying `blocks` in order from genesis. This is
@@ -972,6 +1094,146 @@ mod tests {
                 assert_eq!(got, client.root_at(61).unwrap());
             }
             other => panic!("expected RootMismatch, got {other:?}"),
+        }
+    }
+
+    /// Unique on-disk path for file-backed open tests (stdlib only,
+    /// mirroring the store test helper). The caller removes the file.
+    fn temp_client_path(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "shekyl-curve-tree-client-{tag}-{}-{n}.redb",
+            std::process::id()
+        ))
+    }
+
+    /// Hand-built leaf entry with canonical leaf bytes (each 32-byte limb
+    /// a small Selene scalar) distinguishable per gindex.
+    fn store_entry(gindex: u64, maturity: u64, creation: u64) -> LeafEntry {
+        let mut leaf = [0u8; 128];
+        // Low-order little-endian bytes of the first limb: a small,
+        // canonical Selene scalar unique per gindex.
+        leaf[0..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+        LeafEntry {
+            gindex: Gindex(gindex),
+            maturity: BlockHeight(maturity),
+            creation_height: BlockHeight(creation),
+            leaf,
+            identity: OutputIdentity {
+                output_key: [1u8; 32],
+                commitment: Some([2u8; 32]),
+                h_pqc: [3u8; 32],
+                target: TargetKind::TaggedKey,
+            },
+        }
+    }
+
+    #[test]
+    fn open_on_empty_store_resumes_as_fresh_client() {
+        // F8 restore-from-seed trivial case: no store on disk -> empty
+        // client ready for genesis ingest, indistinguishable from `new()`.
+        let path = temp_client_path("open-empty");
+        let mut client = CurveTreeClient::open(&path).unwrap();
+        assert_eq!(client.ingested_tip_height, None);
+        assert!(client.entries.is_empty());
+        assert_eq!(client.next_gindex, 0);
+        assert!(matches!(
+            client.root_at(0),
+            Err(ClientError::ReferenceBeyondIngestedTip {
+                reference_height: 0,
+                ingested_tip: None,
+            })
+        ));
+        ingest_coinbase_blocks(&mut client, 0, 0);
+        assert_eq!(client.root_at(0).unwrap(), selene_hash_init());
+        drop(client);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn open_resumes_gindex_sorted_union_of_drained_and_pending() {
+        // Resume order invariant (B4): the rebuilt `entries` vec is the
+        // drained ∪ pending union sorted by gindex — the interleave is the
+        // real shape (a long-lock output at a low gindex stays pending
+        // while a later coinbase drains past it).
+        let path = temp_client_path("open-roundtrip");
+        let drained = [store_entry(0, 60, 0), store_entry(2, 61, 1)];
+        let pending = [store_entry(1, 200, 0), store_entry(3, 150_000, 1)];
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_block_deltas(&drained, &pending, &[], BlockHeight(70))
+                .unwrap();
+        }
+
+        let client = CurveTreeClient::open(&path).unwrap();
+        assert_eq!(
+            client.entries,
+            vec![drained[0], pending[0], drained[1], pending[1]],
+            "entries must merge gindex-ascending, not table-grouped"
+        );
+        assert_eq!(client.next_gindex, 4);
+        assert_eq!(client.ingested_tip_height, Some(70));
+        assert!(client.drained_through_counts.is_empty());
+
+        // Maturity index rebuilt from the sorted vec: cutoff 61 covers the
+        // two drained rows; the pending maturities sit above it.
+        assert_eq!(client.drained_leaf_count(62), 2);
+        assert_eq!(client.drained_leaf_count(0), 0);
+
+        // Root queries post-resume ride the maturity-index fallback and
+        // must agree with the store's drained prefix.
+        assert_eq!(
+            client.root_at(62).unwrap(),
+            client.store.root_at_count(2).unwrap()
+        );
+        drop(client);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn resume_rejects_duplicate_gindex_across_tables() {
+        // A gindex lives in exactly one of {drained, pending}; the store's
+        // collision check only guards the pending table against itself, so
+        // a cross-table duplicate is constructible through the real write
+        // path and must fail resume loudly.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[store_entry(0, 60, 0)],
+                &[store_entry(0, 200, 0)],
+                &[],
+                BlockHeight(70),
+            )
+            .unwrap();
+        let err = CurveTreeClient::resume(store).unwrap_err();
+        assert!(
+            matches!(err, ClientError::Store(StoreError::CorruptMeta(_))),
+            "expected CorruptMeta for cross-table gindex duplicate, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn resume_rejects_pruned_store() {
+        // Pruned-store resume is F5 work; until it lands the client must
+        // refuse rather than silently undercount. The pruned shape is
+        // produced through the real path: freeze segment 0, prune it.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = u64::try_from(crate::segment::leaves_per_segment()).expect("fits u64");
+        let mut entries: Vec<LeafEntry> = (0..e).map(|i| store_entry(i, 50, 10)).collect();
+        entries.push(store_entry(e, 5_000, 4_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store.prune_frozen(&[]).unwrap();
+
+        let err = CurveTreeClient::resume(store).unwrap_err();
+        match err {
+            ClientError::ResumeFromPrunedStore { stored, readable } => {
+                assert_eq!(stored, e + 1);
+                assert_eq!(readable, 1, "only the unfrozen tail row survives");
+            }
+            other => panic!("expected ResumeFromPrunedStore, got {other:?}"),
         }
     }
 }
