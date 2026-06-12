@@ -123,9 +123,19 @@ pub fn membership_only_rerandomize(
 
     let rerandomized = RerandomizedOutput::with_blinds(output, *r_o, *r_i, *r_r_i, *r_c);
 
-    // F-6 construction guard: never ship a linkable rerandomization. A component equal
-    // to its base means the corresponding blind was zero.
-    let input = rerandomized.input();
+    check_nondegenerate(&rerandomized.input(), &output)?;
+
+    Ok(rerandomized)
+}
+
+/// F-6 construction guard: never ship a linkable rerandomization.
+///
+/// A rerandomized component equal to its base means the corresponding blind was zero;
+/// an identity `R` means both of its blinds were zero.
+pub(crate) fn check_nondegenerate(
+    input: &Input,
+    output: &Output,
+) -> Result<(), MembershipOnlyError> {
     if (input.O_tilde() == output.O())
         || (input.I_tilde() == output.I())
         || (input.C_tilde() == output.C())
@@ -133,8 +143,7 @@ pub fn membership_only_rerandomize(
     {
         Err(MembershipOnlyError::DegenerateRerandomization)?;
     }
-
-    Ok(rerandomized)
+    Ok(())
 }
 
 /// The membership-only spend-authority proof for an input: the `R_O` leg of SAL alone.
