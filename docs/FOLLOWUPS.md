@@ -92,20 +92,24 @@ sustainability is unaffected by the recalibration.
   (gate-6 wargame round, before the firewall constants freeze).
 
 - **Foundation treasury diversification — floor capacity must not be
-  pro-cyclical (swan-2/W4, 2026-06-11).** The L17 fatal channel (permanent
-  price collapse × fiat opex) is bridged by the adaptive servo *plus the
-  foundation floor* — but a token-denominated treasury loses ~75 % of its fiat
-  purchasing power in the same event it must absorb, and L17/Finding 4 makes
-  the floor load-bearing for **data survival** (extinction read: the oldest
-  stratum needs a *complete* non-market copy, not a gap-reduction ratio —
-  gate-5 sizing export). The requirement: foundation operations policy holds
-  floor-operating reserves **fiat-diversified** (or otherwise
-  crisis-uncorrelated with the token price) at a level sized to carry the
-  floor through the L17 servo-400 impaired window (~114 epochs) at crisis-time
-  costs. This is an operations-document requirement with authority, not code;
-  it lands wherever gate-5 floor sizing is specified, citing
-  `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5 floor
-  sizing close).
+  pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13).** The L17
+  fatal channel (permanent price collapse × fiat opex) is bridged by the
+  adaptive servo *plus the foundation floor* — but a token-denominated
+  treasury loses ~75 % of its fiat purchasing power in the same event it must
+  absorb, and L17/Finding 4 makes the floor load-bearing for **data survival**
+  (extinction read: the **entire deep set** needs a *complete* non-market
+  copy, not a gap-reduction ratio — gate-5 sizing export, re-scoped by the
+  swan-3 W12 band read: trough extinction is mid-deep-modal, not
+  oldest-concentrated, so oldest-stratum-only completeness under-scopes; the
+  W13 floor-on closure arms verify deep-set completeness converts every
+  measured trough loss to zero, `shkExF = 0`). The requirement: foundation
+  operations policy holds floor-operating reserves **fiat-diversified** (or
+  otherwise crisis-uncorrelated with the token price) at a level sized to
+  carry the floor through the L17 servo-400 impaired window (~114 epochs) at
+  crisis-time costs. This is an operations-document requirement with
+  authority, not code; it lands wherever gate-5 floor sizing is specified,
+  citing `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5
+  floor sizing close).
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

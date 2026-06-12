@@ -175,6 +175,20 @@ highest-opportunity-cost archivers exit first — and the simulations show
 coverage degrades *gracefully* (oldest shards thin first, churn backfills, no
 death spiral) rather than cliff-collapsing.
 
+One honest caveat, and it matters. "Graceful" is a claim about *coverage* —
+the fraction of history adequately replicated by the market. The black-swan
+simulations (acute crash scenarios, not gradual declines) showed that a deep
+market crash can wipe out every market copy of some old shards during the
+trough *even when coverage fully recovers afterward* — and deep history is
+irreplaceable: if the last copy goes, recovery of the metric is not recovery
+of the data. Survival of irreplaceable history through a crash trough is
+therefore **not an automatic property of the market**; it is guaranteed by
+the foundation's complete archive (see `PUBLIC_NARRATIVE_FAQ.md`) — a
+designed requirement, sized and verified in the same simulations: with a
+complete non-market copy held continuously, every trough loss measured in
+the crash grid converts into a temporary availability gap instead of a
+permanent one.
+
 So "encourage participation" isn't a fixed APR promise — it's a servo. The
 protocol sets the purse (Loops 3+4); the market sets the population.
 

@@ -4,6 +4,64 @@
 
 ### Added
 
+- **sim: swan-3 black-swan iteration — band read, floor-on closure arms,
+  class-correlated exit (L17 W12–W15, 2026-06-11).** Second wargame response;
+  converts the swan-2 export's two inferences into measurements and pins the
+  domain-result provenance. **Per-band extinction read (W12):** `extB` bins
+  each shock extinction by age band at extinction time; the price rows are
+  **mid-deep-modal, not oldest-concentrated** (vshape 20/17 b4/b5; servo-400
+  5/64/30; permanent-gap 23/181/143) — trough extinction follows holder
+  economics at eviction, not shard age, so the swan-2 oldest-stratum
+  completeness scope under-scoped; **gate-5 export re-scoped to the entire
+  deep set**. **Floored read + closure arms (W13):** the swan worlds were
+  bare-lean (`floor_replicas = 0` — pinned in the ledger row), so 37/99 was
+  the unbacked read; new `shkExF` counts data-dead only when market holders
+  *and* `foundation_floor_aged` are simultaneously zero (also catches the
+  floor-withdrawal hand-off race). `swan3_vshape_floor` / `swan3_servo400_floor`
+  reproduce identical market damage with **`shkExF` = 0** — closure evidence
+  that deep-set completeness converts every measured trough loss into a
+  covered availability window (incl. the 114-epoch servo-400 window);
+  `swan3_vshape_floor_t9` shows the P3 tilt ≤ 0.9 doesn't leak (tilt
+  redistributes depth, not membership; any schedule zeroing a deep band's
+  floor share violates completeness — new reversion trigger). **Class-
+  correlated exit (W15):** the swan-2 domain rows ran with **no placement
+  diversity floor** (the L15 machinery is scoring-only) — benign results were
+  bucketing luck; new `shock_exit_top_deep` exits the top deep-holders
+  (honest worst case for the FTX class-correlation pattern): at 50 %,
+  stride 0 / domain-bucketed 1 / **class-correlated 28** extinctions; class
+  30 % costs 4 (outranks every independent 50 %). Reversion criterion (c)
+  re-keyed on class- or domain-concentrated exit ≥ ~0.3. **W14:** aftershock
+  4 banked as *within the independence-to-no-reseat envelope* [(1/2)⁶×120 ≈
+  1.9, (3/4)⁶×120 ≈ 21] — above the independence floor because 3 epochs of
+  rate-limited reseat leave the second stride no longer anti-correlated with
+  surviving holder sets. `docs/design/STAKER_ARCHIVAL_SIM.md` §L17 (table,
+  Findings 4–6, disposition, reversion clause, ledger row).
+
+- **docs: swan-3 dispositions W16–W18 (2026-06-11).** **W16**
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.2 gains the fourth joint
+  criterion **deterrence-credible**: crisis-tail `m` (W6) and slash
+  deterrence pull in opposite directions — at `m = 11/n = 13` a strategic
+  actor misses 10 of 13 baselines slash-free, and a crisis-sized `m` makes
+  the slash vestigial exactly when the fetch-on-demand temptation peaks
+  (composes with the W5 residue); `E[slash]` under the realistic degrade
+  play must exceed storage-opex savings **at crisis prices**, and if no `m`
+  satisfies all four criteria the decoupled liveness signal **becomes the
+  design**, not the contingency. **W17** the W5 telemetry trigger's
+  observables pinned in L17 Finding 6 + reversion trigger (e):
+  challenge-latency distribution shift (weak, continuous — fetch-on-demand
+  is indistinguishable at the challenge interface per 8c) and **correlated
+  load spikes on surviving true holders at challenge anchors** (confirmatory
+  — the source set's bandwidth is the side channel degraders cannot hide);
+  ledger row honest that detection is **open, not solved**; stressnet to
+  exercise the source-load observable under induced degradation. **W18**
+  public-facing prose aligned: `ECONOMY_EXPLAINED.md` "graceful degradation"
+  passage gains the coverage-vs-data caveat (survival of irreplaceable
+  history through troughs is a gate-5 *requirement*, verified by the W13
+  arms, not an emergent market property); `PUBLIC_NARRATIVE_FAQ.md`
+  "market archivers thin out" answer pins the condition (complete over all
+  deep history, held continuously, treasury crisis-uncorrelated per W4).
+  `FOLLOWUPS.md` treasury item re-scoped to deep-set completeness.
+
 - **sim: swan-2 black-swan iteration — extinction read, domain-correlated
   exit, aftershock, knee timing (L17 W1–W3, 2026-06-11).** Wargame response
   to the adversarial review of the L17 close; converts three assumed-away

@@ -107,11 +107,26 @@ that is **simultaneously**:
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
 | **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
+| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** |
 
-If the tail is heavy enough that no `m` satisfies both, resolution is **elsewhere** — e.g.
-faster dead-`P` detection decoupled from `m` (separate liveness signal), or accepting priced
-pollution on a metric that **is** slot-weighted. Name this gate in stressnet planning; do
-not treat Round-1 `m=11` as final without the CDF.
+**The W16 tension — crisis-tail `m` and slash deterrence pull in opposite directions.**
+The W6 fix raises `m` to ride out correlated honest outages; but every baseline a `P` may
+miss slash-free is a baseline a *strategic* degrader rides for free. At Round-1
+`m = 11 / n = 13` an actor can already miss **10 of every 13** baselines indefinitely
+without slash, with serve-credit gating carrying all the economic enforcement — and with
+bonds-only admission at 0.75/shard the deterrence stack is thin. Composed with the L17
+honest-holding residue (`STAKER_ARCHIVAL_SIM.md` §L17 Finding 6 / W5): the
+fetch-on-demand degrader's calculus is `E[slash] vs fiat-opex saved`, and it tips toward
+degrading **exactly when temptation peaks** (crisis economics — fiat opex > token
+rewards). A crisis-sized `m` that pushes `E[slash] → 0` under the realistic degrade play
+makes the slash vestigial in the one regime it must bite. The deterrence-credible row is
+therefore evaluated **at crisis prices**, not normal-times prices.
+
+If the tail is heavy enough that no `m` satisfies **all four**, the named escape — faster
+dead-`P` detection **decoupled from `m`** (a separate liveness signal) — **stops being a
+contingency and becomes the design**: the slash keyed to the liveness signal restores
+deterrence without re-coupling false-slash risk to the crisis tail. Name this gate in
+stressnet planning; do not treat Round-1 `m=11` as final without the CDF.
 
 **Gating input.** Outage-duration **CDF** (residual-life derived); steady-state `u_eff` alone
 does not pin tail shape.
@@ -227,3 +242,9 @@ tallies with minimal new state.
   added to the Round-2 gate (size `n − m` statically against correlated-failure
   run-lengths; adaptive emergency widening rejected per the §5 dodge result); stressnet
   campaign extended to induced-correlated-failure run-length capture.
+- **2026-06-11 (swan-3/W16):** §3.2 fourth joint criterion **deterrence-credible** —
+  crisis-tail `m` and slash deterrence pull in opposite directions (a crisis-sized `m`
+  makes the slash vestigial exactly when the fetch-on-demand temptation peaks);
+  `E[slash]` under the realistic degrade play must exceed storage-opex savings **at
+  crisis prices**. If no `m` satisfies all four, the decoupled liveness signal becomes
+  the design, not the contingency.

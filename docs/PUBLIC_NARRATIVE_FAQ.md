@@ -136,6 +136,16 @@ operators monitor market coverage (see disclosure doc). Fee-era economics may sh
 how fast the market rebounds; terminal subsidy targets **decentralization margin**,
 not durability survival.
 
+This is a load-bearing answer, not a comfort line. Crash-scenario simulations
+showed that a deep market trough can briefly empty **every market copy** of some
+old shards even when market coverage later recovers in full — so durability of
+irreplaceable history through a crash rests on the complete archive being
+**complete over all deep history and held continuously**, including through the
+same market event (which is why foundation treasury policy is required to be
+diversified rather than token-denominated — the backstop must not shrink in the
+crisis it exists to absorb). With that condition met, the same simulations
+measure zero permanent loss across every crash scenario in the grid.
+
 ### What should exchanges and institutions record?
 
 - Archival promise = **permanent retention + best-effort latency**, not CDN SLA.
