@@ -222,6 +222,14 @@ pub struct SimConfig {
     /// re-sample the *current* active set). Models the 2022 sequence
     /// (LUNA→3AC→FTX) landing inside the first shock's recovery window. `0` ⇒ off.
     pub aftershock_at: usize,
+    /// **Holder-class-correlated exit** (swan-3 / W15): at the shock epoch the
+    /// fraction of the active set holding the **most deep shards** exits — exit
+    /// maximally correlated with deep holder sets. The `a % n` domain bucketing is
+    /// uncorrelated with portfolio composition *by construction*; the FTX pattern
+    /// is custody membership correlated with holder class (the marginal deep bonds
+    /// cluster on cheap custodial operators). This is the honest worst case for
+    /// that pattern. `0.0` ⇒ off.
+    pub shock_exit_top_deep: f64,
 
     /// **Retrieval availability (L15).** When on, the sim scores not just coverage
     /// (`R ≥ R_target`) but realized *retrieval availability* `1 − (1−u)^d` per shard,
@@ -448,6 +456,29 @@ pub struct ScenarioResult {
     /// loss. The number that distinguishes *metric recovery* (`shkRec`) from *data
     /// recovery*. `0` outside the shock axis.
     pub shock_deep_extinct: f64,
+    /// **Per-age-band shock extinctions** (swan-3 / W12): the `shock_deep_extinct`
+    /// events binned by the shard's age band *at extinction time* (same `N_BANDS`
+    /// bands over normalized age as `bands`). Scopes the gate-5 floor-completeness
+    /// export to the band set that actually extinguishes — oldest-concentrated
+    /// extinction validates the P3 composition as written; spread across deep bands
+    /// means an oldest-only floor under-scopes (absence of the claim is a claim of
+    /// absence). Empty bands outside the deep range stay 0 by construction.
+    pub shock_extinct_bands: Vec<f64>,
+    /// **Extinction events net of the foundation floor** (swan-3 / W13), run-wide: a
+    /// deep-seated shard is counted data-dead only when its market holder set **and**
+    /// the floor (`foundation_floor_aged` at its age) are *simultaneously* zero — the
+    /// floor is the non-market source of last resort, so a market wipe-out with the
+    /// floor engaged is under-replication, not extinction. Conditional on **floor
+    /// completeness** over the band (the foundation actually holding a copy of every
+    /// shard the formula says it floors) — which is exactly the gate-5 requirement
+    /// the W13 arm sizes. Equals `deep_extinct_total` when `floor_replicas = 0`.
+    pub deep_extinct_floored_total: f64,
+    /// **Post-shock floored extinctions** (swan-3 / W13): the shock-attributable
+    /// subset of `deep_extinct_floored_total`. ≈0 on a floor-on arm of an
+    /// extinguishing scenario is the closure evidence that a complete re-engagement
+    /// floor converts the swan-1 data losses into covered under-replication. `0`
+    /// outside the shock axis.
+    pub shock_deep_extinct_floored: f64,
     /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
     /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
     /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
@@ -576,33 +607,98 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 /// `deep_seated[s]` records "had ≥1 serving holder while deep since recycle";
 /// `extinct[s]` is the sticky per-slot flag (one event per deep lifetime; both reset
 /// when the slot leaves the deep band, i.e. on recycle). Returns new events this scan.
-fn scan_extinctions(
-    world: &World,
-    serving_r: &[usize],
-    deep_threshold: f64,
-    deep_seated: &mut Vec<bool>,
-    extinct: &mut Vec<bool>,
-) -> usize {
-    // Bootstrap worlds grow the window; extend state for appended slots.
-    if deep_seated.len() < world.shards.len() {
-        deep_seated.resize(world.shards.len(), false);
-        extinct.resize(world.shards.len(), false);
-    }
-    let mut events = 0usize;
-    for s in 0..world.shards.len() {
-        if world.shards[s].age >= deep_threshold {
-            if serving_r[s] > 0 {
-                deep_seated[s] = true;
-            } else if deep_seated[s] && !extinct[s] {
-                extinct[s] = true;
-                events += 1;
-            }
-        } else {
-            deep_seated[s] = false;
-            extinct[s] = false;
+/// Extinction-scan state (swan-2 W1, extended swan-3 W12/W13): sticky per shard slot
+/// until recycle. `deep_seated[s]` = the slot has had ≥1 serving holder while deep since
+/// its last recycle; `extinct[s]` = the slot's *market* extinction has been counted;
+/// `extinct_floored[s]` = counted with the foundation floor as a surviving source.
+struct ExtinctionScan {
+    deep_seated: Vec<bool>,
+    extinct: Vec<bool>,
+    extinct_floored: Vec<bool>,
+}
+
+/// One scan's newly-counted events. `bands` bins the *market* events by the shard's age
+/// band at extinction time (W12 — scopes the floor-completeness export to the band set
+/// that actually extinguishes).
+struct ExtinctionEvents {
+    market: usize,
+    floored: usize,
+    bands: [usize; N_BANDS],
+}
+
+impl ExtinctionScan {
+    fn new(n: usize) -> Self {
+        ExtinctionScan {
+            deep_seated: vec![false; n],
+            extinct: vec![false; n],
+            extinct_floored: vec![false; n],
         }
     }
-    events
+
+    /// Scan for newly-orphaned deep shards. The *market* read counts a deep-seated slot
+    /// the first time its serving holder set empties (acquisition is sourceless, so this
+    /// is the data-loss event even though coverage re-greens). The *floored* read (W13)
+    /// additionally requires `foundation_floor_aged` = 0 at the shard's age — a market
+    /// wipe-out with the floor engaged is under-replication with a surviving non-market
+    /// source, not extinction. The floored flag can fire *later* than the market flag:
+    /// if the floor holds through the trough but withdraws (population recovery decays
+    /// it) before the market re-seats the slot, the hand-off race is lost and the slot
+    /// is counted then. Conditional on floor *completeness* over the floored band — the
+    /// gate-5 requirement this read sizes.
+    fn scan(
+        &mut self,
+        world: &World,
+        serving_r: &[usize],
+        cfg: &SimConfig,
+        pop_now: usize,
+    ) -> ExtinctionEvents {
+        // Bootstrap worlds grow the window; extend state for appended slots.
+        if self.deep_seated.len() < world.shards.len() {
+            self.deep_seated.resize(world.shards.len(), false);
+            self.extinct.resize(world.shards.len(), false);
+            self.extinct_floored.resize(world.shards.len(), false);
+        }
+        let mut ev = ExtinctionEvents {
+            market: 0,
+            floored: 0,
+            bands: [0; N_BANDS],
+        };
+        #[allow(clippy::needless_range_loop)]
+        for s in 0..world.shards.len() {
+            let age = world.shards[s].age;
+            if age >= cfg.deep_threshold {
+                if serving_r[s] > 0 {
+                    self.deep_seated[s] = true;
+                } else if self.deep_seated[s] {
+                    if !self.extinct[s] {
+                        self.extinct[s] = true;
+                        ev.market += 1;
+                        let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
+                        ev.bands[band] += 1;
+                    }
+                    if !self.extinct_floored[s] {
+                        let floor_eff = foundation_floor_aged(
+                            pop_now,
+                            cfg.floor_replicas,
+                            cfg.floor_decay_pop,
+                            cfg.floor_age_tilt,
+                            age,
+                            cfg.deep_threshold,
+                        );
+                        if floor_eff == 0 {
+                            self.extinct_floored[s] = true;
+                            ev.floored += 1;
+                        }
+                    }
+                }
+            } else {
+                self.deep_seated[s] = false;
+                self.extinct[s] = false;
+                self.extinct_floored[s] = false;
+            }
+        }
+        ev
+    }
 }
 
 /// Per-holder uptime used in L15 retrieval scoring; L16 depresses it from transport lag.
@@ -716,15 +812,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // `shock_rho_mult` at the shock epoch and relaxes geometrically back toward 1.0 at
     // `shock_rho_relax` per epoch (panic subsides; 0.0 = permanent regime change).
     let mut rho_shock = 1.0_f64;
-    // swan-2 / W1: extinction accounting. `ext_deep_seated[s]` = the slot has had ≥1
-    // serving holder while deep since its last recycle; `ext_flag[s]` = the slot's
-    // serving holder set emptied while deep after being seated (sticky until recycle —
-    // re-seating recovers the *metric*, not the *data*; acquisition in this model is
-    // sourceless). Both reset when the slot leaves the deep band (recycle path).
-    let mut ext_deep_seated: Vec<bool> = vec![false; world.shards.len()];
-    let mut ext_flag: Vec<bool> = vec![false; world.shards.len()];
+    // swan-2 / W1 (+ swan-3 W12/W13): extinction accounting — see `ExtinctionScan`.
+    // Re-seating recovers the *metric*, not the *data*; acquisition in this model is
+    // sourceless. Flags reset when the slot leaves the deep band (recycle path).
+    let mut ext_scan = ExtinctionScan::new(world.shards.len());
     let mut deep_extinct_total = 0usize;
     let mut shock_deep_extinct = 0usize;
+    let mut shock_extinct_bands = [0usize; N_BANDS];
+    let mut deep_extinct_floored_total = 0usize;
+    let mut shock_deep_extinct_floored = 0usize;
 
     let mut ta1 = if cfg.ta1_model {
         Some(Ta1Recorder::new(
@@ -817,9 +913,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 }
             }
             // swan-2 / W2: domain-correlated exit — one failure domain (L15
-            // bucketing, `a % n == 0`) vanishes whole. The worst-case correlation
-            // structure: a shard whose holders cluster in the dead domain loses
-            // every copy at once.
+            // bucketing, `a % n == 0`) vanishes whole. NOTE (swan-3 / W15): the
+            // bucketing is uncorrelated with *portfolio composition* by
+            // construction, and no placement-side diversity floor exists in this
+            // model — a benign result here is luck of the bucketing, not a floor
+            // working. The class-correlated leg below is the honest worst case.
             if cfg.shock_exit_domains > 0 {
                 for a in 0..world.actors.len() {
                     if world.active[a] && a % cfg.shock_exit_domains == 0 {
@@ -827,22 +925,48 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                     }
                 }
             }
+            // swan-3 / W15: holder-class-correlated exit — the active-set fraction
+            // holding the MOST deep shards exits at once (the FTX pattern as
+            // class-correlated custody membership: the marginal deep bonds cluster
+            // on cheap custodial operators). Exit maximally correlated with deep
+            // holder sets; deterministic (count-then-index ordering), no RNG.
+            if cfg.shock_exit_top_deep > 0.0 {
+                let mut ranked: Vec<(usize, usize)> = (0..world.actors.len())
+                    .filter(|&a| world.active[a])
+                    .map(|a| {
+                        let deep_held = (0..world.shards.len())
+                            .filter(|&s| {
+                                world.shards[s].age >= cfg.deep_threshold && world.holdings[a][s]
+                            })
+                            .count();
+                        (deep_held, a)
+                    })
+                    .collect();
+                let k = (ranked.len() as f64 * cfg.shock_exit_top_deep).round() as usize;
+                ranked.sort_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
+                for &(_, a) in ranked.iter().take(k) {
+                    world.deactivate(a);
+                }
+            }
             // swan-2 / W1: scan for orphaned deep shards *at the shock instant*,
             // before survivors re-seat within this same epoch — re-acquisition in
             // this model is sourceless (see ScenarioResult::deep_extinct_total), so
             // a holder set that empties here is a data-extinction event even though
             // the coverage metric recovers.
-            if cfg.shock_exit_frac > 0.0 || cfg.shock_exit_domains > 0 {
+            if cfg.shock_exit_frac > 0.0
+                || cfg.shock_exit_domains > 0
+                || cfg.shock_exit_top_deep > 0.0
+            {
                 let sr = world.serving_replication();
-                let ev = scan_extinctions(
-                    &world,
-                    &sr,
-                    cfg.deep_threshold,
-                    &mut ext_deep_seated,
-                    &mut ext_flag,
-                );
-                deep_extinct_total += ev;
-                shock_deep_extinct += ev;
+                let pop = bonded_active_count(&world, &ap);
+                let ev = ext_scan.scan(&world, &sr, cfg, pop);
+                deep_extinct_total += ev.market;
+                deep_extinct_floored_total += ev.floored;
+                shock_deep_extinct += ev.market;
+                shock_deep_extinct_floored += ev.floored;
+                for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
+                    *acc += n;
+                }
             }
         } else if cfg.shock_at > 0 && ep > cfg.shock_at {
             if rho_shock != 1.0 && cfg.shock_rho_relax > 0.0 {
@@ -941,16 +1065,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // set empties after having been seated is a data-extinction event (sticky per
         // slot until recycle). Counted run-wide as the frontier-noise baseline and
         // post-shock as the shock-attributable read.
-        let ext_ev = scan_extinctions(
-            &world,
-            &serving_r,
-            cfg.deep_threshold,
-            &mut ext_deep_seated,
-            &mut ext_flag,
-        );
-        deep_extinct_total += ext_ev;
+        let ext_ev = ext_scan.scan(&world, &serving_r, cfg, bonded_active_count(&world, &ap));
+        deep_extinct_total += ext_ev.market;
+        deep_extinct_floored_total += ext_ev.floored;
         if cfg.shock_at > 0 && ep >= cfg.shock_at {
-            shock_deep_extinct += ext_ev;
+            shock_deep_extinct += ext_ev.market;
+            shock_deep_extinct_floored += ext_ev.floored;
+            for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ext_ev.bands) {
+                *acc += n;
+            }
         }
 
         // L15 retrieval availability: realized `1 − (1−u)^d` per shard (d = distinct
@@ -1099,16 +1222,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             // death-spiral channel's extinctions are systematically invisible.
             // Sticky flags make the double scan idempotent per deep lifetime.
             let sr = world.serving_replication();
-            let ev = scan_extinctions(
-                &world,
-                &sr,
-                cfg.deep_threshold,
-                &mut ext_deep_seated,
-                &mut ext_flag,
-            );
-            deep_extinct_total += ev;
+            let ev = ext_scan.scan(&world, &sr, cfg, bonded_active_count(&world, &ap));
+            deep_extinct_total += ev.market;
+            deep_extinct_floored_total += ev.floored;
             if cfg.shock_at > 0 && ep >= cfg.shock_at {
-                shock_deep_extinct += ev;
+                shock_deep_extinct += ev.market;
+                shock_deep_extinct_floored += ev.floored;
+                for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
+                    *acc += n;
+                }
             }
         }
         series_active.push(world.active.iter().filter(|&&x| x).count());
@@ -1411,6 +1533,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         shock_deep_under_peak,
         deep_extinct_total: deep_extinct_total as f64,
         shock_deep_extinct: shock_deep_extinct as f64,
+        shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
+        deep_extinct_floored_total: deep_extinct_floored_total as f64,
+        shock_deep_extinct_floored: shock_deep_extinct_floored as f64,
         shock_recovery_epochs,
         shock_bonded_trough,
         retr_under_deep,
@@ -1536,6 +1661,7 @@ fn baseline() -> SimConfig {
         shock_exit_frac: 0.0,
         shock_exit_domains: 0,
         aftershock_at: 0,
+        shock_exit_top_deep: 0.0,
         // L15 retrieval model: off by default (inert, byte-identical). The retrieval
         // scenarios opt in. Defaults describe a three-nines SLA at 90% holder uptime
         // with independent domains; scenarios override `retr_n_domains` to add
@@ -3180,6 +3306,75 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.shock_exit_frac = 0.50;
         c.shock_rho_mult = 2.0;
         c.shock_rho_relax = 0.02;
+        out.push(c);
+    }
+
+    // --- swan-3 (W12–W15 wargame response, STAKER_ARCHIVAL_SIM.md §L17 swan-3). The
+    // swan-2 price-row extinctions (vshape 37, servo400 99) were measured BARE-LEAN
+    // (`floor_replicas = 0` everywhere in the swan worlds), so the gate-5
+    // floor-completeness export was sized by inference; and the benign domain results
+    // ran with NO placement-side diversity floor in the model (the L15 machinery is
+    // scoring-only), so they are luck of the bucketing, not a floor working.
+    //
+    // (1) W13 closure arms: the two extinguishing price rows re-run with the
+    // foundation floor on as a re-engagement backstop (6 = r_target_deep;
+    // decay_pop 100 ≈ the healthy attractor population, so the floor is ≈0 pre-shock
+    // and re-engages exactly as the trough thins the market — the L12 backstop
+    // property). Tilt 0 = completeness over the WHOLE deep set. `shkExtF` ≈ 0 with
+    // `shkExt` unchanged is the closure evidence: a complete floor converts the
+    // swan-1 data losses into covered under-replication; nonzero `shkExtF` is the
+    // hand-off race lost (floor withdrew before the market re-seated).
+    {
+        let mut c = swan_base();
+        c.name = "swan3_vshape_floor".into();
+        c.axis = "swan3_floor".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_price_relax = 0.05;
+        c.floor_replicas = 6;
+        c.floor_decay_pop = 100.0;
+        out.push(c);
+    }
+    {
+        let mut c = swan_base();
+        c.name = "swan3_servo400_floor".into();
+        c.axis = "swan3_floor".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        swan_servo(&mut c);
+        c.budget_ceiling = 400.0;
+        c.floor_replicas = 6;
+        c.floor_decay_pop = 100.0;
+        out.push(c);
+    }
+    // (2) W12 stratification scoping: the V-crash floor arm with the P3 oldest-ward
+    // tilt at its swept maximum (0.9). The `extB` band read says WHERE trough
+    // extinction lands; this arm measures what an oldest-tilted floor misses — if
+    // extinction is not oldest-concentrated, the under-floored shoulder leaks
+    // extinctions the uniform floor catches (`shkExtF` > the tilt-0 arm), which is
+    // exactly the under-scoping W12 warns the gate-5 export against.
+    {
+        let mut c = swan_base();
+        c.name = "swan3_vshape_floor_t9".into();
+        c.axis = "swan3_floor".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_price_relax = 0.05;
+        c.floor_replicas = 6;
+        c.floor_decay_pop = 100.0;
+        c.floor_age_tilt = 0.9;
+        out.push(c);
+    }
+    // (3) W15 holder-class-correlated exit: the actors holding the most deep shards
+    // exit at once — the honest worst case for the FTX pattern (custody membership
+    // correlated with holder class). Compare `swan_cascade30/50` (stride, benign) and
+    // `swan2_domain3/2` (index-bucketed, uncorrelated with portfolios): same exit
+    // magnitudes, maximally adverse correlation with deep holder sets.
+    for frac in [0.30_f64, 0.50] {
+        let mut c = swan_base();
+        c.name = format!("swan3_class{:.0}", frac * 100.0);
+        c.axis = "swan3_class".into();
+        c.shock_exit_top_deep = frac;
         out.push(c);
     }
 

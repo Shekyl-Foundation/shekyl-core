@@ -124,6 +124,13 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("  being seated at depth; sticky per slot until recycle — backfill in this model is");
     eprintln!("  SOURCELESS, so the metric recovers but the data would not); shkExt = the post-");
     eprintln!("  shock subset — data recovery vs shkRec's metric recovery. swan-2/W1.");
+    eprintln!("  shkExF = post-shock extinctions NET OF THE FOUNDATION FLOOR as surviving source");
+    eprintln!("  (counted only when market holders AND floor are simultaneously zero; = shkExt");
+    eprintln!("  when floor_replicas=0; ~0 on a floor-on arm = the gate-5 completeness closure");
+    eprintln!("  read). extB = shkExt binned by age band at extinction (b1/../b5, oldest last) —");
+    eprintln!(
+        "  scopes the floor-completeness export to the extinguishing band set. swan-3/W12-13."
+    );
     eprintln!("  rUDp = RETRIEVAL deep frac under the SLA (1-(1-u)^d < A*); rAvl = deep-set mean");
     eprintln!(
         "  availability; rTgtA = DERIVED R_target from (u,A*). L15; nonzero rUDp on a covered"
@@ -149,7 +156,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -190,6 +197,8 @@ fn print_summary(results: &[ScenarioResult]) {
         "shkBA",
         "extT",
         "shkExt",
+        "shkExF",
+        "extB",
         "rUDp",
         "rAvl",
         "rTgtA",
@@ -210,7 +219,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -254,6 +263,12 @@ fn print_summary(results: &[ScenarioResult]) {
             r.shock_bonded_trough,
             r.deep_extinct_total,
             r.shock_deep_extinct,
+            r.shock_deep_extinct_floored,
+            r.shock_extinct_bands
+                .iter()
+                .map(|&x| format!("{}", x as usize))
+                .collect::<Vec<_>>()
+                .join("/"),
             r.retr_under_deep,
             r.retr_avail_deep,
             r.r_target_avail as usize,
