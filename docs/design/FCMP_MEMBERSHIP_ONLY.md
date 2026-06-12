@@ -404,15 +404,17 @@ membership only.
 
 ## 10. Sizing
 
-Measured at implementation (1 input, 1 layer, test
-`membership_only_proof_size`): `FcmpMembershipOnly` per-input overhead is
-**192 B** versus 480 B for `FcmpPlusPlus` (the 96-byte `MembershipSpendAuth`
-replaces the 384-byte SAL); the `Fcmp` leg is byte-identical. Total proof
-size is therefore **strictly smaller** than the 1-input `FcmpPlusPlus`
-estimate that [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.1
-carried as the sizing caveat — the 3× reversion trigger is not approached
-(measured ratio < 1×). The §10.1 caveat is closed by the doc sweep
-accompanying this PR; the test asserts the 3× bound permanently.
+Measured at implementation (test `membership_only_proof_size`):
+`FcmpMembershipOnly` per-input overhead is **192 B** versus 480 B for
+`FcmpPlusPlus` (the 96-byte `MembershipSpendAuth` replaces the 384-byte SAL);
+the `Fcmp` leg is byte-identical. Measured totals: **3 104 B vs 3 392 B** at
+1 input / 1 layer; **5 952 B vs 6 240 B** at 1 input / 8 layers; 8 960 B vs
+10 112 B at 4 inputs / 8 layers. Total proof size is therefore **strictly
+smaller** than the 1-input `FcmpPlusPlus` estimate that
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.1 carried as the
+sizing caveat — the 3× reversion trigger is not approached (measured ratio
+< 1×). The §10.1 caveat's size arm is closed by the doc sweep accompanying
+this PR; the test asserts both bounds permanently.
 
 ## 11. Timeframe note (rule 05)
 
