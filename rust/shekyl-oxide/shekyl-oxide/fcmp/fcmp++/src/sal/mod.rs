@@ -22,6 +22,52 @@ use crate::{Input, Output};
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;
 
+/// Build a fixed-width 64-byte domain-separation tag from a human-readable label.
+///
+/// Both SAL-family challenge transcripts (full and membership-only) open with one of
+/// these tags as their first field. The field is 64 bytes — the membership-only label
+/// is 36 bytes and would overflow a 32-byte field — and zero-padded so the challenge
+/// preimage stays length-regular: every field in both preimages is fixed-width, so the
+/// tag occupies an invariant position and cross-type preimage collision requires a
+/// Blake2b collision across differing first blocks. The tag is preimage-only, never on
+/// the wire. See `docs/design/FCMP_MEMBERSHIP_ONLY.md` §4.
+pub(crate) const fn sal_dst(label: &[u8]) -> [u8; 64] {
+    assert!(
+        label.len() <= 64,
+        "SAL DST label exceeds the 64-byte tag field"
+    );
+    let mut tag = [0u8; 64];
+    let mut i = 0;
+    while i < label.len() {
+        tag[i] = label[i];
+        i += 1;
+    }
+    tag
+}
+
+/// Domain-separation tag for the full SAL (key-image-carrying) challenge transcript.
+pub(crate) const SAL_FULL_DST: [u8; 64] = sal_dst(b"Shekyl FCMP++ SAL full v1");
+
+/// Domain-separation tag for the membership-only (no key image) challenge transcript.
+pub(crate) const SAL_MEMBERSHIP_ONLY_DST: [u8; 64] =
+    sal_dst(b"Shekyl FCMP++ SAL membership-only v1");
+
+// The two proof types must never share a challenge transcript prefix.
+const _: () = assert!(
+    {
+        let mut differs = false;
+        let mut i = 0;
+        while i < 64 {
+            if SAL_FULL_DST[i] != SAL_MEMBERSHIP_ONLY_DST[i] {
+                differs = true;
+            }
+            i += 1;
+        }
+        differs
+    },
+    "SAL domain-separation tags must be distinct"
+);
+
 /// A re-randomized output.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RerandomizedOutput {
@@ -206,6 +252,9 @@ impl SpendAuthAndLinkability {
     ) -> Scalar {
         let mut transcript = Blake2b512::new();
 
+        // Proof-type domain separation: a full SAL challenge can never collide with a
+        // membership-only challenge (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §4.2).
+        transcript.update(SAL_FULL_DST);
         transcript.update(signable_tx_hash);
         input.transcript(&mut transcript, L);
 
