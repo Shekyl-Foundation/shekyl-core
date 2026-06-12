@@ -22,8 +22,8 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
 use shekyl_curve_tree::{
-    BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
+    BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
 
@@ -281,10 +281,10 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
     }
     let tip = blocks.last().expect("non-empty");
     let reference = ReferenceBlock {
-        height: tip.height,
+        height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
     };
-    let last_drained = reference.height.saturating_sub(61);
+    let last_drained = reference.height.0.saturating_sub(61);
     let drained = blocks
         .iter()
         .find(|b| b.height == last_drained)
