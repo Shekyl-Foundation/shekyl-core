@@ -27,7 +27,7 @@ use crate::{
         check_nondegenerate, membership_only_rerandomize, MembershipOnlyError, MembershipSpendAuth,
     },
     sal::*,
-    FcmpMembershipOnly, FcmpPlusPlus, FcmpPlusPlusError, Output, FCMP_PARAMS,
+    FcmpMembershipOnly, FcmpPlusPlus, FcmpPlusPlusError, Input, Output, FCMP_PARAMS,
     HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS, SELENE_HASH_INIT,
 };
 
@@ -474,13 +474,23 @@ fn mixed_type_batch_rejects() {
 
     let (mo_tree, mo) = membership_only_proof(tx_hash, b"mixed", &[&mo_leaf]);
 
+    // Byte offset of a single-input proof's first SAL-leg scalar: the input partial
+    // (`write_partial`: O~ ‖ I~ ‖ R = 3 points) followed by the SAL leg's leading
+    // points. Derived from the actual encoded point width so the offsets track an
+    // encoding refactor (e.g. point-compression change) rather than going stale.
+    let first_sal_scalar_offset = |input: &Input, sal_leading_points: usize| -> usize {
+        let point_len = input.O_tilde().to_bytes().len();
+        let input_partial_points = 3;
+        (input_partial_points + sal_leading_points) * point_len
+    };
+
     // Tamper a proof by flipping a byte in its serialized SAL-leg scalar region, then
     // re-reading. The flip stays within a canonical scalar encoding w.h.p.
     let tamper_mo = |proof: &FcmpMembershipOnly| {
         let mut buf = vec![];
         proof.write(&mut buf).unwrap();
-        // Input partial (96) + R_O (32): first byte of s_alpha.
-        buf[96 + 32] ^= 1;
+        // `MembershipSpendAuth` writes R_O (1 point) before s_alpha, s_y.
+        buf[first_sal_scalar_offset(&proof.inputs[0].0, 1)] ^= 1;
         FcmpMembershipOnly::read(
             &[proof.inputs[0].0.C_tilde().to_bytes()],
             1,
@@ -491,8 +501,8 @@ fn mixed_type_batch_rejects() {
     let tamper_full = |proof: &FcmpPlusPlus| {
         let mut buf = vec![];
         proof.write(&mut buf).unwrap();
-        // Input partial (96) + P, A, B, R_O, R_P, R_L (192): first byte of s_alpha.
-        buf[96 + 192] ^= 1;
+        // `SpendAuthAndLinkability` writes P, A, B, R_O, R_P, R_L (6 points) before scalars.
+        buf[first_sal_scalar_offset(&proof.inputs[0].0, 6)] ^= 1;
         FcmpPlusPlus::read(
             &[proof.inputs[0].0.C_tilde().to_bytes()],
             1,

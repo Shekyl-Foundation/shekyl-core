@@ -48,6 +48,35 @@ pub(crate) const fn sal_dst(label: &[u8]) -> [u8; 64] {
     tag
 }
 
+/// Whether every 64-byte tag in `tags` is pairwise distinct.
+///
+/// Backs the `const` distinctness assertions for the domain-separation and
+/// nonce-synthesis tags. A manual byte loop is used because array `PartialEq` is not
+/// `const` under the crate's MSRV; consolidating it here keeps that custom logic in one
+/// audited place rather than repeated per assertion site.
+pub(crate) const fn tags_pairwise_distinct(tags: &[[u8; 64]]) -> bool {
+    let mut i = 0;
+    while i < tags.len() {
+        let mut j = i + 1;
+        while j < tags.len() {
+            let mut identical = true;
+            let mut k = 0;
+            while k < 64 {
+                if tags[i][k] != tags[j][k] {
+                    identical = false;
+                }
+                k += 1;
+            }
+            if identical {
+                return false;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Domain-separation tag for the full SAL (key-image-carrying) challenge transcript.
 pub(crate) const SAL_FULL_DST: [u8; 64] = sal_dst(b"Shekyl FCMP++ SAL full v1");
 
@@ -57,17 +86,7 @@ pub(crate) const SAL_MEMBERSHIP_ONLY_DST: [u8; 64] =
 
 // The two proof types must never share a challenge transcript prefix.
 const _: () = assert!(
-    {
-        let mut differs = false;
-        let mut i = 0;
-        while i < 64 {
-            if SAL_FULL_DST[i] != SAL_MEMBERSHIP_ONLY_DST[i] {
-                differs = true;
-            }
-            i += 1;
-        }
-        differs
-    },
+    tags_pairwise_distinct(&[SAL_FULL_DST, SAL_MEMBERSHIP_ONLY_DST]),
     "SAL domain-separation tags must be distinct"
 );
 

@@ -45,7 +45,10 @@ use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 use shekyl_generators::T;
 
 use crate::{
-    sal::{sal_dst, OpenedInputTuple, RerandomizedOutput, SAL_MEMBERSHIP_ONLY_DST},
+    sal::{
+        sal_dst, tags_pairwise_distinct, OpenedInputTuple, RerandomizedOutput,
+        SAL_MEMBERSHIP_ONLY_DST,
+    },
     Input, Output,
 };
 
@@ -91,6 +94,21 @@ const MO_NONCE_R_R_I: [u8; 64] = sal_dst(b"Shekyl FCMP++ MO nonce r_r_i v1");
 const MO_NONCE_R_C: [u8; 64] = sal_dst(b"Shekyl FCMP++ MO nonce r_c v1");
 const MO_NONCE_ALPHA: [u8; 64] = sal_dst(b"Shekyl FCMP++ MO nonce alpha v1");
 const MO_NONCE_R_Y: [u8; 64] = sal_dst(b"Shekyl FCMP++ MO nonce r_y v1");
+
+// The per-scalar nonce domain tags are load-bearing for nonce-role independence: two
+// roles sharing a tag would synthesize identical nonces from identical inputs, which a
+// copy/paste of the strings above could silently introduce. Reject that at compile time.
+const _: () = assert!(
+    tags_pairwise_distinct(&[
+        MO_NONCE_R_O,
+        MO_NONCE_R_I,
+        MO_NONCE_R_R_I,
+        MO_NONCE_R_C,
+        MO_NONCE_ALPHA,
+        MO_NONCE_R_Y,
+    ]),
+    "membership-only nonce domain tags must be pairwise distinct"
+);
 
 /// Rerandomize an output for a membership-only proof, with synthesized blinds.
 ///
@@ -141,7 +159,7 @@ pub(crate) fn check_nondegenerate(
         || (input.C_tilde() == output.C())
         || input.R().is_identity().into()
     {
-        Err(MembershipOnlyError::DegenerateRerandomization)?;
+        return Err(MembershipOnlyError::DegenerateRerandomization);
     }
     Ok(())
 }
