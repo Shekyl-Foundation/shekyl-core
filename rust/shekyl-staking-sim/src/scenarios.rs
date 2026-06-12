@@ -449,17 +449,19 @@ pub struct ScenarioResult {
     /// the shock epoch on (vs `bondA`, the windowed steady-state mean — trough far
     /// below bondA with full recovery is the resilience signature). `0` outside L17.
     pub shock_bonded_trough: f64,
-    /// **Deep-shard extinction events, run-wide** (swan-2 / W1): number of times a deep
-    /// shard's serving holder set emptied after having been seated at depth (sticky per
-    /// slot until recycle). Acquisition in this model is **sourceless** — a slot that
-    /// hits zero serving holders re-covers as a metric but the data it stands for is
-    /// gone (the foundation floor, where configured, is the only non-market source).
+    /// **Deep-shard market wipe-out events, run-wide** (swan-2 / W1, re-read swan-4):
+    /// number of times a deep shard's serving *market* holder set emptied after having
+    /// been seated at depth (sticky per slot until recycle). Under the foundation
+    /// retention guarantee (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree seeds*)
+    /// this is a **foundation-as-sole-source transition, not data loss** — the model's
+    /// unsourced re-acquisition coincidentally matches the real foundation-seeded
+    /// re-seed path (bandwidth-bound when `reseed_rate > 0`; see `sole_source_*`).
     /// On shock-free dynamic scenarios this is the frontier-noise baseline.
     pub deep_extinct_total: f64,
-    /// **Post-shock deep-shard extinction events** (swan-2 / W1): the subset of
-    /// `deep_extinct_total` at/after the shock epoch — the shock-attributable data
-    /// loss. The number that distinguishes *metric recovery* (`shkRec`) from *data
-    /// recovery*. `0` outside the shock axis.
+    /// **Post-shock market wipe-out events** (swan-2 / W1, re-read swan-4): the subset
+    /// of `deep_extinct_total` at/after the shock epoch — the shock-attributable
+    /// availability exposure. The number that distinguishes *metric recovery* (`shkRec`)
+    /// from *market-source recovery*. `0` outside the shock axis.
     pub shock_deep_extinct: f64,
     /// **Per-age-band shock extinctions** (swan-3 / W12): the `shock_deep_extinct`
     /// events binned by the shard's age band *at extinction time* (same `N_BANDS`
@@ -469,19 +471,20 @@ pub struct ScenarioResult {
     /// means an oldest-only floor under-scopes (absence of the claim is a claim of
     /// absence). Empty bands outside the deep range stay 0 by construction.
     pub shock_extinct_bands: Vec<f64>,
-    /// **Extinction events net of the foundation floor** (swan-3 / W13), run-wide: a
-    /// deep-seated shard is counted data-dead only when its market holder set **and**
-    /// the floor (`foundation_floor_aged` at its age) are *simultaneously* zero — the
-    /// floor is the non-market source of last resort, so a market wipe-out with the
-    /// floor engaged is under-replication, not extinction. Conditional on **floor
-    /// completeness** over the band (the foundation actually holding a copy of every
-    /// shard the formula says it floors) — which is exactly the gate-5 requirement
-    /// the W13 arm sizes. Equals `deep_extinct_total` when `floor_replicas = 0`.
+    /// **Wipe-out events net of the serving floor** (swan-3 / W13), run-wide: a
+    /// deep-seated shard is counted fully *unserved* only when its market holder set
+    /// **and** the serving floor (`foundation_floor_aged` at its age) are
+    /// *simultaneously* zero — the floor is the non-market serving source, so a market
+    /// wipe-out with the floor engaged is under-replication with a live server.
+    /// Conditional on **floor completeness** over the band (the foundation actually
+    /// serving a copy of every shard the formula says it floors) — which is exactly
+    /// the gate-5 serving requirement the W13 arm sizes. Equals `deep_extinct_total`
+    /// when `floor_replicas = 0`. Retention is unaffected either way (swan-4).
     pub deep_extinct_floored_total: f64,
-    /// **Post-shock floored extinctions** (swan-3 / W13): the shock-attributable
-    /// subset of `deep_extinct_floored_total`. ≈0 on a floor-on arm of an
-    /// extinguishing scenario is the closure evidence that a complete re-engagement
-    /// floor converts the swan-1 data losses into covered under-replication. `0`
+    /// **Post-shock floored wipe-outs** (swan-3 / W13): the shock-attributable
+    /// subset of `deep_extinct_floored_total`. ≈0 on a floor-on arm of a wiping-out
+    /// scenario is the closure evidence that a complete re-engagement serving floor
+    /// converts the swan-1 sole-source windows into covered under-replication. `0`
     /// outside the shock axis.
     pub shock_deep_extinct_floored: f64,
     /// **Foundation-as-sole-source shard-epochs, run-wide** (swan-4): total epochs
@@ -622,17 +625,16 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
     world
 }
 
-/// swan-2 / W1 extinction scan. A deep shard whose serving holder set empties *after
-/// having been seated at depth* is a **data-extinction event**: re-acquisition in this
-/// model is sourceless (the best-response simply sets `holdings[a][s] = true`; no
-/// surviving-source check), so the coverage metric recovers but the data would not.
-/// `deep_seated[s]` records "had ≥1 serving holder while deep since recycle";
-/// `extinct[s]` is the sticky per-slot flag (one event per deep lifetime; both reset
-/// when the slot leaves the deep band, i.e. on recycle). Returns new events this scan.
-/// Extinction-scan state (swan-2 W1, extended swan-3 W12/W13): sticky per shard slot
-/// until recycle. `deep_seated[s]` = the slot has had ≥1 serving holder while deep since
-/// its last recycle; `extinct[s]` = the slot's *market* extinction has been counted;
-/// `extinct_floored[s]` = counted with the foundation floor as a surviving source.
+/// Wipe-out-scan state (swan-2 W1, extended swan-3 W12/W13 + swan-4): sticky per shard
+/// slot until recycle. A deep shard whose serving *market* holder set empties after
+/// having been seated at depth is a **foundation-as-sole-source transition** (swan-4:
+/// the retention guarantee means this is an availability state, not data loss; the
+/// model's unsourced re-acquisition — best-response sets `holdings[a][s] = true` —
+/// stands in for the real foundation-seeded re-seed path, bandwidth-bound when
+/// `reseed_rate > 0`). `deep_seated[s]` = the slot has had ≥1 serving holder while deep
+/// since its last recycle; `extinct[s]` = the slot's *market* wipe-out has been counted
+/// (one event per deep lifetime; both reset when the slot leaves the deep band, i.e. on
+/// recycle); `extinct_floored[s]` = counted with the serving floor also at zero.
 struct ExtinctionScan {
     deep_seated: Vec<bool>,
     extinct: Vec<bool>,
@@ -698,15 +700,16 @@ impl ExtinctionScan {
     }
 
     /// Scan for newly-orphaned deep shards. The *market* read counts a deep-seated slot
-    /// the first time its serving holder set empties (acquisition is sourceless, so this
-    /// is the data-loss event even though coverage re-greens). The *floored* read (W13)
+    /// the first time its serving market holder set empties — the start of a
+    /// foundation-as-sole-source window (swan-4: an availability event, not data loss,
+    /// even though the coverage metric re-greens). The *floored* read (W13)
     /// additionally requires `foundation_floor_aged` = 0 at the shard's age — a market
-    /// wipe-out with the floor engaged is under-replication with a surviving non-market
-    /// source, not extinction. The floored flag can fire *later* than the market flag:
+    /// wipe-out with the serving floor engaged is under-replication with a live
+    /// non-market server. The floored flag can fire *later* than the market flag:
     /// if the floor holds through the trough but withdraws (population recovery decays
     /// it) before the market re-seats the slot, the hand-off race is lost and the slot
     /// is counted then. Conditional on floor *completeness* over the floored band — the
-    /// gate-5 requirement this read sizes.
+    /// gate-5 serving requirement this read sizes.
     fn scan(
         &mut self,
         world: &World,
@@ -774,6 +777,15 @@ fn retrieval_uptime(cfg: &SimConfig) -> f64 {
 }
 
 pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
+    // Shock exit knobs are fractions of the active set. A value > 1.0 would make
+    // the stride sampler revisit indices and silently exit fewer unique actors
+    // than the config implies; misconfiguration fails loudly instead (the configs
+    // are authored in this file — there is no external input to degrade for).
+    assert!(
+        (0.0..=1.0).contains(&cfg.shock_exit_frac)
+            && (0.0..=1.0).contains(&cfg.shock_exit_top_deep),
+        "shock exit fractions must be in [0, 1]"
+    );
     let mut rng = Rng::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
 
@@ -1016,10 +1028,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 }
             }
             // swan-2 / W1: scan for orphaned deep shards *at the shock instant*,
-            // before survivors re-seat within this same epoch — re-acquisition in
-            // this model is sourceless (see ScenarioResult::deep_extinct_total), so
-            // a holder set that empties here is a data-extinction event even though
-            // the coverage metric recovers.
+            // before survivors re-seat within this same epoch — a holder set that
+            // empties here is a foundation-as-sole-source transition (swan-4; see
+            // ScenarioResult::deep_extinct_total) that the same-epoch re-seat
+            // would otherwise hide from the count.
             if cfg.shock_exit_frac > 0.0
                 || cfg.shock_exit_domains > 0
                 || cfg.shock_exit_top_deep > 0.0

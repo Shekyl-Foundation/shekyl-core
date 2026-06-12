@@ -51,9 +51,12 @@ pub struct StakeSchedule {
 /// ignored and locked supply is **derived** from the gate-4 bond floor:
 ///
 /// ```text
-/// locked(h) = bond_floor × replicas_per_shard × shards(h)  [+ admission_min × n_p]
-/// shards(h) = genesis_shards + h / blocks_per_shard
+/// locked(h) = bond_floor × replicas_per_shard × ⌊h / blocks_per_shard⌋  [+ admission_min × n_p]
 /// ```
+///
+/// where `h` is the absolute chain height — the caller passes
+/// `block + genesis_height_offset`, so pre-existing history enters through
+/// the offset, not through a separate genesis-shards term.
 ///
 /// Per the pinned build constraint, the derived `stake_ratio` and the burn
 /// input both denominate against the **consensus burn-site circulating**
@@ -69,7 +72,9 @@ pub struct ArchivalLockModel {
     /// is **not yet consensus-pinned** (gate-2/3 `ShardId` wire open), so
     /// this is an explicit model parameter; default arm uses
     /// `SETTLEMENT_EPOCH_BLOCKS` (the staking sim's frontier-growth
-    /// cadence), with a denser sensitivity arm.
+    /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
+    /// no model meaning and `locked_atomic` panics on it rather than
+    /// silently reporting zero locked supply.
     pub blocks_per_shard: u64,
     /// Bonded archiver population `N_P` (enters the admission arm only;
     /// L11 attractor envelope: lean ≈ 79, thick ≈ 154, fee-era-thin band
@@ -82,9 +87,12 @@ pub struct ArchivalLockModel {
 
 impl ArchivalLockModel {
     /// Total consensus-locked supply at height `h`, atomic units.
+    ///
+    /// Panics if `blocks_per_shard == 0` — a misconfigured model fails loudly
+    /// rather than reporting zero bond-locked supply into the gate-7 gauges.
     #[must_use]
     pub fn locked_atomic(&self, height: u64) -> u128 {
-        let shards = height.checked_div(self.blocks_per_shard).unwrap_or(0);
+        let shards = height / self.blocks_per_shard;
         u128::from(self.bond_floor_atomic)
             * u128::from(self.replicas_per_shard)
             * u128::from(shards)
