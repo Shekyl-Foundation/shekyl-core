@@ -26,6 +26,13 @@ const OWNED_IDENTITIES_TABLE: TableDefinition<TreePosition, &[u8; 128]> =
     TableDefinition::new("owned_identities");
 const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
     TableDefinition::new("pinned_segments");
+// Pending (created but not yet drained) leaves, keyed by global output
+// index. Value = 128-byte leaf || 192-byte leaf-meta payload (the same
+// encoders as `LEAVES_TABLE`/`LEAF_META_TABLE` — one layout, two tables),
+// so a pending row migrates to/from the drained tables without
+// re-encoding. Rows enter on block ingest, leave on drain
+// (`append_block_deltas`) or on the rollback creation-height filter.
+const PENDING_TABLE: TableDefinition<Gindex, &[u8; 320]> = TableDefinition::new("pending");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
 // values convert to `BlockHeight`/counts at the API boundary. This is the
 // one legitimate raw-`u64` value site in the store.
@@ -238,6 +245,7 @@ impl LeafStore {
         txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         txn.open_table(OWNED_IDENTITIES_TABLE)?;
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
+        txn.open_table(PENDING_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -267,6 +275,9 @@ impl LeafStore {
         txn.delete_table(FROZEN_SEGMENTS_TABLE)?;
         txn.delete_table(OWNED_IDENTITIES_TABLE)?;
         txn.delete_table(PINNED_SEGMENTS_TABLE)?;
+        // A missed table here leaves stale pending rows that would corrupt
+        // a subsequent `from_blocks` rebuild — pinned by the clear test.
+        txn.delete_table(PENDING_TABLE)?;
         txn.delete_table(META_TABLE)?;
         txn.commit()?;
         self.init_tables()
@@ -290,17 +301,44 @@ impl LeafStore {
 
     /// Append newly drained leaves and advance sync tip in one ACID write txn.
     ///
-    /// Each entry's leaf bytes are validated as four canonical Selene scalars
-    /// before insertion ([`StoreError::InvalidLeafBytes`]); the transaction
-    /// aborts on the first invalid entry, so a bad batch never partially
-    /// lands.
-    ///
-    /// When `entries` is empty, still updates `META_SYNC_TIP` and re-evaluates
-    /// segment-freeze eligibility so height-lagged freezes advance on blocks
-    /// where no new leaves drain.
+    /// Thin wrapper over [`Self::append_block_deltas`] with empty pending
+    /// deltas — keeps CT-1/CT-2 callers and KATs byte-identical.
     pub fn append_drained(
         &self,
         entries: &[LeafEntry],
+        tip_height: BlockHeight,
+    ) -> Result<(), StoreError> {
+        self.append_block_deltas(entries, &[], &[], tip_height)
+    }
+
+    /// Apply one ingested block's store deltas in a single ACID write txn:
+    ///
+    /// 1. append `drained` to the leaf tables (positions follow the
+    ///    persisted leaf count in batch order);
+    /// 2. remove `pending_removed` from the pending table — **every**
+    ///    target must be present ([`StoreError::PendingRowMissing`]):
+    ///    each drained leaf was necessarily pending first (minimum lock
+    ///    ≥ 10 blocks rules out same-block create-and-drain) and prune
+    ///    never touches the pending table, so a missing target is a
+    ///    caller bug or corruption, not a tolerable state;
+    /// 3. insert `pending_added` keyed by gindex — an existing row at the
+    ///    same gindex is an invariant breach
+    ///    ([`StoreError::PendingGindexCollision`]), never clobbered;
+    /// 4. advance `META_SYNC_TIP` (monotonic) and re-evaluate segment
+    ///    freezes.
+    ///
+    /// Leaf bytes in both `drained` and `pending_added` are validated as
+    /// four canonical Selene scalars ([`StoreError::InvalidLeafBytes`],
+    /// `batch_index` counting `drained` first, then `pending_added`). Any
+    /// error aborts the whole transaction — no delta partially lands.
+    ///
+    /// All-empty deltas still advance the tip and freeze clock, exactly
+    /// like the empty [`Self::append_drained`] of CT-1/CT-2.
+    pub fn append_block_deltas(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
         tip_height: BlockHeight,
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
@@ -309,10 +347,10 @@ impl LeafStore {
             let v = meta.get(META_LEAF_COUNT)?;
             v.map(|g| g.value()).unwrap_or(0)
         };
-        if !entries.is_empty() {
+        if !drained.is_empty() {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            for (batch_index, entry) in entries.iter().enumerate() {
+            for (batch_index, entry) in drained.iter().enumerate() {
                 if !leaf_bytes_are_canonical(&entry.leaf) {
                     return Err(StoreError::InvalidLeafBytes { batch_index });
                 }
@@ -320,6 +358,27 @@ impl LeafStore {
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
                 leaf_count += 1;
+            }
+        }
+        if !pending_removed.is_empty() || !pending_added.is_empty() {
+            let mut pending = txn.open_table(PENDING_TABLE)?;
+            for &gindex in pending_removed {
+                if pending.remove(gindex)?.is_none() {
+                    return Err(StoreError::PendingRowMissing { gindex: gindex.0 });
+                }
+            }
+            for (offset, entry) in pending_added.iter().enumerate() {
+                if !leaf_bytes_are_canonical(&entry.leaf) {
+                    return Err(StoreError::InvalidLeafBytes {
+                        batch_index: drained.len() + offset,
+                    });
+                }
+                if pending.get(entry.gindex)?.is_some() {
+                    return Err(StoreError::PendingGindexCollision {
+                        gindex: entry.gindex.0,
+                    });
+                }
+                pending.insert(entry.gindex, &encode_pending(entry))?;
             }
         }
         let effective_tip = {
@@ -851,6 +910,16 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
     })
 }
 
+/// Pending-row codec: `leaf[128] || encode_leaf_meta[192]` — the same
+/// encoders as the drained tables, so a row migrates between pending and
+/// drained without re-encoding (one layout, two tables).
+fn encode_pending(entry: &LeafEntry) -> [u8; 320] {
+    let mut buf = [0u8; 320];
+    buf[..128].copy_from_slice(&entry.leaf);
+    buf[128..].copy_from_slice(&encode_leaf_meta(entry));
+    buf
+}
+
 fn encode_target(target: &TargetKind) -> u8 {
     match target {
         TargetKind::TaggedKey => 0,
@@ -941,6 +1010,121 @@ mod tests {
         assert_eq!(stored.maturity, BlockHeight(130));
         assert_eq!(stored.creation_height, BlockHeight(70));
         assert_eq!(stored.identity, entry.identity);
+    }
+
+    /// Pending rows currently persisted, in key (gindex) order.
+    fn pending_gindexes(store: &LeafStore) -> Vec<u64> {
+        let txn = store.db.begin_read().unwrap();
+        let pending = txn.open_table(PENDING_TABLE).unwrap();
+        pending
+            .iter()
+            .unwrap()
+            .map(|row| row.unwrap().0.value().0)
+            .collect()
+    }
+
+    #[test]
+    fn block_deltas_cycle_pending_rows_through_drain() {
+        // Ingest shape: block N adds pending rows; a later block drains
+        // one of them (remove from pending + append to leaves) in a
+        // single transaction.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let a = sample_entry(3, 70);
+        let b = sample_entry(4, 71);
+        store
+            .append_block_deltas(&[], &[a, b], &[], BlockHeight(10))
+            .unwrap();
+        assert_eq!(pending_gindexes(&store), vec![3, 4]);
+        assert_eq!(store.leaf_count().unwrap(), 0);
+
+        store
+            .append_block_deltas(&[a], &[], &[Gindex(3)], BlockHeight(70))
+            .unwrap();
+        assert_eq!(pending_gindexes(&store), vec![4]);
+        assert_eq!(store.leaf_count().unwrap(), 1);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+    }
+
+    #[test]
+    fn block_deltas_reject_pending_gindex_collision_and_abort() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight(10))
+            .unwrap();
+        // Colliding insert rides with a drained append: the whole txn must
+        // abort — the drained leaf cannot land either.
+        let err = store
+            .append_block_deltas(
+                &[sample_entry(1, 61)],
+                &[sample_entry(5, 99)],
+                &[],
+                BlockHeight(11),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::PendingGindexCollision { gindex: 5 }
+        ));
+        assert_eq!(store.leaf_count().unwrap(), 0, "aborted txn left no trace");
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10));
+    }
+
+    #[test]
+    fn block_deltas_reject_missing_pending_removal_and_abort() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight(10))
+            .unwrap();
+        let err = store
+            .append_block_deltas(&[], &[], &[Gindex(8)], BlockHeight(11))
+            .unwrap_err();
+        assert!(matches!(err, StoreError::PendingRowMissing { gindex: 8 }));
+        assert_eq!(
+            pending_gindexes(&store),
+            vec![7],
+            "aborted txn left pending intact"
+        );
+    }
+
+    #[test]
+    fn block_deltas_reject_non_canonical_pending_leaf() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let mut bad = sample_entry(2, 70);
+        bad.leaf = [0xFFu8; 128];
+        let err = store
+            .append_block_deltas(&[sample_entry(1, 61)], &[bad], &[], BlockHeight(10))
+            .unwrap_err();
+        // batch_index counts drained first, then pending_added.
+        assert!(matches!(
+            err,
+            StoreError::InvalidLeafBytes { batch_index: 1 }
+        ));
+        assert_eq!(store.leaf_count().unwrap(), 0, "aborted txn left no trace");
+    }
+
+    #[test]
+    fn block_deltas_all_empty_advance_tip_and_freeze_clock() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(&[], &[], &[], BlockHeight(42))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(42));
+        assert_eq!(store.leaf_count().unwrap(), 0);
+        assert!(pending_gindexes(&store).is_empty());
+    }
+
+    #[test]
+    fn clear_empties_pending_table() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight(10))
+            .unwrap();
+        assert_eq!(pending_gindexes(&store), vec![9]);
+        store.clear().unwrap();
+        assert!(
+            pending_gindexes(&store).is_empty(),
+            "stale pending rows would corrupt a from_blocks rebuild"
+        );
     }
 
     #[test]
