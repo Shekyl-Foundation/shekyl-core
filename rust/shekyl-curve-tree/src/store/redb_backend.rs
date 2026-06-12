@@ -1222,6 +1222,13 @@ mod tests {
     use super::*;
     use crate::segment::leaves_per_segment;
     use crate::types::OutputIdentity;
+    use ciphersuite::{
+        group::ff::{Field, PrimeField},
+        Ciphersuite,
+    };
+    use helioselene::Selene;
+    use rand_chacha::rand_core::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
 
     fn sample_entry(gindex: u64, maturity: u64) -> LeafEntry {
         LeafEntry {
@@ -1524,6 +1531,393 @@ mod tests {
                 sync_tip: 50
             }
         ));
+    }
+
+    /// Full logical state through every public read path — drained rows,
+    /// pending rows, leaf count, sync tip, root, and the first frozen
+    /// record. Equality of two snapshots is the abort-leaves-no-trace /
+    /// rollback-equals-replay comparator (CT-3a plan §6 P8/P6).
+    type Snapshot = (
+        Vec<LeafEntry>,
+        Vec<LeafEntry>,
+        u64,
+        BlockHeight,
+        [u8; 32],
+        Option<FrozenSegmentRecord>,
+    );
+
+    fn logical_snapshot(store: &LeafStore) -> Snapshot {
+        let count = store.leaf_count().unwrap();
+        (
+            store.read_drained_entries().unwrap(),
+            store.read_pending_candidates().unwrap(),
+            count,
+            store.sync_tip_height().unwrap(),
+            store.root_at_count(count).unwrap(),
+            store.frozen_segment(SegmentId(0)).unwrap(),
+        )
+    }
+
+    #[test]
+    fn rollback_lands_on_first_of_equal_maturity_run() {
+        // F7: drained rows 1..=3 share maturity 101 (a multi-leaf drain
+        // bucket — Tier A never produces this, one coinbase per block).
+        // The partition for fork 100 must land on the FIRST of the run;
+        // landing anywhere inside it would leave rows with maturity > fork
+        // in the tree.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[
+                    entry_created_at(0, 50, 0),
+                    entry_created_at(1, 101, 20),
+                    entry_created_at(2, 101, 30),
+                    entry_created_at(3, 101, 40),
+                    entry_created_at(4, 120, 44),
+                ],
+                &[],
+                &[],
+                BlockHeight(120),
+            )
+            .unwrap();
+        store.rollback_to_fork(BlockHeight(100)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 1, "cut at first of the run");
+        assert_eq!(
+            store.read_drained_entries().unwrap(),
+            vec![entry_created_at(0, 50, 0)]
+        );
+        // The whole run (created on the shared prefix) re-enters pending.
+        assert_eq!(
+            store
+                .read_pending_candidates()
+                .unwrap()
+                .iter()
+                .map(|e| e.gindex.0)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn rollback_to_genesis_migrates_and_filters() {
+        // fork == 0 ⇒ partition at 0 (every maturity > 0): the whole tree
+        // truncates, all drained rows migrate, and only creation_height == 0
+        // outputs (the genesis block's own) survive the filter.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[entry_created_at(0, 60, 0), entry_created_at(1, 65, 5)],
+                &[],
+                &[],
+                BlockHeight(65),
+            )
+            .unwrap();
+        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 0);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(
+            store.read_pending_candidates().unwrap(),
+            vec![entry_created_at(0, 60, 0)]
+        );
+    }
+
+    #[test]
+    fn rollback_on_empty_store_is_noop() {
+        // Also pins the sync_tip empty-vs-height-0 semantics (§6 verify-at-
+        // impl): a fresh store reports tip 0 — indistinguishable from
+        // "synced through height 0" — and that overload is harmless here:
+        // fork 0 ≤ tip 0 passes validation and every step degenerates to a
+        // no-op on empty tables.
+        let store = LeafStore::open_ephemeral().unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 0);
+        assert!(store.read_pending_candidates().unwrap().is_empty());
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+    }
+
+    #[test]
+    fn rollback_without_truncation_still_filters_pending() {
+        // partition == leaf_count (no drained row matured past the fork):
+        // nothing truncates or migrates, but the creation_height filter
+        // still runs — a pending output created in an orphaned block must
+        // not survive just because the drained tree was untouched.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[entry_created_at(0, 50, 0)],
+                &[entry_created_at(1, 140, 80), entry_created_at(2, 130, 20)],
+                &[],
+                BlockHeight(100),
+            )
+            .unwrap();
+        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 1, "no truncation");
+        assert_eq!(
+            store.read_pending_candidates().unwrap(),
+            vec![entry_created_at(2, 130, 20)],
+            "orphaned-creation pending row filtered, prefix row kept"
+        );
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+    }
+
+    #[test]
+    fn rollback_below_pruned_frontier_rejects_without_panic() {
+        // P1: prune segment 0, then ask for a fork below the frontier. The
+        // partition search must probe only the present suffix (a naive
+        // position-probing search would None-probe a hole and panic) and
+        // reject with TruncatedIntoPrunedRange before any write.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
+        let mut entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 10)).collect();
+        entries.push(entry_created_at(e, 5_000, 4_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert!(
+            store.frozen_segment(SegmentId(0)).unwrap().is_some(),
+            "segment 0 must be frozen for the prune to bite"
+        );
+        store.prune_frozen(&[]).unwrap();
+
+        let err = store.rollback_to_fork(BlockHeight(40)).unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::TruncatedIntoPrunedRange { pos } if pos == e
+        ));
+        // Error-before-write: the store is untouched.
+        assert_eq!(store.leaf_count().unwrap(), e + 1);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
+    }
+
+    #[test]
+    fn rollback_across_frozen_segment_drops_freeze_rows() {
+        // F9: a rollback truncating through a frozen-but-unpruned segment
+        // must drop its freeze record and rewind the freeze cursor —
+        // otherwise a post-rollback resume recomposes the root against a
+        // stale R_k.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
+        let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 100, 10)).collect();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+
+        store.rollback_to_fork(BlockHeight(50)).unwrap();
+        assert!(
+            store.frozen_segment(SegmentId(0)).unwrap().is_none(),
+            "freeze record rolled back with its segment"
+        );
+        assert_eq!(store.leaf_count().unwrap(), 0);
+        assert_eq!(
+            store.read_pending_candidates().unwrap().len(),
+            usize::try_from(e).expect("fits usize"),
+            "shared-prefix rows all migrate"
+        );
+        // Cursor rewind, observed through the production freeze path:
+        // re-draining a full segment must freeze it again. A stale cursor
+        // would skip segment 0 silently.
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+    }
+
+    #[test]
+    fn failed_block_deltas_leave_logical_state_identical() {
+        // P8: a delta whose drained append is valid but whose pending
+        // insert is non-canonical aborts the whole txn. The snapshot
+        // comparison over every public read path turns "atomicity is
+        // structural" into a checked property.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[entry_created_at(0, 50, 0)],
+                &[entry_created_at(5, 140, 80)],
+                &[],
+                BlockHeight(90),
+            )
+            .unwrap();
+        let before = logical_snapshot(&store);
+
+        let mut bad = entry_created_at(6, 150, 91);
+        bad.leaf = [0xFFu8; 128];
+        let err = store
+            .append_block_deltas(
+                &[entry_created_at(1, 95, 35)],
+                &[bad],
+                &[Gindex(5)],
+                BlockHeight(95),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::InvalidLeafBytes { batch_index: 1 }
+        ));
+        assert_eq!(
+            logical_snapshot(&store),
+            before,
+            "aborted txn must leave no trace in any table"
+        );
+    }
+
+    fn random_canonical_leaf(rng: &mut ChaCha20Rng) -> [u8; 128] {
+        let mut leaf = [0u8; 128];
+        for chunk in leaf.chunks_mut(32) {
+            let repr = <Selene as Ciphersuite>::F::random(&mut *rng).to_repr();
+            chunk.copy_from_slice(repr.as_ref());
+        }
+        leaf
+    }
+
+    fn random_entry(rng: &mut ChaCha20Rng, gindex: u64, maturity: u64, creation: u64) -> LeafEntry {
+        let mut output_key = [0u8; 32];
+        rng.fill_bytes(&mut output_key);
+        let mut h_pqc = [0u8; 32];
+        rng.fill_bytes(&mut h_pqc);
+        let commitment = if rng.next_u32().is_multiple_of(2) {
+            let mut c = [0u8; 32];
+            rng.fill_bytes(&mut c);
+            Some(c)
+        } else {
+            None
+        };
+        let target = match rng.next_u32() % 4 {
+            0 => TargetKind::TaggedKey,
+            1 => TargetKind::Key,
+            2 => TargetKind::StakedKey {
+                lock_blocks: u64::from(rng.next_u32()),
+            },
+            _ => TargetKind::Other,
+        };
+        LeafEntry {
+            gindex: Gindex(gindex),
+            maturity: BlockHeight(maturity),
+            creation_height: BlockHeight(creation),
+            leaf: random_canonical_leaf(rng),
+            identity: OutputIdentity {
+                output_key,
+                commitment,
+                h_pqc,
+                target,
+            },
+        }
+    }
+
+    #[test]
+    fn random_entries_round_trip_meta_and_pending_codecs() {
+        // Deterministic codec property test (rand_chacha, no new deps):
+        // decode∘encode is identity for leaf_meta and pending rows across
+        // random entries covering every TargetKind variant. Leaf bytes are
+        // genuine random Selene field elements, not masked bytes, so the
+        // canonical re-check in decode_pending runs on representative input.
+        let mut rng = ChaCha20Rng::from_seed([7u8; 32]);
+        for i in 0..64u64 {
+            let creation = u64::from(rng.next_u32());
+            let gindex = u64::from(rng.next_u32());
+            let maturity = creation.saturating_add(u64::from(rng.next_u32() % 1_000_000));
+            let entry = random_entry(&mut rng, gindex, maturity, creation);
+            let meta = encode_leaf_meta(&entry);
+            let stored = decode_stored_leaf_meta(&meta).unwrap();
+            assert_eq!(stored.gindex, entry.gindex, "iteration {i}");
+            assert_eq!(stored.maturity, entry.maturity);
+            assert_eq!(stored.creation_height, entry.creation_height);
+            assert_eq!(stored.identity, entry.identity);
+            assert_eq!(decode_pending(&encode_pending(&entry)).unwrap(), entry);
+        }
+    }
+
+    #[test]
+    fn rollback_equals_prefix_replay_property() {
+        // P6: derive, don't fabricate. A random block sequence is driven
+        // through append_block_deltas (which enforces drain-order maturity
+        // monotonicity and gindex disjointness by construction); rolling
+        // back must equal replaying the prefix through the same write API.
+        // The 150_000 lock class never drains inside the window — the
+        // direct pending-table comparison covers rows no drain-order or
+        // root assertion would ever touch (rider 1).
+        struct SimBlock {
+            height: u64,
+            drained: Vec<LeafEntry>,
+            added: Vec<LeafEntry>,
+            removed: Vec<Gindex>,
+        }
+
+        fn replay_prefix(blocks: &[SimBlock], fork: u64) -> LeafStore {
+            let store = LeafStore::open_ephemeral().unwrap();
+            for b in blocks.iter().filter(|b| b.height <= fork) {
+                store
+                    .append_block_deltas(&b.drained, &b.added, &b.removed, BlockHeight(b.height))
+                    .unwrap();
+            }
+            store
+        }
+
+        fn assert_disjoint(store: &LeafStore) {
+            let drained: std::collections::BTreeSet<u64> = store
+                .read_drained_entries()
+                .unwrap()
+                .iter()
+                .map(|e| e.gindex.0)
+                .collect();
+            let pending: std::collections::BTreeSet<u64> = store
+                .read_pending_candidates()
+                .unwrap()
+                .iter()
+                .map(|e| e.gindex.0)
+                .collect();
+            assert!(drained.is_disjoint(&pending));
+        }
+
+        let mut rng = ChaCha20Rng::from_seed([42u8; 32]);
+        let locks = [10u64, 60, 200, 150_000];
+        let store = LeafStore::open_ephemeral().unwrap();
+        let mut live_pending: std::collections::BTreeMap<u64, LeafEntry> =
+            std::collections::BTreeMap::new();
+        let mut next_gindex = 0u64;
+        let mut blocks = Vec::new();
+        for height in 1..=80u64 {
+            let mut added = Vec::new();
+            for _ in 0..(rng.next_u32() % 3) {
+                let lock = locks[(rng.next_u32() as usize) % locks.len()];
+                let entry = random_entry(&mut rng, next_gindex, height + lock, height);
+                next_gindex += 1;
+                live_pending.insert(entry.gindex.0, entry);
+                added.push(entry);
+            }
+            let due: Vec<u64> = live_pending
+                .values()
+                .filter(|e| e.maturity.0 == height)
+                .map(|e| e.gindex.0)
+                .collect();
+            let drained: Vec<LeafEntry> = due
+                .iter()
+                .map(|g| live_pending.remove(g).expect("due row is live"))
+                .collect();
+            let removed: Vec<Gindex> = drained.iter().map(|e| e.gindex).collect();
+            store
+                .append_block_deltas(&drained, &added, &removed, BlockHeight(height))
+                .unwrap();
+            blocks.push(SimBlock {
+                height,
+                drained,
+                added,
+                removed,
+            });
+        }
+        assert!(
+            store.leaf_count().unwrap() > 0,
+            "fixture must actually drain"
+        );
+        assert_disjoint(&store);
+
+        // First rollback, then a second deeper one on the same store —
+        // sequential reorgs compose.
+        for fork in [55u64, 21] {
+            store.rollback_to_fork(BlockHeight(fork)).unwrap();
+            let fresh = replay_prefix(&blocks, fork);
+            assert_eq!(
+                logical_snapshot(&store),
+                logical_snapshot(&fresh),
+                "rollback to {fork} must equal prefix replay"
+            );
+            assert_disjoint(&store);
+        }
     }
 
     #[test]
