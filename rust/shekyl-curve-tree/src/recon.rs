@@ -16,7 +16,7 @@
 //! by `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` and runs at the
 //! decode boundary (`client`, CT-3). No second `tx_extra` parser exists.
 
-use crate::types::{LeafEntry, OutputIdentity, TargetKind};
+use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
 use shekyl_fcmp::tree::{build_layers, construct_leaf, selene_hash_init, SCALARS_PER_LEAF};
 use shekyl_oxide::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 
@@ -151,8 +151,9 @@ pub fn collect_block_leaves(
             };
             if let Some(leaf) = try_build_leaf(output) {
                 out.push(LeafEntry {
-                    gindex: this_gindex,
-                    maturity,
+                    gindex: Gindex(this_gindex),
+                    maturity: BlockHeight(maturity),
+                    creation_height: BlockHeight(block_height),
                     leaf,
                     identity: *output,
                 });
@@ -179,7 +180,7 @@ pub fn collect_block_leaves(
 pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafEntry> {
     let mut drained: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity <= drained_through)
+        .filter(|e| e.maturity <= BlockHeight(drained_through))
         .collect();
     drained.sort_by_key(|e| (e.maturity, e.gindex));
     drained
@@ -196,7 +197,7 @@ pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafE
 pub fn newly_drained_at_cutoff(entries: &[LeafEntry], drained_through: u64) -> Vec<LeafEntry> {
     let mut batch: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity == drained_through)
+        .filter(|e| e.maturity == BlockHeight(drained_through))
         .collect();
     batch.sort_by_key(|e| e.gindex);
     batch.into_iter().copied().collect()
@@ -358,8 +359,20 @@ mod tests {
         let next = collect_block_leaves(60, &txs, 0, &mut leaves);
         assert_eq!(next, 2, "both vouts consume an index");
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
-        assert_eq!(leaves[0].gindex, 1, "leaf carries its true global index");
-        assert_eq!(leaves[0].maturity, 60 + COINBASE_LOCK_WINDOW as u64);
+        assert_eq!(
+            leaves[0].gindex,
+            Gindex(1),
+            "leaf carries its true global index"
+        );
+        assert_eq!(
+            leaves[0].maturity,
+            BlockHeight(60 + COINBASE_LOCK_WINDOW as u64)
+        );
+        assert_eq!(
+            leaves[0].creation_height,
+            BlockHeight(60),
+            "leaf records the block it was created in"
+        );
     }
 
     #[test]
@@ -372,8 +385,9 @@ mod tests {
         let id = coinbase_output();
         let leaf = try_build_leaf(&id).expect("leaf");
         let entry = LeafEntry {
-            gindex: 0,
-            maturity: 120,
+            gindex: Gindex(0),
+            maturity: BlockHeight(120),
+            creation_height: BlockHeight(60),
             leaf,
             identity: id,
         };
@@ -389,21 +403,24 @@ mod tests {
         let leaf = try_build_leaf(&id).expect("leaf");
         let entries = [
             LeafEntry {
-                gindex: 5,
-                maturity: 70,
+                gindex: Gindex(5),
+                maturity: BlockHeight(70),
+                creation_height: BlockHeight(10),
                 leaf,
                 identity: id,
             },
             LeafEntry {
-                gindex: 2,
-                maturity: 70,
+                gindex: Gindex(2),
+                maturity: BlockHeight(70),
+                creation_height: BlockHeight(10),
                 leaf,
                 identity: id,
             },
             // Not yet drained at cutoff 70.
             LeafEntry {
-                gindex: 1,
-                maturity: 71,
+                gindex: Gindex(1),
+                maturity: BlockHeight(71),
+                creation_height: BlockHeight(11),
                 leaf,
                 identity: id,
             },
@@ -419,14 +436,16 @@ mod tests {
         let leaf = try_build_leaf(&id).expect("valid leaf");
         let entries = vec![
             LeafEntry {
-                gindex: 0,
-                maturity: 60,
+                gindex: Gindex(0),
+                maturity: BlockHeight(60),
+                creation_height: BlockHeight(0),
                 leaf,
                 identity: id,
             },
             LeafEntry {
-                gindex: 1,
-                maturity: 10,
+                gindex: Gindex(1),
+                maturity: BlockHeight(10),
+                creation_height: BlockHeight(0),
                 leaf,
                 identity: id,
             },

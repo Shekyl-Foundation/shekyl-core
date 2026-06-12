@@ -138,10 +138,16 @@ pub struct LeafEntry {
     /// monotonically. Secondary drain sort key. The leaf set is a subset
     /// of the indexed set, so a `LeafEntry`'s `gindex` may skip values
     /// consumed by leaf-ineligible outputs (CT2_DRAIN_ORDER.md §2.2).
-    pub gindex: u64,
+    pub gindex: Gindex,
     /// Maturity height at which this leaf drains into the tree. Primary
     /// drain sort key.
-    pub maturity: u64,
+    pub maturity: BlockHeight,
+    /// Block height the output was created at. The lock offset from
+    /// creation to `maturity` varies by output class (coinbase +60,
+    /// regular +10, stake tiers), so maturity is **not** invertible to
+    /// creation height — the rollback two-class partition (CT3_SYNC.md
+    /// R1-Q3/F4) filters on this field directly.
+    pub creation_height: BlockHeight,
     /// The constructed 128-byte leaf (4 × 32-byte Selene scalars), cached
     /// as the x-coordinate form `build_layers` consumes (the hot path that
     /// rebuilds the root at a reference height).
@@ -223,7 +229,7 @@ pub struct AssembledPath {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ReferenceBlock {
     /// Block height.
-    pub height: u64,
+    pub height: BlockHeight,
     /// Header-committed curve-tree root (consensus value to match).
     pub curve_tree_root: [u8; 32],
 }

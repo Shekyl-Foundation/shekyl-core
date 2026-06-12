@@ -14,7 +14,7 @@ use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
-use crate::types::{BlockHeight, LeafEntry, TargetKind, TreePosition};
+use crate::types::{BlockHeight, Gindex, LeafEntry, TargetKind, TreePosition};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
 const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
@@ -728,14 +728,15 @@ fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64,
         .get(TreePosition(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
-    Ok(stored.maturity.saturating_add(1))
+    Ok(stored.maturity.0.saturating_add(1))
 }
 
 /// Metadata persisted in `LEAF_META_TABLE` (leaf bytes live in `LEAVES_TABLE`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StoredLeafMeta {
-    gindex: u64,
-    maturity: u64,
+    gindex: Gindex,
+    maturity: BlockHeight,
+    creation_height: BlockHeight,
     identity: crate::types::OutputIdentity,
 }
 
@@ -795,8 +796,8 @@ fn decode_frozen_segment(buf: &[u8; 56]) -> FrozenSegmentRecord {
 
 fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     let mut buf = [0u8; 192];
-    buf[0..8].copy_from_slice(&entry.gindex.to_be_bytes());
-    buf[8..16].copy_from_slice(&entry.maturity.to_be_bytes());
+    buf[0..8].copy_from_slice(&entry.gindex.0.to_be_bytes());
+    buf[8..16].copy_from_slice(&entry.maturity.0.to_be_bytes());
     buf[16..48].copy_from_slice(&entry.identity.output_key);
     match entry.identity.commitment {
         Some(c) => {
@@ -810,12 +811,16 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     if let TargetKind::StakedKey { lock_blocks } = entry.identity.target {
         buf[114..122].copy_from_slice(&lock_blocks.to_be_bytes());
     }
+    // Schema v2: creation_height in the formerly-free range. The value
+    // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
+    // schema_version cell exists — redb cannot see this layout change.
+    buf[122..130].copy_from_slice(&entry.creation_height.0.to_be_bytes());
     buf
 }
 
 fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError> {
-    let gindex = u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes"));
-    let maturity = u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes"));
+    let gindex = Gindex(u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes")));
+    let maturity = BlockHeight(u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes")));
     let mut output_key = [0u8; 32];
     output_key.copy_from_slice(&buf[16..48]);
     let commitment = match buf[48] {
@@ -830,9 +835,13 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
     let mut h_pqc = [0u8; 32];
     h_pqc.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
+    let creation_height = BlockHeight(u64::from_be_bytes(
+        buf[122..130].try_into().expect("8 bytes"),
+    ));
     Ok(StoredLeafMeta {
         gindex,
         maturity,
+        creation_height,
         identity: crate::types::OutputIdentity {
             output_key,
             commitment,
@@ -881,8 +890,11 @@ mod tests {
 
     fn sample_entry(gindex: u64, maturity: u64) -> LeafEntry {
         LeafEntry {
-            gindex,
-            maturity,
+            gindex: Gindex(gindex),
+            maturity: BlockHeight(maturity),
+            // Coinbase-shaped offset; tests that exercise the rollback
+            // creation-height filter construct entries explicitly.
+            creation_height: BlockHeight(maturity.saturating_sub(60)),
             leaf: [1u8; 128],
             identity: OutputIdentity {
                 output_key: [1u8; 32],
@@ -913,6 +925,22 @@ mod tests {
             "aborted batch must not partially land"
         );
         assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+    }
+
+    #[test]
+    fn leaf_meta_round_trips_creation_height() {
+        // Schema-v2 round trip: creation_height survives encode/decode at
+        // its `buf[122..130]` slot alongside every pre-existing field —
+        // the rollback two-class filter (CT3_SYNC.md R1-Q3/F4) depends on
+        // this value, so a silent zero here would misclassify every leaf
+        // as genesis-created.
+        let mut entry = sample_entry(7, 130);
+        entry.creation_height = BlockHeight(70);
+        let stored = decode_stored_leaf_meta(&encode_leaf_meta(&entry)).unwrap();
+        assert_eq!(stored.gindex, Gindex(7));
+        assert_eq!(stored.maturity, BlockHeight(130));
+        assert_eq!(stored.creation_height, BlockHeight(70));
+        assert_eq!(stored.identity, entry.identity);
     }
 
     #[test]
@@ -1077,7 +1105,6 @@ mod tests {
     /// tables did.
     #[test]
     fn typed_key_delegation_parity() {
-        use crate::types::Gindex;
         use redb::{Key as _, Value as _};
 
         fn check_u64<T>(wrap: fn(u64) -> T)
@@ -1135,8 +1162,6 @@ mod tests {
     /// not silent cross-keyed reads.
     #[test]
     fn typed_key_table_type_guard_fires() {
-        use crate::types::Gindex;
-
         const WRONG_KEY_LEAVES: TableDefinition<Gindex, &[u8; 128]> =
             TableDefinition::new("leaves");
 
