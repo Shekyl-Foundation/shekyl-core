@@ -400,6 +400,93 @@ impl LeafStore {
         Ok(())
     }
 
+    /// All pending (not yet drained) leaves, in gindex order — the resume
+    /// read path's pending half (CT-3b rebuilds the client's undrained set
+    /// from this).
+    ///
+    /// Corruption-loud: any row that fails to decode is
+    /// [`StoreError::CorruptMeta`] — no skip-and-continue, a corrupt
+    /// pending row is a hard error, not a silently dropped output.
+    pub fn read_pending_candidates(&self) -> Result<Vec<LeafEntry>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let pending = txn.open_table(PENDING_TABLE)?;
+        let mut out = Vec::new();
+        for row in pending.iter()? {
+            let (key, value) = row?;
+            let entry = decode_pending(value.value())?;
+            if entry.gindex != key.value() {
+                return Err(StoreError::CorruptMeta(
+                    "pending row gindex disagrees with its key",
+                ));
+            }
+            out.push(entry);
+        }
+        Ok(out)
+    }
+
+    /// All drained leaves still present in the store, in tree-position
+    /// order — the resume read path's drained half. Pruned positions
+    /// (non-owned leaf bytes dropped by [`Self::prune_frozen`]) are simply
+    /// absent; CT-3b rebuilds `entries`/`entries_by_maturity`/`next_gindex`
+    /// from this plus [`Self::read_pending_candidates`] and
+    /// [`Self::sync_tip_height`].
+    ///
+    /// Two structural invariants are runtime-checked on every scan:
+    ///
+    /// - **Key-set symmetry**: `leaves` and `leaf_meta` are written and
+    ///   deleted in lockstep everywhere (append, truncate, prune), so any
+    ///   asymmetry is corruption — [`StoreError::CorruptMeta`],
+    ///   unconditionally (no pruned-range carve-out exists).
+    /// - **Drain-order monotonicity (P7)**: `maturity` must be
+    ///   non-decreasing in position order. The rollback partition search
+    ///   rests on this S8 invariant; checking it here converts a
+    ///   design-doc assumption into a precondition verified on every
+    ///   resume, at one comparison per row.
+    pub fn read_drained_entries(&self) -> Result<Vec<LeafEntry>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let meta = txn.open_table(LEAF_META_TABLE)?;
+        let mut out = Vec::new();
+        let mut last_maturity: Option<BlockHeight> = None;
+        let mut leaves_iter = leaves.iter()?;
+        let mut meta_iter = meta.iter()?;
+        loop {
+            let entry = match (leaves_iter.next(), meta_iter.next()) {
+                (None, None) => break,
+                (Some(leaf_row), Some(meta_row)) => {
+                    let (leaf_key, leaf_value) = leaf_row?;
+                    let (meta_key, meta_value) = meta_row?;
+                    if leaf_key.value() != meta_key.value() {
+                        return Err(StoreError::CorruptMeta(
+                            "leaves/leaf_meta key-set asymmetry",
+                        ));
+                    }
+                    let stored = decode_stored_leaf_meta(meta_value.value())?;
+                    LeafEntry {
+                        gindex: stored.gindex,
+                        maturity: stored.maturity,
+                        creation_height: stored.creation_height,
+                        leaf: *leaf_value.value(),
+                        identity: stored.identity,
+                    }
+                }
+                _ => {
+                    return Err(StoreError::CorruptMeta(
+                        "leaves/leaf_meta key-set asymmetry",
+                    ));
+                }
+            };
+            if last_maturity.is_some_and(|prev| entry.maturity < prev) {
+                return Err(StoreError::CorruptMeta(
+                    "drain-order maturity regression in persisted leaves",
+                ));
+            }
+            last_maturity = Some(entry.maturity);
+            out.push(entry);
+        }
+        Ok(out)
+    }
+
     /// Scan only from the persisted freeze cursor forward (O(newly eligible)
     /// per block, not O(total segments)).
     fn maybe_freeze_segments_in_txn(
@@ -920,6 +1007,27 @@ fn encode_pending(entry: &LeafEntry) -> [u8; 320] {
     buf
 }
 
+/// Decode a pending row back to a [`LeafEntry`], corruption-loud: the
+/// meta slice goes through the validating leaf-meta decoder, and the leaf
+/// bytes are re-checked canonical (they were validated at write time, so
+/// a failure here is store corruption, not caller error).
+fn decode_pending(buf: &[u8; 320]) -> Result<LeafEntry, StoreError> {
+    let mut leaf = [0u8; 128];
+    leaf.copy_from_slice(&buf[..128]);
+    if !leaf_bytes_are_canonical(&leaf) {
+        return Err(StoreError::CorruptMeta("non-canonical pending leaf bytes"));
+    }
+    let meta: &[u8; 192] = buf[128..].try_into().expect("192-byte meta slice");
+    let stored = decode_stored_leaf_meta(meta)?;
+    Ok(LeafEntry {
+        gindex: stored.gindex,
+        maturity: stored.maturity,
+        creation_height: stored.creation_height,
+        leaf,
+        identity: stored.identity,
+    })
+}
+
 fn encode_target(target: &TargetKind) -> u8 {
     match target {
         TargetKind::TaggedKey => 0,
@@ -1125,6 +1233,61 @@ mod tests {
             pending_gindexes(&store).is_empty(),
             "stale pending rows would corrupt a from_blocks rebuild"
         );
+    }
+
+    #[test]
+    fn resume_reads_round_trip_pending_and_drained() {
+        // Resume contract: what append_block_deltas wrote is exactly what
+        // the two read paths return, field-for-field, in order.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let drained = [sample_entry(0, 60), sample_entry(1, 61)];
+        let pending = [sample_entry(5, 90), sample_entry(3, 80)];
+        store
+            .append_block_deltas(&drained, &pending, &[], BlockHeight(61))
+            .unwrap();
+
+        assert_eq!(store.read_drained_entries().unwrap(), drained.to_vec());
+        // Pending returns in gindex (key) order regardless of insert order.
+        assert_eq!(
+            store.read_pending_candidates().unwrap(),
+            vec![pending[1], pending[0]]
+        );
+    }
+
+    #[test]
+    fn read_drained_rejects_maturity_regression() {
+        // The P7 monotonicity check: a batch persisted out of drain order
+        // (a caller bug — the client sorts by (maturity, gindex)) must be
+        // rejected at resume, not silently fed to the rollback partition
+        // search that assumes sortedness.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&[sample_entry(0, 70), sample_entry(1, 61)], BlockHeight(70))
+            .unwrap();
+        let err = store.read_drained_entries().unwrap_err();
+        assert!(matches!(err, StoreError::CorruptMeta(_)));
+    }
+
+    #[test]
+    fn read_drained_rejects_key_set_asymmetry() {
+        // Fault injection (test-only): every production path writes and
+        // deletes leaves/leaf_meta in lockstep, so asymmetry can only be
+        // store corruption — manufactured here by deleting one meta row
+        // directly to prove the detector fires.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&[sample_entry(0, 60), sample_entry(1, 61)], BlockHeight(61))
+            .unwrap();
+        {
+            let txn = store.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(LEAF_META_TABLE).unwrap();
+                meta.remove(TreePosition(1)).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        let err = store.read_drained_entries().unwrap_err();
+        assert!(matches!(err, StoreError::CorruptMeta(_)));
     }
 
     #[test]
