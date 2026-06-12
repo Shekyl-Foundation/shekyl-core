@@ -4,6 +4,26 @@
 
 ### Added
 
+- **archival: `g(age)` normalization pinned — relative-depth age; constant
+  mapped to the sealed band (2026-06-11).** Closes the Layer-2 Finding-5
+  FOLLOWUPS item the day it opened (pre-genesis discount;
+  `ARCHIVAL_REWARD_ARITHMETIC.md` §Shard age). Consensus shard age is now a
+  **relative depth fraction** — `age_milli = floor(age_epochs · 1000 /
+  chain_epochs) ∈ [0, 1000]` — so `g(age)` spans `[1, 1 + age_weight]` for
+  the life of the chain, matching the sim semantics the Layer-2 band run
+  sealed. The prior raw-epoch form grew `g` without bound (`≈ 700·w` for a
+  10-year shard at `SEB = 10 000`), concentrating `Σwork` onto oldest-band
+  holders over mission timeframes — a shape no sim run validated and the
+  whale-capture surface Layer 2 gates. `shard_age_milli` reimplemented
+  (signature unchanged — callers already pass `close_block_height`);
+  `archival_reward_age_weight_milli` 1000 → **2000** (sealed target
+  `g* ≈ 2`, calibration band `[1500, 2500]`, retunable on stressnet
+  evidence without a design round); epoch-close KAT vector re-derived by
+  hand (`Σwork` 3500 → 2590, derivation recorded in the fixture
+  description); `REWARD_EMISSION_LEG.md` Channel-1 prose carries the unit.
+  Mission-timeframe note: this change is what makes the `g ≈ 2` seal valid
+  at the 30-year horizon, not just at genesis.
+
 - **archival: Layer-2 margin-robustness band run and closed (2026-06-11).**
   Built and ran the scoped sweep (`shekyl-staking-sim` axes `layer2_band{,_whale,_coloc}`,
   `layer2_budget{,_whale}`, `layer2_colocbud`; 29 scenarios; results in

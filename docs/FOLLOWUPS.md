@@ -47,23 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Pin the consensus `g(age)` age normalization, then map the sealed `g`
+- **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
-  2026-06-11).** The Layer-2 margin-robustness band
-  ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
-  §*Layer-2 margin-robustness band — results* Finding 5) sealed
-  `g ∈ [1.5, 2.5]` (target `≈ 2`) in **sim units** — `g = 1 + w · age` with
-  age normalized to [0, 1]. The consensus form (`g_age_milli` /
-  `shard_age_milli` in `shekyl-archival-retention`) runs on **raw epoch
-  counts**, unbounded — a different functional shape; the provisional
-  `archival_reward_age_weight_milli = 1000` has no defined mapping from the
-  sealed band. Pin the normalization (e.g. age over chain depth in
-  settlement epochs, or a capped weight schedule) as a spec decision in
-  `ARCHIVAL_REWARD_ARITHMETIC.md`, then set the milli constant at
-  CALIBRATION. This is consensus reward math — own review, not a ride-along.
-  Target: V3.0 (pre-genesis; the constant ships in genesis consensus).
-  *Reopen sooner if:* any emission-leg implementation PR consumes
-  `g_age_milli` against real shard ages before the normalization is pinned.
+  2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
+  normalization pinned as **relative depth** —
+  `age_milli = floor(age_epochs · 1000 / chain_epochs) ∈ [0, 1000]` — in
+  [`design/ARCHIVAL_REWARD_ARITHMETIC.md`](./design/ARCHIVAL_REWARD_ARITHMETIC.md)
+  §Shard age, matching the sim semantics the Layer-2 band run sealed
+  (`g` spans `[1, 1 + w]` for the life of the chain; the prior raw-epoch
+  form grew `g` without bound — `≈ 700·w` at 10 years — a shape no sim run
+  validated). `shard_age_milli` reimplemented (signature unchanged; callers
+  already pass `close_block_height`); `archival_reward_age_weight_milli`
+  set to **2000** (sealed target `g* ≈ 2`, calibration band `[1500, 2500]`);
+  `consensus_state_kat_v1.json` epoch-close vector re-derived by hand
+  (`Σwork` 3500 → 2590, derivation in the fixture description).
 
 - **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
   consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while

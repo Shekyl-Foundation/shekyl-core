@@ -905,18 +905,20 @@ insurance at endogenous-population thickness costs nothing while the servo
 holds the purse above bare-lean), with `g = 1.5` recorded as the fallback if
 calibration finds the purse pinned at the bare-lean point.
 
-**Finding 5 — `g` units gap blocks the constant mapping (calibration item).**
+**Finding 5 — `g` units gap blocks the constant mapping. CLOSED same day.**
 The sealed band is in **sim units**: `g = 1 + age_weight · age` with age
 **normalized to [0, 1]** (fraction of chain depth). The consensus form
-(`g_age_milli` in `shekyl-archival-retention/src/reward_arithmetic.rs`) takes
-**raw epoch counts** from `shard_age_milli` — unbounded, so consensus `g` grows
-linearly with shard age forever, a different functional shape from the one this
-run sealed. `archival_reward_age_weight_milli` (currently a provisional `1000`)
-therefore has **no defined mapping** from the sealed band until the consensus
-age normalization is pinned (e.g. age normalized by chain depth in epochs, or
-an explicit weight schedule). Recorded in `docs/FOLLOWUPS.md` (V3.0): pin the
-normalization, then map `g* ≈ 2` onto the milli constant at CALIBRATION. The
-band, not the point and not the milli value, is what this run seals.
+(`g_age_milli` in `shekyl-archival-retention/src/reward_arithmetic.rs`) took
+**raw epoch counts** from `shard_age_milli` — unbounded, so consensus `g` grew
+linearly with shard age forever (`≈ 700·w` at 10 years), a different functional
+shape from the one this run sealed and a mission-timeframe oldest-band
+concentration surface. **Resolution (2026-06-11, same day):** normalization
+pinned as relative depth — `age_milli = floor(age_epochs · 1000 /
+chain_epochs)` — in `ARCHIVAL_REWARD_ARITHMETIC.md` §Shard age;
+`shard_age_milli` reimplemented (signature unchanged);
+`archival_reward_age_weight_milli = 2000` maps the sealed target `g* ≈ 2` with
+calibration band `[1500, 2500]`; the epoch-close KAT vector re-derived by hand
+(`Σwork` 3500 → 2590).
 
 **Reversion clause (rule 21).** Reopen the Layer-2 seal iff (a) any direct whale
 gauge (`mxSW`, `wB4`, per-band distinct-actor count) trends past half its bar in

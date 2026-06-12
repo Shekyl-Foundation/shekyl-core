@@ -47,7 +47,7 @@
     { "work_milli": 32000, "capped_milli": 8000 }
   ],
   "epoch_close": {
-    "description": "Composed epoch_close_compute replay: membership, R_market counting, held-shard intersection, age weighting, Σwork. Values derived from §3.3/§3.5 by hand: g(age)=1000+age_weight·age/1000; scarcity=floor(1000·g/(R·1000)); curve below first band is identity.",
+    "description": "Composed epoch_close_compute replay: membership, R_market counting, held-shard intersection, age weighting, Σwork. Values derived from §3.3/§3.5 by hand with relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age): age_milli=floor(age_epochs·1000/chain_epochs); shard 42 → floor(4·1000/11)=363; g(age)=1000+floor(age_weight·age/1000)=1181; scarcity=floor(1000·g/(R·1000)) → 590; curve below first band is identity. Σ = (590+500) + 500 + 1000 = 2590.",
     "settlement_epoch": 10,
     "close_block_height": 110000,
     "settlement_epoch_blocks": 10000,
@@ -75,7 +75,7 @@
     ],
     "expected": {
       "r_market_by_shard": [2, 2, 1],
-      "sigma_work_milli": 3500
+      "sigma_work_milli": 2590
     }
   }
 }

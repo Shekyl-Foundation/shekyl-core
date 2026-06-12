@@ -7,7 +7,9 @@
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
-use crate::reward_arithmetic::{curve_milli, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE};
+use crate::reward_arithmetic::{
+    curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
+};
 
 const _: () = assert!(
     SETTLEMENT_EPOCH_BLOCKS > 0,
@@ -166,11 +168,20 @@ pub fn sigma_work_milli(
     sum
 }
 
-/// Shard age in milli-epochs at `close_block_height` (ARCHIVAL_REWARD_ARITHMETIC.md §"Shard age").
+/// Shard age as a **relative depth fraction** in milli at `close_block_height`
+/// (ARCHIVAL_REWARD_ARITHMETIC.md §"Shard age", normalization pinned 2026-06-11).
 ///
-/// `age = floor((close_block_height − freeze_height) / settlement_epoch_blocks)`
-/// epochs, scaled by [`WORK_MILLI_SCALE`]. Zero when the shard segment is not
-/// yet frozen past the close height or `settlement_epoch_blocks` is zero.
+/// `age = floor((close − freeze) / SEB) / floor(close / SEB)` — settlement
+/// epochs since freeze over chain depth in settlement epochs — scaled by
+/// [`WORK_MILLI_SCALE`] and floored, so the result is bounded to
+/// `[0, WORK_MILLI_SCALE]` and `g(age)` spans exactly `[1, 1 + age_weight]`
+/// for the life of the chain (the scale-free shape the Layer-2 band run
+/// sealed; raw epoch counts would grow `g` without bound, concentrating
+/// `Σwork` onto oldest-band holders over mission timeframes).
+///
+/// Zero when the segment is not yet frozen past the close height, before the
+/// first settlement epoch completes (`chain_epochs = 0` — everything is hot
+/// at genesis), or when `settlement_epoch_blocks` is zero.
 #[must_use]
 pub fn shard_age_milli(
     close_block_height: u64,
@@ -181,7 +192,14 @@ pub fn shard_age_milli(
         return 0;
     }
     let age_epochs = (close_block_height - freeze_height) / settlement_epoch_blocks;
-    age_epochs.saturating_mul(WORK_MILLI_SCALE)
+    let chain_epochs = close_block_height / settlement_epoch_blocks;
+    if chain_epochs == 0 {
+        return 0;
+    }
+    // `age_epochs <= chain_epochs` (freeze_height >= 0, floor is monotone),
+    // so the quotient is bounded by WORK_MILLI_SCALE and the fallback is
+    // unreachable for in-range inputs.
+    mul_div_floor(age_epochs, WORK_MILLI_SCALE, chain_epochs).unwrap_or(WORK_MILLI_SCALE)
 }
 
 /// One market candidate's bond fields at epoch close (LMDB-shape-free gather output).
@@ -568,13 +586,21 @@ mod tests {
     }
 
     #[test]
-    fn shard_age_milli_floors_by_settlement_epoch() {
-        assert_eq!(shard_age_milli(60_000, 0, 10_000), 6_000);
+    fn shard_age_milli_is_relative_depth_fraction() {
+        // Genesis-band shard: frozen in the first epoch, age = chain depth → 1000.
+        assert_eq!(shard_age_milli(60_000, 0, 10_000), 1_000);
+        // Frozen this epoch → 0 (epoch floor).
         assert_eq!(shard_age_milli(60_000, 55_000, 10_000), 0);
         assert_eq!(shard_age_milli(60_000, 60_000, 10_000), 0);
+        // Interior depth: age_epochs 4 over chain_epochs 11 → floor(4000/11) = 363.
+        assert_eq!(shard_age_milli(110_000, 70_000, 10_000), 363);
+        assert_eq!(shard_age_milli(110_000, 5_000, 10_000), 909);
+        // Before the first settlement epoch completes, everything is hot.
+        assert_eq!(shard_age_milli(9_999, 0, 10_000), 0);
+        // Degenerate SEB.
         assert_eq!(shard_age_milli(60_000, 0, 0), 0);
-        // saturates instead of overflowing on pathological heights
-        assert_eq!(shard_age_milli(u64::MAX, 0, 1), u64::MAX);
+        // Bounded at pathological heights — never exceeds WORK_MILLI_SCALE.
+        assert_eq!(shard_age_milli(u64::MAX, 0, 1), 1_000);
     }
 
     #[test]

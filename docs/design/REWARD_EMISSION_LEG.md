@@ -235,7 +235,10 @@ reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud o
 
 **Channel 1 — scarcity.** `R_market` is the public replication count; holding a shard
 raises `R` and dilutes its own `1/R`. `g(age) = 1 + age_weight·age` (public shard
-property) is the privacy-clean deep-history premium replacing retired tier weighting.
+property) is the privacy-clean deep-history premium replacing retired tier weighting;
+`age` is the shard's **relative depth fraction** `∈ [0, 1]` (settlement epochs since
+freeze over chain depth in settlement epochs — `ARCHIVAL_REWARD_ARITHMETIC.md`
+§Shard age), so `g` spans `[1, 1 + age_weight]` for the life of the chain.
 `serve_credit_bit` is the challenge-pass bit from consensus archival state (gate 2), not
 retrieval volume.
 
