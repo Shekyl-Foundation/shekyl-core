@@ -15,7 +15,8 @@
 //! (`20-rust-vs-cpp-policy.mdc`; coarse-call FFI discipline). The FFI wrapper
 //! lands with its first caller, the emission vin's connect path.
 //!
-//! Window maintenance is part of [`check_and_set`], not a separate sweep:
+//! Window maintenance is part of [`claimed_epochs_check_and_set`], not a
+//! separate sweep:
 //! entries below `current_settled_epoch − W` are pruned on insert. The prune
 //! is safe by construction — a pruned epoch is unclaimable under the
 //! `MAX_CLAIM_AGE_W` rule (§6.6), and `ARCHIVAL_REORG_DEPTH_BLOCKS` (720) is
@@ -31,8 +32,8 @@ use crate::MAX_CLAIM_AGE_W;
 /// §6.3 pins the cap at 32; the const assertion below keeps the derived form
 /// honest against the pin if `max_claim_age_w` ever moves in
 /// `config/consensus_constants.json`. The cap is unreachable through
-/// [`check_and_set`] (a pruned, windowed set holds at most `W` entries); it
-/// bounds what an untrusted at-rest decode will accept.
+/// [`claimed_epochs_check_and_set`] (a pruned, windowed set holds at most
+/// `W` entries); it bounds what an untrusted at-rest decode will accept.
 pub const MAX_CLAIMED_EPOCH_ENTRIES: u64 = MAX_CLAIM_AGE_W + 6;
 
 const _: () = assert!(
@@ -41,7 +42,8 @@ const _: () = assert!(
      (W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves"
 );
 
-/// Rejection reasons for [`check_and_set`]; the set is not mutated on error.
+/// Rejection reasons for [`claimed_epochs_check_and_set`]; the set is not
+/// mutated on error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimedEpochsError {
     /// `epoch >= current_settled_epoch`: only closed settlement epochs are
