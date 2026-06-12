@@ -610,10 +610,27 @@ impl LeafStore {
     /// Resets [`Self::sync_tip_height`] to `0` (sync invalidated until the next
     /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
-        let pos = pos.0;
         let txn = self.db.begin_write()?;
-        // Bounds check inside the write txn (one snapshot); returning early
-        // drops the uncommitted txn, which aborts it.
+        Self::truncate_internals(&txn, pos, BlockHeight(0))?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Shared truncation core: partition delete on the leaf tables,
+    /// frozen/pinned segment-row rollback (F9), freeze-cursor recompute,
+    /// and leaf-count/tip reset — inside the caller's transaction, so
+    /// [`Self::truncate_from_tree_position`] (`new_tip = 0`: sync
+    /// invalidated) and [`Self::rollback_to_fork`] (`new_tip = fork`)
+    /// share one implementation. Two truncation bodies would let the F9
+    /// freeze-awareness drift apart.
+    fn truncate_internals(
+        txn: &redb::WriteTransaction,
+        pos: TreePosition,
+        new_tip: BlockHeight,
+    ) -> Result<(), StoreError> {
+        let pos = pos.0;
+        // Bounds check inside the write txn (one snapshot); the caller
+        // dropping the uncommitted txn on error aborts it.
         let current_leaf_count = {
             let meta = txn.open_table(META_TABLE)?;
             let v = meta.get(META_LEAF_COUNT)?;
@@ -685,12 +702,153 @@ impl LeafStore {
                 }
             }
         }
-        let next_freeze_seg = recompute_next_freeze_seg(&txn, pos)?;
+        let next_freeze_seg = recompute_next_freeze_seg(txn, pos)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &pos)?;
-            meta.insert(META_SYNC_TIP, &0u64)?;
+            meta.insert(META_SYNC_TIP, &new_tip.0)?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
+        }
+        Ok(())
+    }
+
+    /// Roll the store back to `fork_height` after a reorg, in one ACID
+    /// write txn (CT3_SYNC.md R1-Q3, amended two-class form):
+    ///
+    /// 1. **Partition search (pruned-range-safe, P1/F7).** Drained rows
+    ///    are maturity-sorted in position order (the P7 invariant), so the
+    ///    cut point is `partition_point(maturity > fork_height)` — the
+    ///    *first* index of an equal-maturity run. Probes run over the
+    ///    present suffix `[pruned frontier, leaf_count)` only, so a
+    ///    post-prune store can never `None`-probe. A partition resolving
+    ///    at a non-zero frontier means the cut lands at/below pruned rows:
+    ///    [`StoreError::TruncatedIntoPrunedRange`], before any write.
+    ///    (Intentionally conservative when `partition == frontier > 0`
+    ///    would be a valid exact-boundary cut: pruned segments are buried
+    ///    beyond `SPENDABLE_AGE + 720`, so no plausible fork makes that
+    ///    cut valid — rejecting unconditionally avoids reasoning about
+    ///    rows that no longer exist. Do not "fix" this.)
+    /// 2. **Read-before-delete migration.** The truncated suffix is read
+    ///    in full (leaf bytes + meta, including `creation_height`) before
+    ///    any delete — `leaf_meta` alone does not carry the leaf bytes.
+    /// 3. [`Self::truncate_internals`] — shared with
+    ///    [`Self::truncate_from_tree_position`], so frozen/pinned segment
+    ///    rollback (F9) and the freeze-cursor recompute cannot drift; the
+    ///    tip resets to `fork_height` (not 0 — the store is still synced,
+    ///    just shorter).
+    /// 4. Migrated rows re-enter the pending table (collision-checked,
+    ///    same discipline as [`Self::append_block_deltas`]).
+    /// 5. Pending rows with `creation_height > fork_height` are deleted —
+    ///    the uniform class-(a) filter, catching orphaned-block outputs
+    ///    whether they were still pending or just migrated. Class (b)
+    ///    (created on the shared prefix, drained on the orphaned suffix)
+    ///    survives by composition: migrated in step 4, passes the filter,
+    ///    re-drains on re-sync.
+    ///
+    /// `fork_height` above the synced tip is a caller bug
+    /// ([`StoreError::InvalidRollback`]); there is nothing above the tip
+    /// to roll back.
+    pub fn rollback_to_fork(&self, fork_height: BlockHeight) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        let (sync_tip, leaf_count) = {
+            let meta = txn.open_table(META_TABLE)?;
+            let tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
+            let count = meta.get(META_LEAF_COUNT)?.map(|v| v.value()).unwrap_or(0);
+            (tip, count)
+        };
+        if fork_height.0 > sync_tip {
+            return Err(StoreError::InvalidRollback {
+                fork_height: fork_height.0,
+                sync_tip,
+            });
+        }
+
+        // Steps 1–2 under a scoped read of the leaf tables.
+        let (partition, migrated) = {
+            let leaf_meta = txn.open_table(LEAF_META_TABLE)?;
+            let leaves = txn.open_table(LEAVES_TABLE)?;
+            // Pruned frontier: lowest present meta position. Prune only
+            // ever removes a prefix of frozen segments (pin_segment has no
+            // production caller, so interior holes cannot occur); an empty
+            // table degenerates to frontier == leaf_count and the search
+            // range is empty.
+            let frontier = match leaf_meta.iter()?.next().transpose()? {
+                Some((key, _)) => key.value().0,
+                None => leaf_count,
+            };
+            let maturity_at = |pos: u64| -> Result<u64, StoreError> {
+                let row = leaf_meta
+                    .get(TreePosition(pos))?
+                    .ok_or(StoreError::CorruptMeta(
+                        "hole in present suffix during partition search",
+                    ))?;
+                Ok(decode_stored_leaf_meta(row.value())?.maturity.0)
+            };
+            // partition_point over [frontier, leaf_count): first present
+            // position with maturity > fork (maturity is non-decreasing,
+            // P7), which is the first index of an equal-maturity run (F7).
+            let mut lo = frontier;
+            let mut hi = leaf_count;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if maturity_at(mid)? > fork_height.0 {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            let partition = lo;
+            if partition == frontier && frontier > 0 {
+                return Err(StoreError::TruncatedIntoPrunedRange { pos: frontier });
+            }
+            // Read-before-delete: reconstitute full pending rows from the
+            // suffix while both tables still hold it.
+            let mut migrated = Vec::with_capacity(
+                usize::try_from(leaf_count - partition).expect("suffix fits usize"),
+            );
+            for pos in (partition..leaf_count).map(TreePosition) {
+                let meta_row = leaf_meta
+                    .get(pos)?
+                    .ok_or(StoreError::CorruptMeta("missing leaf meta in suffix"))?;
+                let stored = decode_stored_leaf_meta(meta_row.value())?;
+                let leaf_row = leaves
+                    .get(pos)?
+                    .ok_or(StoreError::CorruptMeta("missing leaf bytes in suffix"))?;
+                migrated.push(LeafEntry {
+                    gindex: stored.gindex,
+                    maturity: stored.maturity,
+                    creation_height: stored.creation_height,
+                    leaf: *leaf_row.value(),
+                    identity: stored.identity,
+                });
+            }
+            (partition, migrated)
+        };
+
+        // Step 3: shared truncation core (F9 freeze-aware), tip = fork.
+        Self::truncate_internals(&txn, TreePosition(partition), fork_height)?;
+
+        // Steps 4–5: migrate to pending, then the uniform class-(a) filter.
+        {
+            let mut pending = txn.open_table(PENDING_TABLE)?;
+            for entry in &migrated {
+                if pending.get(entry.gindex)?.is_some() {
+                    return Err(StoreError::PendingGindexCollision {
+                        gindex: entry.gindex.0,
+                    });
+                }
+                pending.insert(entry.gindex, &encode_pending(entry))?;
+            }
+            let mut orphaned = Vec::new();
+            for row in pending.iter()? {
+                let (key, value) = row?;
+                if decode_pending(value.value())?.creation_height > fork_height {
+                    orphaned.push(key.value());
+                }
+            }
+            for gindex in orphaned {
+                pending.remove(gindex)?;
+            }
         }
         txn.commit()?;
         Ok(())
@@ -1288,6 +1446,84 @@ mod tests {
         }
         let err = store.read_drained_entries().unwrap_err();
         assert!(matches!(err, StoreError::CorruptMeta(_)));
+    }
+
+    /// `sample_entry` with an explicit creation height (the rollback
+    /// two-class partition filters on it).
+    fn entry_created_at(gindex: u64, maturity: u64, created: u64) -> LeafEntry {
+        let mut entry = sample_entry(gindex, maturity);
+        entry.creation_height = BlockHeight(created);
+        entry
+    }
+
+    #[test]
+    fn rollback_partitions_two_classes() {
+        // Fork at 100. Store state before rollback:
+        //   drained: g0 (created 10, matured 70)   — shared prefix, stays
+        //            g1 (created 40, matured 101)  — class (b): created on
+        //              the shared prefix, drained on the orphaned suffix →
+        //              must re-enter pending
+        //            g2 (created 101, matured 161) — class (a) drained:
+        //              created in an orphaned block → deleted entirely
+        //   pending: g3 (created 90, matured 150)  — survives the filter
+        //            g4 (created 102, matured 162) — class (a) pending →
+        //              deleted
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[
+                    entry_created_at(0, 70, 10),
+                    entry_created_at(1, 101, 40),
+                    entry_created_at(2, 161, 101),
+                ],
+                &[entry_created_at(3, 150, 90), entry_created_at(4, 162, 102)],
+                &[],
+                BlockHeight(161),
+            )
+            .unwrap();
+
+        store.rollback_to_fork(BlockHeight(100)).unwrap();
+
+        let drained = store.read_drained_entries().unwrap();
+        assert_eq!(drained, vec![entry_created_at(0, 70, 10)]);
+        // Pending = {g1 migrated back, g3 untouched}; g2/g4 filtered out.
+        assert_eq!(
+            store.read_pending_candidates().unwrap(),
+            vec![entry_created_at(1, 101, 40), entry_created_at(3, 150, 90)]
+        );
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        assert_eq!(store.leaf_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn rollback_at_tip_is_clean_noop() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_block_deltas(
+                &[entry_created_at(0, 70, 10)],
+                &[entry_created_at(1, 150, 60)],
+                &[],
+                BlockHeight(70),
+            )
+            .unwrap();
+        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 1);
+        assert_eq!(store.read_pending_candidates().unwrap().len(), 1);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+    }
+
+    #[test]
+    fn rollback_above_tip_is_invalid() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store.append_drained(&[], BlockHeight(50)).unwrap();
+        let err = store.rollback_to_fork(BlockHeight(51)).unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::InvalidRollback {
+                fork_height: 51,
+                sync_tip: 50
+            }
+        ));
     }
 
     #[test]
