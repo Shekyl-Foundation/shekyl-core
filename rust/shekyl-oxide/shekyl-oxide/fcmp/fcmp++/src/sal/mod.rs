@@ -22,6 +22,9 @@ use crate::{Input, Output};
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;
 
+/// Membership-only spend authority (the `R_O` leg of SAL, no key image).
+pub mod membership_only;
+
 /// Build a fixed-width 64-byte domain-separation tag from a human-readable label.
 ///
 /// Both SAL-family challenge transcripts (full and membership-only) open with one of
@@ -107,6 +110,21 @@ impl RerandomizedOutput {
         let r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
         let r_r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
 
+        Self::with_blinds(output, r_o, r_i, r_r_i, r_c)
+    }
+
+    /// Re-randomize an output with explicit, caller-derived blinds.
+    ///
+    /// Used by the membership-only prove path, whose blinds are synthesized
+    /// RFC-6979-style rather than drawn raw from an RNG
+    /// (`membership_only::membership_only_rerandomize`).
+    pub(crate) fn with_blinds(
+        output: Output,
+        r_o: <Ed25519 as Ciphersuite>::F,
+        r_i: <Ed25519 as Ciphersuite>::F,
+        r_r_i: <Ed25519 as Ciphersuite>::F,
+        r_c: <Ed25519 as Ciphersuite>::F,
+    ) -> RerandomizedOutput {
         let O_tilde = output.O() + (EdwardsPoint(*T) * r_o);
         let I_tilde = output.I() + (EdwardsPoint(*FCMP_PLUS_PLUS_U) * r_i);
         let R = (EdwardsPoint(*FCMP_PLUS_PLUS_V) * r_i) + (EdwardsPoint(*T) * r_r_i);
