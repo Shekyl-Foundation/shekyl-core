@@ -26,7 +26,11 @@
   routed (no-secrets test over the pending table, synthetic equal-maturity
   partition KAT, restore-from-seed scope totality, freeze-aware truncate
   source-confirmed); deferred `get_curve_tree_leaves` endpoint + KAT now a
-  tracked `FOLLOWUPS.md` row bound to prune policy.
+  tracked `FOLLOWUPS.md` row bound to prune policy. **Round 1 closure
+  verified (same day):** three CT-3a/3c implementation riders folded
+  (direct pending-table row-set equality in the CT-3c KAT; shared truncation
+  internals between `rollback_to_fork` and `truncate_from_tree_position`;
+  migration read-then-delete contract); title synced to closed.
 
 ### Changed
 
