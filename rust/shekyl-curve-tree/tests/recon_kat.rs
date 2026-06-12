@@ -27,8 +27,8 @@ use shekyl_curve_tree::recon::{
     root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
+    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
+    TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::selene_hash_init;
 
@@ -302,7 +302,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
                 })
                 .unwrap();
             let reference = ReferenceBlock {
-                height: blk.height,
+                height: BlockHeight(blk.height),
                 curve_tree_root: blk.root,
             };
             if client.verify_root(&reference).is_err() {

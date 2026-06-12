@@ -9,8 +9,8 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
+    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
+    TargetKind, TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
@@ -147,7 +147,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
                     blk.height
                 );
                 let reference = ReferenceBlock {
-                    height: blk.height,
+                    height: BlockHeight(blk.height),
                     curve_tree_root: blk.root,
                 };
                 assert!(client.verify_root(&reference).is_ok());

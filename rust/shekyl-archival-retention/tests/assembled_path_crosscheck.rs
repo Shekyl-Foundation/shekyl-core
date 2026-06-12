@@ -8,8 +8,8 @@
 use serde_json::Value;
 use shekyl_archival_retention::{verify_segment_path, SegmentPathOpening};
 use shekyl_curve_tree::{
-    BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
+    BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
 
@@ -115,10 +115,10 @@ fn assembled_path_verifies_as_segment_opening() {
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: tip.height,
+        height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
     };
-    let last_drained = reference.height.saturating_sub(61);
+    let last_drained = reference.height.0.saturating_sub(61);
     let drained_block = blocks
         .iter()
         .find(|b| b.height == last_drained)

@@ -14,7 +14,9 @@
 //! engine boundary (`36-secret-locality.mdc`), not here.
 
 use shekyl_curve_tree::recon::TxOutputs;
-use shekyl_curve_tree::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use shekyl_curve_tree::{
+    BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind,
+};
 
 fn assert_copy<T: Copy>() {}
 
@@ -22,8 +24,15 @@ fn assert_copy<T: Copy>() {}
 fn public_types_are_non_secret_copy() {
     assert_copy::<TargetKind>();
     assert_copy::<OutputIdentity>();
+    // `LeafEntry` is the persisted row shape for the drained tables AND
+    // the CT-3 pending-candidates table (F6): a pending row is exactly
+    // `leaf ‖ leaf_meta`, so this one assertion covers the new table's
+    // persisted material too — public on-chain bytes only.
     assert_copy::<LeafEntry>();
     assert_copy::<ReferenceBlock>();
+    // CT-3 typed keys: plain wrapped integers, public by construction.
+    assert_copy::<BlockHeight>();
+    assert_copy::<Gindex>();
     // `recon::TxOutputs<'a>` borrows a slice of `OutputIdentity`; it carries no
     // owned secret material, so it is `Copy` like the rest of the surface.
     assert_copy::<TxOutputs<'static>>();

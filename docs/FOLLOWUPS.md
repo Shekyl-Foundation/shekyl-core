@@ -88,6 +88,29 @@ sustainability is unaffected by the recalibration.
   pre-genesis refetch demand) pulls it earlier. See
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
 
+- **`append_drained` demotion after the client moves to
+  `append_block_deltas` (CT-3a P4, 2026-06-12).** Target: V3.0, at CT-3c
+  closeout; criterion = "no production caller after CT-3b lands."
+  `LeafStore::append_drained` is now a thin wrapper over
+  `append_block_deltas` with empty pending deltas — it advances the tip
+  and freeze clock without maintaining the pending table, so once the
+  client ingests through the deltas API, any mixed use silently breaks
+  drained/pending disjointness and resume exactness. Demote to
+  `#[cfg(test)]` or fold into the KAT harness when the criterion is met.
+  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
+
+- **Carry `BlockHeight`/`Gindex` typing across the client → engine seam
+  (CT-3a P5, 2026-06-12).** Target: V3.0, with CT-3b and the engine
+  refresh wiring. CT-3a newtypes every `LeafStore` `pub fn` and
+  `types.rs` struct; the `CurveTreeClient` public API (`ingest_block`,
+  `from_blocks`, the §3.5 contract surfaces) deliberately stays bare
+  `u64` and converts at the call edge — staged typing along the existing
+  PR seam, not half-typed drift. The long-term swap risk lives where
+  heights cross into `shekyl-engine-*`; retype the client's outward
+  signatures in CT-3b (where they change anyway) and carry the newtypes
+  (or engine-side equivalents) through the engine boundary there. See
+  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
+
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   single-image amendment).** The per-binary Rust-image selection in
   `cmake/BuildRust.cmake` structurally gives every binary one Rust

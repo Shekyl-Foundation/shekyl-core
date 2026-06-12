@@ -25,7 +25,7 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::{
-    AssembledPath, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
+    AssembledPath, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{
@@ -190,7 +190,7 @@ fn check_path(client: &CurveTreeClient, target: &OutputIdentity, reference: &Ref
         recompute_root(&path),
         reference.curve_tree_root,
         "recomputed root must equal the consensus header root at height {}",
-        reference.height,
+        reference.height.0,
     );
     assert_eq!(path.tree.tree_root, reference.curve_tree_root);
 
@@ -219,7 +219,7 @@ fn assembled_path_recomputes_to_consensus_root() {
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: tip.height,
+        height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
     };
 
@@ -227,7 +227,7 @@ fn assembled_path_recomputes_to_consensus_root() {
     // `b <= reference.height - 61`. Pick the founder (leaf position 0, the
     // first leaf node) and a mid-tree output (a non-zero leaf-node index that
     // exercises the internal-layer branch slicing).
-    let last_drained = reference.height.saturating_sub(61);
+    let last_drained = reference.height.0.saturating_sub(61);
     assert!(
         last_drained >= 1,
         "fixture must mine past the freeze lag so a non-empty tree exists",
@@ -251,7 +251,7 @@ fn assemble_path_rejects_undrained_output() {
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
-        height: tip.height,
+        height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
     };
 
@@ -276,7 +276,7 @@ fn assemble_path_rejects_root_mismatch() {
     // A reference carrying the wrong consensus root must fail the integrity
     // gate before any path is assembled.
     let bad = ReferenceBlock {
-        height: tip.height,
+        height: BlockHeight(tip.height),
         curve_tree_root: [0xFFu8; 32],
     };
     match client.assemble_path(&founder, &bad, [0u8; 32]) {

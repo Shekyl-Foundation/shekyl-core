@@ -53,7 +53,7 @@ use std::collections::BTreeMap;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
-use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use crate::types::{BlockHeight, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -157,7 +157,7 @@ pub struct CurveTreeClient {
     drained_through_counts: Vec<(u64, u64)>,
     /// Maturity bucket → indices into [`Self::entries`] for O(bucket) drain
     /// batching on each ingested block.
-    entries_by_maturity: BTreeMap<u64, Vec<usize>>,
+    entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>>,
     /// Last block height passed to [`Self::ingest_block`], if any. Root
     /// queries are bounded by this tip ([`ClientError::ReferenceBeyondIngestedTip`]).
     ingested_tip_height: Option<u64>,
@@ -287,7 +287,7 @@ impl CurveTreeClient {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
         if stored == canonical {
-            self.store.append_drained(&[], tip_height)?;
+            self.store.append_drained(&[], BlockHeight(tip_height))?;
         } else {
             let bucket = self.newly_drained_from_index(through);
             let bucket_len = u64::try_from(bucket.len()).expect("bucket fits u64");
@@ -300,7 +300,8 @@ impl CurveTreeClient {
                 let skip = usize::try_from(stored).expect("stored leaf count fits usize");
                 self.drained_suffix_from_index(through, skip)
             };
-            self.store.append_drained(&new_entries, tip_height)?;
+            self.store
+                .append_drained(&new_entries, BlockHeight(tip_height))?;
         }
         self.record_drained_count(through, canonical);
         Ok(())
@@ -313,7 +314,7 @@ impl CurveTreeClient {
     /// block; indices within each bucket are appended in `gindex` order.
     pub(crate) fn newly_drained_from_index(&self, drained_through: u64) -> Vec<LeafEntry> {
         self.entries_by_maturity
-            .get(&drained_through)
+            .get(&BlockHeight(drained_through))
             .map(|indices| indices.iter().map(|&i| self.entries[i]).collect())
             .unwrap_or_default()
     }
@@ -323,7 +324,7 @@ impl CurveTreeClient {
     pub(crate) fn drained_suffix_from_index(&self, through: u64, skip: usize) -> Vec<LeafEntry> {
         let mut remaining_skip = skip;
         let mut out = Vec::new();
-        for (_, indices) in self.entries_by_maturity.range(..=through) {
+        for (_, indices) in self.entries_by_maturity.range(..=BlockHeight(through)) {
             for &i in indices {
                 if remaining_skip > 0 {
                     remaining_skip -= 1;
@@ -374,9 +375,12 @@ impl CurveTreeClient {
         let canonical = match self.drained_through_counts.last() {
             Some(&(t, count)) if t == through => count,
             Some(&(t, count)) if t.checked_add(1) == Some(through) => {
-                let bucket = self.entries_by_maturity.get(&through).map_or(0, |indices| {
-                    u64::try_from(indices.len()).expect("bucket fits u64")
-                });
+                let bucket = self
+                    .entries_by_maturity
+                    .get(&BlockHeight(through))
+                    .map_or(0, |indices| {
+                        u64::try_from(indices.len()).expect("bucket fits u64")
+                    });
                 count + bucket
             }
             _ => self.drained_count_from_index(through),
@@ -402,7 +406,7 @@ impl CurveTreeClient {
     /// Count leaves with `maturity <= through` via [`Self::entries_by_maturity`].
     fn drained_count_from_index(&self, through: u64) -> u64 {
         self.entries_by_maturity
-            .range(..=through)
+            .range(..=BlockHeight(through))
             .map(|(_, indices)| u64::try_from(indices.len()).expect("bucket fits u64"))
             .sum()
     }
@@ -455,12 +459,12 @@ impl CurveTreeClient {
     /// [`ClientError::RootMismatch`] otherwise — the wallet refuses to
     /// build a proof against a tree it cannot reproduce.
     pub fn verify_root(&self, reference: &ReferenceBlock) -> Result<(), ClientError> {
-        let got = self.root_at(reference.height)?;
+        let got = self.root_at(reference.height.0)?;
         if got == reference.curve_tree_root {
             Ok(())
         } else {
             Err(ClientError::RootMismatch {
-                height: reference.height,
+                height: reference.height.0,
                 expected: reference.curve_tree_root,
                 got,
             })
@@ -487,6 +491,7 @@ mod tests {
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
+    use crate::types::Gindex;
     use shekyl_fcmp::tree::selene_hash_init;
     use shekyl_oxide::COINBASE_LOCK_WINDOW;
 
@@ -665,7 +670,7 @@ mod tests {
         ));
         // The rejected query left no trace in the store: the freeze clock
         // still sits at the ingested tip.
-        assert_eq!(client.store.sync_tip_height().unwrap(), 0);
+        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(0));
     }
 
     #[test]
@@ -874,8 +879,8 @@ mod tests {
         let client = CurveTreeClient::from_blocks(&blocks).unwrap();
         assert_eq!(client.next_gindex, 2, "two coinbases consume indices 0,1");
         assert_eq!(client.entries.len(), 2);
-        assert_eq!(client.entries[0].gindex, 0);
-        assert_eq!(client.entries[1].gindex, 1);
+        assert_eq!(client.entries[0].gindex, Gindex(0));
+        assert_eq!(client.entries[1].gindex, Gindex(1));
     }
 
     #[test]
@@ -910,7 +915,7 @@ mod tests {
         .unwrap();
         assert_eq!(client.next_gindex, 2, "both vouts consume an index");
         assert_eq!(client.entries.len(), 1, "only the valid output is a leaf");
-        assert_eq!(client.entries[0].gindex, 1);
+        assert_eq!(client.entries[0].gindex, Gindex(1));
     }
 
     #[test]
@@ -947,13 +952,13 @@ mod tests {
 
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
-            height: 61,
+            height: BlockHeight(61),
             curve_tree_root: client.root_at(61).unwrap(),
         };
         assert!(client.verify_root(&good).is_ok());
 
         let bad = ReferenceBlock {
-            height: 61,
+            height: BlockHeight(61),
             curve_tree_root: [0xFFu8; 32],
         };
         match client.verify_root(&bad) {

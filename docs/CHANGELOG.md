@@ -59,6 +59,25 @@
 
 ### Added
 
+- **crypto: CT-3a persistent-resume store schema (`shekyl-curve-tree`,
+  2026-06-12).** The `LeafStore` now carries the full CT-3 sync/reorg
+  contract at the store layer (`CT3_SYNC.md` Round 1, closed): redb-typed
+  keys end to end (`BlockHeight`/`Gindex` newtypes plus the
+  `TreePosition`/`SegmentId` retrofit, byte/order delegation
+  KAT-verified), a `schema_version` stamp checked before any write on an
+  existing file (error-without-mutation), `creation_height` on
+  `LeafEntry`/`leaf_meta`, a pending-candidates table, the single-txn
+  `append_block_deltas` write API (collision/missing-row loud,
+  abort-leaves-no-trace), resume read paths with runtime-checked
+  invariants (gindex parity, maturity monotonicity, key-set symmetry),
+  and `rollback_to_fork` — pruned-range-safe partition search, two-class
+  drained→pending migration, the uniform `creation_height > fork` orphan
+  filter, and frozen-segment rollback through shared truncate internals.
+  KAT/robustness coverage includes equal-maturity partition boundaries,
+  a full-snapshot atomicity check, deterministic `rand_chacha` codec
+  round-trips, and a rollback-equals-prefix-replay property test driven
+  through the production write API. Client wiring is CT-3b/3c.
+
 - **docs: swan-arc closure notes — seeding SLO recommendation, domain
   diversity, enforcement pins (2026-06-11).** Five small dispositions
   closing the L17 black-swan round series. **(1) Seeding SLO carries the

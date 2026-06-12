@@ -18,8 +18,8 @@ use shekyl_curve_tree::recon::{
     root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
+    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
+    TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::selene_hash_init;
 
@@ -82,7 +82,7 @@ fn _drift_canary_client_path() {
     let root = client.root_at(0).expect("store hot path");
     std::hint::black_box(root);
     let reference = ReferenceBlock {
-        height: 0,
+        height: BlockHeight(0),
         curve_tree_root: [0u8; 32],
     };
     let verify_ok = client.verify_root(&reference).is_ok();

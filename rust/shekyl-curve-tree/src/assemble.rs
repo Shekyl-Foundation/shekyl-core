@@ -66,16 +66,16 @@ impl CurveTreeClient {
         reference: &ReferenceBlock,
         reference_block_hash: [u8; 32],
     ) -> Result<AssembledPath, ClientError> {
-        let cutoff = Self::drained_through(reference.height);
+        let cutoff = Self::drained_through(reference.height.0);
 
         // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
         // (CT-1), no replay-oracle fallback; (2) path branches — replay
         // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
         // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
-        let got = self.root_at(reference.height)?;
+        let got = self.root_at(reference.height.0)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
-                height: reference.height,
+                height: reference.height.0,
                 expected: reference.curve_tree_root,
                 got,
             });
