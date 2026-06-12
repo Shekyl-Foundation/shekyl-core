@@ -205,6 +205,50 @@ service rendezvous for the fetch leg). They provide:
 - **Fee-era backstop** — always present when the market thins (replaces
   L12 **decaying** floor — see gate-list item 5 amendment below).
 
+**Retention vs internal redundancy vs serving participation (authority
+pin — swan-4, 2026-06-11).** Three distinct properties travel under the
+word "floor"; conflating them produced the swan-2/-3 extinction
+over-claim and is named here so it cannot recur:
+
+1. **Retention (the guarantee).** Every active genesis `CompleteTree`
+   seat holds **all of B + C, permanently** — complete over all deep
+   history, held continuously, **no sunset** (per this gate-list's
+   item 5: foundation withdrawal is rejected as mutable-governance +
+   gap risk). Consequence: a market-side replica count of **zero on
+   any shard is never data loss** — it is a transition to
+   **foundation-as-sole-source**, an availability state. Simulation
+   reads that count market holder-set wipe-outs (`extT`/`shkExt` in
+   `STAKER_ARCHIVAL_SIM.md` §L17) measure this availability exposure,
+   not irrecoverability.
+2. **Internal redundancy (foundation operations).** The guarantee's
+   own durability is `N_active = 3` replica-complete trees across
+   diverse providers and jurisdictions (the "many nines" managed-archive
+   number above), plus the W4 treasury requirement that
+   floor-operating reserves be crisis-uncorrelated with the token
+   price. This is ops policy with authority, not consensus code.
+3. **Serving participation (the modeled floor).** The sim's
+   `floor_replicas` / `floor_decay_pop` / `foundation_floor_aged`
+   knobs model how many **serving** replicas the floor contributes to
+   coverage and retrieval latency — an availability lever. The L13
+   "~57 % backstop" and the L17 floor-on arms are serving-layer
+   measurements; they size degraded-retrieval exposure, **not** the
+   retention guarantee, which holds regardless of the serving
+   schedule.
+
+**The threat model this concentrates.** For irreplaceable history the
+durability backstop of record is **one organization**: correlated
+infrastructure loss across the `N_active` seats, seizure, and
+dissolution over mission timeframes 2–3 are the binding failure
+modes — no privacy cost (chain data is public), but a single point the
+market architecture otherwise exists to avoid. Mitigations are the
+disclosed-backstop posture (`FOUNDATION_ARCHIVAL_DISCLOSURE.md`),
+jurisdiction/provider diversity in §2, and the market trajectory
+dwarfing the floor. **Reversion clause:** the no-sunset pin is the
+substrate; if it is ever reopened (foundation-independence becomes a
+design goal), the swan-3 W12/W13 questions — deep-set completeness of
+any successor mechanism, mid-deep-modal trough exposure — re-activate
+at that design round and are parked here against it, not deleted.
+
 **Accountability.** Foundation archivers are **registered and
 challengeable** — public challenge pass/fail is the accountability
 mechanism. They are **fully excluded from archival reward claims** (no

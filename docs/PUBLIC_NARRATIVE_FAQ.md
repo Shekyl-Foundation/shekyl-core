@@ -138,13 +138,18 @@ not durability survival.
 
 This is a load-bearing answer, not a comfort line. Crash-scenario simulations
 showed that a deep market trough can briefly empty **every market copy** of some
-old shards even when market coverage later recovers in full — so durability of
-irreplaceable history through a crash rests on the complete archive being
-**complete over all deep history and held continuously**, including through the
-same market event (which is why foundation treasury policy is required to be
-diversified rather than token-denominated — the backstop must not shrink in the
-crisis it exists to absorb). With that condition met, the same simulations
-measure zero permanent loss across every crash scenario in the grid.
+old shards even when market coverage later recovers in full. Because the
+foundation archive is complete and held permanently, no scenario in the grid
+loses data — those shards become **foundation-only** until the market re-seeds
+from the foundation, and the measured cost is an availability window (in the
+worst recovering crash, up to ~9 epochs of foundation-only retrieval for the
+affected shards, bounded by the foundation's seeding bandwidth). Two honest
+implications follow. First, through a crash trough the durability of
+irreplaceable history rests on **one disclosed organization**, which is why
+foundation treasury policy is required to be diversified rather than
+token-denominated — the backstop must not shrink in the crisis it exists to
+absorb. Second, foundation seeding capacity is an availability commitment,
+sized from the same simulations.
 
 ### What should exchanges and institutions record?
 

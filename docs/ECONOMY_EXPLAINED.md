@@ -178,16 +178,18 @@ death spiral) rather than cliff-collapsing.
 One honest caveat, and it matters. "Graceful" is a claim about *coverage* —
 the fraction of history adequately replicated by the market. The black-swan
 simulations (acute crash scenarios, not gradual declines) showed that a deep
-market crash can wipe out every market copy of some old shards during the
-trough *even when coverage fully recovers afterward* — and deep history is
-irreplaceable: if the last copy goes, recovery of the metric is not recovery
-of the data. Survival of irreplaceable history through a crash trough is
-therefore **not an automatic property of the market**; it is guaranteed by
-the foundation's complete archive (see `PUBLIC_NARRATIVE_FAQ.md`) — a
-designed requirement, sized and verified in the same simulations: with a
-complete non-market copy held continuously, every trough loss measured in
-the crash grid converts into a temporary availability gap instead of a
-permanent one.
+market crash can empty every *market* copy of some old shards during the
+trough, even when coverage fully recovers afterward. No data is lost when
+that happens: the foundation's seed archivers retain a complete copy of all
+history permanently (see `PUBLIC_NARRATIVE_FAQ.md`), so those shards fall
+back to the foundation as their only source until the market re-seeds from
+it. The honest cost is availability, and the simulations sized it: during
+the worst recovering crash, some deep shards spend up to ~9 epochs
+foundation-only before the market re-absorbs them — degraded retrieval for
+old data, bounded by the foundation's seeding bandwidth, not loss. The
+flip side is worth stating plainly: through a crash trough, durability of
+irreplaceable history rests on the foundation's archive — one disclosed
+organization — rather than on the market.
 
 So "encourage participation" isn't a fixed APR promise — it's a servo. The
 protocol sets the purse (Loops 3+4); the market sets the population.

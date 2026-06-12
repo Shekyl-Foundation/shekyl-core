@@ -4,6 +4,53 @@
 
 ### Added
 
+- **sim: swan-4 — retention correction + foundation-sourced re-seed
+  bottleneck (L17, 2026-06-11).** Third wargame response; dissolves the
+  swan-2/-3 extinction framing. The genesis foundation seeds retain **at
+  least one complete copy of every shard permanently**, so market-side
+  `extT`/`shkExt` events are **foundation-as-sole-source transitions, not
+  data loss** — the 37/99 price-row results re-read as an availability /
+  re-seed bottleneck, and the sim's previously "sourceless" backfill is
+  coincidentally modeling the real foundation-sourced path. New
+  `reseed_rate` knob caps fresh-deep acquisitions of sole-source shards
+  per epoch (bandwidth-bound foundation seeding over the L16 rendezvous
+  path); new metrics `ssSE` (sole-source shard-epochs), `ssMxW` (max
+  single-shard window), `ssOpn` (windows open at end). Measured
+  (`swan4_vshape_reseed3/12`, `swan4_servo400_reseed3`): at `reseed_rate
+  = 3` (~1 seeding flow per active seat) the V-trough costs **365
+  sole-source shard-epochs, worst window 9 epochs**, servo-400 282/8 —
+  all fully re-seeded by horizon end; **4× provisioning halves exposure
+  and cuts wipe-out count 40 → 10** (faster re-seat interrupts trough
+  cascades). Foundation seeding bandwidth is therefore an
+  **availability-SLO sizing input**, exported to gate-5 ops. L17 verdicts
+  re-worded ("extinct" → "sole-source"), Findings 1/4/5 + disposition
+  re-anchored on the retention guarantee ("no shock in this grid loses
+  data; the grid measures availability"), reversion clause keyed on the
+  no-sunset retention pin (W12/W13 completeness questions parked against
+  it, not deleted). `docs/design/STAKER_ARCHIVAL_SIM.md` §L17.
+
+- **docs: swan-4 retention authority pin + availability re-frame
+  (2026-06-11).** `V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree
+  seeds* gains the **authority pin** distinguishing three previously
+  conflated properties: **retention** (complete B+C held permanently, no
+  sunset — the durability guarantee of record), **internal redundancy**
+  (foundation ops: N_active = 3 seats, fiat-diversified reserves), and
+  **serving participation** (the population-decaying floor the sim
+  models). Names the **single-organization threat model** the guarantee
+  creates (infra loss, seizure, dissolution over the timeframe-2/3
+  horizon — the single point the market architecture otherwise exists to
+  avoid) with a reversion clause: if the no-sunset pin is ever reopened,
+  the swan-3 W12/W13 market-completeness questions re-activate at that
+  sunset. `FOLLOWUPS.md` treasury item re-anchored: the swan-2/-3
+  "deep-set completeness requirement" converts to documentation of the
+  existing guarantee; what remains is fiat-diversified reserves sized for
+  serving + re-seed duty through the servo-400 impaired window, plus
+  seeding bandwidth as an availability-SLO input. Public prose aligned
+  (`ECONOMY_EXPLAINED.md`, `PUBLIC_NARRATIVE_FAQ.md`): crash troughs
+  cause **bounded foundation-only availability windows (~9 epochs worst
+  measured), never data loss**, and through a trough durability rests on
+  one disclosed organization — stated plainly, not hedged.
+
 - **sim: swan-3 black-swan iteration — band read, floor-on closure arms,
   class-correlated exit (L17 W12–W15, 2026-06-11).** Second wargame response;
   converts the swan-2 export's two inferences into measurements and pins the
