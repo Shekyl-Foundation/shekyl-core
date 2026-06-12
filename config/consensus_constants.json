@@ -27,5 +27,7 @@
   "_comment_archival_reward_curve": "Provisional banded PL Curve (REWARD_EMISSION_LEG.md §4). Milli scale; stressnet reopening clause. plateau_work = 2 × plateau_value.",
   "archival_reward_plateau_value_milli": 8000,
   "archival_reward_plateau_work_milli": 16000,
-  "archival_reward_age_weight_milli": 1000
+
+  "_comment_archival_reward_age_weight": "g(age) slope on relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age). Sealed target g* ≈ 2; calibration band [1500, 2500] per the Layer-2 margin-robustness run (STAKER_ARCHIVAL_SIM.md).",
+  "archival_reward_age_weight_milli": 2000
 }

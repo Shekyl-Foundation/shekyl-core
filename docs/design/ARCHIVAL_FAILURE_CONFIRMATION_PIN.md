@@ -106,14 +106,70 @@ that is **simultaneously**:
 |-----------|-------------|
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
+| **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
+| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below |
 
-If the tail is heavy enough that no `m` satisfies both, resolution is **elsewhere** — e.g.
-faster dead-`P` detection decoupled from `m` (separate liveness signal), or accepting priced
-pollution on a metric that **is** slot-weighted. Name this gate in stressnet planning; do
-not treat Round-1 `m=11` as final without the CDF.
+**The W16 tension — crisis-tail `m` and slash deterrence pull in opposite directions.**
+The W6 fix raises `m` to ride out correlated honest outages; but every baseline a `P` may
+miss slash-free is a baseline a *strategic* degrader rides for free. At Round-1
+`m = 11 / n = 13` an actor can already miss **10 of every 13** baselines indefinitely
+without slash, with serve-credit gating carrying all the economic enforcement — and with
+bonds-only admission at 0.75/shard the deterrence stack is thin. Composed with the L17
+honest-holding residue (`STAKER_ARCHIVAL_SIM.md` §L17 Finding 6 / W5): the
+fetch-on-demand degrader's calculus is `E[slash] vs fiat-opex saved`, and it tips toward
+degrading **exactly when temptation peaks** (crisis economics — fiat opex > token
+rewards). A crisis-sized `m` that pushes `E[slash] → 0` under the realistic degrade play
+makes the slash vestigial in the one regime it must bite. The deterrence-credible row is
+therefore evaluated **at crisis prices**, not normal-times prices.
+
+**Crisis-price multiplier pinned (rule 21, swan-4 follow-up).** "At crisis prices" means
+the **L17 fatal-channel regime: token price ×0.25, permanent**
+(`STAKER_ARCHIVAL_SIM.md` §L17 `swan_price_gap*` rows) — the regime where the degrade
+calculus tips and the slash must still bite. Evaluators do not choose their own stress
+level; a row that passes at ×0.5 but fails at ×0.25 fails the criterion. Reopen the
+multiplier only if the L17 grid itself is re-anchored (reversion trigger (a)/(b) of
+that layer) — the pin tracks the fatal channel, not a preference.
+
+If the tail is heavy enough that no `m` satisfies **all four**, the named escape — faster
+dead-`P` detection **decoupled from `m`** (a separate liveness signal) — **stops being a
+contingency and becomes the design**: the slash keyed to the liveness signal restores
+deterrence without re-coupling false-slash risk to the crisis tail.
+
+**The escape inherits the unpredictability prerequisite.** Whatever liveness signal
+replaces `m`-keyed slashing carries the **`H_fire`-class beacon-unpredictability
+requirement** (§1's shared prerequisite, gate-2 §3.4) as a design constraint, not an
+implementation detail: a *predictable* liveness probe is dodgeable exactly like the
+rejected §5 escalation recheck — a strategic dropper fetches just-in-time for the
+probe window and degrades between probes, rebuilding §5's gaming surface under a new
+name. The §5 lesson (predictable adaptivity is the gaming surface, per §3.3's
+static-margin consequence) transfers to the escape wholesale. Name this gate in
+stressnet planning; do not treat Round-1 `m=11` as final without the CDF.
 
 **Gating input.** Outage-duration **CDF** (residual-life derived); steady-state `u_eff` alone
 does not pin tail shape.
+
+### 3.3 Enforcement pro-cyclicality (swan-2/W6, 2026-06-11)
+
+During a legitimate crisis (the L17 black-swan regimes,
+`STAKER_ARCHIVAL_SIM.md` §L17), honest survivors run **degraded infrastructure** —
+crisis outage distributions are exactly the fat-tailed regime §3.2 flags, arriving
+*correlated across the population*. An `n − m` margin sized to the normal-times
+stressnet CDF then produces **false-slash cascades**: slashes amplify exit, a fifth
+loop feeding the death spiral through the enforcement layer itself (on top of the
+four L13/P2 loops).
+
+Two consequences pinned into the Round-2 close criteria:
+
+1. **The fix is static margin, not adaptive widening.** The §5 escalation-dodge
+   result already establishes that predictable adaptivity is the gaming surface —
+   an "emergency widening" rule that loosens `m/n` when outages spike is a free
+   dodge for a strategic dropper who can simulate a crisis. Size `n − m` against
+   the **crisis-tail run-length** once, statically.
+2. **The stressnet measurement campaign must capture outage run-lengths under
+   induced correlated failure** (kill a failure domain; measure consecutive-miss
+   run-lengths across the surviving population while it degrades), not only the
+   marginal single-`P` duration CDF. The marginal CDF under-states the crisis tail
+   by construction.
 
 ---
 
@@ -199,3 +255,18 @@ tallies with minimal new state.
 - **2026-06-08 (pin):** Sliding-window selected; dodge 0/1; tuned-`m` fair compare.
 - **2026-06-08 (doc):** Restructure — §1 pinned policy; §5 rejected alternative stratum;
   `R_market` serve-credit substrate; Round-2 joint `m` feasibility gate.
+- **2026-06-11 (swan-2/W6):** §3.3 enforcement pro-cyclicality — crisis-tail criterion
+  added to the Round-2 gate (size `n − m` statically against correlated-failure
+  run-lengths; adaptive emergency widening rejected per the §5 dodge result); stressnet
+  campaign extended to induced-correlated-failure run-length capture.
+- **2026-06-11 (swan-3/W16):** §3.2 fourth joint criterion **deterrence-credible** —
+  crisis-tail `m` and slash deterrence pull in opposite directions (a crisis-sized `m`
+  makes the slash vestigial exactly when the fetch-on-demand temptation peaks);
+  `E[slash]` under the realistic degrade play must exceed storage-opex savings **at
+  crisis prices**. If no `m` satisfies all four, the decoupled liveness signal becomes
+  the design, not the contingency.
+- **2026-06-11 (swan-4 follow-up):** §3.2 crisis-price multiplier **pinned at the L17
+  fatal channel (×0.25 permanent)** per rule 21 — evaluators do not choose their own
+  stress level. Liveness-signal escape gains the **`H_fire`-class unpredictability
+  inheritance**: a predictable liveness probe rebuilds the §5 gaming surface under a
+  new name; the prerequisite transfers to whatever replaces `m`.

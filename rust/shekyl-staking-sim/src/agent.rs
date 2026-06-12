@@ -57,13 +57,30 @@ pub struct AgentParams {
     /// Max *fresh* deep-shard fetches an actor may start per epoch (bandwidth bound).
     /// `0` = unlimited (the default; fetch latency alone carries the lag).
     pub acq_rate: usize,
+    /// **Foundation re-seed bandwidth** (swan-4): network-wide cap on fresh deep
+    /// acquisitions per epoch of shards with **zero serving market holders** — those
+    /// fetches must source from the foundation complete-tree seeds (the retention
+    /// guarantee makes them the source of last resort; few seats ⇒ serialized
+    /// seeding). `0` = unlimited (legacy sourceless-instant behavior, byte-identical).
+    /// Market-sourced fetches (≥1 serving holder) are never throttled by this knob.
+    pub reseed_rate: usize,
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
 // Several loops index parallel collections (holdings, locks, r, shards) by `s`;
 // enumerate over one is no cleaner than the range loop.
+// `sole_source`: epoch-start serving replication + the epoch's shared foundation
+// re-seed budget (swan-4); `None` when `reseed_rate == 0` (unlimited, legacy).
 #[allow(clippy::needless_range_loop)]
-fn best_response(world: &mut World, actor: usize, price: f64, ap: &AgentParams, age_weight: f64) {
+fn best_response(
+    world: &mut World,
+    actor: usize,
+    price: f64,
+    ap: &AgentParams,
+    age_weight: f64,
+    sole_source: Option<&[usize]>,
+    reseed_budget: &mut usize,
+) {
     let n_shard = world.shards.len();
     let r = world.replication();
     let cap_storage = world.actors[actor].storage_capacity;
@@ -151,6 +168,22 @@ fn best_response(world: &mut World, actor: usize, price: f64, ap: &AgentParams, 
         if fresh_deep && ap.acq_rate > 0 && fresh_fetches >= ap.acq_rate {
             continue;
         }
+        // Foundation re-seed bound (swan-4): a fresh deep fetch of a shard with zero
+        // serving market holders at epoch start must source from the foundation seeds
+        // and consumes one of the epoch's shared re-seed slots; budget exhausted ⇒ the
+        // seat defers to a later epoch. (The epoch-start snapshot means same-epoch
+        // concurrent fetches of one sole-source shard each consume a slot — they all
+        // hit the foundation.) Market-sourced fetches are untouched.
+        if fresh_deep {
+            if let Some(serving0) = sole_source {
+                if serving0[s] == 0 {
+                    if *reseed_budget == 0 {
+                        continue;
+                    }
+                    *reseed_budget -= 1;
+                }
+            }
+        }
         new_held[s] = true;
         used_storage += stor_cost(deep);
         if deep && bonded {
@@ -208,8 +241,24 @@ pub fn run_epoch(
         .filter(|&a| world.active[a])
         .collect();
     rng.shuffle(&mut order);
+    // Foundation re-seed budget (swan-4): shared across the epoch's best-responses,
+    // against the epoch-start serving view. Inert (`None`) when `reseed_rate == 0`.
+    let serving0 = if ap.reseed_rate > 0 {
+        Some(world.serving_replication())
+    } else {
+        None
+    };
+    let mut reseed_budget = ap.reseed_rate;
     for a in order {
-        best_response(world, a, price, ap, age_weight);
+        best_response(
+            world,
+            a,
+            price,
+            ap,
+            age_weight,
+            serving0.as_deref(),
+            &mut reseed_budget,
+        );
     }
 
     // Total (actor, shard) holding flips this epoch.

@@ -123,6 +123,12 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// expected depreciation ⇒ higher effective reservation ⇒ more exit ⇒ worse coverage),
 /// closing the candidate loop. `0.0` ⇒ no coupling (legacy / non-fee-era).
 ///
+/// `reservation_mult` (L17) is a *multiplicative* stress on every active actor's
+/// reservation — the acute flight-to-liquidity channel (outside yields spike in a
+/// crisis, so the opportunity cost of staked capital jumps as a factor, not a bump).
+/// `1.0` ⇒ no stress (every pre-L17 scenario). It composes with `reservation_add`:
+/// `apr < reservation · mult + add`.
+///
 /// `flow_cost_fiat`/`token_price` (L13 / P2) decide the **second death-spiral leg**.
 /// `reward_a` and the bond are token-denominated, so they cancel in the ratio and only
 /// *expected* depreciation (the `reservation_add` channel) bites — **if every term is
@@ -136,12 +142,16 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// trust-loss trigger** (`reservation_add = 0`) — a level-driven ignition the
 /// expectation channel does not model. `token_price = 1.0` ⇒ identical to the
 /// token-denominated case; `flow_cost_fiat = false` ⇒ legacy (price never consulted).
+// The exit rule composes one channel per crisis leg (trust bump, acute stress, fiat
+// price); a parameter struct would only relocate the argument list.
+#[allow(clippy::too_many_arguments)]
 pub fn process_exits(
     world: &mut World,
     eval: &RewardEval,
     ap: &AgentParams,
     pp: &ParticipationParams,
     reservation_add: f64,
+    reservation_mult: f64,
     flow_cost_fiat: bool,
     token_price: f64,
 ) {
@@ -165,7 +175,7 @@ pub fn process_exits(
                 eval.rewards[a] - fcost
             };
             let apr = net / committed;
-            apr < world.actors[a].reservation + reservation_add
+            apr < world.actors[a].reservation * reservation_mult + reservation_add
         };
         if strike {
             world.below_streak[a] += 1;

@@ -9,5 +9,9 @@ description = "Eight-scenario economics simulation harness for DESIGN_CONCEPTS p
 
 [dependencies]
 shekyl-economics = { path = "../shekyl-economics" }
+# Gate-7 derived-lock model: compile-time tie to the pinned consensus
+# constants (`ARCHIVAL_BOND_FLOOR_ATOMIC`, `SETTLEMENT_EPOCH_BLOCKS`)
+# instead of re-asserting their values locally.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 serde = { workspace = true }
 serde_json = "1"

@@ -6,8 +6,10 @@
 **Un-implementable until:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 (archival read contract + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
 **Gate 3 dissolved (2026-06-07):** no `ν` primitive; `R_market` derived from serve-credit ledger.
-**Admission wire:** ordinary transfer ≥ `MIN`, **no `C_stake`** (§7.2–§7.4; gate 7 reopen).
-**Layer 2:** margin-robustness gate on spread (§1.2), not point calibration at one `giniW` reading.
+**Admission wire:** ordinary transfer, **no consensus minimum, no `C_stake`** (§7.2–§7.4;
+gate 7 closed bonds-only 2026-06-11, §10.2).
+**Layer 2:** margin-robustness band **closed 2026-06-11** (§1.2 #4) — spread gate re-anchored
+on direct whale gauges; `g` sealed as band `[1.5, 2.5]`, target `≈ 2`; `Curve` reserve untriggered.
 
 **Scope:** The **consensus-special reward emission transaction leg** for pay-for-service
 archival under firewalled pseudonym **`P`**. This document is the byte-layout and
@@ -38,8 +40,9 @@ rebasing*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4;
 | Reorg atomicity | §8 |
 | Nothing on the wire **forces** a published dedup tag | §5.3, §9 |
 
-Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) and **(iii)**
-(admission principal + gate 7) are **not** closed here; §10 names the hooks.
+Close-condition **(ii)** (per-reward proof aggregate at `N_P` × cadence) **closed
+(2026-06-11)** via the worked byte sweep — see §10.1. Close-condition **(iii)** **closed
+bonds-only (2026-06-11)** via the gate-7 iteration-5 sim — see §10.2.
 
 ### 1.1 Design sequencing (four layers, gated)
 
@@ -48,7 +51,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 | Layer | Scope | Gate |
 |-------|--------|------|
 | **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) implementation (contract pinned). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema impl. |
-| **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7; byte aggregate (ii). | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
+| **2 — Economic keystone** | **Margin-robustness gate closed** (§1.2 #4, 2026-06-11): band run confirmed the decomposition — spread gate **re-anchored on direct whale gauges** (`mxSW`, `wB4`, per-band seats; `gini_actor` → trend); **`g` sealed as band `[1.5, 2.5]`, target `≈ 2`** (`g ≥ 3.0` fails coloc coverage at any purse); purse confirmed as spread lever. `Curve` reserve not triggered (stays V3). Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). | Layer 2 fully closed; reversion clauses live in the sim doc results section. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
 
@@ -59,6 +62,9 @@ snap-fail→win-pass (`gate4_coloc_5.50`, far above pin). At **`bond_rate* = 0.7
 rows `giniW ≈ 0.593–0.599` (snapshot grazes at **0.600**); at **1.00** both fail (`≈ 0.626`);
 thin lean `l11_bud_b50` fails both at `≈ 0.84`. **Verdict:** keystone **holds** — Layer 2 is
 **calibration, not shape reopen** — but the margin is a **hair**, not a plateau.
+*(Definition superseded 2026-06-11: the band run re-anchored `sprd`/`sprdW` on the direct
+whale gauges — `max_actor_share < 0.20`, `wB4 < 0.20` — with `gini_actor` demoted to trend;
+implemented in the sim same day. The pass counts above are the pre-re-anchor record.)*
 
 **Sim reconciliation (2026-06-07 — load-bearing for calibration reads):**
 
@@ -124,9 +130,19 @@ changes what is next:
 
 4. **Thin spread margin is genesis-seal robustness risk.** Reframe Layer 2 from
    "find the `g(age)` that passes" to **margin-robustness across the operating band**
-   with whale-trend bounded throughout. If the band cannot clear with comfortable
-   margin, the declining-tail `Curve` reserve (V3) widens the pocket — do not seal
-   `bond 0.75` + `g` on a single `giniW = 0.599` model reading.
+   with whale-trend bounded throughout. **Run and closed 2026-06-11**
+   (`STAKER_ARCHIVAL_SIM.md` §*Layer-2 margin-robustness band — results*): the
+   decomposition held decisively across the band — whale gauges flat (`mxSW`
+   0.013–0.018 vs 0.20 bar, `wB4 = 0`, whale Δ`giniW` ≤ 0.003) while `giniW`
+   tracked leanness (`bondA`) in both sweep directions. Disposition: **spread
+   gate re-anchored on the direct whale gauges** (`gini_actor` demoted to trend);
+   **`g` sealed as a band `[1.5, 2.5]`, target `g ≈ 2`** (upper bound is coloc
+   coverage oscillation at `g ≥ 3.0`, purse-incurable); budget cross confirms the
+   gate-1/7 purse as the spread lever (+30 % purse ⇒ `giniW` 0.598 → 0.475, the
+   L13 servo's static image). The declining-tail `Curve` reserve was **not
+   triggered** and stays a V3 reserve. The 2026-06-07 single-point readings are
+   superseded (banded PL Curve repair moved the equilibrium — the reframe's
+   warning made empirical); the `bond 0.75` pin stands under the re-read.
 
 **Genuinely unblocked:** §3–§7 FSM retool (principal form, reward-reception state);
 gate 6 firewall rigor; V3 form **C** reconciliation.
@@ -156,8 +172,8 @@ gate 6 firewall rigor; V3 form **C** reconciliation.
 5. **Bond posture vs mint.** Bond create/update/slash/re-bond is gate 4; reward mint +
    dedup is this leg only — never bundled as “first emission creates everything.”
 6. **Bond is the intra-epoch honesty anchor.** Between settlement-epoch emissions,
-   admission principal may be spent; backing is not re-verified every block. Challenge
-   failure slashes **bond** regardless of admission UTXO state (§7.5).
+   funds at `P` may be spent freely; backing is not re-verified every block. Challenge
+   failure slashes **bond** regardless of `P`'s UTXO state (§7.5).
 
 ---
 
@@ -222,7 +238,10 @@ reward_P(E)    = budget(E) · capped_P(E) / Σwork(E)   // integer floor; loud o
 
 **Channel 1 — scarcity.** `R_market` is the public replication count; holding a shard
 raises `R` and dilutes its own `1/R`. `g(age) = 1 + age_weight·age` (public shard
-property) is the privacy-clean deep-history premium replacing retired tier weighting.
+property) is the privacy-clean deep-history premium replacing retired tier weighting;
+`age` is the shard's **relative depth fraction** `∈ [0, 1]` (settlement epochs since
+freeze over chain depth in settlement epochs — `ARCHIVAL_REWARD_ARITHMETIC.md`
+§Shard age), so `g` spans `[1, 1 + age_weight]` for the life of the chain.
 `serve_credit_bit` is the challenge-pass bit from consensus archival state (gate 2), not
 retrieval volume.
 
@@ -334,7 +353,6 @@ ArchivalRewardEmissionVin {
   settlement_epochs:  u64[MAX],            // 1 ≤ MAX ≤ 15, strictly increasing, unique
   work_claim:         WorkClaimVector,     // per-epoch public work breakdown (§5.4)
   backing:            MembershipOnlyBacking, // FCMP++ membership, NO key image (§7)
-  admission_proof:    OptionalAmountProof,     // §7.4; ordinary-transfer ≥ MIN only if policy on
 }
 ```
 
@@ -347,6 +365,7 @@ ArchivalRewardEmissionVin {
 | `N_arch`, `G_arch` | Conflated backing vs dedup; both jobs replaced |
 | `entitlement`, `ρ_blind`, `C_claim` confidential leg | Loud reward |
 | Staking-subtree membership root | 3C not genesis; backing is **main tree** |
+| `admission_proof` | Gate-7 closed bonds-only (§10.2); admission has no consensus role |
 
 ### 5.4 `WorkClaimVector` (public)
 
@@ -435,19 +454,44 @@ check_and_set(E): bool
 
 **Encoding (genesis pin):** Per-`P` **sparse set of absolute settlement-epoch indices**
 `E`. Consensus-visible semantics only; **not** the retired 2-byte **relative** `u16`
-mask from tier-bounded stake claims. **Concrete encoding deferred until `W` is pinned**
-([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-3; joint with F1/F4).
+mask from tier-bounded stake claims.
+
+**Concrete encoding (decided 2026-06-11, `W = 26` pinned):** an **inline field on
+`ArchivalBondValue`** — strictly-increasing list of absolute epoch indices, `u32` count +
+`u64` BE per entry, hard cap **32** entries (`W = 26` plus reorg slack; cap violation is a
+decode error like the existing `kMax*` bounds). `ArchivalBondValue` bumps **v3 → v4**; v3
+rejected at decode per the pre-genesis posture (no migration; reset data-dir). Pruning to
+`E > tip_settled − W` rides the existing §6.6 forfeiture sweep and is an optimization only —
+correctness comes from E-3 forfeiture rejecting out-of-window claims *before* dedup is
+consulted, so a stale entry can never enable or block a valid claim. Why inline, not the
+alternatives:
+
+- **Emission verify reads the bond record anyway** (`good_through`, `E_join`); one decode
+  covers the whole ≤15-epoch batch. A separate table costs up to 15 point reads per vin on
+  the verify hot path plus its own `pop_block` revert plumbing; inline reverts atomically
+  with the record rewrite the reorg path already performs.
+- **Size is a non-issue:** ≤ 26×8 = 208 bytes against a record already carrying a ~2 KB
+  hybrid pubkey, and the counted-vector shape matches `held_shard_ids` / `bad_intervals`
+  precedent.
 
 **Rejected encoding options (pre-genesis):**
 
+- **Fixed bitmap over `(tip − W, tip]`** (`u32` fits `W = 26`) — requires a base-epoch
+  rebase as the window slides (per-record mutation at epoch close, or lazy-rebase logic
+  whose failure mode is exactly the double-claim-after-window-slide bug the relative mask
+  was retired for); saves ~200 bytes per record, which is noise.
+- **Separate LMDB table, composite key `P_canonical_id ‖ BE(E)`** (the
+  `archival_serve_credit` precedent) — viable but strictly worse here: see hot-path and
+  revert-plumbing costs above.
 - **LMDB `MDB_DUPSORT` dup-keys `(P_id, E)`** — collides with Shekyl composite-key
   discipline ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md): no DUPSORT on Shekyl-native tables).
-  Use composite key `P_canonical_id ‖ BE(E)` or equivalent without DUPSORT.
-- **Roaring bitmap** — defer unless `W` proves large enough to justify dependency
+- **Roaring bitmap** — dependency unjustified at `W = 26`
   ([`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)).
 
-**Candidate shapes (post-`W`):** sorted epoch list pruned to `E ≥ tip − W`; or fixed bitmap
-over the `(tip − W, tip]` window when `W` is small.
+**Reversion clause:** reopen the encoding (bitmap or separate table re-enter) only if `W`
+is re-pinned above ~64 epochs (inline cap stops being trivially bounded) or if measured
+emission-verify cost shows record decode dominating; re-evaluation is a constants-cluster
+amendment plus this section, not a semantics change.
 
 **Why not reuse the u16 relative mask:** Stake claims were bounded to ≤15 epochs over
 a **tier lock window**. Archival `P` accrues settlement epochs **without a tier lock
@@ -567,34 +611,36 @@ Apply in order; fail-fast:
 4. **Archival work** — recompute `work_P(E)` from state; compare to `work_claim`.
 5. **Economics** — recompute three-channel `reward_P(E)` (§4); compare to `reward_amount_plain` and vout sum.
 6. **Membership-only backing** — §7.2.
-7. **Admission threshold** — §7.4 if enabled.
-8. **FCMP++ balance** — ordinary RCT balance equation including mint; fee inputs use
+7. **FCMP++ balance** — ordinary RCT balance equation including mint; fee inputs use
    standard key-image path.
+
+(There is **no admission-threshold step**: gate 7 closed bonds-only — §7.4, §10.2.)
 
 On `pop_block`, reverse **3** (revert dedup bits) and bond mutations from **4–6** in
 block disconnect order (§8).
 
 ### 7.2 Membership-only backing (ordinary transfer, not `C_stake`)
 
-**Leading disposition (gate 4/7 reopen):** admission is an **ordinary FCMP++ transfer ≥
-`ADMISSION_MIN_ATOMIC`** to `P`’s stealth address on the **main tree**. There is **no
-`C_stake` / confidential admission opening** on the genesis path unless gate 4/7 reopens
-with a demonstrated monetary reason to keep the admission stake confidential.
+**Disposition (gate 7 closed bonds-only, 2026-06-11 — §10.2):** admission funding is an
+**ordinary FCMP++ transfer** to `P`’s stealth address on the **main tree**, with **no
+consensus minimum**. There is **no `C_stake` / confidential admission opening** on the
+genesis path unless gate 4/7 reopens with a demonstrated monetary reason to keep the
+admission stake confidential.
 
 **Statement:** Prover knows opening for one or more **ordinary** outputs on the current
 main-chain FCMP++ root that collectively satisfy:
 
 ```text
 backing_ok(P, roots) :=
-  Σ backing_outputs.amount ≥ ADMISSION_MIN_ATOMIC   // if admission policy active (gate 7)
-  ∧ each output is spendable by P's key material (ordinary transfer to P)
+  each output is spendable by P's key material (ordinary transfer to P)
   ∧ membership valid under FcmpMembershipOnly at reference block
 ```
 
-When admission principal is **not** consensus-required (gate 7 bonds-only sink), the
-membership proof may attest **bond posture only**: `bonded_total_atomic ==
-bond_floor(holdings)` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2) without a
-separate admission UTXO threshold.
+The membership proof attests **spend authority and bond posture only**:
+`bonded_total_atomic == bond_floor(holdings)`
+([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2) — there is no admission UTXO
+threshold (the `Σ amount ≥ ADMISSION_MIN_ATOMIC` conjunct was deleted at the gate-7
+close; reinstatement requires the gate-7 reversion clause to fire).
 
 **Unspent-proof wall:** The transfer-shaped admission model plus the unspent-proof
 discipline lean **away** from settled-retained confidential principal machinery.
@@ -622,25 +668,23 @@ fee-input linkage — per the gate-6 firewall spec. Those are operational threat
 consensus lemmas; they must be named there. This leg does not impose rotation as a
 verify rule.
 
-### 7.4 Optional `ADMISSION_MIN` amount proof
+### 7.4 `ADMISSION_MIN` amount proof — deleted (gate 7 closed bonds-only)
 
-If gate 7 pins an admission minimum **ordinary transfer** to `P`:
+**Resolved 2026-06-11 (§10.2):** gate 7 closed close-condition (iii) **bonds-only**, so
+the optional amount proof this section held open is **deleted, not gated**: no
+`admission_proof` vin field (§5.3), no `ADMISSION_MIN` branch in `backing_ok` (§7.2), no
+admission-threshold verify step (§7.1). `ADMISSION_MIN_ATOMIC` has **no consensus role**,
+and gate-6 §2.5 pins **no wallet-policy minimum either** — there is no funding minimum
+at any layer. Reinstatement requires the gate-7 reversion clause
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) ledger G7) or the gate-6 §2.5
+reversion clause to fire.
 
-- Vin includes a **public** sum check or amount proof that backing outputs total ≥
-  `ADMISSION_MIN_ATOMIC` (loud amounts align with §2 loud-reward discipline).
-- This is **economics-only** — not unspent-enforcement on those outputs (soft admission
-  per §2.4). Outputs may be spent after first emission; bond slash is the intra-epoch
-  honesty anchor (§7.5).
-
-If admission principal is dropped (close-condition iii / bonds-only sink), remove
-`admission_proof` and the `ADMISSION_MIN` branch of `backing_ok`.
-
-**Wallet FSM implication:** Stage 3 manages **ordinary-transfer admission** to `P`, not
+**Wallet FSM implication:** Stage 3 manages **ordinary-transfer funding** of `P`, not
 `C_stake` openings or claim-pending state. See §11.
 
 ### 7.5 Intra-epoch unbacked window (explicit safety lemma)
 
-Between emissions, `P` may spend admission outputs while still listed as serving. The
+Between emissions, `P` may spend its funding outputs while still listed as serving. The
 verifier **does not** re-check full retention on every block. Safety relies on:
 
 > Challenge failure at any time → bond slash (gate 4) → `good_standing` false → **future**
@@ -686,28 +730,46 @@ refresh claimed-epoch cache; `Bonded` → `AdmissionPending` on join-Market reve
 
 ## 10. Hooks for remaining close-conditions
 
-### 10.1 Close-condition (ii) — proof aggregate
+### 10.1 Close-condition (ii) — proof aggregate: CLOSED (2026-06-11)
 
-Per-emission vin size is dominated by:
+**Resolved by the worked byte sweep**
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Close-condition (ii)*, ledger row
+AGG). Per-emission size is dominated by **constant-size crypto** (hybrid pubkey + two
+ML-DSA-65 auths + FCMP++ membership ≈ 15 kB), not the work claim
+(`|epochs| × portfolio × 13 B` — ≤ 780 B/epoch at year-30 lean portfolio). At a 20 kB
+per-emission margin, the aggregate across the `N_P` envelope {40, 79, 154} amortizes to
+**80–310 B/block = 0.027–0.103 %** of the 300 kB penalty-free zone; single-tx max
+(15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero
+spreading. The wire as specced is confirmed: `SETTLEMENT_EPOCH_BLOCKS = 10_000` and
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` stand as pinned (§3); no format change.
 
-- `|settlement_epochs| × |shard_entries| × sizeof(ShardWorkEntry)`
-- `+ sizeof(MembershipOnlyBacking)` per FCMP++ input (gate 2 + curve tree depth)
+**Caveat carried:** `FcmpMembershipOnly` is sized at 1-input `FcmpPlusPlus` order until
+built (it proves strictly less). **Reversion:** reopen iff the built proof exceeds 3×
+that estimate, the `N_P` envelope re-pins above ~1 500, the epoch re-pins below
+1 000 blocks, or **the operating envelope extends below `N_P` ≈ 25–30** (thin
+direction, swan-2/W9 — the L13 servo floor is 17 and L17 swan troughs reach ~9;
+per-archiver claims scale as `1/N_P`, a 15-epoch batch ≈ 70 kB at `N_P` = 17
+year-30 and grows with chain age; the named guard is a per-emission claim cap
+forcing batch splitting); re-evaluation is a sweep re-run with measured sizes.
 
-Sim sweep (`STAKER_ARCHIVAL_SIM.md` adjustment ledger) should use:
+### 10.2 Close-condition (iii) — admission principal: CLOSED bonds-only (2026-06-11)
 
-```text
-N_P ≈ active market archivers at settlement boundary
-cadence = SETTLEMENT_EPOCH_BLOCKS
-bytes_per_emission ≈ f(holdings shards, FCMP proof size)
-```
+**Resolved by the gate-7 iteration-5 sim**
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Gate 7 iteration-5 — results*,
+ledger row G7): the derived archival lock collapses to `bond_floor × R × shards(t)` at
+`lock/circ ≤ 10⁻⁴` in every arm, and all three macro gauges (burn servo, release factor,
+net inflation) are insensitive to both admission arms at every `N_P` — the pre-named
+indeterminate criterion resolves **bonds-only**. Consequences executed in this spec:
 
-This spec **pins cadence** (§3) so (ii) can run; it does not size proofs.
+- `admission_proof` removed from the vin (§5.3) and the verify order (§7.1).
+- `backing_ok` loses the `Σ amount ≥ ADMISSION_MIN_ATOMIC` conjunct (§7.2).
+- §7.4's optional amount proof is deleted, not gated.
+- `ADMISSION_MIN_ATOMIC` is **not a consensus constant**; gate-6 §2.5 additionally
+  pins **no wallet-policy minimum** (no funding minimum at any layer).
 
-### 10.2 Close-condition (iii) — admission principal
-
-`ADMISSION_MIN_ATOMIC` and `admission_proof` presence are **policy constants** left
-open for gate 7. Emission verification branches on whether admission is load-bearing
-(§7.2, §7.4).
+**Reversion:** reopen only per the gate-7 reversion clause (bond floor / shard geometry
+re-pinned ≥ 3 OOM upward combined, or a new archival lock class lands); re-evaluation is
+a `--gate7` re-run plus this section, not a new design round unless a gauge moves.
 
 ---
 
@@ -719,7 +781,8 @@ Not consensus — orients Stage 3 (Layer 3 FSM retool):
 rescan, `C_stake` admission openings.
 
 **Add:** `P` lifecycle (HKDF derivation, multi-`P` hygiene), **ordinary-transfer
-admission** ≥ `MIN` to `P`, off-chain announce-before-anchor, reward reception (loud
+funding** of `P` (no minimum at any layer — gate-6 §2.5 pin; funding shape/timing
+hygiene still applies), off-chain announce-before-anchor, reward reception (loud
 amounts), bond post/slash reaction.
 
 1. Gate 6: announce `P` + present backing off-chain; ensure recognized before first emission.
@@ -745,7 +808,11 @@ amounts), bond post/slash reaction.
 - [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim`, `C_stake` admission paths.
 - [ ] KAT vectors: minimal valid emission + double-claim reject + work mismatch reject.
 - [ ] Update `AUDIT_SCOPE.md` §staking — entitlement out, emission in.
-- [ ] Layer 2 remaining: gate-7 admission re-pricing sweep; per-reward byte aggregate (§10.1).
+- [x] Layer 2: gate-7 admission re-pricing sweep — **closed bonds-only 2026-06-11** (§10.2).
+- [x] Layer 2: per-reward byte aggregate — **closed 2026-06-11** (§10.1; ≤ 0.11 % of
+      penalty-free zone across the `N_P` envelope).
+- [x] Layer 2: margin-robustness band — **closed 2026-06-11** (§1.2 #4; spread gate
+      re-anchored on direct whale gauges, `g` band `[1.5, 2.5]` sealed, target `≈ 2`).
 
 ---
 

@@ -47,6 +47,21 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
+  band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
+  2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
+  normalization pinned as **relative depth** —
+  `age_milli = floor(age_epochs · 1000 / chain_epochs) ∈ [0, 1000]` — in
+  [`design/ARCHIVAL_REWARD_ARITHMETIC.md`](./design/ARCHIVAL_REWARD_ARITHMETIC.md)
+  §Shard age, matching the sim semantics the Layer-2 band run sealed
+  (`g` spans `[1, 1 + w]` for the life of the chain; the prior raw-epoch
+  form grew `g` without bound — `≈ 700·w` at 10 years — a shape no sim run
+  validated). `shard_age_milli` reimplemented (signature unchanged; callers
+  already pass `close_block_height`); `archival_reward_age_weight_milli`
+  set to **2000** (sealed target `g* ≈ 2`, calibration band `[1500, 2500]`);
+  `consensus_state_kat_v1.json` epoch-close vector re-derived by hand
+  (`Σwork` 3500 → 2590, derivation in the fixture description).
+
 - **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5,
   2026-06-11).** Target: V3.0, with the prune-policy work
   (`CURVE_TREE_CLIENT.md` §8 #9). `assemble` reads the in-memory entry vec
@@ -93,6 +108,59 @@ sustainability is unaffected by the recalibration.
   `ARCHIVAL_REORG_DEPTH_BLOCKS` into Rust codegen. Until then, cross-ref only;
   two copies are drift debt, not permanent. See
   [`docs/design/CT1_ROUND1_PINS.md`](./design/CT1_ROUND1_PINS.md).
+
+- **Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).** A black
+  swan is a **correlation oracle** against the gate-6 firewall: mass exit
+  compresses many loud `bond_floor` Unbond refunds into a few epochs, and the
+  decorrelation discipline (jitter, drain spacing) was designed against
+  steady-state cadence — a crisis blows through jitter windows by synchronizing
+  the population. An A2 analyst gets a time-boxed cohort of P-side releases to
+  correlate against principal-side activity, plus the mirrored re-entry wave
+  later. The wargame: replay the gate-6 adversary models against an L17-shaped
+  synchronized exit/re-entry event (`STAKER_ARCHIVAL_SIM.md` §L17 swan table —
+  troughs 9–25, re-entry over ~10–20 epochs); the open mechanism question is
+  whether `RELEASE_COOLDOWN_EPOCHS = 2` **smears** the cohort or merely
+  **delays** it intact, and whether a release-cooldown *queue* (spreading
+  crisis unbonds over a randomized multi-epoch window) is needed. Couples to
+  the T-A1 regime bound
+  ([`design/F1_TA3_TA7_LIFETIME_WINDOW.md`](./design/F1_TA3_TA7_LIFETIME_WINDOW.md)
+  §7): trough populations make the intersection surface maximally cheap, so the
+  exit-event channel is the binding one. Priority-2 (privacy) per
+  `00-mission.mdc` — ranked above the other swan-2 exports. Target: **V3.0**
+  (gate-6 wargame round, before the firewall constants freeze).
+
+- **Foundation treasury diversification — floor capacity must not be
+  pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
+  swan-4).** The L17 fatal channel (permanent price collapse × fiat opex) is
+  bridged by the adaptive servo *plus the foundation floor* — but a
+  token-denominated treasury loses ~75 % of its fiat purchasing power in the
+  same event it must absorb. **swan-4 correction:** the retention guarantee
+  (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree seeds* authority pin —
+  complete trees held permanently, no sunset) means market trough wipe-outs
+  are foundation-as-sole-source transitions, **not data loss**; the
+  swan-2/-3 "deep-set completeness requirement" is converted to
+  *documentation of the existing guarantee + its single-organization threat
+  model* (landed in the authority pin, with the W12/W13 completeness
+  questions parked against the no-sunset pin's reversion clause). What
+  remains for this item: (1) foundation operations policy holds
+  floor-operating reserves **fiat-diversified** (or otherwise
+  crisis-uncorrelated with the token price) at a level sized to carry the
+  serving floor + re-seed duty through the L17 servo-400 impaired window
+  (~114 epochs) at crisis-time costs — this funds both the guarantee's
+  internal redundancy and the crisis serving load; (2) **foundation seeding
+  capacity provisioned at the crisis multiple — ~4× steady-state flow**
+  (swan-4 recommendation, not just measurement: at ~1 seeding flow per seat
+  the V-trough costs ~429 sole-source shard-epochs, worst window 10 epochs;
+  4× provisioning halves exposure **and cuts trough wipe-outs 40 → 10** by
+  interrupting the cascade; surge seeding is the foundation's own action,
+  not adversary-triggerable, so the `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  §3.3 static-margin objection doesn't apply — `STAKER_ARCHIVAL_SIM.md`
+  §L17 Finding 4); (3) **`N_active` seats domain-diverse**: during a
+  sole-source window internal redundancy counts toward the L15 diversity
+  floor only if the three seats sit in distinct failure domains.
+  Operations-document requirements with authority, not code; citing
+  `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5
+  floor sizing close).
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
@@ -2584,6 +2652,21 @@ sustainability is unaffected by the recalibration.
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
+  (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
+  re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
+  §*Gate 7 iteration-5 — results*) showed the derived V3 archival lock holds
+  `stake_ratio` at 10⁻⁷–10⁻⁴ of `SCALE`, so the `stake_factor` term in
+  `shekyl-economics::burn::calc_burn_pct` is effectively inert — it was
+  designed for the retired tier-staking model, whose 5–35 % asserted ratios
+  inflated burn ~22 % in the legacy sim scenarios. Decide: keep (inert but
+  harmless; preserves the lever if a future lock class materializes) or
+  delete (smaller consensus surface per `15-deletion-and-debt.mdc`). This is
+  consensus burn math — it needs its own review against `00-mission.mdc`,
+  not a ride-along edit. Target: V3.1. *Reopen sooner if:* any V3.0 change
+  introduces a lock class large enough to move `stake_ratio` above ~10⁻³ of
+  `SCALE` (the gate-7 reversion threshold).
 
 - **Typed epoch/height parameters across the archival FFI (spawned PR 123,
   2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,

@@ -1,9 +1,9 @@
 use serde::Serialize;
 use shekyl_economics::{
     base_block_reward,
-    burn::compute_burn_split,
+    burn::{calc_burn_pct_from_activity, compute_burn_split},
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
-    params::{EconomicParams, SCALE},
+    params::{calc_stake_ratio, EconomicParams, SCALE},
     release::apply_release_multiplier,
     split_block_emission,
 };
@@ -22,6 +22,10 @@ pub struct YearSnapshot {
     pub stake_ratio_pct: f64,
     pub release_multiplier: f64,
     pub net_inflation_pct: f64,
+    /// Derived archival-locked supply in coins (gate-7 scenarios only;
+    /// absent — and skipped in JSON — on legacy asserted-stake scenarios).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_supply_coins: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +46,60 @@ pub struct StakeSchedule {
     pub get_stake_ratio: Box<dyn Fn(u64, u64, u64) -> u64>,
 }
 
+/// Gate-7 derived archival-lock model (`STAKER_ARCHIVAL_SIM.md` §Iteration-5
+/// scope). When present on a scenario, the asserted `StakeSchedule` is
+/// ignored and locked supply is **derived** from the gate-4 bond floor:
+///
+/// ```text
+/// locked(h) = bond_floor × replicas_per_shard × ⌊h / blocks_per_shard⌋  [+ admission_min × n_p]
+/// ```
+///
+/// where `h` is the absolute chain height — the caller passes
+/// `block + genesis_height_offset`, so pre-existing history enters through
+/// the offset, not through a separate genesis-shards term.
+///
+/// Per the pinned build constraint, the derived `stake_ratio` and the burn
+/// input both denominate against the **consensus burn-site circulating**
+/// (prev-block `already_generated`), matching the C4 recorder — not the
+/// modeling loop's emitted-minus-burned gauge.
+pub struct ArchivalLockModel {
+    /// Per-shard-replica bonded collateral (gate-4 §8.1
+    /// `ARCHIVAL_BOND_FLOOR_ATOMIC`; pinned 750_000_000).
+    pub bond_floor_atomic: u64,
+    /// Seated replicas per deep shard (`R_target`; L15 lean ≈ 6).
+    pub replicas_per_shard: u64,
+    /// Blocks of chain history per new deep shard. Shard segment geometry
+    /// is **not yet consensus-pinned** (gate-2/3 `ShardId` wire open), so
+    /// this is an explicit model parameter; default arm uses
+    /// `SETTLEMENT_EPOCH_BLOCKS` (the staking sim's frontier-growth
+    /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
+    /// no model meaning and `locked_atomic` panics on it rather than
+    /// silently reporting zero locked supply.
+    pub blocks_per_shard: u64,
+    /// Bonded archiver population `N_P` (enters the admission arm only;
+    /// L11 attractor envelope: lean ≈ 79, thick ≈ 154, fee-era-thin band
+    /// 17–62).
+    pub n_p: u64,
+    /// Arm B hard admission lock per `P` (`ADMISSION_MIN_ATOMIC`
+    /// candidate); `0` = arm A (bonds-only).
+    pub admission_min_atomic: u64,
+}
+
+impl ArchivalLockModel {
+    /// Total consensus-locked supply at height `h`, atomic units.
+    ///
+    /// Panics if `blocks_per_shard == 0` — a misconfigured model fails loudly
+    /// rather than reporting zero bond-locked supply into the gate-7 gauges.
+    #[must_use]
+    pub fn locked_atomic(&self, height: u64) -> u128 {
+        let shards = height / self.blocks_per_shard;
+        u128::from(self.bond_floor_atomic)
+            * u128::from(self.replicas_per_shard)
+            * u128::from(shards)
+            + u128::from(self.admission_min_atomic) * u128::from(self.n_p)
+    }
+}
+
 pub struct ScenarioConfig {
     pub name: String,
     pub description: String,
@@ -51,6 +109,9 @@ pub struct ScenarioConfig {
     pub fee_per_tx: u64,
     pub initial_emitted_fraction: f64,
     pub genesis_height_offset: u64,
+    /// Gate-7 derived-lock model. `None` (all legacy scenarios) leaves the
+    /// asserted `StakeSchedule` path byte-identical.
+    pub archival_lock: Option<ArchivalLockModel>,
 }
 
 pub struct SimParams {
@@ -132,8 +193,22 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        let stake_ratio =
-            (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating);
+        // Consensus burn-site circulating: prev-block `already_generated`
+        // alone, matching `validate_miner_transaction` / the C4 recorder
+        // (pinned build constraint, STAKER_ARCHIVAL_SIM.md §Iteration-5).
+        let circ_consensus = already_generated.min(u64::MAX as u128) as u64;
+        let (stake_ratio, staked_atomic) = match &config.archival_lock {
+            Some(model) => {
+                let locked = model
+                    .locked_atomic(block + config.genesis_height_offset)
+                    .min(u128::from(circ_consensus)) as u64;
+                (calc_stake_ratio(locked, circ_consensus), Some(locked))
+            }
+            None => (
+                (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating),
+                None,
+            ),
+        };
 
         let multiplier = calc_release_multiplier(
             tx_volume,
@@ -162,15 +237,27 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let total_fees_this_block = tx_volume as u128 * config.fee_per_tx as u128;
         let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
 
-        let burn_pct = calc_burn_pct(
-            tx_volume,
-            params.tx_volume_baseline,
-            circulating,
-            params.money_supply,
-            stake_ratio,
-            params.burn_base_rate,
-            params.burn_cap,
-        );
+        let burn_pct = match (&config.archival_lock, staked_atomic) {
+            // Gate-7 path: the engine-equivalent composition over the
+            // consensus circulating quantity (follows the recorder).
+            (Some(_), Some(locked)) => calc_burn_pct_from_activity(
+                tx_volume,
+                params.tx_volume_baseline,
+                circ_consensus,
+                locked,
+                &economic,
+            ),
+            // Legacy path: byte-identical to the pre-gate-7 modeling loop.
+            _ => calc_burn_pct(
+                tx_volume,
+                params.tx_volume_baseline,
+                circulating,
+                params.money_supply,
+                stake_ratio,
+                params.burn_base_rate,
+                params.burn_cap,
+            ),
+        };
 
         let fee_split = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
 
@@ -189,10 +276,12 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
             let avg_block_reward = effective_reward as f64 / COIN;
 
-            let staked_amount = if stake_ratio > 0 && circulating > 0 {
-                (circulating as u128 * stake_ratio as u128 / SCALE as u128) as f64 / COIN
-            } else {
-                0.0
+            let staked_amount = match staked_atomic {
+                Some(locked) => locked as f64 / COIN,
+                None if stake_ratio > 0 && circulating > 0 => {
+                    (circulating as u128 * stake_ratio as u128 / SCALE as u128) as f64 / COIN
+                }
+                None => 0.0,
             };
 
             let total_staker_income = staker_emission_earned_year + staker_fee_earned_year;
@@ -233,6 +322,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 } else {
                     -1.0
                 },
+                locked_supply_coins: staked_atomic.map(|locked| locked as f64 / COIN),
             });
         }
     }
@@ -249,8 +339,79 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
 #[cfg(test)]
 mod tests {
-    use super::SimParams;
+    use super::{
+        run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule,
+    };
     use serde_json::Value;
+
+    fn tiny_lock_model(admission_min_atomic: u64) -> ArchivalLockModel {
+        ArchivalLockModel {
+            bond_floor_atomic: 750_000_000,
+            replicas_per_shard: 6,
+            blocks_per_shard: 100,
+            n_p: 79,
+            admission_min_atomic,
+        }
+    }
+
+    #[test]
+    fn locked_atomic_is_exact_integer_math() {
+        let arm_a = tiny_lock_model(0);
+        assert_eq!(arm_a.locked_atomic(0), 0);
+        assert_eq!(arm_a.locked_atomic(99), 0);
+        // one shard frozen: floor x replicas
+        assert_eq!(arm_a.locked_atomic(100), 750_000_000u128 * 6);
+        assert_eq!(arm_a.locked_atomic(1_000), 750_000_000u128 * 6 * 10);
+
+        let arm_b = tiny_lock_model(750_000_000);
+        // admission term is flat MIN x N_P on top of the bond term
+        assert_eq!(arm_b.locked_atomic(0), 750_000_000u128 * 79);
+        assert_eq!(
+            arm_b.locked_atomic(100),
+            750_000_000u128 * 6 + 750_000_000u128 * 79
+        );
+    }
+
+    fn tiny_config(archival_lock: Option<ArchivalLockModel>) -> ScenarioConfig {
+        ScenarioConfig {
+            name: "tiny".into(),
+            description: "test".into(),
+            sim_years: 1,
+            volume: VolumeSchedule {
+                get_volume: Box::new(|_b, _bpy| 50),
+            },
+            stake: StakeSchedule {
+                get_stake_ratio: Box::new(|_b, _bpy, _c| 250_000),
+            },
+            fee_per_tx: 100_000_000,
+            initial_emitted_fraction: 0.0,
+            genesis_height_offset: 0,
+            archival_lock,
+        }
+    }
+
+    #[test]
+    fn gate7_path_reports_derived_lock_and_legacy_path_omits_it() {
+        let params = SimParams {
+            blocks_per_year: 10_000,
+            ..SimParams::default()
+        };
+
+        let legacy = run_scenario(&params, &tiny_config(None));
+        let last = legacy.years.last().expect("snapshot");
+        assert_eq!(last.locked_supply_coins, None);
+        // asserted schedule passes through untouched
+        assert!((last.stake_ratio_pct - 25.0).abs() < 1e-9);
+
+        let gate7 = run_scenario(&params, &tiny_config(Some(tiny_lock_model(0))));
+        let last = gate7.years.last().expect("snapshot");
+        let locked = last.locked_supply_coins.expect("derived lock reported");
+        // snapshot at block 9_999: 99 shards x 6 replicas x 0.75 coin
+        assert!((locked - 445.5).abs() < 1e-6);
+        // derived ratio against multi-million-coin circulating is far below
+        // the asserted 25%
+        assert!(last.stake_ratio_pct < 0.01);
+    }
 
     fn cfg_u64(cfg: &Value, key: &str) -> u64 {
         cfg.get(key)

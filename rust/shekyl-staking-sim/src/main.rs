@@ -49,16 +49,21 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!();
     eprintln!("Sub-claims (stated thresholds): covered = frac_under_target<0.05 & min_R>=1;");
     eprintln!(
-        "  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, final-epoch SNAPSHOT);"
+        "  spread = max_actor_share<0.20 & wB4<0.20 (DIRECT whale gauges, final-epoch SNAPSHOT;"
     );
     eprintln!(
-        "  sprdW = same thresholds on WINDOWED read (mean gini, peak max_share over churn_window);"
+        "    re-anchored 2026-06-11 Layer-2 band close — gini is a reported trend gauge only);"
+    );
+    eprintln!(
+        "  sprdW = peak max_actor_share over churn_window < 0.20 & wB4<0.20 (WINDOWED read);"
     );
     eprintln!("  ALL uses sprdW not sprd (L9 lesson: steady-state read is the discipline gate).");
     eprintln!("  deep_history = deep_frac_under_target<0.10;");
     eprintln!("  churn_stable = max(oUmx, serving_oUmx)<0.05 (coverage oscillation, NOT abandonment churn).");
-    eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
-    eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
+    eprintln!("Note: gini/giniW (actor-level) and gini_psd (pseudonym-level, on-chain-observer");
+    eprintln!("  read) are reported, not pass criteria. The Layer-2 band run decomposed giniW:");
+    eprintln!("  it tracks population leanness (bondA), not whale capture. A splitting whale");
+    eprintln!("  looks egalitarian in gini_psd by design.");
     eprintln!();
     eprintln!("Durability columns: dS/dN = CO-LOCATED coverage (L8 min-form) =");
     eprintln!(
@@ -112,6 +117,33 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!("  saturated); fDUpk = worst serving deep gap over the run's 2nd half (death-spiral");
     eprintln!("  read — sustained high = priority-1 failure). L13; =budget/0 outside fee-era.");
+    eprintln!("  shkP = post-shock worst serving deep gap; shkRec = epochs the deep tail stayed");
+    eprintln!("  over the 0.10 bar after the shock (0 = never breached, -1 = NOT recovered by");
+    eprintln!("  run end); shkBA = post-shock bonded-archiver trough. L17; 0 outside shock axis.");
+    eprintln!("  extT = deep-shard market-holder-set WIPE-OUT events run-wide (serving holder set");
+    eprintln!("  emptied after being seated at depth; sticky per slot until recycle). Under the");
+    eprintln!("  foundation retention guarantee (V3_STAKER_ARCHIVAL.md, complete trees held");
+    eprintln!("  permanently) these are FOUNDATION-AS-SOLE-SOURCE transitions, not data loss;");
+    eprintln!("  shkExt = the post-shock subset. swan-2/W1, re-read swan-4.");
+    eprintln!(
+        "  shkExF = post-shock wipe-outs NET OF THE MODELED SERVING FLOOR (counted only when"
+    );
+    eprintln!(
+        "  market holders AND floor are simultaneously zero; = shkExt when floor_replicas=0)."
+    );
+    eprintln!(
+        "  extB = shkExt binned by age band at wipe-out (b1/../b5, oldest last). swan-3/W12-13."
+    );
+    eprintln!(
+        "  ssSE = sole-source SHARD-EPOCHS run-wide (deep shards x epochs with the foundation"
+    );
+    eprintln!(
+        "  as only source); ssMxW = longest single-shard sole-source window; ssOpn = windows"
+    );
+    eprintln!(
+        "  still open at run end (market never re-seated). With reseed_rate>0 the re-seed is"
+    );
+    eprintln!("  foundation-bandwidth-bound (serialized recovery ~ backlog/rate). swan-4.");
     eprintln!("  rUDp = RETRIEVAL deep frac under the SLA (1-(1-u)^d < A*); rAvl = deep-set mean");
     eprintln!(
         "  availability; rTgtA = DERIVED R_target from (u,A*). L15; nonzero rUDp on a covered"
@@ -137,7 +169,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -173,6 +205,16 @@ fn print_summary(results: &[ScenarioResult]) {
         "boOld",
         "feB",
         "fDUpk",
+        "shkP",
+        "shkRec",
+        "shkBA",
+        "extT",
+        "shkExt",
+        "shkExF",
+        "extB",
+        "ssSE",
+        "ssMxW",
+        "ssOpn",
         "rUDp",
         "rAvl",
         "rTgtA",
@@ -193,7 +235,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -232,6 +274,20 @@ fn print_summary(results: &[ScenarioResult]) {
             r.boot_oldest_floored_peak,
             r.fee_budget_end,
             r.fee_deep_under_peak,
+            r.shock_deep_under_peak,
+            r.shock_recovery_epochs,
+            r.shock_bonded_trough,
+            r.deep_extinct_total,
+            r.shock_deep_extinct,
+            r.shock_deep_extinct_floored,
+            r.shock_extinct_bands
+                .iter()
+                .map(|&x| format!("{}", x as usize))
+                .collect::<Vec<_>>()
+                .join("/"),
+            r.sole_source_shard_epochs,
+            r.sole_source_max_window,
+            r.sole_source_open_end,
             r.retr_under_deep,
             r.retr_avail_deep,
             r.r_target_avail as usize,

@@ -2,7 +2,400 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **sim: sole-source window tick moved to end-of-epoch (PR #126 Copilot
+  round 2).** The swan-4 tick ran after the mid-epoch wipe-out scan but
+  before `process_exits` and its post-exit re-scan, so a window opened
+  by an epoch's voluntary exits started counting one epoch late and a
+  window the next epoch's re-acquisition closed immediately was never
+  counted. The tick now reads end-of-epoch serving state (after the
+  post-exit re-scan refreshes `deep_seated`). Re-measured swan-4 arms
+  confirm the predicted +1-per-exit-opened-window undercount exactly
+  (`ssSE` += run-wide `extT` on each row): reseed-3 V-trough 365 → 429
+  (worst window 9 → 10), reseed-12 170 → 204, servo-400 282 → 403, and
+  5 final-epoch windows on the servo row are now visible at the run
+  boundary (`ssOpn` 0 → 5). Banked figures updated in
+  `STAKER_ARCHIVAL_SIM.md` §L17 (table, Finding 4, ledger row),
+  `FOLLOWUPS.md`, and the public prose (~9 → ~10 epochs worst window).
+  Same round: the per-epoch scan comment's stale "data-extinction"
+  wording aligned with the swan-4 sole-source framing. Round 1 of the
+  same review (commit `2fdf33650`) aligned the `ScenarioResult` /
+  `ExtinctionScan` doc comments, added the `[0, 1]` loud-failure assert
+  on the shock exit fractions, corrected the `ArchivalLockModel` formula
+  doc, and made `locked_atomic` panic on `blocks_per_shard == 0` instead
+  of silently reporting zero locked supply.
+
 ### Added
+
+- **docs: swan-arc closure notes — seeding SLO recommendation, domain
+  diversity, enforcement pins (2026-06-11).** Five small dispositions
+  closing the L17 black-swan round series. **(1) Seeding SLO carries the
+  recommendation, not just the measurement:** provision foundation
+  re-seed capacity at the **crisis multiple, ~4× steady-state flow** —
+  the 40 → 10 wipe-out result is the actionable number (surge seeding
+  interrupts the trough cascade before it propagates), and unlike
+  adaptive `m/n` widening it is **not gameable** (the foundation's own
+  provisioning decision, not an adversary-triggerable consensus rule, so
+  the §3.3 static-margin objection doesn't apply). Landed in the
+  authority pin, L17 Finding 4, disposition, ledger row, FOLLOWUPS.
+  **(2) Foundation domain diversity folded into the SLO:** during a
+  sole-source window the shard's availability is the foundation's uptime
+  with effective domain count 1 in the L15 sense; internal redundancy
+  counts toward the diversity floor only if the `N_active = 3` seats sit
+  in distinct failure domains. **(3) Liveness-signal escape inherits the
+  unpredictability prerequisite** (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  §3.2): whatever replaces `m`-keyed slashing carries the `H_fire`-class
+  beacon-unpredictability requirement — a predictable liveness probe
+  rebuilds the §5 gaming surface under a new name. **(4) Crisis-price
+  multiplier pinned** (rule 21): the deterrence-credible criterion is
+  evaluated at the **L17 fatal channel, ×0.25 permanent** — evaluators
+  do not choose their own stress level; reopens only with the L17 grid
+  itself. **(5) Closure observation banked** (L17 Finding 4): the
+  scarcity servo and foundation seeding **compose by construction**
+  through the sole-source window — foundation isn't in `Market`, so a
+  sole-source shard reads `R_market = 0` (maximal scarcity, maximal
+  `g`-weighted re-acquisition reward) exactly while the foundation
+  supplies the bytes; the binding constraint is `reseed_rate`, which is
+  what the SLO sizes. The trough self-heals as designed; no emergency
+  mechanism is needed. Black-swan layer closed in the full sense:
+  measured tails, named guarantees, scoped residues (W16/W17 in the
+  Round-2 enforcement gate, W4/W8 in FOLLOWUPS), reversion clauses keyed
+  to the right triggers.
+
+- **sim: swan-4 — retention correction + foundation-sourced re-seed
+  bottleneck (L17, 2026-06-11).** Third wargame response; dissolves the
+  swan-2/-3 extinction framing. The genesis foundation seeds retain **at
+  least one complete copy of every shard permanently**, so market-side
+  `extT`/`shkExt` events are **foundation-as-sole-source transitions, not
+  data loss** — the 37/99 price-row results re-read as an availability /
+  re-seed bottleneck, and the sim's previously "sourceless" backfill is
+  coincidentally modeling the real foundation-sourced path. New
+  `reseed_rate` knob caps fresh-deep acquisitions of sole-source shards
+  per epoch (bandwidth-bound foundation seeding over the L16 rendezvous
+  path); new metrics `ssSE` (sole-source shard-epochs), `ssMxW` (max
+  single-shard window), `ssOpn` (windows open at end). Measured
+  (`swan4_vshape_reseed3/12`, `swan4_servo400_reseed3`): at `reseed_rate
+  = 3` (~1 seeding flow per active seat) the V-trough costs **429
+  sole-source shard-epochs, worst window 10 epochs**, servo-400 403/9
+  (5 final-epoch windows open at the run boundary; everything else
+  re-seeded by horizon end); **4× provisioning halves exposure
+  (429 → 204) and cuts wipe-out count 40 → 10** (faster re-seat
+  interrupts trough cascades). (Figures re-measured after the PR-126
+  Copilot fix below; the pre-fix tick undercounted each exit-opened
+  window by one epoch.) Foundation seeding bandwidth is therefore an
+  **availability-SLO sizing input**, exported to gate-5 ops. L17 verdicts
+  re-worded ("extinct" → "sole-source"), Findings 1/4/5 + disposition
+  re-anchored on the retention guarantee ("no shock in this grid loses
+  data; the grid measures availability"), reversion clause keyed on the
+  no-sunset retention pin (W12/W13 completeness questions parked against
+  it, not deleted). `docs/design/STAKER_ARCHIVAL_SIM.md` §L17.
+
+- **docs: swan-4 retention authority pin + availability re-frame
+  (2026-06-11).** `V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree
+  seeds* gains the **authority pin** distinguishing three previously
+  conflated properties: **retention** (complete B+C held permanently, no
+  sunset — the durability guarantee of record), **internal redundancy**
+  (foundation ops: N_active = 3 seats, fiat-diversified reserves), and
+  **serving participation** (the population-decaying floor the sim
+  models). Names the **single-organization threat model** the guarantee
+  creates (infra loss, seizure, dissolution over the timeframe-2/3
+  horizon — the single point the market architecture otherwise exists to
+  avoid) with a reversion clause: if the no-sunset pin is ever reopened,
+  the swan-3 W12/W13 market-completeness questions re-activate at that
+  sunset. `FOLLOWUPS.md` treasury item re-anchored: the swan-2/-3
+  "deep-set completeness requirement" converts to documentation of the
+  existing guarantee; what remains is fiat-diversified reserves sized for
+  serving + re-seed duty through the servo-400 impaired window, plus
+  seeding bandwidth as an availability-SLO input. Public prose aligned
+  (`ECONOMY_EXPLAINED.md`, `PUBLIC_NARRATIVE_FAQ.md`): crash troughs
+  cause **bounded foundation-only availability windows (~10 epochs worst
+  measured), never data loss**, and through a trough durability rests on
+  one disclosed organization — stated plainly, not hedged.
+
+- **sim: swan-3 black-swan iteration — band read, floor-on closure arms,
+  class-correlated exit (L17 W12–W15, 2026-06-11).** Second wargame response;
+  converts the swan-2 export's two inferences into measurements and pins the
+  domain-result provenance. **Per-band extinction read (W12):** `extB` bins
+  each shock extinction by age band at extinction time; the price rows are
+  **mid-deep-modal, not oldest-concentrated** (vshape 20/17 b4/b5; servo-400
+  5/64/30; permanent-gap 23/181/143) — trough extinction follows holder
+  economics at eviction, not shard age, so the swan-2 oldest-stratum
+  completeness scope under-scoped; **gate-5 export re-scoped to the entire
+  deep set**. **Floored read + closure arms (W13):** the swan worlds were
+  bare-lean (`floor_replicas = 0` — pinned in the ledger row), so 37/99 was
+  the unbacked read; new `shkExF` counts data-dead only when market holders
+  *and* `foundation_floor_aged` are simultaneously zero (also catches the
+  floor-withdrawal hand-off race). `swan3_vshape_floor` / `swan3_servo400_floor`
+  reproduce identical market damage with **`shkExF` = 0** — closure evidence
+  that deep-set completeness converts every measured trough loss into a
+  covered availability window (incl. the 114-epoch servo-400 window);
+  `swan3_vshape_floor_t9` shows the P3 tilt ≤ 0.9 doesn't leak (tilt
+  redistributes depth, not membership; any schedule zeroing a deep band's
+  floor share violates completeness — new reversion trigger). **Class-
+  correlated exit (W15):** the swan-2 domain rows ran with **no placement
+  diversity floor** (the L15 machinery is scoring-only) — benign results were
+  bucketing luck; new `shock_exit_top_deep` exits the top deep-holders
+  (honest worst case for the FTX class-correlation pattern): at 50 %,
+  stride 0 / domain-bucketed 1 / **class-correlated 28** extinctions; class
+  30 % costs 4 (outranks every independent 50 %). Reversion criterion (c)
+  re-keyed on class- or domain-concentrated exit ≥ ~0.3. **W14:** aftershock
+  4 banked as *within the independence-to-no-reseat envelope* [(1/2)⁶×120 ≈
+  1.9, (3/4)⁶×120 ≈ 21] — above the independence floor because 3 epochs of
+  rate-limited reseat leave the second stride no longer anti-correlated with
+  surviving holder sets. `docs/design/STAKER_ARCHIVAL_SIM.md` §L17 (table,
+  Findings 4–6, disposition, reversion clause, ledger row).
+
+- **docs: swan-3 dispositions W16–W18 (2026-06-11).** **W16**
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.2 gains the fourth joint
+  criterion **deterrence-credible**: crisis-tail `m` (W6) and slash
+  deterrence pull in opposite directions — at `m = 11/n = 13` a strategic
+  actor misses 10 of 13 baselines slash-free, and a crisis-sized `m` makes
+  the slash vestigial exactly when the fetch-on-demand temptation peaks
+  (composes with the W5 residue); `E[slash]` under the realistic degrade
+  play must exceed storage-opex savings **at crisis prices**, and if no `m`
+  satisfies all four criteria the decoupled liveness signal **becomes the
+  design**, not the contingency. **W17** the W5 telemetry trigger's
+  observables pinned in L17 Finding 6 + reversion trigger (e):
+  challenge-latency distribution shift (weak, continuous — fetch-on-demand
+  is indistinguishable at the challenge interface per 8c) and **correlated
+  load spikes on surviving true holders at challenge anchors** (confirmatory
+  — the source set's bandwidth is the side channel degraders cannot hide);
+  ledger row honest that detection is **open, not solved**; stressnet to
+  exercise the source-load observable under induced degradation. **W18**
+  public-facing prose aligned: `ECONOMY_EXPLAINED.md` "graceful degradation"
+  passage gains the coverage-vs-data caveat (survival of irreplaceable
+  history through troughs is a gate-5 *requirement*, verified by the W13
+  arms, not an emergent market property); `PUBLIC_NARRATIVE_FAQ.md`
+  "market archivers thin out" answer pins the condition (complete over all
+  deep history, held continuously, treasury crisis-uncorrelated per W4).
+  `FOLLOWUPS.md` treasury item re-scoped to deep-set completeness.
+
+- **sim: swan-2 black-swan iteration — extinction read, domain-correlated
+  exit, aftershock, knee timing (L17 W1–W3, 2026-06-11).** Wargame response
+  to the adversarial review of the L17 close; converts three assumed-away
+  tails into measured ones. **Extinction accounting (W1):** backfill in the
+  model is *sourceless* (best-response sets `holdings[a][s]` with no
+  surviving-source check), so `shkRec` was a metric-recovery claim only; new
+  `extT`/`shkExt` reads count deep shards whose serving holder set empties
+  after being seated at depth (sticky per slot until recycle; scanned at the
+  shock instant, per epoch, and after voluntary exits — the death-spiral
+  channel's orphanings were otherwise invisible). **Domain-correlated exit
+  (W2):** `shock_exit_domains = n` wipes failure domain 0 under the L15
+  `a % n` bucketing — stride was the most benign correlation structure
+  (holder sets straddle it; per-shard total loss ≈ 0 by construction).
+  **Aftershock + timing (W3):** `aftershock_at` re-fires every shock leg
+  against the survivors; `swan2_knee_cascade` fires at the L13 decayed-purse
+  knee; `swan2_cascade_rho` compounds 50 % exit with an entry-suppressing
+  ρ ×2. Five `swan2_*` scenarios + all swan-1 rows re-run: stride 50 % = 0
+  extinctions but domain-correlated 50 % = 1 and the 50 %+50 % aftershock
+  pair = 4 (analytic match: (1/2)⁶ × ~120 deep); the *recovered* V-crash and
+  servo-400 rows quietly extinguish **37 / 99** deep shards in their troughs
+  — metric recovery ≠ data recovery, now measured. Knee-timed and
+  domain-1/3 cascades absorbed with zero data loss. L17 re-dispositioned
+  (claim narrowed to measured; reversion re-keyed on **domain-concentrated
+  exit ≥ ~0.3**, correlation not magnitude; floor completeness over the
+  oldest stratum exported as a gate-5 survival requirement;
+  honest-holding-under-stress named as residue W5 with telemetry trigger).
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §L17 + ledger row.
+
+- **docs: swan-2 cross-gate exports W4–W11 (2026-06-11).** The adversarial
+  review's reversion-clause and cross-reference edits, landed with
+  authority: **W4** foundation-treasury diversification named as a V3.0
+  ops requirement (`FOLLOWUPS.md`; the floor's fiat capacity is pro-cyclical
+  in exactly the crisis it must absorb, and Finding 4 makes it load-bearing
+  for data survival) and the servo-ceiling pro-cyclicality caveat folded
+  into L17 Finding 3 (crisis-time fee capacity sits below the static
+  ceiling). **W6** enforcement pro-cyclicality:
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.3 — `n − m` sized statically
+  against crisis-tail run-lengths under *induced correlated failure*
+  (adaptive emergency widening rejected per the escalation-dodge result);
+  stressnet campaign extended accordingly. **W7** T-A1/F1 acceptance
+  recorded as **regime-bounded** (`F1_TA3_TA7_LIFETIME_WINDOW.md` §7: the
+  lean-eq premise is temporarily invalidated at swan troughs of 9–25, where
+  the intersection surface is maximally cheap; Form-C not reopened). **W8**
+  gate-6 synchronized-exit wargame queued V3.0 (`FOLLOWUPS.md`; does
+  `RELEASE_COOLDOWN_EPOCHS = 2` smear or merely delay the unbond cohort?).
+  **W9** AGG reversion clause gains the **downward** `N_P` trigger (reopen
+  iff envelope extends below ~25–30; per-archiver claims scale as `1/N_P` —
+  ~70 kB single tx at `N_P` = 17 year-30; named guard = per-emission claim
+  cap forcing batch splitting) in `STAKER_ARCHIVAL_SIM.md` +
+  `REWARD_EMISSION_LEG.md` §10.1. **W10** gate-7 bonds-only ↔ `R_market`
+  weighting coupling cross-referenced both ways
+  (`ARCHIVAL_CONSENSUS_STATE.md` §3.3 note: serve-credit weighting is
+  load-bearing against ~0.75-coin/pseudonym Sybil inflation; gate-7 close is
+  a blocking input to any re-weighting). **W11** `swan_regime` verdict
+  conditioned on the Finding-0 windowed-Gini reconciliation (L17
+  Finding 7).
+
+- **sim: L17 black-swan / acute-shock axis (2026-06-11).** Closes the
+  due-diligence gap between the gradual-decline stresses (L13 subsidy taper,
+  P2 price decay) and step-event crises observed in production networks.
+  Gated `shock_*` knobs in `shekyl-staking-sim` (`shock_at = 0` ⇒ inert;
+  legacy rows verified byte-identical): one-epoch token-price gap-down with
+  optional V-shaped recovery (March-2020 class vs FTX/deep-bear class),
+  reservation-yield step with relaxation (2008 flight-to-liquidity vs
+  permanent regime change), and stride-sampled forced exit of an active-set
+  fraction (custody-collapse contagion). New reads `shkP`/`shkRec`/`shkBA`
+  (post-shock worst deep gap, epochs-to-recovery, bonded trough). Ten
+  `swan_*` scenarios at the pinned genesis economics. Findings
+  (`STAKER_ARCHIVAL_SIM.md` §L17): population shocks are absorbed by
+  construction (30 % overnight exit and ρ×3 panic never breach the deep bar;
+  50 % exit recovers in 4 epochs; permanent ρ×2 settles leaner but covered);
+  a V-shaped −75 % crash recovers fully in 17 epochs with no ratchet; the
+  fatal channel is a **permanent** price collapse with fiat-denominated opex
+  (the Filecoin 2022→24 provider-exodus pattern — confirms P2 for step
+  ignition), survivable only when fee-market headroom scales with the real
+  cost multiplier. Disposition: no new V3.0 mechanism; the L13 adaptive
+  servo + re-engaging foundation floor are the bridge; reversion clause
+  recorded.
+
+- **sim: spread gate re-anchored on direct whale gauges — Layer-2 close-out
+  (2026-06-11).** Implements the gate the Layer-2 band run sealed:
+  `shekyl-staking-sim`'s `spread`/`sprdW` verdicts now gate on
+  `max_actor_share < 0.20` and oldest-band whale share `wB4 < 0.20`
+  (the per-band distinct-actor-seating term rides on the coverage claims,
+  since `R` counts distinct actors); `gini_actor`/`giniW` are printed as
+  reported trend gauges only. Whale-capture bar unchanged at 0.20 — this is
+  a metric re-derivation against the threat model, not a threshold move.
+  Verified by re-run: all lean/whale band rows pass `sprdW` across
+  `g ∈ [1.5, 4.0]`, and bare-lean coloc fails re-attribute to coverage
+  oscillation (`churn_stable`), matching the Finding-3 reading. Verdict
+  columns recorded before this date used the gini-gated definition; raw
+  gauge columns are unchanged (supersession notes in
+  `STAKER_ARCHIVAL_SIM.md` §Layer-2 results and `REWARD_EMISSION_LEG.md`).
+  Stale pre-Curve-repair attractor counts (~79 archivers) annotated to the
+  post-repair ~113 equilibrium in `ECONOMY_EXPLAINED.md` and the L11
+  section (Finding-0 fallout; attractor properties unchanged).
+
+- **archival: `g(age)` normalization pinned — relative-depth age; constant
+  mapped to the sealed band (2026-06-11).** Closes the Layer-2 Finding-5
+  FOLLOWUPS item the day it opened (pre-genesis discount;
+  `ARCHIVAL_REWARD_ARITHMETIC.md` §Shard age). Consensus shard age is now a
+  **relative depth fraction** — `age_milli = floor(age_epochs · 1000 /
+  chain_epochs) ∈ [0, 1000]` — so `g(age)` spans `[1, 1 + age_weight]` for
+  the life of the chain, matching the sim semantics the Layer-2 band run
+  sealed. The prior raw-epoch form grew `g` without bound (`≈ 700·w` for a
+  10-year shard at `SEB = 10 000`), concentrating `Σwork` onto oldest-band
+  holders over mission timeframes — a shape no sim run validated and the
+  whale-capture surface Layer 2 gates. `shard_age_milli` reimplemented
+  (signature unchanged — callers already pass `close_block_height`);
+  `archival_reward_age_weight_milli` 1000 → **2000** (sealed target
+  `g* ≈ 2`, calibration band `[1500, 2500]`, retunable on stressnet
+  evidence without a design round); epoch-close KAT vector re-derived by
+  hand (`Σwork` 3500 → 2590, derivation recorded in the fixture
+  description); `REWARD_EMISSION_LEG.md` Channel-1 prose carries the unit.
+  Mission-timeframe note: this change is what makes the `g ≈ 2` seal valid
+  at the 30-year horizon, not just at genesis.
+
+- **archival: Layer-2 margin-robustness band run and closed (2026-06-11).**
+  Built and ran the scoped sweep (`shekyl-staking-sim` axes `layer2_band{,_whale,_coloc}`,
+  `layer2_budget{,_whale}`, `layer2_colocbud`; 29 scenarios; results in
+  `STAKER_ARCHIVAL_SIM.md` §Layer-2 margin-robustness band — results).
+  Decomposition confirmed decisively: `giniW` tracks population leanness
+  (`bondA`) in both sweep directions while every direct whale gauge stays flat
+  (`mxSW` 0.013–0.018 vs the 0.20 bar, `wB4 = 0`, whale Δ`giniW` ≤ 0.003).
+  Dispositions: **spread gate re-anchored on direct whale gauges** (`gini_actor`
+  demoted to trend); **`g` sealed as a band `[1.5, 2.5]`, genesis target
+  `g ≈ 2`** — the band's upper bound is polarized-world coverage oscillation
+  (`g ≥ 3.0` fails at any purse; the `g ∈ {2.0, 2.5}` shoulder heals at +30 %
+  purse, the L13 servo's static image); budget cross confirms the purse as the
+  spread lever (`giniW` 0.598 → 0.217 over budget 100 → 200); `Curve` reserve
+  untriggered. Finding 0: the 2026-06-07 `gate4_fine` readings are superseded —
+  the banded PL Curve repair (`4071ec032`) moved the L11 equilibrium
+  (`bondA` 79 → ~113; coloc pin row oscillates at bare-lean purse); the
+  `bond_rate* = 0.75` pin stands under the re-read (Finding 4). Finding 5:
+  sim-vs-consensus `g(age)` **units gap** (normalized [0,1] age vs raw epoch
+  counts) blocks mapping the sealed band onto
+  `archival_reward_age_weight_milli` — normalization pin queued in
+  `FOLLOWUPS.md` (V3.0). Cross-docs: `REWARD_EMISSION_LEG.md` §1.2 #4 +
+  keystone row + checklist; `WALLET_REWRITE_PLAN.md` status. **Phase 2B design
+  is fully closed**; Stage 3 gates on schema implementation + gate-6 soundness.
+
+- **archival: Layer-2 margin-robustness band scoped (2026-06-11).** The last
+  open 2B design item (`STAKER_ARCHIVAL_SIM.md` §Layer-2 margin-robustness
+  band — scope; L1/L2 ledger rows updated; `REWARD_EMISSION_LEG.md` §1.2 #4).
+  Decomposes the `giniW ≈ 0.599` grazing reading before sweeping: the whale
+  gauges have wide margins (`max_actor_share ≈ 0.011` vs 0.20; `wB4 ≈ 0.12`)
+  and the ~0.59 baseline is the lean L11 attractor's intrinsic inequality
+  (entry-until-breakeven leanness + `g(age)` incumbency premium + windowed
+  churn flicker), not whale capture. Sweep: `g ∈ {1.5–4.0}` × pin rows at
+  `bond_rate = 0.75` + budget cross {100–200} pricing the gate-1/7 purse as
+  the spread lever. Three named outcomes: seal as-is, re-anchor the gate on
+  direct whale gauges (metric re-derivation, not threshold relaxation), or
+  pull the declining-tail `Curve` (V3 reserve).
+
+- **docs: `ECONOMY_EXPLAINED.md` — plain-language economy walkthrough
+  (2026-06-11).** Human-friendly explainer of the four control loops (emission
+  curve, release multiplier, adaptive burn, staker emission share) with worked
+  numerical examples from the gate-7 sim run and the L11 attractor tables.
+  Carries the CALIBRATION caveat (coefficients provisional per
+  `DESIGN_CONCEPTS.md`). Linked from `PUBLIC_NARRATIVE_FAQ.md`.
+
+- **archival: §2.4 close-condition (ii) closed — per-reward proof aggregate
+  (2026-06-11).** Worked byte sweep (`STAKER_ARCHIVAL_SIM.md` §Close-condition
+  (ii), ledger row AGG; `REWARD_EMISSION_LEG.md` §10.1): per-emission tx
+  ≈ 17–19 kB dominated by constant-size hybrid crypto, not the work claim;
+  aggregate at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
+  `MAX = 15`) amortizes to 80–310 B/block = **0.027–0.103 %** of the 300 kB
+  penalty-free zone across the `N_P` envelope {40, 79, 154}; single-tx max
+  ≈ 29 kB; boundary burst self-drains in ≈ 11 blocks; no compounding growth
+  term. Wire confirmed as specced — no format change. Reversion clause:
+  built `FcmpMembershipOnly` > 3× estimate, `N_P` > ~1 500, or epoch
+  < 1 000 blocks. **All three PHASE_2B §2.4 close-conditions are now
+  resolved**; Stage 3 gates on schema implementation + gate-6 soundness.
+
+- **archival: gate-7 bonds-only disposition executed across specs (2026-06-11).**
+  Cross-document spec edits landing PHASE_2B §2.4 close-condition (iii) on
+  maintainer sign-off: `REWARD_EMISSION_LEG.md` deletes the admission branch
+  (no `admission_proof` vin field §5.3, no admission-threshold verify step
+  §7.1, `backing_ok` loses the `Σ ≥ ADMISSION_MIN_ATOMIC` conjunct §7.2, §7.4
+  amount proof deleted-not-gated, §10.2 records the closure + reversion
+  pointer); `PHASE_2B_STAKE_LIFECYCLE.md` closes §2.4 (iii), the staking-form
+  admission row, the §2.3 principal wire, and the reward-leg threshold-proof
+  bill item; `ARCHIVAL_FIREWALL_GATE6.md` §2.5 becomes the **sole owner** of
+  any funding minimum (wallet hygiene, non-consensus);
+  `V3_STAKER_ARCHIVAL.md` admission bullet updated. `ADMISSION_MIN_ATOMIC` is
+  **not a consensus constant**; reinstatement only via the G7 reversion
+  clause (`STAKER_ARCHIVAL_SIM.md` ledger). Follow-up pin (same day,
+  maintainer direction): gate-6 §2.5 pins **no wallet-policy minimum
+  either** — no funding minimum at any layer (consensus, economics, Sybil
+  pricing, and privacy surfaces each examined; none is load-bearing on an
+  amount floor; reversion clause names the reopening threats).
+
+- **economics-sim: gate-7 locked-supply re-pricing built and run — §2.4 (iii)
+  resolves bonds-only (2026-06-11).** Iteration 5 per the
+  `STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope: `ArchivalLockModel` in
+  `shekyl-economics-sim` derives locked supply from the consensus pins
+  (compile-tied to `shekyl-archival-retention::ARCHIVAL_BOND_FLOOR_ATOMIC` /
+  `SETTLEMENT_EPOCH_BLOCKS`), denominating `stake_ratio` and the burn input
+  against **consensus circulating** per the pinned build constraint; eleven
+  `gate7_*` scenarios behind `--gate7` (arm A across the `N_P` envelope +
+  shard-geometry sensitivity, arm B `MIN` grid, volume-stress pair, asserted
+  comparators); legacy eight-scenario output verified **byte-identical**.
+  Result: derived lock collapses to `bond_floor × R × shards(t)` at
+  `lock/circ ≤ 10⁻⁴` in every arm; all three macro gauges insensitive to
+  both arms at every `N_P` → the pre-named indeterminate criterion resolves
+  **bonds-only** (gate-7 ledger row G7; cross-doc spec edits landed same day —
+  see entry above). Corollary FOLLOWUP (V3.1): the `(1 + stake_ratio)`
+  factor in `calc_burn_pct` is effectively inert in V3.
+
+- **archival: 2B design dispositions — bond-duration shape, `ClaimedEpochSet`
+  encoding, gate-7 iteration-5 scope (2026-06-11).** Three Phase-2B design
+  closures, docs-only: (1) bond retention-commitment **shape pinned
+  age-scaled-constant** at the sim-exercised plateau arm
+  (`BOND_DURATION_BASE_EPOCHS = 4`, `BOND_DURATION_AGE_SCALE = 4`, numerics
+  provisional until testnet `fetch_latency_per_unit`; `STAKER_ARCHIVAL_SIM.md`
+  §L10-hardening disposition, `ARCHIVAL_TIMING_CONSTANTS.md` §1,
+  `ARCHIVAL_BOND_GATE4.md` §3.4); (2) **`ClaimedEpochSet` encoding decided**
+  under `W = 26` — inline sorted absolute-epoch list on `ArchivalBondValue`
+  (v3 → v4 at the implementing PR), bitmap / separate-table / DUPSORT /
+  roaring rejected with reversion clause (`REWARD_EMISSION_LEG.md` §6.3,
+  `PHASE_2B_FSM_RETOOL.md` P2B-3); (3) **iteration-5 gate-7 locked-supply
+  re-pricing sim scoped** — derived archival-lock model replacing the
+  asserted `stake_ratio` in `shekyl-economics-sim`, two admission arms,
+  named close criteria for §2.4 close-condition (iii)
+  (`STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope).
 
 - **curve-tree: CT-3 design Round 1 opened (`docs/design/CT3_SYNC.md`).**
   Pre-flight substrate audit (pinned citations) of the persistent-client

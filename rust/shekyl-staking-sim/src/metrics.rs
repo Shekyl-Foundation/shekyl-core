@@ -80,9 +80,12 @@ pub struct CoverageMetrics {
     pub mean_r: f64,
 
     // --- spread ---
-    /// Actor-level Gini of shards-held (PRIMARY pass/fail input).
+    /// Actor-level Gini of shards-held. **Reported trend gauge, not a pass/fail
+    /// input** since the Layer-2 band close (2026-06-11): the decomposition showed
+    /// its movement tracks population leanness (`bondA`), not whale capture.
     pub gini_actor: f64,
-    /// Largest single-actor share of all (actor,shard) holdings.
+    /// Largest single-actor share of all (actor,shard) holdings (PRIMARY pass/fail
+    /// input — the direct whale gauge; the whale is an actor, so this bounds it).
     pub max_actor_share: f64,
     /// The Sybil whale's own share of all holdings, if a whale is present. The
     /// keystone claim is that the per-shard bond makes this *small* despite the

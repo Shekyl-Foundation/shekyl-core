@@ -256,6 +256,20 @@ shard-set's co-holder cohort; at lean equilibrium portfolios are ~unique by cons
 rotation without storage change does not decorrelate; the reward pays for the spread that
 fingerprints.
 
+**Regime bound (swan-2/W7, 2026-06-11).** The conditional final accept is premised on
+the **lean-equilibrium population** (~79–100 bonded archivers, ~98 % singleton
+portfolios — the cohort sizes the wargame's base rates assume). The L17 black-swan
+runs (`STAKER_ARCHIVAL_SIM.md` §L17) reach post-shock troughs of **9–25 bonded
+archivers**, where surviving portfolios are maximally unique and the cross-pseudonym
+intersection surface (T-A7; gate-6's named failure mode) is maximally cheap — every
+scenario in the swan table *temporarily invalidates the acceptance premise* for the
+trough's duration. This does **not** reopen Form-C (the channel is the same, the
+honest residual already concedes it; the trough is transient and recovery
+re-populates the cohort), but the acceptance is recorded as **regime-bounded: it
+holds at the attractor, not in a crisis trough**. The active mitigation question —
+whether gate-6's decorrelation discipline survives a *synchronized* mass-exit/re-entry
+wave — is the gate-6 synchronized-exit wargame item (W8, `docs/FOLLOWUPS.md`).
+
 **Cohort instrumentation:** closed — no further sweeps required for F1 disposition.
 
 ---

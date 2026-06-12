@@ -54,6 +54,15 @@ you cannot group a `P`'s shards to cap them while hiding that they belong to one
 `R_market(s,E)` collapses to a **plain count** over the public serve-credit ledger keyed by
 public `P_id`.
 
+> **Serve-credit weighting is load-bearing (gate-7 coupling, W10, 2026-06-11).** With
+> the gate-7 bonds-only close plus gate-6 §2.5's no-wallet-minimum pin, a market
+> identity costs `bond_floor × R × shards ≈ 0.75` coins at one shard. A
+> **bond-membership** weighting of `R_market` would therefore be Sybil-inflatable at
+> ~0.75/pseudonym; the serve-credit count is the Sybil-resistant arm (credits cost
+> real service per pseudonym). Any proposal to re-weight `R_market` onto bond
+> membership must cite the gate-7 close
+> (`STAKER_ARCHIVAL_SIM.md` §*Gate 7 iteration-5 — results*) as a blocking input.
+
 **Same dissolution pattern as `N_arch`:** a privacy-preserving primitive carried from the
 hidden model, made redundant by the firewall-not-hide model. **Privacy that remains:**
 `P` ↔ principal (gate 6 firewall), **not** `P`-holdings hiding.
