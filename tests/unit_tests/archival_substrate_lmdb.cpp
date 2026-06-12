@@ -47,15 +47,51 @@ crypto::hash make_hash(uint8_t fill)
   return h;
 }
 
-/// Minimum-length bond LMDB value with a non-v3 version byte.
+/// Minimum-length bond LMDB value with a non-v4 version byte.
 ///
 /// `ArchivalBondValue::decode` rejects solely on `version != kVersion` once
-/// `len >= 19`; no historical pre-v3 wire layout is load-bearing at genesis.
-std::vector<uint8_t> non_v3_bond_blob(uint8_t version)
+/// `len >= 40` (the v4 structural minimum); no historical pre-v4 wire layout
+/// is load-bearing at genesis.
+std::vector<uint8_t> non_v4_bond_blob(uint8_t version)
 {
-  std::vector<uint8_t> blob(19, 0);
+  std::vector<uint8_t> blob(40, 0);
   blob[0] = version;
   return blob;
+}
+
+/// Splice an arbitrary claimed-epoch tail onto a valid v4 encoding that was
+/// produced with an empty claimed set. The empty-set encoding always ends in
+/// 12 bytes (`u32` count = 0, `u64` first_paying_emission_height), so the
+/// crafted tail can bypass the encoder's well-formedness throw and exercise
+/// the decode invariants directly.
+std::vector<uint8_t> with_claimed_tail(std::vector<uint8_t> encoded_empty,
+  const std::vector<uint64_t>& claimed, uint64_t first_paying_emission_height)
+{
+  encoded_empty.resize(encoded_empty.size() - 12);
+  const uint32_t count = static_cast<uint32_t>(claimed.size());
+  for (int i = 3; i >= 0; --i)
+    encoded_empty.push_back(static_cast<uint8_t>((count >> (i * 8)) & 0xFF));
+  for (const uint64_t epoch : claimed)
+  {
+    for (int i = 7; i >= 0; --i)
+      encoded_empty.push_back(static_cast<uint8_t>((epoch >> (i * 8)) & 0xFF));
+  }
+  for (int i = 7; i >= 0; --i)
+    encoded_empty.push_back(
+      static_cast<uint8_t>((first_paying_emission_height >> (i * 8)) & 0xFF));
+  return encoded_empty;
+}
+
+/// Valid v4 record with an empty claimed set, as a baseline for tail splicing.
+shekyl::db::ArchivalBondValue baseline_bond()
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x01, 0x02};
+  bond.join_settlement_epoch = 7;
+  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {42};
+  return bond;
 }
 
 } // namespace
@@ -99,9 +135,13 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
     entry.end_exclusive = iv.second;
     written.bad_intervals.push_back(entry);
   }
+  written.claimed_settlement_epochs = {100, 105, 126}; // span 26 = W, the legal max
+  written.first_paying_emission_height = 1234567;
   const std::vector<uint8_t> encoded = written.encode();
   ASSERT_TRUE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), roundtrip));
   EXPECT_EQ(roundtrip.bonded_total_atomic, bonded_total);
+  EXPECT_EQ(roundtrip.claimed_settlement_epochs, written.claimed_settlement_epochs);
+  EXPECT_EQ(roundtrip.first_paying_emission_height, written.first_paying_emission_height);
 
   db.remove_archival_bond_record(p_id);
   fixture.db.batch_stop();
@@ -130,31 +170,32 @@ TEST(archival_substrate_lmdb, bond_reject_legacy_versions)
 {
   shekyl::db::ArchivalBondValue decoded{};
 
-  const std::vector<uint8_t> v1 = non_v3_bond_blob(1);
+  const std::vector<uint8_t> v1 = non_v4_bond_blob(1);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v1.data(), v1.size(), decoded));
 
-  const std::vector<uint8_t> v2 = non_v3_bond_blob(2);
+  const std::vector<uint8_t> v2 = non_v4_bond_blob(2);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v2.data(), v2.size(), decoded));
+
+  // Byte-exact v3 record: the v4 layout minus the 12-byte claimed tail,
+  // with the version byte patched. Pre-genesis posture: rejected, no
+  // migration path.
+  std::vector<uint8_t> v3 = baseline_bond().encode();
+  v3.resize(v3.size() - 12);
+  v3[0] = 3;
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v3.data(), v3.size(), decoded));
 }
 
 TEST(archival_substrate_lmdb, bond_reject_unknown_version)
 {
-  std::vector<uint8_t> blob = non_v3_bond_blob(1);
+  std::vector<uint8_t> blob = non_v4_bond_blob(1);
   blob[0] = 99;
   shekyl::db::ArchivalBondValue decoded{};
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v3_reject_truncated_after_join_epoch)
+TEST(archival_substrate_lmdb, bond_v4_reject_truncated_after_join_epoch)
 {
-  shekyl::db::ArchivalBondValue bond{};
-  bond.hybrid_pubkey = {0x01, 0x02};
-  bond.join_settlement_epoch = 7;
-  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
-  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
-  bond.held_shard_ids = {42};
-
-  std::vector<uint8_t> encoded = bond.encode();
+  std::vector<uint8_t> encoded = baseline_bond().encode();
   ASSERT_GT(encoded.size(), 20u);
   encoded.resize(encoded.size() - 9);
 
@@ -162,7 +203,7 @@ TEST(archival_substrate_lmdb, bond_v3_reject_truncated_after_join_epoch)
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v3_encode_version_byte)
+TEST(archival_substrate_lmdb, bond_v4_encode_version_byte)
 {
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = {0x0A};
@@ -174,6 +215,96 @@ TEST(archival_substrate_lmdb, bond_v3_encode_version_byte)
   const std::vector<uint8_t> encoded = bond.encode();
   ASSERT_FALSE(encoded.empty());
   EXPECT_EQ(encoded[0], shekyl::db::ArchivalBondValue::kVersion);
+}
+
+TEST(archival_substrate_lmdb, bond_v4_empty_claimed_defaults)
+{
+  const std::vector<uint8_t> encoded = baseline_bond().encode();
+  shekyl::db::ArchivalBondValue decoded{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), decoded));
+  EXPECT_TRUE(decoded.claimed_settlement_epochs.empty());
+  EXPECT_EQ(decoded.first_paying_emission_height, 0u);
+}
+
+TEST(archival_substrate_lmdb, bond_v4_claimed_cap_rejected_at_decode)
+{
+  // 33 entries — one over the §6.3 cap (W = 26 + 6 reorg slack = 32). Spaced
+  // within the span bound is impossible at this count, but the cap check is
+  // the one that must fire: it runs before any entry is read.
+  std::vector<uint64_t> claimed;
+  for (uint64_t e = 0; e < 33; ++e)
+    claimed.push_back(e);
+  const std::vector<uint8_t> blob = with_claimed_tail(baseline_bond().encode(), claimed, 0);
+
+  shekyl::db::ArchivalBondValue decoded{};
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
+}
+
+TEST(archival_substrate_lmdb, bond_v4_claimed_non_monotone_rejected_at_decode)
+{
+  shekyl::db::ArchivalBondValue decoded{};
+
+  const std::vector<uint8_t> descending =
+    with_claimed_tail(baseline_bond().encode(), {7, 3}, 0);
+  EXPECT_FALSE(
+    shekyl::db::ArchivalBondValue::decode(descending.data(), descending.size(), decoded));
+
+  const std::vector<uint8_t> duplicate =
+    with_claimed_tail(baseline_bond().encode(), {5, 5}, 0);
+  EXPECT_FALSE(
+    shekyl::db::ArchivalBondValue::decode(duplicate.data(), duplicate.size(), decoded));
+}
+
+TEST(archival_substrate_lmdb, bond_v4_claimed_span_violation_rejected_at_decode)
+{
+  // Span 27 > W = 26: a correct writer prunes below `current − W`, so a wider
+  // span is unreachable except through corruption or a writer bug.
+  const std::vector<uint8_t> wide =
+    with_claimed_tail(baseline_bond().encode(), {0, 27}, 0);
+  shekyl::db::ArchivalBondValue decoded{};
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(wide.data(), wide.size(), decoded));
+
+  // Span exactly W is legal.
+  const std::vector<uint8_t> edge =
+    with_claimed_tail(baseline_bond().encode(), {0, 26}, 0);
+  EXPECT_TRUE(shekyl::db::ArchivalBondValue::decode(edge.data(), edge.size(), decoded));
+  EXPECT_EQ(decoded.claimed_settlement_epochs, (std::vector<uint64_t>{0, 26}));
+}
+
+TEST(archival_substrate_lmdb, bond_v4_claimed_invariants_enforced_at_encode)
+{
+  shekyl::db::ArchivalBondValue over_cap = baseline_bond();
+  for (uint64_t e = 0; e < 33; ++e)
+    over_cap.claimed_settlement_epochs.push_back(e);
+  EXPECT_THROW(over_cap.encode(), std::runtime_error);
+
+  shekyl::db::ArchivalBondValue disorder = baseline_bond();
+  disorder.claimed_settlement_epochs = {9, 4};
+  EXPECT_THROW(disorder.encode(), std::runtime_error);
+
+  shekyl::db::ArchivalBondValue wide_span = baseline_bond();
+  wide_span.claimed_settlement_epochs = {0, 27};
+  EXPECT_THROW(wide_span.encode(), std::runtime_error);
+}
+
+TEST(archival_substrate_lmdb, bond_v4_reject_truncated_claimed_tail)
+{
+  shekyl::db::ArchivalBondValue bond = baseline_bond();
+  bond.claimed_settlement_epochs = {11, 12};
+  bond.first_paying_emission_height = 50001;
+
+  std::vector<uint8_t> encoded = bond.encode();
+  shekyl::db::ArchivalBondValue decoded{};
+
+  std::vector<uint8_t> missing_height = encoded;
+  missing_height.resize(missing_height.size() - 8);
+  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(
+    missing_height.data(), missing_height.size(), decoded));
+
+  std::vector<uint8_t> short_one = encoded;
+  short_one.resize(short_one.size() - 1);
+  EXPECT_FALSE(
+    shekyl::db::ArchivalBondValue::decode(short_one.data(), short_one.size(), decoded));
 }
 
 TEST(archival_substrate_lmdb, shard_registry_roundtrip)

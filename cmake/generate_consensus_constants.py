@@ -46,6 +46,12 @@ KEYS_INTEGER = {
     "daa_genesis_difficulty": "u64",
     # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
     "archival_bond_floor_atomic": "u64",
+    # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
+    # REWARD_EMISSION_LEG.md §6.6. C++ consumer: ArchivalBondValue v4
+    # claimed-epoch decode invariants (cap W + slack, span <= W) in
+    # src/blockchain_db/shekyl_types.h. Rust mirror:
+    # rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
+    "max_claim_age_w": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -173,6 +179,15 @@ def main() -> int:
 // registry lands, this macro has no C++ consumer.
 #define SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC \
     {emit("archival_bond_floor_atomic")}
+
+// Archival claim-age window `W` (MAX_CLAIM_AGE_W,
+// ARCHIVAL_TIMING_CONSTANTS.md §1; REWARD_EMISSION_LEG.md §6.6). Emission
+// for settlement epoch E is rejected once E < C - W; the windowed
+// ClaimedEpochSet on ArchivalBondValue derives its decode invariants
+// (entry cap W + reorg slack, span <= W) from this value. Rust mirror:
+// rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
+#define SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W \
+    {emit("max_claim_age_w")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

@@ -43,6 +43,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "shekyl/consensus_constants_generated.h"
+
 namespace shekyl { namespace db {
 
 // ─── Big-endian uint64 primitives ──────────────────────────────────────────
@@ -581,14 +583,29 @@ private:
 // ─── ArchivalBondValue ─────────────────────────────────────────────────────
 //
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
+//
+// v4 (REWARD_EMISSION_LEG.md §6.2/§6.3, encoding pinned 2026-06-11) appends
+// the windowed claimed-epoch set and `first_paying_emission_height`. v3 is
+// rejected at decode per the pre-genesis posture: no migration, reset the
+// data directory.
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 3;
+    static constexpr uint8_t kVersion = 4;
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
     static constexpr size_t kMaxBadIntervals = 256;
+    /// Claimed-epoch entry cap: claim window `W` plus reorg slack
+    /// (REWARD_EMISSION_LEG.md §6.3 pins the cap at 32). Derived from the
+    /// JSON authority so a `max_claim_age_w` change cannot drift past this
+    /// codec; the static_assert below re-pins the §6.3 value and fires if
+    /// the derivation and the pin ever disagree.
+    static constexpr size_t kMaxClaimedEpochs =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W) + 6;
+    static_assert(kMaxClaimedEpochs == 32,
+        "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 "
+        "(W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves");
 
     struct BadInterval {
         uint64_t start_epoch = 0;
@@ -603,6 +620,19 @@ struct ArchivalBondValue {
     uint8_t holdings_kind = kHoldingsShardSetCompact;
     std::vector<uint64_t> held_shard_ids;
     std::vector<BadInterval> bad_intervals;
+    /// Strictly increasing absolute settlement-epoch indices already claimed
+    /// by an emission vin (REWARD_EMISSION_LEG.md §6.3). Empty at join. The
+    /// dedup semantics — windowed `check_and_set` that prunes entries below
+    /// `current_settled_epoch − W` on insert — are consensus semantics and
+    /// live in Rust only (`shekyl-archival-retention::claimed_epochs`); this
+    /// codec stores and validates the at-rest shape (cap, order, span).
+    std::vector<uint64_t> claimed_settlement_epochs;
+    /// Height of the first emission that paid this `P` (REWARD_EMISSION_LEG.md
+    /// §6.2; set-once, immutable after first write — the emission PR is the
+    /// only writer). Sentinel 0 = unset: unreachable as a real value because
+    /// no emission can pay before the first settlement epoch closes at height
+    /// `SETTLEMENT_EPOCH_BLOCKS` (10_000).
+    uint64_t first_paying_emission_height = 0;
 
     [[nodiscard]] bool is_complete_tree() const noexcept
     {
@@ -613,14 +643,21 @@ struct ArchivalBondValue {
     {
         if (hybrid_pubkey.size() > kMaxPubkeyLen
             || held_shard_ids.size() > kMaxHoldings
-            || bad_intervals.size() > kMaxBadIntervals)
+            || bad_intervals.size() > kMaxBadIntervals
+            || claimed_settlement_epochs.size() > kMaxClaimedEpochs)
         {
             throw std::runtime_error("ArchivalBondValue encode: bounds exceeded");
         }
+        // The claimed set's order and span invariants are maintained by the
+        // Rust dedup helper; a violation here is a writer bug, surfaced loudly
+        // rather than deferred to the next decode.
+        if (!claimed_epochs_well_formed())
+            throw std::runtime_error(
+                "ArchivalBondValue encode: claimed_settlement_epochs order/span violated");
 
         std::vector<uint8_t> out;
         out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 8 + 1 + 4 + held_shard_ids.size() * 8
-            + 4 + bad_intervals.size() * 16);
+            + 4 + bad_intervals.size() * 16 + 4 + claimed_settlement_epochs.size() * 8 + 8);
         out.push_back(kVersion);
         const uint16_t pk_len = static_cast<uint16_t>(hybrid_pubkey.size());
         out.push_back(static_cast<uint8_t>(pk_len >> 8));
@@ -649,12 +686,42 @@ struct ArchivalBondValue {
             for (int i = 7; i >= 0; --i)
                 out.push_back(static_cast<uint8_t>((iv.end_exclusive >> (i * 8)) & 0xFF));
         }
+        const uint32_t claimed_count = static_cast<uint32_t>(claimed_settlement_epochs.size());
+        for (int i = 3; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((claimed_count >> (i * 8)) & 0xFF));
+        for (const uint64_t epoch : claimed_settlement_epochs)
+        {
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((epoch >> (i * 8)) & 0xFF));
+        }
+        for (int i = 7; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((first_paying_emission_height >> (i * 8)) & 0xFF));
         return out;
+    }
+
+    /// True when the claimed set satisfies the §6.3 at-rest invariants:
+    /// strictly increasing, and spanning no more than `W` from oldest to
+    /// newest (the windowed dedup helper prunes below `current − W`, so a
+    /// wider span cannot arise from a correct writer).
+    [[nodiscard]] bool claimed_epochs_well_formed() const noexcept
+    {
+        for (size_t i = 1; i < claimed_settlement_epochs.size(); ++i)
+        {
+            if (claimed_settlement_epochs[i] <= claimed_settlement_epochs[i - 1])
+                return false;
+        }
+        if (!claimed_settlement_epochs.empty()
+            && claimed_settlement_epochs.back() - claimed_settlement_epochs.front()
+                > SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W)
+        {
+            return false;
+        }
+        return true;
     }
 
     static bool decode(const void* data, size_t len, ArchivalBondValue& out)
     {
-        if (!data || len < 1 + 2 + 8 + 4 + 4)
+        if (!data || len < 1 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
             return false;
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
@@ -702,7 +769,7 @@ struct ArchivalBondValue {
             | (static_cast<uint32_t>(p[off + 2]) << 8)
             | static_cast<uint32_t>(p[off + 3]));
         off += 4;
-        if (interval_count > kMaxBadIntervals || off + interval_count * 16u != len)
+        if (interval_count > kMaxBadIntervals || off + interval_count * 16u + 4 > len)
             return false;
         out.bad_intervals.clear();
         out.bad_intervals.reserve(interval_count);
@@ -715,6 +782,25 @@ struct ArchivalBondValue {
             off += 8;
             out.bad_intervals.push_back(iv);
         }
+        const uint32_t claimed_count = static_cast<uint32_t>(
+            (static_cast<uint32_t>(p[off]) << 24)
+            | (static_cast<uint32_t>(p[off + 1]) << 16)
+            | (static_cast<uint32_t>(p[off + 2]) << 8)
+            | static_cast<uint32_t>(p[off + 3]));
+        off += 4;
+        if (claimed_count > kMaxClaimedEpochs || off + claimed_count * 8u + 8 != len)
+            return false;
+        out.claimed_settlement_epochs.clear();
+        out.claimed_settlement_epochs.reserve(claimed_count);
+        for (uint32_t i = 0; i < claimed_count; ++i)
+        {
+            out.claimed_settlement_epochs.push_back(load_be64(p + off));
+            off += 8;
+        }
+        if (!out.claimed_epochs_well_formed())
+            return false;
+        out.first_paying_emission_height = load_be64(p + off);
+        off += 8;
         return true;
     }
 
