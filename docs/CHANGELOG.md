@@ -4,6 +4,41 @@
 
 ### Added
 
+- **docs: swan-arc closure notes — seeding SLO recommendation, domain
+  diversity, enforcement pins (2026-06-11).** Five small dispositions
+  closing the L17 black-swan round series. **(1) Seeding SLO carries the
+  recommendation, not just the measurement:** provision foundation
+  re-seed capacity at the **crisis multiple, ~4× steady-state flow** —
+  the 40 → 10 wipe-out result is the actionable number (surge seeding
+  interrupts the trough cascade before it propagates), and unlike
+  adaptive `m/n` widening it is **not gameable** (the foundation's own
+  provisioning decision, not an adversary-triggerable consensus rule, so
+  the §3.3 static-margin objection doesn't apply). Landed in the
+  authority pin, L17 Finding 4, disposition, ledger row, FOLLOWUPS.
+  **(2) Foundation domain diversity folded into the SLO:** during a
+  sole-source window the shard's availability is the foundation's uptime
+  with effective domain count 1 in the L15 sense; internal redundancy
+  counts toward the diversity floor only if the `N_active = 3` seats sit
+  in distinct failure domains. **(3) Liveness-signal escape inherits the
+  unpredictability prerequisite** (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  §3.2): whatever replaces `m`-keyed slashing carries the `H_fire`-class
+  beacon-unpredictability requirement — a predictable liveness probe
+  rebuilds the §5 gaming surface under a new name. **(4) Crisis-price
+  multiplier pinned** (rule 21): the deterrence-credible criterion is
+  evaluated at the **L17 fatal channel, ×0.25 permanent** — evaluators
+  do not choose their own stress level; reopens only with the L17 grid
+  itself. **(5) Closure observation banked** (L17 Finding 4): the
+  scarcity servo and foundation seeding **compose by construction**
+  through the sole-source window — foundation isn't in `Market`, so a
+  sole-source shard reads `R_market = 0` (maximal scarcity, maximal
+  `g`-weighted re-acquisition reward) exactly while the foundation
+  supplies the bytes; the binding constraint is `reseed_rate`, which is
+  what the SLO sizes. The trough self-heals as designed; no emergency
+  mechanism is needed. Black-swan layer closed in the full sense:
+  measured tails, named guarantees, scoped residues (W16/W17 in the
+  Round-2 enforcement gate, W4/W8 in FOLLOWUPS), reversion clauses keyed
+  to the right triggers.
+
 - **sim: swan-4 — retention correction + foundation-sourced re-seed
   bottleneck (L17, 2026-06-11).** Third wargame response; dissolves the
   swan-2/-3 extinction framing. The genesis foundation seeds retain **at

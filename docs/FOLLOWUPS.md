@@ -110,12 +110,19 @@ sustainability is unaffected by the recalibration.
   serving floor + re-seed duty through the L17 servo-400 impaired window
   (~114 epochs) at crisis-time costs — this funds both the guarantee's
   internal redundancy and the crisis serving load; (2) **foundation seeding
-  bandwidth as an availability-SLO sizing input** (swan-4: at ~1 seeding
-  flow per seat the V-trough costs ~365 sole-source shard-epochs, worst
-  window 9 epochs; 4× provisioning halves it — `STAKER_ARCHIVAL_SIM.md`
-  §L17 Finding 4). Operations-document requirements with authority, not
-  code; citing `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0**
-  (gate-5 floor sizing close).
+  capacity provisioned at the crisis multiple — ~4× steady-state flow**
+  (swan-4 recommendation, not just measurement: at ~1 seeding flow per seat
+  the V-trough costs ~365 sole-source shard-epochs, worst window 9 epochs;
+  4× provisioning halves exposure **and cuts trough wipe-outs 40 → 10** by
+  interrupting the cascade; surge seeding is the foundation's own action,
+  not adversary-triggerable, so the `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  §3.3 static-margin objection doesn't apply — `STAKER_ARCHIVAL_SIM.md`
+  §L17 Finding 4); (3) **`N_active` seats domain-diverse**: during a
+  sole-source window internal redundancy counts toward the L15 diversity
+  floor only if the three seats sit in distinct failure domains.
+  Operations-document requirements with authority, not code; citing
+  `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5
+  floor sizing close).
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

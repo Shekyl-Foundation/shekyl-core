@@ -226,6 +226,22 @@ over-claim and is named here so it cannot recur:
    number above), plus the W4 treasury requirement that
    floor-operating reserves be crisis-uncorrelated with the token
    price. This is ops policy with authority, not consensus code.
+   **Domain diversity is part of the requirement, not a deployment
+   detail:** during a sole-source window the shard's availability *is*
+   the foundation's uptime with effective domain count 1 in the L15
+   sense unless the `N_active` seats are placed across distinct failure
+   domains — internal redundancy counts toward the diversity floor only
+   if the three seats are domain-diverse; otherwise the L17
+   "degraded, foundation as sole source" verdicts are degraded further
+   than the rows imply. **Seeding capacity is sized at the crisis
+   multiple, not steady state:** provision re-seed bandwidth at **~4×
+   the steady-state seeding flow** (the swan-4 `reseed_rate = 12` arm —
+   halves sole-source exposure *and* cuts trough wipe-out count 40 → 10
+   by interrupting the cascade; `STAKER_ARCHIVAL_SIM.md` §L17
+   Finding 4). Surge seeding is the foundation's own action, not a
+   consensus rule an adversary can trigger, so the static-margin
+   objection to adaptive enforcement
+   (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.3) does not apply.
 3. **Serving participation (the modeled floor).** The sim's
    `floor_replicas` / `floor_decay_pop` / `foundation_floor_aged`
    knobs model how many **serving** replicas the floor contributes to
