@@ -8,7 +8,8 @@
 **Gate 3 dissolved (2026-06-07):** no `ν` primitive; `R_market` derived from serve-credit ledger.
 **Admission wire:** ordinary transfer, **no consensus minimum, no `C_stake`** (§7.2–§7.4;
 gate 7 closed bonds-only 2026-06-11, §10.2).
-**Layer 2:** margin-robustness gate on spread (§1.2), not point calibration at one `giniW` reading.
+**Layer 2:** margin-robustness band **closed 2026-06-11** (§1.2 #4) — spread gate re-anchored
+on direct whale gauges; `g` sealed as band `[1.5, 2.5]`, target `≈ 2`; `Curve` reserve untriggered.
 
 **Scope:** The **consensus-special reward emission transaction leg** for pay-for-service
 archival under firewalled pseudonym **`P`**. This document is the byte-layout and
@@ -50,7 +51,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 | Layer | Scope | Gate |
 |-------|--------|------|
 | **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Implement blocked on** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) implementation (contract pinned). Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; code waits on schema impl. |
-| **2 — Economic keystone** | **Margin-robustness gate** (§1.2): `giniW ≈ 0.599` vs hard 0.6 is **genesis-seal risk** — confirm windowed margin stable across the **`g(age)` operating band** with whale-trend bounded throughout, not at one point. Reserve: population-gated declining-tail `Curve` (V3) to widen pocket. Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). Remaining: margin-robustness band. | Resist sealing `bond 0.75` + `g` on one 0.599 reading. |
+| **2 — Economic keystone** | **Margin-robustness gate closed** (§1.2 #4, 2026-06-11): band run confirmed the decomposition — spread gate **re-anchored on direct whale gauges** (`mxSW`, `wB4`, per-band seats; `gini_actor` → trend); **`g` sealed as band `[1.5, 2.5]`, target `≈ 2`** (`g ≥ 3.0` fails coloc coverage at any purse); purse confirmed as spread lever. `Curve` reserve not triggered (stays V3). Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). | Layer 2 fully closed; reversion clauses live in the sim doc results section. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
 
@@ -126,16 +127,19 @@ changes what is next:
 
 4. **Thin spread margin is genesis-seal robustness risk.** Reframe Layer 2 from
    "find the `g(age)` that passes" to **margin-robustness across the operating band**
-   with whale-trend bounded throughout. If the band cannot clear with comfortable
-   margin, the declining-tail `Curve` reserve (V3) widens the pocket — do not seal
-   `bond 0.75` + `g` on a single `giniW = 0.599` model reading. **Scoped
-   2026-06-11** (`STAKER_ARCHIVAL_SIM.md` §*Layer-2 margin-robustness band — scope*):
-   the grazing reading decomposes as lean-attractor intrinsic inequality
-   (~0.593 with no whale present; whale adds ~0.001 against `max_actor_share ≈
-   0.011` vs the 0.20 bar) — the sweep tests whether that decomposition holds
-   across the `g` band, with three named outcomes (seal as-is / re-anchor the gate
-   on the direct whale gauges / pull the `Curve` reserve) and a budget cross
-   pricing the gate-1/7 purse as the spread lever (`budget → bondA → giniW`).
+   with whale-trend bounded throughout. **Run and closed 2026-06-11**
+   (`STAKER_ARCHIVAL_SIM.md` §*Layer-2 margin-robustness band — results*): the
+   decomposition held decisively across the band — whale gauges flat (`mxSW`
+   0.013–0.018 vs 0.20 bar, `wB4 = 0`, whale Δ`giniW` ≤ 0.003) while `giniW`
+   tracked leanness (`bondA`) in both sweep directions. Disposition: **spread
+   gate re-anchored on the direct whale gauges** (`gini_actor` demoted to trend);
+   **`g` sealed as a band `[1.5, 2.5]`, target `g ≈ 2`** (upper bound is coloc
+   coverage oscillation at `g ≥ 3.0`, purse-incurable); budget cross confirms the
+   gate-1/7 purse as the spread lever (+30 % purse ⇒ `giniW` 0.598 → 0.475, the
+   L13 servo's static image). The declining-tail `Curve` reserve was **not
+   triggered** and stays a V3 reserve. The 2026-06-07 single-point readings are
+   superseded (banded PL Curve repair moved the equilibrium — the reframe's
+   warning made empirical); the `bond 0.75` pin stands under the re-read.
 
 **Genuinely unblocked:** §3–§7 FSM retool (principal form, reward-reception state);
 gate 6 firewall rigor; V3 form **C** reconciliation.
@@ -797,6 +801,8 @@ amounts), bond post/slash reaction.
 - [x] Layer 2: gate-7 admission re-pricing sweep — **closed bonds-only 2026-06-11** (§10.2).
 - [x] Layer 2: per-reward byte aggregate — **closed 2026-06-11** (§10.1; ≤ 0.11 % of
       penalty-free zone across the `N_P` envelope).
+- [x] Layer 2: margin-robustness band — **closed 2026-06-11** (§1.2 #4; spread gate
+      re-anchored on direct whale gauges, `g` band `[1.5, 2.5]` sealed, target `≈ 2`).
 
 ---
 

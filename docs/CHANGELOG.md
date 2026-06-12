@@ -4,6 +4,30 @@
 
 ### Added
 
+- **archival: Layer-2 margin-robustness band run and closed (2026-06-11).**
+  Built and ran the scoped sweep (`shekyl-staking-sim` axes `layer2_band{,_whale,_coloc}`,
+  `layer2_budget{,_whale}`, `layer2_colocbud`; 29 scenarios; results in
+  `STAKER_ARCHIVAL_SIM.md` §Layer-2 margin-robustness band — results).
+  Decomposition confirmed decisively: `giniW` tracks population leanness
+  (`bondA`) in both sweep directions while every direct whale gauge stays flat
+  (`mxSW` 0.013–0.018 vs the 0.20 bar, `wB4 = 0`, whale Δ`giniW` ≤ 0.003).
+  Dispositions: **spread gate re-anchored on direct whale gauges** (`gini_actor`
+  demoted to trend); **`g` sealed as a band `[1.5, 2.5]`, genesis target
+  `g ≈ 2`** — the band's upper bound is polarized-world coverage oscillation
+  (`g ≥ 3.0` fails at any purse; the `g ∈ {2.0, 2.5}` shoulder heals at +30 %
+  purse, the L13 servo's static image); budget cross confirms the purse as the
+  spread lever (`giniW` 0.598 → 0.217 over budget 100 → 200); `Curve` reserve
+  untriggered. Finding 0: the 2026-06-07 `gate4_fine` readings are superseded —
+  the banded PL Curve repair (`4071ec032`) moved the L11 equilibrium
+  (`bondA` 79 → ~113; coloc pin row oscillates at bare-lean purse); the
+  `bond_rate* = 0.75` pin stands under the re-read (Finding 4). Finding 5:
+  sim-vs-consensus `g(age)` **units gap** (normalized [0,1] age vs raw epoch
+  counts) blocks mapping the sealed band onto
+  `archival_reward_age_weight_milli` — normalization pin queued in
+  `FOLLOWUPS.md` (V3.0). Cross-docs: `REWARD_EMISSION_LEG.md` §1.2 #4 +
+  keystone row + checklist; `WALLET_REWRITE_PLAN.md` status. **Phase 2B design
+  is fully closed**; Stage 3 gates on schema implementation + gate-6 soundness.
+
 - **archival: Layer-2 margin-robustness band scoped (2026-06-11).** The last
   open 2B design item (`STAKER_ARCHIVAL_SIM.md` §Layer-2 margin-robustness
   band — scope; L1/L2 ledger rows updated; `REWARD_EMISSION_LEG.md` §1.2 #4).

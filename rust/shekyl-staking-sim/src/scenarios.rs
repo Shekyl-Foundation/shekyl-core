@@ -2632,5 +2632,73 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(c);
     }
 
+    // --- Layer-2 margin-robustness band (STAKER_ARCHIVAL_SIM.md §Layer-2 margin-
+    // robustness band — scope). Genesis seal of `g(age)` at the gate-4 pin
+    // `bond_rate = 0.75`: sweep the `g` operating band across the three pin rows
+    // (lean / whale / coloc) and cross the purse at `g = 2` (lean + whale). The
+    // decomposition check is the lean-vs-whale `giniW` delta per cell against the
+    // `bondA` (leanness) and `wB4` (whale oldest-band) trends — distinguishing a
+    // proxy-metric graze from a genuine approach to the whale-capture property.
+    // `g = 2.0` rows duplicate `gate4_fine_0.75{,_whale}` / `gate4_coloc_0.75`
+    // (same fixed seed ⇒ numerically identical) as the in-table cross-check. ---
+    let layer2_base = || {
+        let mut c = gate4_fine_base();
+        c.bond_rate = 0.75;
+        c
+    };
+    for g in [1.5_f64, 2.0, 2.5, 3.0, 3.5, 4.0] {
+        let label = format!("{g:.1}");
+        let mut c = layer2_base();
+        c.name = format!("layer2_band_g{label}");
+        c.axis = "layer2_band".into();
+        c.age_weight = g;
+        out.push(c);
+
+        let mut cw = layer2_base();
+        cw.name = format!("layer2_band_g{label}_whale");
+        cw.axis = "layer2_band_whale".into();
+        cw.age_weight = g;
+        cw.whale = true;
+        out.push(cw);
+
+        let mut cc = gate4_fine_coloc_base();
+        cc.name = format!("layer2_coloc_g{label}");
+        cc.axis = "layer2_band_coloc".into();
+        cc.bond_rate = 0.75;
+        cc.age_weight = g;
+        out.push(cc);
+    }
+    // Budget cross at the pin (L2 "Active" item: replaces the non-comparable
+    // `l11_bud_*` rows that ran at the `baseline()` default `bond_rate = 2.0`).
+    // Prices the gate-1/7 purse as a spread lever: `budget → bondA → giniW`.
+    for bud in [100.0_f64, 130.0, 160.0, 200.0] {
+        let label = format!("b{bud:.0}");
+        let mut c = layer2_base();
+        c.name = format!("layer2_bud_{label}");
+        c.axis = "layer2_budget".into();
+        c.budget = bud;
+        out.push(c);
+
+        let mut cw = layer2_base();
+        cw.name = format!("layer2_bud_{label}_whale");
+        cw.axis = "layer2_budget_whale".into();
+        cw.budget = bud;
+        cw.whale = true;
+        out.push(cw);
+    }
+    // Coloc × budget mini-cross: the b100 coloc rows oscillate (`oUmx` > 0) at
+    // g ≥ 2.0 under the post-Curve-repair substrate — does the purse restore
+    // coverage stability in the polarized-endowment world the way it restores
+    // spread in the lean world?
+    for g in [2.0_f64, 2.5, 3.0] {
+        let mut c = gate4_fine_coloc_base();
+        c.name = format!("layer2_colocbud_g{g:.1}_b130");
+        c.axis = "layer2_colocbud".into();
+        c.bond_rate = 0.75;
+        c.age_weight = g;
+        c.budget = 130.0;
+        out.push(c);
+    }
+
     out
 }
