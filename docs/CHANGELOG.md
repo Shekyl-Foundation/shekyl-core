@@ -4,6 +4,63 @@
 
 ### Added
 
+- **sim: swan-2 black-swan iteration — extinction read, domain-correlated
+  exit, aftershock, knee timing (L17 W1–W3, 2026-06-11).** Wargame response
+  to the adversarial review of the L17 close; converts three assumed-away
+  tails into measured ones. **Extinction accounting (W1):** backfill in the
+  model is *sourceless* (best-response sets `holdings[a][s]` with no
+  surviving-source check), so `shkRec` was a metric-recovery claim only; new
+  `extT`/`shkExt` reads count deep shards whose serving holder set empties
+  after being seated at depth (sticky per slot until recycle; scanned at the
+  shock instant, per epoch, and after voluntary exits — the death-spiral
+  channel's orphanings were otherwise invisible). **Domain-correlated exit
+  (W2):** `shock_exit_domains = n` wipes failure domain 0 under the L15
+  `a % n` bucketing — stride was the most benign correlation structure
+  (holder sets straddle it; per-shard total loss ≈ 0 by construction).
+  **Aftershock + timing (W3):** `aftershock_at` re-fires every shock leg
+  against the survivors; `swan2_knee_cascade` fires at the L13 decayed-purse
+  knee; `swan2_cascade_rho` compounds 50 % exit with an entry-suppressing
+  ρ ×2. Five `swan2_*` scenarios + all swan-1 rows re-run: stride 50 % = 0
+  extinctions but domain-correlated 50 % = 1 and the 50 %+50 % aftershock
+  pair = 4 (analytic match: (1/2)⁶ × ~120 deep); the *recovered* V-crash and
+  servo-400 rows quietly extinguish **37 / 99** deep shards in their troughs
+  — metric recovery ≠ data recovery, now measured. Knee-timed and
+  domain-1/3 cascades absorbed with zero data loss. L17 re-dispositioned
+  (claim narrowed to measured; reversion re-keyed on **domain-concentrated
+  exit ≥ ~0.3**, correlation not magnitude; floor completeness over the
+  oldest stratum exported as a gate-5 survival requirement;
+  honest-holding-under-stress named as residue W5 with telemetry trigger).
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §L17 + ledger row.
+
+- **docs: swan-2 cross-gate exports W4–W11 (2026-06-11).** The adversarial
+  review's reversion-clause and cross-reference edits, landed with
+  authority: **W4** foundation-treasury diversification named as a V3.0
+  ops requirement (`FOLLOWUPS.md`; the floor's fiat capacity is pro-cyclical
+  in exactly the crisis it must absorb, and Finding 4 makes it load-bearing
+  for data survival) and the servo-ceiling pro-cyclicality caveat folded
+  into L17 Finding 3 (crisis-time fee capacity sits below the static
+  ceiling). **W6** enforcement pro-cyclicality:
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.3 — `n − m` sized statically
+  against crisis-tail run-lengths under *induced correlated failure*
+  (adaptive emergency widening rejected per the escalation-dodge result);
+  stressnet campaign extended accordingly. **W7** T-A1/F1 acceptance
+  recorded as **regime-bounded** (`F1_TA3_TA7_LIFETIME_WINDOW.md` §7: the
+  lean-eq premise is temporarily invalidated at swan troughs of 9–25, where
+  the intersection surface is maximally cheap; Form-C not reopened). **W8**
+  gate-6 synchronized-exit wargame queued V3.0 (`FOLLOWUPS.md`; does
+  `RELEASE_COOLDOWN_EPOCHS = 2` smear or merely delay the unbond cohort?).
+  **W9** AGG reversion clause gains the **downward** `N_P` trigger (reopen
+  iff envelope extends below ~25–30; per-archiver claims scale as `1/N_P` —
+  ~70 kB single tx at `N_P` = 17 year-30; named guard = per-emission claim
+  cap forcing batch splitting) in `STAKER_ARCHIVAL_SIM.md` +
+  `REWARD_EMISSION_LEG.md` §10.1. **W10** gate-7 bonds-only ↔ `R_market`
+  weighting coupling cross-referenced both ways
+  (`ARCHIVAL_CONSENSUS_STATE.md` §3.3 note: serve-credit weighting is
+  load-bearing against ~0.75-coin/pseudonym Sybil inflation; gate-7 close is
+  a blocking input to any re-weighting). **W11** `swan_regime` verdict
+  conditioned on the Finding-0 windowed-Gini reconciliation (L17
+  Finding 7).
+
 - **sim: L17 black-swan / acute-shock axis (2026-06-11).** Closes the
   due-diligence gap between the gradual-decline stresses (L13 subsidy taper,
   P2 price decay) and step-event crises observed in production networks.

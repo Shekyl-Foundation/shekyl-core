@@ -106,6 +106,7 @@ that is **simultaneously**:
 |-----------|-------------|
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
+| **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
 
 If the tail is heavy enough that no `m` satisfies both, resolution is **elsewhere** — e.g.
 faster dead-`P` detection decoupled from `m` (separate liveness signal), or accepting priced
@@ -114,6 +115,29 @@ not treat Round-1 `m=11` as final without the CDF.
 
 **Gating input.** Outage-duration **CDF** (residual-life derived); steady-state `u_eff` alone
 does not pin tail shape.
+
+### 3.3 Enforcement pro-cyclicality (swan-2/W6, 2026-06-11)
+
+During a legitimate crisis (the L17 black-swan regimes,
+`STAKER_ARCHIVAL_SIM.md` §L17), honest survivors run **degraded infrastructure** —
+crisis outage distributions are exactly the fat-tailed regime §3.2 flags, arriving
+*correlated across the population*. An `n − m` margin sized to the normal-times
+stressnet CDF then produces **false-slash cascades**: slashes amplify exit, a fifth
+loop feeding the death spiral through the enforcement layer itself (on top of the
+four L13/P2 loops).
+
+Two consequences pinned into the Round-2 close criteria:
+
+1. **The fix is static margin, not adaptive widening.** The §5 escalation-dodge
+   result already establishes that predictable adaptivity is the gaming surface —
+   an "emergency widening" rule that loosens `m/n` when outages spike is a free
+   dodge for a strategic dropper who can simulate a crisis. Size `n − m` against
+   the **crisis-tail run-length** once, statically.
+2. **The stressnet measurement campaign must capture outage run-lengths under
+   induced correlated failure** (kill a failure domain; measure consecutive-miss
+   run-lengths across the surviving population while it degrades), not only the
+   marginal single-`P` duration CDF. The marginal CDF under-states the crisis tail
+   by construction.
 
 ---
 
@@ -199,3 +223,7 @@ tallies with minimal new state.
 - **2026-06-08 (pin):** Sliding-window selected; dodge 0/1; tuned-`m` fair compare.
 - **2026-06-08 (doc):** Restructure — §1 pinned policy; §5 rejected alternative stratum;
   `R_market` serve-credit substrate; Round-2 joint `m` feasibility gate.
+- **2026-06-11 (swan-2/W6):** §3.3 enforcement pro-cyclicality — crisis-tail criterion
+  added to the Round-2 gate (size `n − m` statically against correlated-failure
+  run-lengths; adaptive emergency widening rejected per the §5 dodge result); stressnet
+  campaign extended to induced-correlated-failure run-length capture.

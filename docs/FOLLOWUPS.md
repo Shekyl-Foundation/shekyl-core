@@ -71,6 +71,42 @@ sustainability is unaffected by the recalibration.
   two copies are drift debt, not permanent. See
   [`docs/design/CT1_ROUND1_PINS.md`](./design/CT1_ROUND1_PINS.md).
 
+- **Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).** A black
+  swan is a **correlation oracle** against the gate-6 firewall: mass exit
+  compresses many loud `bond_floor` Unbond refunds into a few epochs, and the
+  decorrelation discipline (jitter, drain spacing) was designed against
+  steady-state cadence — a crisis blows through jitter windows by synchronizing
+  the population. An A2 analyst gets a time-boxed cohort of P-side releases to
+  correlate against principal-side activity, plus the mirrored re-entry wave
+  later. The wargame: replay the gate-6 adversary models against an L17-shaped
+  synchronized exit/re-entry event (`STAKER_ARCHIVAL_SIM.md` §L17 swan table —
+  troughs 9–25, re-entry over ~10–20 epochs); the open mechanism question is
+  whether `RELEASE_COOLDOWN_EPOCHS = 2` **smears** the cohort or merely
+  **delays** it intact, and whether a release-cooldown *queue* (spreading
+  crisis unbonds over a randomized multi-epoch window) is needed. Couples to
+  the T-A1 regime bound
+  ([`design/F1_TA3_TA7_LIFETIME_WINDOW.md`](./design/F1_TA3_TA7_LIFETIME_WINDOW.md)
+  §7): trough populations make the intersection surface maximally cheap, so the
+  exit-event channel is the binding one. Priority-2 (privacy) per
+  `00-mission.mdc` — ranked above the other swan-2 exports. Target: **V3.0**
+  (gate-6 wargame round, before the firewall constants freeze).
+
+- **Foundation treasury diversification — floor capacity must not be
+  pro-cyclical (swan-2/W4, 2026-06-11).** The L17 fatal channel (permanent
+  price collapse × fiat opex) is bridged by the adaptive servo *plus the
+  foundation floor* — but a token-denominated treasury loses ~75 % of its fiat
+  purchasing power in the same event it must absorb, and L17/Finding 4 makes
+  the floor load-bearing for **data survival** (extinction read: the oldest
+  stratum needs a *complete* non-market copy, not a gap-reduction ratio —
+  gate-5 sizing export). The requirement: foundation operations policy holds
+  floor-operating reserves **fiat-diversified** (or otherwise
+  crisis-uncorrelated with the token price) at a level sized to carry the
+  floor through the L17 servo-400 impaired window (~114 epochs) at crisis-time
+  costs. This is an operations-document requirement with authority, not code;
+  it lands wherever gate-5 floor sizing is specified, citing
+  `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5 floor
+  sizing close).
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published

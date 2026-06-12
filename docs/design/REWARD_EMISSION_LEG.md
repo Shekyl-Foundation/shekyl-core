@@ -745,8 +745,12 @@ spreading. The wire as specced is confirmed: `SETTLEMENT_EPOCH_BLOCKS = 10_000` 
 
 **Caveat carried:** `FcmpMembershipOnly` is sized at 1-input `FcmpPlusPlus` order until
 built (it proves strictly less). **Reversion:** reopen iff the built proof exceeds 3×
-that estimate, the `N_P` envelope re-pins above ~1 500, or the epoch re-pins below
-1 000 blocks; re-evaluation is a sweep re-run with measured sizes.
+that estimate, the `N_P` envelope re-pins above ~1 500, the epoch re-pins below
+1 000 blocks, or **the operating envelope extends below `N_P` ≈ 25–30** (thin
+direction, swan-2/W9 — the L13 servo floor is 17 and L17 swan troughs reach ~9;
+per-archiver claims scale as `1/N_P`, a 15-epoch batch ≈ 70 kB at `N_P` = 17
+year-30 and grows with chain age; the named guard is a per-emission claim cap
+forcing batch splitting); re-evaluation is a sweep re-run with measured sizes.
 
 ### 10.2 Close-condition (iii) — admission principal: CLOSED bonds-only (2026-06-11)
 
