@@ -283,6 +283,15 @@ Attacks considered against the drafted reduction:
 5. **Challenge-collision across types** — craft preimages of equal bytes
    under both tags. Foreclosed by length-regularity (§4.2) + fixed-width
    distinct leading tags: equal preimages would need a Blake2b collision.
+6. **Incomplete-addition edge cases in the (a0) gadget** — the first-layer
+   constraint enforces `O~ = o_blind·T + O` via `incomplete_add_pub`, and
+   incomplete addition is undefined on identity/equal operands (e.g.
+   `o_blind = 0`). This surface is **byte-identical to the full path** —
+   the subtraction does not touch the `Fcmp` leg — so it is covered by the
+   upstream full-composition review, not a surface this proof type
+   introduces; prover-side, the synthesis + degeneracy guard (§6) keeps
+   honest provers away from the degenerate inputs. Named here so the §5.5
+   external review checks the premise rather than inheriting it silently.
 
 ## 6. Privacy: non-linkability and nonce synthesis
 
