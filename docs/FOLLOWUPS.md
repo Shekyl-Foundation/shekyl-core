@@ -62,6 +62,44 @@ sustainability is unaffected by the recalibration.
   `consensus_state_kat_v1.json` epoch-close vector re-derived by hand
   (`Σwork` 3500 → 2590, derivation in the fixture description).
 
+- **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5,
+  2026-06-11).** Target: V3.0, with the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9). `assemble` reads the in-memory entry vec
+  (`rust/shekyl-curve-tree/src/assemble.rs:84-89`); whole-tree-in-memory is
+  correct at Tier-A scale and wrong at mainnet scale. CT-3 keeps the
+  in-memory vec as the V3.0 assembly substrate (resume rebuilds it from the
+  store) and must not foreclose store-backed assembly — the store already
+  persists `owned_identities`. **Reopening trigger:** the prune-policy PR
+  (minimal wallets prune non-owned leaves of frozen segments) lands, at
+  which point in-memory-only assembly breaks for pruned wallets by
+  construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
+  R1-Q6.
+
+- **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
+  artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
+  post-prune segment refetch. CT-3 Round 1 confirmed block-derived forward
+  sync as the default (the §6 reversion criterion fired: CT-2 landed the
+  drain replication, KAT-verified), repositioning the bulk-leaf RPC to
+  non-forward catch-up + archival. The C++ endpoint and its §6
+  reconstruct-root KAT (`SHEKYLD_PREREQUISITES.md` shape) land with the
+  prune-policy PR, which makes refetch reachable. **Reopening trigger:**
+  either R1-Q1 reversion criterion (forward-sync latency budget breach;
+  pre-genesis refetch demand) pulls it earlier. See
+  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
+
+- **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
+  single-image amendment).** The per-binary Rust-image selection in
+  `cmake/BuildRust.cmake` structurally gives every binary one Rust
+  archive, but the post-link `nm` gate asserting exactly one
+  `tracing-core` `GLOBAL_DISPATCH` runs only on the `daemon` target.
+  Factor the gate into a CMake function and apply it to the wallet-side
+  executables (`shekyl-wallet-cli`, `shekyl-wallet-rpc`) so a future
+  link-topology regression on those binaries fails the build instead of
+  silently dropping their engine tracing events. **Target: V3.0 (the
+  gate is the contract's enforcement surface).** Cross-link:
+  decision-log single-image entries (2026-06-10, 2026-06-11).
+
 - **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
   consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while
   [`config/consensus_constants.json`](../config/consensus_constants.json)
@@ -1097,19 +1135,29 @@ sustainability is unaffected by the recalibration.
   is grep-able from the code site, not only from this file. Target:
   V3.0.
 
-- **`Wallet::change_password` integration tests against
-  `WalletFile::rotate_password`.** The lifecycle commit's unit tests
+- ~~**`Wallet::change_password` integration tests against
+  `WalletFile::rotate_password`.**~~ **Landed 2026-06-10 for FULL
+  capability** (Phase 1 closeout). The lifecycle commit's unit tests
   for `change_password` exercise the orchestrator path (rotate, then
   reopen with the new password and refuse the old one) but rely on
   `WalletFile::rotate_password`'s own test coverage for the underlying
-  envelope rewrap correctness. A small integration suite in
-  `shekyl-wallet-core` should drive `change_password` against a real
-  on-disk wallet across all three capabilities (FULL today; ViewOnly /
-  HardwareOffload once their `open_*` bodies land), verifying that the
-  rotated envelope round-trips against an independently-constructed
-  `WalletFile::open` call rather than only against `Wallet::open_full`.
-  This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
-  Target: V3.0.
+  envelope rewrap correctness. Closed by two integration tests in
+  `shekyl-engine-core::engine::lifecycle::tests`:
+  `change_password_round_trips_via_independent_wallet_file_open`
+  (rotate via `Engine::change_password`, close, then open the on-disk
+  pair through an independently-constructed `WalletFile::open` — new
+  password loads state, old password fails with the envelope's
+  `InvalidPasswordOrCorrupt`) and
+  `change_password_with_new_kdf_rewrites_envelope_header` (rotation
+  with `Some(KdfParams)` verified via `inspect_keys_file` on the raw
+  on-disk header, not just open-success). This pins the full
+  I/O ↔ KDF ↔ AEAD chain at the orchestrator layer for FULL.
+  **Remaining scope:** the same two assertions for ViewOnly /
+  HardwareOffload. **Reopen when:** the View/HW lifecycle bodies land
+  (entry above); the capability-dispatch commit that deletes
+  `OpenError::CapabilityNotYetImplemented` extends both tests across
+  capabilities in the same PR. Target for remainder: V3.0 (tracks the
+  View/HW entry).
 
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
@@ -4554,7 +4602,7 @@ by the rewrite plan's half-day review gate, item 3):
 | --- | --- | --- |
 | Absorbed (already by rewrite plan) | `wallet2.cpp` absorption (2l/2m/2n) | Phase 5 deletion |
 | Absorbed | `WalletPrefs` round-trip property test (2k.a2) | Phase 1 (`RuntimeWalletState` audit) |
-| Absorbed | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) |
+| Landed 2026-06-10 | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) — closed via single-Rust-image link contract, decision log 2026-06-10 |
 | Closed by Phase 5 | `shekyl-cli` key image export binary format (V3.2 below) | Phase 5 — Monero binary format dies with `wallet2.cpp`; air-gapped flow uses `UnsignedTxBundle`/`SignedTxBundle` |
 | Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
 | Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
@@ -5475,6 +5523,21 @@ one place to confirm each item's relationship to the wallet stack.
   rewrite (was V3.2). Cross-link: rewrite plan
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phase 1 deliverables.**
+
+  **Closed 2026-06-10 (mechanism amended 2026-06-11).** Neither of the
+  two shapes sketched above survived implementation: `nm` on the linked
+  `shekyld` showed *two* `tracing-core` `GLOBAL_DISPATCH` copies (one
+  per Rust staticlib image), which no in-process subscriber install can
+  bridge — and the wallet binaries carried the same split. Landed shape
+  is the per-binary single-Rust-image link contract: `shekyl-ffi` folds
+  in `shekyl-logging` (wallet-side image), the link-image crate
+  `rust/shekyl-daemon-image` combines `shekyl-ffi` + `shekyl-daemon-rpc`
+  (daemon image, selected per binary in `cmake/BuildRust.cmake`), a
+  post-link `nm` gate asserts exactly one dispatcher in `shekyld`,
+  and `shekyl_log_install_tracing_forwarder` (decision log
+  2026-04-25) ships as the runtime ordering/idempotency contract,
+  called from `src/daemon/main.cpp` after `mlog_configure`. See
+  `V3_WALLET_DECISION_LOG.md` 2026-06-10 + 2026-06-11 amendments.
 
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
   deferrals rest on the same "upstream cherry-pick preservation"

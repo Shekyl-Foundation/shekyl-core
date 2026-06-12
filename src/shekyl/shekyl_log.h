@@ -106,6 +106,7 @@ extern "C" {
 #define SHEKYL_LOG_ERR_NOT_INITIALIZED            -9
 #define SHEKYL_LOG_ERR_INVALID_UTF8              -10
 #define SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL        -11
+#define SHEKYL_LOG_ERR_ALREADY_INSTALLED         -12
 
 // -----------------------------------------------------------------
 // Init / shutdown
@@ -148,6 +149,29 @@ int32_t shekyl_log_init_file(
 /// function after shutdown, they just write to stderr/the file
 /// without the async buffer. Safe to call multiple times.
 void shekyl_log_shutdown(void);
+
+/// Pin the tracing-forwarder call ordering (init first) and install
+/// idempotency as a process-global one-shot.
+///
+/// This call does NOT verify event routing at runtime. Under the
+/// single-Rust-image contract there is nothing to forward between:
+/// `tracing` events from Rust crates linked into this binary reach
+/// the subscriber installed by `shekyl_log_init_*` because every
+/// binary links exactly one Rust image with one tracing dispatcher
+/// (wallet side: libshekyl_ffi.a; daemon: libshekyl_daemon_image.a).
+/// That property is enforced at link time (per-binary image selection
+/// in cmake/BuildRust.cmake plus the post-link nm gate in
+/// src/daemon/CMakeLists.txt), not by this call. See
+/// V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10/2026-06-11
+/// single-image amendments.
+///
+/// Call after `mlog_configure` (which runs `shekyl_log_init_*`).
+/// Returns `SHEKYL_LOG_OK` on the first successful install,
+/// `SHEKYL_LOG_ERR_ALREADY_INSTALLED` on repeat calls (benign — the
+/// SIGHUP-style re-configure path lands here), and
+/// `SHEKYL_LOG_ERR_NOT_INITIALIZED` when no successful init preceded
+/// the call (the one-shot is not consumed; retry after init).
+int32_t shekyl_log_install_tracing_forwarder(void);
 
 // -----------------------------------------------------------------
 // Hot path: enabled gate + emit

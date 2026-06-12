@@ -1101,7 +1101,11 @@ canonical tree under replacement at both deepen boundaries.
    at the confidential redesign or when the Tier-B staked case is wired, **not at
    Round-1 readiness**.
 6. **Block-derived leaves (§6).** Re-evaluate the zero-RPC alternative once the
-   drain-ordering replication cost is known.
+   drain-ordering replication cost is known. **Re-evaluation underway (CT-3
+   Round 1):** the reversion criterion is met — CT-2 landed the replication as
+   the production client path, KAT-verified against real headers. Proposed
+   disposition and the bulk-RPC's repositioned role are
+   [`CT3_SYNC.md`](./CT3_SYNC.md) R1-Q1.
 7. **GATE — G1 value-invariance (§7.7). CLOSED: G1 PASSES (CT-0 run, 2026-06).**
    *Decided: pure tree-position, subtree-aligned (§7.2), and now gate-confirmed.*
    The harness (`rust/shekyl-fcmp/tests/curve_tree_freeze.rs`) ran against the real
@@ -1164,7 +1168,7 @@ canonical tree under replacement at both deepen boundaries.
 | **CT-0** | **Gate spike — DONE, G1 PASSES.** 19-test harness (+1 `#[ignore]`) proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
 | **CT-1** | **Round 1 closed** — see [`CT1_ROUND1_CLOSEOUT.md`](CT1_ROUND1_CLOSEOUT.md). `LeafStore` on **redb** (`CT1_ROUND1_PINS.md`): subtree-aligned segment cache keyed by `R_k` (pin/prune seam, §7.6), height-gated freeze (`end_block_height`), canonical 4×32 Selene-scalar leaf encoding, `build_upper_layers` mixed-composition hot path + `upper_layers_kat`, ACID reorg truncate, `store_kat` Tier A. `CurveTreeClient` mirrors drained leaves into the store on ingest. Remaining: on-disk path wiring (CT-3/CT-5), full-segment freeze KAT at `j=2` scale. | `shekyl-curve-tree/store`, `tests/store_kat.rs`, `tests/upper_layers_kat.rs` |
 | **CT-2** | **Round 1 closed** — see [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Reconstruct-root KAT (`recon_kat.rs`) + production client path (`client.rs`) over `ct2_tier_a.json`: Rust root == C++ header root at every height on `main`, `reorg_deep`, `reorg_shallow`. Tier A pins empty-window boundary (`last_empty=60`, `first_drain=61`), coinbase `+60`, undeepen via `reorg_deep` (fork 140), freeze-lag via shallow reorg. Tier B `#[ignore]` scaffold in `recon_tier_b.rs`. CT-4 `assemble` and CT-1 `store` landed ahead of schedule. Remaining: CT-3 sync, CT-5 engine wiring. | `recon`, `client`, `assemble`, `tests/recon_kat.rs`, `tests/recon_tier_b.rs` |
-| **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
+| **CT-3** | **Round 1 open** — plan-doc [`CT3_SYNC.md`](./CT3_SYNC.md) (pre-flight audit complete 2026-06-11). Persistent client lifecycle (open-on-disk, resume, delta sync), reorg rollback by segment without genesis replay, frozen-`R_k` resume recheck, source seam. The §6 bulk-RPC-vs-block-derived default is re-evaluated there (R1-Q1 — the §6 reversion criterion fired: CT-2 landed the replication, KAT-verified) | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
 | **C++** | `get_curve_tree_leaves` endpoint + KAT (`SHEKYLD_PREREQUISITES.md`) | `core_rpc_server`, separate PR |

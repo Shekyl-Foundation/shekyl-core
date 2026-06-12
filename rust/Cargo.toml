@@ -19,6 +19,11 @@ members = [
     "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
+
+    # Link-image crate: the daemon's single Rust archive (shekyl-ffi +
+    # shekyl-daemon-rpc → one tracing-core dispatcher). No logic; see
+    # its crate docs and src/daemon/CMakeLists.txt's nm gate.
+    "shekyl-daemon-image",
     "shekyl-encoding",
     "shekyl-address",
     "shekyl-difficulty",
