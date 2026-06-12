@@ -206,7 +206,22 @@ pub struct SimConfig {
     /// deterministic stride across the active set (samples every endowment class;
     /// no RNG-stream perturbation). Exited actors drop holdings and rejoin the
     /// entry pool — recovery is rate-limited by `entry_per_epoch`.
+    ///
+    /// **Stride is the most benign correlation structure** (swan-2 / W2): a shard's
+    /// holders almost surely straddle the stride, so per-shard total loss is ≈0 by
+    /// construction. Use `shock_exit_domains` for the correlated (worst-case) arm.
     pub shock_exit_frac: f64,
+    /// **Domain-correlated exit** (swan-2 / W2): at the shock epoch every active
+    /// actor in failure domain 0 under the L15 bucketing (`a % shock_exit_domains
+    /// == 0`) exits — one custody/operator domain vanishes whole. `2` ⇒ ~50 % of
+    /// the active set, `3` ⇒ ~33 %, correlated by domain rather than stride. `0`
+    /// ⇒ off. Composes with `shock_exit_frac` (both legs fire if both set).
+    pub shock_exit_domains: usize,
+    /// **Aftershock** (swan-2 / W3): a second shock epoch re-firing every configured
+    /// shock leg against the survivors (price gaps again, ρ re-steps, exit legs
+    /// re-sample the *current* active set). Models the 2022 sequence
+    /// (LUNA→3AC→FTX) landing inside the first shock's recovery window. `0` ⇒ off.
+    pub aftershock_at: usize,
 
     /// **Retrieval availability (L15).** When on, the sim scores not just coverage
     /// (`R ≥ R_target`) but realized *retrieval availability* `1 − (1−u)^d` per shard,
@@ -421,6 +436,18 @@ pub struct ScenarioResult {
     /// the shock epoch on (vs `bondA`, the windowed steady-state mean — trough far
     /// below bondA with full recovery is the resilience signature). `0` outside L17.
     pub shock_bonded_trough: f64,
+    /// **Deep-shard extinction events, run-wide** (swan-2 / W1): number of times a deep
+    /// shard's serving holder set emptied after having been seated at depth (sticky per
+    /// slot until recycle). Acquisition in this model is **sourceless** — a slot that
+    /// hits zero serving holders re-covers as a metric but the data it stands for is
+    /// gone (the foundation floor, where configured, is the only non-market source).
+    /// On shock-free dynamic scenarios this is the frontier-noise baseline.
+    pub deep_extinct_total: f64,
+    /// **Post-shock deep-shard extinction events** (swan-2 / W1): the subset of
+    /// `deep_extinct_total` at/after the shock epoch — the shock-attributable data
+    /// loss. The number that distinguishes *metric recovery* (`shkRec`) from *data
+    /// recovery*. `0` outside the shock axis.
+    pub shock_deep_extinct: f64,
     /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
     /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
     /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
@@ -542,6 +569,42 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
     world
 }
 
+/// swan-2 / W1 extinction scan. A deep shard whose serving holder set empties *after
+/// having been seated at depth* is a **data-extinction event**: re-acquisition in this
+/// model is sourceless (the best-response simply sets `holdings[a][s] = true`; no
+/// surviving-source check), so the coverage metric recovers but the data would not.
+/// `deep_seated[s]` records "had ≥1 serving holder while deep since recycle";
+/// `extinct[s]` is the sticky per-slot flag (one event per deep lifetime; both reset
+/// when the slot leaves the deep band, i.e. on recycle). Returns new events this scan.
+fn scan_extinctions(
+    world: &World,
+    serving_r: &[usize],
+    deep_threshold: f64,
+    deep_seated: &mut Vec<bool>,
+    extinct: &mut Vec<bool>,
+) -> usize {
+    // Bootstrap worlds grow the window; extend state for appended slots.
+    if deep_seated.len() < world.shards.len() {
+        deep_seated.resize(world.shards.len(), false);
+        extinct.resize(world.shards.len(), false);
+    }
+    let mut events = 0usize;
+    for s in 0..world.shards.len() {
+        if world.shards[s].age >= deep_threshold {
+            if serving_r[s] > 0 {
+                deep_seated[s] = true;
+            } else if deep_seated[s] && !extinct[s] {
+                extinct[s] = true;
+                events += 1;
+            }
+        } else {
+            deep_seated[s] = false;
+            extinct[s] = false;
+        }
+    }
+    events
+}
+
 /// Per-holder uptime used in L15 retrieval scoring; L16 depresses it from transport lag.
 fn retrieval_uptime(cfg: &SimConfig) -> f64 {
     if cfg.transport_model {
@@ -653,6 +716,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // `shock_rho_mult` at the shock epoch and relaxes geometrically back toward 1.0 at
     // `shock_rho_relax` per epoch (panic subsides; 0.0 = permanent regime change).
     let mut rho_shock = 1.0_f64;
+    // swan-2 / W1: extinction accounting. `ext_deep_seated[s]` = the slot has had ≥1
+    // serving holder while deep since its last recycle; `ext_flag[s]` = the slot's
+    // serving holder set emptied while deep after being seated (sticky until recycle —
+    // re-seating recovers the *metric*, not the *data*; acquisition in this model is
+    // sourceless). Both reset when the slot leaves the deep band (recycle path).
+    let mut ext_deep_seated: Vec<bool> = vec![false; world.shards.len()];
+    let mut ext_flag: Vec<bool> = vec![false; world.shards.len()];
+    let mut deep_extinct_total = 0usize;
+    let mut shock_deep_extinct = 0usize;
 
     let mut ta1 = if cfg.ta1_model {
         Some(Ta1Recorder::new(
@@ -716,10 +788,15 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 
         // L17 acute shock: one epoch, up to three channels at once. Price gaps down
         // (bites via the fiat flow-cost leg), every reservation steps up
-        // (flight-to-liquidity), and/or a stride-sampled cohort of active actors is
-        // forced out instantly (custody collapse — holdings dropped, actors return to
-        // the entry pool). Fires BEFORE entry so the same epoch's dynamics respond.
-        if cfg.shock_at > 0 && ep == cfg.shock_at {
+        // (flight-to-liquidity), and/or a cohort of active actors is forced out
+        // instantly (custody collapse — holdings dropped, actors return to the entry
+        // pool). Fires BEFORE entry so the same epoch's dynamics respond. An
+        // aftershock epoch (swan-2 / W3) re-fires every configured leg against the
+        // survivors — price gaps *again*, ρ re-steps, exits re-sample the current
+        // active set.
+        let shock_now = cfg.shock_at > 0
+            && (ep == cfg.shock_at || (cfg.aftershock_at > 0 && ep == cfg.aftershock_at));
+        if shock_now {
             tok_price *= cfg.shock_price_mult;
             rho_shock = cfg.shock_rho_mult;
             if cfg.shock_exit_frac > 0.0 {
@@ -738,6 +815,34 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                         x += stride;
                     }
                 }
+            }
+            // swan-2 / W2: domain-correlated exit — one failure domain (L15
+            // bucketing, `a % n == 0`) vanishes whole. The worst-case correlation
+            // structure: a shard whose holders cluster in the dead domain loses
+            // every copy at once.
+            if cfg.shock_exit_domains > 0 {
+                for a in 0..world.actors.len() {
+                    if world.active[a] && a % cfg.shock_exit_domains == 0 {
+                        world.deactivate(a);
+                    }
+                }
+            }
+            // swan-2 / W1: scan for orphaned deep shards *at the shock instant*,
+            // before survivors re-seat within this same epoch — re-acquisition in
+            // this model is sourceless (see ScenarioResult::deep_extinct_total), so
+            // a holder set that empties here is a data-extinction event even though
+            // the coverage metric recovers.
+            if cfg.shock_exit_frac > 0.0 || cfg.shock_exit_domains > 0 {
+                let sr = world.serving_replication();
+                let ev = scan_extinctions(
+                    &world,
+                    &sr,
+                    cfg.deep_threshold,
+                    &mut ext_deep_seated,
+                    &mut ext_flag,
+                );
+                deep_extinct_total += ev;
+                shock_deep_extinct += ev;
             }
         } else if cfg.shock_at > 0 && ep > cfg.shock_at {
             if rho_shock != 1.0 && cfg.shock_rho_relax > 0.0 {
@@ -831,6 +936,22 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .map(|b| b.frac_under)
                 .unwrap_or(0.0),
         );
+
+        // swan-2 / W1: per-epoch extinction scan — a deep shard whose serving holder
+        // set empties after having been seated is a data-extinction event (sticky per
+        // slot until recycle). Counted run-wide as the frontier-noise baseline and
+        // post-shock as the shock-attributable read.
+        let ext_ev = scan_extinctions(
+            &world,
+            &serving_r,
+            cfg.deep_threshold,
+            &mut ext_deep_seated,
+            &mut ext_flag,
+        );
+        deep_extinct_total += ext_ev;
+        if cfg.shock_at > 0 && ep >= cfg.shock_at {
+            shock_deep_extinct += ext_ev;
+        }
 
         // L15 retrieval availability: realized `1 − (1−u)^d` per shard (d = distinct
         // failure domains among seated holders), scored over the deep set against the
@@ -972,6 +1093,23 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 cfg.flow_cost_fiat,
                 tok_price,
             );
+            // swan-2 / W1: re-scan after voluntary exits. Exits land after the
+            // per-epoch scan, and next epoch's (sourceless) re-acquisition would
+            // hide the orphaning before the next scan runs — without this pass the
+            // death-spiral channel's extinctions are systematically invisible.
+            // Sticky flags make the double scan idempotent per deep lifetime.
+            let sr = world.serving_replication();
+            let ev = scan_extinctions(
+                &world,
+                &sr,
+                cfg.deep_threshold,
+                &mut ext_deep_seated,
+                &mut ext_flag,
+            );
+            deep_extinct_total += ev;
+            if cfg.shock_at > 0 && ep >= cfg.shock_at {
+                shock_deep_extinct += ev;
+            }
         }
         series_active.push(world.active.iter().filter(|&&x| x).count());
         series_bonded_active.push(bonded_active_count(&world, &ap));
@@ -1271,6 +1409,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         fee_budget_end,
         fee_deep_under_peak,
         shock_deep_under_peak,
+        deep_extinct_total: deep_extinct_total as f64,
+        shock_deep_extinct: shock_deep_extinct as f64,
         shock_recovery_epochs,
         shock_bonded_trough,
         retr_under_deep,
@@ -1394,6 +1534,8 @@ fn baseline() -> SimConfig {
         shock_rho_mult: 1.0,
         shock_rho_relax: 0.0,
         shock_exit_frac: 0.0,
+        shock_exit_domains: 0,
+        aftershock_at: 0,
         // L15 retrieval model: off by default (inert, byte-identical). The retrieval
         // scenarios opt in. Defaults describe a three-nines SLA at 90% holder uptime
         // with independent domains; scenarios override `retr_n_domains` to add
@@ -2979,6 +3121,65 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.shock_exit_frac = 0.30;
         c.price_coupling = 0.10;
         swan_servo(&mut c);
+        out.push(c);
+    }
+
+    // --- swan-2 (W1–W3 wargame response, STAKER_ARCHIVAL_SIM.md §L17 swan-2). The
+    // swan-1 verdicts measured METRIC recovery under the most benign correlation
+    // structure (stride straddles holder sets ⇒ per-shard total loss ≈0 by
+    // construction) at the healthy attractor only. swan-2 converts the assumed-away
+    // tails into measured ones: domain-correlated exit (W2), extinction accounting
+    // (W1 — the `shkExt` column, live across ALL swan rows), shock-at-knee timing
+    // (W3), an aftershock pair (W3), and the cascade × ρ-step compound (W3).
+    // (1) Domain-correlated exit: one failure domain (the L15 `a % n` bucketing)
+    // vanishes whole — the FTX class as it actually happened (correlated by
+    // custodian, not sampled across the population). n=3 ⇒ ~33% (compare
+    // swan_cascade30's stride 30%), n=2 ⇒ ~50% (compare swan_cascade50).
+    for n in [3usize, 2] {
+        let mut c = swan_base();
+        c.name = format!("swan2_domain{n}");
+        c.axis = "swan2_domain".into();
+        c.shock_exit_domains = n;
+        out.push(c);
+    }
+    // (2) Shock at the L13 knee: the decayed-purse low-margin state (terminal floor
+    // 80, the band where the oldest stratum already oscillates) — markets do not
+    // schedule crises for the attractor. Purse ≈86 when the 30% cascade lands at
+    // epoch 150; 90 epochs of recovery read after.
+    {
+        let mut c = l13_base();
+        c.name = "swan2_knee_cascade".into();
+        c.axis = "swan2_knee".into();
+        c.bond_rate = 0.75; // pinned genesis economics, as the swan worlds
+        c.budget_floor = 80.0;
+        c.epochs = 240;
+        c.shock_at = 150;
+        c.shock_exit_frac = 0.30;
+        out.push(c);
+    }
+    // (3) Aftershock pair (the 2022 sequence: LUNA→3AC→FTX inside months): 50%
+    // cascade at 120, the SAME leg re-fired against the survivors at 123 — inside
+    // swan_cascade50's 4-epoch breach window, against a trough population with
+    // rate-limited entry.
+    {
+        let mut c = swan_base();
+        c.name = "swan2_aftershock".into();
+        c.axis = "swan2_seq".into();
+        c.shock_exit_frac = 0.50;
+        c.aftershock_at = 123;
+        out.push(c);
+    }
+    // (4) Cascade × ρ-step compound: swan_cascade50 held ρ constant, so entry
+    // continued THROUGH the panic — generous. Re-run it with a ρ×2 panic that
+    // subsides slowly (~35-epoch half-life), suppressing re-entry exactly when the
+    // rebuild needs it.
+    {
+        let mut c = swan_base();
+        c.name = "swan2_cascade_rho".into();
+        c.axis = "swan2_seq".into();
+        c.shock_exit_frac = 0.50;
+        c.shock_rho_mult = 2.0;
+        c.shock_rho_relax = 0.02;
         out.push(c);
     }
 
