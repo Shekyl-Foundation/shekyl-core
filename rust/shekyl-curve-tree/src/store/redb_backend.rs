@@ -77,6 +77,44 @@ pub enum StoreError {
         /// Index of the offending entry within the append batch.
         batch_index: usize,
     },
+    /// `rollback_to_fork` was asked to roll back above the synced tip —
+    /// a caller bug (there is nothing above the tip to roll back), never
+    /// a recoverable store state.
+    InvalidRollback {
+        /// Fork height the caller requested.
+        fork_height: u64,
+        /// Synced tip height currently persisted.
+        sync_tip: u64,
+    },
+    /// A pending-table insert would overwrite an existing row at the same
+    /// gindex. A gindex is in exactly one of {drained, pending}; an insert
+    /// colliding with a live pending row is an invariant breach, rejected
+    /// rather than silently clobbered.
+    PendingGindexCollision {
+        /// Global output index of the colliding row.
+        gindex: u64,
+    },
+    /// A pending-table removal named a gindex that is not present. Every
+    /// drained leaf was necessarily pending first (minimum lock rules out
+    /// same-block create-and-drain) and prune never touches the pending
+    /// table, so a missing removal target is a caller bug or corruption —
+    /// loud, not tolerated.
+    PendingRowMissing {
+        /// Global output index the removal targeted.
+        gindex: u64,
+    },
+    /// The store's in-band layout version stamp disagrees with this build.
+    /// redb's `TypeName` check only catches key/value *type* drift; codec
+    /// layout changes inside a same-width value are invisible to it, so the
+    /// version cell is the loud guard. Pre-genesis disposition: delete the
+    /// store and re-sync (no in-Shekyl migration code).
+    SchemaVersionMismatch {
+        /// Version found in the store (`1` when the cell is absent — the
+        /// implicit CT-1/CT-2 layout).
+        found: u64,
+        /// Version this build reads and writes.
+        expected: u64,
+    },
 }
 
 impl From<redb::Error> for StoreError {
