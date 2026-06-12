@@ -946,6 +946,100 @@ while `g ≥ 2` (then the `g = 1.5` fallback activates or the L13 servo gain is
 re-examined). Re-evaluation shape: re-run the band axes against the changed
 substrate and update this section; design round only on a direct-gauge fail.
 
+## L17 — black-swan / acute-shock layer (2026-06-11)
+
+**Why.** The L13/P2 sustainability layers stress *gradual* declines — geometric
+subsidy taper, geometric price decay. Historical crises are step events. This
+layer fires one-epoch discontinuities at a settled, healthy network and reads
+the damage and the recovery, closing the "feasible scenarios, outliers, black
+swans" due-diligence gap.
+
+**Research grounding — observed crash patterns and the channel each maps to:**
+
+| Historical pattern | What happened | Sim channel |
+|---|---|---|
+| March 2020 (COVID) | BTC −50 % in 2 days, V-shaped recovery within months | `shock_price_mult` + `shock_price_relax` (gap-down that heals) |
+| FTX, Nov 2022 | Contagion price leg **plus** custody collapse — a cohort of participants (exchange-held stakes, exchange-run nodes) vanished overnight | `shock_price_mult` (permanent) + `shock_exit_frac` |
+| LUNA/UST, May 2022 | Compound event: price, panic, forced exits, and a live trust→exit feedback | all channels + `price_coupling` (the L13 expectation leg) |
+| 2008 (flight to liquidity) | Outside yields / liquidity preference spike; risk capital's opportunity cost jumps as a *factor*, then subsides — or persists (rates-era regime change) | `shock_rho_mult` + `shock_rho_relax` |
+| **Filecoin, 2022→2024** | **The closest analog of this exact system**: FIL price fell, fiat opex vs token rewards turned negative, providers terminated sectors to recover pledged collateral — active SPs 4 100 → ~1 900, raw capacity 17 → 4.2 EiB (Messari, State of Filecoin Q3'22→Q4'24) | the P2 fiat flow-cost leg (`flow_cost_fiat`) under a permanent `shock_price_mult` |
+
+**Instrument.** Gated `shock_*` knobs in `SimConfig` (`shock_at = 0` ⇒ inert;
+every prior scenario byte-identical — cross-checked: `gate4_fine_0.75` and the
+`layer2_band` rows reproduce their banked values to the digit). At the shock
+epoch: the token price gaps by `shock_price_mult` (bites via the P2 fiat
+flow-cost leg), every reservation steps by `shock_rho_mult` (relaxing back at
+`shock_rho_relax`), and `shock_exit_frac` of the active set is deactivated by
+deterministic stride (samples all endowment classes; no RNG perturbation;
+exiters drop holdings and rejoin the entry pool at the rate-limited
+`entry_per_epoch`). New reads: `shkP` (post-shock worst serving deep gap),
+`shkRec` (epochs the deep tail stayed over the 0.10 bar; −1 = not recovered by
+run end), `shkBA` (post-shock bonded-archiver trough). World: the pinned
+genesis economics (`bond 0.75`, `g 2.0`, ρ = 0.02, budget 100 — bare-lean),
+mature and healthy at t = 0; shock at epoch 120 of 240. Run:
+`cargo run -p shekyl-staking-sim --release -- --axis=swan`.
+
+**Results (10 scenarios, axes `swan_price` / `swan_flight` / `swan_cascade` /
+`swan_combo`):**
+
+| scenario | shock | `shkP` | `shkRec` | `shkBA` | `bondA` | verdict read |
+|---|---|---:|---:|---:|---:|---|
+| `swan_cascade30` | 30 % of actives gone overnight | 0.000 | 0 | 75 | 96.3 | **absorbed** — deep bar never breached |
+| `swan_cascade50` | 50 % gone overnight | 1.000 | 4 | 53 | 99.6 | breached 4 epochs, **full recovery** |
+| `swan_flight` | ρ ×3, subsiding (~14-ep half-life) | 0.000 | 0 | 70 | 97.9 | **absorbed** |
+| `swan_regime` | ρ ×2 **permanent** | 0.000 | 0 | 74 | 85.2 | leaner attractor (−25 %), coverage holds |
+| `swan_price_vshape` | price ×0.25, V-shaped recovery | 1.000 | 17 | 10 | 95.9 | trough evicts, **full recovery, no ratchet** |
+| `swan_price_gap` | price ×0.25 **permanent**, fiat opex | 1.000 | **−1** | 10 | 25.6 | **collapse** |
+| `swan_price_gap_servo` | + L13 servo, ceiling 130 | 1.000 | **−1** | 12 | 34.9 | **collapse** — +30 % purse ≪ 4× cost shock |
+| `swan_price_gap_servo400` | + servo, ceiling 400 | 1.000 | 114 | 9 | 58.4 | coverage **recovers** (barely, leaner, ~114 ep impaired) |
+| `swan_perfect` | ×0.25 + ρ ×2 + 30 % exit + trust coupling | 1.000 | **−1** | 8 | 20.5 | **collapse** |
+| `swan_perfect_servo` | same + servo, ceiling 130 | 1.000 | **−1** | 9 | 27.3 | **collapse** |
+
+**Finding 1 — population shocks are absorbed by construction.** A 30 % overnight
+exit, a tripled-then-subsiding opportunity cost, and even a *permanent* doubling
+of every actor's reservation never breach the deep-history bar: the per-shard
+replication headroom (`R_target_deep`) rides through the transient and the
+free-entry attractor (L11) refills the population. The 50 % cascade breaches for
+exactly 4 epochs and recovers completely. The system's resilience to *who-shows-up*
+shocks is structural, not tuned.
+
+**Finding 2 — the fatal channel is a permanent price collapse with
+fiat-denominated operating costs.** A −75 % permanent gap quadruples real flow
+costs (`F/p`), and the network collapses regardless of the +30 % adaptive purse
+— consistent with the banked P2 finding (the gradual fall collapses to the same
+end state), now confirmed for step ignition. This is precisely the
+Filecoin-2022 pattern, observed at production scale in the closest real-world
+analog. The compound (LUNA-class) event is dominated by this leg.
+
+**Finding 3 — survivability of the fatal channel scales with fee-market
+headroom, and recovery is slow.** With the servo ceiling raised to ≈ the real
+cost multiplier (400 ≈ 4×), coverage recovers — but the impaired window is
+~114 epochs and the recovered attractor is leaner (`bondA` 58 vs 113). The
+mitigation stack named at L13 — adaptive purse (capacity permitting) **plus the
+population-decaying foundation floor that re-engages automatically as the
+market thins** (`l13_floor`) — is the bridge across that window. The V-shaped
+crash needs none of it: 17 epochs impaired, full recovery, no ratchet.
+
+**Disposition.** No new mechanism at V3.0. The defenses this layer exercises
+are already in the design: replication headroom + free entry absorb population
+shocks; the L13 adaptive servo + foundation-floor re-engagement carry the price
+leg to the limit of fee-market capacity. The named residual exposure — a
+permanent large price collapse with fiat opex exceeding fee capacity — is an
+economic-viability bound, not a mechanism gap: no protocol lever manufactures
+fee revenue that does not exist (the L13 "graceful loud failure" reading).
+Timeframes: addresses **now** and **mining-era end** (the fee-era stress is
+where the price leg lives); V4 inherits the mechanism unchanged.
+
+**Reversion clause (rule 21).** Reopen this layer iff (a) a substrate change of
+the Curve-repair class lands (re-run `--axis=swan`, table update per the
+Finding-0 precedent), (b) calibration or testnet telemetry shows the real
+fiat-opex share of archiver costs materially exceeds the model's flow-cost
+share (the price leg's bite scales with it), or (c) a custody-concentration
+read (many archivers behind one operator — the L15 domain machinery measures
+this) shows a plausible single-event `shock_exit_frac > 0.5`. Re-evaluation
+shape: re-run the axis against the changed substrate and update this table;
+design round only if a previously-absorbed channel turns fatal.
+
 ## Build decision — confirmed: separate `shekyl-staking-sim` crate
 
 A **new crate `shekyl-staking-sim`** (agent-based) for iterations 1, 2, 4; macro
@@ -2938,6 +3032,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | L14 | **Proof-of-archival / free-rider gate** (gate 4 / consensus) | Reward is for *provable* work but the model rewards declared holdings; the free-rider (claim without storing, or store-but-refuse-to-serve) is gated by the audit cadence, not the bond. Modeled the deterrence threshold `a* = benefit/penalty` (abstain iff caught-prob·slash ≥ saved flow cost) and the **read-credit**: a content-bound retrieval *is* a proof, so the explicit-challenge rate is only the top-up `max(0, (a*−p_read)/(1−p_read))` the unread tail needs (`src/audit.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** The non-productive (oversight-only) traffic **collapses onto the cold tail**: crediting real reads cuts the mean challenge cadence from the naive `a*=0.1` to `0.035` (**~65%**) with **98% of the residual on deep shards** (`l14_credited`: `auN 0.100 → auC 0.035`, `auDp 0.98`) — hot shards are proven for free by their own reads; only the oldest carry cadence (`auOld 0.090`, P3). Two levers shrink it further: (1) **a credible slash is the primary deterrent** — penalty 0.5/1/2/4 drops `a*` 0.20/0.10/0.05/0.025 and credited cadence 0.106/0.035/0.010/0.002 (`l14_penalty_*`), so the bond/penalty does the deterring and challenges are the top-up, not the reverse; (2) **demand self-polices** — as the cold-tail read floor rises to `a*`, even the oldest self-prove and explicit challenges vanish (`l14_read_*`: `auOld 0.090→0`). **Disposition:** gate-4's free-rider gate is **retrieval-credited PoR** — real reads are the proof wherever they occur; explicit challenges are cover traffic confined to the unread cold tail, sampled/aggregated, rate-set by the band's irreplaceability (P3) and its retrieval SLA (L15); deterrence is carried by a credible slash, with the challenge cadence only topping up the read-audit to `a*`. **Residue:** live read-rate distribution, the real `benefit/penalty` ratio, and the challenge-faking cost (can a free-rider fetch-on-demand to fake a challenge? — sets the floor cadence) are post-testnet/gate-7 empirics. See §*L14 — proof-of-archival* and the §*L14×L15 specification*. |
 | L15 | **Retrieval / correlated-failure realism** (gate 4–5) | Coverage (replicas exist) ≠ retrieval (fetch within latency at target availability); the L4 survival arithmetic assumes *independent* holder failure. Modeled per-holder uptime `u` + a coarse failure-domain bucketing (`a % n_domains`); availability `= 1 − (1−u)^d` where `d` is the count of *distinct domains* among a shard's serving holders (`src/retrieval.rs`; gated, legacy byte-identical). | **RESOLVED (shape derived) — iteration 3.** Two results, both on a **fully-covered** deep set (`deep_und=0`, `R≈6`): (1) **coverage ≠ retrieval** — under independent failure (`l15_indep`) the covered set meets a three-nines SLA (`rUDp=0`), but as holders cluster into fewer domains (`l15_corr_d{6,3,2,1}`) realized availability falls `0.9997/0.997/0.988/0.900` and the under-SLA deep fraction climbs `0.007/0.20/1.0/1.0` **with `R` unchanged** — so **diversity (≥3 domains), not replica count, is the binding retrieval constraint**; (2) **`R_target` is derivable, not stipulated** — `⌈ln(1−A*)/ln(1−u)⌉` gives `rTgtA` 2/3/5/10 at `u` 0.95/0.90/0.80/0.50 (`l15_uptime_*`), so the stipulated `r_target_deep=6` silently assumes `u ≳ 0.85`; below that the covered set is under-redundant for the SLA *even under independence* (`u50`: `rUDp=1.0`). **Disposition:** gate-4/5 must (a) state the retrieval SLA `(u, A*)` and *derive* `R_target` from it, and (b) add a **co-located-with-coverage diversity floor** (≥`d*` distinct domains per deep shard) — a covered-but-clustered set is a latent availability failure. **Reinforces P3** (the oldest band, thinnest, is first under the diversity floor) and **L16** (the onion path depresses `u`, raising the derived `R_target`). **Residue:** live `u`, the SLA `A*`, and the real domain-correlation structure are post-testnet empirics; the privacy tension (diversity must be measured in coarse buckets, never per-holder geolocation — mission priority 2) is the gate-4 design constraint. See §*L15 — retrieval availability*. **Substrate for L14** (the challenge cadence rides on this serving/diversity state). |
 | L16 | **Transport selection / latency-regime coupling** (gate 6 / networking; the L10 latency axis seen from the transport side) | The firewalled-pseudonym requirement forces the **heavy archival fetch onto onion-service↔Tor-client rendezvous** (slowest Tor config; `P`'s location must not link to the principal, so no clearnet fallback). This makes the L10 `L2–L6` sweep the **operating regime by construction**, and `fetch_latency_per_unit` the onion-rendezvous latency — the post-testnet "real fetch latency" unknown is just *where on the band* the live transport sits. L16 couples that band to L15 via `u_eff = u_base/(1+k·L)` (`src/transport.rs`; gated, legacy byte-identical). TCP-sync and Tor reinforce (Tor is TCP-only; the inherited Levin/TCP stack drops in); the commitment is coupled (UDP/QUIC sync would reopen it). Tor is primary on maturity + TCP + persistent-reachable-service + longevity; I2P is a defensible secondary; Lokinet (Oxen-tied, UDP) and Nym (mixnet, latency-disqualifying for heavy fetch) are out. The **Arti in-process onion-service** option (Rust-canonical) is claimed viable on the 2.x LTS line — *to verify per `17-dependency-discipline.mdc`*. Full analysis: [`../ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Transport for the staker-archival path*. | **RESOLVED (shape derived) — iteration 3.** On a fully covered deep set (`deep_und=0`, `R≈6`), transport depression alone breaks the retrieval SLA from `L≥1` (`l16_regime_*`: `trU` 0.900→0.634, derived `rTgtA` 3→7, `rUDp` 0→1.0 across `L0..L6`); duration backstop does not repair depressed `u` (`l16_L6_s0`≡`s4`); replica floor adds `R` not `u` (`l16_L6_floor`≡`L6` — reinforces P4); transport+diversity compose worse than either (`l16_L4_d3`: `rUDp=1.0` vs `l15_corr_d3` `0.202`). **Disposition:** treat rendezvous latency as an input to the retrieval SLA `(u,A*)`, derive `R_target` from depressed `u_eff`, size against transport **and** diversity. **Residue:** post-testnet `L`, `k`, band position, and any non-linking bandwidth relaxation. Transport PR forks unchanged (Arti embed, I2P door, rendezvous threat pass). See §*L16 — transport-regime coupling* and §*Soundness pass*. |
+| L17 | **Black-swan / acute-shock resilience** (gates 5/7; due-diligence close) | L13/P2 stressed *gradual* declines; historical crises are steps (March-2020 gap-down, FTX custody collapse, LUNA compound, 2008 flight-to-liquidity, **Filecoin's fiat-opex provider exodus** — SPs 4 100 → ~1 900 as FIL fell). Gated `shock_*` knobs fire one-epoch discontinuities (price gap ± V-recovery, reservation step ± relax, stride-sampled forced exit) at the settled pinned-economics attractor; reads `shkP`/`shkRec`/`shkBA` (§*L17*). | **RESOLVED (shape derived) — 2026-06-11.** Population shocks **absorbed by construction**: 30 % overnight exit and ρ×3 panic never breach the deep bar; 50 % exit breaches 4 epochs, full recovery; permanent ρ×2 settles a leaner-but-covered attractor. V-shaped −75 % crash: 17 epochs impaired, full recovery, no ratchet. The **fatal channel is a permanent price collapse with fiat opex** (the Filecoin pattern; confirms P2 for step ignition): collapse at servo ceiling 130; recovery only at ceiling ≈ the real cost multiplier (400 ⇒ ~114 epochs impaired, leaner attractor). No new V3.0 mechanism — the L13 servo + re-engaging foundation floor are the named bridge; the residual (price collapse beyond fee capacity) is an economic-viability bound, not a mechanism gap. Reversion clause in §*L17*. |
 | T-A1 | **F1 re-linkage instrument** (PHASE_2B §7.7; gate-3 + rotation) | **CLOSED.** Instrument + qual firewall wargame complete. Scarcity-spread → unique portfolios; primary firewall holds lifetime `T_obs` under wallet defaults. | **Conditionally finally accepted.** Form-C reopen not triggered. [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9. |
 | G7 | **Locked-supply re-pricing / admission principal** (gate 7; PHASE_2B §2.4 close-condition (iii)) | Iteration-5 run (2026-06-11; §*Gate 7 iteration-5 — results*): derived archival lock collapses to `bond_floor × R × shards(t)` — 117 → 3 546 coins over 30 yr, `lock/circ ≤ 8.5×10⁻⁷` (10⁻⁵ even at 10× denser shard geometry; 1.4×10⁻⁴ at arm-B `MIN = 10 000×` floor). All three macro gauges (burn servo, release factor, net inflation) **insensitive to both arms at every `N_P`** — burn identical to the cent; both arms clamp identically at the 90 % cap under load. Δ vs. the asserted comparator: legacy schedules overstated burn −22.3 % via the now-inert `(1 + stake_ratio)` factor (FOLLOWUPS item). | **RESOLVED — bonds-only** per the pre-named indeterminate criterion (admission lock does no measurable macro work; smaller consensus surface wins). Cross-doc spec edits **landed 2026-06-11** (emission §10.2 branch deletion, PHASE_2B §2.4 (iii) + admission row, gate-6 §2.5, V3_STAKER_ARCHIVAL). **Reversion:** reopen iff bond floor / shard geometry re-pin ≥ 3 OOM upward combined, or a new archival lock class lands; re-run `--gate7`, re-apply criteria. |
 | AGG | **Per-reward proof aggregate** (PHASE_2B §2.4 close-condition (ii); emission §10.1) | Worked byte sweep (2026-06-11; §*Close-condition (ii)*) — no feedback dynamics, every term pinned or banked. Typical emission tx ≈ 17–19 kB, dominated by constant-size hybrid crypto (ML-DSA-65 sig 3.3 kB ×2, hybrid pk 2 kB, FCMP++ ~2.5 kB), not the work claim (≤ 780 B/epoch at year-30 lean portfolio ≈ 60 shards). Aggregate at 20 kB margin: thin/lean/thick = 80/160/310 B per block amortized = **0.027/0.053/0.103 %** of the 300 kB penalty-free zone. Single-tx max (15-epoch batch) ≈ 29 kB; boundary burst drains in ≈ 11 blocks at thick with zero spreading; only `work_claim` grows with chain age (2.6 kB/epoch at year 100 — still < 15 kB constant term). | **RESOLVED — (ii) closes; wire confirmed as pinned.** ≤ 0.11 % amortized across the envelope (≤ 0.21 % at uniform 2× size error). `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` + `SETTLEMENT_EPOCH_BLOCKS = 10_000` confirmed. Caveat: `FcmpMembershipOnly` size assumed at 1-input `FcmpPlusPlus` order (proves strictly less). **Reversion:** reopen iff built proof > 3× estimate, `N_P` envelope re-pins above ~1 500, or epoch re-pins below 1 000 blocks; re-evaluation = re-run sweep with measured sizes. |

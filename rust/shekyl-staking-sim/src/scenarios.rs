@@ -177,6 +177,37 @@ pub struct SimConfig {
     /// Terminal token price the decay approaches.
     pub price_floor: f64,
 
+    // L17 black-swan / acute-shock axis (inert when `shock_at == 0`). The L13/P2
+    // machinery stresses *gradual* declines (geometric subsidy/price decay); real
+    // crises are step discontinuities: March-2020 / FTX-class price gap-downs,
+    // 2008-class flight-to-liquidity (outside yields spike), custody-collapse
+    // contagion (a cohort of participants vanishes overnight), and LUNA-class
+    // compound events. One epoch, several channels at once.
+    /// Epoch at which the acute shock fires. `0` ⇒ no shock (every prior scenario,
+    /// byte-identical).
+    pub shock_at: usize,
+    /// One-time multiplicative step on the token price at the shock epoch (e.g.
+    /// `0.25` = a −75 % gap-down). Bites only with `flow_cost_fiat` (the fiat
+    /// flow-cost leg). `1.0` ⇒ no price leg.
+    pub shock_price_mult: f64,
+    /// Per-epoch geometric recovery of the token price back toward its pre-shock
+    /// level (the V-shaped crash — March-2020 class). `0.0` ⇒ the gap-down is
+    /// permanent (FTX / deep-bear class).
+    pub shock_price_relax: f64,
+    /// Multiplier on every actor's reservation yield at the shock — the
+    /// flight-to-liquidity leg (outside opportunities suddenly pay more / capital
+    /// wants out of risk). `1.0` ⇒ no reservation leg.
+    pub shock_rho_mult: f64,
+    /// Per-epoch geometric relaxation of the reservation shock back toward 1.0
+    /// (the panic subsides). `0.0` ⇒ the shock is a permanent regime change.
+    pub shock_rho_relax: f64,
+    /// Fraction of currently-active actors forced to exit instantly at the shock
+    /// epoch (custody collapse / contagion — the FTX class). Selected by
+    /// deterministic stride across the active set (samples every endowment class;
+    /// no RNG-stream perturbation). Exited actors drop holdings and rejoin the
+    /// entry pool — recovery is rate-limited by `entry_per_epoch`.
+    pub shock_exit_frac: f64,
+
     /// **Retrieval availability (L15).** When on, the sim scores not just coverage
     /// (`R ≥ R_target`) but realized *retrieval availability* `1 − (1−u)^d` per shard,
     /// where `d` is the count of distinct failure domains among a shard's serving
@@ -378,6 +409,18 @@ pub struct ScenarioResult {
     /// is a priority-1 durability failure (the deep tail is unfunded and going dark);
     /// ≈0 means the decayed purse, adaptive servo, or foundation floor held the tail.
     pub fee_deep_under_peak: f64,
+    /// **Post-shock worst serving deep gap** (L17): peak serving deep under-target from
+    /// the shock epoch on — the acute damage. `0` outside the shock axis.
+    pub shock_deep_under_peak: f64,
+    /// **Shock recovery time** (L17): epochs from the shock until the serving deep
+    /// under-target fraction last sits at/above the 0.10 deep-history bar (i.e. how
+    /// long the deep tail stayed impaired). `0` = the deep tail never breached the bar;
+    /// `-1` = still breached at run end (NOT recovered). `0` outside the shock axis.
+    pub shock_recovery_epochs: f64,
+    /// **Post-shock bonded-archiver trough** (L17): minimum bonded-archiver count from
+    /// the shock epoch on (vs `bondA`, the windowed steady-state mean — trough far
+    /// below bondA with full recovery is the resilience signature). `0` outside L17.
+    pub shock_bonded_trough: f64,
     /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
     /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
     /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
@@ -606,6 +649,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // flow-cost level channel is isolated from the expectation channel). Constant at
     // `token_price` otherwise; consulted only when `flow_cost_fiat`.
     let mut tok_price = cfg.token_price;
+    // L17 acute shock: multiplicative reservation stress, 1.0 outside a shock. Steps to
+    // `shock_rho_mult` at the shock epoch and relaxes geometrically back toward 1.0 at
+    // `shock_rho_relax` per epoch (panic subsides; 0.0 = permanent regime change).
+    let mut rho_shock = 1.0_f64;
 
     let mut ta1 = if cfg.ta1_model {
         Some(Ta1Recorder::new(
@@ -666,6 +713,43 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         } else {
             0.0
         };
+
+        // L17 acute shock: one epoch, up to three channels at once. Price gaps down
+        // (bites via the fiat flow-cost leg), every reservation steps up
+        // (flight-to-liquidity), and/or a stride-sampled cohort of active actors is
+        // forced out instantly (custody collapse — holdings dropped, actors return to
+        // the entry pool). Fires BEFORE entry so the same epoch's dynamics respond.
+        if cfg.shock_at > 0 && ep == cfg.shock_at {
+            tok_price *= cfg.shock_price_mult;
+            rho_shock = cfg.shock_rho_mult;
+            if cfg.shock_exit_frac > 0.0 {
+                let active_idx: Vec<usize> = (0..world.actors.len())
+                    .filter(|&a| world.active[a])
+                    .collect();
+                let k = (active_idx.len() as f64 * cfg.shock_exit_frac).round() as usize;
+                if k > 0 {
+                    // Deterministic stride over the active set: samples every endowment
+                    // class without perturbing the RNG stream.
+                    let stride = active_idx.len() as f64 / k as f64;
+                    let mut x = 0.0_f64;
+                    for _ in 0..k {
+                        let i = (x as usize).min(active_idx.len() - 1);
+                        world.deactivate(active_idx[i]);
+                        x += stride;
+                    }
+                }
+            }
+        } else if cfg.shock_at > 0 && ep > cfg.shock_at {
+            if rho_shock != 1.0 && cfg.shock_rho_relax > 0.0 {
+                rho_shock = 1.0 + (rho_shock - 1.0) * (1.0 - cfg.shock_rho_relax);
+            }
+            // V-shaped price recovery toward the pre-shock level (inert when 0.0 or
+            // when the price never gapped).
+            if cfg.shock_price_relax > 0.0 {
+                tok_price =
+                    cfg.token_price + (tok_price - cfg.token_price) * (1.0 - cfg.shock_price_relax);
+            }
+        }
 
         // L11 entry: trickle inactive actors into the active set (inert when
         // `entry_per_epoch == 0`, i.e. every non-endogenous scenario).
@@ -884,6 +968,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 &ap,
                 &pp,
                 res_add,
+                rho_shock,
                 cfg.flow_cost_fiat,
                 tok_price,
             );
@@ -1099,6 +1184,30 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .copied()
         .fold(0.0_f64, f64::max);
 
+    // L17 shock damage + recovery reads, from the shock epoch on. Recovery is judged
+    // against the deep-history sub-claim bar (0.10): the recovery time is the LAST
+    // epoch the serving deep gap sat at/above the bar (so a dip-recover-dip pattern
+    // counts to the final dip), -1 if it is still breached at run end.
+    let (shock_deep_under_peak, shock_recovery_epochs, shock_bonded_trough) =
+        if cfg.shock_at > 0 && cfg.shock_at < series_serving_deep_under.len() {
+            let post = &series_serving_deep_under[cfg.shock_at..];
+            let peak = post.iter().copied().fold(0.0_f64, f64::max);
+            let last_breach = post.iter().rposition(|&v| v >= 0.10);
+            let recovery = match last_breach {
+                None => 0.0,
+                Some(i) if i + 1 == post.len() => -1.0,
+                Some(i) => (i + 1) as f64,
+            };
+            let trough = series_bonded_active[cfg.shock_at..]
+                .iter()
+                .copied()
+                .min()
+                .unwrap_or(0) as f64;
+            (peak, recovery, trough)
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+
     // Spread: snapshot (final epoch) vs windowed steady-state read (L9 lesson).
     let gini_window = &series_gini_actor[series_gini_actor.len().saturating_sub(w)..];
     let gini_actor_window = if w > 0 {
@@ -1161,6 +1270,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         boot_oldest_floored_peak,
         fee_budget_end,
         fee_deep_under_peak,
+        shock_deep_under_peak,
+        shock_recovery_epochs,
+        shock_bonded_trough,
         retr_under_deep,
         retr_avail_deep,
         r_target_avail,
@@ -1274,6 +1386,14 @@ fn baseline() -> SimConfig {
         token_price: 1.0,
         price_decay: 0.0,
         price_floor: 1.0,
+        // L17 acute shock: off by default (`shock_at = 0` ⇒ inert, byte-identical).
+        // The swan_* scenarios opt in.
+        shock_at: 0,
+        shock_price_mult: 1.0,
+        shock_price_relax: 0.0,
+        shock_rho_mult: 1.0,
+        shock_rho_relax: 0.0,
+        shock_exit_frac: 0.0,
         // L15 retrieval model: off by default (inert, byte-identical). The retrieval
         // scenarios opt in. Defaults describe a three-nines SLA at 90% holder uptime
         // with independent domains; scenarios override `retr_n_domains` to add
@@ -2714,6 +2834,151 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.bond_rate = 0.75;
         c.age_weight = g;
         c.budget = 130.0;
+        out.push(c);
+    }
+
+    // --- L17: black-swan / acute-shock axis (STAKER_ARCHIVAL_SIM.md §L17). The
+    // L13/P2 layers stress GRADUAL declines (geometric subsidy and price decay);
+    // historical crises are step events. Channel mapping, each grounded in an
+    // observed pattern:
+    //   price gap-down   (shock_price_mult, via the P2 fiat flow-cost leg) —
+    //     BTC −50% in 2 days (2020-03), FTX contagion (2022-11); the live analog is
+    //     Filecoin's provider exodus when FIL fell: fiat opex vs token rewards
+    //     turned negative and providers terminated sectors (SPs 4 100 → ~1 900,
+    //     capacity 17 → 4.2 EiB from 2022-Q3 to 2024-Q4).
+    //   flight-to-liquidity (shock_rho_mult + relax) — the 2008 class: outside
+    //     yields/liquidity preference spike, staked capital's opportunity cost
+    //     jumps as a factor, then subsides (relax) or persists (regime change).
+    //   exit cascade     (shock_exit_frac) — custody collapse: a cohort of
+    //     participants vanishes overnight (FTX-held stakes; exchange-run nodes).
+    //   compound + trust coupling (all three + price_coupling) — the LUNA-class
+    //     event: price, panic, and forced exits land together while the trust
+    //     signal feeds back into reservations.
+    // World: the mature pinned-economics attractor (bond 0.75, g 2.0, ρ=0.02,
+    // budget 100 — bare-lean), healthy at t=0; shock at epoch 120 of 240 so there
+    // is a settled pre-shock baseline and a 120-epoch recovery read. Servo arms
+    // give the L13 adaptive purse a 130 ceiling (the Layer-2 +30 % static image).
+    let swan_base = || {
+        let mut c = l11_base();
+        c.bond_rate = 0.75; // the gate-4 pin (genesis economics, not baseline 2.0)
+        c.dynamic = true;
+        c.epoch_aging = 0.05;
+        c.init_active_frac = 1.0; // mature healthy network when the shock lands
+        c.reservation_lo = 0.02;
+        c.reservation_hi = 0.02;
+        c.budget = 100.0;
+        c.epochs = 240;
+        c.churn_window = 60;
+        c.shock_at = 120;
+        c
+    };
+    let swan_servo = |c: &mut SimConfig| {
+        c.fee_era = true;
+        c.budget_decay = 0.0; // constant base purse — the servo is the only fee-era piece
+        c.budget_floor = 100.0;
+        c.adaptive_share = true;
+        c.share_gain = 8.0;
+        c.budget_ceiling = 130.0;
+    };
+    // (1) Price gap-down, bare vs servo: −75% step at parity, fiat flow cost.
+    {
+        let mut c = swan_base();
+        c.name = "swan_price_gap".into();
+        c.axis = "swan_price".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        out.push(c);
+    }
+    {
+        let mut c = swan_base();
+        c.name = "swan_price_gap_servo".into();
+        c.axis = "swan_price".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        swan_servo(&mut c);
+        out.push(c);
+    }
+    // A −75% gap with 4× real flow costs needs ≈4× purse headroom (the P2c
+    // lesson against the gradual fall): give the servo a 400 ceiling and ask
+    // whether the step ignition is also caught when the response CAN scale.
+    {
+        let mut c = swan_base();
+        c.name = "swan_price_gap_servo400".into();
+        c.axis = "swan_price".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        swan_servo(&mut c);
+        c.budget_ceiling = 400.0;
+        out.push(c);
+    }
+    // V-shaped crash (March-2020 class): same −75% gap, price recovers toward
+    // parity with a ~14-epoch half-life. Exit patience is 3 epochs, so the
+    // trough WILL evict; the question is whether the attractor pulls the
+    // population back once the price normalizes — transient damage vs ratchet.
+    {
+        let mut c = swan_base();
+        c.name = "swan_price_vshape".into();
+        c.axis = "swan_price".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_price_relax = 0.05;
+        out.push(c);
+    }
+    // (2) Flight-to-liquidity: ρ ×3 panic that subsides (~14-epoch half-life), and
+    // a ρ ×2 PERMANENT regime change (the rates-era read).
+    {
+        let mut c = swan_base();
+        c.name = "swan_flight".into();
+        c.axis = "swan_flight".into();
+        c.shock_rho_mult = 3.0;
+        c.shock_rho_relax = 0.05;
+        out.push(c);
+    }
+    {
+        let mut c = swan_base();
+        c.name = "swan_regime".into();
+        c.axis = "swan_flight".into();
+        c.shock_rho_mult = 2.0;
+        out.push(c);
+    }
+    // (3) Exit cascade: 30% / 50% of the active set gone in one epoch.
+    for frac in [0.30_f64, 0.50] {
+        let mut c = swan_base();
+        c.name = format!("swan_cascade{:.0}", frac * 100.0);
+        c.axis = "swan_cascade".into();
+        c.shock_exit_frac = frac;
+        out.push(c);
+    }
+    // (4) The compound black swan: price gap + panic + cascade with the trust
+    // coupling live, bare vs servo. The unmanaged arm is the worst-case read; the
+    // servo arm asks whether the L13 damping apparatus also catches a STEP
+    // ignition (its banked result was against gradual decay).
+    {
+        let mut c = swan_base();
+        c.name = "swan_perfect".into();
+        c.axis = "swan_combo".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_rho_mult = 2.0;
+        c.shock_rho_relax = 0.02;
+        c.shock_exit_frac = 0.30;
+        c.fee_era = true;
+        c.budget_decay = 0.0;
+        c.budget_floor = 100.0;
+        c.price_coupling = 0.10;
+        out.push(c);
+    }
+    {
+        let mut c = swan_base();
+        c.name = "swan_perfect_servo".into();
+        c.axis = "swan_combo".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_rho_mult = 2.0;
+        c.shock_rho_relax = 0.02;
+        c.shock_exit_frac = 0.30;
+        c.price_coupling = 0.10;
+        swan_servo(&mut c);
         out.push(c);
     }
 

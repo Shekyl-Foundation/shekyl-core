@@ -4,6 +4,28 @@
 
 ### Added
 
+- **sim: L17 black-swan / acute-shock axis (2026-06-11).** Closes the
+  due-diligence gap between the gradual-decline stresses (L13 subsidy taper,
+  P2 price decay) and step-event crises observed in production networks.
+  Gated `shock_*` knobs in `shekyl-staking-sim` (`shock_at = 0` ⇒ inert;
+  legacy rows verified byte-identical): one-epoch token-price gap-down with
+  optional V-shaped recovery (March-2020 class vs FTX/deep-bear class),
+  reservation-yield step with relaxation (2008 flight-to-liquidity vs
+  permanent regime change), and stride-sampled forced exit of an active-set
+  fraction (custody-collapse contagion). New reads `shkP`/`shkRec`/`shkBA`
+  (post-shock worst deep gap, epochs-to-recovery, bonded trough). Ten
+  `swan_*` scenarios at the pinned genesis economics. Findings
+  (`STAKER_ARCHIVAL_SIM.md` §L17): population shocks are absorbed by
+  construction (30 % overnight exit and ρ×3 panic never breach the deep bar;
+  50 % exit recovers in 4 epochs; permanent ρ×2 settles leaner but covered);
+  a V-shaped −75 % crash recovers fully in 17 epochs with no ratchet; the
+  fatal channel is a **permanent** price collapse with fiat-denominated opex
+  (the Filecoin 2022→24 provider-exodus pattern — confirms P2 for step
+  ignition), survivable only when fee-market headroom scales with the real
+  cost multiplier. Disposition: no new V3.0 mechanism; the L13 adaptive
+  servo + re-engaging foundation floor are the bridge; reversion clause
+  recorded.
+
 - **sim: spread gate re-anchored on direct whale gauges — Layer-2 close-out
   (2026-06-11).** Implements the gate the Layer-2 band run sealed:
   `shekyl-staking-sim`'s `spread`/`sprdW` verdicts now gate on
