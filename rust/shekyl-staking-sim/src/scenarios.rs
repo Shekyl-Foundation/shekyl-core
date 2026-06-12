@@ -83,6 +83,11 @@ pub struct SimConfig {
     pub fetch_latency_per_unit: f64,
     /// Max fresh deep fetches per actor per epoch (0 = unlimited bandwidth).
     pub acq_rate: usize,
+    /// **Foundation re-seed bandwidth** (swan-4): network-wide cap on fresh deep
+    /// fetches per epoch of shards with zero serving market holders — those must
+    /// source from the foundation complete-tree seeds (few seats ⇒ serialized
+    /// seeding). `0` = unlimited (legacy sourceless-instant, byte-identical).
+    pub reseed_rate: usize,
 
     // L11 endogenous-participation axis (iteration 3; inert when `!endogenous`).
     /// Free entry/exit on. When off, the population is fixed at `n_actors` all-active —
@@ -479,6 +484,23 @@ pub struct ScenarioResult {
     /// floor converts the swan-1 data losses into covered under-replication. `0`
     /// outside the shock axis.
     pub shock_deep_extinct_floored: f64,
+    /// **Foundation-as-sole-source shard-epochs, run-wide** (swan-4): total epochs
+    /// summed over deep shards spent with zero serving market holders after having
+    /// been seated at depth. Under the foundation retention guarantee
+    /// (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree seeds*) a market wipe-out
+    /// is an **availability state, not data loss** — this is the honest size of the
+    /// degraded-retrieval exposure that the extinction reads previously over-claimed
+    /// as irrecoverable.
+    pub sole_source_shard_epochs: f64,
+    /// **Longest single-shard sole-source window** (swan-4), in epochs — "deep
+    /// retrieval degraded for X epochs with the foundation as sole source" for the
+    /// worst shard. Bounded by the re-seed bandwidth when `reseed_rate > 0`
+    /// (serialized recovery: ~backlog/rate after demand returns).
+    pub sole_source_max_window: f64,
+    /// **Sole-source windows still open at run end** (swan-4): deep shards whose
+    /// market never re-seated them — the permanent-foundation-dependence read on
+    /// fatal-channel rows (vs transient windows on recovering rows).
+    pub sole_source_open_end: f64,
     /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
     /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
     /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
@@ -615,6 +637,11 @@ struct ExtinctionScan {
     deep_seated: Vec<bool>,
     extinct: Vec<bool>,
     extinct_floored: Vec<bool>,
+    /// swan-4: current **foundation-as-sole-source window** length per slot (epochs
+    /// the deep-seated slot has had zero serving market holders; 0 = market-sourced).
+    /// Under the retention guarantee a market wipe-out is an availability state, not
+    /// data loss — this tracks how long the availability degradation lasts.
+    ss_open: Vec<u32>,
 }
 
 /// One scan's newly-counted events. `bands` bins the *market* events by the shard's age
@@ -632,7 +659,42 @@ impl ExtinctionScan {
             deep_seated: vec![false; n],
             extinct: vec![false; n],
             extinct_floored: vec![false; n],
+            ss_open: vec![0; n],
         }
+    }
+
+    /// swan-4 sole-source window tick — call **once per epoch**, after the per-epoch
+    /// `scan` (so `deep_seated` is fresh). A deep-seated slot with zero serving market
+    /// holders is in a foundation-as-sole-source window; the window closes when the
+    /// market re-seats it (≥1 serving holder) and resets on recycle. Returns
+    /// `(sole_source_slots_this_epoch, max_open_window)` — the caller accumulates
+    /// shard-epochs and the run max.
+    fn sole_source_tick(
+        &mut self,
+        world: &World,
+        serving_r: &[usize],
+        cfg: &SimConfig,
+    ) -> (usize, u32) {
+        if self.ss_open.len() < world.shards.len() {
+            self.ss_open.resize(world.shards.len(), 0);
+        }
+        let mut open = 0usize;
+        let mut max_open = 0u32;
+        for (s, shard) in world.shards.iter().enumerate() {
+            if shard.age >= cfg.deep_threshold && self.deep_seated[s] && serving_r[s] == 0 {
+                self.ss_open[s] += 1;
+                open += 1;
+                max_open = max_open.max(self.ss_open[s]);
+            } else {
+                self.ss_open[s] = 0;
+            }
+        }
+        (open, max_open)
+    }
+
+    /// Count of sole-source windows still open (for the run-end "unrecovered" read).
+    fn sole_source_open(&self) -> usize {
+        self.ss_open.iter().filter(|&&w| w > 0).count()
     }
 
     /// Scan for newly-orphaned deep shards. The *market* read counts a deep-seated slot
@@ -734,6 +796,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         lock_anticipation: cfg.lock_anticipation,
         fetch_latency_per_unit: cfg.fetch_latency_per_unit,
         acq_rate: cfg.acq_rate,
+        reseed_rate: cfg.reseed_rate,
     };
     let pp = ParticipationParams {
         entry_per_epoch: cfg.entry_per_epoch,
@@ -821,6 +884,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut shock_extinct_bands = [0usize; N_BANDS];
     let mut deep_extinct_floored_total = 0usize;
     let mut shock_deep_extinct_floored = 0usize;
+    // swan-4: foundation-as-sole-source accounting — total shard-epochs spent with the
+    // foundation as a deep shard's only source, and the longest single-shard window.
+    let mut sole_source_shard_epochs = 0usize;
+    let mut sole_source_max_window = 0u32;
 
     let mut ta1 = if cfg.ta1_model {
         Some(Ta1Recorder::new(
@@ -1075,6 +1142,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 *acc += n;
             }
         }
+        // swan-4: sole-source window tick (once per epoch, after the scan refreshed
+        // `deep_seated`). Run-wide accumulation; shock-free rows show the noise floor.
+        let (ss_open_now, ss_max_now) = ext_scan.sole_source_tick(&world, &serving_r, cfg);
+        sole_source_shard_epochs += ss_open_now;
+        sole_source_max_window = sole_source_max_window.max(ss_max_now);
 
         // L15 retrieval availability: realized `1 − (1−u)^d` per shard (d = distinct
         // failure domains among seated holders), scored over the deep set against the
@@ -1536,6 +1608,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
         deep_extinct_floored_total: deep_extinct_floored_total as f64,
         shock_deep_extinct_floored: shock_deep_extinct_floored as f64,
+        sole_source_shard_epochs: sole_source_shard_epochs as f64,
+        sole_source_max_window: sole_source_max_window as f64,
+        sole_source_open_end: ext_scan.sole_source_open() as f64,
         shock_recovery_epochs,
         shock_bonded_trough,
         retr_under_deep,
@@ -1620,6 +1695,9 @@ fn baseline() -> SimConfig {
         // iteration-1/2 model unchanged. The L10 scenarios opt in.
         fetch_latency_per_unit: 0.0,
         acq_rate: 0,
+        // swan-4: unlimited foundation re-seed bandwidth by default (sourceless-
+        // instant, every prior scenario byte-identical). The re-seed arms opt in.
+        reseed_rate: 0,
         // L11: fixed all-active population by default (every pre-L11 scenario). The
         // participation scenarios opt in.
         endogenous: false,
@@ -3375,6 +3453,43 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = format!("swan3_class{:.0}", frac * 100.0);
         c.axis = "swan3_class".into();
         c.shock_exit_top_deep = frac;
+        out.push(c);
+    }
+
+    // --- swan-4 (foundation-retention correction, STAKER_ARCHIVAL_SIM.md §L17
+    // swan-4). The genesis foundation seeds hold COMPLETE trees permanently
+    // (V3_STAKER_ARCHIVAL.md gate-list item 5 — "permanent foundation floor, no
+    // decay_pop withdrawal"; §*Foundation complete-tree seeds*), so a market
+    // holder-set wipe-out is never data loss — it is a transition to
+    // foundation-as-sole-source, and the model's sourceless backfill coincidentally
+    // models the real recovery path (fetch from a public foundation seed) minus its
+    // bandwidth bound. These arms add the bound: `reseed_rate` = network-wide fresh
+    // fetches per epoch of zero-serving-holder shards (N_active = 3 seeds; ~1
+    // seeding flow each ⇒ 3; 12 = 4× provisioning sensitivity). The verdict the
+    // price rows should carry is "deep retrieval degraded for X epochs with the
+    // foundation as sole source" (`ssSE`/`ssMxW`/`ssOpn`), not extinction.
+    for (name, rate) in [
+        ("swan4_vshape_reseed3", 3usize),
+        ("swan4_vshape_reseed12", 12),
+    ] {
+        let mut c = swan_base();
+        c.name = name.into();
+        c.axis = "swan4_reseed".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        c.shock_price_relax = 0.05;
+        c.reseed_rate = rate;
+        out.push(c);
+    }
+    {
+        let mut c = swan_base();
+        c.name = "swan4_servo400_reseed3".into();
+        c.axis = "swan4_reseed".into();
+        c.flow_cost_fiat = true;
+        c.shock_price_mult = 0.25;
+        swan_servo(&mut c);
+        c.budget_ceiling = 400.0;
+        c.reseed_rate = 3;
         out.push(c);
     }
 
