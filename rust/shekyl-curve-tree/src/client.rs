@@ -53,7 +53,7 @@ use std::collections::BTreeMap;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
-use crate::types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use crate::types::{BlockHeight, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -287,7 +287,7 @@ impl CurveTreeClient {
             return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
         }
         if stored == canonical {
-            self.store.append_drained(&[], tip_height)?;
+            self.store.append_drained(&[], BlockHeight(tip_height))?;
         } else {
             let bucket = self.newly_drained_from_index(through);
             let bucket_len = u64::try_from(bucket.len()).expect("bucket fits u64");
@@ -300,7 +300,8 @@ impl CurveTreeClient {
                 let skip = usize::try_from(stored).expect("stored leaf count fits usize");
                 self.drained_suffix_from_index(through, skip)
             };
-            self.store.append_drained(&new_entries, tip_height)?;
+            self.store
+                .append_drained(&new_entries, BlockHeight(tip_height))?;
         }
         self.record_drained_count(through, canonical);
         Ok(())
@@ -665,7 +666,7 @@ mod tests {
         ));
         // The rejected query left no trace in the store: the freeze clock
         // still sits at the ingested tip.
-        assert_eq!(client.store.sync_tip_height().unwrap(), 0);
+        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(0));
     }
 
     #[test]

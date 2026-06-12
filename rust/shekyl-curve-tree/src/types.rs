@@ -57,9 +57,75 @@ pub struct OutputIdentity {
     pub target: TargetKind,
 }
 
+/// Implement `redb::Value` + `redb::Key` for an integer newtype by
+/// delegating every operation to the inner primitive's impl.
+///
+/// Delegation (rather than hand-rolled byte twiddling) guarantees the
+/// on-disk byte layout and key ordering are byte-identical to a raw
+/// `u64`/`u32` table — range scans, ordered iteration, and batched
+/// range-deletes behave exactly as before the typed-key retrofit. Only
+/// the `TypeName` differs, which is the point: redb refuses to open a
+/// table whose stored key type disagrees, so a position, height, gindex,
+/// and segment id can never index each other's tables.
+macro_rules! redb_delegated_key {
+    ($ty:ty, $inner:ty, $name:literal) => {
+        impl redb::Value for $ty {
+            type SelfType<'a> = $ty;
+            type AsBytes<'a> = <$inner as redb::Value>::AsBytes<'a>;
+
+            fn fixed_width() -> Option<usize> {
+                <$inner as redb::Value>::fixed_width()
+            }
+
+            fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+            where
+                Self: 'a,
+            {
+                Self(<$inner as redb::Value>::from_bytes(data))
+            }
+
+            fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+            where
+                Self: 'b,
+            {
+                <$inner as redb::Value>::as_bytes(&value.0)
+            }
+
+            fn type_name() -> redb::TypeName {
+                redb::TypeName::new($name)
+            }
+        }
+
+        impl redb::Key for $ty {
+            fn compare(data1: &[u8], data2: &[u8]) -> core::cmp::Ordering {
+                <$inner as redb::Key>::compare(data1, data2)
+            }
+        }
+    };
+}
+pub(crate) use redb_delegated_key;
+
+/// Block height on the Shekyl chain. Typed so a height can never be
+/// swapped with a tree position, gindex, or leaf count at a store seam —
+/// the compiler rejects the mix-up rather than a KAT catching it later.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct BlockHeight(pub u64);
+
+redb_delegated_key!(BlockHeight, u64, "shekyl_curve_tree::BlockHeight");
+
+/// Global output index (the daemon's `next_output_seq` counter), assigned
+/// to every `vout` in C++ drain order. Typed for the same swap-rejection
+/// reason as [`BlockHeight`]; keys the pending-candidates table.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Gindex(pub u64);
+
+redb_delegated_key!(Gindex, u64, "shekyl_curve_tree::Gindex");
+
 /// Dense tree position in drain order (`(maturity, gindex)` sort).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct TreePosition(pub u64);
+
+redb_delegated_key!(TreePosition, u64, "shekyl_curve_tree::TreePosition");
 
 /// A drained tree leaf: its global output index, its maturity height, the
 /// 128-byte curve-tree leaf (`{O.x, I.x, C.x, h_pqc}`), and the public

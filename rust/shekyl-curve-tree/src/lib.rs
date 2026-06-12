@@ -63,6 +63,6 @@ pub use store::{
     mixed_composition_root, FrozenSegmentRecord, LeafStore, MixedRootError, StoreError,
 };
 pub use types::{
-    AssembledPath, ChunkLeaf, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
-    TreePosition,
+    AssembledPath, BlockHeight, ChunkLeaf, Gindex, LeafEntry, OutputIdentity, ReferenceBlock,
+    TargetKind, TreeContext, TreePosition,
 };

@@ -14,21 +14,44 @@ use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
-use crate::types::{LeafEntry, TargetKind, TreePosition};
+use crate::types::{BlockHeight, LeafEntry, TargetKind, TreePosition};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
-const LEAVES_TABLE: TableDefinition<u64, &[u8; 128]> = TableDefinition::new("leaves");
-const LEAF_META_TABLE: TableDefinition<u64, &[u8; 192]> = TableDefinition::new("leaf_meta");
-const FROZEN_SEGMENTS_TABLE: TableDefinition<u32, &[u8; 56]> =
+const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
+const LEAF_META_TABLE: TableDefinition<TreePosition, &[u8; 192]> =
+    TableDefinition::new("leaf_meta");
+const FROZEN_SEGMENTS_TABLE: TableDefinition<SegmentId, &[u8; 56]> =
     TableDefinition::new("frozen_segments");
-const OWNED_IDENTITIES_TABLE: TableDefinition<u64, &[u8; 128]> =
+const OWNED_IDENTITIES_TABLE: TableDefinition<TreePosition, &[u8; 128]> =
     TableDefinition::new("owned_identities");
-const PINNED_SEGMENTS_TABLE: TableDefinition<u32, u32> = TableDefinition::new("pinned_segments");
+const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
+    TableDefinition::new("pinned_segments");
+// `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
+// values convert to `BlockHeight`/counts at the API boundary. This is the
+// one legitimate raw-`u64` value site in the store.
 const META_TABLE: TableDefinition<&str, u64> = TableDefinition::new("meta");
 
 const META_LEAF_COUNT: &str = "leaf_count";
 const META_SYNC_TIP: &str = "sync_tip_height";
 const META_NEXT_FREEZE_SEG: &str = "next_freeze_seg";
+const META_SCHEMA_VERSION: &str = "schema_version";
+
+/// In-band layout version this build reads and writes.
+///
+/// redb's `TypeName` check catches key/value *type* drift (the typed-key
+/// retrofit trips it for CT-1/CT-2 stores automatically), but codec layout
+/// changes inside a same-width value — e.g. a field landing in a
+/// previously-zeroed free range of `&[u8; 192]` — are invisible to it.
+/// This cell is the loud guard for that class. CT-1/CT-2 stores are
+/// implicitly version 1 (cell absent); the CT-3a schema (pending table +
+/// `creation_height` in `leaf_meta`) is version 2. Pre-genesis disposition
+/// for a mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc`
+/// — no in-Shekyl migration code).
+const SCHEMA_VERSION: u64 = 2;
+
+/// Version reported for a store whose `schema_version` cell is absent —
+/// the implicit CT-1/CT-2 layout.
+const IMPLICIT_SCHEMA_VERSION: u64 = 1;
 
 /// Peak memory bound when truncating large leaf ranges during reorg.
 const TRUNCATE_DELETE_BATCH: usize = 256;
@@ -37,9 +60,9 @@ const TRUNCATE_DELETE_BATCH: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrozenSegmentRecord {
     pub r_k: [u8; 32],
-    pub end_tree_pos: u64,
-    pub end_block_height: u64,
-    pub frozen_at_height: u64,
+    pub end_tree_pos: TreePosition,
+    pub end_block_height: BlockHeight,
+    pub frozen_at_height: BlockHeight,
 }
 
 /// Persistent curve-tree leaf store (redb).
@@ -155,9 +178,22 @@ impl From<redb::DatabaseError> for StoreError {
 
 impl LeafStore {
     /// Open (or create) a persistent store at `path`.
+    ///
+    /// Stamp-on-create-only contract: a newly created database file is
+    /// stamped with the current [`SCHEMA_VERSION`]; an **existing** file
+    /// has its version cell read-and-checked **before any write
+    /// whatsoever** — reaching the open-or-create [`Self::init_tables`]
+    /// path first would stamp a stale store to the current version in
+    /// passing and the mismatch could never fire. On
+    /// [`StoreError::SchemaVersionMismatch`] the store is unmodified
+    /// (error-without-mutation at the open boundary).
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let existed = path.as_ref().exists();
         let db = Database::create(path).map_err(StoreError::from)?;
         let store = Self { db };
+        if existed {
+            store.check_schema_version()?;
+        }
         store.init_tables()?;
         Ok(store)
     }
@@ -170,6 +206,29 @@ impl LeafStore {
         let store = Self { db };
         store.init_tables()?;
         Ok(store)
+    }
+
+    /// Read-and-check the schema version of an existing store, in a read
+    /// transaction (no write side effects). A store without the version
+    /// cell — or without a meta table at all — is the implicit version-1
+    /// (CT-1/CT-2) layout.
+    fn check_schema_version(&self) -> Result<(), StoreError> {
+        let txn = self.db.begin_read()?;
+        let found = match txn.open_table(META_TABLE) {
+            Ok(meta) => meta
+                .get(META_SCHEMA_VERSION)?
+                .map(|v| v.value())
+                .unwrap_or(IMPLICIT_SCHEMA_VERSION),
+            Err(redb::TableError::TableDoesNotExist(_)) => IMPLICIT_SCHEMA_VERSION,
+            Err(e) => return Err(e.into()),
+        };
+        if found != SCHEMA_VERSION {
+            return Err(StoreError::SchemaVersionMismatch {
+                found,
+                expected: SCHEMA_VERSION,
+            });
+        }
+        Ok(())
     }
 
     fn init_tables(&self) -> Result<(), StoreError> {
@@ -190,6 +249,11 @@ impl LeafStore {
             if meta.get(META_NEXT_FREEZE_SEG)?.is_none() {
                 meta.insert(META_NEXT_FREEZE_SEG, &0u64)?;
             }
+            // Safe to stamp unconditionally: `open` checks an existing
+            // file's version before this runs, so the only values that
+            // can reach this insert are "absent" (fresh create / `clear`)
+            // or the current version (idempotent re-stamp).
+            meta.insert(META_SCHEMA_VERSION, &SCHEMA_VERSION)?;
         }
         txn.commit()?;
         Ok(())
@@ -216,10 +280,12 @@ impl LeafStore {
     }
 
     /// Synced chain tip height last written by the client.
-    pub fn sync_tip_height(&self) -> Result<u64, StoreError> {
+    pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        Ok(meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0))
+        Ok(BlockHeight(
+            meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0),
+        ))
     }
 
     /// Append newly drained leaves and advance sync tip in one ACID write txn.
@@ -232,7 +298,11 @@ impl LeafStore {
     /// When `entries` is empty, still updates `META_SYNC_TIP` and re-evaluates
     /// segment-freeze eligibility so height-lagged freezes advance on blocks
     /// where no new leaves drain.
-    pub fn append_drained(&self, entries: &[LeafEntry], tip_height: u64) -> Result<(), StoreError> {
+    pub fn append_drained(
+        &self,
+        entries: &[LeafEntry],
+        tip_height: BlockHeight,
+    ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
             let meta = txn.open_table(META_TABLE)?;
@@ -246,7 +316,7 @@ impl LeafStore {
                 if !leaf_bytes_are_canonical(&entry.leaf) {
                     return Err(StoreError::InvalidLeafBytes { batch_index });
                 }
-                let pos = leaf_count;
+                let pos = TreePosition(leaf_count);
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
                 leaf_count += 1;
@@ -255,7 +325,7 @@ impl LeafStore {
         let effective_tip = {
             let meta = txn.open_table(META_TABLE)?;
             let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
-            tip_height.max(sync_tip)
+            tip_height.0.max(sync_tip)
         };
         {
             let mut meta = txn.open_table(META_TABLE)?;
@@ -287,7 +357,7 @@ impl LeafStore {
         };
         let mut seg_k = next_freeze_seg;
         while seg_k < complete_segments {
-            let segment_id = u32::try_from(seg_k).expect("segment id fits u32");
+            let segment_id = SegmentId(u32::try_from(seg_k).expect("segment id fits u32"));
             {
                 let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
                 if frozen.get(segment_id)?.is_some() {
@@ -306,9 +376,9 @@ impl LeafStore {
             let r_k = recompute_segment_r_k(&seg_leaves).map_err(store_mixed_root_err)?;
             let record = FrozenSegmentRecord {
                 r_k,
-                end_tree_pos,
-                end_block_height,
-                frozen_at_height: tip_height,
+                end_tree_pos: TreePosition(end_tree_pos),
+                end_block_height: BlockHeight(end_block_height),
+                frozen_at_height: BlockHeight(tip_height),
             };
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             frozen.insert(segment_id, &encode_frozen_segment(&record))?;
@@ -319,7 +389,7 @@ impl LeafStore {
     }
 
     /// Freeze any newly eligible complete segments at `tip_height`.
-    pub fn maybe_freeze_segments(&self, tip_height: u64) -> Result<(), StoreError> {
+    pub fn maybe_freeze_segments(&self, tip_height: BlockHeight) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         // Leaf count is read inside the write txn so the freeze scan and its
         // commit see one consistent snapshot (no check/use gap).
@@ -328,7 +398,7 @@ impl LeafStore {
             let v = meta.get(META_LEAF_COUNT)?;
             v.map(|g| g.value()).unwrap_or(0)
         };
-        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height, leaf_count)?;
+        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height.0, leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
@@ -361,7 +431,8 @@ impl LeafStore {
         {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             for k in 0..complete {
-                if let Some(v) = frozen.get(u32::try_from(k).expect("segment key fits u32"))? {
+                let id = SegmentId(u32::try_from(k).expect("segment key fits u32"));
+                if let Some(v) = frozen.get(id)? {
                     frozen_r.push(decode_frozen_segment(v.value()).r_k);
                 } else {
                     let start = k * e;
@@ -414,7 +485,7 @@ impl LeafStore {
                 let leaves = txn.open_table(LEAVES_TABLE)?;
                 let seg_start = ((pos - 1) / e) * e;
                 for p in seg_start..pos {
-                    if leaves.get(p)?.is_none() {
+                    if leaves.get(TreePosition(p))?.is_none() {
                         return Err(StoreError::TruncatedIntoPrunedRange { pos: p });
                     }
                 }
@@ -423,44 +494,48 @@ impl LeafStore {
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            delete_u64_range_batched(&mut leaves, &mut leaf_meta, pos)?;
+            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePosition(pos))?;
         }
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
             if pos == 0 {
-                delete_u32_keys_batched(&mut frozen, 0)?;
+                delete_seg_keys_batched(&mut frozen, SegmentId(0))?;
             } else {
                 let max_segment = (pos - 1) / e;
-                delete_u32_keys_batched(
+                delete_seg_keys_batched(
                     &mut frozen,
-                    u32::try_from(max_segment + 1).expect("segment range fits u32"),
+                    SegmentId(u32::try_from(max_segment + 1).expect("segment range fits u32")),
                 )?;
                 // Drop frozen segment that partially overlaps the truncation boundary.
                 if !pos.is_multiple_of(e) {
                     let partial_id = (pos - 1) / e;
-                    frozen.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
+                    frozen.remove(SegmentId(
+                        u32::try_from(partial_id).expect("segment id fits u32"),
+                    ))?;
                 }
             }
         }
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            delete_u64_keys_batched(&mut owned, pos)?;
+            delete_pos_keys_batched(&mut owned, TreePosition(pos))?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
             let e = leaves_per_segment() as u64;
             if pos == 0 {
-                delete_u32_keys_batched(&mut pinned, 0)?;
+                delete_seg_keys_batched(&mut pinned, SegmentId(0))?;
             } else {
                 let max_segment = (pos - 1) / e;
-                delete_u32_keys_batched(
+                delete_seg_keys_batched(
                     &mut pinned,
-                    u32::try_from(max_segment + 1).expect("segment range fits u32"),
+                    SegmentId(u32::try_from(max_segment + 1).expect("segment range fits u32")),
                 )?;
                 if !pos.is_multiple_of(e) {
                     let partial_id = (pos - 1) / e;
-                    pinned.remove(u32::try_from(partial_id).expect("segment id fits u32"))?;
+                    pinned.remove(SegmentId(
+                        u32::try_from(partial_id).expect("segment id fits u32"),
+                    ))?;
                 }
             }
         }
@@ -486,7 +561,7 @@ impl LeafStore {
         let txn = self.db.begin_write()?;
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
-            pinned.insert(id.0, &1u32)?;
+            pinned.insert(id, &1u32)?;
         }
         txn.commit()?;
         Ok(())
@@ -501,17 +576,18 @@ impl LeafStore {
     /// must have pinned it first ([`Self::pin_segment`]). All leaf bytes are
     /// reconstructible by chain replay regardless.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
-        let owned: std::collections::BTreeSet<u64> = owned_positions.iter().map(|p| p.0).collect();
+        let owned: std::collections::BTreeSet<TreePosition> =
+            owned_positions.iter().copied().collect();
         let txn = self.db.begin_write()?;
         let e = leaves_per_segment() as u64;
-        let frozen_ids: Vec<u32> = {
+        let frozen_ids: Vec<SegmentId> = {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             frozen
                 .iter()?
                 .map(|r| r.map(|(k, _)| k.value()))
                 .collect::<Result<Vec<_>, _>>()?
         };
-        let pinned: std::collections::BTreeSet<u32> = {
+        let pinned: std::collections::BTreeSet<SegmentId> = {
             let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
             pinned
                 .iter()?
@@ -526,9 +602,9 @@ impl LeafStore {
                 if pinned.contains(&seg_id) {
                     continue;
                 }
-                let start = u64::from(seg_id) * e;
+                let start = u64::from(seg_id.0) * e;
                 let end = start + e;
-                for pos in start..end {
+                for pos in (start..end).map(TreePosition) {
                     let leaf_bytes = match leaves.get(pos)? {
                         Some(leaf) => *leaf.value(),
                         None => continue,
@@ -549,16 +625,16 @@ impl LeafStore {
     pub fn frozen_segment(&self, id: SegmentId) -> Result<Option<FrozenSegmentRecord>, StoreError> {
         let txn = self.db.begin_read()?;
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
-        Ok(frozen.get(id.0)?.map(|v| decode_frozen_segment(v.value())))
+        Ok(frozen.get(id)?.map(|v| decode_frozen_segment(v.value())))
     }
 }
 
-fn delete_u64_keys_batched<V: redb::Value>(
-    table: &mut redb::Table<'_, u64, V>,
-    start: u64,
+fn delete_pos_keys_batched<V: redb::Value>(
+    table: &mut redb::Table<'_, TreePosition, V>,
+    start: TreePosition,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<u64> = table
+        let batch: Vec<TreePosition> = table
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -573,13 +649,13 @@ fn delete_u64_keys_batched<V: redb::Value>(
     Ok(())
 }
 
-fn delete_u64_range_batched(
-    leaves: &mut redb::Table<'_, u64, &[u8; 128]>,
-    leaf_meta: &mut redb::Table<'_, u64, &[u8; 192]>,
-    start: u64,
+fn delete_pos_range_batched(
+    leaves: &mut redb::Table<'_, TreePosition, &[u8; 128]>,
+    leaf_meta: &mut redb::Table<'_, TreePosition, &[u8; 192]>,
+    start: TreePosition,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<u64> = leaves
+        let batch: Vec<TreePosition> = leaves
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -595,12 +671,12 @@ fn delete_u64_range_batched(
     Ok(())
 }
 
-fn delete_u32_keys_batched<V: redb::Value>(
-    table: &mut redb::Table<'_, u32, V>,
-    start: u32,
+fn delete_seg_keys_batched<V: redb::Value>(
+    table: &mut redb::Table<'_, SegmentId, V>,
+    start: SegmentId,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<u32> = table
+        let batch: Vec<SegmentId> = table
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -624,7 +700,7 @@ fn recompute_next_freeze_seg(
     let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
     let mut next = 0u64;
     for seg_k in 0..complete_segments {
-        let segment_id = u32::try_from(seg_k).expect("segment id fits u32");
+        let segment_id = SegmentId(u32::try_from(seg_k).expect("segment id fits u32"));
         if frozen.get(segment_id)?.is_some() {
             next = seg_k + 1;
         } else {
@@ -649,7 +725,7 @@ fn leaf_bytes_are_canonical(leaf: &[u8; 128]) -> bool {
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
     let meta = txn.open_table(LEAF_META_TABLE)?;
     let m = meta
-        .get(tree_pos)?
+        .get(TreePosition(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
     Ok(stored.maturity.saturating_add(1))
@@ -671,7 +747,7 @@ fn read_leaf_bytes_range(
     let leaves = txn.open_table(LEAVES_TABLE)?;
     let cap = usize::try_from(end - start).expect("leaf range fits usize");
     let mut out = Vec::with_capacity(cap);
-    for pos in start..end {
+    for pos in (start..end).map(TreePosition) {
         let leaf = leaves
             .get(pos)?
             .ok_or(StoreError::CorruptMeta("missing leaf"))?;
@@ -688,7 +764,7 @@ fn read_leaf_bytes_range_read(
     let leaves = txn.open_table(LEAVES_TABLE)?;
     let cap = usize::try_from(end - start).expect("leaf range fits usize");
     let mut out = Vec::with_capacity(cap);
-    for pos in start..end {
+    for pos in (start..end).map(TreePosition) {
         let leaf = leaves
             .get(pos)?
             .ok_or(StoreError::CorruptMeta("missing leaf"))?;
@@ -700,9 +776,9 @@ fn read_leaf_bytes_range_read(
 fn encode_frozen_segment(rec: &FrozenSegmentRecord) -> [u8; 56] {
     let mut buf = [0u8; 56];
     buf[..32].copy_from_slice(&rec.r_k);
-    buf[32..40].copy_from_slice(&rec.end_tree_pos.to_be_bytes());
-    buf[40..48].copy_from_slice(&rec.end_block_height.to_be_bytes());
-    buf[48..56].copy_from_slice(&rec.frozen_at_height.to_be_bytes());
+    buf[32..40].copy_from_slice(&rec.end_tree_pos.0.to_be_bytes());
+    buf[40..48].copy_from_slice(&rec.end_block_height.0.to_be_bytes());
+    buf[48..56].copy_from_slice(&rec.frozen_at_height.0.to_be_bytes());
     buf
 }
 
@@ -711,9 +787,9 @@ fn decode_frozen_segment(buf: &[u8; 56]) -> FrozenSegmentRecord {
     r_k.copy_from_slice(&buf[..32]);
     FrozenSegmentRecord {
         r_k,
-        end_tree_pos: u64::from_be_bytes(buf[32..40].try_into().expect("8 bytes")),
-        end_block_height: u64::from_be_bytes(buf[40..48].try_into().expect("8 bytes")),
-        frozen_at_height: u64::from_be_bytes(buf[48..56].try_into().expect("8 bytes")),
+        end_tree_pos: TreePosition(u64::from_be_bytes(buf[32..40].try_into().expect("8 bytes"))),
+        end_block_height: BlockHeight(u64::from_be_bytes(buf[40..48].try_into().expect("8 bytes"))),
+        frozen_at_height: BlockHeight(u64::from_be_bytes(buf[48..56].try_into().expect("8 bytes"))),
     }
 }
 
@@ -825,7 +901,7 @@ mod tests {
         let mut bad = sample_entry(1, 0);
         bad.leaf = [0xff; 128];
         let err = store
-            .append_drained(&[sample_entry(0, 0), bad], 1)
+            .append_drained(&[sample_entry(0, 0), bad], BlockHeight(1))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -836,7 +912,7 @@ mod tests {
             0,
             "aborted batch must not partially land"
         );
-        assert_eq!(store.sync_tip_height().unwrap(), 0);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
     }
 
     #[test]
@@ -851,7 +927,7 @@ mod tests {
     fn append_and_truncate_round_trip() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0), sample_entry(1, 0)], 1)
+            .append_drained(&[sample_entry(0, 0), sample_entry(1, 0)], BlockHeight(1))
             .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2);
         store.truncate_from_tree_position(TreePosition(1)).unwrap();
@@ -872,7 +948,7 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, 10_000).unwrap();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
@@ -886,11 +962,11 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, 100).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 100);
+        store.append_drained(&entries, BlockHeight(100)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
-        store.append_drained(&[], 10_000).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 10_000);
+        store.append_drained(&[], BlockHeight(10_000)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -901,15 +977,15 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, 10_000).unwrap();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         store.pin_segment(SegmentId(0)).unwrap();
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        store.append_drained(&entries, 20_000).unwrap();
+        store.append_drained(&entries, BlockHeight(20_000)).unwrap();
         store.prune_frozen(&[]).unwrap();
         let txn = store.db.begin_read().unwrap();
         let leaves = txn.open_table(LEAVES_TABLE).unwrap();
         assert!(
-            leaves.get(0).unwrap().is_none(),
+            leaves.get(TreePosition(0)).unwrap().is_none(),
             "stale pin must not block prune"
         );
     }
@@ -917,10 +993,12 @@ mod tests {
     #[test]
     fn truncate_invalidates_sync_tip() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[sample_entry(0, 0)], 500).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 500);
+        store
+            .append_drained(&[sample_entry(0, 0)], BlockHeight(500))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(500));
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 0);
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
     }
 
     #[test]
@@ -930,7 +1008,7 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, 10_000).unwrap();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         store.prune_frozen(&[]).unwrap();
         let pos_in_seg = e / 2;
         let err = store
@@ -948,16 +1026,20 @@ mod tests {
     #[test]
     fn append_drained_sync_tip_is_monotonic() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[sample_entry(0, 0)], 100).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 100);
-        store.append_drained(&[], 50).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), 100);
+        store
+            .append_drained(&[sample_entry(0, 0)], BlockHeight(100))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        store.append_drained(&[], BlockHeight(50)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
     }
 
     #[test]
     fn root_at_count_rejects_request_beyond_stored() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[sample_entry(0, 0)], 1).unwrap();
+        store
+            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .unwrap();
         let err = store.root_at_count(2).unwrap_err();
         assert!(matches!(
             err,
@@ -971,7 +1053,9 @@ mod tests {
     #[test]
     fn truncate_beyond_leaf_count_rejects() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[sample_entry(0, 0)], 1).unwrap();
+        store
+            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .unwrap();
         let err = store
             .truncate_from_tree_position(TreePosition(2))
             .unwrap_err();
@@ -983,5 +1067,179 @@ mod tests {
             }
         ));
         assert_eq!(store.leaf_count().unwrap(), 1);
+    }
+
+    /// Delegation-parity KAT: every typed key's byte layout, fixed width,
+    /// round-trip, and key ordering are byte-identical to the inner
+    /// primitive's redb impl. This is the property the
+    /// `redb_delegated_key!` macro exists to guarantee — range scans and
+    /// batched range-deletes behave exactly as the pre-retrofit raw-`u64`
+    /// tables did.
+    #[test]
+    fn typed_key_delegation_parity() {
+        use crate::types::Gindex;
+        use redb::{Key as _, Value as _};
+
+        fn check_u64<T>(wrap: fn(u64) -> T)
+        where
+            T: redb::Key + for<'a> redb::Value<SelfType<'a> = T> + PartialEq + core::fmt::Debug,
+        {
+            let samples = [0u64, 1, 2, 60, 61, u64::MAX - 1, u64::MAX];
+            assert_eq!(T::fixed_width(), u64::fixed_width());
+            for &a in &samples {
+                let wrapped_a = wrap(a);
+                let bytes = T::as_bytes(&wrapped_a);
+                assert_eq!(bytes.as_ref(), u64::as_bytes(&a).as_ref());
+                assert_eq!(T::from_bytes(bytes.as_ref()), wrap(a));
+                for &b in &samples {
+                    let wrapped_b = wrap(b);
+                    let rhs = T::as_bytes(&wrapped_b);
+                    assert_eq!(
+                        T::compare(bytes.as_ref(), rhs.as_ref()),
+                        u64::compare(u64::as_bytes(&a).as_ref(), u64::as_bytes(&b).as_ref()),
+                    );
+                }
+            }
+        }
+
+        check_u64::<TreePosition>(TreePosition);
+        check_u64::<BlockHeight>(BlockHeight);
+        check_u64::<Gindex>(Gindex);
+
+        // SegmentId wraps u32; same parity properties against the u32 impl.
+        let samples = [0u32, 1, 2, u32::MAX - 1, u32::MAX];
+        assert_eq!(
+            <SegmentId as redb::Value>::fixed_width(),
+            u32::fixed_width()
+        );
+        for &a in &samples {
+            let bytes = <SegmentId as redb::Value>::as_bytes(&SegmentId(a));
+            assert_eq!(bytes.as_ref(), u32::as_bytes(&a).as_ref());
+            assert_eq!(
+                <SegmentId as redb::Value>::from_bytes(bytes.as_ref()),
+                SegmentId(a)
+            );
+            for &b in &samples {
+                let rhs = <SegmentId as redb::Value>::as_bytes(&SegmentId(b));
+                assert_eq!(
+                    <SegmentId as redb::Key>::compare(bytes.as_ref(), rhs.as_ref()),
+                    u32::compare(u32::as_bytes(&a).as_ref(), u32::as_bytes(&b).as_ref()),
+                );
+            }
+        }
+    }
+
+    /// The typed-key point: redb refuses to open a table whose stored key
+    /// type disagrees, so a gindex can never index the position-keyed
+    /// leaves table (and vice versa) — the mix-up is a loud open error,
+    /// not silent cross-keyed reads.
+    #[test]
+    fn typed_key_table_type_guard_fires() {
+        use crate::types::Gindex;
+
+        const WRONG_KEY_LEAVES: TableDefinition<Gindex, &[u8; 128]> =
+            TableDefinition::new("leaves");
+
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .unwrap();
+        let txn = store.db.begin_read().unwrap();
+        let err = txn.open_table(WRONG_KEY_LEAVES).unwrap_err();
+        assert!(
+            matches!(err, redb::TableError::TableTypeMismatch { .. }),
+            "expected TableTypeMismatch, got: {err:?}"
+        );
+    }
+
+    /// Unique on-disk path for file-backed open tests (stdlib only; no
+    /// tempfile dependency). The caller removes the file.
+    fn temp_store_path(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "shekyl-curve-tree-{tag}-{}-{n}.redb",
+            std::process::id()
+        ))
+    }
+
+    /// Schema-version guard (stamp-on-create-only contract):
+    ///
+    /// - a freshly created store is stamped and reopens clean;
+    /// - a version-1-shaped store fails open with
+    ///   `SchemaVersionMismatch { found: 1, expected: 2 }`;
+    /// - the failed open mutates nothing — a second open fails
+    ///   identically (no stamp-in-passing), and after re-stamping the
+    ///   data is intact (error-without-mutation at the open boundary).
+    ///
+    /// Scoped exception to the real-path rule: the v1 layout cannot be
+    /// produced through the current init path (it stamps v2 by design,
+    /// and the code that produced v1 stores no longer exists in-tree).
+    /// The fixture is fabricated by deleting the `schema_version` cell in
+    /// a test-only transaction — a plain `META_TABLE` u64 cell, not a
+    /// codec side channel; the test subject is the open check itself.
+    #[test]
+    fn schema_version_guard_rejects_v1_without_mutation() {
+        let path = temp_store_path("schema-guard");
+
+        // Fresh create: stamped, reopens clean, data persists.
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .unwrap();
+        }
+        {
+            let store = LeafStore::open(&path).unwrap();
+            assert_eq!(store.leaf_count().unwrap(), 1);
+        }
+
+        // Fabricate the implicit-v1 shape (see doc comment for the
+        // scoped exception rationale).
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.remove(META_SCHEMA_VERSION).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // The mismatch fires, twice: the first failed open must not have
+        // stamped the store to the current version in passing.
+        for _ in 0..2 {
+            let err = LeafStore::open(&path).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    StoreError::SchemaVersionMismatch {
+                        found: IMPLICIT_SCHEMA_VERSION,
+                        expected: SCHEMA_VERSION,
+                    }
+                ),
+                "expected SchemaVersionMismatch(found=1, expected=2), got: {err:?}"
+            );
+        }
+
+        // Error-without-mutation: re-stamp (test-only txn) and the data
+        // written before the fabricated downgrade is untouched.
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_SCHEMA_VERSION, &SCHEMA_VERSION).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        {
+            let store = LeafStore::open(&path).unwrap();
+            assert_eq!(store.leaf_count().unwrap(), 1);
+            assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(1));
+        }
+
+        std::fs::remove_file(&path).unwrap();
     }
 }

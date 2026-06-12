@@ -25,8 +25,10 @@ pub const SEGMENT_FREEZE_REORG_MARGIN_BLOCKS: u64 = 720;
 pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 
 /// Dense segment identifier (`SegmentId` 0 covers tree positions `[0, E)`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SegmentId(pub u32);
+
+crate::types::redb_delegated_key!(SegmentId, u32, "shekyl_curve_tree::SegmentId");
 
 /// Outputs covered by one node at sub-root layer `j` (= segment size `E`).
 #[must_use]
