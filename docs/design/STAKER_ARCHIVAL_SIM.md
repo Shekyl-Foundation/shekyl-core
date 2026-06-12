@@ -72,7 +72,8 @@ committed_bond`) vs. a per-actor reservation ρ, over a pool of *potential* arch
 (trickle-entry + hysteretic realized-yield-exit; fully gated, every pre-L11 scenario
 byte-identical). The lean equilibrium then **emerges with three model-backed properties**:
 (1) it is an **attractor** — cold-start-from-empty and trim-from-oversubscribed converge to
-the same ~79-archiver, deep-covered point; (2) reservation is a **smooth monotone lever**
+the same ~79-archiver, deep-covered point (post-Curve-repair substrate: ~113 — the
+attractor property is unchanged, the count moved; §*Layer-2 results* Finding 0); (2) reservation is a **smooth monotone lever**
 with a coverage knee (interior-feasible at ρ≈0.02); (3) **budget transfers to coverage
 *through participation*** — `budget → APR → marginal entry → archiver count → coverage`, no
 asserted population in the loop. Participation churn at the lean margin is **benign for
@@ -919,6 +920,21 @@ chain_epochs)` — in `ARCHIVAL_REWARD_ARITHMETIC.md` §Shard age;
 `archival_reward_age_weight_milli = 2000` maps the sealed target `g* ≈ 2` with
 calibration band `[1500, 2500]`; the epoch-close KAT vector re-derived by hand
 (`Σwork` 3500 → 2590).
+
+**Instrument note — gate re-anchor implemented (2026-06-11, same day).** The
+sim's `spread`/`sprdW` verdicts now gate on the direct whale gauges
+(`max_actor_share < 0.20`; oldest-band whale share `wB4 < 0.20`; the per-band
+distinct-actor-seating term rides on the coverage claims since `R` counts
+distinct actors), with `gini_actor`/`giniW` printed as trend gauges only.
+Verdict columns in tables recorded *before* this date were produced under the
+old gini-gated `sprdW`; the raw gauge columns are unchanged and re-judgeable.
+Re-run under the new gate: every lean/whale band row passes `sprdW` across
+`g ∈ [1.5, 4.0]` (mxSW 0.013–0.018, wB4 = 0), and the bare-lean coloc fails at
+`g ∈ {2.0, 2.5, 3.0, 3.5}` are now attributed to `churn_stable`/coverage —
+matching the Finding-3 oscillation reading, not spread. (The coloc `g = 4.0`
+row prints ALL-pass under the new gate; its `churn ≈ 0.01` is the frozen
+lock-in artifact, and the band's `g ≥ 3.0` exclusion stands on the `g = 3.0`
+coverage fail and `g = 3.5` oscillation.)
 
 **Reversion clause (rule 21).** Reopen the Layer-2 seal iff (a) any direct whale
 gauge (`mxSW`, `wB4`, per-band distinct-actor count) trends past half its bar in
@@ -2034,7 +2050,10 @@ floor and deep coverage collapsed to `deep_und=1.0` — an interior-but-infeasib
 equilibrium. Widening the pool to 240 (≈150 actors of headroom above the floor) turns the
 cliff into a **gradient**: the servo settles at a breakeven population that, for a band of
 reservations, lands *above* the floor. The interior-feasible operating point is ρ≈0.02
-(bonded-archiver count ≈79, deep covered).
+(bonded-archiver count ≈79, deep covered). *(Substrate note, 2026-06-11: the banded PL
+Curve repair thickened the attractor to ≈113 at the same ρ — counts in this section are
+the pre-repair record; the attractor/lever/transfer properties re-confirmed at the new
+equilibrium. §Layer-2 results, Finding 0.)*
 
 **Finding 1 — the operating point is an attractor.** Booting from near-empty
 (`l11_fill`, `init_active_frac=0`, bootstrap-like) and from over-subscribed

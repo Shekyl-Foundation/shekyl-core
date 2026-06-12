@@ -4,6 +4,24 @@
 
 ### Added
 
+- **sim: spread gate re-anchored on direct whale gauges — Layer-2 close-out
+  (2026-06-11).** Implements the gate the Layer-2 band run sealed:
+  `shekyl-staking-sim`'s `spread`/`sprdW` verdicts now gate on
+  `max_actor_share < 0.20` and oldest-band whale share `wB4 < 0.20`
+  (the per-band distinct-actor-seating term rides on the coverage claims,
+  since `R` counts distinct actors); `gini_actor`/`giniW` are printed as
+  reported trend gauges only. Whale-capture bar unchanged at 0.20 — this is
+  a metric re-derivation against the threat model, not a threshold move.
+  Verified by re-run: all lean/whale band rows pass `sprdW` across
+  `g ∈ [1.5, 4.0]`, and bare-lean coloc fails re-attribute to coverage
+  oscillation (`churn_stable`), matching the Finding-3 reading. Verdict
+  columns recorded before this date used the gini-gated definition; raw
+  gauge columns are unchanged (supersession notes in
+  `STAKER_ARCHIVAL_SIM.md` §Layer-2 results and `REWARD_EMISSION_LEG.md`).
+  Stale pre-Curve-repair attractor counts (~79 archivers) annotated to the
+  post-repair ~113 equilibrium in `ECONOMY_EXPLAINED.md` and the L11
+  section (Finding-0 fallout; attractor properties unchanged).
+
 - **archival: `g(age)` normalization pinned — relative-depth age; constant
   mapped to the sealed band (2026-06-11).** Closes the Layer-2 Finding-5
   FOLLOWUPS item the day it opened (pre-genesis discount;

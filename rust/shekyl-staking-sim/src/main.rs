@@ -49,16 +49,21 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!();
     eprintln!("Sub-claims (stated thresholds): covered = frac_under_target<0.05 & min_R>=1;");
     eprintln!(
-        "  spread = gini_actor<0.6 & max_actor_share<0.20 (ACTOR-level, final-epoch SNAPSHOT);"
+        "  spread = max_actor_share<0.20 & wB4<0.20 (DIRECT whale gauges, final-epoch SNAPSHOT;"
     );
     eprintln!(
-        "  sprdW = same thresholds on WINDOWED read (mean gini, peak max_share over churn_window);"
+        "    re-anchored 2026-06-11 Layer-2 band close — gini is a reported trend gauge only);"
+    );
+    eprintln!(
+        "  sprdW = peak max_actor_share over churn_window < 0.20 & wB4<0.20 (WINDOWED read);"
     );
     eprintln!("  ALL uses sprdW not sprd (L9 lesson: steady-state read is the discipline gate).");
     eprintln!("  deep_history = deep_frac_under_target<0.10;");
     eprintln!("  churn_stable = max(oUmx, serving_oUmx)<0.05 (coverage oscillation, NOT abandonment churn).");
-    eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
-    eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
+    eprintln!("Note: gini/giniW (actor-level) and gini_psd (pseudonym-level, on-chain-observer");
+    eprintln!("  read) are reported, not pass criteria. The Layer-2 band run decomposed giniW:");
+    eprintln!("  it tracks population leanness (bondA), not whale capture. A splitting whale");
+    eprintln!("  looks egalitarian in gini_psd by design.");
     eprintln!();
     eprintln!("Durability columns: dS/dN = CO-LOCATED coverage (L8 min-form) =");
     eprintln!(

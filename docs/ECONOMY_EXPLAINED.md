@@ -161,7 +161,12 @@ And sweeping the opportunity cost at fixed budget:
 | 3% | 65 | knee — gaps open |
 | 5% | 50 | broken |
 
-The equilibrium at ~79 archivers is an **attractor**: boot the system from
+(The counts in these tables are from the L11 simulation substrate; a later
+reward-curve refinement thickened the same equilibrium to ~113 archivers at
+the same budget and ρ. The numbers shift with the substrate — the transfer
+function and the attractor behavior are the durable findings.)
+
+The equilibrium (~79 archivers then, ~113 now) is an **attractor**: boot the system from
 zero participants or from oversubscription, and it converges to the same
 point, because entry continues exactly until the marginal archiver's pay
 equals their reservation yield. If rewards run rich, new archivers join and
@@ -197,7 +202,7 @@ bandwidth*, compensated by the pool, not frozen wealth.
 - Fees total 10 coins; burn rate is 37.4% → **2.80 coins destroyed**, **0.94
   to the staker pool**, **6.26 to the miner**.
 - Miner's block income: ~498 coins. Staker pool inflow: ~25 coins, divided
-  among ~79 archivers by verified epoch work — which over an epoch is what
+  among ~110 archivers by verified epoch work — which over an epoch is what
   holds the population at its breakeven attractor.
 - Net inflation that year: 4.7% and falling; locked supply: ~1,300 coins out
   of 3.2 billion circulating.

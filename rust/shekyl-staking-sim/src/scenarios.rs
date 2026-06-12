@@ -279,11 +279,17 @@ pub struct SimConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct SubClaims {
     pub covered: bool,
-    /// Snapshot spread (final epoch): `gini_actor < 0.6 && max_actor_share < 0.20`.
+    /// Snapshot spread (final epoch), **re-anchored on direct whale gauges**
+    /// (Layer-2 band close, 2026-06-11): `max_actor_share < 0.20` and, when a whale
+    /// is present, oldest-band whale share (`wB4`) `< 0.20`. `gini_actor` is a
+    /// reported trend gauge, not a pass/fail input — the band run showed its
+    /// movement tracks population leanness (`bondA`), not capture (decomposition
+    /// in `STAKER_ARCHIVAL_SIM.md` §Layer-2 results). The per-band
+    /// distinct-actor-seating term of the re-anchored gate is carried by the
+    /// coverage claims (`R` counts distinct actors).
     pub spread: bool,
-    /// Windowed spread (steady-state read): mean `gini_actor` and max `max_actor_share`
-    /// over the churn window — the L9 lesson applied to spread (snapshot can graze/fail
-    /// while the windowed mean passes, or vice versa).
+    /// Windowed spread (steady-state read, L9 lesson): peak `max_actor_share` over
+    /// the churn window against the same 0.20 bar, plus the snapshot `wB4` term.
     pub spread_windowed: bool,
     pub deep_history: bool,
     pub churn_stable: bool,
@@ -1109,9 +1115,20 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 
     // Verdict thresholds (stated, not hidden). These are review-tunable judgment
     // calls; the raw metrics are reported alongside so a reviewer can re-judge.
+    //
+    // Spread gates on the DIRECT whale gauges (re-anchored at the Layer-2 band
+    // close, 2026-06-11): `max_actor_share` (the whale is an actor, so this bounds
+    // whale share) and oldest-band whale share `wB4`. `gini_actor` is reported as a
+    // trend gauge only — the band run's decomposition attributed its movement to
+    // population leanness, not capture. Whale-capture bar unchanged at 0.20.
     let covered = last_metrics.frac_under_target < 0.05 && last_metrics.min_r >= 1;
-    let spread = last_metrics.gini_actor < 0.6 && last_metrics.max_actor_share < 0.20;
-    let spread_windowed = gini_actor_window < 0.6 && max_actor_share_window < 0.20;
+    let whale_band4_share = last_metrics
+        .bands
+        .last()
+        .and_then(|b| b.whale_share)
+        .unwrap_or(0.0);
+    let spread = last_metrics.max_actor_share < 0.20 && whale_band4_share < 0.20;
+    let spread_windowed = max_actor_share_window < 0.20 && whale_band4_share < 0.20;
     let deep_history = last_metrics.deep_frac_under_target < 0.10;
     // Churn-stable sub-claim: coverage oscillation (oldest-band under-target peak over the
     // steady-state window), NOT participation abandonment (`churn`). Benign rotation when

@@ -62,6 +62,9 @@ snap-fail→win-pass (`gate4_coloc_5.50`, far above pin). At **`bond_rate* = 0.7
 rows `giniW ≈ 0.593–0.599` (snapshot grazes at **0.600**); at **1.00** both fail (`≈ 0.626`);
 thin lean `l11_bud_b50` fails both at `≈ 0.84`. **Verdict:** keystone **holds** — Layer 2 is
 **calibration, not shape reopen** — but the margin is a **hair**, not a plateau.
+*(Definition superseded 2026-06-11: the band run re-anchored `sprd`/`sprdW` on the direct
+whale gauges — `max_actor_share < 0.20`, `wB4 < 0.20` — with `gini_actor` demoted to trend;
+implemented in the sim same day. The pass counts above are the pre-re-anchor record.)*
 
 **Sim reconciliation (2026-06-07 — load-bearing for calibration reads):**
 
