@@ -142,7 +142,7 @@ old shards even when market coverage later recovers in full. Because the
 foundation archive is complete and held permanently, no scenario in the grid
 loses data — those shards become **foundation-only** until the market re-seeds
 from the foundation, and the measured cost is an availability window (in the
-worst recovering crash, up to ~9 epochs of foundation-only retrieval for the
+worst recovering crash, up to ~10 epochs of foundation-only retrieval for the
 affected shards, bounded by the foundation's seeding bandwidth). Two honest
 implications follow. First, through a crash trough the durability of
 irreplaceable history rests on **one disclosed organization**, which is why

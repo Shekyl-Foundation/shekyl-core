@@ -1140,10 +1140,11 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .unwrap_or(0.0),
         );
 
-        // swan-2 / W1: per-epoch extinction scan — a deep shard whose serving holder
-        // set empties after having been seated is a data-extinction event (sticky per
-        // slot until recycle). Counted run-wide as the frontier-noise baseline and
-        // post-shock as the shock-attributable read.
+        // swan-2 / W1: per-epoch wipe-out scan — a deep shard whose serving market
+        // holder set empties after having been seated transitions to
+        // foundation-as-sole-source (swan-4; sticky per slot until recycle). Counted
+        // run-wide as the frontier-noise baseline and post-shock as the
+        // shock-attributable read.
         let ext_ev = ext_scan.scan(&world, &serving_r, cfg, bonded_active_count(&world, &ap));
         deep_extinct_total += ext_ev.market;
         deep_extinct_floored_total += ext_ev.floored;
@@ -1154,11 +1155,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 *acc += n;
             }
         }
-        // swan-4: sole-source window tick (once per epoch, after the scan refreshed
-        // `deep_seated`). Run-wide accumulation; shock-free rows show the noise floor.
-        let (ss_open_now, ss_max_now) = ext_scan.sole_source_tick(&world, &serving_r, cfg);
-        sole_source_shard_epochs += ss_open_now;
-        sole_source_max_window = sole_source_max_window.max(ss_max_now);
 
         // L15 retrieval availability: realized `1 − (1−u)^d` per shard (d = distinct
         // failure domains among seated holders), scored over the deep set against the
@@ -1289,7 +1285,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.price_decay > 0.0 {
             tok_price = cfg.price_floor + (tok_price - cfg.price_floor) * (1.0 - cfg.price_decay);
         }
-        if cfg.endogenous {
+        // End-of-epoch serving view: refreshed after exits when endogenous (the only
+        // path that changes holdings between here and epoch end), otherwise the
+        // mid-epoch view is still current.
+        let serving_end = if cfg.endogenous {
             process_exits(
                 &mut world,
                 &last_eval,
@@ -1301,9 +1300,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 tok_price,
             );
             // swan-2 / W1: re-scan after voluntary exits. Exits land after the
-            // per-epoch scan, and next epoch's (sourceless) re-acquisition would
-            // hide the orphaning before the next scan runs — without this pass the
-            // death-spiral channel's extinctions are systematically invisible.
+            // per-epoch scan, and next epoch's re-acquisition would hide the
+            // orphaning before the next scan runs — without this pass the
+            // death-spiral channel's wipe-outs are systematically invisible.
             // Sticky flags make the double scan idempotent per deep lifetime.
             let sr = world.serving_replication();
             let ev = ext_scan.scan(&world, &sr, cfg, bonded_active_count(&world, &ap));
@@ -1316,7 +1315,19 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                     *acc += n;
                 }
             }
-        }
+            sr
+        } else {
+            serving_r
+        };
+        // swan-4: sole-source window tick — once per epoch, at end-of-epoch state so
+        // windows opened by this epoch's voluntary exits count from the epoch they
+        // open (the post-exit re-scan above has refreshed `deep_seated`; ticking
+        // before `process_exits` would defer exit-opened windows one epoch and drop
+        // any window the next epoch's re-acquisition closes immediately). Run-wide
+        // accumulation; shock-free rows show the noise floor.
+        let (ss_open_now, ss_max_now) = ext_scan.sole_source_tick(&world, &serving_end, cfg);
+        sole_source_shard_epochs += ss_open_now;
+        sole_source_max_window = sole_source_max_window.max(ss_max_now);
         series_active.push(world.active.iter().filter(|&&x| x).count());
         series_bonded_active.push(bonded_active_count(&world, &ap));
 

@@ -112,7 +112,7 @@ sustainability is unaffected by the recalibration.
   internal redundancy and the crisis serving load; (2) **foundation seeding
   capacity provisioned at the crisis multiple — ~4× steady-state flow**
   (swan-4 recommendation, not just measurement: at ~1 seeding flow per seat
-  the V-trough costs ~365 sole-source shard-epochs, worst window 9 epochs;
+  the V-trough costs ~429 sole-source shard-epochs, worst window 10 epochs;
   4× provisioning halves exposure **and cuts trough wipe-outs 40 → 10** by
   interrupting the cascade; surge seeding is the foundation's own action,
   not adversary-triggerable, so the `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`

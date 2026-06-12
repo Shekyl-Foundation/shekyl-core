@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **sim: sole-source window tick moved to end-of-epoch (PR #126 Copilot
+  round 2).** The swan-4 tick ran after the mid-epoch wipe-out scan but
+  before `process_exits` and its post-exit re-scan, so a window opened
+  by an epoch's voluntary exits started counting one epoch late and a
+  window the next epoch's re-acquisition closed immediately was never
+  counted. The tick now reads end-of-epoch serving state (after the
+  post-exit re-scan refreshes `deep_seated`). Re-measured swan-4 arms
+  confirm the predicted +1-per-exit-opened-window undercount exactly
+  (`ssSE` += run-wide `extT` on each row): reseed-3 V-trough 365 → 429
+  (worst window 9 → 10), reseed-12 170 → 204, servo-400 282 → 403, and
+  5 final-epoch windows on the servo row are now visible at the run
+  boundary (`ssOpn` 0 → 5). Banked figures updated in
+  `STAKER_ARCHIVAL_SIM.md` §L17 (table, Finding 4, ledger row),
+  `FOLLOWUPS.md`, and the public prose (~9 → ~10 epochs worst window).
+  Same round: the per-epoch scan comment's stale "data-extinction"
+  wording aligned with the swan-4 sole-source framing. Round 1 of the
+  same review (commit `2fdf33650`) aligned the `ScenarioResult` /
+  `ExtinctionScan` doc comments, added the `[0, 1]` loud-failure assert
+  on the shock exit fractions, corrected the `ArchivalLockModel` formula
+  doc, and made `locked_atomic` panic on `blocks_per_shard == 0` instead
+  of silently reporting zero locked supply.
+
 ### Added
 
 - **docs: swan-arc closure notes — seeding SLO recommendation, domain
@@ -52,11 +76,14 @@
   path); new metrics `ssSE` (sole-source shard-epochs), `ssMxW` (max
   single-shard window), `ssOpn` (windows open at end). Measured
   (`swan4_vshape_reseed3/12`, `swan4_servo400_reseed3`): at `reseed_rate
-  = 3` (~1 seeding flow per active seat) the V-trough costs **365
-  sole-source shard-epochs, worst window 9 epochs**, servo-400 282/8 —
-  all fully re-seeded by horizon end; **4× provisioning halves exposure
-  and cuts wipe-out count 40 → 10** (faster re-seat interrupts trough
-  cascades). Foundation seeding bandwidth is therefore an
+  = 3` (~1 seeding flow per active seat) the V-trough costs **429
+  sole-source shard-epochs, worst window 10 epochs**, servo-400 403/9
+  (5 final-epoch windows open at the run boundary; everything else
+  re-seeded by horizon end); **4× provisioning halves exposure
+  (429 → 204) and cuts wipe-out count 40 → 10** (faster re-seat
+  interrupts trough cascades). (Figures re-measured after the PR-126
+  Copilot fix below; the pre-fix tick undercounted each exit-opened
+  window by one epoch.) Foundation seeding bandwidth is therefore an
   **availability-SLO sizing input**, exported to gate-5 ops. L17 verdicts
   re-worded ("extinct" → "sole-source"), Findings 1/4/5 + disposition
   re-anchored on the retention guarantee ("no shock in this grid loses
@@ -82,7 +109,7 @@
   serving + re-seed duty through the servo-400 impaired window, plus
   seeding bandwidth as an availability-SLO input. Public prose aligned
   (`ECONOMY_EXPLAINED.md`, `PUBLIC_NARRATIVE_FAQ.md`): crash troughs
-  cause **bounded foundation-only availability windows (~9 epochs worst
+  cause **bounded foundation-only availability windows (~10 epochs worst
   measured), never data loss**, and through a trough durability rests on
   one disclosed organization — stated plainly, not hedged.
 

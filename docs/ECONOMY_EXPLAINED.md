@@ -184,7 +184,7 @@ that happens: the foundation's seed archivers retain a complete copy of all
 history permanently (see `PUBLIC_NARRATIVE_FAQ.md`), so those shards fall
 back to the foundation as their only source until the market re-seeds from
 it. The honest cost is availability, and the simulations sized it: during
-the worst recovering crash, some deep shards spend up to ~9 epochs
+the worst recovering crash, some deep shards spend up to ~10 epochs
 foundation-only before the market re-absorbs them — degraded retrieval for
 old data, bounded by the foundation's seeding bandwidth, not loss. The
 flip side is worth stating plainly: through a crash trough, durability of
