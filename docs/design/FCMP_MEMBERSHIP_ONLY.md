@@ -402,6 +402,10 @@ membership only.
 
 ## 9. Carries (deferred, named)
 
+The "emission vin PR" rows below are scoped and sequenced in
+[`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E1/E2/E3 map
+in its §9); the ML-DSA hard gate binds that plan's PR-E3.
+
 | Item | Where it lands | Gate / reversion |
 |---|---|---|
 | ML-DSA backing auth (quantum spend authority) | emission vin PR | **Hard merge blocker** — §7 |

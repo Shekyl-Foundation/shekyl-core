@@ -4,6 +4,21 @@
 
 ### Added
 
+- **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
+  2026-06-13).** Sub-PR decomposition (PR-E0…E5) for the `REWARD_EMISSION_LEG.md`
+  §12 emission leg, downstream of the closed consensus spec. Round-0 pre-flight
+  substrate audit recorded against actual code; ML-DSA backing-auth hard merge
+  gate bound to PR-E3; `txin_stake_claim`/`C_stake` deletion surface enumerated;
+  `07-consensus-atomic-cutovers.mdc` evaluated (exception does **not** apply,
+  standard splitting governs). Architecture is **Rust-first**: the new emission
+  consensus logic (untrusted-input parse, amount arithmetic, membership + ML-DSA
+  crypto) lives in Rust behind `shekyl_emission_vin_verify` joining the
+  `shekyl_archival_*`/`shekyl_fcmp_*` FFI family; C++ keeps only the `txin_v`
+  variant + epee/boost/JSON transport shim, pushing the FFI boundary forward for
+  the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
+  production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
+  §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
+
 - **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
   key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
   §7.2 verify API (the §12 sibling-API gap) as a sibling type to
