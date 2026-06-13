@@ -696,6 +696,14 @@ mod tests {
         }
     }
 
+    fn staked_raw(lock_blocks: u64) -> RawOutput {
+        RawOutput {
+            output_key: ED25519_BASEPOINT,
+            commitment: Some(ED25519_BASEPOINT),
+            target: TargetKind::StakedKey { lock_blocks },
+        }
+    }
+
     /// One coinbase tx carrying a per-output `0x07` hash blob of `n` × 32
     /// bytes (one well-formed hash per output, as a V3 chain always emits).
     fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
@@ -719,6 +727,29 @@ mod tests {
                     txs: &txs,
                 })
                 .unwrap();
+        }
+    }
+
+    fn ingest_outputs_at(client: &mut CurveTreeClient, height: u64, outputs: &[RawOutput]) {
+        let blob = vec![0x07u8; outputs.len() * 32];
+        let txs = coinbase_block(outputs, &blob);
+        client
+            .ingest_block(BlockLeaves {
+                height: BlockHeight(height),
+                txs: &txs,
+            })
+            .unwrap();
+    }
+
+    fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
+        for height in 0..=tip {
+            if height == 1 {
+                let outputs = [coinbase_raw(), staked_raw(150_000)];
+                ingest_outputs_at(client, height, &outputs);
+            } else {
+                let outputs = [coinbase_raw()];
+                ingest_outputs_at(client, height, &outputs);
+            }
         }
     }
 
@@ -1218,6 +1249,98 @@ mod tests {
         assert_eq!(client.ingested_tip_height, Some(BlockHeight(1)));
         assert_eq!(client.entries.len(), 2);
         assert_eq!(client.next_gindex, 2);
+    }
+
+    #[test]
+    fn from_blocks_pending_matches_explicit_replay() {
+        // CT-3c's fresh-build oracle is meaningful only because
+        // from_blocks replays the same per-block delta path.
+        let out0 = [coinbase_raw()];
+        let blob0 = [0x07u8; 32];
+        let txs0 = coinbase_block(&out0, &blob0);
+        let out1 = [coinbase_raw(), staked_raw(1_000)];
+        let blob1 = [0x07u8; 64];
+        let txs1 = coinbase_block(&out1, &blob1);
+        let blocks = [
+            BlockLeaves {
+                height: BlockHeight(0),
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: BlockHeight(1),
+                txs: &txs1,
+            },
+        ];
+        let from_blocks = CurveTreeClient::from_blocks(&blocks).unwrap();
+        let mut explicit = CurveTreeClient::new();
+        explicit.ingest_block(blocks[0]).unwrap();
+        explicit.ingest_block(blocks[1]).unwrap();
+
+        assert_eq!(
+            from_blocks.store.read_pending_candidates().unwrap(),
+            explicit.store.read_pending_candidates().unwrap()
+        );
+    }
+
+    #[test]
+    fn rollback_restores_pending_rows_for_redraining_and_long_maturity() {
+        // Primary R1-Q3 gate: a class-(b) leaf created on the shared prefix
+        // (height 5 coinbase, maturity 65) drains only on the orphaned
+        // suffix block 66. Rollback to fork 65 must migrate it back to
+        // pending so the new branch's block 66 drains the same row. The
+        // height-1 staked output pins the never-draining long-maturity half
+        // of the invariant: pending equality catches it even though no
+        // practical root window can.
+        let mut orphaned = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut orphaned, 66);
+        assert!(
+            orphaned
+                .store
+                .read_drained_entries()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.maturity == BlockHeight(65)),
+            "orphaned suffix must drain the class-(b) witness"
+        );
+
+        orphaned.rollback_to_fork(BlockHeight(65)).unwrap();
+
+        let mut fresh_prefix = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut fresh_prefix, 65);
+        assert_eq!(
+            orphaned.store.read_pending_candidates().unwrap(),
+            fresh_prefix.store.read_pending_candidates().unwrap(),
+            "post-rollback pending set must equal fresh shared-prefix replay"
+        );
+        assert!(
+            orphaned
+                .store
+                .read_pending_candidates()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.maturity == BlockHeight(150_001)),
+            "long-maturity staked row stays pending and directly compared"
+        );
+
+        let output = [coinbase_raw()];
+        ingest_outputs_at(&mut orphaned, 66, &output);
+        let mut fresh_redrain = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut fresh_redrain, 66);
+        assert_eq!(
+            orphaned.store.read_pending_candidates().unwrap(),
+            fresh_redrain.store.read_pending_candidates().unwrap(),
+            "pending set still matches after the class-(b) row re-drains"
+        );
+        assert_eq!(
+            orphaned.store.read_drained_entries().unwrap(),
+            fresh_redrain.store.read_drained_entries().unwrap(),
+            "drain order corroborates the pending-set proof"
+        );
+        assert_eq!(
+            orphaned.root_at(BlockHeight(66)).unwrap(),
+            fresh_redrain.root_at(BlockHeight(66)).unwrap(),
+            "root equality corroborates after re-drain"
+        );
     }
 
     #[test]

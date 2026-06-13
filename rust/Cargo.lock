@@ -3778,6 +3778,7 @@ dependencies = [
  "serde_json",
  "shekyl-fcmp",
  "shekyl-oxide",
+ "tempfile",
 ]
 
 [[package]]
