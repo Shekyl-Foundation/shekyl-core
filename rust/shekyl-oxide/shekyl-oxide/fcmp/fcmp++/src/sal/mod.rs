@@ -137,6 +137,13 @@ impl RerandomizedOutput {
     /// Used by the membership-only prove path, whose blinds are synthesized
     /// RFC-6979-style rather than drawn raw from an RNG
     /// (`membership_only::membership_only_rerandomize`).
+    ///
+    /// This constructor performs no validation of the blinds. A zero blind yields a
+    /// rerandomized component equal to its base, which is a direct linkability defect
+    /// for the membership-only flow. Any caller deriving blinds (rather than drawing
+    /// them uniformly, where degeneracy is a ~2^-252 event) must run
+    /// [`membership_only::check_nondegenerate`] on the result, as
+    /// `membership_only_rerandomize` does.
     pub(crate) fn with_blinds(
         output: Output,
         r_o: <Ed25519 as Ciphersuite>::F,

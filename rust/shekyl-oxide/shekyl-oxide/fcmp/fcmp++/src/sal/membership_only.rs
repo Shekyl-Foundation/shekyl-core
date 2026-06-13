@@ -129,9 +129,10 @@ pub fn membership_only_rerandomize(
     let leaf_o = output.O().to_bytes();
     let leaf_i = output.I().to_bytes();
     let leaf_c = output.C().to_bytes();
-    let context_len = u64::try_from(context.len())
-        .expect("context length exceeds u64")
-        .to_le_bytes();
+    // Fixed-width length prefix for the variable-length context, per the framing
+    // discipline (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §4.3). `usize` is at most
+    // 64 bits on every supported target, so the cast is lossless.
+    let context_len = (context.len() as u64).to_le_bytes();
     let context_parts: &[&[u8]] = &[&leaf_o, &leaf_i, &leaf_c, &context_len, context];
 
     let r_o = synthesize_scalar(rng, &MO_NONCE_R_O, x, context_parts);

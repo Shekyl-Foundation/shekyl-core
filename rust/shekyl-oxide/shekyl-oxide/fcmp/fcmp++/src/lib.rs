@@ -169,6 +169,9 @@ impl Input {
 /// A FCMP++ output tuple.
 pub type Output = fcmps::Output<<Ed25519 as Ciphersuite>::G>;
 
+/// Byte length of a canonically-encoded Ed25519 point or scalar on the wire.
+const ED25519_REPR_BYTES: usize = 32;
+
 /// An error encountered when working with FCMP++.
 #[derive(Debug)]
 pub enum FcmpPlusPlusError {
@@ -205,8 +208,9 @@ impl FcmpPlusPlus {
 
     /// The size of a FCMP++ proof.
     pub fn proof_size(inputs: usize, layers: usize) -> usize {
-        // Each input tuple, without C~, each SAL, and the FCMP
-        (inputs * ((3 * 32) + (12 * 32))) + Fcmp::<Curves>::proof_size(inputs, layers)
+        // Each input tuple, without C~ (3 points), each SAL (6 points + 6 scalars),
+        // and the FCMP
+        (inputs * ((3 + 12) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
     /// Write a FCMP++ proof.
@@ -330,8 +334,9 @@ impl FcmpMembershipOnly {
 
     /// The size of a membership-only FCMP++ proof.
     pub fn proof_size(inputs: usize, layers: usize) -> usize {
-        // Each input tuple, without C~, each MembershipSpendAuth, and the FCMP
-        (inputs * ((3 * 32) + (3 * 32))) + Fcmp::<Curves>::proof_size(inputs, layers)
+        // Each input tuple, without C~ (3 points), each MembershipSpendAuth
+        // (1 point + 2 scalars), and the FCMP
+        (inputs * ((3 + 3) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
     /// Write a membership-only FCMP++ proof.

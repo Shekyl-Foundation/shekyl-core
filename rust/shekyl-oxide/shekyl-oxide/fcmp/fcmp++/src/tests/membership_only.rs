@@ -11,7 +11,10 @@
 use rand_core::{CryptoRng, OsRng, RngCore};
 
 use ciphersuite::{
-    group::{ff::Field, Group, GroupEncoding},
+    group::{
+        ff::{Field, PrimeField},
+        Group, GroupEncoding,
+    },
     Ciphersuite,
 };
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
@@ -743,8 +746,16 @@ fn membership_only_tamper_rejects() {
     let mut buf = vec![];
     proof.write(&mut buf).unwrap();
 
-    // One byte in each of: O~, R_O, s_alpha, s_y.
-    for index in [0, 96, 96 + 32, 96 + 64] {
+    // One byte in each of: O~, R_O, s_alpha, s_y. Offsets are derived from the actual
+    // encoded widths — the input partial is 3 points (O~ ‖ I~ ‖ R), then the
+    // `MembershipSpendAuth` leg writes R_O ‖ s_alpha ‖ s_y — so the test tracks an
+    // encoding refactor rather than going stale.
+    let point_len = proof.inputs[0].0.O_tilde().to_bytes().len();
+    let scalar_len = leaf.x.to_repr().len();
+    let r_o_offset = 3 * point_len;
+    let s_alpha_offset = r_o_offset + point_len;
+    let s_y_offset = s_alpha_offset + scalar_len;
+    for index in [0, r_o_offset, s_alpha_offset, s_y_offset] {
         let mut tampered = buf.clone();
         tampered[index] ^= 1;
         match FcmpMembershipOnly::read(&pseudo_outs, 1, &mut tampered.as_slice()) {
