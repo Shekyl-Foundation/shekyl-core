@@ -194,6 +194,14 @@ pub struct CurveTreeClient {
     ingested_tip_height: Option<BlockHeight>,
 }
 
+/// In-memory state reconstructed from a [`LeafStore`] snapshot.
+struct RebuiltState {
+    entries: Vec<LeafEntry>,
+    next_gindex: u64,
+    entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>>,
+    ingested_tip_height: Option<BlockHeight>,
+}
+
 impl Default for CurveTreeClient {
     fn default() -> Self {
         Self::new()
@@ -291,6 +299,22 @@ impl CurveTreeClient {
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
     fn resume(store: LeafStore) -> Result<Self, ClientError> {
+        let rebuilt = Self::rebuild_from_store(&store)?;
+
+        Ok(Self {
+            store,
+            entries: rebuilt.entries,
+            next_gindex: rebuilt.next_gindex,
+            drained_through_counts: Vec::new(),
+            entries_by_maturity: rebuilt.entries_by_maturity,
+            ingested_tip_height: rebuilt.ingested_tip_height,
+        })
+    }
+
+    /// Rebuild the in-memory state from the store's drained and pending
+    /// tables. Callers assign the returned state only after every check
+    /// succeeds so stale memory is never partially overwritten on `Err`.
+    fn rebuild_from_store(store: &LeafStore) -> Result<RebuiltState, ClientError> {
         let stored = store.leaf_count().map_err(ClientError::from)?;
         let drained = store.read_drained_entries().map_err(ClientError::from)?;
         let readable = u64::try_from(drained.len()).expect("drained row count fits u64");
@@ -338,11 +362,9 @@ impl CurveTreeClient {
             Some(tip)
         };
 
-        Ok(Self {
-            store,
+        Ok(RebuiltState {
             entries,
             next_gindex,
-            drained_through_counts: Vec::new(),
             entries_by_maturity,
             ingested_tip_height,
         })
