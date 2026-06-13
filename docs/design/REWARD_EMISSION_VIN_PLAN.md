@@ -6,8 +6,10 @@
 [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
 (evaluated in §4 — exception does **not** apply; standard splitting governs).
 No production code has landed against this plan. The Round-0 substrate
-re-audit (A2 audit-against-actual-code) is recorded in §1; design rounds 1–N
-and the per-sub-PR pre-flight passes follow before any implementation cut.
+re-audit (A2 audit-against-actual-code) is recorded in §1; **Design Round 1**
+(external review — 8 findings, F-E1–F-E3 are PR-E3 holds) is recorded in §R1;
+rounds 2–N and the per-sub-PR pre-flight passes follow before any
+implementation cut.
 
 **Specification of record:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)
 (§5 envelope, §6 bond record, §7 verification, §12 checklist). This document
@@ -161,7 +163,10 @@ reconstructs a **fresh** `ArchivalBondValue` from scalar args and does **not**
 set `claimed_settlement_epochs` / `first_paying_emission_height`. The slash
 apply/revert paths load the full bond and then call `put_archival_bond_record`,
 which therefore **wipes** the claimed-epoch set and first-paying height on
-every slash update. There is also **no production LMDB write path** for
+every slash update. **(F-E5, round 1):** the bug is in the writer's
+reconstruction, so it wipes for **any** load-modify-store caller — gate-4
+holdings-update / re-bond flows carry the same latent wipe; PR-E0 enumerates
+all callers, not just slash. There is also **no production LMDB write path** for
 claimed epochs and **no C++ FFI** for `claimed_epochs_check_and_set` yet
 (spec §6.3: "FFI surface deferred to its first consumer" — that consumer is
 this PR). Disposition: §3 PR-E0.
@@ -208,7 +213,132 @@ the full `HybridEd25519MlDsa` (ed25519 + ML-DSA)? §10.1 of the spec sizes
 "two ML-DSA-65 auths"; the ed25519 half adds nothing against a CRQC but costs
 bytes. Default to **ML-DSA-65-only** for the gate; confirm in rounds. What
 exactly the signature commits to (tx hash? vin context? settlement-epoch
-set?) is a Q in §8.
+set?) is pinned as a proposal in **R1.A** for the round to attack.
+
+---
+
+## R1. Design Round 1 — review dispositions (2026-06-13)
+
+External review anchored to `REWARD_EMISSION_LEG.md` §4 / §4.5 / §5 /
+§6.4.1 / §6.5 (source, not the plan's self-description). Direction approved.
+Eight findings: **F-E1–F-E3 are PR-E3 holds** — each is a chain-split or
+unauthorized-mint path as the plan read pre-round; F-E4 is a binding proposal
+to attack; F-E5 widens PR-E0; F-E6–F-E8 are open questions. Affected sub-PR and
+section text is patched in place; the two drafted artifacts (R1.A, R1.B) are
+recorded in full here.
+
+| # | Class | Disposition | Lands |
+|---|---|---|---|
+| F-E1 | consensus / reorg | Explicit `h > h_close(E)` **and** `MAX_CLAIM_AGE_W` bounds, not row-absence proxies | PR-E3 step 1; boundary KAT |
+| F-E2 | consensus / supply | Remainder disposition pinned (R1.B: floor + burn-the-dust) + single-source `reward_arithmetic` both sides | PR-E3 step 5; §8 |
+| F-E3 | consensus / double-mint | Intra-block `(P,E)` uniqueness (check/set fusion or block-assembly pass) | PR-E3 step 3; §8 |
+| F-E4 | security / replay | Binding-message proposal pinned (R1.A) | §2; §8 Q1 |
+| F-E5 | scope | F-S1 affects **every** `put_archival_bond_record` caller, not just slash | PR-E0 widened |
+| F-E6 | open | `holdings` (static) vs `held(P,E)` (per-epoch) snapshot semantics | §8 |
+| F-E7 | open | same-tx backing + key-imaged fee double-use | §8 |
+| F-E8 | open | zero-work/zero-reward emission + arithmetic widths | §8 |
+
+### R1.A — F-E4: ML-DSA auth binding-message proposal (attack in round 2)
+
+The membership proof already binds `signable_tx_hash` + input index
+(`FCMP_MEMBERSHIP_ONLY.md` §5.3), so the *proof* cannot be replayed. The ML-DSA
+auth is a **separate artifact** that must bind equivalently or it can be lifted
+out and replayed. Proposal — one canonical auth digest; every ML-DSA-65 auth in
+the vin signs it:
+
+```text
+emission_auth_msg = cSHAKE256(
+  customization = "shekyl/archival-emission-auth-v1",
+  input = length-prefixed (TupleHash-style) concat, in order, of:
+    P_canonical_id            // 32 B = §6.1 cSHAKE(P_pubkey) — pseudonym identity
+    P_pubkey.canonical_bytes  // exact hybrid key (no substitution)
+    holdings_digest           // canonical HoldingsDescriptor encoding
+    settlement_epochs         // exact claimed set, count-prefixed (epoch replay)
+    work_claim_digest         // canonical hash of the full WorkClaimVector
+    reward_commit_set_digest  // ordered vout: (commitment, amount_plain, one-time key)
+    signable_tx_hash          // tx prefix + pseudo-outs (cross-tx replay)
+)[0..64]
+```
+
+Two ML-DSA-65 auths (the §10.1 two-auth byte budget), both over
+`emission_auth_msg`:
+
+- **Auth-B (backing):** under the `pqc_pk` whose `H(pqc_pk)` the `Fcmp` leg
+  proved in-circuit — the §7-wargame quantum spend-authority defense. This is
+  the load-bearing gate; without it backing reduces to classical security.
+- **Auth-P (pseudonym):** under `P_pubkey`'s ML-DSA component — binds
+  claim/dedup/mint to P's quantum identity (an attacker who somehow produced a
+  valid backing proof still cannot redirect the mint to a different P).
+
+Field rationale (each closes a named lift):
+
+- `signable_tx_hash` — cross-tx replay (mirrors the proof's own §5.3 binding).
+- `reward_commit_set_digest` — mint-destination swap; bound **explicitly** even
+  though `signable_tx_hash` covers the prefix, so the property survives any
+  future change to what the tx hash spans.
+- `settlement_epochs` + `work_claim_digest` — cross-epoch / cross-work replay.
+- `P_pubkey` / `P_canonical_id` — pseudonym substitution.
+
+Hash family: **cSHAKE256**, matching the §6.1 `P_canonical_id` derivation
+(already in the archival consensus path; `sha3` already a workspace dep,
+`17-dependency-discipline.mdc`). This is a vin-layer consensus digest, **not**
+an FCMP transcript challenge, so it correctly joins the cSHAKE/archival family
+rather than the Blake2b FCMP transcript family — no new hash family enters
+either path. Domain tag distinct from §6.1's `shekyl/archival-p-id-v1` and from
+the membership transcript tags.
+
+Open sub-questions for the round: (1) is **Auth-P** necessary, or is the
+backing leaf's `pqc_pk` already derivationally bound to `P_pubkey` such that
+Auth-B + the in-circuit leaf binding pins P? If so, collapse to one auth and
+re-pin §10.1 sizing. (2) ML-DSA-65-only confirmed (ed25519 half adds nothing
+against a CRQC).
+
+### R1.B — F-E2: remainder disposition recommendation (for the gate-1 pin)
+
+Form C is `reward_P(E) = floor(budget(E)·capped_P(E) / Σwork(E))`. Floor strands
+up to `N_P − 1` atomic units (`Σ_P floor(·) ≤ budget`), contradicting §4.0's
+exact "`Σ reward = budget`" against §5.4's **zero-tolerance** vout compare.
+
+**Pinned recommendation: floor + burn-the-dust (unminted remainder), with
+u128 numerator-before-divide.**
+
+1. **Operation order:** compute `budget·capped_P` as **u128** *before* dividing
+   by `Σwork` (no intermediate precision loss). `capped_P` / `Σwork` accumulate
+   in u64; the product needs u128 (see F-E8).
+2. **Rounding:** floor (integer division).
+3. **Remainder:** the `≤ N_P − 1` atomic shortfall is **unminted** — never
+   minted, not rolled, not redistributed.
+
+Why burn-the-dust over largest-remainder (Hamilton): **per-P independence is a
+hard architectural constraint here, not a preference.** Emissions are per-P and
+asynchronous across many blocks; the verifier checks one P's emission against
+the finalized epoch row (the §4.4 accumulator, an O(1) read). Largest-remainder
+makes P's `+1` depend on the *rank* of P's fractional remainder among **all**
+market P at E — forcing the verifier to enumerate the full cohort per emission
+(exactly the full-ledger re-walk §4.4 exists to avoid) and breaking the
+per-P-pure-function property that both the zero-tolerance compare and
+wallet/consensus bit-identity require. Burn-the-dust keeps `reward_P(E)` a pure
+function of `(P, E, finalized row)`; the dust is supply-**safe** (under-mint,
+never over-mint) and is the same flavor as §4.5's already-accepted "offline P's
+share unminted." Roll (carry to next epoch) is rejected: cross-epoch state +
+reorg coupling.
+
+**Spec consequence (gate-1 pin, not yet applied — spec is the authority, §0):**
+§4.0's "`Σ reward_P = budget` whenever `Σ Curve > 0`" refines to "`Σ minted ≤
+budget`; the `≤ (N_P−1)`-atomic floor remainder is unminted (supply-safe),
+consistent with §4.5." Land this wording in `REWARD_EMISSION_LEG.md` §4.0
+before PR-E3 code.
+
+**Single source of truth:** PR-E3's recompute **imports the canonical
+`reward_arithmetic` crate** — not a third reimplementation — and the wallet
+build path (`REWARD_EMISSION_LEG.md` §11) imports the **same** crate.
+Zero-tolerance compare is sound only when both sides are bit-identical by
+construction (project no-third-copy-of-an-arith-function rule). The verify is
+the **third** Form-C consumer after the sim (`shekyl-staking-sim/reward.rs`,
+`REWARD_EMISSION_LEG.md` §4.0) and the economics engine; if `reward_arithmetic`
+does not yet exist as the shared canonical crate, a PR-E3 precursor extracts
+the sim's Form-C into it and re-points the existing consumers — that extraction
+is the single-source mechanism, not a fourth copy.
 
 ---
 
@@ -223,14 +353,20 @@ a body-fill, not a signature churn.
 
 ### PR-E0 — bond-state write-path correctness (precursor, substrate fix)
 
-Scope: fix Finding **F-S1**. Make slash apply/revert preserve
-`claimed_settlement_epochs` + `first_paying_emission_height` (load-modify-store
-rather than reconstruct), or stop routing slash through
-`put_archival_bond_record`. Add the C++ FFI for `claimed_epochs_check_and_set`
-/ `claimed_epochs_contains` and a full-bond LMDB writer. No emission behavior;
+Scope: fix Finding **F-S1** (widened per **F-E5**). The root cause is that
+`put_archival_bond_record` reconstructs a fresh `ArchivalBondValue` from scalar
+args, dropping `claimed_settlement_epochs` + `first_paying_emission_height` —
+so the wipe hits **every** load-modify-store caller, not only slash
+(gate-4 holdings-update / re-bond round-trips carry the same latent wipe).
+Disposition: make the writer load-modify-store (preserve all fields) or stop
+routing field-preserving updates through the reconstructing path; **enumerate
+every caller** of `put_archival_bond_record` as part of the fix, not just the
+slash path. Add the C++ FFI for `claimed_epochs_check_and_set` /
+`claimed_epochs_contains` and a full-bond LMDB writer. No emission behavior;
 this is an independent correctness fix that PR-E3 depends on.
-**Gate:** existing archival LMDB unit tests (`archival_substrate_lmdb.cpp`)
-extended to assert claimed-epoch survival across a slash apply/revert cycle.
+**Gate:** archival LMDB unit tests (`archival_substrate_lmdb.cpp`) extended to
+assert claimed-epoch + first-paying-height survival across **slash apply/revert
+*and* holdings-update / re-bond** cycles (all callers, per F-E5).
 *Reversion: could fold into PR-E3, but it is pre-existing and independently
 testable, so it splits per `15-deletion-and-debt.mdc` bisection discipline.*
 
@@ -285,18 +421,39 @@ shim: marshal the canonical vin bytes + the consensus-state snapshot it needs,
 call the Rust verify, apply the returned verdict and connect-effects. New
 arithmetic and crypto never re-appear as C++ logic.
 
-**Rust (`shekyl_emission_vin_verify`)** — owns steps 2–8 of the fail-fast order:
+**Rust (`shekyl_emission_vin_verify`)** — owns the fail-fast order:
+1. **Finalization & claim-age bounds (F-E1)** — for every claimed `E`, enforce
+   **explicitly**, as structural checks, `current_block_height > h_close(E) =
+   (E+1)·SETTLEMENT_EPOCH_BLOCKS` (the §4.5 finalization invariant — deterministic
+   and order-independent under reorg, unlike the row-presence side effect) **and**
+   `E ≥ C − MAX_CLAIM_AGE_W` (the §6.6 upper bound — explicit window check, not a
+   prune-on-insert row-absence proxy), *in addition to* reading the finalized
+   `Σwork(E)` row.
 2. **Bond posture** — record exists, holdings match, `E ≥ E_join + 1`.
 3. **Dedup** — `claimed_epochs_check_and_set` (already Rust; PR-E0 FFI),
-   returning the epochs to commit so C++ applies them atomically at connect.
+   returning the epochs to commit. **Intra-block double-mint guard (F-E3):**
+   the check (verify-time) and set (connect-time) are split across the FFI, so
+   two same-block emissions from the same `P` claiming the same `E` both see `E`
+   unset and both commit → `E` minted twice. PR-E3 must specify where the
+   same-`(P,E)` collision is caught: either the set is applied within the
+   connecting transaction's scope so tx2 sees tx1's set, **or** block
+   assembly/connect runs an explicit `(P, E)` uniqueness pass across all
+   emission vins in the block. Dedup is per-`P`, so the collision is strictly
+   same-`P`-same-`E`-same-block. (Open: §8 F-E3.)
 4. **Work** — recompute `work_P(E)` from archival state; compare to
    `work_claim` (`checked_*` integer arithmetic, rule 20).
-5. **Economics** — recompute three-channel `reward_P(E)`; compare to
-   `reward_amount_plain` and vout sum (loud inflation check, `checked_*`).
+5. **Economics** — recompute three-channel `reward_P(E)` via the **canonical
+   `reward_arithmetic` crate** (single source of truth, R1.B — not a third
+   reimplementation), compare to `reward_amount_plain` and vout sum
+   (zero-tolerance loud inflation check). Remainder disposition per R1.B
+   (floor + burn-the-dust, u128 numerator-before-divide); the gate-1 §4.0
+   wording refinement must land in the spec before this code.
 6. **Membership-only backing** — PR-E1 (`shekyl_fcmp_membership_only_verify`),
    **not** `shekyl_fcmp_verify`.
 7. **FCMP balance** — fee `txin_to_key` via existing `shekyl_fcmp_verify`.
-8. **ML-DSA gate (§2)** — `H(pqc_pk)` match + ML-DSA-65 vin-context verify.
+8. **ML-DSA gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
+   in-circuit leaf scalar, and verify the ML-DSA-65 auth(s) over
+   `emission_auth_msg` (R1.A binding).
 
 **C++ (thin shim):**
 1. **Structural pre-gate** — extend `check_inputs_types_supported` to accept
@@ -311,10 +468,14 @@ arithmetic and crypto never re-appear as C++ logic.
      connect/`pop_block` hooks in `blockchain_db.cpp`; revert on reorg (§8).
 
 **Merge blocker:** step 8 must be present and tested (§2). **Gates / KATs**
-(in Rust where the logic lives): minimal valid emission accepts; double-claim
-rejects; work-mismatch rejects; inflation/vout-sum mismatch rejects;
-ML-DSA-forgery rejects (wargame); reorg dedup-revert roundtrip at the C++
-connect/pop layer.
+(in Rust where the logic lives): minimal valid emission accepts; cross-block
+double-claim rejects; **intra-block same-`(P,E)` double-claim rejects (F-E3)**;
+work-mismatch rejects; inflation/vout-sum mismatch rejects; ML-DSA-forgery
+rejects (wargame); **finalization-boundary KAT (F-E1)** — cite `E` at
+`h_close(E)` → reject, at `h_close(E)+1` → accept, and a reorg straddling
+`h_close(E)` neither strands nor double-applies; **claim-age boundary** — `E`
+at `C − W` accepts, at `C − W − 1` rejects; reorg dedup-revert roundtrip at the
+C++ connect/pop layer.
 
 ### PR-E4 — delete `txin_stake_claim` / `C_stake` admission (removal)
 
@@ -387,9 +548,13 @@ is sized within the normal envelope, not under the §07 carve-out.
 - **FFI seam (PR-E1):** membership-only roundtrip; **deser cross-type
   rejection** (membership bytes → full ABI → reject); ML-DSA gate ±.
 - **Consensus KATs (PR-E3, spec §12):** minimal valid emission accepts;
-  double-claim rejects; work-mismatch rejects; **ML-DSA-forgery rejects**
-  (§2 wargame); economics-mismatch rejects; reorg dedup-revert roundtrip.
-- **Substrate (PR-E0):** claimed-epoch survival across slash apply/revert.
+  cross-block + **intra-block same-`(P,E)`** double-claim reject (F-E3);
+  work-mismatch rejects; **ML-DSA-forgery rejects** (§2 wargame, R1.A binding);
+  economics-mismatch rejects (incl. the `≤(N_P−1)` dust boundary, R1.B);
+  **finalization-boundary + claim-age-boundary KATs** (F-E1); reorg
+  dedup-revert roundtrip.
+- **Substrate (PR-E0):** claimed-epoch + first-paying-height survival across
+  slash apply/revert **and** holdings-update / re-bond cycles (all callers, F-E5).
 - **Deletion (PR-E4):** clean build; legacy tests rewritten to HF1 rules.
 
 ---
@@ -397,17 +562,23 @@ is sized within the normal envelope, not under the §07 carve-out.
 ## 7. Threat-model addenda frame (A3) — to close in design rounds
 
 Adversarial objectives to probe before PR-E3 closure (non-exhaustive):
-quantum backing-forgery (the §2 gate — load-bearing); double-claim across
-reorg boundaries; work/economics over-claim via fixed-point edge; emission-vin
-+ fee-input mixing to launder a key-image spend; vin-context signature replay
-across txs/epochs; empty / duplicate-input vacuity at the vin layer (§8.2 of
-the membership doc defers input-distinctness here). Each routes to in-scope,
+quantum backing-forgery (the §2 gate — load-bearing); **mint-destination swap
+via an under-bound ML-DSA auth** (R1.A — bind vout set + tx hash);
+double-claim across reorg boundaries and the finalization boundary (F-E1);
+**intra-block same-`(P,E)` double-mint** (F-E3); work/economics over-claim via
+fixed-point edge; **supply leak / over-mint via the floor remainder** (R1.B);
+emission-vin + fee-input mixing to launder a key-image spend (F-E7);
+vin-context signature replay across txs/epochs; empty / duplicate-input
+vacuity at the vin layer (§8.2 of the membership doc defers input-distinctness
+here); **zero-reward block-space spam** (F-E8). Each routes to in-scope,
 discipline note, or named forward-action (A5).
 
 ## 8. Open design questions (for the rounds)
 
-1. **ML-DSA vin auth shape** — ML-DSA-65-only vs full hybrid; exact signed
-   message (tx hash vs vin context vs epoch-set binding); replay binding.
+1. **ML-DSA vin auth shape (F-E4)** — *proposal pinned in R1.A* for the round
+   to attack (binding message, two auths, cSHAKE family). Remaining: is Auth-P
+   necessary or does the leaf→`P_pubkey` derivation already pin P? ML-DSA-65-only
+   confirmed.
 2. **PR-E4 sequencing** — delete `stake_claim` before or after PR-E3.
 3. **Input distinctness** — does the emission vin require backing-input
    distinctness (membership proof does not dedup, §8.2)? Enforce at vin layer?
@@ -425,6 +596,34 @@ discipline note, or named forward-action (A5).
    into C++ LMDB? Snapshot is simpler to audit and keeps the verify pure;
    callbacks avoid copying large work state. Decide in the rounds; affects the
    `shekyl_archival_*`-family ABI shape.
+
+### Round-1 open items (must close before PR-E3 code; F-E2/F-E3 consensus-load-bearing)
+
+8. **Remainder disposition (F-E2)** — *recommendation pinned in R1.B*
+   (floor + burn-the-dust, u128-numerator-first, canonical `reward_arithmetic`
+   both sides). Closes when the gate-1 §4.0 spec wording lands and the crate
+   import is confirmed for both verify and wallet-build.
+9. **Intra-block `(P,E)` uniqueness (F-E3)** — pick check/set fusion within the
+   connecting tx scope vs an explicit block-assembly uniqueness pass. Consensus
+   double-mint hole until pinned.
+10. **Holdings snapshot semantics (F-E6)** — §6.4.1 says holdings "compatible,"
+    §5.3 "must match," but work is recomputed over per-epoch `held(P,E)` (§4.1),
+    which may differ from *current* holdings if a gate-4 flow ran between epochs.
+    Pin which snapshot the vin `holdings` field must match and how a mid-batch
+    holdings change is handled.
+11. **Same-tx backing + fee double-use (F-E7)** — §5.2 permits key-imaged fee
+    `txin_to_key` alongside keyless membership-only backing; the threat model
+    names mixing to launder a key-image spend. Decide whether one output may be
+    both membership-only backing *and* a key-imaged fee input (possibly inside
+    the §7.5 intra-epoch-unbacked model — state it) or the backing set must
+    exclude same-tx-spent outputs.
+12. **Zero-work / zero-reward emission (F-E8)** — §4.3's R-ceiling dead zone
+    (`R > 1000·g(age)` → `scarcity_milli = 0`) plus `Curve(0)` lets a `P` with
+    all shards in the dead zone recompute `work_P = 0`, `reward = 0`. Reject a
+    zero-reward emission (block-space spam) or accept with zero vout? Also
+    confirm `reward_arithmetic` widths (u64 for `Σ scarcity_milli` work
+    accumulation; u128 for the `budget·capped_P` product, R1.B) so a legitimate
+    large early-chain emission does not hit a wrong-width `checked_mul` reject.
 
 ## 9. Inherited forward-actions (`FCMP_MEMBERSHIP_ONLY.md` §9 carries)
 
