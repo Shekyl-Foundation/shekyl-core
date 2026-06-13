@@ -54,7 +54,7 @@ use std::path::Path;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
 use crate::store::{LeafStore, StoreError};
-use crate::types::{BlockHeight, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -332,10 +332,17 @@ impl CurveTreeClient {
     /// `2`, …); gaps, duplicates, and rewinds return
     /// [`ClientError::NonConsecutiveBlockHeight`].
     ///
-    /// If the store mirror fails ([`ClientError::Store`]), the in-memory
-    /// indices have already advanced; the next successful ingest replays the
-    /// missing canonical drained suffix, so the store self-heals rather than
-    /// skipping a maturity bucket.
+    /// **Store-write-before-commit (B5).** The block's full delta — newly
+    /// drained bucket, newly created pending leaves, drained pending
+    /// removals, tip advance — lands in one ACID
+    /// [`LeafStore::append_block_deltas`] transaction *before* any
+    /// in-memory state changes. On `Err` the client is unchanged on both
+    /// sides and the same block can be re-ingested; on `Ok` the in-memory
+    /// commit is infallible. The store can therefore never lag memory; the
+    /// only residual asymmetry is store-*ahead*-of-memory for the instant
+    /// between the commit and the in-memory update, which matters only if
+    /// the process dies in that gap — where memory evaporates and resume
+    /// re-derives from the store.
     pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
         let expected = self.ingested_tip_height.map_or(0, |last| {
             last.checked_add(1).expect("chain height fits u64")
@@ -377,54 +384,46 @@ impl CurveTreeClient {
             })
             .collect();
 
+        // Collect this block's leaves into a local vec — `self.entries` is
+        // untouched until the store transaction commits.
+        let mut new_leaves: Vec<LeafEntry> = Vec::new();
+        let next_gindex =
+            collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves);
+
+        // The bucket newly final at this block's cutoff, read from the
+        // *existing* maturity index (a leaf created in this block can never
+        // mature at `height - 1`: the minimum lock window is ≥ 10 blocks,
+        // which also guarantees every drained leaf entered the pending
+        // table when its creation block was ingested — so the removals
+        // below are present by construction). Blocks 0 and 1 share cutoff
+        // 0, whose bucket is empty for the same reason.
+        let through = Self::drained_through(block.height);
+        let drained = self.newly_drained_from_index(through);
+        let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
+
+        // One ACID transaction for the whole block delta; the freeze clock
+        // (`META_SYNC_TIP`) advances to the ingested tip — the only height
+        // the freeze gate is ever driven by. An all-empty delta still
+        // advances the tip.
+        self.store.append_block_deltas(
+            &drained,
+            &new_leaves,
+            &removed,
+            BlockHeight(block.height),
+        )?;
+
+        // Store committed — the in-memory commit below is infallible.
+        let canonical = self.canonical_drained_count_on_ingest(through);
         let entry_base = self.entries.len();
-        self.next_gindex =
-            collect_block_leaves(block.height, &txs, self.next_gindex, &mut self.entries);
-        for (offset, entry) in self.entries[entry_base..].iter().enumerate() {
+        for (offset, entry) in new_leaves.iter().enumerate() {
             self.entries_by_maturity
                 .entry(entry.maturity)
                 .or_default()
                 .push(entry_base + offset);
         }
+        self.entries.extend(new_leaves);
+        self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
-        self.sync_store(block.height)
-    }
-
-    /// Mirror the canonical drained prefix at `drained_through(tip_height)`
-    /// into the store and advance the freeze clock (`META_SYNC_TIP`) to the
-    /// *ingested* tip — the only height the freeze gate is ever driven by.
-    ///
-    /// Because ingest is strictly consecutive, the drain cutoff advances by
-    /// at most one maturity bucket per block and the store is append-only by
-    /// construction. The steady-state append is the single newly-final bucket
-    /// (O(bucket)); if the store lags by more than one bucket (a prior
-    /// `append_drained` returned an error and the caller continued), the
-    /// missing canonical suffix is replayed instead, so a failed sync heals on
-    /// the next successful ingest rather than silently skipping a bucket.
-    fn sync_store(&mut self, tip_height: u64) -> Result<(), ClientError> {
-        let through = Self::drained_through(tip_height);
-        let stored = self.store.leaf_count()?;
-        let canonical = self.canonical_drained_count_on_ingest(through);
-        if canonical < stored {
-            return Err(StoreError::CorruptMeta("store leaf count exceeds canonical drain").into());
-        }
-        if stored == canonical {
-            self.store.append_drained(&[], BlockHeight(tip_height))?;
-        } else {
-            let bucket = self.newly_drained_from_index(through);
-            let bucket_len = u64::try_from(bucket.len()).expect("bucket fits u64");
-            // `stored + bucket_len == canonical` ⟺ the store holds exactly the
-            // canonical prefix below this block's bucket (counts of canonical
-            // prefixes are unique), so appending the bucket is sound.
-            let new_entries = if stored + bucket_len == canonical {
-                bucket
-            } else {
-                let skip = usize::try_from(stored).expect("stored leaf count fits usize");
-                self.drained_suffix_from_index(through, skip)
-            };
-            self.store
-                .append_drained(&new_entries, BlockHeight(tip_height))?;
-        }
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -439,23 +438,6 @@ impl CurveTreeClient {
             .get(&BlockHeight(drained_through))
             .map(|indices| indices.iter().map(|&i| self.entries[i]).collect())
             .unwrap_or_default()
-    }
-
-    /// Canonical drain-order suffix via [`Self::entries_by_maturity`] (maturity
-    /// ascending; indices within each bucket are appended in `gindex` order).
-    pub(crate) fn drained_suffix_from_index(&self, through: u64, skip: usize) -> Vec<LeafEntry> {
-        let mut remaining_skip = skip;
-        let mut out = Vec::new();
-        for (_, indices) in self.entries_by_maturity.range(..=BlockHeight(through)) {
-            for &i in indices {
-                if remaining_skip > 0 {
-                    remaining_skip -= 1;
-                    continue;
-                }
-                out.push(self.entries[i]);
-            }
-        }
-        out
     }
 
     /// Upsert `(drained_through, drained_leaf_count)` while keeping the cache
@@ -491,8 +473,9 @@ impl CurveTreeClient {
     /// - cutoff advanced by one: previous count plus the newly-final bucket,
     ///   which is complete by the same maturity bound.
     ///
-    /// Any other cache shape (first block, or a prior store error that
-    /// skipped [`Self::record_drained_count`]) falls back to the full scan.
+    /// Any other cache shape (first block, first post-resume block, or a
+    /// prior store error that skipped [`Self::record_drained_count`])
+    /// falls back to the full scan.
     fn canonical_drained_count_on_ingest(&self, through: u64) -> u64 {
         let canonical = match self.drained_through_counts.last() {
             Some(&(t, count)) if t == through => count,
@@ -613,7 +596,6 @@ mod tests {
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
-    use crate::types::Gindex;
     use shekyl_fcmp::tree::selene_hash_init;
     use shekyl_oxide::COINBASE_LOCK_WINDOW;
 
@@ -678,37 +660,6 @@ mod tests {
                 client.newly_drained_from_index(through),
                 newly_drained_at_cutoff(&client.entries, through),
                 "through={through}"
-            );
-        }
-    }
-
-    #[test]
-    fn drained_suffix_from_index_matches_oracle() {
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[
-            BlockLeaves {
-                height: 0,
-                txs: &txs0,
-            },
-            BlockLeaves {
-                height: 1,
-                txs: &txs1,
-            },
-        ])
-        .unwrap();
-        let through = 61;
-        let oracle: Vec<LeafEntry> = drained_sorted(&client.entries, through)
-            .into_iter()
-            .copied()
-            .collect();
-        for skip in 0..=oracle.len() {
-            assert_eq!(
-                client.drained_suffix_from_index(through, skip),
-                oracle[skip..],
-                "skip={skip}"
             );
         }
     }
@@ -984,8 +935,11 @@ mod tests {
     #[test]
     fn gindex_threads_across_blocks() {
         // Two single-coinbase blocks: gindex must advance 0 then 1.
+        // The blob lands verbatim as the leaf's 4th scalar and the store
+        // validates pending rows at write time, so it must be canonical
+        // (top bit clear keeps it below the Selene modulus).
         let outs = [coinbase_raw()];
-        let blob = [0xAAu8; 32];
+        let blob = [0x2Au8; 32];
         let txs0 = coinbase_block(&outs, &blob);
         let txs1 = coinbase_block(&outs, &blob);
         let blocks = [
@@ -1128,6 +1082,33 @@ mod tests {
                 target: TargetKind::TaggedKey,
             },
         }
+    }
+
+    #[test]
+    fn delta_ingest_maintains_pending_table() {
+        // The pending table tracks the undrained set exactly: every leaf
+        // candidate enters it on its creation block's ingest and leaves it
+        // on the ingest that drains its maturity bucket — keeping the
+        // store's drained ∪ pending equal to the in-memory entries at
+        // every step (the resume read path's source of truth).
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 61);
+
+        let pending = client.store.read_pending_candidates().unwrap();
+        let drained_count = usize::try_from(client.store.leaf_count().unwrap()).unwrap();
+        assert_eq!(
+            drained_count, 1,
+            "only the genesis coinbase (m=60) drains by block 61"
+        );
+        assert_eq!(pending.len() + drained_count, client.entries.len());
+
+        // Pending rows are exactly the undrained in-memory entries, in
+        // gindex order (entries[0] drained; the rest are still locked).
+        assert_eq!(pending, client.entries[1..]);
+        assert_eq!(
+            client.store.read_drained_entries().unwrap(),
+            client.entries[..1]
+        );
     }
 
     #[test]
