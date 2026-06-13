@@ -1,3 +1,4 @@
+mod membership_only;
 mod sal;
 
 use rand_core::OsRng;

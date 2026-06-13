@@ -50,7 +50,7 @@ Work is **not** parallel-equal. Lower layers gate higher ones.
 
 | Layer | Scope | Gate |
 |-------|--------|------|
-| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Schema substrate implemented (2026-06-12):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §8 — `ArchivalBondValue` v4 closed the last delta. Owed crypto: `FcmpMembershipOnly::verify`; 8c construction may trail interface pin. | Spec right pre-genesis; emission vin now gates on `FcmpMembershipOnly`, not schema. |
+| **1 — Consensus structural core** | **Closed at spec layer** — this doc. **Schema substrate implemented (2026-06-12):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §8 — `ArchivalBondValue` v4 closed the last delta. **Owed crypto implemented (2026-06-12):** `FcmpMembershipOnly` landed ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md)); 8c construction may trail interface pin. | Spec right pre-genesis; emission vin now gates on the **ML-DSA backing-auth merge gate** (§12) and its own wire/FFI work, not crypto primitives. |
 | **2 — Economic keystone** | **Margin-robustness gate closed** (§1.2 #4, 2026-06-11): band run confirmed the decomposition — spread gate **re-anchored on direct whale gauges** (`mxSW`, `wB4`, per-band seats; `gini_actor` → trend); **`g` sealed as band `[1.5, 2.5]`, target `≈ 2`** (`g ≥ 3.0` fails coloc coverage at any purse); purse confirmed as spread lever. `Curve` reserve not triggered (stays V3). Gate 7 **closed bonds-only**; byte aggregate (ii) **closed** (§10.1–§10.2). | Layer 2 fully closed; reversion clauses live in the sim doc results section. |
 | **3 — Operational / firewall** | Gate 6: `P` HKDF, multi-`P` hygiene, announce-before-anchor. **FSM retool unblocked** — ordinary-transfer admission, reward reception, `EpochSet` → absolute sparse set on bond record. | Load-bearing for privacy. |
 | **4 — Document rebase** | Round 0 / threat model → F-ARCHIVAL+`P`; claim-centric `PHASE_2B` §3–§7 historical; FCMP §15 / 3C retirement. V3 gate-1 / form **C** reconciled. | Corpus consistency; parallel with schema pin. |
@@ -683,18 +683,24 @@ discipline lean **away** from settled-retained confidential principal machinery.
 Pedersen commitments and range proofs on the admission path survive **only** if a named
 gate 4/7 reopen supplies a monetary reason for confidential admission amounts.
 
-**Verify API (new):** `FcmpMembershipOnly::verify(input, witness, reference_root)` —
-proves spend authority **without** producing a key image consumed by the spent set.
-Today's `FcmpPlusPlus::verify` **must gain** a per-input mode flag or sibling type;
-reward emission is the first consumer.
+**Verify API (implemented 2026-06-12):** `FcmpMembershipOnly::verify` — proves spend
+authority **without** producing a key image consumed by the spent set. Landed as a
+**sibling type** to `FcmpPlusPlus` in the `shekyl-oxide` FCMP++ crate (cross-type
+rejection is a compile-time property, not a runtime flag); reward emission is the
+first consumer. Statement, wire format, and security argument:
+[`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md). The proof attests spend
+authority + membership only; the bond-posture conjunct above is discharged by §7.1
+step 2 against the bond record, not by the circuit.
 
-**Proof-type domain separation (load-bearing, pinned 2026-06-12):** subtraction from
-the full verify path creates a proof-type confusion surface — a membership-only proof
-must **not** verify where a full `FcmpPlusPlus` proof (key image included) is required,
-or this leg's relaxation leaks into the spend path. The verify API carries **distinct
-transcript domain separation binding the proof type**, and the emission vin's verify
-demands the membership-only tag specifically. This is a construction requirement on
-the `FcmpMembershipOnly` PR, not an implied property.
+**Proof-type domain separation (load-bearing, pinned 2026-06-12, implemented same
+day):** subtraction from the full verify path creates a proof-type confusion surface —
+a membership-only proof must **not** verify where a full `FcmpPlusPlus` proof (key
+image included) is required, or this leg's relaxation leaks into the spend path. Both
+SAL-family challenge transcripts now open with fixed-width 64-byte type tags
+([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §4), and the emission vin's
+verify demands the membership-only type specifically. The cross-type rejection tests
+cover the deserialization seam in both directions; the FFI-seam variant is a named
+carry to the emission vin PR.
 
 **Independence:** Backing outputs are **main-tree** leaves, not staking-subtree (3C
 deleted).
@@ -787,14 +793,20 @@ per-emission margin, the aggregate across the `N_P` envelope {40, 79, 154} amort
 spreading. The wire as specced is confirmed: `SETTLEMENT_EPOCH_BLOCKS = 10_000` and
 `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` stand as pinned (§3); no format change.
 
-**Caveat carried:** `FcmpMembershipOnly` is sized at 1-input `FcmpPlusPlus` order until
-built (it proves strictly less). **Reversion:** reopen iff the built proof exceeds 3×
-that estimate, the `N_P` envelope re-pins above ~1 500, the epoch re-pins below
-1 000 blocks, or **the operating envelope extends below `N_P` ≈ 25–30** (thin
-direction, swan-2/W9 — the L13 servo floor is 17 and L17 swan troughs reach ~9;
-per-archiver claims scale as `1/N_P`, a 15-epoch batch ≈ 70 kB at `N_P` = 17
-year-30 and grows with chain age; the named guard is a per-emission claim cap
-forcing batch splitting); re-evaluation is a sweep re-run with measured sizes.
+**Caveat closed (2026-06-12, measured at build):** `FcmpMembershipOnly` was sized at
+1-input `FcmpPlusPlus` order until built. Built and measured
+([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §10, test
+`membership_only_proof_size`): **strictly smaller than the estimate** — 3 104 B vs
+3 392 B at 1 input / 1 layer, 5 952 B vs 6 240 B at 8 layers (the 96-byte
+`MembershipSpendAuth` replaces the 384-byte SAL; the `Fcmp` leg is byte-identical).
+The size-estimate arm of the reversion trigger (3× overrun) is not approached and is
+asserted permanently by that test. **Reversion (remaining arms):** reopen iff the
+`N_P` envelope re-pins above ~1 500, the epoch re-pins below 1 000 blocks, or **the
+operating envelope extends below `N_P` ≈ 25–30** (thin direction, swan-2/W9 — the L13
+servo floor is 17 and L17 swan troughs reach ~9; per-archiver claims scale as `1/N_P`,
+a 15-epoch batch ≈ 70 kB at `N_P` = 17 year-30 and grows with chain age; the named
+guard is a per-emission claim cap forcing batch splitting); re-evaluation is a sweep
+re-run with measured sizes.
 
 ### 10.2 Close-condition (iii) — admission principal: CLOSED bonds-only (2026-06-11)
 
@@ -855,7 +867,18 @@ amounts), bond post/slash reaction.
 - [ ] C++ / Rust vin deserializer for `txin_archival_reward_emission`.
 - [x] `ArchivalBondRecord` LMDB table + `pop_block` revert — `archival_bond`
       (`LMDB_SCHEMA.md`), v4 with claimed-epoch set + `first_paying_emission_height`.
-- [ ] **`FcmpMembershipOnly::verify`** in `shekyl-oxide` FCMP++ crate (line-441 gap).
+- [x] **`FcmpMembershipOnly::verify`** in `shekyl-oxide` FCMP++ crate — **implemented
+      2026-06-12** ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md)): sibling
+      type to `FcmpPlusPlus`, both-sides transcript domain separation, index-bound
+      per-input challenges, RFC-6979-style nonce synthesis, empty-input rejection.
+      External cryptographic review of the soundness reduction
+      (`FCMP_MEMBERSHIP_ONLY.md` §5.5) remains a named pre-genesis criterion.
+- [ ] **ML-DSA backing auth at the emission vin (HARD MERGE GATE).** The
+      membership-only proof is classically secure only; the quantum
+      spend-authority property rests entirely on the vin verifying an ML-DSA
+      signature against the leaf-committed `H(pqc_pk)` the proof binds in-circuit.
+      **The emission vin PR is not mergeable without this check**
+      ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7).
 - [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim`, `C_stake` admission paths.
 - [ ] KAT vectors: minimal valid emission + double-claim reject + work mismatch reject.
 - [ ] Update `AUDIT_SCOPE.md` §staking — entitlement out, emission in.
@@ -878,6 +901,7 @@ amounts), bond post/slash reaction.
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
+| [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) | §7.2 verify API — statement, wire, security argument, PQC gate |
 
 ---
 
@@ -904,3 +928,11 @@ sim↔spec coherence verified (`reward.rs` Σ capped); §4.5 reframed as denomin
 §4.5 collapsed to lagged §4.4 read + boundaries; §6.6 `MAX_CLAIM_AGE_W`; Layer 2 →
 margin-robustness gate; [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) as
 single next move; FSM retool unblocked.
+
+**2026-06-12 (`FcmpMembershipOnly` implemented):** §7.2 verify API landed as a sibling
+type with both-sides transcript domain separation
+([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md)); §10.1 sizing caveat closed
+measured (strictly smaller than the 1-input `FcmpPlusPlus` estimate; 3× trigger arm
+retired, remaining arms unchanged); §12 gains the **ML-DSA backing-auth hard merge
+gate** on the emission vin — the quantum spend-authority property lives there, not in
+the membership-only proof.

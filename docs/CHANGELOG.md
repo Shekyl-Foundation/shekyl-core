@@ -4,6 +4,39 @@
 
 ### Added
 
+- **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
+  key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
+  §7.2 verify API (the §12 sibling-API gap) as a sibling type to
+  `FcmpPlusPlus` in the `shekyl-oxide` FCMP++ crate; first consumer is
+  the emission vin. `MembershipSpendAuth` keeps SAL's `R_O` leg alone
+  (96 B/input — the self-contained `(x, y~)` opening proof over
+  `(G, T)`); the BP+/`P'`/`L` key-image machinery is not carried; the
+  `Fcmp` membership leg, including the `H(pqc_pk)` extra-leaf-scalar
+  binding, is unchanged. Both SAL-family challenge transcripts now open
+  with fixed-width 64-byte zero-padded type tags (the full spend path's
+  transcript changed too — consensus transcript change, migration-free
+  pre-genesis, guarded by a named roundtrip regression), with
+  length-regularity of both preimages verified field-by-field as the
+  invariant the tags rest on. Per-input challenges bind the tx hash and
+  the input index (`u32` LE — forecloses cross-slot transplant); empty
+  input sets reject rather than vacuously verify. All per-proof scalars
+  are synthesized RFC-6979-style (a degraded RNG cannot zero or reuse
+  them) with a loud degenerate-rerandomization guard as backstop, since
+  `O~` freshness is the entire non-linkability property for an input
+  type publicly tagged as archival activity. Measured strictly smaller
+  than the 1-input `FcmpPlusPlus` order it was provisionally sized at
+  (3 104 B vs 3 392 B at 1 layer), closing the §10.1 caveat's size arm.
+  18 tests: roundtrips, cross-type rejection at the deserialization
+  seam (both directions), mixed-type batch rejection (both polarities),
+  freshness/ZeroRng/guard, index-binding, blob-swap, replay, wrong-root,
+  tamper, sizing. Two named gates carried: external review of the
+  soundness reduction (`FCMP_MEMBERSHIP_ONLY.md` §5.5) pre-genesis, and
+  the **ML-DSA backing-auth hard merge gate** on the emission vin PR —
+  the membership-only proof is classically secure only; quantum spend
+  authority lives at the vin (`FCMP_MEMBERSHIP_ONLY.md` §7). Docs:
+  `FCMP_MEMBERSHIP_ONLY.md` (new), emission-leg §7.2/§10.1/§12 + layer
+  table.
+
 - **archival: `ArchivalBondValue` v4 — inline `ClaimedEpochSet` +
   `first_paying_emission_height` (2026-06-12).** Implements the schema
   half of the Stage-3 gate per `REWARD_EMISSION_LEG.md` §6.2/§6.3

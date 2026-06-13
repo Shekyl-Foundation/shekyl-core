@@ -31,6 +31,7 @@ use shekyl_generators::{
 
 /// The Spend-Authorization and Linkability proof.
 pub mod sal;
+use sal::membership_only::MembershipSpendAuth;
 use sal::*;
 
 #[cfg(test)]
@@ -168,11 +169,21 @@ impl Input {
 /// A FCMP++ output tuple.
 pub type Output = fcmps::Output<<Ed25519 as Ciphersuite>::G>;
 
+/// Byte length of a canonically-encoded Ed25519 point or scalar on the wire.
+const ED25519_REPR_BYTES: usize = 32;
+
 /// An error encountered when working with FCMP++.
 #[derive(Debug)]
 pub enum FcmpPlusPlusError {
     /// An invalid quantity of key images was provided.
     InvalidKeyImageQuantity,
+    /// An empty input set was provided.
+    ///
+    /// A membership-only proof over zero inputs must reject, never verify
+    /// vacuously-true (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §8.2).
+    EmptyInputs,
+    /// An invalid quantity of PQC public-key hashes was provided.
+    InvalidPqcPkHashQuantity,
     /// A propagated FCMP error.
     FcmpError(FcmpError),
 }
@@ -197,8 +208,9 @@ impl FcmpPlusPlus {
 
     /// The size of a FCMP++ proof.
     pub fn proof_size(inputs: usize, layers: usize) -> usize {
-        // Each input tuple, without C~, each SAL, and the FCMP
-        (inputs * ((3 * 32) + (12 * 32))) + Fcmp::<Curves>::proof_size(inputs, layers)
+        // Each input tuple, without C~ (3 points), each SAL (6 points + 6 scalars),
+        // and the FCMP
+        (inputs * ((3 + 12) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
     /// Write a FCMP++ proof.
@@ -244,8 +256,11 @@ impl FcmpPlusPlus {
     ///
     /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
     ///
-    /// If this function returns an error, the BatchVerifiers MUST be considered corrupted and
-    /// discarded.
+    /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
+    /// input-validation errors (`InvalidKeyImageQuantity`, `InvalidPqcPkHashQuantity`) are returned
+    /// before any statement is queued, so the verifiers are in fact untouched in those cases; an
+    /// error raised once queuing has begun leaves them partially populated. Discarding on any error
+    /// is the safe, uniform contract.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
@@ -260,10 +275,10 @@ impl FcmpPlusPlus {
         pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
     ) -> Result<(), FcmpPlusPlusError> {
         if self.inputs.len() != key_images.len() {
-            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+            return Err(FcmpPlusPlusError::InvalidKeyImageQuantity);
         }
         if self.inputs.len() != pqc_pk_hashes.len() {
-            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+            return Err(FcmpPlusPlusError::InvalidPqcPkHashQuantity);
         }
 
         let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
@@ -271,6 +286,139 @@ impl FcmpPlusPlus {
             self.inputs.iter().zip(key_images).zip(pqc_pk_hashes)
         {
             spend_auth_and_linkability.verify(rng, verifier_ed, signable_tx_hash, input, key_image);
+
+            fcmp_inputs.push(fcmps::Input::with_extra_scalars(
+                input.O_tilde,
+                input.I_tilde,
+                input.R,
+                input.C_tilde,
+                vec![h_pqc],
+            )?);
+        }
+
+        Ok(self.fcmp.verify(
+            rng,
+            verifier_1,
+            verifier_2,
+            &*FCMP_PARAMS,
+            tree,
+            layers,
+            &fcmp_inputs,
+        )?)
+    }
+}
+
+/// A membership-only FCMP++ proof for a set of inputs: spend authority + tree
+/// membership, **no key image**.
+///
+/// Sibling type to [`FcmpPlusPlus`] — the SAL leg is replaced by
+/// [`MembershipSpendAuth`] (the `R_O` leg alone); the `Fcmp` membership leg, including
+/// the `H(pqc_pk)` extra-leaf-scalar binding, is unchanged. A membership-only proof
+/// cannot verify where a full proof is required (and vice versa): at the typed API by
+/// construction, at the byte seam by transcript domain separation.
+///
+/// First consumer: the reward-emission vin (`docs/design/REWARD_EMISSION_LEG.md`
+/// §7.2). Statement, wire format, and security argument:
+/// `docs/design/FCMP_MEMBERSHIP_ONLY.md`.
+#[derive(Clone, Debug, Zeroize)]
+pub struct FcmpMembershipOnly {
+    inputs: Vec<(Input, MembershipSpendAuth)>,
+    fcmp: Fcmp<Curves>,
+}
+
+impl FcmpMembershipOnly {
+    /// Create a new membership-only FCMP++ proof from its components.
+    pub fn new(
+        inputs: Vec<(Input, MembershipSpendAuth)>,
+        fcmp: Fcmp<Curves>,
+    ) -> FcmpMembershipOnly {
+        FcmpMembershipOnly { inputs, fcmp }
+    }
+
+    /// The size of a membership-only FCMP++ proof.
+    pub fn proof_size(inputs: usize, layers: usize) -> usize {
+        // Each input tuple, without C~ (3 points), each MembershipSpendAuth
+        // (1 point + 2 scalars), and the FCMP
+        (inputs * ((3 + 3) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
+    }
+
+    /// Write a membership-only FCMP++ proof.
+    pub fn write(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        for (input, membership_spend_auth) in &self.inputs {
+            input.write_partial(writer)?;
+            membership_spend_auth.write(writer)?;
+        }
+        self.fcmp.write(writer)
+    }
+
+    /// Read a membership-only FCMP++ proof.
+    ///
+    /// As with [`FcmpPlusPlus::read`], the pseudo-outs and the FCMP layer count are
+    /// passed in; the pseudo-out count is the input count.
+    pub fn read(
+        pseudo_outs: &[[u8; 32]],
+        layers: usize,
+        reader: &mut impl io::Read,
+    ) -> io::Result<Self> {
+        let mut inputs = vec![];
+        for pseudo_out in pseudo_outs {
+            let C_tilde = Ed25519::read_G(&mut pseudo_out.as_slice())?;
+            inputs.push((
+                Input::read_partial(C_tilde, reader)?,
+                MembershipSpendAuth::read(reader)?,
+            ));
+        }
+        let fcmp = Fcmp::read(reader, pseudo_outs.len(), layers)?;
+        Ok(Self { inputs, fcmp })
+    }
+
+    /// Verify a membership-only FCMP++ proof.
+    ///
+    /// See [`Fcmp::verify`] for further context.
+    ///
+    /// `signable_tx_hash` must be binding to the transaction prefix, the RingCT base,
+    /// and the pseudo-outs. No key images are taken: nothing here is checked against
+    /// the spent set. Each input's `H(pqc_pk)` leaf commitment is proven in-circuit;
+    /// the ML-DSA authentication against that commitment is the caller's obligation
+    /// (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §7 — a hard gate on the emission vin).
+    ///
+    /// An empty input set is rejected, never vacuously verified.
+    ///
+    /// This only queues the proofs for batch verification. The BatchVerifiers MUST
+    /// also be verified.
+    ///
+    /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
+    /// input-validation errors (`EmptyInputs`, `InvalidPqcPkHashQuantity`) are returned
+    /// before any statement is queued, so the verifiers are in fact untouched in those
+    /// cases; an error raised once queuing has begun leaves them partially populated.
+    /// Discarding on any error is the safe, uniform contract.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify(
+        &self,
+        rng: &mut (impl RngCore + CryptoRng),
+        verifier_ed: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
+        verifier_1: &mut generalized_bulletproofs::BatchVerifier<Selene>,
+        verifier_2: &mut generalized_bulletproofs::BatchVerifier<Helios>,
+        tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
+        layers: usize,
+        signable_tx_hash: [u8; 32],
+        pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
+    ) -> Result<(), FcmpPlusPlusError> {
+        if self.inputs.is_empty() {
+            return Err(FcmpPlusPlusError::EmptyInputs);
+        }
+        if self.inputs.len() != pqc_pk_hashes.len() {
+            return Err(FcmpPlusPlusError::InvalidPqcPkHashQuantity);
+        }
+
+        let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
+        for (index, ((input, membership_spend_auth), h_pqc)) in
+            self.inputs.iter().zip(pqc_pk_hashes).enumerate()
+        {
+            // A u32 cannot overflow here: a proof with 2^32 inputs cannot be
+            // constructed or deserialized.
+            let index = u32::try_from(index).expect("more than u32::MAX inputs");
+            membership_spend_auth.verify(rng, verifier_ed, signable_tx_hash, index, input);
 
             fcmp_inputs.push(fcmps::Input::with_extra_scalars(
                 input.O_tilde,

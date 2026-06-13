@@ -47,6 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **External cryptographic review of the `FcmpMembershipOnly` soundness
+  reduction (2026-06-12).**
+  [`design/FCMP_MEMBERSHIP_ONLY.md`](./design/FCMP_MEMBERSHIP_ONLY.md) §5.5:
+  the (a0)–(c) reduction re-establishes soundness of the subtracted
+  sub-proof, but §7.2 of the emission leg names the proof-type confusion
+  surface load-bearing, and soundness of a sub-proof in isolation is not
+  inherited from the Cypher-Stack review of the full composition. The
+  in-repo argument is necessary, not sufficient: an external eye on §5
+  (the G-preserving rerandomization premise, the binding/extraction step,
+  and the cross-leg `O~` identity) is a named pre-genesis criterion.
+  Until it lands, `FcmpMembershipOnly` is implemented-but-not-genesis-final.
+  Target: V3.0 (genesis freeze gate; schedule with the broader FCMP++
+  audit window so the reviewer has the full-composition context in hand).
+
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
   2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
@@ -3051,6 +3065,23 @@ sustainability is unaffected by the recalibration.
   Target: V3.1 if Guix integration lands then; bumps to V3.x
   otherwise. Cross-reference:
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22.
+
+- **Rules-queue: reconcile the priority-ordering statements across
+  scopes (2026-06-12, `FcmpMembershipOnly` review round).** The
+  ordering is currently stated three ways: project memory carries
+  "privacy > security," the privacy/security rule material carries
+  "quantum #1, classical security #2, privacy #3," and
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) carries
+  "security and quantum resilience #1, privacy #2." These are
+  plausibly all correct at different scopes (cross-domain product
+  positioning vs. within-crypto-primitive-selection vs. mission
+  arbitration), but a privacy-maximalist chain with three numberings
+  will trip an external reviewer. Disposition: a one-line
+  reconciliation in `00-mission.mdc` (the single source of truth on
+  priority ordering, by its own statement) naming which ranking is
+  canonical at which scope. Non-blocking; fold into the next rules
+  touch. Target: V3.1 (sibling to the other rules-queue entries in
+  this section).
 
 - **Rules-queue: elevate per-gate reviewer-discipline calibration
   into a workspace-wide rule (trigger: RandomX v2 Phase 0 review
