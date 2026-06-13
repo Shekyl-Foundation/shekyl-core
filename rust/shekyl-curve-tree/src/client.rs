@@ -1229,4 +1229,173 @@ mod tests {
             other => panic!("expected ResumeFromPrunedStore, got {other:?}"),
         }
     }
+
+    #[test]
+    fn restart_roundtrip_matches_continuous_run() {
+        // The resume order invariant (B4) cashed end-to-end through the
+        // production path: ingest, drop, reopen, keep ingesting. The
+        // resumed client must be element-wise identical to one that never
+        // restarted, and no block is replayed from genesis.
+        let path = temp_client_path("restart-roundtrip");
+        {
+            let mut before = CurveTreeClient::open(&path).unwrap();
+            ingest_coinbase_blocks(&mut before, 0, 70);
+        }
+
+        let mut resumed = CurveTreeClient::open(&path).unwrap();
+        // Resume picks the persisted tip up directly: a genesis replay is
+        // structurally rejected as a non-consecutive ingest.
+        assert_eq!(resumed.ingested_tip_height, Some(BlockHeight(70)));
+        let outs = [coinbase_raw()];
+        let blob = [0x07u8; 32];
+        let genesis_txs = coinbase_block(&outs, &blob);
+        assert!(matches!(
+            resumed.ingest_block(BlockLeaves {
+                height: BlockHeight(0),
+                txs: &genesis_txs,
+            }),
+            Err(ClientError::NonConsecutiveBlockHeight {
+                got: BlockHeight(0),
+                expected: BlockHeight(71),
+            })
+        ));
+        ingest_coinbase_blocks(&mut resumed, 71, 140);
+
+        let mut continuous = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut continuous, 0, 140);
+
+        assert_eq!(
+            resumed.entries, continuous.entries,
+            "resumed entries must be element-wise identical to a continuous run"
+        );
+        assert_eq!(resumed.next_gindex, continuous.next_gindex);
+        // Drain-order identity: the persisted drained prefix matches the
+        // never-restarted run's byte-for-byte, in order.
+        assert_eq!(
+            resumed.store.read_drained_entries().unwrap(),
+            continuous.store.read_drained_entries().unwrap()
+        );
+        for h in 0..=140u64 {
+            assert_eq!(
+                resumed.root_at(BlockHeight(h)).unwrap(),
+                continuous.root_at(BlockHeight(h)).unwrap(),
+                "height {h}"
+            );
+        }
+        drop(resumed);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn staked_locks_drain_and_persist_across_restart() {
+        // B3 split from the plan, both halves over one restart.
+        //
+        // (a) A synthetic 300-block stake lock — tractable in a test, same
+        //     `StakedKey` code path as any consensus tier — must drain at
+        //     the right height on the *resumed* client, identically to a
+        //     run that never restarted.
+        // (b) The adversarial 150_000-block stake must survive the same
+        //     restart byte-correct in the pending table and never drain
+        //     inside the window — asserted directly against the table, so
+        //     a long-maturity resume bug cannot hide behind root checks
+        //     that never reach its maturity.
+        let path = temp_client_path("staked-restart");
+        const SHORT_LOCK: u64 = 300;
+        const LONG_LOCK: u64 = 150_000;
+        let staked = |lock_blocks: u64| RawOutput {
+            output_key: ED25519_BASEPOINT,
+            commitment: Some(ED25519_BASEPOINT),
+            target: TargetKind::StakedKey { lock_blocks },
+        };
+        let cb = [coinbase_raw()];
+        let outs_short = [staked(SHORT_LOCK)];
+        let outs_long = [staked(LONG_LOCK)];
+        let blob_cb = [0x07u8; 32];
+        let blob_short = [0x11u8; 32];
+        let blob_long = [0x13u8; 32];
+        let block0_txs = vec![
+            TxLeafInputs {
+                is_miner: true,
+                leaf_hash_blob: Some(&blob_cb),
+                outputs: &cb,
+            },
+            TxLeafInputs {
+                is_miner: false,
+                leaf_hash_blob: Some(&blob_short),
+                outputs: &outs_short,
+            },
+            TxLeafInputs {
+                is_miner: false,
+                leaf_hash_blob: Some(&blob_long),
+                outputs: &outs_long,
+            },
+        ];
+
+        {
+            let mut client = CurveTreeClient::open(&path).unwrap();
+            client
+                .ingest_block(BlockLeaves {
+                    height: BlockHeight(0),
+                    txs: &block0_txs,
+                })
+                .unwrap();
+            // Stop inside the short stake's lock window (matures at 300,
+            // drains at 301): the restart lands while both stakes pend.
+            ingest_coinbase_blocks(&mut client, 1, 250);
+        }
+
+        let mut resumed = CurveTreeClient::open(&path).unwrap();
+
+        // (b) pre-drive: the 150k stake came back byte-correct.
+        let pending = resumed.store.read_pending_candidates().unwrap();
+        let long_row = pending
+            .iter()
+            .find(|e| e.gindex == Gindex(2))
+            .expect("150k stake pending after resume");
+        assert_eq!(long_row.maturity, BlockHeight(LONG_LOCK));
+        assert_eq!(long_row.creation_height, BlockHeight(0));
+        assert_eq!(
+            long_row.identity.target,
+            TargetKind::StakedKey {
+                lock_blocks: LONG_LOCK
+            }
+        );
+
+        // (a) drive the resumed client past the short stake's drain
+        // boundary and compare against a continuous run.
+        ingest_coinbase_blocks(&mut resumed, 251, SHORT_LOCK + 1);
+        let mut continuous = CurveTreeClient::new();
+        continuous
+            .ingest_block(BlockLeaves {
+                height: BlockHeight(0),
+                txs: &block0_txs,
+            })
+            .unwrap();
+        ingest_coinbase_blocks(&mut continuous, 1, SHORT_LOCK + 1);
+
+        assert_eq!(resumed.entries, continuous.entries);
+        let drained = resumed.store.read_drained_entries().unwrap();
+        assert_eq!(drained, continuous.store.read_drained_entries().unwrap());
+        assert!(
+            drained
+                .iter()
+                .any(|e| e.maturity == BlockHeight(SHORT_LOCK)),
+            "short stake must drain at lock expiry on the resumed client"
+        );
+        assert_eq!(
+            resumed.root_at(BlockHeight(SHORT_LOCK + 1)).unwrap(),
+            continuous.root_at(BlockHeight(SHORT_LOCK + 1)).unwrap()
+        );
+
+        // (b) post-drive: the 150k stake never drained and still pends.
+        assert!(drained.iter().all(|e| e.gindex != Gindex(2)));
+        assert!(resumed
+            .store
+            .read_pending_candidates()
+            .unwrap()
+            .iter()
+            .any(|e| e.gindex == Gindex(2)));
+        drop(resumed);
+        std::fs::remove_file(&path).unwrap();
+    }
 }
