@@ -272,10 +272,10 @@ impl FcmpPlusPlus {
         pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
     ) -> Result<(), FcmpPlusPlusError> {
         if self.inputs.len() != key_images.len() {
-            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+            return Err(FcmpPlusPlusError::InvalidKeyImageQuantity);
         }
         if self.inputs.len() != pqc_pk_hashes.len() {
-            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+            return Err(FcmpPlusPlusError::InvalidPqcPkHashQuantity);
         }
 
         let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
