@@ -75,7 +75,7 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: blk.height,
+                height: BlockHeight(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -133,7 +133,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
             let through = blk.height.saturating_sub(1);
             let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
             let store_root = client
-                .root_at(blk.height)
+                .root_at(BlockHeight(blk.height))
                 .expect("store hot path must not error during Tier-A KAT");
             assert_eq!(
                 store_root, oracle,
@@ -192,7 +192,7 @@ fn store_root_mixed_maturity_drain_order() {
     let mut client = CurveTreeClient::new();
     client
         .ingest_block(BlockLeaves {
-            height: 0,
+            height: BlockHeight(0),
             txs: &txs,
         })
         .unwrap();
@@ -208,7 +208,7 @@ fn store_root_mixed_maturity_drain_order() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height,
+                height: BlockHeight(height),
                 txs: &txs_cb,
             })
             .unwrap();
@@ -255,7 +255,9 @@ fn store_root_mixed_maturity_drain_order() {
 
     let through = 60u64;
     let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
-    let store_root = client.root_at(61).expect("store hot path must not error");
+    let store_root = client
+        .root_at(BlockHeight(61))
+        .expect("store hot path must not error");
     assert_eq!(
         store_root, oracle,
         "store must mirror canonical drain order"
@@ -294,8 +296,11 @@ fn truncate_and_replay_matches_from_blocks() {
 
     for blk in prefix {
         assert_eq!(
-            full.root_at(blk.height).expect("store hot path"),
-            rebuilt.root_at(blk.height).expect("store hot path"),
+            full.root_at(BlockHeight(blk.height))
+                .expect("store hot path"),
+            rebuilt
+                .root_at(BlockHeight(blk.height))
+                .expect("store hot path"),
             "reorg replay at {}",
             blk.height
         );

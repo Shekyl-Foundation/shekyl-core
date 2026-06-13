@@ -116,7 +116,7 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: blk.height,
+                height: BlockHeight(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -281,7 +281,7 @@ fn assemble_path_rejects_root_mismatch() {
     };
     match client.assemble_path(&founder, &bad, [0u8; 32]) {
         Err(shekyl_curve_tree::ClientError::RootMismatch { height, .. }) => {
-            assert_eq!(height, tip.height);
+            assert_eq!(height, BlockHeight(tip.height));
         }
         other => panic!("expected RootMismatch, got {other:?}"),
     }

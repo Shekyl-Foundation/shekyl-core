@@ -66,27 +66,27 @@ impl CurveTreeClient {
         reference: &ReferenceBlock,
         reference_block_hash: [u8; 32],
     ) -> Result<AssembledPath, ClientError> {
-        let cutoff = Self::drained_through(reference.height.0);
+        let cutoff = Self::drained_through(reference.height);
 
         // Two mechanisms by design: (1) integrity gate — store-backed `root_at`
         // (CT-1), no replay-oracle fallback; (2) path branches — replay
         // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
         // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
-        let got = self.root_at(reference.height.0)?;
+        let got = self.root_at(reference.height)?;
         if got != reference.curve_tree_root {
             return Err(ClientError::RootMismatch {
-                height: reference.height.0,
+                height: reference.height,
                 expected: reference.curve_tree_root,
                 got,
             });
         }
 
-        let stream = assemble_leaf_stream(&self.entries, cutoff);
+        let stream = assemble_leaf_stream(&self.entries, cutoff.0);
         let layers = build_layers(&stream);
 
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
-        let drained = drained_sorted(&self.entries, cutoff);
+        let drained = drained_sorted(&self.entries, cutoff.0);
         let leaf_pos = drained
             .iter()
             .position(|e| {

@@ -297,7 +297,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: blk.height,
+                    height: BlockHeight(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
@@ -337,12 +337,14 @@ fn client_path_matches_recon_path() {
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: blk.height,
+                    height: BlockHeight(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
             assert_eq!(
-                client.root_at(blk.height).expect("store hot path"),
+                client
+                    .root_at(BlockHeight(blk.height))
+                    .expect("store hot path"),
                 *recon_root,
                 "client/recon divergence at height {}",
                 blk.height,
