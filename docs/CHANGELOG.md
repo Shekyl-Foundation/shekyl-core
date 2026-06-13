@@ -207,6 +207,33 @@
 
 ### Added
 
+- **crypto: CT-3c persistent reorg rollback (`shekyl-curve-tree`,
+  2026-06-12).** `CurveTreeClient::rollback_to_fork(BlockHeight)` now
+  rolls the redb-backed `LeafStore` back to an inclusive fork point,
+  verifies the boundary-adjacent frozen segment's `R_k`, rebuilds
+  in-memory state from the authoritative store, and resumes forward
+  ingest at `fork + 1`. Rollback partitioning is aligned with CT-2's
+  drain boundary (`maturity > drained_through(fork_height)`, while
+  `sync_tip_height` and the orphan filter remain fork-height based),
+  fixing the off-by-one that would otherwise keep `maturity == fork`
+  rows drained and make the first post-rollback block remove
+  already-drained pending rows. New structured store errors identify
+  frozen-record absence and `R_k` mismatch. Coverage adds the primary
+  direct pending-row equality KAT with a re-draining class-(b) witness
+  and a 150k-lock never-draining witness, plus a file-backed
+  `reorg_deep` rollback/resync KAT against fresh replay and consensus
+  roots. `LeafStore::append_drained` is now test-only so production
+  ingest cannot bypass pending-table maintenance. **Review hardening
+  (2026-06-13):** the rollback poison contract is now machine-enforced —
+  the client sets an internal poison flag at the store commit and clears
+  it only on full rebuild success, so a post-commit failure makes every
+  load-bearing call (`ingest_block`, `root_at`, `verify_root`,
+  `rollback_to_fork`) fail fast with `ClientError::Poisoned` instead of
+  relying on caller prose discipline; `verify_frozen_tail` maps a corrupt
+  freeze-segment counter to `StoreError::CorruptMeta` rather than
+  panicking on the rollback path; and the persistent `reorg_deep` KAT
+  asserts its `deep_pop <= main_tip` fixture invariant explicitly.
+
 - **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
   2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted
   `LeafStore` with no genesis replay: in-memory state is rebuilt as the
