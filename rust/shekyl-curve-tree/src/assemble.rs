@@ -48,13 +48,14 @@ impl CurveTreeClient {
     /// reference block.
     ///
     /// `id` is matched against the drained leaves by output key (`O`,
-    /// primary) and commitment (`C`, disambiguation), per §4.3.
-    /// `reference_block_hash` is the hash of the block at `reference.height`
-    /// (held by the caller from the synced header); it is threaded into
-    /// [`TreeContext::reference_block`] for the eventual
-    /// `rctSig.referenceBlock`. (`select_reference_block`, §5, will later
-    /// bundle the hash with the reference so this argument folds in; it is
-    /// explicit here while that horizon logic is deferred.)
+    /// primary) and commitment (`C`, disambiguation), per §4.3. The block
+    /// hash threaded into [`TreeContext::reference_block`] (for the eventual
+    /// `rctSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
+    /// caller supplies the full consensus anchor (height, root, hash) as one
+    /// value. Reference-block *selection* (the validity-horizon arithmetic in
+    /// [`crate::reference`], e.g. [`crate::reference::select_reference_height`])
+    /// is the caller's, against its own chain view; it is landed and pure
+    /// height arithmetic, not a `ReferenceBlock` constructor (§5).
     ///
     /// Runs the integrity gate first: returns [`ClientError::RootMismatch`]
     /// if the reconstructed root does not match `reference.curve_tree_root`,
@@ -64,7 +65,6 @@ impl CurveTreeClient {
         &self,
         id: &OutputIdentity,
         reference: &ReferenceBlock,
-        reference_block_hash: [u8; 32],
     ) -> Result<AssembledPath, ClientError> {
         let cutoff = Self::drained_through(reference.height);
 
@@ -164,7 +164,7 @@ impl CurveTreeClient {
             c1_layers,
             c2_layers,
             tree: TreeContext {
-                reference_block: reference_block_hash,
+                reference_block: reference.block_hash,
                 // Equals our reconstruction (verify_root just confirmed it);
                 // carry the consensus value.
                 tree_root: reference.curve_tree_root,

@@ -318,6 +318,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
             let reference = ReferenceBlock {
                 height: BlockHeight(blk.height),
                 curve_tree_root: blk.root,
+                block_hash: [0u8; 32],
             };
             if client.verify_root(&reference).is_err() {
                 mismatches.push(blk.height);

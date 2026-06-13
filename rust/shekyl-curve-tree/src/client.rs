@@ -1297,6 +1297,7 @@ mod tests {
             client.verify_root(&ReferenceBlock {
                 height: BlockHeight(5),
                 curve_tree_root: [0u8; 32],
+                block_hash: [0u8; 32],
             }),
             Err(ClientError::Poisoned)
         ));
@@ -1436,12 +1437,14 @@ mod tests {
         let good = ReferenceBlock {
             height: BlockHeight(61),
             curve_tree_root: client.root_at(BlockHeight(61)).unwrap(),
+            block_hash: [0u8; 32],
         };
         assert!(client.verify_root(&good).is_ok());
 
         let bad = ReferenceBlock {
             height: BlockHeight(61),
             curve_tree_root: [0xFFu8; 32],
+            block_hash: [0u8; 32],
         };
         match client.verify_root(&bad) {
             Err(ClientError::RootMismatch {

@@ -84,6 +84,7 @@ fn _drift_canary_client_path() {
     let reference = ReferenceBlock {
         height: BlockHeight(0),
         curve_tree_root: [0u8; 32],
+        block_hash: [0u8; 32],
     };
     let verify_ok = client.verify_root(&reference).is_ok();
     std::hint::black_box(verify_ok);

@@ -450,7 +450,8 @@ For V3.0 / Phase 2a this gap is **not blocking**. The wallet's
 `DaemonClient::submit_transaction` (§3.6 honest-subset mapping) maps the
 generic `Failed` bucket — which includes a stale root — to
 `DaemonRejectedTerminal { Malformed }`. The **proactive** guard
-(`reference.rs` validity horizon / `select_reference_block`, §5.4) bounds how
+(`reference.rs` validity horizon / `should_reanchor`,
+`select_reference_height`, §5.4) bounds how
 stale a built proof can become before the wallet pre-emptively rebuilds, so the
 reactive signal is a backstop, not the primary defense. Treating every generic
 `Failed` as possibly-stale is explicitly rejected: it would misclassify real

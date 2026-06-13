@@ -218,8 +218,19 @@ pub struct AssembledPath {
     pub tree: TreeContext,
 }
 
-/// A reference block the wallet anchors a membership proof to: the height
-/// and the consensus curve-tree root committed in that block's header.
+/// A reference block the wallet anchors a membership proof to: the height,
+/// the consensus curve-tree root committed in that block's header, and the
+/// block's own hash.
+///
+/// All three are public consensus values the caller holds from its synced
+/// chain view; the struct is the single anchor [`crate::CurveTreeClient::assemble_path`]
+/// consumes, so the caller cannot positionally swap one 32-byte value for
+/// another (output keys, commitments, roots, and block hashes are all
+/// `[u8; 32]`). Binding a height to its consensus root and hash is the
+/// caller's responsibility (the caller-supplies-root integrity model,
+/// `CURVE_TREE_CLIENT.md` §3.5); reference-block *selection* is the height
+/// arithmetic in [`crate::reference`], which deliberately does not construct
+/// a `ReferenceBlock` (it stores no header roots).
 ///
 /// The reconstructed root (see [`crate::recon::root_from_scalars`]) must
 /// byte-equal `curve_tree_root` — the CT-2 reconstruct-root KAT. The
@@ -232,4 +243,9 @@ pub struct ReferenceBlock {
     pub height: BlockHeight,
     /// Header-committed curve-tree root (consensus value to match).
     pub curve_tree_root: [u8; 32],
+    /// Hash of the block at [`Self::height`], echoed into
+    /// [`TreeContext::reference_block`] for the eventual
+    /// `rctSig.referenceBlock`. A consensus value the caller holds from the
+    /// synced header alongside [`Self::curve_tree_root`].
+    pub block_hash: [u8; 32],
 }

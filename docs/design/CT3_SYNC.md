@@ -13,8 +13,12 @@ predates delta ingest). **CT-3c landed** (2026-06-12: client
 `rollback_to_fork`, rollback partition corrected to the CT-2 drain cutoff,
 rollback-path frozen-tail `R_k` recheck, direct pending-set KAT with
 class-(b) and long-maturity witnesses, persistent `reorg_deep` KAT,
-`append_drained` demoted to test-only). CT-3d (parent doc closeout)
-remains.
+`append_drained` demoted to test-only). **CT-3d landed** (2026-06-13:
+parent doc closeout — [`CT3_ROUND1_CLOSEOUT.md`](./CT3_ROUND1_CLOSEOUT.md),
+parent §8 #6 / §9 CT-3 row flipped to closed, FOLLOWUPS routing).
+**CT-3 Round 1 complete** — the bulk-leaf RPC (R1-Q1) and `SegmentSource`
+seam (R1-Q5) are deferred-with-recorded-shape, landing with the post-prune
+refetch path.
 
 **Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-3 row:
 "Source-agnostic bulk-segment fetch + delta sync + per-segment root verify
