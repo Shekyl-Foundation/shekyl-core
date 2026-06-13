@@ -80,6 +80,20 @@ C++ struct carries only what the mempool/explorer need beyond the opaque
 backing blob. The exact marshaling contract (snapshot struct vs DB-read
 callbacks for bond/work/tree state) is an open design-round question (§8 Q7).
 
+**Daemon-side touches follow the same rule.** PR-E3's C++ shim lands in daemon
+consensus code (`blockchain.cpp`, `tx_pool.cpp`, `blockchain_db.cpp`). The
+daemon is not part of the wallet rewrite and this PR series does not rewrite
+it — but every daemon file this work opens is an opportunity to push the
+boundary forward rather than thicken the C++: keep the shim minimal, route new
+logic through the Rust FFI, and leave the file in better Rust-forward shape
+than found. A full daemon rewrite is an eventual (post-wallet) goal; these
+incremental "touched-it-so-improved-it" cuts shrink that future scope and
+de-risk the Stage-5 transition. This is the `16-architectural-inheritance.mdc`
+"leave the file in good shape after my edit" discipline applied to the daemon
+— **not** a `15-deletion-and-debt.mdc` "while we're here" expansion: PR scope
+stays the emission vin, and unrelated daemon migration is a separate planning
+activity (`20-rust-vs-cpp-policy.mdc`).
+
 ---
 
 ## 1. Pre-flight substrate inventory (A2)
