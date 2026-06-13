@@ -6,7 +6,23 @@
 #![deny(clippy::float_arithmetic)]
 
 /// Fixed-point scale for work, scarcity, and curve values (milli-units).
+///
+/// **Consensus invariant, frozen by PR 1.5** (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`).
+/// This is the fixed-point scale the §5.4 zero-tolerance emission-vin compare runs
+/// in; every node must agree on it bit-for-bit. **Changing this value forks the
+/// chain** and invalidates the F-E8 u128 width audit (a larger scale widens the
+/// `mul_div_floor` operands). It is not a tuning knob — the milli freeze is
+/// validated band-interior; see `ARCHIVAL_REWARD_ARITHMETIC.md` §Economic-tolerance
+/// for the raise-`N` reopen criterion.
 pub const WORK_MILLI_SCALE: u64 = 1_000;
+
+// Tripwire: the value above is consensus-load-bearing and frozen. Editing the
+// const without consciously editing this guard (and reading the note) forks the
+// chain. Mirrors the `const _: () = assert!(...)` discipline in consensus_state.rs.
+const _: () = assert!(
+    WORK_MILLI_SCALE == 1_000,
+    "WORK_MILLI_SCALE is a frozen consensus invariant (PR 1.5); changing it forks the chain"
+);
 
 /// Provisional banded PL `Curve`: decreasing slopes → plateau.
 ///

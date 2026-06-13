@@ -357,23 +357,97 @@ Second-pass review against `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` and
 dependency neither doc currently connects); M-2/M-3 are precision tightenings
 folding into PR-E3 step 4.
 
-**M-1 (genesis-freeze prerequisite, cross-track) — PR 1.5 integer-sweep gate.**
+**M-1 has two halves, both addressed 2026-06-13 — half (a)
+economics-preservation: PASS (PR 1.5), integer `Curve` frozen at milli; half (b)
+cross-arch determinism: closed (golden-vector KAT runs on x86_64 + aarch64), with
+the wallet-side single-source the single carry into PR-E3 (see §9).**
 `reward_arithmetic`'s **integer** `Curve` is the function PR-E3 mints money with
-at **zero tolerance** (§5.4), but its economic equivalence to the validated
-**float** `Curve` has passed only a thin per-point reconciliation KAT
-(`ε_curve ≤ 0.002`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`, 2026-06-09). The
-**full integer-sweep comparison is PR 1.5**, and it **has not run** — verified
-at source: `ARCHIVAL_REWARD_ARITHMETIC.md` §KAT carries "`ε_gini` TBD in PR 1.5
-sweep report." Per-point `ε ≤ 0.002` is the wrong sufficiency standard for a
-zero-tolerance consensus path: the margin-robustness band is **narrow** in the
-sim, and a per-point deviation propagated across a sweep can flip a
-boundary-grazing metric — which is precisely why the verdict names
-attractor-rank / margin-boolean / Gini-Δ as reopen criteria. **Disposition:**
-PR 1.5 (full integer-sweep economic-equivalence) is a **genesis-freeze
-prerequisite for freezing the integer `Curve`** that PR-E3 consumes; PR-E3's
-economics KATs are flagged for **regeneration** if PR 1.5 reshapes the curve
-(a consensus change to wired code — cheap pre-genesis, no migration, but
-tracked rather than discovered). Recorded in §9.
+at **zero tolerance** (§5.4). Two distinct properties hide under "freeze the
+integer Curve": **(a)** does the integer `Curve` *preserve the emergent
+economics* the float sim validated, and **(b)** do the wallet build path and the
+consensus recompute produce *bit-identical* integer values across
+implementations and arches for the §5.4 compare. They are closed by different
+mechanisms; PR 1.5 addresses (a) only.
+
+**Half (a) — economics preservation (PASS).** The thin per-point reconciliation
+KAT (`ε_curve ≤ 0.002`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`, 2026-06-09) is the
+wrong sufficiency standard on its own — a per-point deviation can propagate
+across a sweep and flip a boundary-grazing metric — so the **full integer-sweep
+comparison (PR 1.5)** was run on the *homeostasis* frame, which measures that
+propagation instead of assuming it: *does the integer backend keep the network
+within every homeostasis bound at least as well as the validated float model?*
+**Result (full 325-scenario sweep, `--curve-impl=integer` vs `=float`):** the
+load-bearing decentralization invariant `spread`/`spread_windowed`
+(`max_actor_share < 0.20`) is **325/325 clean** on both backends and integer is
+**never below float** on any aggregate. Integer is therefore **not worse** than
+the float object — the bar. The +3/+2/+1 on `deep_history`/`churn_stable`/
+`all_pass` is **not** a directional edge: the metrics are dependent (`all_pass`
+is the conjunction), so those are one-or-two threshold-grazing scenarios flipping
+across correlated metrics — reshuffling noise, not five wins. Flooring is a
+systematic *down*-bias (see tail-margin note); "integer ≥ float in aggregate"
+must not harden into "flooring is benign." Only **4/325** scenarios bifurcate
+materially (|Δ frac_under| > 0.30), all at operating-band extremes (servo gain
+400 black swans; the g≈2.5 age-weight band edge). A milli→micro
+(`WORK_MILLI_SCALE` ×1000) discriminating sweep is what makes the verdict
+load-bearing rather than reassuring — it did **not** reduce the material count
+(4→4, aggregate slightly worse), converting "the residuals look like band
+extremes" into proof of class: **three of four (servo-400) are dynamical, not
+arithmetic** (finer fixed-point cannot move a bifurcation); **the fourth
+(`layer2_coloc_g2.5`) is genuinely quantization-driven** — micro rescued it
+(0→0.70 → 0→0.00) — so the milli freeze does *not* validate it away, and it is
+routed to the band-interior carry + the raise-`N` re-check in
+`ARCHIVAL_REWARD_ARITHMETIC.md` §Economic-tolerance. **Disposition (a):** PR 1.5
+**PASSES**; the integer `Curve` is frozen at `WORK_MILLI_SCALE = 1_000` (milli)
+for PR-E3. Raising the scale is rejected (overflow re-audit cost for zero
+homeostasis gain; freezing at milli also keeps F-E8's u128 width audit valid
+as-is). `WORK_MILLI_SCALE` is now a **load-bearing consensus invariant** (it sets
+the fixed-point scale the zero-tolerance compare runs in) and carries a
+compile-time guard + "changing this forks the chain" note in
+`reward_arithmetic.rs`. **Reopen criterion (rule 21):** the servo-400 / g≈2.5
+fragility is addressable only by operating-envelope discipline — a servo-gain
+ceiling and a band-interior age-weight target, set and confirmed on **testnet**;
+reopen if testnet operates near those edges. **Tail-margin note (second-pass
+scan):** integer biases the redundancy tail thinner (`min_r` 26↓/17↑,
+`sole_source_shard_epochs` 76↑/49↓) in-envelope — no invariant breaks (no shard
+to `min_r = 0` that float kept ≥ 1) — because `floor()` discards the fractional
+work-credit float optimistically counted. Consequence: tune redundancy /
+`R_target` bands against the **integer backend** (+1 deep-tail replica margin),
+and watch `sole_source_shard_epochs` on testnet. PR-E3's economics KATs remain
+flagged for regeneration only if a future re-tune reshapes the curve. Evidence:
+`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` (PR 1.5 section).
+
+**Half (b) — cross-implementation / cross-arch determinism (KAT gap closed
+2026-06-13; one residual = PR-E3 mandate).** Two properties carry the §5.4
+zero-tolerance compare: (i) the integer arithmetic produces bit-identical values
+across arches, and (ii) every implementation single-sources `reward_arithmetic`
+(no second copy).
+
+*Determinism, property (i).* `reward_arithmetic` is pure fixed-width integer
+arithmetic — `u64` operands, `u128` intermediates, no `usize`/`isize`, and
+`#![deny(clippy::float_arithmetic)]` forbids floating point. Rust defines every
+fixed-width integer operation identically on all targets, so cross-arch
+bit-identity holds **by construction**; the risk is a *future regression* (an
+accidental float/`usize`, or a reordered `mul_div_floor` that floors early). The
+**gap found earlier** — the old `determinism_curve_milli_cross_check` was a
+same-arch in-process double-call of `curve_milli` that exercised neither a second
+arch nor the **Form-C division path** (`reward_share_floor` / `mul_div_floor`) —
+is now **closed**: `shekyl-archival-retention/tests/reward_arithmetic_determinism_kat.rs`
+pins golden vectors for `g_age_milli`, `scarcity_milli`, `curve_milli`,
+`mul_div_floor` (including a vector that overflows the `u64` product, forcing the
+u128 path, and one that pins the u128-before-divide order: `floor(7·3/4)=5`, not
+`(7/4)·3=3`), `reward_share_floor`, and the Σ-minted-≤-budget burned-dust
+property. The weak double-call was reduced to an honest plateau/scale pin. The
+vectors **execute** on `x86_64` (`build.yml` `cargo test --workspace`) and on
+`aarch64` under qemu-user (`depends.yml`), so the cross-arch claim is verified,
+not assumed.
+
+*Single-source, property (ii).* The **consensus** path already single-sources
+`reward_arithmetic` (`consensus_state.rs` imports it; there is no second
+implementation). The **wallet build** path that produces `reward_amount_plain`
+does not exist until PR-E3 (FFI), so its single-source import is a **PR-E3
+construction mandate**, not a closeable item now — it is pinned in R1.B/M-3 and
+restated in §9. Half (b) is therefore **closed**, with the wallet-side import the
+single carry into PR-E3.
 
 **M-2 (supply conservation — resolved: sourcing-discipline pin, not a schema
 gap).** The credited numerator `capped_P(E)` must be P's **exact** term in the
@@ -713,11 +787,34 @@ discipline note, or named forward-action (A5).
   emission KATs → **PR-E1/E2/E3/E5**.
 - FFI-seam variant of the deser cross-type test → **PR-E1**.
 - Vin-layer input-distinctness rule (if required) → **PR-E3** (§8 Q3).
-- **PR 1.5 integer-sweep economic-equivalence (M-1)** → **genesis-freeze
-  prerequisite** for the integer `Curve` PR-E3 mints with; not yet run
-  (`ARCHIVAL_REWARD_ARITHMETIC.md` §KAT: `ε_gini` TBD). PR-E3 economics KATs
-  regenerate if PR 1.5 reshapes the curve. Cross-track dependency on the
-  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` validation line.
+- **M-1 half (a) — economics preservation (PR 1.5)** → **PASS 2026-06-13**;
+  integer `Curve` frozen at `WORK_MILLI_SCALE = 1_000`. Homeostasis-frame sweep:
+  `spread` 325/325 clean, integer **not worse** than float on any aggregate;
+  4/325 material bifurcations — three servo-400 (dynamical, micro did not move
+  them), one g≈2.5 band edge (quantization-driven, micro-rescued → band-interior
+  carry). Evidence: `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` (PR 1.5).
+- **M-1 half (a) carries → testnet operating-envelope:** servo-gain ceiling;
+  band-interior age-weight target (the g≈2.5 upper edge is quantization-fragile
+  at the frozen milli scale); tune redundancy / `R_target` bands against the
+  **integer backend** with a **+1 deep-tail replica margin** (tail-margin
+  finding: integer thins `min_r` / raises `sole_source_shard_epochs` in-envelope
+  because flooring discards work-credit float over-counted — no invariant
+  breaks). PR-E3 economics KATs regenerate only on a future re-tune.
+- **M-1 half (b) — cross-arch bit-identical determinism** → **closed 2026-06-13;
+  one carry into PR-E3.** Prerequisite for the §5.4 zero-tolerance compare.
+  Determinism holds **by construction** (pure fixed-width integer arithmetic, no
+  float/`usize`, `#![deny(clippy::float_arithmetic)]`); the golden-vector KAT is
+  the regression guard. The inadequate `determinism_curve_milli_cross_check`
+  (same-arch double-call of `curve_milli` only) is superseded by
+  `shekyl-archival-retention/tests/reward_arithmetic_determinism_kat.rs`, which
+  pins `g_age_milli`, `scarcity_milli`, `curve_milli`, `mul_div_floor` (overflow
+  → u128 path; `floor(7·3/4)=5` pins u128-before-divide order), `reward_share_floor`,
+  and the Σ-minted-≤-budget burned-dust property. The KAT **executes** on both
+  `x86_64` (`build.yml`) and `aarch64` under qemu-user (`depends.yml`). Consensus
+  path single-sources `reward_arithmetic`. **Carry into PR-E3:** the wallet build
+  path that emits `reward_amount_plain` must import the same `reward_arithmetic`
+  crate (no second implementation) — un-closeable until that path is built;
+  pinned in R1.B/M-3.
 
 ## 10. Related documents
 
