@@ -156,9 +156,11 @@ pub enum ClientError {
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
 ///
-/// Holds leaf candidates and mirrors drained leaves into the store on each
-/// [`Self::ingest_block`]. Construct with [`Self::from_blocks`] (or
-/// [`Self::try_new`] + ingest) and reconstruct/verify a root at a reference
+/// Holds leaf candidates and writes block deltas (drained + pending) into
+/// the store on each [`Self::ingest_block`]. The production wallet
+/// constructs with [`Self::open`] (persistent store, resume from contents
+/// — CT-3b); [`Self::from_blocks`] and [`Self::try_new`] + ingest cover
+/// the ephemeral/replay shapes. Reconstruct/verify a root at a reference
 /// height via the persisted [`LeafStore`] hot path ([`Self::root_at`]);
 /// store errors propagate and there is no silent replay-oracle fallback.
 #[derive(Debug)]
@@ -809,7 +811,7 @@ mod tests {
         // Every block carries a coinbase (m = h+60) and a regular output
         // (m = h+11), so once both schedules overlap each maturity bucket
         // holds two entries from two different blocks. The O(1) incremental
-        // count in sync_store must agree with the maturity-index scan at
+        // count in ingest_block must agree with the maturity-index scan at
         // every cutoff (the ingest-path debug_assert also checks each step).
         let cb = coinbase_raw();
         let regular = RawOutput {

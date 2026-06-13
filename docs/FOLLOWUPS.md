@@ -97,18 +97,22 @@ sustainability is unaffected by the recalibration.
   client ingests through the deltas API, any mixed use silently breaks
   drained/pending disjointness and resume exactness. Demote to
   `#[cfg(test)]` or fold into the KAT harness when the criterion is met.
+  **Criterion met by CT-3b (2026-06-12):** the client ingests through
+  `append_block_deltas`; every remaining `append_drained` caller is a
+  test site. Execute the demotion at CT-3c closeout as scheduled.
   See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
 
 - **Carry `BlockHeight`/`Gindex` typing across the client → engine seam
-  (CT-3a P5, 2026-06-12).** Target: V3.0, with CT-3b and the engine
-  refresh wiring. CT-3a newtypes every `LeafStore` `pub fn` and
-  `types.rs` struct; the `CurveTreeClient` public API (`ingest_block`,
-  `from_blocks`, the §3.5 contract surfaces) deliberately stays bare
-  `u64` and converts at the call edge — staged typing along the existing
-  PR seam, not half-typed drift. The long-term swap risk lives where
-  heights cross into `shekyl-engine-*`; retype the client's outward
-  signatures in CT-3b (where they change anyway) and carry the newtypes
-  (or engine-side equivalents) through the engine boundary there. See
+  (CT-3a P5, 2026-06-12; client portion closed by CT-3b 2026-06-12).**
+  Target: V3.0, with the engine refresh wiring (CT-5). CT-3a newtypes
+  every `LeafStore` `pub fn` and `types.rs` struct; **CT-3b retyped the
+  client's outward signatures** (`BlockLeaves.height`, `ingest_block`,
+  `root_at`, `verify_root`, `drained_leaf_count`, the height-carrying
+  `ClientError` fields) so raw `u64` heights no longer cross any client
+  method boundary. Remaining scope: carry the newtypes (or engine-side
+  equivalents) through the `shekyl-engine-*` boundary when the refresh
+  wiring consumes the client API. The `recon`-layer `u64` cutoffs are
+  internal-oracle surface and stay bare by design. See
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
 
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11

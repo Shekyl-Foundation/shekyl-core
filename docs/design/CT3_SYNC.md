@@ -3,8 +3,14 @@
 **Status:** Pre-flight substrate audit complete (2026-06-11). **Round 1
 closed (2026-06-11, §3.7–§3.8):** R1-Q1/Q4/Q5/Q6 endorsed; R1-Q2/Q3
 amended (two-class rollback + `creation_height`); findings F6–F9 routed;
-closure verified with three CT-3a/3c implementation riders (§3.8). No
-production code yet.
+closure verified with three CT-3a/3c implementation riders (§3.8).
+**CT-3a landed** (2026-06-12, PR #128: store schema, `rollback_to_fork`,
+schema gates). **CT-3b landed** (2026-06-12: `open(path)` + resume,
+delta ingest via `append_block_deltas` with store-write-before-commit,
+client API `BlockHeight` retype, restart/staked-lock KATs;
+`SCHEMA_VERSION` 2 → 3 retires CT-3a-window stores whose pending table
+predates delta ingest). CT-3c (reorg rollback wiring) and CT-3d (doc
+closeout) remain.
 
 **Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-3 row:
 "Source-agnostic bulk-segment fetch + delta sync + per-segment root verify
@@ -384,8 +390,8 @@ Closure verified against the amended text. Three implementation riders
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-3a** | Store schema: pending-candidates table (with `creation_height`) + `creation_height` in `leaf_meta`; resume read path (`LeafStore` only, no client change). **Schema gates (binding):** CT-3c's full read/write patterns land as 3a acceptance criteria — maturity partition search, drained→pending row migration (read leaf bytes + meta before delete, same txn — §3.8 rider 3), `creation_height` filter, single-txn `rollback_to_fork` op; **shared truncation internals** factored into a private txn-taking helper used by both `rollback_to_fork` and `truncate_from_tree_position` (§3.8 rider 2) — so 3c never reaches back into a landed 3a. KATs include the F7 synthetic equal-maturity partition-boundary case | `store/redb_backend.rs`, `tests/store_kat.rs` |
-| **CT-3b** | Client lifecycle: `open(path)` constructor, resume (rebuild in-memory state from store), delta `ingest_block`; restart round-trip KAT | `client.rs`, `tests/recon_kat.rs` |
+| **CT-3a** (landed 2026-06-12, PR #128) | Store schema: pending-candidates table (with `creation_height`) + `creation_height` in `leaf_meta`; resume read path (`LeafStore` only, no client change). **Schema gates (binding):** CT-3c's full read/write patterns land as 3a acceptance criteria — maturity partition search, drained→pending row migration (read leaf bytes + meta before delete, same txn — §3.8 rider 3), `creation_height` filter, single-txn `rollback_to_fork` op; **shared truncation internals** factored into a private txn-taking helper used by both `rollback_to_fork` and `truncate_from_tree_position` (§3.8 rider 2) — so 3c never reaches back into a landed 3a. KATs include the F7 synthetic equal-maturity partition-boundary case | `store/redb_backend.rs`, `tests/store_kat.rs` |
+| **CT-3b** (landed 2026-06-12) | Client lifecycle: `open(path)` constructor, resume (rebuild in-memory state from store — gindex-sorted drained ∪ pending union, element-wise identical to a continuous run), delta `ingest_block` via `append_block_deltas` (store-write-before-commit; self-heal path deleted with the inversion); client outward API retyped to `BlockHeight` (P5 client portion); `SCHEMA_VERSION` 2 → 3 (CT-3a-window stores fail open — their pending table predates delta ingest); restart round-trip + staked-lock (B3 both halves) KATs; pruned-store resume refused loudly (F5 remains V3.0) | `client.rs`, `store/redb_backend.rs` |
 | **CT-3c** | Reorg rollback: fork-point search + transactional `rollback_to_fork` + re-sync; `reorg_deep` persistent-path KAT with **direct pending-table row-set equality** post-rollback (§3.8 rider 1; drain-order corroborates); frozen-`R_k` resume recheck (F9 residual) | `client.rs`, `store/`, `tests/` |
 | **CT-3d** | Doc closeout: parent §8/§9 status updates, `CT3_ROUND1_CLOSEOUT.md` (or pins), CHANGELOG, FOLLOWUPS routing (F5) | docs |
 
