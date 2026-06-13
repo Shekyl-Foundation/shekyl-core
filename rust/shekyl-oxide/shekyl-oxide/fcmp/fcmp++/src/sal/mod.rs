@@ -282,6 +282,14 @@ pub struct SpendAuthAndLinkability {
 }
 
 impl SpendAuthAndLinkability {
+    /// Byte length of a serialized SAL leg: 6 points (`P`, `A`, `B`, `R_O`, `R_P`,
+    /// `R_L`) plus 6 scalars (`s_alpha`, `s_beta`, `s_delta`, `s_y`, `s_z`, `s_r_p`).
+    ///
+    /// Single source of truth for the SAL contribution to [`crate::FcmpPlusPlus::proof_size`].
+    /// Asserted against the actual [`SpendAuthAndLinkability::write`] footprint in the
+    /// crate tests.
+    pub const WIRE_SIZE: usize = 12 * crate::ED25519_REPR_BYTES;
+
     #[allow(clippy::too_many_arguments)]
     fn challenge(
         signable_tx_hash: [u8; 32],

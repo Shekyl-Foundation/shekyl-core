@@ -105,6 +105,14 @@ pub struct Input {
 }
 
 impl Input {
+    /// Byte length of an `Input` written without its pseudo-out (`O~`, `I~`, `R`).
+    ///
+    /// This is the on-wire footprint of [`Input::write_partial`], which is the form
+    /// carried inside both [`FcmpPlusPlus`] and [`FcmpMembershipOnly`] proofs (the
+    /// pseudo-out `C~` travels in the transaction's existing field). Single source of
+    /// truth for the proof-size accounting in `proof_size`.
+    pub const PARTIAL_WIRE_SIZE: usize = 3 * ED25519_REPR_BYTES;
+
     // Write an Input without the pseudo-out.
     fn write_partial(&self, writer: &mut impl io::Write) -> io::Result<()> {
         writer.write_all(&self.O_tilde.to_bytes())?;
@@ -170,20 +178,35 @@ impl Input {
 pub type Output = fcmps::Output<<Ed25519 as Ciphersuite>::G>;
 
 /// Byte length of a canonically-encoded Ed25519 point or scalar on the wire.
-const ED25519_REPR_BYTES: usize = 32;
+pub(crate) const ED25519_REPR_BYTES: usize = 32;
+
+/// Verifier-supplied, per-input context for [`FcmpPlusPlus::verify`].
+///
+/// The key image and the input's `H(pqc_pk)` leaf scalar are the two pieces of
+/// verifier-side data that must align, by input index, with the proof's input
+/// tuples. Bundling them into one ordered collection makes a length mismatch or a
+/// cross-input transposition unrepresentable: there is a single `Vec` whose length
+/// is checked once, not two parallel `Vec`s whose independent lengths each needed a
+/// guard (and whose guards could misroute one count's error to the other variant).
+#[derive(Clone, Copy, Debug)]
+pub struct InputVerification {
+    /// The input's key image (`L`), as an Ed25519 group element.
+    pub key_image: <Ed25519 as Ciphersuite>::G,
+    /// The input's `H(pqc_pk)` leaf-committed scalar on Selene.
+    pub pqc_pk_hash: <Selene as Ciphersuite>::F,
+}
 
 /// An error encountered when working with FCMP++.
 #[derive(Debug)]
 pub enum FcmpPlusPlusError {
-    /// An invalid quantity of key images was provided.
-    InvalidKeyImageQuantity,
     /// An empty input set was provided.
     ///
     /// A membership-only proof over zero inputs must reject, never verify
     /// vacuously-true (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §8.2).
     EmptyInputs,
-    /// An invalid quantity of PQC public-key hashes was provided.
-    InvalidPqcPkHashQuantity,
+    /// The verifier-supplied per-input context count did not match the proof's
+    /// input count.
+    InvalidInputCount,
     /// A propagated FCMP error.
     FcmpError(FcmpError),
 }
@@ -208,9 +231,11 @@ impl FcmpPlusPlus {
 
     /// The size of a FCMP++ proof.
     pub fn proof_size(inputs: usize, layers: usize) -> usize {
-        // Each input tuple, without C~ (3 points), each SAL (6 points + 6 scalars),
-        // and the FCMP
-        (inputs * ((3 + 12) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
+        // Per input: the partial input tuple plus a full SAL leg. The per-leg sizes
+        // are owned by their respective types, so this stays correct if a leg's
+        // field set changes.
+        (inputs * (Input::PARTIAL_WIRE_SIZE + SpendAuthAndLinkability::WIRE_SIZE))
+            + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
     /// Write a FCMP++ proof.
@@ -256,10 +281,13 @@ impl FcmpPlusPlus {
     ///
     /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
     ///
+    /// `per_input` carries the verifier-side key image and `H(pqc_pk)` leaf scalar for
+    /// each input, in input order; its length must equal the proof's input count.
+    ///
     /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
-    /// input-validation errors (`InvalidKeyImageQuantity`, `InvalidPqcPkHashQuantity`) are returned
-    /// before any statement is queued, so the verifiers are in fact untouched in those cases; an
-    /// error raised once queuing has begun leaves them partially populated. Discarding on any error
+    /// input-count error (`InvalidInputCount`) is returned before any statement is
+    /// queued, so the verifiers are in fact untouched in that case; an error raised
+    /// once queuing has begun leaves them partially populated. Discarding on any error
     /// is the safe, uniform contract.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
@@ -271,28 +299,28 @@ impl FcmpPlusPlus {
         tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
         layers: usize,
         signable_tx_hash: [u8; 32],
-        key_images: Vec<<Ed25519 as Ciphersuite>::G>,
-        pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
+        per_input: Vec<InputVerification>,
     ) -> Result<(), FcmpPlusPlusError> {
-        if self.inputs.len() != key_images.len() {
-            return Err(FcmpPlusPlusError::InvalidKeyImageQuantity);
-        }
-        if self.inputs.len() != pqc_pk_hashes.len() {
-            return Err(FcmpPlusPlusError::InvalidPqcPkHashQuantity);
+        if self.inputs.len() != per_input.len() {
+            return Err(FcmpPlusPlusError::InvalidInputCount);
         }
 
         let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
-        for (((input, spend_auth_and_linkability), key_image), h_pqc) in
-            self.inputs.iter().zip(key_images).zip(pqc_pk_hashes)
-        {
-            spend_auth_and_linkability.verify(rng, verifier_ed, signable_tx_hash, input, key_image);
+        for ((input, spend_auth_and_linkability), ctx) in self.inputs.iter().zip(per_input) {
+            spend_auth_and_linkability.verify(
+                rng,
+                verifier_ed,
+                signable_tx_hash,
+                input,
+                ctx.key_image,
+            );
 
             fcmp_inputs.push(fcmps::Input::with_extra_scalars(
                 input.O_tilde,
                 input.I_tilde,
                 input.R,
                 input.C_tilde,
-                vec![h_pqc],
+                vec![ctx.pqc_pk_hash],
             )?);
         }
 
@@ -337,9 +365,10 @@ impl FcmpMembershipOnly {
 
     /// The size of a membership-only FCMP++ proof.
     pub fn proof_size(inputs: usize, layers: usize) -> usize {
-        // Each input tuple, without C~ (3 points), each MembershipSpendAuth
-        // (1 point + 2 scalars), and the FCMP
-        (inputs * ((3 + 3) * ED25519_REPR_BYTES)) + Fcmp::<Curves>::proof_size(inputs, layers)
+        // Per input: the partial input tuple plus a membership-only SAL-replacement
+        // leg. The per-leg sizes are owned by their respective types.
+        (inputs * (Input::PARTIAL_WIRE_SIZE + MembershipSpendAuth::WIRE_SIZE))
+            + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
     /// Write a membership-only FCMP++ proof.
@@ -388,10 +417,15 @@ impl FcmpMembershipOnly {
     /// also be verified.
     ///
     /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
-    /// input-validation errors (`EmptyInputs`, `InvalidPqcPkHashQuantity`) are returned
+    /// input-validation errors (`EmptyInputs`, `InvalidInputCount`) are returned
     /// before any statement is queued, so the verifiers are in fact untouched in those
     /// cases; an error raised once queuing has begun leaves them partially populated.
     /// Discarding on any error is the safe, uniform contract.
+    ///
+    /// `pqc_pk_hashes` is the membership-only path's only verifier-supplied per-input
+    /// collection (there is no key image by construction), so it stays a single `Vec`;
+    /// the parallel-collection bundling that [`InputVerification`] gives the full path
+    /// is not warranted here.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
@@ -408,7 +442,7 @@ impl FcmpMembershipOnly {
             return Err(FcmpPlusPlusError::EmptyInputs);
         }
         if self.inputs.len() != pqc_pk_hashes.len() {
-            return Err(FcmpPlusPlusError::InvalidPqcPkHashQuantity);
+            return Err(FcmpPlusPlusError::InvalidInputCount);
         }
 
         let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());

@@ -178,6 +178,14 @@ pub struct MembershipSpendAuth {
 }
 
 impl MembershipSpendAuth {
+    /// Byte length of a serialized membership-only SAL-replacement leg: 1 point
+    /// (`R_O`) plus 2 scalars (`s_alpha`, `s_y`).
+    ///
+    /// Single source of truth for the leg's contribution to
+    /// [`crate::FcmpMembershipOnly::proof_size`]. Asserted against the actual
+    /// [`MembershipSpendAuth::write`] footprint in the crate tests.
+    pub const WIRE_SIZE: usize = 3 * crate::ED25519_REPR_BYTES;
+
     /// The membership-only challenge.
     ///
     /// Preimage (all fields fixed-width per the length-regularity invariant,
