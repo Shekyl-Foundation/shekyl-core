@@ -338,10 +338,13 @@ impl LeafStore {
         ))
     }
 
-    /// Append newly drained leaves and advance sync tip in one ACID write txn.
+    /// Test-only wrapper for appending drained leaves and advancing sync tip.
     ///
-    /// Thin wrapper over [`Self::append_block_deltas`] with empty pending
-    /// deltas — keeps CT-1/CT-2 callers and KATs byte-identical.
+    /// Production ingest must use [`Self::append_block_deltas`] so drained
+    /// and pending tables stay disjoint and resume-exact. This wrapper keeps
+    /// CT-1/CT-2-era store KATs byte-identical without leaving a production
+    /// path that can bypass pending-table maintenance.
+    #[cfg(test)]
     pub fn append_drained(
         &self,
         entries: &[LeafEntry],
