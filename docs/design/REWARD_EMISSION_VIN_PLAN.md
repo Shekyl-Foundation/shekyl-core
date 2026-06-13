@@ -7,9 +7,10 @@
 (evaluated in §4 — exception does **not** apply; standard splitting governs).
 No production code has landed against this plan. The Round-0 substrate
 re-audit (A2 audit-against-actual-code) is recorded in §1; **Design Round 1**
-(external review — 8 findings, F-E1–F-E3 are PR-E3 holds) is recorded in §R1;
-rounds 2–N and the per-sub-PR pre-flight passes follow before any
-implementation cut.
+(external review — 8 findings, F-E1–F-E3 are PR-E3 holds; follow-on M-1–M-3
+cross-track / sourcing tightenings) is recorded in §R1 (R1.A binding message,
+R1.B remainder, R1.C M-findings); rounds 2–N and the per-sub-PR pre-flight
+passes follow before any implementation cut.
 
 **Specification of record:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)
 (§5 envelope, §6 bond record, §7 verification, §12 checklist). This document
@@ -323,11 +324,19 @@ never over-mint) and is the same flavor as §4.5's already-accepted "offline P's
 share unminted." Roll (carry to next epoch) is rejected: cross-epoch state +
 reorg coupling.
 
-**Spec consequence (gate-1 pin, not yet applied — spec is the authority, §0):**
-§4.0's "`Σ reward_P = budget` whenever `Σ Curve > 0`" refines to "`Σ minted ≤
-budget`; the `≤ (N_P−1)`-atomic floor remainder is unminted (supply-safe),
-consistent with §4.5." Land this wording in `REWARD_EMISSION_LEG.md` §4.0
-before PR-E3 code.
+**Spec consequence (gate-1 pin — lands at the integer-payout layer, not the
+Form-C row; not yet on this branch's spec copy, §0).** The naive edit
+(weaken the Form-C row's `Σ reward_P = budget` to `≤`) is **wrong**: that row's
+identity is the **real-valued** normalization that distinguishes C from A (A
+strands budget pre-rounding; C's real shares sum to budget exactly), and the
+floor remainder is a *different* residual one layer down. The refinement keeps
+the real-valued identity where it does the C-vs-A work, and lands the integer
+pin at the payout layer: `Σ minted ≤ budget`, the `≤ (N_P−1)`-atomic **floor**
+remainder unminted (supply-safe, §4.5) — a different, explicitly-chosen
+residual from the `Curve` residual the §4.0 reversion clause governs, which is
+exactly the "must be chosen explicitly" that clause demands. Land this in
+`REWARD_EMISSION_LEG.md` §4.0 before PR-E3 code (currently line 213 still reads
+"rounding disposition pinned at gate 1" on this branch).
 
 **Single source of truth:** PR-E3's recompute **imports the canonical
 `reward_arithmetic` crate** — not a third reimplementation — and the wallet
@@ -335,10 +344,72 @@ build path (`REWARD_EMISSION_LEG.md` §11) imports the **same** crate.
 Zero-tolerance compare is sound only when both sides are bit-identical by
 construction (project no-third-copy-of-an-arith-function rule). The verify is
 the **third** Form-C consumer after the sim (`shekyl-staking-sim/reward.rs`,
-`REWARD_EMISSION_LEG.md` §4.0) and the economics engine; if `reward_arithmetic`
-does not yet exist as the shared canonical crate, a PR-E3 precursor extracts
-the sim's Form-C into it and re-points the existing consumers — that extraction
-is the single-source mechanism, not a fourth copy.
+`REWARD_EMISSION_LEG.md` §4.0) and the economics engine. **The canonical crate
+already exists:** `shekyl-archival-retention/src/reward_arithmetic.rs` exposes
+`curve_milli`, `reward_share_floor` (docstring: "dust stays unminted"),
+`scarcity_milli`, `g_age_milli`, and `mul_div_floor` (u128 intermediate) — so
+R1.B's floor + burn-the-dust + numerator-first recommendation is the crate's
+**shipped behavior**, and PR-E3 imports it rather than reimplementing.
+
+### R1.C — Round-1 follow-on: cross-track & sourcing tightenings (M-1/M-2/M-3)
+
+Second-pass review against `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` and
+`ARCHIVAL_CONSENSUS_STATE.md`. M-1 is load-bearing (a cross-document genesis
+dependency neither doc currently connects); M-2/M-3 are precision tightenings
+folding into PR-E3 step 4.
+
+**M-1 (genesis-freeze prerequisite, cross-track) — PR 1.5 integer-sweep gate.**
+`reward_arithmetic`'s **integer** `Curve` is the function PR-E3 mints money with
+at **zero tolerance** (§5.4), but its economic equivalence to the validated
+**float** `Curve` has passed only a thin per-point reconciliation KAT
+(`ε_curve ≤ 0.002`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`, 2026-06-09). The
+**full integer-sweep comparison is PR 1.5**, and it **has not run** — verified
+at source: `ARCHIVAL_REWARD_ARITHMETIC.md` §KAT carries "`ε_gini` TBD in PR 1.5
+sweep report." Per-point `ε ≤ 0.002` is the wrong sufficiency standard for a
+zero-tolerance consensus path: the margin-robustness band is **narrow** in the
+sim, and a per-point deviation propagated across a sweep can flip a
+boundary-grazing metric — which is precisely why the verdict names
+attractor-rank / margin-boolean / Gini-Δ as reopen criteria. **Disposition:**
+PR 1.5 (full integer-sweep economic-equivalence) is a **genesis-freeze
+prerequisite for freezing the integer `Curve`** that PR-E3 consumes; PR-E3's
+economics KATs are flagged for **regeneration** if PR 1.5 reshapes the curve
+(a consensus change to wired code — cheap pre-genesis, no migration, but
+tracked rather than discovered). Recorded in §9.
+
+**M-2 (supply conservation — resolved: sourcing-discipline pin, not a schema
+gap).** The credited numerator `capped_P(E)` must be P's **exact** term in the
+finalized denominator `Σwork(E)`, or a P over-claims a live-recomputed fat
+numerator against a stale finalized denominator and breaks R1.B's `Σ minted ≤
+budget`. **Traced against `ARCHIVAL_CONSENSUS_STATE.md`:** the §3.5 accumulator
+stores **only the aggregate** `Σwork(E)`; per-P `capped_P(E)` keyed by P is
+named only as a *non-consensus-visible* incremental-maintenance option, not a
+stored record. **But the schema supports as-of-E reconstruction of every
+numerator input** — `serve_credit_bit(P,s,E)` is E-indexed (§3.1);
+`R_market(s,E)` is **finalized-and-immutable at E-close** (§4 invariant 2),
+derivable from the E-indexed ledger (§3.3); `good_through(P,E)` is derivable at
+close from the bond event log (§3.4 / invariant 4); shard `age` as-of-E is a
+deterministic function of `E` and the shard freeze epoch (§3.2). So M-2 is
+**not** a schema gap — it is a **sourcing-discipline requirement on PR-E3 step
+4**: recompute `work_P(E)` from the **same frozen as-of-E snapshot that
+produced `Σwork(E)`**, never live `R_market`/holdings. Pinned to step 4; the
+related `holdings`-snapshot question is §8 item 10 (F-E6).
+
+**M-3 (single-source completeness — extend the mandate to channel 1).** R1.B's
+canonical-crate mandate named the Form-C division + `Curve` (channels 2/3), but
+PR-E3 step 4's **work** recompute (channel 1: `scarcity_milli =
+floor((1/R)·g(age)·1000)`) read as bare "`checked_*` arithmetic" — the
+identical zero-tolerance/bit-identity hazard one channel up, and the `age`
+fixed-point division is exactly where two implementations drift. Verified at
+source: the canonical crate **already exposes** `scarcity_milli(...)` and
+`g_age_milli(...)` beside `curve_milli`/`reward_share_floor`. **Extend the
+single-source mandate to step 4:** scarcity + `g(age)` import the crate, on
+both the verify and the wallet build path — otherwise step 4 is the fourth copy
+the mechanism exists to prevent.
+
+**Minor (band scope).** `ε_curve ≤ 0.002` is a **sim float-vs-integer
+reconciliation band only** and never reaches consensus — §5.4 is exact equality
+and R1.B's zero-tolerance is correct. A contributor porting the sim's
+reconciliation logic must not carry the band into the verify.
 
 ---
 
@@ -440,8 +511,15 @@ arithmetic and crypto never re-appear as C++ logic.
    assembly/connect runs an explicit `(P, E)` uniqueness pass across all
    emission vins in the block. Dedup is per-`P`, so the collision is strictly
    same-`P`-same-`E`-same-block. (Open: §8 F-E3.)
-4. **Work** — recompute `work_P(E)` from archival state; compare to
-   `work_claim` (`checked_*` integer arithmetic, rule 20).
+4. **Work** — recompute `work_P(E)` and compare to `work_claim`. **As-of-E
+   sourcing (M-2):** every input — `R_market(s,E)`, `held(P,E)`,
+   `serve_credit_bit(P,s,E)`, shard `age` — is read from the **frozen as-of-E
+   snapshot that produced `Σwork(E)`** (sound by `ARCHIVAL_CONSENSUS_STATE.md`
+   §4 invariant 2 + E-indexing), **never** live state, or the credited numerator
+   drifts from P's term in the finalized denominator and R1.B supply
+   conservation breaks. **Channel-1 single source (M-3):** `scarcity_milli` /
+   `g_age_milli` import the canonical `reward_arithmetic` crate (same mandate as
+   step 5), not bare `checked_*`.
 5. **Economics** — recompute three-channel `reward_P(E)` via the **canonical
    `reward_arithmetic` crate** (single source of truth, R1.B — not a third
    reimplementation), compare to `reward_amount_plain` and vout sum
@@ -599,10 +677,11 @@ discipline note, or named forward-action (A5).
 
 ### Round-1 open items (must close before PR-E3 code; F-E2/F-E3 consensus-load-bearing)
 
-8. **Remainder disposition (F-E2)** — *recommendation pinned in R1.B*
-   (floor + burn-the-dust, u128-numerator-first, canonical `reward_arithmetic`
-   both sides). Closes when the gate-1 §4.0 spec wording lands and the crate
-   import is confirmed for both verify and wallet-build.
+8. **Remainder disposition (F-E2)** — *pinned in R1.B and already the canonical
+   crate's shipped behavior* (`reward_share_floor` = floor + "dust stays
+   unminted", `mul_div_floor` = u128 numerator-first). Remaining to close: land
+   the gate-1 §4.0 spec wording (real-valued identity preserved, ≤ at the
+   integer layer — R1.B), and the PR 1.5 economic-equivalence gate (M-1).
 9. **Intra-block `(P,E)` uniqueness (F-E3)** — pick check/set fusion within the
    connecting tx scope vs an explicit block-assembly uniqueness pass. Consensus
    double-mint hole until pinned.
@@ -610,7 +689,8 @@ discipline note, or named forward-action (A5).
     §5.3 "must match," but work is recomputed over per-epoch `held(P,E)` (§4.1),
     which may differ from *current* holdings if a gate-4 flow ran between epochs.
     Pin which snapshot the vin `holdings` field must match and how a mid-batch
-    holdings change is handled.
+    holdings change is handled. (Sibling to M-2's as-of-E numerator-sourcing pin
+    — `held(P,E)` is one of the inputs that must come from the frozen snapshot.)
 11. **Same-tx backing + fee double-use (F-E7)** — §5.2 permits key-imaged fee
     `txin_to_key` alongside keyless membership-only backing; the threat model
     names mixing to launder a key-image spend. Decide whether one output may be
@@ -620,10 +700,12 @@ discipline note, or named forward-action (A5).
 12. **Zero-work / zero-reward emission (F-E8)** — §4.3's R-ceiling dead zone
     (`R > 1000·g(age)` → `scarcity_milli = 0`) plus `Curve(0)` lets a `P` with
     all shards in the dead zone recompute `work_P = 0`, `reward = 0`. Reject a
-    zero-reward emission (block-space spam) or accept with zero vout? Also
-    confirm `reward_arithmetic` widths (u64 for `Σ scarcity_milli` work
-    accumulation; u128 for the `budget·capped_P` product, R1.B) so a legitimate
-    large early-chain emission does not hit a wrong-width `checked_mul` reject.
+    zero-reward emission (block-space spam) or accept with zero vout?
+    (`reward_share_floor` already returns 0 cleanly when `capped == 0`, so the
+    arithmetic is well-defined; the open part is the accept/reject policy.) Width
+    check **confirmed at source:** `mul_div_floor` already uses a u128
+    intermediate for the `budget·capped_P` product; `Σ scarcity_milli` work
+    accumulation stays u64.
 
 ## 9. Inherited forward-actions (`FCMP_MEMBERSHIP_ONLY.md` §9 carries)
 
@@ -632,6 +714,11 @@ discipline note, or named forward-action (A5).
   emission KATs → **PR-E1/E2/E3/E5**.
 - FFI-seam variant of the deser cross-type test → **PR-E1**.
 - Vin-layer input-distinctness rule (if required) → **PR-E3** (§8 Q3).
+- **PR 1.5 integer-sweep economic-equivalence (M-1)** → **genesis-freeze
+  prerequisite** for the integer `Curve` PR-E3 mints with; not yet run
+  (`ARCHIVAL_REWARD_ARITHMETIC.md` §KAT: `ε_gini` TBD). PR-E3 economics KATs
+  regenerate if PR 1.5 reshapes the curve. Cross-track dependency on the
+  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` validation line.
 
 ## 10. Related documents
 
@@ -639,5 +726,7 @@ discipline note, or named forward-action (A5).
 |---|---|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consensus spec of record (§5–§7, §12) |
 | [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) | Backing primitive; §7 quantum gate; §9 carries |
-| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | gate 2/3 schema + `W` (work recompute substrate) |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | gate 2/3 schema + `W`; §3.5 accumulator + §4 invariant 2 (M-2 as-of-E sourcing) |
+| [`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](ARCHIVAL_SIM_ECONOMICS_VERDICT.md) | economics validation track; PR 1.5 integer-sweep gate (M-1) |
+| [`ARCHIVAL_REWARD_ARITHMETIC.md`](ARCHIVAL_REWARD_ARITHMETIC.md) | canonical `reward_arithmetic` Q-format + KAT bands (R1.B, M-3) |
 | [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) | `HybridPublicKey` wire (§5) |
