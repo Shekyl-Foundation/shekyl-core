@@ -3,10 +3,12 @@
 **Status:** **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9);
 GF-1 per-tx-type verifier contract resolved and GF-2 dual-scan enforcement made architectural;
 reviewer sign-off recorded (§9.8), with post-sign-off review refinements (C-1/C-2/C-3) folded in.
-**Round 2 (network + transport) is next.** Round-1 carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest
-+ `archival_p` implementation (§7), and the **C-1 confirm-at-source dependency** — the emission
-vin-layer ML-DSA equality check (a hard merge blocker, §9.8) must land before the `archival_p`
-impl is wired into emission. Network/timing/output rounds still open. Not soundness-closed.
+**Round 2 (network + transport) is drafted and OPEN for the adversarial pass (§10).** Round-1
+carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (§7), and the
+**C-1 confirm-at-source dependency** — the emission vin-layer ML-DSA equality check (a hard merge
+blocker, §9.8) must land before the `archival_p` impl is wired into emission. Round 2 may add an
+**HS-identity HKDF label** to that KAT (GF-9, §10.7). Timing/output rounds still open. Not
+soundness-closed.
 Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
@@ -108,7 +110,10 @@ principal lives or which clearnet IP serves archival bytes.
   items).
 
 **Round-open:** Arti integration surface, peer handshake that presents `P` without
-principal metadata, challenge-delivery path vs fetch path separation.
+principal metadata, challenge-delivery path vs fetch path separation. **→ now drafted in
+§10 (Round 2, open):** GF-12 Arti capability confirmed (§10.3), GF-3 challenge class
+(§10.4), GF-5 pre-join presentation (§10.5), GF-6 wire-size fingerprint (§10.6), GF-9 HS
+key lifecycle (§10.7), heavy-path lever (§10.8).
 
 ### 2.3 Timing layer
 
@@ -302,7 +307,7 @@ the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIF
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Done** (2026-06-13) — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off recorded (§9.8). **Lone carry:** `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` module (impl, §7). |
-| **2** | Network + transport (L16 → production shape) | Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named):** challenge-response Levin message class added to the anonymity-routable set (GF-3); pre-join backing-presentation transport requirement pinned (GF-5); Arti HS-hosting source verification as an entry gate (GF-12); `P`-tx-type wire-size fingerprint characterized + dummy/fragmentation policy decided (GF-6); Tor HS key lifecycle either in-scope or named in the honest residual (GF-9). |
+| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). Exit checklist + carries: §10.9. |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults. **Exit gate (R1-named):** within-epoch claim jitter min/max bounds pinned (GF-10). |
 | **4** | Output + bond-funding hygiene | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named):** terminal-drain **output-count** discipline pinned (GF-4 — delay floor already pinned, see §2.4); join-Market structural-distinguishability characterized + minimum separation from bond-funding pinned (GF-7). |
 | **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
@@ -604,7 +609,249 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 
 ---
 
-## 10. Related documents
+## 10. Round 2 — network + transport layer (draft — OPEN)
+
+**Status:** Draft for the adversarial pass (opened 2026-06-13). **Not closed.** Round 2
+specifies how peers reach `P` and how `P` broadcasts, such that `P`'s network *location* and
+*traffic shape* never link to the principal. It threads the R1-named entry gates
+(GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface.
+
+### 10.0 How Round 2 differs from Round 1 (the bar is different)
+
+Round 1 closed on **algebraic separation** — distinct `combined_ss`/decap make principal/`P`
+outputs uncrossable *by construction* (§9.6). The network layer has **no such clean
+separation**. The firewall here is **defense-in-depth**: a named fingerprint, a bounded +
+*measurable* mitigation, and an **honest residual**. The Round-2 exit bar is therefore *"every
+leak vector is named, the mitigation is specified and testable, and the residual is written
+down,"* **not** *"linkage is impossible."* Treating a probabilistic traffic-analysis surface as
+if it were a proof is the failure mode this round guards against — and it is why the network
+round, not the crypto round, is the harder one.
+
+### 10.1 Threat model (the live observer)
+
+| Adversary | Capability | Must not learn |
+|-----------|------------|----------------|
+| Local / ISP | principal clearnet link timing + volume | that a clearnet link serves/answers for `P` |
+| Malicious peer | initiates challenges, fetches, handshakes vs `P` | `P`'s clearnet IP; any principal-correlated metadata |
+| HS-side observer (rendezvous) | sees `P`'s onion traffic shape + timing | which clearnet node is `P`; correlation to principal txs |
+| Partial passive (GPA-lite) | correlates entry/exit timing on a relay fraction | principal↔`P` circuit co-residency |
+
+**Property:** over `P`'s whole life, no network observer links `P`'s serving / challenge /
+broadcast traffic to (a) the principal's clearnet identity or (b) the principal's wallet
+traffic. Anonymity-network source privacy is **experimental with known residuals**
+([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Privacy Limitations*); Round 2 **inherits
+those residuals** and adds the `P`-specific ones — it does not re-solve Tor.
+
+### 10.2 Two traffic classes (inherited frame)
+
+| Class | Traffic | Transport (proposed) | Latency posture |
+|-------|---------|----------------------|-----------------|
+| Light / privacy-critical | bond announce, emission/drain broadcast, liveness re-proofs, challenge responses | anonymity-routed Levin (Tor) | latency-tolerant; battle-tested fit |
+| Heavy / archival serving | deep-shard fetch responses | **onion-service ↔ Tor-client rendezvous; no clearnet fallback** | worst-case L-regime **by construction** (L16) |
+
+The heavy path's worst-case latency is **not** a Round-2 open question — it is pinned by §2.2
+and the L10/L16 sim findings ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)). Round 2's
+transport work is the **light-class routing**, the **serving-path reachability + key
+lifecycle**, and the single heavy-path lever in §10.8.
+
+### 10.3 GF-12 — Arti onion-service hosting (entry gate: capability confirmed; at-source pin carried)
+
+Per [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc), the
+"embed Arti in-process" fork ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Forks* #1)
+cannot be pinned on training-data recall. **Published-capability check (web, 2026-06 — not yet
+the at-source pin):**
+
+- Arti supports **service-side onion-service hosting** (full vanguards, restricted discovery,
+  client auth) — **done / stable since Arti 1.2.0 (2024-03)**; the older "client-only" notes are
+  stale.
+- Gated by the **`onion-service-service`** feature on `arti-client` (current `0.43.0`,
+  2026-06-01; MSRV 1.89). API: `TorClient::launch_onion_service` /
+  `launch_onion_service_with_hsid`. **Vanguards** require `onion-service-client | -service`;
+  **restricted-discovery** is available (client-auth-gated HS resolution — load-bearing for
+  §10.4 / §10.7). Relay / dir-auth side is *not* done — irrelevant, `P` hosts a service, it is
+  not a relay.
+
+**Disposition (proposed):** the capability question that made GF-12 an entry gate is
+**answered — service-side hosting is stable and feature-flagged.** What remains is the
+**at-source pin** deferred to the transport PR per the dependency-discipline relaxation clause:
+exact workspace version, `onion-service-service` (+ `vanguards`, + `restricted-discovery`)
+feature plumbing, MSRV vs. workspace, and the **`launch_onion_service_with_hsid` key-injection
+API shape** (load-bearing for §10.7). **Embed-vs-external (Fork #1) is therefore decidable in
+Round 2** — embed Arti, Rust-canonical per
+[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — **conditional on**
+that at-source pin, with the external-daemon-over-SOCKS fallback held as the reversion clause
+([`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc))
+if the at-source check fails.
+
+### 10.4 GF-3 — the challenge-response message class must be anonymity-routable
+
+Inherited Shekyl routes only **handshakes, timed syncs, and tx broadcast** over the anonymity
+network ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*P2P Commands*). The archival
+**challenge-response** (a peer challenges `P` to prove retention/liveness; `P` answers) and the
+**liveness re-proof** are a **new Levin message class** that does **not** exist in that
+allowlist. If it falls back to the clearnet P2P path, the exchange **links `P`'s clearnet IP** —
+on the exact traffic the firewall exists for.
+
+**Disposition (proposed):**
+
+- The challenge-response + liveness-re-proof commands are **added to the anonymity-routable
+  command set** as a first-class member; `P` **refuses to answer a challenge that did not arrive
+  over the anonymity transport** — loud refusal, *not* clearnet fallback (the user-absent-context
+  default inversion per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)).
+- Challenges arrive **inbound over `P`'s onion service** (Arti restricted-discovery can gate
+  *who* may resolve `P`'s HS, §10.3); responses return over the **same rendezvous circuit**.
+- **Pin the Levin command IDs** for the new class so the allowlist is enumerable, not "whatever
+  the archival module happens to send."
+
+**Open for the pass:** do challenges originate from **arbitrary peers** (open challenge market)
+or **bonded verifiers only**? The former widens `P`'s inbound exposure; the latter needs a
+verifier-set definition (gate-2/gate-4 surface). The routing rule is identical; the exposure
+surface differs.
+
+### 10.5 GF-5 — pre-join backing presentation is `P`'s first network appearance
+
+Before `P` anchors its bond on-chain (join-Market), it **presents backing** (announce-before-
+anchor: the membership-only backing proofs + the announce). This is **`P`'s first time on the
+network.** If the announce traverses clearnet, or a circuit/stream shared with the principal's
+wallet traffic (stream-reuse leak, [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Stream
+Used Twice*), it links principal↔`P` **at birth** — before any later-layer mitigation can
+matter.
+
+**Disposition (proposed):**
+
+- The pre-join announce/backing presentation **traverses the anonymity transport on a fresh
+  circuit**, with **no principal-correlated stream reuse** and no principal metadata in the
+  payload.
+- The §7 checklist item "pin off-chain announce/backing presentation wire" is the *wire* half;
+  **GF-5 adds the *transport* half** — wire and transport are pinned together, not separately.
+- **Announce-before-anchor** ordering stands, but the announce↔anchor **timing gap** is a
+  standing correlation channel if deterministic → **handed to Round 3** (timing/rotation).
+
+**Open for the pass:** is the announce a **P2P broadcast** (→ it is the tx-broadcast anonymity
+path, already routable) or a **directed presentation to a market coordinator / verifier set**
+(→ a new directed message needing the §10.4 treatment)? This decides whether GF-5 is "reuse the
+broadcast path" or "define a new directed class."
+
+### 10.6 GF-6 — `P`-tx wire-size fingerprint + dummy/fragmentation policy
+
+PQC inflates tx size: a 2-in/2-out FCMP++ tx grows ~2–3 KB → ~7–8 KB — **~14–16 Tor cells** vs
+~4–6 pre-PQC, ~7–8 I2P fragments ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Measured
+v3 Impact*). **`P`-typed txs (emission, bond-post, terminal drain) carry additional
+consensus-special material** (`P_pubkey` vin identity; membership-only backing proofs; the
+carried ML-DSA equality material per §9.8 C-1) — a **distinctive broadcast burst shape** on top
+of the v3 baseline.
+
+**Distinction that must not blur:** on-chain `P`-typing is **public by function** — emission
+txs are consensus-special and anyone parsing the chain sees they are emission txs (by design,
+gate-1/emission-leg). **GF-6 is not about on-chain identifiability.** It is about the
+**broadcast-origin fingerprint**: an observer watching the anonymity transport must not be able
+to say "*that* large archival-shaped burst on *this* circuit is `P`," and pivot to the
+principal.
+
+**Disposition (proposed):**
+
+- **Characterize** the `P`-tx-type burst distribution at **cell (Tor) / fragment (I2P)
+  granularity** for each `P`-tx type, against the ambient v3 mix — i.e. *is a `P` emission burst
+  separable from an ordinary large v3 transfer?*
+- **Decide the policy shape:** fragmentation + dummy padding tuned to a **measured
+  real-to-dummy ratio** that makes `P` bursts statistically indistinguishable from the ambient
+  large-v3 class ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Recommended Testing* #2).
+  This is **measure-then-tune** — Round 2 names the measurement obligation; the tuned constant
+  lands with the testnet replay (carried).
+- **Honest residual:** dummy traffic cannot conceal a large burst unless dummy volume scales
+  with it (same §); the cost/coverage trade is the residual — written down, not papered over.
+
+**Open for the pass (highest leverage):** does `P` broadcast via **its own node** (burst
+originates at `P`'s onion service) or via the **generic tx-broadcast anonymity path** (burst is
+one-of-many on shared outgoing circuits, Dandelion-style)? The latter dilutes the fingerprint
+*structurally*; the former concentrates it.
+
+### 10.7 GF-9 — Tor HS key lifecycle (couples to §2.3 rotation)
+
+`P` hosts a `.onion` to serve archival bytes + accept challenges. Its identity key
+(`ks_hs_id.ed25519_expanded_private` in Arti's keystore, §10.3) **is** `P`'s reachability
+identity. Two failure modes:
+
+1. **Stable across `P` rotation → the `.onion` is a cross-`P_old`→`P_new` linker** that defeats
+   the §2.3 rotation decorrelation (E-4 threat): rotating `P`'s keys while keeping the same
+   `.onion` is **cosmetic rotation**.
+2. **Rotating mid-life → breaks reachability:** peers hold `P`'s `.onion` as the bond-record
+   reachability field; it must be **stable within a single `P`'s life.**
+
+**Disposition (proposed):**
+
+- The HS identity key is **bound to `p_slot`** (§9.2): **stable within a `P`'s life, rotates
+  with `P`.** On rotation, `P` stands up a **new HS under a new key**, migrates the reachability
+  field, and retires `P_old`'s `.onion` on the same schedule as `P_old`'s keys.
+- **Derive the HS ed25519 identity from `master_seed`+`p_slot`** (a §9.3-style HKDF label, e.g.
+  `b"shekyl.archival.p.hs_id.v1"`), injected via `launch_onion_service_with_hsid` (§10.3)
+  rather than Arti-autogenerated. **Why:** the `.onion` becomes **deterministic +
+  seed-recoverable** (survives device loss; fits wallet recovery) and **provably `p_slot`-scoped**
+  (rotation is structural, not operational discipline). This **adds an HKDF label to §9.3 → it
+  must be in the `ARCHIVAL_P_DERIVE_V1` KAT.**
+- **Honest residual:** the live HS private key is a **long-term secret resident on the serving
+  device**; its compromise links `P`'s *location* (not the principal, but `P`'s box). This is
+  the **irreducible serving-side residual** — named, not mitigated away.
+
+**Open for the pass:** does deterministic seed-derivation of the HS key **over-couple** — does
+putting the `.onion` under the same seed create a *recovery-time* correlation (restore wallet →
+re-derive the same `.onion` → an observer who saw `P_old` sees it reappear)? `p_slot` rotation
+should foreclose this, but it is exactly the "convenience that re-links" the pass should attack.
+
+### 10.8 The one heavy-path lever that feeds the sim
+
+[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*The one question that feeds the sim*:
+**does the heavy serving path stay pure-rendezvous (worst-case L-regime, maximal firewall), or
+is there a relaxation that buys bandwidth without linking `P`?** This is the **only** transport
+parameter that moves the staker-archival sim's L-curve position. Round 2 **names and bounds**
+it; it does **not** relax the firewall to chase bandwidth (priority hierarchy per
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc): privacy > performance). Any proposed
+relaxation (e.g. a seeding-path leg over a lighter transport for **public, non-`P`-attributable**
+bytes) must **prove it carries no `P`-attributable metadata** before it is admissible — the
+seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+
+### 10.9 Round 2 exit criteria + carried items
+
+**Exit (all required to close Round 2):**
+
+- [ ] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
+      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)**.
+- [ ] **GF-5** — pre-join announce/backing-presentation **transport** pinned (fresh circuit, no
+      principal stream reuse); announce↔anchor timing gap **handed to R3**.
+- [ ] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
+      per `P`-tx type) + dummy/fragmentation **policy shape** decided; tuned ratio **carried to
+      testnet replay**.
+- [ ] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition pinned; **new
+      HKDF label added to §9.3 + `ARCHIVAL_P_DERIVE_V1` KAT**; serving-side key-compromise
+      residual **named**.
+- [ ] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
+      (version/feature/MSRV/`with_hsid` API); external-daemon reversion clause recorded.
+
+**Carried out of Round 2 (named, not silently deferred — per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):**
+
+- **At-source Arti pin** → transport PR (§10.3).
+- **Dummy/fragmentation tuned ratio** → testnet replay (§10.6).
+- **Announce↔anchor + emission-cadence timing** → Round 3.
+- **Heavy-path relaxation decision** → bounded in §10.8; lands with the sim's post-testnet
+  L-curve measurement.
+
+### 10.10 Open questions for the adversarial pass (to work through)
+
+1. **§10.4** — open challenge market vs. bonded-verifier-only challenges? (inbound exposure)
+2. **§10.5** — announce as P2P broadcast vs. directed presentation? (reuse vs. new directed class)
+3. **§10.6** — `P` broadcasts via its own node vs. generic anonymity broadcast path?
+   (concentrated vs. diluted fingerprint — *highest leverage*)
+4. **§10.7** — does deterministic seed-derived `.onion` over-couple at recovery time?
+   (convenience-relink attack)
+5. **§10.8** — is any heavy-path relaxation admissible, or is pure-rendezvous the genesis
+   commitment? (privacy > bandwidth)
+6. **Cross-cutting** — I2P secondary door: kept architecturally open (reversion clause,
+   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Forks* #2) or closed at genesis?
+
+---
+
+## 11. Related documents
 
 | Doc | Relationship |
 |-----|----------------|
@@ -619,6 +866,24 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 
 ## Revision history
 
+- **2026-06-13 (Round 2 draft opened):** Drafted §10 — network + transport layer — as the
+  opening position for the Round 2 adversarial pass (OPEN, not closed). Framed the round's
+  bar as **defense-in-depth** (named fingerprint + measurable mitigation + honest residual),
+  not algebraic separation. Threat model (live observer); two traffic classes (light/Tor,
+  heavy/onion-rendezvous, no clearnet fallback). Threaded the five R1-named entry gates:
+  **GF-12** — Arti **service-side onion-service hosting confirmed** (done/stable since 1.2.0,
+  `onion-service-service` feature on `arti-client` 0.43.0; web-verified, **at-source pin
+  carried** to the transport PR per dependency-discipline), embed-Arti fork decidable on that
+  pin; **GF-3** — challenge/liveness Levin class added to the anonymity-routable set, clearnet
+  fallback refused (loud); **GF-5** — pre-join backing presentation pinned to a fresh anonymity
+  circuit (no principal stream reuse), announce↔anchor timing handed to R3; **GF-6** — `P`-tx
+  broadcast-origin fingerprint characterization obligation + dummy/fragmentation policy shape
+  (on-chain `P`-typing is public-by-function and explicitly *not* the concern), tuned ratio
+  carried to testnet replay; **GF-9** — HS identity key `p_slot`-bound + **seed-derived via a
+  new §9.3 HKDF label** (`launch_onion_service_with_hsid`), serving-side key-compromise residual
+  named. Added the heavy-path relaxation lever (§10.8, privacy > bandwidth) and ten open
+  questions for the pass (§10.10). §6 round table + §2.2 pointers updated; old §10 Related
+  documents renumbered §11.
 - **2026-06-13 (Round 1 C-1 second-order confirmation):** Pressure-test on the C-1 interim
   characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1
   (a)/(b)/(c)) that the `MembershipSpendAuth` `R_O` leg proves **classical knowledge of the leaf's

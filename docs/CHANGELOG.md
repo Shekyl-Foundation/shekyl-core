@@ -4,6 +4,39 @@
 
 ### Added
 
+- **archival: Gate 6 Round 2 draft opened — network + transport layer
+  (2026-06-13).** Drafted `ARCHIVAL_FIREWALL_GATE6.md` §10 as the opening
+  position for the Round 2 adversarial pass (**OPEN, not closed**). The round's
+  bar is **defense-in-depth** (named fingerprint + measurable mitigation +
+  honest residual), explicitly *not* algebraic separation — the network layer
+  cannot rest on a proof the way the crypto layer (§9) does. Threat model: live
+  network observer (ISP, malicious peer, HS-side, partial passive); property is
+  that `P`'s serving/challenge/broadcast traffic never links to the principal's
+  clearnet identity or wallet traffic. Two traffic classes: light/privacy-
+  critical over Tor, heavy/archival serving over onion-rendezvous (no clearnet
+  fallback, worst-case L-regime by construction per L16). The five R1-named
+  entry gates were threaded into the draft: **GF-12** — Arti **service-side
+  onion-service hosting confirmed** (done/stable since Arti 1.2.0, 2024-03;
+  `onion-service-service` feature on `arti-client` 0.43.0; web-verified per
+  dependency-discipline, with the **at-source pin carried** to the transport
+  PR), embed-Arti-vs-external fork decidable on that pin; **GF-3** —
+  challenge-response + liveness-re-proof Levin class added to the
+  anonymity-routable set, `P` refuses clearnet-arriving challenges (loud, no
+  fallback); **GF-5** — pre-join backing presentation pinned to a fresh
+  anonymity circuit with no principal stream reuse (it is `P`'s first network
+  appearance), announce↔anchor timing handed to Round 3; **GF-6** — `P`-tx
+  broadcast-origin fingerprint characterization obligation (cell/fragment
+  granularity) + dummy/fragmentation policy shape, with the explicit distinction
+  that on-chain `P`-typing is public-by-function and *not* the concern, tuned
+  ratio carried to testnet replay; **GF-9** — HS identity key `p_slot`-bound +
+  **seed-derived via a new §9.3 HKDF label** (`launch_onion_service_with_hsid`),
+  making `.onion` rotation structural and seed-recoverable, serving-side
+  key-compromise residual named (and the new label must enter the
+  `ARCHIVAL_P_DERIVE_V1` KAT). Added the single heavy-path relaxation lever that
+  feeds the sim (§10.8, privacy > bandwidth) and ten open questions for the pass
+  (§10.10). Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.2, 6, 10 [new], 11
+  [renumbered], revision history).
+
 - **archival: Gate 6 Round 1 closed — `P` lifecycle + pseudonym hygiene
   (2026-06-13).** Adversarial-pass disposition on `ARCHIVAL_FIREWALL_GATE6.md`
   §9. GF-1 (critical): rewrote §9.6 with a per-transaction-type verifier
