@@ -64,6 +64,22 @@ forks the chain"); it is a consensus invariant, not a free tuning knob.
 
 No emission vin may credit outputs under provisional bands until final band review lands. CI: `scripts/ci/check_archival_reward_gates.sh` (grep for live mint paths).
 
+## Pure-integer contract gate
+
+The same CI gate (`scripts/ci/check_archival_reward_gates.sh`, invoked from
+`check_consensus_invariants.sh`) enforces that `reward_arithmetic.rs` stays **pure
+fixed-width integer** — it rejects `f32`/`f64`, `usize`/`isize`, and atomics. This
+is what makes the cross-arch bit-identity guarantee (M-1 half (b)) hold *by
+construction* rather than by convention: the aarch64 determinism KAT runs under
+qemu-user, whose only divergence surface from real aarch64 is FP rounding /
+denormals / NaN / atomic ordering — none present in a pure-integer path. A `usize`
+that leaked into a credited value would be 64-bit and benign on today's arches but
+would silently drop the guarantee from "real" to "emulated-and-hoping" on a future
+32-bit target, and qemu-user would not flag it. `#![deny(clippy::float_arithmetic)]`
+guards float *arithmetic* in-crate; this gate guards the *types* (and `usize`/atomics
+clippy does not). Escape hatch for a genuinely-benign, reviewed use: an inline
+`reward-arith-allow` marker comment on the line.
+
 ## KATs
 
 - `tests/fixtures/consensus_state_kat_v1.json` — `R_market`, `Σwork`, curve cases, partial-slash row
@@ -72,9 +88,10 @@ No emission vin may credit outputs under provisional bands until final band revi
   pins `g_age_milli`, `scarcity_milli`, `curve_milli`, `mul_div_floor` (incl. the
   u128-before-divide order and a u64-product-overflow vector), `reward_share_floor`,
   and the Σ-minted-≤-budget burned-dust bound. Bit-identity across arches holds by
-  construction (pure fixed-width integer, no float/`usize`); the KAT is the
-  regression guard, executed on `x86_64` (build.yml) and on `aarch64` under
-  qemu-user (depends.yml) — see `REWARD_EMISSION_VIN_PLAN.md` §9, M-1 half (b).
+  construction (pure fixed-width integer, no float/`usize`, enforced by the
+  pure-integer contract gate above); the KAT is the regression guard, executed on
+  `x86_64` (build.yml) and on `aarch64` under qemu-user (depends.yml) — see
+  `REWARD_EMISSION_VIN_PLAN.md` §9, M-1 half (b).
 
 ## Shard age
 

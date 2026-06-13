@@ -103,7 +103,13 @@ capital-arrival rate), not the economics. Disposition: pin genesis constants for
 steady state, let the population-decaying floor cover the transient — and that floor's
 *bootstrap* role is now its primary one (reframing L5/L6). Residue: the real growth rate,
 genesis floor size, and safe decay schedule are post-testnet calibrations of an
-already-understood curve. See §*L12 — bootstrapping / cold-start*.
+already-understood curve. **Genesis-seal carry (tail-margin finding,
+`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`):** the `r_target_deep` genesis floor is
+sealed at genesis, so its post-testnet calibration must be re-derived against the
+**integer** backend with a **+1 deep-tail replica margin** — the float sim
+over-reads worst-shard redundancy by up to one replica, and a sealed floor cannot
+be corrected post-genesis without a fork (tracked: `docs/FOLLOWUPS.md` V3.0
+pre-genesis queue). See §*L12 — bootstrapping / cold-start*.
 
 **Iteration-3 headline (L13).** The fee-era end-state is the L11 attractor under a *shrinking*
 purse (block subsidy → fees / bounded terminal subsidy; fully gated, legacy byte-identical).

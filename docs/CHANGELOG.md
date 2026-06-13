@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **economics: CI gate enforces the pure-integer contract for `reward_arithmetic`
+  (2026-06-13).** `scripts/ci/check_archival_reward_gates.sh` (run from
+  `check_consensus_invariants.sh`) now rejects `f32`/`f64`, `usize`/`isize`, and
+  atomics in `reward_arithmetic.rs`, with an inline `reward-arith-allow` escape
+  hatch for reviewed-benign uses. This makes the cross-arch bit-identity guarantee
+  (M-1 half (b)) hold *by construction*, not convention:
+  `#![deny(clippy::float_arithmetic)]` only guards float arithmetic, so a `usize`
+  leaking into a credited value would silently drop the aarch64 guarantee from
+  "real" to "emulated-and-hoping" on a future 32-bit target, and qemu-user would
+  not flag it. Docs: `ARCHIVAL_REWARD_ARITHMETIC.md` §Pure-integer contract gate.
+
+- **economics: pre-genesis-seal carry for float-calibrated redundancy floors
+  (tail-margin finding, 2026-06-13).** PR 1.5 showed the float sim over-reads
+  worst-shard redundancy by up to one replica. Genesis-sealed redundancy params
+  that gate sole-sourcing — the L12 `r_target_deep` floor and any sealed
+  `R_target`/redundancy floor — must be re-derived against the integer backend with
+  a +1 deep-tail replica margin **before the seal** (a sealed value cannot move
+  post-genesis without a fork; "watch on testnet" only covers the tunable bands).
+  Availability-scoped (Foundation complete-tree B+C seeds are the durability
+  backstop), not a durability escalation. Tracked as a V3.0 pre-genesis FOLLOWUPS
+  item so it cannot slip into genesis at its float value by omission; cross-refs in
+  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin, `REWARD_EMISSION_VIN_PLAN.md`
+  §9, `STAKER_ARCHIVAL_SIM.md` §L12.
+
 ### Changed
 
 - **economics: `shekyl-staking-sim` default backend is now the authoritative

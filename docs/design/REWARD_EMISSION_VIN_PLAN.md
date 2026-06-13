@@ -795,11 +795,22 @@ discipline note, or named forward-action (A5).
   carry). Evidence: `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` (PR 1.5).
 - **M-1 half (a) carries → testnet operating-envelope:** servo-gain ceiling;
   band-interior age-weight target (the g≈2.5 upper edge is quantization-fragile
-  at the frozen milli scale); tune redundancy / `R_target` bands against the
-  **integer backend** with a **+1 deep-tail replica margin** (tail-margin
-  finding: integer thins `min_r` / raises `sole_source_shard_epochs` in-envelope
-  because flooring discards work-credit float over-counted — no invariant
-  breaks). PR-E3 economics KATs regenerate only on a future re-tune.
+  at the frozen milli scale); tune the **testnet-tunable** redundancy / `R_target`
+  operating bands against the **integer backend** with a **+1 deep-tail replica
+  margin** (tail-margin finding: integer thins `min_r` / raises
+  `sole_source_shard_epochs` in-envelope because flooring discards work-credit
+  float over-counted — no invariant breaks). PR-E3 economics KATs regenerate only
+  on a future re-tune.
+- **M-1 half (a) carry → genesis-seal (pre-genesis, blocks the seal):** the same
+  +1 over-optimism applies to the **genesis-sealed** redundancy params, which the
+  testnet-watch carry above cannot fix (a sealed value cannot move without a fork).
+  The L12 genesis deep-replica floor `r_target_deep` and any genesis-sealed
+  `R_target`/redundancy floor (currently provisional, float-calibrated —
+  `STAKER_ARCHIVAL_SIM.md` §L12) must be **re-derived against the integer backend
+  with a +1 deep-tail replica margin before the seal**. Availability-scoped
+  (Foundation complete-tree B+C seeds are the durability backstop), not a
+  durability escalation. Tracked in `docs/FOLLOWUPS.md` V3.0 pre-genesis queue so
+  it cannot slip into genesis at its float value by omission.
 - **M-1 half (b) — cross-arch bit-identical determinism** → **closed 2026-06-13;
   one carry into PR-E3.** Prerequisite for the §5.4 zero-tolerance compare.
   Determinism holds **by construction** (pure fixed-width integer arithmetic, no

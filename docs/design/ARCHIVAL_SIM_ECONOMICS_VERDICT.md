@@ -141,9 +141,22 @@ import; see `REWARD_EMISSION_VIN_PLAN.md` §9.
   addressable only by operating discipline — a servo-gain ceiling and a
   band-interior age-weight target. Set and confirm these on testnet; reopen the
   freeze if testnet must operate near those edges. Per the tail-margin finding,
-  tune redundancy / `R_target` bands against the **integer backend** (a +1
-  deep-tail replica margin over the float reading), and watch
-  `sole_source_shard_epochs` on testnet.
+  tune the **testnet-tunable** redundancy / `R_target` operating bands against the
+  **integer backend** (a +1 deep-tail replica margin over the float reading), and
+  watch `sole_source_shard_epochs` on testnet. These bands can move post-genesis.
+- **Genesis-seal (pre-genesis, blocks the seal):** the tail-margin +1 over-optimism
+  applies to *every* redundancy/coverage param that gates sole-sourcing — including
+  the **genesis-sealed** subset, which "watch on testnet" cannot fix because a
+  sealed value cannot move without a fork. The L12 genesis deep-replica floor
+  `r_target_deep` and any genesis-sealed `R_target`/redundancy floor
+  (`STAKER_ARCHIVAL_SIM.md` §L12 — currently a *provisional* float-calibrated
+  "post-testnet calibration") **must be re-derived against the integer backend with
+  a +1 deep-tail replica margin before the seal**, so none slips into genesis at its
+  float value by omission. Scope: this is an *availability* correction (Foundation
+  complete-tree B+C seeds are the durability backstop), not a durability escalation.
+  Tracked in `docs/FOLLOWUPS.md` (V3.0 pre-genesis queue) and
+  `REWARD_EMISSION_VIN_PLAN.md` §9; closes when the final band review re-derives the
+  sealed floor against integer +1.
 - **Curve reshape:** integer sweep flips attractor rank, margin-robustness
   boolean, or Gini Δ beyond pinned ε in `ARCHIVAL_REWARD_ARITHMETIC.md`. A
   re-tune that reshapes the curve forces regeneration of PR-E3's economics KATs
