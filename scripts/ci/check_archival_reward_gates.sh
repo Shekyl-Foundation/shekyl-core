@@ -12,6 +12,16 @@ FAIL=0
 
 REWARD_ARITH="rust/shekyl-archival-retention/src/reward_arithmetic.rs"
 
+# This is a consensus-discipline guardrail: if the guarded module is missing or
+# renamed, the gate must fail loudly rather than silently stop enforcing. (A
+# swallowed `rg` "no such file" error inside the `if` below would otherwise leave
+# the pure-integer contract unenforced with a green check.)
+if [[ ! -f "$REWARD_ARITH" ]]; then
+  echo "FAIL: $REWARD_ARITH not found — pure-integer gate cannot enforce its contract" >&2
+  echo "  (if the module moved, update REWARD_ARITH in this gate; do not let it pass silently)" >&2
+  exit 1
+fi
+
 # Pure fixed-width integer discipline for the canonical reward arithmetic.
 #
 # The cross-architecture bit-identity guarantee (REWARD_EMISSION_VIN_PLAN.md §9,
@@ -37,7 +47,7 @@ REWARD_ARITH="rust/shekyl-archival-retention/src/reward_arithmetic.rs"
 # genuinely-benign, reviewed use — e.g. a slice index that provably never reaches
 # a credited value). The marker forces the exemption to be explicit and grep-able.
 NONFIXED_PATTERN='\bf32\b|\bf64\b|\busize\b|\bisize\b|\bAtomic[A-Za-z0-9]+\b|::atomic\b'
-if NONFIXED_HITS="$(rg -n "$NONFIXED_PATTERN" "$REWARD_ARITH" 2>/dev/null | rg -v 'reward-arith-allow')"; then
+if NONFIXED_HITS="$(rg -n "$NONFIXED_PATTERN" "$REWARD_ARITH" | rg -v 'reward-arith-allow')"; then
   echo "FAIL: non-fixed-width / non-deterministic type in reward_arithmetic.rs" >&2
   echo "  (pure-integer contract underwrites cross-arch bit-identity; see gate comment)" >&2
   echo "$NONFIXED_HITS" >&2

@@ -24,7 +24,7 @@
 //! both `x86_64` and `aarch64` so an arch-divergent change is caught on the
 //! second target as well as on the primary.
 //!
-//! The supersedes the earlier same-arch in-process double-call of `curve_milli`,
+//! This supersedes the earlier same-arch in-process double-call of `curve_milli`,
 //! which exercised neither a second arch nor the Form-C division path.
 
 use shekyl_archival_retention::reward_arithmetic::{
