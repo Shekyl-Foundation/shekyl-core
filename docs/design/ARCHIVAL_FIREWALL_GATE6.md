@@ -2,9 +2,11 @@
 
 **Status:** **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9);
 GF-1 per-tx-type verifier contract resolved and GF-2 dual-scan enforcement made architectural;
-reviewer sign-off recorded (§9.8). **Round 2 (network + transport) is next.** Lone Round-1 carry:
-the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (§7). Network/timing/output
-rounds still open. Not soundness-closed.
+reviewer sign-off recorded (§9.8), with post-sign-off review refinements (C-1/C-2/C-3) folded in.
+**Round 2 (network + transport) is next.** Round-1 carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest
++ `archival_p` implementation (§7), and the **C-1 confirm-at-source dependency** — the emission
+vin-layer ML-DSA equality check (a hard merge blocker, §9.8) must land before the `archival_p`
+impl is wired into emission. Network/timing/output rounds still open. Not soundness-closed.
 Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
@@ -283,7 +285,7 @@ wallet/daemon defaults that **enforce** the invariants or loud-fail into unsafe 
 | Component | Gate-6 responsibilities |
 |-----------|-------------------------|
 | **`shekyl-wallet-core` / `StakeEngine`** | `P` HKDF; build emission/drain txs; rotation ceremony; bond-funding UX defaults; local jitter |
-| **`StakeEngine` — `P`-scan identification context** | **Sole owner of `P.view_sk` and the `P`-scan pipeline (§9.6).** `P`-output identification descends from `P`'s `combined_ss`/decap, structurally disjoint from the principal `LedgerEngine` scan; outputs route by which decap matched, never cross-assigned |
+| **`StakeEngine` — `P`-scan identification context** | **Sole owner of `P.view_sk` and the `P`-scan pipeline** — a Gate-6 forward requirement on the PHASE_2B FSM retool, not inherited from claim-era §4.6 (§9.6 ownership-boundary clause). `P`-output identification descends from `P`'s `combined_ss`/decap, structurally disjoint from the principal `LedgerEngine` scan; outputs route by which decap matched, never cross-assigned |
 | **`LedgerEngine` — principal-scan context** | Owns principal `view_sk`; **must not** receive `P.view_sk` or `P` decap material; principal scan never claims a `P`-destined output |
 | **`shekyld` (daemon)** | Peer reachability to `P`; challenge routing; optional policy hooks — **must not** require principal identity for archival RPC |
 | **Transport stack** | Onion rendezvous for serving; seeding-path rules (step 2) |
@@ -382,6 +384,16 @@ Ed25519 wide-reduce and ML-KEM `d_z` paths, `32` for the ML-DSA-65 seed — matc
 **Forbidden info labels on the `P` path:** `shekyl-ed25519-spend`, `shekyl-ed25519-view`,
 `shekyl-ml-kem-768`, and the entire `shekyl-output-derive-v1` / `shekyl-pqc-output` tree.
 
+**Info-string concatenation note (micro, KAT-authoring).** `info = LABEL || p_slot.to_le_bytes()`
+is **not length-prefixed**. It is unambiguous under the current label set — the labels are
+non-prefix-free with respect to each other and `p_slot` is fixed-width (4 B LE) — so no two
+`(LABEL, p_slot)` pairs collide. The only way to break this is **adding a new label** whose bytes
+are a prefix of an existing label's `LABEL || slot` concatenation. **Disposition:** lock a
+single-byte separator (`LABEL || 0x00 || p_slot.to_le_bytes()`) into the `ARCHIVAL_P_DERIVE_V1`
+KAT at manifest-authoring time, so the wire is fixed before any label is ever added. No wire
+change now (the current concatenation is safe and unimplemented); this is a note to the KAT
+author, not a Round-1 reopener.
+
 **ML-KEM intermediary (unchanged function, archival-only input):**
 
 ```text
@@ -459,7 +471,7 @@ checks each against a different key.
 | `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
 |-------------|-------------------------------|------------------------------------------|----------|
 | **join-Market / bond-post** (gate 4) | `P_pubkey` **identity** — creates the bond record keyed by `P_canonical_id` | **per-output** (ordinary funding inputs; key image present) | create/lookup `ArchivalBondRecord` by `P_canonical_id`; funding inputs via standard key-image path |
-| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **leaf-committed per-output `pqc_pk`** the membership proof binds in-circuit ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7 hard merge gate), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + ML-DSA against the leaf hash; fee inputs standard |
+| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
 **Why ordinary `P` transfers carry no identity field:** they are byte-shaped identically to
@@ -476,15 +488,25 @@ path, and so no account-level key on it.
 | Principal | principal `view_sk` | `combined_ss` from principal decap | `LedgerEngine` | — |
 | `P` | `P.view_sk` | `combined_ss` from `P` decap | `StakeEngine` | principal view tags, principal `enc_label` domain |
 
-The firewall here is **structural, not a naming convention.** `StakeEngine` owns `P.view_sk`
-([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §4.6) as an identification context
-logically separate from the principal `LedgerEngine` scan. Separation rests on the fact that
-each pipeline's per-output secrets descend from a **distinct `combined_ss`** (distinct ML-KEM
-decap key + distinct Ed25519 ECDH), so an output that matches one pipeline's `combined_ss`
-**cannot** match the other's — the discriminator is the decap layer, not a downstream label.
-The output-derive labels (`shekyl-pqc-output`, `enc_label`) are **shared by construction**; the
-domain separation that makes them safe lives entirely in the upstream `combined_ss` / decap
-material, which is why pinning that is the load-bearing requirement.
+The firewall here is **structural, not a naming convention.** Its soundness rests on the crypto,
+not on which actor runs the scan: each pipeline's per-output secrets descend from a **distinct
+`combined_ss`** (distinct ML-KEM decap key + distinct Ed25519 ECDH), so an output that matches
+one pipeline's `combined_ss` **cannot** match the other's at the full one-time-key check — the
+discriminator is the decap layer, not a downstream label. The output-derive labels
+(`shekyl-pqc-output`, `enc_label`) are **shared by construction**; the domain separation that
+makes them safe lives entirely in the upstream `combined_ss` / decap material, which is why
+pinning that is the load-bearing requirement.
+
+**Ownership boundary (Gate-6 forward requirement on the PHASE_2B retool).** The dual-scan pipeline
+(principal + `P`) is an authoritative genesis pin
+([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.1 carry-over — "`P` HKDF
+sub-wallet … dual scan"). Assigning sole ownership of `P.view_sk` to `StakeEngine` (separate from
+the principal `LedgerEngine` scan) is a Gate-6 **requirement the FSM retool must honor**, not a
+fact inherited from current PHASE_2B text: §4.6's `StakeEngine` trait surface is **claim-era /
+pending retool** (flagged STRATUM in the PHASE_2B header; authority is
+[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)), so it is not yet a binding ownership pin. The
+crypto basis above holds regardless of the actor assignment; this clause pins the assignment so
+the retool lands it rather than leaving it implicit.
 
 A **single shared scan loop is acceptable only** if each candidate output is routed by which
 `combined_ss`/decap matched, with no cross-assignment — an output is emitted to exactly one
@@ -494,14 +516,28 @@ allowing an output to be tried-then-claimed by both contexts, is a firewall viol
 **Negative test (Round-1 named, folded into §7 cross-layer linkability negatives):** no output
 is ever emitted to both the principal and `P` pipelines; a `P`-destined output presented to the
 principal scan context produces no match, and vice versa. This is the cross-pipeline
-non-cross-assignment test.
+non-cross-assignment test. **Defensive invariant (C-3):** "exactly one pipeline" is cryptographically
+guaranteed at the full one-time-key check (distinct `combined_ss` ⇒ at most one match), so a
+double-match is impossible by construction — the implementation must therefore **loud-fail**
+(not silently pick one) if both pipelines' full-key checks ever pass for a single output. Assert
+the double-match-is-unreachable invariant rather than assuming it.
 
 **Membership-only emission:** Backing UTXOs are spent under `P`'s **per-output** key material
 (not the account key); the verifier omits the key image from the spent set per the emission
-leg, and the quantum spend-authority check is the ML-DSA signature against the leaf-committed
-`H(pqc_pk)` ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7) — crypto surface
-unchanged from principal spends. Only the bond-record **identity** (`P_pubkey`) is `P`'s
-account-level hybrid material; the spend authority is per-output, per the table above.
+leg. Because there is **no key image** on this path, the entire quantum spend-authority property
+rests on one binding: the membership proof and the ML-DSA check must reference the **same proven
+leaf at the same input index**, not merely each reference *a* leaf. The mechanism that delivers
+this ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7, verified at source 2026-06-13): the
+`Fcmp` membership leg commits `H(pqc_pk)` as an **in-circuit extra leaf scalar**
+(`fcmps::Input::with_extra_scalars`) on the proven leaf, and the per-input challenge binds the
+input index (§4.2/§8.2); the vin layer recomputes `H(pqc_pk)` from the supplied key and demands
+equality with *that leaf's* committed scalar. An attacker who proves membership of a victim's
+leaf cannot substitute their own `pqc_pk` (its hash would not match the leaf-committed scalar),
+and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1):** the in-circuit half is
+implemented in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check is a not-yet-landed
+hard merge blocker** (§9.8 carried dependency). Until it lands, backing ownership reduces to
+classical security. Only the bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
+material; the spend authority is per-output, per the table above.
 
 ### 9.7 V4 reversion clause (per `21-reversion-clause-discipline.mdc`)
 
@@ -525,6 +561,21 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`).
 - [ ] `shekyl-crypto-pq::archival_p` implementation + unit tests.
 
+**Carried dependencies (confirm-at-source before the impl + emission verifier land):**
+
+- **C-1 — emission backing-input quantum spend-authority binding.** The GF-1 §9.6 emission
+  contract rests entirely on the membership proof and the ML-DSA check binding the **same
+  proven leaf at the same input index**. **Verified at source (2026-06-13,
+  [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
+  `H(pqc_pk)` extra-leaf-scalar binding (`with_extra_scalars`) is index-bound and **implemented**
+  in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
+  the supplied key, demand equality with the leaf-committed scalar) is a **hard merge blocker**
+  named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **not yet landed**.
+  **Obligation:** the emission vin verifier must implement and test this equality check before
+  the `archival_p` impl is wired into emission construction; until it lands, no quantum
+  spend-authority guarantee exists on the backing path (classical security only). This is a
+  dependency Gate 6 leans on, not a Gate-6 deliverable — it discharges in the emission vin PR.
+
 ---
 
 ## 10. Related documents
@@ -542,6 +593,22 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 
 ## Revision history
 
+- **2026-06-13 (Round 1 post-sign-off review refinements):** Closure-review items on the
+  sign-off itself. **C-1** — recorded the emission backing-input quantum spend-authority binding
+  as a **named carried dependency** (§9.8) rather than a citation that read as closed; verified
+  at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
+  proof and ML-DSA check bind the **same proven leaf at the same input index** (in-circuit
+  `H(pqc_pk)` extra scalar, index-bound — implemented), and that the **vin-layer ML-DSA equality
+  check is a not-yet-landed hard merge blocker** that must precede the `archival_p` impl + emission
+  verifier; sharpened the §9.6 emission row and membership-only paragraph accordingly. **C-2** —
+  re-anchored the GF-2 ownership boundary: the dual-scan pipeline is the authoritative §2.1 genesis
+  pin, but `StakeEngine`'s sole ownership of `P.view_sk` is a Gate-6 **forward requirement on the
+  PHASE_2B FSM retool**, not inherited from claim-era §4.6 (flagged STRATUM); the crypto basis
+  (distinct `combined_ss`/decap) is independent of the actor assignment. **C-3** — added the
+  loud-fail defensive invariant to the cross-pipeline negative test (double-match is unreachable
+  by construction; the impl must assert it, not assume it). Micro — recorded the §9.3 info-string
+  non-prefix-free safety argument + the separator-byte-at-KAT-authoring disposition (no wire change
+  now).
 - **2026-06-13 (Round 1 closed):** Adversarial pass disposition. GF-1 — rewrote §9.6 with a
   per-tx-type verifier-contract table: account `hybrid_sign_pk` is bond-record **identity only**
   (`P_pubkey`), never a per-input auth key; emission backing inputs authenticate against the

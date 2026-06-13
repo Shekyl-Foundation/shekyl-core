@@ -31,11 +31,23 @@
   terminal-drain output-count discipline is the remaining Round 4 hard exit).
   Remaining findings folded into the §6 round table as named criteria: GF-3 /
   GF-5 / GF-6 / GF-9 / GF-12 as Round 2 entry gates, GF-10 as a Round 3 exit,
-  GF-4 / GF-7 as Round 4 hard exits. Reviewer sign-off recorded (§9.8); the
+  GF-4 / GF-7 as Round 4 hard exits. Reviewer sign-off recorded (§9.8). Three
+  post-sign-off review refinements folded in: **C-1** — the emission
+  backing-input quantum spend-authority binding is now a **named carried
+  dependency** (§9.8), verified at source (`FCMP_MEMBERSHIP_ONLY.md` §7/§8.2/§9:
+  the membership proof and ML-DSA check bind the **same proven leaf at the same
+  input index** via the in-circuit `H(pqc_pk)` extra scalar — implemented; the
+  vin-layer ML-DSA equality check is a not-yet-landed hard merge blocker that
+  must precede the `archival_p` impl + emission verifier); **C-2** — re-anchored
+  the GF-2 ownership boundary, since PHASE_2B §4.6 is claim-era/pending-retool:
+  `StakeEngine` sole ownership of `P.view_sk` is now a Gate-6 forward requirement
+  on the FSM retool (the §2.1 dual-scan pin is authoritative; the crypto basis is
+  actor-independent); **C-3** — the cross-pipeline negative test now asserts a
+  loud-fail defensive invariant (double-match unreachable by construction). The
   `ARCHIVAL_P_DERIVE_V1` KAT manifest + `shekyl-crypto-pq::archival_p`
-  implementation remain the lone Round-1 carry. Docs:
-  `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4, 9.6,
-  9.8, revision history).
+  implementation and the C-1 confirm-at-source dependency are the Round-1 carries.
+  Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4,
+  9.6, 9.8, revision history).
 
 - **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
   key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
