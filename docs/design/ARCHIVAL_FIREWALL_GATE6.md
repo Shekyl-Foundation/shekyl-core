@@ -330,6 +330,13 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 - [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
       cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
       scan contexts; §9.6).
+- [ ] **C-1 forgery negative (emission vin + stressnet negative suite):** a backing input that
+      proves leaf membership while supplying a `pqc_pk` whose `H(pqc_pk)` does **not** equal the
+      leaf-committed extra scalar must be **rejected** by the emission vin verifier. This test
+      **fails until the vin-layer ML-DSA equality check lands** (§9.8 C-1), making the carried
+      dependency a failing test rather than a remember-to-build item. Add as an explicit negative
+      case alongside the honest-path "staking lifecycle completes 100 full cycles" stressnet
+      criterion.
 
 ---
 
@@ -539,6 +546,19 @@ hard merge blocker** (§9.8 carried dependency). Until it lands, backing ownersh
 classical security. Only the bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
 material; the spend authority is per-output, per the table above.
 
+**"Classical security only" is accurate — there *is* a classical spend-authority belt
+(verified at source 2026-06-13).** "Membership-only" omits the **key image / nullifier** (the
+linkability tag), **not** the spend authority. The `MembershipSpendAuth` `R_O` leg is a
+two-generator Schnorr proof that proves **knowledge of the proven leaf's spend secret `x`**
+([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1: (a) a verifying `R_O` proof implies
+knowledge of the specific `x` via the rewinding extractor; (b) that `x` is the `G`-component of a
+**real tree leaf**; (c) `x = Hs + b` bakes in the recipient spend scalar `b` — i.e. ownership). So
+a **classical** attacker cannot forge a backing claim over a victim's leaf: they cannot produce
+the leaf's `x` (discrete-log hardness). The PQ gap is precisely that a **quantum** attacker can
+recover `x` from on-chain `O` (Shor), which the leaf-bound ML-DSA equality check forecloses. The
+interim is therefore PQ-weak, **not** authority-free — emission may scaffold against the classical
+belt, but the vin ML-DSA check must land before any quantum spend-authority claim holds.
+
 ### 9.7 V4 reversion clause (per `21-reversion-clause-discipline.mdc`)
 
 | Artifact | Current | Reopen when | Re-evaluation |
@@ -573,8 +593,14 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
   named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **not yet landed**.
   **Obligation:** the emission vin verifier must implement and test this equality check before
   the `archival_p` impl is wired into emission construction; until it lands, no quantum
-  spend-authority guarantee exists on the backing path (classical security only). This is a
-  dependency Gate 6 leans on, not a Gate-6 deliverable — it discharges in the emission vin PR.
+  spend-authority guarantee exists on the backing path (classical security only — the
+  `MembershipSpendAuth` `R_O` leg still proves classical spend-secret knowledge per
+  `FCMP_MEMBERSHIP_ONLY.md` §5.1; "membership-only" omits the key image, not the authority). This
+  is a dependency Gate 6 leans on, not a Gate-6 deliverable — it discharges in the emission vin PR.
+  **Discharge is test-enforced, not memory-enforced:** the §7 `pqc_pk`-mismatch forgery negative
+  (a backing input whose supplied `pqc_pk` does not hash to the leaf-committed extra scalar must be
+  **rejected**) **fails** until the vin equality check lands — so the dependency cannot silently
+  fail to discharge.
 
 ---
 
@@ -593,6 +619,15 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 
 ## Revision history
 
+- **2026-06-13 (Round 1 C-1 second-order confirmation):** Pressure-test on the C-1 interim
+  characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1
+  (a)/(b)/(c)) that the `MembershipSpendAuth` `R_O` leg proves **classical knowledge of the leaf's
+  spend secret `x`** (= ownership) — "membership-only" omits the **key image/nullifier**, not the
+  spend authority. So "reduces to classical security" is **accurate** (the interim is PQ-weak, not
+  authority-free); added the §9.6 belt clarification. Wired the C-1 dependency to a **failing
+  test**: the §7 `pqc_pk`-mismatch forgery negative (membership proven, non-matching `pqc_pk` ⇒
+  must reject) fails until the vin-layer ML-DSA equality check lands, plus a stressnet negative-case
+  obligation alongside the honest-path 100-cycle criterion.
 - **2026-06-13 (Round 1 post-sign-off review refinements):** Closure-review items on the
   sign-off itself. **C-1** — recorded the emission backing-input quantum spend-authority binding
   as a **named carried dependency** (§9.8) rather than a citation that read as closed; verified

@@ -43,7 +43,15 @@
   `StakeEngine` sole ownership of `P.view_sk` is now a Gate-6 forward requirement
   on the FSM retool (the §2.1 dual-scan pin is authoritative; the crypto basis is
   actor-independent); **C-3** — the cross-pipeline negative test now asserts a
-  loud-fail defensive invariant (double-match unreachable by construction). The
+  loud-fail defensive invariant (double-match unreachable by construction). A
+  second-order C-1 confirmation followed: verified at source
+  (`FCMP_MEMBERSHIP_ONLY.md` §5.1) that the `MembershipSpendAuth` `R_O` leg proves
+  **classical knowledge of the leaf's spend secret** (ownership) — "membership-only"
+  omits the key image, not the authority — so the interim "classical security only"
+  characterization is accurate (PQ-weak, not authority-free); and the C-1 dependency
+  is now enforced by a **failing test** (the §7 `pqc_pk`-mismatch forgery negative
+  rejects until the vin-layer ML-DSA equality check lands), with a stressnet
+  negative-case obligation. The
   `ARCHIVAL_P_DERIVE_V1` KAT manifest + `shekyl-crypto-pq::archival_p`
   implementation and the C-1 confirm-at-source dependency are the Round-1 carries.
   Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4,
