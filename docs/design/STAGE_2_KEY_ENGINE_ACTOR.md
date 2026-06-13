@@ -1,12 +1,12 @@
 # Stage 2 — `KeyEngine` → `kameo` actor migration (design)
 
-**Status:** landed on branch `torvaldsl/stage-2-key-engine-actor`, pending
-merge to `dev`. The design closed at Round 6 (§9) and the implementation
-followed on the same branch: `KeyActor` + `KeyEngineHandle`, the `Engine`
-field swap, the require-ambient runtime disposition (§4.2), the zeroization
-audit (Findings 1–4), the §5.2 contract/protocol tests, and the §5.3 B9
-dispatch bench (PASS, ratio 1.039). All six §10 DoD items are met. This
-document and its §9 round record remain the design-of-record.
+**Status:** landed on `dev` via PR #99 (merge `01a849e6b`). The design closed
+at Round 6 (§9) and the implementation followed on branch
+`torvaldsl/stage-2-key-engine-actor`: `KeyActor` + `KeyEngineHandle`, the
+`Engine` field swap, the require-ambient runtime disposition (§4.2), the
+zeroization audit (Findings 1–4), the §5.2 contract/protocol tests, and the
+§5.3 B9 dispatch bench (PASS, ratio 1.039). All six §10 DoD items are met.
+This document and its §9 round record remain the design-of-record.
 
 **Process discipline:** authored under
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
