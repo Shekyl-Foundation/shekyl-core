@@ -50,6 +50,7 @@ ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 rand_chacha = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

@@ -155,6 +155,23 @@ pub enum StoreError {
         /// Global output index present in both tables.
         gindex: u64,
     },
+    /// The freeze cursor claims `segment` is frozen, but the frozen-segment
+    /// table has no row for it. This is metadata corruption: `None` is not a
+    /// clean "nothing to verify" result when the cursor names the segment.
+    FrozenSegmentRecordMissing {
+        /// Segment whose frozen record is absent.
+        segment: SegmentId,
+    },
+    /// A frozen segment's stored `R_k` does not match recomputation from the
+    /// full leaf bytes. This is the F9 stale/corrupt frozen metadata guard.
+    FrozenSegmentRkMismatch {
+        /// Segment whose root disagreed.
+        segment: SegmentId,
+        /// `R_k` persisted in the frozen-segment row.
+        expected: [u8; 32],
+        /// `R_k` recomputed from the present leaf bytes.
+        recomputed: [u8; 32],
+    },
     /// The store's in-band layout version stamp disagrees with this build.
     /// redb's `TypeName` check only catches key/value *type* drift; codec
     /// layout changes inside a same-width value are invisible to it, so the
@@ -321,10 +338,13 @@ impl LeafStore {
         ))
     }
 
-    /// Append newly drained leaves and advance sync tip in one ACID write txn.
+    /// Test-only wrapper for appending drained leaves and advancing sync tip.
     ///
-    /// Thin wrapper over [`Self::append_block_deltas`] with empty pending
-    /// deltas — keeps CT-1/CT-2 callers and KATs byte-identical.
+    /// Production ingest must use [`Self::append_block_deltas`] so drained
+    /// and pending tables stay disjoint and resume-exact. This wrapper keeps
+    /// CT-1/CT-2-era store KATs byte-identical without leaving a production
+    /// path that can bypass pending-table maintenance.
+    #[cfg(test)]
     pub fn append_drained(
         &self,
         entries: &[LeafEntry],
@@ -739,11 +759,14 @@ impl LeafStore {
     ///
     /// 1. **Partition search (pruned-range-safe, P1/F7).** Drained rows
     ///    are maturity-sorted in position order (the P7 invariant), so the
-    ///    cut point is `partition_point(maturity > fork_height)` — the
-    ///    *first* index of an equal-maturity run. Probes run over the
-    ///    present suffix `[pruned frontier, leaf_count)` only, so a
-    ///    post-prune store can never `None`-probe. A partition resolving
-    ///    at a non-zero frontier means the cut lands at/below pruned rows:
+    ///    cut point is `partition_point(maturity >
+    ///    drained_through(fork_height))` — the *first* index of an
+    ///    equal-maturity run. A store synced through block `F` has drained
+    ///    leaves through `F - 1`; leaves maturing exactly at `F` enter on
+    ///    connection of block `F + 1` and must be pending after rollback.
+    ///    Probes run over the present suffix `[pruned frontier, leaf_count)`
+    ///    only, so a post-prune store can never `None`-probe. A partition
+    ///    resolving at a non-zero frontier means the cut lands at/below pruned rows:
     ///    [`StoreError::TruncatedIntoPrunedRange`], before any write.
     ///    (Intentionally conservative when `partition == frontier > 0`
     ///    would be a valid exact-boundary cut: pruned segments are buried
@@ -807,13 +830,17 @@ impl LeafStore {
                 Ok(decode_stored_leaf_meta(row.value())?.maturity.0)
             };
             // partition_point over [frontier, leaf_count): first present
-            // position with maturity > fork (maturity is non-decreasing,
-            // P7), which is the first index of an equal-maturity run (F7).
+            // position with maturity > drained_through(fork). Maturity is
+            // non-decreasing (P7), so this lands on the first index of an
+            // equal-maturity run (F7). Height 0 saturates at cutoff 0; no
+            // real leaf has maturity 0, so genesis rollback still truncates
+            // the whole drained tree.
+            let drain_cutoff = fork_height.0.saturating_sub(1);
             let mut lo = frontier;
             let mut hi = leaf_count;
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                if maturity_at(mid)? > fork_height.0 {
+                if maturity_at(mid)? > drain_cutoff {
                     hi = mid;
                 } else {
                     lo = mid + 1;
@@ -952,6 +979,54 @@ impl LeafStore {
         let txn = self.db.begin_read()?;
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         Ok(frozen.get(id)?.map(|v| decode_frozen_segment(v.value())))
+    }
+
+    /// Recompute the boundary-adjacent frozen segment's `R_k`.
+    ///
+    /// The freeze cursor names the next segment to freeze, so `cursor - 1`
+    /// is the highest frozen row and the rollback-boundary witness CT-3c
+    /// checks after `rollback_to_fork`. This is intentionally O(one
+    /// segment), not a full-store scan.
+    pub(crate) fn verify_frozen_tail(&self) -> Result<(), StoreError> {
+        let txn = self.db.begin_read()?;
+        let next_freeze_seg = {
+            let meta = txn.open_table(META_TABLE)?;
+            meta.get(META_NEXT_FREEZE_SEG)?
+                .map(|v| v.value())
+                .unwrap_or(0)
+        };
+        if next_freeze_seg == 0 {
+            return Ok(());
+        }
+
+        // `verify_frozen_tail` runs on the rollback path against persisted
+        // metadata, so a corrupt `META_NEXT_FREEZE_SEG` must surface as a
+        // structured error rather than panic — the function exists to detect
+        // corruption, not to trust it. (`next_freeze_seg >= 1` here, so the
+        // subtraction cannot underflow.)
+        let segment = SegmentId(
+            u32::try_from(next_freeze_seg - 1)
+                .map_err(|_| StoreError::CorruptMeta("freeze segment counter exceeds u32"))?,
+        );
+        let record = {
+            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            match frozen.get(segment)? {
+                Some(row) => decode_frozen_segment(row.value()),
+                None => return Err(StoreError::FrozenSegmentRecordMissing { segment }),
+            }
+        };
+        let e = leaves_per_segment() as u64;
+        let start = u64::from(segment.0) * e;
+        let leaves = read_leaf_bytes_range_read(&txn, start, start + e)?;
+        let recomputed = recompute_segment_r_k(&leaves).map_err(store_mixed_root_err)?;
+        if recomputed != record.r_k {
+            return Err(StoreError::FrozenSegmentRkMismatch {
+                segment,
+                expected: record.r_k,
+                recomputed,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -1529,7 +1604,7 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         store
             .append_block_deltas(
-                &[entry_created_at(0, 70, 10)],
+                &[entry_created_at(0, 69, 10)],
                 &[entry_created_at(1, 150, 60)],
                 &[],
                 BlockHeight(70),
@@ -1738,6 +1813,64 @@ mod tests {
         // would skip segment 0 silently.
         store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+    }
+
+    #[test]
+    fn verify_frozen_tail_rejects_corrupt_r_k() {
+        // Build the frozen row through the real freeze path; only the final
+        // row mutation is test-only corruption of the persisted metadata.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
+        let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        let mut record = store
+            .frozen_segment(SegmentId(0))
+            .unwrap()
+            .expect("segment 0 frozen");
+        record.r_k[0] ^= 1;
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE).unwrap();
+            frozen
+                .insert(SegmentId(0), &encode_frozen_segment(&record))
+                .unwrap();
+        }
+        txn.commit().unwrap();
+
+        let err = store.verify_frozen_tail().unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::FrozenSegmentRkMismatch {
+                segment: SegmentId(0),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_frozen_tail_rejects_missing_cursor_row() {
+        // Build cursor + row through the real freeze path, then remove just
+        // the row. A cursor claiming segment 0 is frozen with no row is
+        // corruption, not a clean "nothing to verify" state.
+        let store = LeafStore::open_ephemeral().unwrap();
+        let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
+        let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE).unwrap();
+            drop(frozen.remove(SegmentId(0)).unwrap());
+        }
+        txn.commit().unwrap();
+
+        let err = store.verify_frozen_tail().unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::FrozenSegmentRecordMissing {
+                segment: SegmentId(0)
+            }
+        ));
     }
 
     #[test]
