@@ -324,19 +324,18 @@ never over-mint) and is the same flavor as §4.5's already-accepted "offline P's
 share unminted." Roll (carry to next epoch) is rejected: cross-epoch state +
 reorg coupling.
 
-**Spec consequence (gate-1 pin — lands at the integer-payout layer, not the
-Form-C row; not yet on this branch's spec copy, §0).** The naive edit
-(weaken the Form-C row's `Σ reward_P = budget` to `≤`) is **wrong**: that row's
-identity is the **real-valued** normalization that distinguishes C from A (A
-strands budget pre-rounding; C's real shares sum to budget exactly), and the
-floor remainder is a *different* residual one layer down. The refinement keeps
-the real-valued identity where it does the C-vs-A work, and lands the integer
-pin at the payout layer: `Σ minted ≤ budget`, the `≤ (N_P−1)`-atomic **floor**
-remainder unminted (supply-safe, §4.5) — a different, explicitly-chosen
-residual from the `Curve` residual the §4.0 reversion clause governs, which is
-exactly the "must be chosen explicitly" that clause demands. Land this in
-`REWARD_EMISSION_LEG.md` §4.0 before PR-E3 code (currently line 213 still reads
-"rounding disposition pinned at gate 1" on this branch).
+**Spec consequence (gate-1 pin — APPLIED 2026-06-13, `REWARD_EMISSION_LEG.md`
+§4.0).** The refinement landed at the **integer-payout layer**, not the Form-C
+row: §4.0's Form-C row keeps the **real-valued** normalization identity
+(`Σ_P reward_P = budget` whenever `Σ Curve > 0`) — the property that
+distinguishes C from A (A strands budget pre-rounding) — and the integer pin
+sits one layer down in the notation block: `reward_P(E) = floor(budget·capped_P
+/ Σwork)`, u128 numerator before divide, the `≤ (N_P−1)`-atomic floor remainder
+**unminted** (`Σ minted ≤ budget`, supply-safe), with a residual-collision
+guard distinguishing it from the `Curve` residual the existing reversion clause
+governs, and a rule-21 reopen clause. The naive edit (weakening the Form-C
+row's `=` to `≤`) was rejected for exactly the C-vs-A reason. Spec and plan are
+now reconciled; no further §4.0 action.
 
 **Single source of truth:** PR-E3's recompute **imports the canonical
 `reward_arithmetic` crate** — not a third reimplementation — and the wallet
@@ -677,11 +676,11 @@ discipline note, or named forward-action (A5).
 
 ### Round-1 open items (must close before PR-E3 code; F-E2/F-E3 consensus-load-bearing)
 
-8. **Remainder disposition (F-E2)** — *pinned in R1.B and already the canonical
-   crate's shipped behavior* (`reward_share_floor` = floor + "dust stays
-   unminted", `mul_div_floor` = u128 numerator-first). Remaining to close: land
-   the gate-1 §4.0 spec wording (real-valued identity preserved, ≤ at the
-   integer layer — R1.B), and the PR 1.5 economic-equivalence gate (M-1).
+8. **Remainder disposition (F-E2)** — *closed on the spec/disposition side*:
+   pinned in R1.B, **applied in §4.0** (2026-06-13), and already the canonical
+   crate's shipped behavior (`reward_share_floor` = floor + "dust stays
+   unminted", `mul_div_floor` = u128 numerator-first). Only remaining gate is
+   PR 1.5 economic-equivalence for the integer `Curve` (M-1).
 9. **Intra-block `(P,E)` uniqueness (F-E3)** — pick check/set fusion within the
    connecting tx scope vs an explicit block-assembly uniqueness pass. Consensus
    double-mint hole until pinned.
