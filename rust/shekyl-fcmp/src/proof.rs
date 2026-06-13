@@ -31,7 +31,8 @@ use shekyl_fcmp_plus_plus::{
         TreeRoot,
     },
     sal::{OpenedInputTuple, RerandomizedOutput, SpendAuthAndLinkability},
-    Curves, FcmpPlusPlus, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS,
+    Curves, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
+    SELENE_FCMP_GENERATORS,
 };
 use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
@@ -707,6 +708,17 @@ pub fn verify(
         .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Both collections are length-validated to `num_inputs` above; zip them into the
+    // single ordered per-input bundle the verifier takes, so alignment is structural.
+    let per_input: Vec<InputVerification> = ki_points
+        .into_iter()
+        .zip(pqc_selene)
+        .map(|(key_image, pqc_pk_hash)| InputVerification {
+            key_image,
+            pqc_pk_hash,
+        })
+        .collect();
+
     let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut proof.data.as_slice())
         .map_err(|e| {
             tracing::debug!(proof_len = proof.data.len(), layers, error = %e, "FcmpPlusPlus::read failed");
@@ -726,8 +738,7 @@ pub fn verify(
             tree,
             layers,
             signable_tx_hash,
-            ki_points,
-            pqc_selene,
+            per_input,
         )
         .map_err(|e| VerifyError::UpstreamError(format!("{e:?}")))?;
 

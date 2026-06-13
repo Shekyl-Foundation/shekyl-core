@@ -30,8 +30,8 @@ use crate::{
         check_nondegenerate, membership_only_rerandomize, MembershipOnlyError, MembershipSpendAuth,
     },
     sal::*,
-    FcmpMembershipOnly, FcmpPlusPlus, FcmpPlusPlusError, Input, Output, FCMP_PARAMS,
-    HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS, SELENE_HASH_INIT,
+    FcmpMembershipOnly, FcmpPlusPlus, FcmpPlusPlusError, Input, InputVerification, Output,
+    FCMP_PARAMS, HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS, SELENE_HASH_INIT,
 };
 
 /// An RNG returning all zeroes: the degraded-RNG seam for the F-6 synthesis tests.
@@ -335,8 +335,10 @@ fn membership_only_bytes_rejected_by_full_path() {
                 tree,
                 1,
                 tx_hash,
-                vec![key_image],
-                vec![leaf.h_pqc],
+                vec![InputVerification {
+                    key_image,
+                    pqc_pk_hash: leaf.h_pqc,
+                }],
             );
             assert!(
                 result.is_err() || !verifiers.all_valid(),
@@ -527,8 +529,10 @@ fn mixed_type_batch_rejects() {
             full_tree,
             1,
             tx_hash,
-            vec![key_image],
-            vec![full_leaf.h_pqc],
+            vec![InputVerification {
+                key_image,
+                pqc_pk_hash: full_leaf.h_pqc,
+            }],
         )
         .unwrap();
         tamper_mo(&mo)
@@ -561,8 +565,10 @@ fn mixed_type_batch_rejects() {
                 full_tree,
                 1,
                 tx_hash,
-                vec![key_image],
-                vec![full_leaf.h_pqc],
+                vec![InputVerification {
+                    key_image,
+                    pqc_pk_hash: full_leaf.h_pqc,
+                }],
             )
             .unwrap();
         mo.verify(
@@ -593,8 +599,10 @@ fn mixed_type_batch_rejects() {
             full_tree,
             1,
             tx_hash,
-            vec![key_image],
-            vec![full_leaf.h_pqc],
+            vec![InputVerification {
+                key_image,
+                pqc_pk_hash: full_leaf.h_pqc,
+            }],
         )
         .unwrap();
         mo.verify(

@@ -66,6 +66,35 @@
   gates on gate-6 soundness only), `FcmpMembershipOnly` proof-type
   domain-separation requirement made load-bearing (§7.2).
 
+### Changed
+
+- **fcmp: typed the FCMP++ composition layer to make the verify
+  input-context misalignment unrepresentable (2026-06-12).** The
+  Copilot rounds on the membership-only PR surfaced a recurring shape
+  in `shekyl-oxide`'s FCMP++ crate rather than one bug: `proof_size`
+  hard-coded the per-leg byte counts, and `FcmpPlusPlus::verify` took
+  the key images and `H(pqc_pk)` leaf scalars as two parallel `Vec`s
+  whose lengths each needed a guard (one of which misrouted a
+  PQC-count mismatch to the key-image error variant, fixed in PR #129
+  round 3). This change addresses the cause: per-leg wire sizes are now
+  owned by their types (`Input::PARTIAL_WIRE_SIZE`,
+  `SpendAuthAndLinkability::WIRE_SIZE`, `MembershipSpendAuth::WIRE_SIZE`),
+  with `proof_size` composed from them and transitively asserted against
+  the serialized length by the existing roundtrip tests; and
+  `FcmpPlusPlus::verify` takes a single ordered `Vec<InputVerification>`
+  bundling each input's key image with its leaf scalar, so a length
+  mismatch or cross-input transposition is no longer representable as
+  two independently-sized collections. The two count-mismatch error
+  variants (`InvalidKeyImageQuantity`, `InvalidPqcPkHashQuantity`)
+  collapse into one `InvalidInputCount`; the wrapper in `shekyl-fcmp`
+  already does its own granular length checks before calling the oxide
+  layer, so no downstream granularity is lost. The membership-only
+  verify keeps its single `pqc_pk_hashes` `Vec` — it has no second
+  per-input collection by construction, so the bundle is not warranted
+  there (reversion clause: introduce it if a second collection is ever
+  added). No consensus behavior changes; all 18 fcmp++ and 66
+  `shekyl-fcmp` tests pass.
+
 ### Fixed
 
 - **sim: sole-source window tick moved to end-of-epoch (PR #126 Copilot

@@ -17,8 +17,8 @@ use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 use crate::{
     fcmps::{Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path, TreeRoot},
     sal::*,
-    FcmpPlusPlus, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS,
-    SELENE_HASH_INIT,
+    FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
+    SELENE_FCMP_GENERATORS, SELENE_HASH_INIT,
 };
 
 #[test]
@@ -125,8 +125,10 @@ fn test() {
             tree,
             1, // Layers
             [0; 32],
-            vec![L],
-            vec![h_pqc],
+            vec![InputVerification {
+                key_image: L,
+                pqc_pk_hash: h_pqc,
+            }],
         )
         .unwrap();
 
@@ -145,8 +147,10 @@ fn test() {
             tree,
             1, // Layers
             [0; 32],
-            vec![L],
-            vec![h_pqc],
+            vec![InputVerification {
+                key_image: L,
+                pqc_pk_hash: h_pqc,
+            }],
         )
         .unwrap();
 
