@@ -377,6 +377,10 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
     let f = fixture();
     let main_tip = f["main_tip"].as_u64().unwrap();
     let deep_pop = f["deep_pop"].as_u64().unwrap();
+    assert!(
+        deep_pop <= main_tip,
+        "malformed fixture: deep_pop ({deep_pop}) exceeds main_tip ({main_tip})",
+    );
     let fork = main_tip - deep_pop;
     let fork_index = usize::try_from(fork).expect("fork height fits usize");
     let main = decode_client_chain(chain(&f, "main"));

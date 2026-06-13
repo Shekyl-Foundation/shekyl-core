@@ -999,7 +999,15 @@ impl LeafStore {
             return Ok(());
         }
 
-        let segment = SegmentId(u32::try_from(next_freeze_seg - 1).expect("segment id fits u32"));
+        // `verify_frozen_tail` runs on the rollback path against persisted
+        // metadata, so a corrupt `META_NEXT_FREEZE_SEG` must surface as a
+        // structured error rather than panic — the function exists to detect
+        // corruption, not to trust it. (`next_freeze_seg >= 1` here, so the
+        // subtraction cannot underflow.)
+        let segment = SegmentId(
+            u32::try_from(next_freeze_seg - 1)
+                .map_err(|_| StoreError::CorruptMeta("freeze segment counter exceeds u32"))?,
+        );
         let record = {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             match frozen.get(segment)? {

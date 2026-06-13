@@ -89,16 +89,23 @@ sustainability is unaffected by the recalibration.
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
 
 - **CT-5 rollback error handling: drop-and-reopen poisoned client
-  (CT-3c poison contract, 2026-06-12).** Target: V3.0, with the engine
-  refresh wiring (CT-5). `CurveTreeClient::rollback_to_fork` commits the
-  store rollback before rebuilding memory; if a post-store check fails
-  (`FrozenSegmentRkMismatch`, `FrozenSegmentRecordMissing`, duplicate
-  gindex on rebuild, pruned/corrupt shape, etc.), the method returns
-  `Err` with the store authoritative and rolled back but the in-memory
-  client object still stale. CT-5 must treat rollback `Err` as
-  drop-and-reopen, not retry-with-same-object. **Reopening trigger:**
-  if CT-5 introduces a rollback actor/wrapper that owns this policy
-  centrally, fold the item into that actor's contract and close it.
+  (CT-3c poison contract, 2026-06-12; machine-enforced 2026-06-13).**
+  Target: V3.0, with the engine refresh wiring (CT-5).
+  `CurveTreeClient::rollback_to_fork` commits the store rollback before
+  rebuilding memory; if a post-store check fails (`FrozenSegmentRkMismatch`,
+  `FrozenSegmentRecordMissing`, duplicate gindex on rebuild, pruned/corrupt
+  shape, etc.), the method returns `Err` with the store authoritative and
+  rolled back but the in-memory client object still stale. **The detection
+  is now self-enforcing:** the client sets an internal poison flag at the
+  store commit and clears it only on full rebuild success, so a stale client
+  fails fast with `ClientError::Poisoned` on every load-bearing call
+  (`ingest_block`, `root_at`, `verify_root`, `rollback_to_fork`) rather than
+  silently ingesting against stale memory or returning a stale root. CT-5's
+  residual obligation is only the *reaction*: map `ClientError::Poisoned`
+  (and, conservatively, any rollback `Err`) to drop-and-reopen rather than
+  retry-with-same-object. **Reopening trigger:** if CT-5 introduces a
+  rollback actor/wrapper that owns this policy centrally, fold the item into
+  that actor's contract and close it.
   See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4 CT-3c.
 
 - **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1

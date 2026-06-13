@@ -75,7 +75,16 @@
   and a 150k-lock never-draining witness, plus a file-backed
   `reorg_deep` rollback/resync KAT against fresh replay and consensus
   roots. `LeafStore::append_drained` is now test-only so production
-  ingest cannot bypass pending-table maintenance.
+  ingest cannot bypass pending-table maintenance. **Review hardening
+  (2026-06-13):** the rollback poison contract is now machine-enforced —
+  the client sets an internal poison flag at the store commit and clears
+  it only on full rebuild success, so a post-commit failure makes every
+  load-bearing call (`ingest_block`, `root_at`, `verify_root`,
+  `rollback_to_fork`) fail fast with `ClientError::Poisoned` instead of
+  relying on caller prose discipline; `verify_frozen_tail` maps a corrupt
+  freeze-segment counter to `StoreError::CorruptMeta` rather than
+  panicking on the rollback path; and the persistent `reorg_deep` KAT
+  asserts its `deep_pop <= main_tip` fixture invariant explicitly.
 
 - **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
   2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted

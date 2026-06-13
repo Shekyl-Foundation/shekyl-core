@@ -166,6 +166,15 @@ pub enum ClientError {
         /// Drained rows actually readable (exceeds `stored` — the breach).
         readable: u64,
     },
+    /// The client was poisoned by a [`CurveTreeClient::rollback_to_fork`]
+    /// that committed the authoritative store rollback but then failed
+    /// before the in-memory state was rebuilt (frozen-tail recheck or
+    /// rebuild errored). Its in-memory leaves no longer match the store, so
+    /// every load-bearing public method fails fast with this error rather
+    /// than ingesting against stale memory or returning a stale root. The
+    /// store on disk is authoritative at the fork height; recover by
+    /// dropping this object and re-opening with [`CurveTreeClient::open`].
+    Poisoned,
 }
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
@@ -194,6 +203,13 @@ pub struct CurveTreeClient {
     /// Last block height passed to [`Self::ingest_block`], if any. Root
     /// queries are bounded by this tip ([`ClientError::ReferenceBeyondIngestedTip`]).
     ingested_tip_height: Option<BlockHeight>,
+    /// Set when [`Self::rollback_to_fork`] commits the store rollback but
+    /// fails before rebuilding in-memory state, leaving memory inconsistent
+    /// with the authoritative store. While set, load-bearing public methods
+    /// fail fast with [`ClientError::Poisoned`]; the only recovery is
+    /// drop-and-reopen ([`Self::open`]). See the `rollback_to_fork` poison
+    /// contract.
+    poisoned: bool,
 }
 
 /// In-memory state reconstructed from a [`LeafStore`] snapshot.
@@ -220,6 +236,7 @@ impl CurveTreeClient {
             drained_through_counts: Vec::new(),
             entries_by_maturity: BTreeMap::new(),
             ingested_tip_height: None,
+            poisoned: false,
         })
     }
 
@@ -310,6 +327,7 @@ impl CurveTreeClient {
             drained_through_counts: Vec::new(),
             entries_by_maturity: rebuilt.entries_by_maturity,
             ingested_tip_height: rebuilt.ingested_tip_height,
+            poisoned: false,
         })
     }
 
@@ -393,16 +411,29 @@ impl CurveTreeClient {
     /// after rebuild succeeds, so no partial memory overwrite occurs on
     /// error.
     ///
-    /// **Poison contract for callers (CT-5).** If this method returns `Err`
-    /// after the store rollback committed but before memory is rebuilt, the
-    /// store is rolled back and authoritative while this client object still
-    /// holds pre-rollback memory. The caller must drop the client and re-open
-    /// it from the store before continuing; do not keep using the stale
-    /// object.
+    /// **Poison contract (CT-5), machine-enforced.** Failures *before* the
+    /// store rollback commits (e.g. an above-tip request) leave both store
+    /// and memory untouched and return `Err` with the client fully usable.
+    /// Failures *after* the commit but before the in-memory rebuild
+    /// completes (frozen-tail recheck or rebuild errors) leave the store
+    /// authoritative at `fork_height` while memory is stale; the client
+    /// marks itself [poisoned](ClientError::Poisoned) and every subsequent
+    /// load-bearing public call ([`Self::ingest_block`], [`Self::root_at`],
+    /// [`Self::verify_root`], and this method) fails fast with
+    /// [`ClientError::Poisoned`]. The caller does not have to inspect which
+    /// phase failed: a poisoned client is recovered only by dropping it and
+    /// re-opening from the store ([`Self::open`]).
     pub fn rollback_to_fork(&mut self, fork_height: BlockHeight) -> Result<(), ClientError> {
+        self.ensure_live()?;
         self.store
             .rollback_to_fork(fork_height)
             .map_err(ClientError::from)?;
+        // Store rollback committed: it is now authoritative at `fork_height`
+        // and in-memory state is stale. Any failure from here leaves the two
+        // inconsistent, so poison first and clear only once the rebuild has
+        // fully landed. The `?` early-returns below therefore leave the
+        // client poisoned, which is the contract.
+        self.poisoned = true;
         self.store.verify_frozen_tail().map_err(ClientError::from)?;
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
@@ -410,6 +441,16 @@ impl CurveTreeClient {
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        self.poisoned = false;
+        Ok(())
+    }
+
+    /// Fail fast if the client was poisoned by a partially-applied
+    /// [`Self::rollback_to_fork`]. See that method's poison contract.
+    fn ensure_live(&self) -> Result<(), ClientError> {
+        if self.poisoned {
+            return Err(ClientError::Poisoned);
+        }
         Ok(())
     }
 
@@ -431,6 +472,7 @@ impl CurveTreeClient {
     /// the process dies in that gap — where memory evaporates and resume
     /// re-derives from the store.
     pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
+        self.ensure_live()?;
         let expected = self.ingested_tip_height.map_or(BlockHeight(0), |last| {
             BlockHeight(last.0.checked_add(1).expect("chain height fits u64"))
         });
@@ -626,6 +668,7 @@ impl CurveTreeClient {
     /// store propagate — there is no silent fallback to the replay oracle, so
     /// KATs and callers gate the CT-1 hot path rather than masking corruption.
     pub fn root_at(&self, reference_height: BlockHeight) -> Result<[u8; 32], ClientError> {
+        self.ensure_live()?;
         let within_chain = self
             .ingested_tip_height
             .is_some_and(|tip| reference_height <= tip);
@@ -1228,6 +1271,47 @@ mod tests {
         assert_eq!(client.next_gindex, next_gindex);
         assert_eq!(client.ingested_tip_height, Some(BlockHeight(5)));
         assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(5));
+        // The failure was before the store committed, so the client is not
+        // poisoned: it stays fully usable.
+        assert!(!client.poisoned);
+        client.root_at(BlockHeight(5)).unwrap();
+        client.rollback_to_fork(BlockHeight(3)).unwrap();
+    }
+
+    #[test]
+    fn poisoned_client_fails_fast_on_load_bearing_methods() {
+        // A post-commit rollback failure (frozen-tail recheck or rebuild)
+        // sets the poison flag; simulate that terminal state directly and
+        // assert every load-bearing public entry point refuses to proceed
+        // rather than ingesting against stale memory or returning a stale
+        // root. Recovery is drop-and-reopen, which this client cannot do.
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 5);
+        client.poisoned = true;
+
+        assert!(matches!(
+            client.root_at(BlockHeight(5)),
+            Err(ClientError::Poisoned)
+        ));
+        assert!(matches!(
+            client.verify_root(&ReferenceBlock {
+                height: BlockHeight(5),
+                curve_tree_root: [0u8; 32],
+            }),
+            Err(ClientError::Poisoned)
+        ));
+        assert!(matches!(
+            client.rollback_to_fork(BlockHeight(3)),
+            Err(ClientError::Poisoned)
+        ));
+        let block = BlockLeaves {
+            height: BlockHeight(6),
+            txs: &[],
+        };
+        assert!(matches!(
+            client.ingest_block(block),
+            Err(ClientError::Poisoned)
+        ));
     }
 
     #[test]
