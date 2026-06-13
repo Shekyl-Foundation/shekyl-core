@@ -188,7 +188,12 @@
   path can decode. `encode()` now rejects unknown `holdings_kind` alongside its
   existing at-rest invariants (bounds, claimed-epoch well-formedness), which
   protects every writer through the single serialization funnel; regression test
-  `bond_encode_rejects_unknown_holdings_kind`. This is a latent-bug precursor the
+  `bond_encode_rejects_unknown_holdings_kind`. Because `apply_archival_slash_one`
+  was moved to public scope for the slash regression tests, it now carries the
+  same `check_open()` + active-write-txn precondition the internal scheduler
+  enforces, so direct invocation without a write txn fails loudly instead of
+  dereferencing a null `*m_write_txn`; regression test
+  `apply_slash_requires_active_write_txn`. This is a latent-bug precursor the
   emission vin (PR-E3) depends on; no emission behavior changes. Docs:
   `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
 

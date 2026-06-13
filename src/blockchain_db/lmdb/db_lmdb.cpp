@@ -5358,6 +5358,16 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   const crypto::hash& p_id, uint64_t shard_id, uint64_t settlement_epoch,
   uint64_t slashed_amount)
 {
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  // Exposed for direct invocation (slash scheduler + unit tests), so the
+  // open-DB / active-write-txn preconditions the scheduler enforces must be
+  // enforced here too: every mutating helper below (put_archival_bond_value,
+  // set_total_*, append_archival_slash_log) dereferences *m_write_txn. Fail
+  // loudly on misuse rather than dereferencing a null txn (UB).
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival slash apply requires active write txn");
+
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
     throw std::runtime_error("FATAL: archival slash without bond record");

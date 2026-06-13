@@ -493,6 +493,32 @@ TEST(archival_substrate_lmdb, bond_v4_fields_survive_load_modify_store)
   EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
 }
 
+// apply_archival_slash_one is public (scheduler + tests). Without an active
+// write txn its mutating helpers would dereference a null *m_write_txn (UB);
+// the precondition must reject that loudly instead.
+TEST(archival_substrate_lmdb, apply_slash_requires_active_write_txn)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x75);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+  db.put_archival_bond_value(p_id, bond_with_v4_fields({7, 9}, 2 * floor));
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+  // Close the batch so no write txn is active when the public entry is called.
+  fixture.db.batch_stop();
+
+  uint32_t seq = 0;
+  EXPECT_THROW(
+    lmdb.apply_archival_slash_one(6000, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor),
+    std::runtime_error);
+
+  // Restore an active batch for TempLMDB teardown symmetry.
+  fixture.db.batch_start();
+}
+
 TEST(archival_substrate_lmdb, bond_v4_claimed_set_survives_reorg_revert)
 {
   TempLMDB fixture;
