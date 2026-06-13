@@ -13,7 +13,12 @@ Replaced flat `min(work, cap)` with banded piecewise-linear `Curve` (`rust/sheky
 
 ## Sweep status
 
-Full curated sweep set runs via `shekyl-staking-sim` (default `--curve-impl=float`). Integer path: `--curve-impl=integer` imports `shekyl-archival-retention::reward_arithmetic`.
+Full curated sweep set runs via `shekyl-staking-sim`. **The default backend is
+`--curve-impl=integer`** (authoritative — imports
+`shekyl-archival-retention::reward_arithmetic`, the minting code). `--curve-impl=float`
+is opt-in exploration only and is **not authoritative** (PR 1.5: float over-reads
+worst-shard redundancy by up to one replica); an unrecognized value exits non-zero
+rather than silently falling back. Implemented 2026-06-13.
 
 ## Disposition (PR 0)
 

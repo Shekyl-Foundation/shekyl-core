@@ -1701,7 +1701,9 @@ fn baseline() -> SimConfig {
         cap: 8.0,
         pseudonym_cost: 0.05,
         age_weight: 2.0,
-        curve_impl: CurveImpl::Float,
+        // Authoritative backend by default (the canonical minting arithmetic);
+        // main overrides per `--curve-impl`. Float is opt-in exploration only.
+        curve_impl: CurveImpl::Integer,
         storage_unit_cost: 0.03,
         bond_rate: 2.0,      // mid
         bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)

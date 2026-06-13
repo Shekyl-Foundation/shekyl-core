@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **economics: `shekyl-staking-sim` default backend is now the authoritative
+  integer `Curve` (2026-06-13).** `--curve-impl=integer` (imports the canonical
+  `shekyl-archival-retention::reward_arithmetic`, the code the emission vin mints
+  with) is the default for all sweeps; `--curve-impl=float` is opt-in exploration
+  only and is no longer authoritative — PR 1.5 (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`)
+  showed the float backend over-reads worst-shard redundancy by up to one replica
+  (the tail-margin finding). An unrecognized `--curve-impl` value now fails loudly
+  (exit 2) instead of silently falling back to float, and every run prints the
+  active backend (with a "NOT authoritative" tag for float). The `CurveImpl`
+  type-level default and the scenario base config flip to `Integer` accordingly;
+  the float↔integer reconciliation tests remain as drift guards. Closes the M-1
+  follow-on "stop treating float as a co-authoritative validation substrate."
+
 ### Added
 
 - **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
