@@ -4,6 +4,39 @@
 
 ### Added
 
+- **archival: Gate 6 Round 1 closed — `P` lifecycle + pseudonym hygiene
+  (2026-06-13).** Adversarial-pass disposition on `ARCHIVAL_FIREWALL_GATE6.md`
+  §9. GF-1 (critical): rewrote §9.6 with a per-transaction-type verifier
+  contract — the account-level `hybrid_sign_pk` is the bond-record **identity
+  only** (the on-wire `P_pubkey` feeding `P_canonical_id`) and is **never** a
+  per-input `PqcAuthentication.hybrid_public_key`; emission **backing inputs**
+  authenticate against the leaf-committed per-output `pqc_pk` the membership
+  proof binds in-circuit (`FCMP_MEMBERSHIP_ONLY.md` §7, no key image), fee
+  inputs / ordinary transfers / terminal drains use per-output keys, and
+  ordinary `P` transfers carry no `P`-typing (byte-identical to principal
+  transfers — the firewall property, not a gap). This aligns the doc to the
+  already-implemented `FcmpMembershipOnly` contract; no consensus-rule change.
+  GF-2 (high): made the dual-scan firewall **architectural** rather than a
+  naming convention — `StakeEngine` owns `P.view_sk` as an identification
+  context disjoint from the principal `LedgerEngine` scan, separation rests on
+  distinct `combined_ss`/decap material (shared output-derive labels are safe
+  because the discriminator is the decap layer), a shared scan loop is allowed
+  only with match-routing and no cross-assignment, and the cross-pipeline
+  non-cross-assignment negative test is named; added `P`-scan ownership rows to
+  the §5 consumer map. Corrections: GF-8 (the §9.3 `L = …` placeholder was
+  cosmetic — per-row `L` is pinned `64/64/64/32`, matching `account.rs` and
+  `derivation.rs`), GF-11 (`MAX_CLAIM_AGE_W = 26 > MAX_SETTLEMENT_EPOCHS_PER_
+  EMISSION = 15` already pinned in `ARCHIVAL_TIMING_CONSTANTS.md` §1 — added the
+  cross-ref, no new pin), GF-4 (drain delay floor already pinned; the
+  terminal-drain output-count discipline is the remaining Round 4 hard exit).
+  Remaining findings folded into the §6 round table as named criteria: GF-3 /
+  GF-5 / GF-6 / GF-9 / GF-12 as Round 2 entry gates, GF-10 as a Round 3 exit,
+  GF-4 / GF-7 as Round 4 hard exits. Reviewer sign-off recorded (§9.8); the
+  `ARCHIVAL_P_DERIVE_V1` KAT manifest + `shekyl-crypto-pq::archival_p`
+  implementation remain the lone Round-1 carry. Docs:
+  `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4, 9.6,
+  9.8, revision history).
+
 - **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
   key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
   §7.2 verify API (the §12 sibling-API gap) as a sibling type to
