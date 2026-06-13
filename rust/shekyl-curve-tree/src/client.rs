@@ -244,7 +244,17 @@ impl CurveTreeClient {
     /// leaf-ineligible class (unreachable on a consensus-valid block) the
     /// guarantee degrades to order-isomorphism with the consensus leaf
     /// index, which is the only property the `(maturity, gindex)` drain
-    /// tiebreak consumes.
+    /// tiebreak consumes: a rewound counter still assigns above every
+    /// persisted gindex, relative leaf order is preserved, and leaf bytes
+    /// do not embed gindex, so drain order and roots are unchanged.
+    /// Persisting the output-sequence cursor in store meta was considered
+    /// and rejected — schema surface for consensus-unreachable state.
+    /// **Reopening criterion:** a consensus change admitting an output
+    /// type that is not leaf-eligible (i.e., the daemon's
+    /// `check_output_types` accepted set grows beyond tagged/staked keys)
+    /// makes gindex sparse over leaves; that change must land the cursor
+    /// as a store-meta field written by `append_block_deltas`, as schema
+    /// work with its own KAT, before any such block can be ingested.
     ///
     /// `drained_through_counts` is left empty: a resumed client rides the
     /// maturity-index-scan fallback ([`Self::drained_count_from_index`])
