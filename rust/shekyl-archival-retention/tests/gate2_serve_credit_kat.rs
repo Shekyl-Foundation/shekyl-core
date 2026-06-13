@@ -274,7 +274,7 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
         }];
         client
             .ingest_block(BlockLeaves {
-                height: blk.height,
+                height: BlockHeight(blk.height),
                 txs: &txs,
             })
             .unwrap();

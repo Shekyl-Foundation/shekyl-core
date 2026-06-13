@@ -107,7 +107,7 @@ fn assembled_path_verifies_as_segment_opening() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: blk.height,
+                height: BlockHeight(blk.height),
                 txs: &txs,
             })
             .unwrap();

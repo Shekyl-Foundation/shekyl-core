@@ -59,6 +59,31 @@
 
 ### Added
 
+- **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
+  2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted
+  `LeafStore` with no genesis replay: in-memory state is rebuilt as the
+  gindex-sorted union of the drained and pending tables, element-wise
+  identical to a never-restarted run (B4 invariant, KAT-pinned end to
+  end via a restart round-trip). `ingest_block` now writes both tables
+  atomically through `append_block_deltas` *before* committing in-memory
+  state, making the store-behind-memory divergence structurally
+  unreachable — the CT-2-era self-heal path is deleted with that
+  inversion. Resume refuses pruned stores loudly
+  (`ResumeFromPrunedStore`; pruned-resume is F5/V3.0 work) and rejects
+  cross-table gindex duplicates as corruption. The client's outward API
+  (`BlockLeaves.height`, `ingest_block`, `root_at`, `verify_root`,
+  `drained_leaf_count`, error fields) is retyped `u64` →
+  `BlockHeight`, closing the client portion of the CT-3a P5 FOLLOWUPS
+  row. Staked-lock resume coverage lands both B3 halves: a synthetic
+  300-block stake drains correctly across a restart, and the
+  adversarial 150 000-block stake is asserted byte-correct in the
+  pending table without ever draining. **`SCHEMA_VERSION` bumps 2 → 3**:
+  a CT-3a-window store is byte-identical but its pending table was not
+  yet maintained by ingest, so resuming from one would silently corrupt
+  the drained/pending contract — v2 stores now fail open with
+  `SchemaVersionMismatch`; the pre-genesis migration path is delete the
+  wallet store and re-sync.
+
 - **crypto: CT-3a persistent-resume store schema (`shekyl-curve-tree`,
   2026-06-12).** The `LeafStore` now carries the full CT-3 sync/reorg
   contract at the store layer (`CT3_SYNC.md` Round 1, closed): redb-typed

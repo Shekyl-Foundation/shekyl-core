@@ -51,10 +51,24 @@ const META_SCHEMA_VERSION: &str = "schema_version";
 /// previously-zeroed free range of `&[u8; 192]` — are invisible to it.
 /// This cell is the loud guard for that class. CT-1/CT-2 stores are
 /// implicitly version 1 (cell absent); the CT-3a schema (pending table +
-/// `creation_height` in `leaf_meta`) is version 2. Pre-genesis disposition
-/// for a mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc`
-/// — no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 2;
+/// `creation_height` in `leaf_meta`) is version 2; version 3 (CT-3b) is
+/// **byte-identical to version 2** but changes the *contract*: the client
+/// maintains the pending table on every ingest and resume reads it as the
+/// source of truth for undrained leaves. A store synced in the CT-3a
+/// window (drained table populated through the `append_drained` wrapper,
+/// pending table never maintained) is v2-valid and silently wrong under
+/// the v3 contract — resume would drop every undrained leaf and fail as
+/// a baffling root mismatch at the first post-resume drain. The bump
+/// retires that shape with a typed error. Pre-genesis disposition for a
+/// mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
+/// no in-Shekyl migration code).
+const SCHEMA_VERSION: u64 = 3;
+
+/// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
+/// without the maintained-pending-table contract. Test-only — production
+/// code never writes it.
+#[cfg(test)]
+const CT3A_SCHEMA_VERSION: u64 = 2;
 
 /// Version reported for a store whose `schema_version` cell is absent —
 /// the implicit CT-1/CT-2 layout.
@@ -131,6 +145,14 @@ pub enum StoreError {
     /// loud, not tolerated.
     PendingRowMissing {
         /// Global output index the removal targeted.
+        gindex: u64,
+    },
+    /// Resume found the same gindex in both the drained and pending
+    /// tables. A gindex is in exactly one of {drained, pending}; a
+    /// cross-table duplicate is store corruption (the colliding value is
+    /// carried so logs identify it for forensics).
+    DuplicateGindex {
+        /// Global output index present in both tables.
         gindex: u64,
     },
     /// The store's in-band layout version stamp disagrees with this build.
@@ -2170,14 +2192,15 @@ mod tests {
     ///
     /// - a freshly created store is stamped and reopens clean;
     /// - a version-1-shaped store fails open with
-    ///   `SchemaVersionMismatch { found: 1, expected: 2 }`;
+    ///   `SchemaVersionMismatch { found: 1, expected: SCHEMA_VERSION }`;
     /// - the failed open mutates nothing — a second open fails
     ///   identically (no stamp-in-passing), and after re-stamping the
     ///   data is intact (error-without-mutation at the open boundary).
     ///
     /// Scoped exception to the real-path rule: the v1 layout cannot be
-    /// produced through the current init path (it stamps v2 by design,
-    /// and the code that produced v1 stores no longer exists in-tree).
+    /// produced through the current init path (it stamps the current
+    /// [`SCHEMA_VERSION`] by design, and the code that produced v1 stores
+    /// no longer exists in-tree).
     /// The fixture is fabricated by deleting the `schema_version` cell in
     /// a test-only transaction — a plain `META_TABLE` u64 cell, not a
     /// codec side channel; the test subject is the open check itself.
@@ -2221,7 +2244,7 @@ mod tests {
                         expected: SCHEMA_VERSION,
                     }
                 ),
-                "expected SchemaVersionMismatch(found=1, expected=2), got: {err:?}"
+                "expected SchemaVersionMismatch(found=1, expected={SCHEMA_VERSION}), got: {err:?}"
             );
         }
 
@@ -2240,6 +2263,62 @@ mod tests {
             let store = LeafStore::open(&path).unwrap();
             assert_eq!(store.leaf_count().unwrap(), 1);
             assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(1));
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A CT-3a-window (version-2) store fails open. Its byte layout is
+    /// identical to v3 — `TypeName` and the codecs cannot see the
+    /// difference — but its pending table was never maintained (the
+    /// CT-3a-era client wrote through the `append_drained` wrapper), so
+    /// resuming from it would silently drop every undrained leaf. The
+    /// version cell is exactly the guard for this contract-only drift.
+    ///
+    /// Scoped exception to the real-path rule (same rationale as the v1
+    /// guard test above): the current init path stamps v3 by design, so
+    /// the v2 shape is fabricated by rewriting the plain `META_TABLE`
+    /// version cell in a test-only transaction — the test subject is the
+    /// open check, not a codec.
+    #[test]
+    fn schema_version_guard_rejects_ct3a_window_v2_store() {
+        let path = temp_store_path("schema-guard-v2");
+
+        // Create through the real path (stamped v3, drained row present),
+        // then downgrade the version cell to the CT-3a stamp.
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .unwrap();
+        }
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_SCHEMA_VERSION, &CT3A_SCHEMA_VERSION)
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // The mismatch fires, twice (no stamp-in-passing on the failed
+        // open), naming the found version so the operator sees "delete
+        // and re-sync", not a reconstruction mystery.
+        for _ in 0..2 {
+            let err = LeafStore::open(&path).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    StoreError::SchemaVersionMismatch {
+                        found: CT3A_SCHEMA_VERSION,
+                        expected: SCHEMA_VERSION,
+                    }
+                ),
+                "expected SchemaVersionMismatch(found={CT3A_SCHEMA_VERSION}, \
+                 expected={SCHEMA_VERSION}), got: {err:?}"
+            );
         }
 
         std::fs::remove_file(&path).unwrap();
