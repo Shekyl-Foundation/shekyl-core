@@ -147,6 +147,14 @@ pub enum StoreError {
         /// Global output index the removal targeted.
         gindex: u64,
     },
+    /// Resume found the same gindex in both the drained and pending
+    /// tables. A gindex is in exactly one of {drained, pending}; a
+    /// cross-table duplicate is store corruption (the colliding value is
+    /// carried so logs identify it for forensics).
+    DuplicateGindex {
+        /// Global output index present in both tables.
+        gindex: u64,
+    },
     /// The store's in-band layout version stamp disagrees with this build.
     /// redb's `TypeName` check only catches key/value *type* drift; codec
     /// layout changes inside a same-width value are invisible to it, so the

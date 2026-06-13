@@ -152,6 +152,18 @@ pub enum ClientError {
         /// Drained rows actually readable (post-prune survivors).
         readable: u64,
     },
+    /// [`CurveTreeClient::open`] found a store whose readable drained rows
+    /// *exceed* its own `leaf_count` metadata. Pruning can only remove
+    /// readable rows (`readable < leaf_count`), so `readable > leaf_count`
+    /// is a table/metadata disagreement no client write produces — store
+    /// corruption, reported distinctly from the pruned shape so the
+    /// diagnosis is not "pruned" when the store is actually corrupt.
+    ResumeFromCorruptStore {
+        /// Drained positions the `leaf_count` metadata claims.
+        stored: u64,
+        /// Drained rows actually readable (exceeds `stored` — the breach).
+        readable: u64,
+    },
 }
 
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
@@ -274,13 +286,23 @@ impl CurveTreeClient {
     /// in-memory vec would undercount and every root query would be
     /// silently wrong. Unreachable through this client's own writes (the
     /// V3.0 client never prunes); store-backed resume over pruned stores
-    /// is the F5 work.
+    /// is the F5 work. The opposite imbalance — readable rows exceeding
+    /// `leaf_count` — cannot arise from pruning and is reported distinctly
+    /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
+    /// not misdiagnosed as a pruned one.
     fn resume(store: LeafStore) -> Result<Self, ClientError> {
         let stored = store.leaf_count().map_err(ClientError::from)?;
         let drained = store.read_drained_entries().map_err(ClientError::from)?;
         let readable = u64::try_from(drained.len()).expect("drained row count fits u64");
-        if readable != stored {
+        if readable < stored {
+            // Pruning dropped frozen leaf bytes: the in-memory vec would
+            // undercount and every root would be silently wrong (F5 work).
             return Err(ClientError::ResumeFromPrunedStore { stored, readable });
+        }
+        if readable > stored {
+            // More readable rows than `leaf_count` claims — a direction
+            // pruning cannot produce; the store is corrupt, not pruned.
+            return Err(ClientError::ResumeFromCorruptStore { stored, readable });
         }
         let pending = store.read_pending_candidates().map_err(ClientError::from)?;
         let tip = store.sync_tip_height().map_err(ClientError::from)?;
@@ -293,9 +315,9 @@ impl CurveTreeClient {
             // duplicate across the union is store corruption, not a
             // mergeable state.
             if pair[1].gindex <= pair[0].gindex {
-                return Err(StoreError::CorruptMeta(
-                    "duplicate gindex across drained and pending tables",
-                )
+                return Err(StoreError::DuplicateGindex {
+                    gindex: pair[1].gindex.0,
+                }
                 .into());
             }
         }
@@ -1215,8 +1237,12 @@ mod tests {
             .unwrap();
         let err = CurveTreeClient::resume(store).unwrap_err();
         assert!(
-            matches!(err, ClientError::Store(StoreError::CorruptMeta(_))),
-            "expected CorruptMeta for cross-table gindex duplicate, got {err:?}"
+            matches!(
+                err,
+                ClientError::Store(StoreError::DuplicateGindex { gindex: 0 })
+            ),
+            "expected DuplicateGindex {{ gindex: 0 }} for cross-table gindex \
+             duplicate, got {err:?}"
         );
     }
 
