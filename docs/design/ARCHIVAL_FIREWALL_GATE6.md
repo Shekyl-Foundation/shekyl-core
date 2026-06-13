@@ -307,13 +307,43 @@ the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIF
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Done** (2026-06-13) — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off recorded (§9.8). **Lone carry:** `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` module (impl, §7). |
-| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). Exit checklist + carries: §10.9. |
+| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). **Pass-1 dispositions (2026-06-13):** bonded-verifier challenges (§10.4), broadcast announce (§10.5), `P`↔principal circuit/guard isolation pinned as exit item (§10.9), pure-rendezvous + I2P-closed leans (§10.11); **rebond/unbond-at-genesis scope expansion** (R4 recurring; pre-seal sim dependency). Exit checklist + carries: §10.10. |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults. **Exit gate (R1-named):** within-epoch claim jitter min/max bounds pinned (GF-10). |
-| **4** | Output + bond-funding hygiene | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named):** terminal-drain **output-count** discipline pinned (GF-4 — delay floor already pinned, see §2.4); join-Market structural-distinguishability characterized + minimum separation from bond-funding pinned (GF-7). |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named, now recurring not one-time — see scope note):** decorrelated-drain **output-count** discipline pinned for **terminal drain *and* recurring partial-unbond (`HoldingsUpdate`)** (GF-4 — delay floor already pinned, §2.4); principal→`P` bond-funding structural-distinguishability + minimum separation pinned for **first join *and* recurring rebond-topup** (GF-7); within-epoch timing (GF-10, R3) now applies to **bond ops, not just emission**. |
 | **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
+
+**Round-2 scope expansion — rebond/unbond at genesis (R-1/R-2/R-3).** Bond is consensus-tracked
+balance under a gate-4 conservation law, not a UTXO; every balance change is a consensus
+transition, so completing the bond FSM post-genesis is a **hard fork**. Genesis already carries
+`JoinMarket` / `Rebond`-after-slash / full `Unbond` + a release cooldown
+(`RELEASE_COOLDOWN_EPOCHS = 2 < W`) and a `bond_duration(age)` retention horizon; **voluntary
+partial-unbond (`HoldingsUpdate`, gate-4 §4.4) is specified but deferred to "V3.1 wire,"** and a
+voluntary holdings-*increase* / top-up has no dedicated wire (§9.6 bond-post note). Pinning the
+**full** lifecycle at genesis (the gate-4 / FSM-retool call) turns three **one-time** firewall
+events into **recurring** ones — GF-7 funding-linkage, GF-4 decorrelated-drain, GF-10
+within-epoch timing each get *many* correlation shots instead of one (R4 re-scoped above).
+**Genesis-seal dependency (R-3):** the staker-archival sim **explicitly abstracts the release
+cooldown ("sim still unmodeled"), partial slashing, and capital-lockup opportunity cost to "a
+flat seating cost"** ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame*
+item 6), modeling only the `bond_duration` commitment (L9/L10). The genesis-seal `r_target_deep`
+redundancy-floor re-derivation is already a reopen criterion against (a) the **integer** backend
+and (b) a **+1 deep-tail replica margin** (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` tail-margin; sim
+§L12). Because real bond mobility under cooldown + duration is **lower than the sim's myopic
+per-epoch acquire/drop** exactly on the **deep tail where the +1 margin lives**, R-3 adds (c): a
+**sim bond-mobility model reconciled to the rebond/unbond FSM's frictions.** (c) cannot be
+computed until the FSM (the V3.1→genesis promotion) is pinned — so the **rebond/unbond FSM is a
+pre-genesis-seal dependency for the sim reconciliation, not merely a consensus deliverable.**
+**The reconciliation must be age-stratified, not a re-tuned flat scalar.** The sim's "flat
+seating cost" is a uniform scalar standing in for a friction (cooldown, partial-slash, lockup,
+`bond_duration(age)`) that is itself **age-stratified — worst on the deep tail**. Merely
+recalibrating the flat cost to a network *average* stays structurally optimistic precisely on the
+binding constraint, because the deep tail's friction is *above* the average and that is where
+recovery mobility matters most. So the pre-seal requirement is **"model the friction
+age-stratified,"** not "add the frictions" — a re-tuned flat cost will *look* reconciled while
+shipping an optimistic sealed floor on top of the very +1 margin it is meant to protect.
 
 ---
 
@@ -482,9 +512,51 @@ checks each against a different key.
 
 | `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
 |-------------|-------------------------------|------------------------------------------|----------|
-| **join-Market / bond-post** (gate 4) | `P_pubkey` **identity** — creates the bond record keyed by `P_canonical_id` | **per-output** (ordinary funding inputs; key image present) | create/lookup `ArchivalBondRecord` by `P_canonical_id`; funding inputs via standard key-image path |
+| **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Rebond` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
+| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying | **single bond vin** authorizes the `bond_debit`: gate-4 §3.5 step 5 ("`P` hybrid signatures on vin"; `pqc_auths[]` aligned with `vin[]`). **GF-1-carve (asymmetric — the carve is the default-by-inertia, below):** §3.5 step 5's existing wording already presumes the **account `hybrid_sign_pk`**, which would carve GF-1; **recommended disposition is a dedicated bond-spend key committed in the record** (own HKDF label + KAT, domain-separated from identity) — preserves GF-1 identity-only, compromise-isolates bond-debit authority. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; **bond-debit auth must be resolved at gate-4 source — and §3.5 step 5 re-worded to name the key explicitly — before the verifier lands** |
 | **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
+
+**Bond-post is the recurring self-identifying class (Round-2 scope; rebond/unbond at genesis).**
+All four bond mutations are one `txin_archival_bond_post` discriminated by `post_kind`
+(`0=JoinMarket, 1=Rebond, 2=Unbond, 3=HoldingsUpdate` — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+§3.2). Genesis already carries `JoinMarket`, `Rebond`-after-slash, and full `Unbond`;
+**voluntary partial-unbond (`HoldingsUpdate`) is specified but flagged "V3.1 wire"** (gate-4
+§3.2 / §4.4 G4-6), and a voluntary holdings-*increase* / top-up has no dedicated wire. Pinning
+the **full** lifecycle at genesis (create / rebond-topup / partial-unbond / full-unbond) — so
+completing the consensus FSM later is not a hard fork — promotes `HoldingsUpdate` (and any
+top-up wire) to genesis. **That promotion is a gate-4 / FSM-retool call** (recorded here, not
+executed in this doc); its Gate-6 consequence is that the previously **one-time** firewall
+events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
+drain, GF-10 within-epoch timing).
+
+**GF-1-carve — not a symmetric fork; the carve is the default trajectory by omission.** The
+collateral-out direction authorizes a *reduction of consensus-tracked bonded balance*, and it is
+the **only `P` path with neither a key image (ordinary spend) nor a leaf to bind (emission's
+membership-only `R_O` PoK)** — the bond is a consensus balance, so there is genuinely nothing to
+authorize the debit except a key the record commits. That is exactly why the account
+`hybrid_sign_pk` is "right there" and tempting, and why gate-4 §3.5 step 5 already reads "`P`
+hybrid signatures on vin" — phrasing written before the Round-1 identity-only invariant existed.
+**If gate-4 implements that sentence at face value, the carve happens silently — by the path of
+least resistance, not by a decision.** That is the "absence of the claim is a claim of absence"
+trap: the doc must not present this as a balanced fork when the source text tilts it toward the
+carve. **Security ordering argues against the carve:** carving changes the account key's
+compromise surface from what Round 1 fought to keep minimal — *identifier; compromise reveals
+nothing spendable* — to *compromise drains the bond*. That spends the cleanest invariant in the
+crypto layer to save one derived key.
+
+**Recommended resolution (a gate-4 custody-model call, recorded not prescribed):** a **dedicated
+bond-spend key committed in the bond record at post time** — its own HKDF label and KAT entry,
+domain-separated from the identity — authorizes debits. Identity-only is preserved; bond-spend
+authority is compromise-isolated. No key image is needed: non-replay comes from balance-accounting
+(`bond_debit ≤ bonded_total`) plus standard tx-height / input binding, which is sufficient.
+**A direction worth gate-4's consideration:** a *receipt-UTXO* custody model — mint a
+non-transferable receipt at bond-post, unbond by spending it on the standard per-output +
+key-image path (replay protection for free, partial-unbond = receipt split), which would reuse the
+most existing machinery and could make the value-movement leg **byte-indistinguishable** while only
+the `tx_extra` bond-record mutation stays self-identifying. **Concrete action:** re-word gate-4
+§3.5 step 5 to name the authorizing key explicitly, and **resolve at gate-4 source before the
+bond-post verifier lands** — it is a consensus rule, so wrong-once = fork-to-fix. Do not infer.
 
 **Why ordinary `P` transfers carry no identity field:** they are byte-shaped identically to
 principal transfers, so a verifier cannot (and must not) tell a `P` drain from any other
@@ -703,10 +775,22 @@ on the exact traffic the firewall exists for.
 - **Pin the Levin command IDs** for the new class so the allowlist is enumerable, not "whatever
   the archival module happens to send."
 
-**Open for the pass:** do challenges originate from **arbitrary peers** (open challenge market)
-or **bonded verifiers only**? The former widens `P`'s inbound exposure; the latter needs a
-verifier-set definition (gate-2/gate-4 surface). The routing rule is identical; the exposure
-surface differs.
+**Disposition (pass — bonded-verifier-only).** Challenges originate from a **bonded verifier
+set, not an open market.** The exposure axis is the **{`.onion` ↔ `P_canonical_id` ↔ shard}
+map**: an open market lets *anyone who challenges* build it; bonded-verifier-only **+ Arti
+restricted-discovery** (§10.3 gates who may resolve `P`'s HS) bounds map exposure to the
+verifier set and enforces it cryptographically. Two conditions ride with it: **(a)** the verifier
+set is then a concentrated deanonymization chokepoint (compromise the set → the whole map) → it
+must itself **rotate and be firewall-aware**, not a static registry; **(b)** the choice must
+match the **L14b failure-confirmation** challenger-population assumption
+([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); sliding-window
+`m`-of-`n`, `11/13` provisional). **Sharpened (verified at source):** the L14 oversight *volume*
+homeostasis (read-credit confines oversight to the cold tail; **challenge ≡ retrieval**, keyed
+on read-credit + retrieval SLA — [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L14×L15*)
+is **challenger-population-independent**, so the traffic result transfers regardless. What must
+be re-checked against L14b is **challenger availability/liveness** — does a *bonded* set sustain
+the `m`-of-`n` recheck cadence on the cold tail it must cover — plus condition (a)'s chokepoint.
+Same sim-consistency family as R-3, not the volume axis.
 
 ### 10.5 GF-5 — pre-join backing presentation is `P`'s first network appearance
 
@@ -727,10 +811,19 @@ matter.
 - **Announce-before-anchor** ordering stands, but the announce↔anchor **timing gap** is a
   standing correlation channel if deterministic → **handed to Round 3** (timing/rotation).
 
-**Open for the pass:** is the announce a **P2P broadcast** (→ it is the tx-broadcast anonymity
-path, already routable) or a **directed presentation to a market coordinator / verifier set**
-(→ a new directed message needing the §10.4 treatment)? This decides whether GF-5 is "reuse the
-broadcast path" or "define a new directed class."
+**Disposition (pass — broadcast; it diverges from §10.4 by event sensitivity).** The announce is
+a **P2P broadcast over the tx-broadcast anonymity path (dilute), not a directed presentation to
+a coordinator.** The two forks pull opposite *for a reason*: a **challenge is routine and
+repeated** → bound the audience (§10.4 narrows to bonded verifiers); the **announce is
+once-per-`P` and maximally linkage-sensitive** — first network appearance, backing presentation,
+and temporal proximity to funding, all at once. A directed presentation concentrates the **richest
+linkage moment in `P`'s life at a single observer** (the worst-placed observer for GF-5/GF-7);
+broadcast dilutes it among all peers. Treating both as a uniform "narrow vs wide" is the trap.
+**Sequencing hazard (decides it):** §10.5 hands announce↔funding **timing** to R3; picking
+*directed* in R2 **pre-commits a constraint R3 must then satisfy** (the directed observer sees
+the timing whether or not R3 decorrelates it), whereas **broadcast is robust to the timing
+question** and mortgages nothing to R3. Broadcast wins on both linkage-dilution and
+round-sequencing grounds.
 
 ### 10.6 GF-6 — `P`-tx wire-size fingerprint + dummy/fragmentation policy
 
@@ -761,10 +854,17 @@ principal.
 - **Honest residual:** dummy traffic cannot conceal a large burst unless dummy volume scales
   with it (same §); the cost/coverage trade is the residual — written down, not papered over.
 
-**Open for the pass (highest leverage):** does `P` broadcast via **its own node** (burst
-originates at `P`'s onion service) or via the **generic tx-broadcast anonymity path** (burst is
-one-of-many on shared outgoing circuits, Dandelion-style)? The latter dilutes the fingerprint
-*structurally*; the former concentrates it.
+**Disposition (pass — the axis was mislabeled; the real pin is §10.9 circuit/guard isolation).**
+Own-node-vs-generic-broadcast is leverage on **origin**, and the **GF-6 burst *shape* is
+orthogonal to it** — Dandelion-style dilution changes *who/where* originated, not *what* a
+7–8 KB PQC burst looks like, so it does not shrink the §10.6 fingerprint. And origin-dilution
+only matters for principal-linkage **if `P`'s broadcast circuit could correlate to the
+principal's in the first place**: with **independent Tor clients / guards** for `P` vs principal,
+origin is already unlinkable and the own-node/Dandelion choice is second-order; with a **shared
+guard**, a guard-level observer correlates them *regardless* of own-node or Dandelion. So the
+load-bearing pin is **per-`P` outbound-broadcast circuit/guard isolation from the principal
+(§10.9)** — pinned first; own-node-vs-Dandelion is then a secondary dilution refinement carried
+to the transport PR, **not** the structural fork.
 
 ### 10.7 GF-9 — Tor HS key lifecycle (couples to §2.3 rotation)
 
@@ -793,10 +893,20 @@ identity. Two failure modes:
   device**; its compromise links `P`'s *location* (not the principal, but `P`'s box). This is
   the **irreducible serving-side residual** — named, not mitigated away.
 
-**Open for the pass:** does deterministic seed-derivation of the HS key **over-couple** — does
-putting the `.onion` under the same seed create a *recovery-time* correlation (restore wallet →
-re-derive the same `.onion` → an observer who saw `P_old` sees it reappear)? `p_slot` rotation
-should foreclose this, but it is exactly the "convenience that re-links" the pass should attack.
+**Disposition (pass — the crypto over-coupling is foreclosed; the real risk is restore-flow
+co-activation).** Seed-derivation creates **no public linkage**: HKDF label-separation makes the
+public `.onion` Ed25519 key **one-way from the master seed**, so it cannot be tied to the
+principal without the seed, and "the same `.onion` reappears on restore" is just the **accepted
+`.onion` ↔ `P_canonical_id` baseline** — no new leak, and `p_slot` rotation is *not* what closes
+it (it was already closed cryptographically). The real over-coupling is **restore-flow
+co-activation**: one restore re-derives and re-launches **both** principal and `P` from one
+device/session, **co-timing their network reappearance** — an observer at the restore moment
+sees principal-sync and `P`-`.onion`-reanimation co-occur from one origin. **`p_slot` rotation
+does not foreclose this** (it changes the address, not the co-activation). **Fix = restore-flow
+discipline (§10.9):** `StakeEngine` must **not** auto-launch `P`'s HS in lockstep with
+`LedgerEngine`'s principal sync — independent scheduling, isolated circuits. This is the **same
+isolation pin fork 1 needs**, surfacing from the restore angle — the convergence is the tell
+that it is the real §10 gap.
 
 ### 10.8 The one heavy-path lever that feeds the sim
 
@@ -810,7 +920,44 @@ relaxation (e.g. a seeding-path leg over a lighter transport for **public, non-`
 bytes) must **prove it carries no `P`-attributable metadata** before it is admissible — the
 seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWUPS.md).
 
-### 10.9 Round 2 exit criteria + carried items
+**Pass lean:** **pure-rendezvous *is* the genesis commitment**; any relaxation is a
+**post-testnet reversion clause, not a genesis option.** And "public, non-`P`-attributable bytes"
+is an **insufficient** bar on its own — the **seeding request pattern** can be `P`-attributable
+even when the bytes are not, so the burden is "prove the *access pattern*, not just the payload,
+carries no `P`-attributable metadata" (§10.11 #5).
+
+### 10.9 `P` ↔ principal client/circuit isolation (forks 1 + 4 convergence — §10 exit pin)
+
+Forks 1 (§10.6) and 4 (§10.7) converge on the **single most load-bearing thing §10 had not
+pinned**: §10.7 pins `P`'s *inbound* HS identity-key lifecycle, but §10 said nothing about
+**isolation between `P`'s network activity and the principal's** — *outbound* broadcast, and
+*restore-time* launch. That isolation dominates both forks; it is pinned here as a Round-2 exit
+item, not left as an open question.
+
+- **Independent Tor clients / guard sets.** `P`'s serving HS, `P`'s outbound broadcast, and the
+  principal wallet's traffic use **separate Arti client instances with non-overlapping guard
+  sets**. A shared guard lets a guard-level observer correlate `P` and principal **regardless**
+  of own-node-vs-Dandelion (fork 1) — so isolation is the structural pin and origin-dilution
+  (Dandelion / own-node) is a refinement on top of it, not a substitute.
+- **No principal-correlated stream reuse** on any `P` circuit — extends the §10.5 fresh-circuit
+  rule from the announce to *all* `P` traffic
+  ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Stream Used Twice*).
+- **Restore-flow discipline (fork 4's real attack).** On wallet restore, `StakeEngine` **must not
+  auto-launch `P`'s HS in lockstep with `LedgerEngine`'s principal sync.** Co-activation co-times
+  principal-sync and `P`-`.onion`-reanimation from one origin — a correlation `p_slot` rotation
+  does **not** foreclose (it changes the address, not the co-timing). Independent scheduling +
+  isolated circuits foreclose it; this is a **wallet-orchestration requirement on the PHASE_2B
+  engines**, not a crypto pin.
+- **Honest residual:** isolation is **operational** — it holds only as far as the two client
+  instances are genuinely independent (separate guards, no shared exit, no co-timed activation).
+  A host-level observer that compromises the *device* sees both regardless; that is the §10.7
+  serving-side residual, not re-solved here.
+
+**Why an exit item, not an open question:** the two forks that looked like independent transport
+choices both reduce to this pin; leaving it unpinned would let the Round-2 transport spec land
+with the principal-linkage gap still open under a different name.
+
+### 10.10 Round 2 exit criteria + carried items
 
 **Exit (all required to close Round 2):**
 
@@ -826,6 +973,14 @@ seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWU
       residual **named**.
 - [ ] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
       (version/feature/MSRV/`with_hsid` API); external-daemon reversion clause recorded.
+- [ ] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
+      Arti clients + non-overlapping guard sets; no principal stream reuse; **restore-flow
+      co-activation discipline** — `StakeEngine` does not co-launch `P`'s HS with principal sync).
+      Operational residual named.
+- [ ] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
+      and GF-7 (bond-funding separation) carried as **recurring** (partial-unbond / rebond-topup),
+      not one-time; the **rebond/unbond FSM (V3.1→genesis promotion)** named as the
+      **pre-genesis-seal dependency** for the R-3 sim bond-mobility reconciliation.
 
 **Carried out of Round 2 (named, not silently deferred — per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):**
@@ -836,18 +991,51 @@ seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWU
 - **Heavy-path relaxation decision** → bounded in §10.8; lands with the sim's post-testnet
   L-curve measurement.
 
-### 10.10 Open questions for the adversarial pass (to work through)
+### 10.11 Pass dispositions + remaining open questions
 
-1. **§10.4** — open challenge market vs. bonded-verifier-only challenges? (inbound exposure)
-2. **§10.5** — announce as P2P broadcast vs. directed presentation? (reuse vs. new directed class)
-3. **§10.6** — `P` broadcasts via its own node vs. generic anonymity broadcast path?
-   (concentrated vs. diluted fingerprint — *highest leverage*)
-4. **§10.7** — does deterministic seed-derived `.onion` over-couple at recovery time?
-   (convenience-relink attack)
-5. **§10.8** — is any heavy-path relaxation admissible, or is pure-rendezvous the genesis
-   commitment? (privacy > bandwidth)
-6. **Cross-cutting** — I2P secondary door: kept architecturally open (reversion clause,
-   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Forks* #2) or closed at genesis?
+**Resolved this pass (dispositions in §§10.4–10.9):**
+
+1. **§10.4** — challenge market → **bonded-verifier-only** + restricted-discovery (rotating,
+   firewall-aware set; L14b challenger-*liveness* check carried, not the volume axis).
+2. **§10.5** — announce → **P2P broadcast** (dilute the once-per-`P` linkage moment; robust to
+   the R3 timing question, where *directed* would mortgage a constraint to R3).
+3. **§10.6** — own-node-vs-Dandelion is **secondary**; the structural pin is **§10.9
+   circuit/guard isolation** (the GF-6 burst *shape* is orthogonal to origin-dilution).
+4. **§10.7** — seed-derived `.onion` **does not over-couple cryptographically** (HKDF
+   one-wayness); the real risk is **restore-flow co-activation**, fixed by **§10.9** restore
+   discipline.
+
+**Leans (pass to confirm; reversion-clause shaped):**
+
+5. **§10.8** — **pure-rendezvous is the genesis commitment** (privacy > bandwidth); any
+   heavy-path relaxation is a **post-testnet reversion clause, not a genesis option**, and the
+   bar is the *access pattern* not just the payload (§10.8 pass lean).
+6. **Cross-cutting — I2P secondary door: lean closed-at-genesis** (reopen post-audit). The cost
+   of keeping it open is **not the door** — it **doubles the GF-6 characterization surface**
+   (every `P`-tx burst shape characterized on **I2P fragments *and* Tor cells**, §10.6). The one
+   cheap way to keep it open: pin the new message classes (§10.4 challenge, §10.5 announce)
+   **transport-agnostic now** so reopening is config, not redesign.
+
+**Still genuinely open (carried):**
+
+- **§10.4 condition (b)** — L14b challenger availability/liveness under a *bonded* set
+  (sim-consistency, R-3 family).
+- **§10.6** — dummy/fragmentation tuned ratio (measure-then-tune → testnet replay).
+- **§10.9** — guard-isolation enforcement mechanism (Arti config vs. policy) → transport PR.
+- **GF-1-carve** — bond-debit vin authorization key (§9.6 bond-post note). **Not symmetric:** the
+  carve is the default-by-inertia (§3.5 step 5's "`P` hybrid signatures on vin" presumes the
+  account key); recommended disposition is a **dedicated bond-spend key** (identity-only
+  preserved). Concrete action: **re-word gate-4 §3.5 step 5 to name the key**, resolve at gate-4
+  source **before the bond-post verifier lands** (consensus rule — wrong-once = fork-to-fix).
+- **Rebond/unbond FSM** — `HoldingsUpdate` V3.1→genesis promotion + top-up wire (gate-4 / FSM
+  retool call); **blocks the R-3 sim reconciliation and thus the genesis seal** (§6 scope note);
+  the reconciliation must be **age-stratified, not a re-tuned flat cost**.
+
+**Critical path out of Round 2 (these two, not the transport tuning):** (1) the GF-1-carve
+resolves at gate-4 source — wording fix to §3.5 step 5 — before the bond-post verifier lands; and
+(2) the rebond/unbond FSM promotion gates the R-3 age-stratified sim reconciliation, which gates
+the genesis seal. The transport-tuning carries (§10.4(b), §10.6, §10.9) correctly defer to testnet
+replay.
 
 ---
 
@@ -866,6 +1054,52 @@ seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWU
 
 ## Revision history
 
+- **2026-06-13 (Round 2 adversarial pass 2):** Two sharpenings on the pass-1 landings. **GF-1-carve
+  is asymmetric, not a balanced fork:** gate-4 §3.5 step 5's existing wording ("`P` hybrid
+  signatures on vin") already presumes the account `hybrid_sign_pk`, so the carve is the
+  default-by-inertia — it happens unless explicitly chosen against ("absence of the claim is a
+  claim of absence"). Reframed the §9.6 collateral-out cell + note: collateral-out is the only `P`
+  path with neither key image nor bindable leaf, which is why the account key tempts; carving it
+  trades the cleanest Round-1 invariant (account key = identifier, compromise reveals nothing
+  spendable) for "compromise drains the bond." **Recommended disposition:** a dedicated bond-spend
+  key committed in the record (own HKDF label + KAT, domain-separated; non-replay from
+  `bond_debit ≤ bonded_total` + tx-height/input binding, no key image). Recorded a *receipt-UTXO*
+  custody direction (non-transferable receipt spent on the standard per-output+key-image path —
+  replay-free, partial-unbond = receipt split, value-leg byte-indistinguishable) as a gate-4 call,
+  not a prescription. Concrete action pinned: **re-word gate-4 §3.5 step 5 to name the key** before
+  the verifier lands. **R-3 reconciliation must be age-stratified, not a re-tuned flat scalar:** the
+  "flat seating cost" stands in for a friction that is worst on the deep tail, so recalibrating it
+  to a network average stays optimistic exactly on the binding constraint — pre-seal requirement is
+  "model friction age-stratified." Added a **critical-path-out-of-Round-2** note to §10.11 (the
+  GF-1-carve wording fix + the FSM→age-stratified-reconciliation→seal chain; transport tuning
+  defers to testnet). Docs-only.
+- **2026-06-13 (Round 2 adversarial pass 1):** Worked the §10 forks + the rebond/unbond scope
+  question, **verifying the load-bearing claims at source** before landing (per the Round-1
+  C-1/C-2 verify-don't-infer discipline). **R-1 (reframed at source):** the bond FSM already
+  carries `JoinMarket` / `Rebond`-after-slash / full `Unbond` + release cooldown
+  (`RELEASE_COOLDOWN_EPOCHS = 2 < W`) + `bond_duration(age)` horizon at genesis; **voluntary
+  partial-unbond is `HoldingsUpdate` (`post_kind=3`), specified but flagged "V3.1 wire"**
+  (`ARCHIVAL_BOND_GATE4.md` §3.2/§4.4) — so R-1 is a **V3.1→genesis promotion** (+ top-up wire),
+  a gate-4/FSM-retool call recorded here. **R-2:** §9.6 bond-post row split into collateral-in
+  (inherits the contract) / collateral-out, with the **GF-1-carve open question** named (does the
+  bond-debit vin authenticate via the account `hybrid_sign_pk` — carving identity-only — or a
+  per-output key?); resolve at gate-4 source. §6 R4 re-scoped to **recurring** GF-4/GF-7, GF-10
+  extended to bond ops. **R-3 (verified + strengthened):** sim **explicitly abstracts release
+  cooldown ("sim still unmodeled"), partial slash, capital-lockup to "a flat seating cost"**
+  (`STAKER_ARCHIVAL_SIM.md` §steady-state #6); seal carry is integer + **+1 deep-tail margin**
+  (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`); since `bond_duration` peaks on the deep tail where the
+  margin lives, the FSM-friction reconciliation (c) compounds the tail-margin finding → the
+  **rebond/unbond FSM is a pre-genesis-seal dependency** for the R-3 sim reconciliation (§6 scope
+  note). **§10 fork dispositions:** §10.4 bonded-verifier-only + restricted-discovery (condition
+  (b) sharpened — L14 oversight *volume* is challenge≡retrieval / population-independent; the
+  real check is challenger *liveness* vs L14b `m`-of-`n`); §10.5 announce → broadcast (event-
+  sensitivity divergence + R3 sequencing hazard); §10.6 own-node/Dandelion is secondary, GF-6
+  shape orthogonal; §10.7 crypto over-coupling foreclosed (HKDF one-wayness), real risk is
+  restore co-activation. New **§10.9 `P`↔principal client/circuit isolation** exit pin (forks 1+4
+  convergence: independent Arti clients/guards + restore-flow discipline — `StakeEngine` must not
+  co-launch `P`'s HS with principal sync). §10.8 pure-rendezvous genesis lean (access-pattern
+  bar); §10.11 I2P-closed-at-genesis lean. Exit §10.9→§10.10 (isolation + recurring-surface
+  items added); open questions §10.10→§10.11 (dispositions + remaining carries).
 - **2026-06-13 (Round 2 draft opened):** Drafted §10 — network + transport layer — as the
   opening position for the Round 2 adversarial pass (OPEN, not closed). Framed the round's
   bar as **defense-in-depth** (named fingerprint + measurable mitigation + honest residual),
@@ -881,9 +1115,9 @@ seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWU
   (on-chain `P`-typing is public-by-function and explicitly *not* the concern), tuned ratio
   carried to testnet replay; **GF-9** — HS identity key `p_slot`-bound + **seed-derived via a
   new §9.3 HKDF label** (`launch_onion_service_with_hsid`), serving-side key-compromise residual
-  named. Added the heavy-path relaxation lever (§10.8, privacy > bandwidth) and ten open
-  questions for the pass (§10.10). §6 round table + §2.2 pointers updated; old §10 Related
-  documents renumbered §11.
+  named. Added the heavy-path relaxation lever (§10.8, privacy > bandwidth) and six open
+  questions for the pass (§10.10, since renumbered §10.11 by pass 1). §6 round table + §2.2
+  pointers updated; old §10 Related documents renumbered §11.
 - **2026-06-13 (Round 1 C-1 second-order confirmation):** Pressure-test on the C-1 interim
   characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1
   (a)/(b)/(c)) that the `MembershipSpendAuth` `R_O` leg proves **classical knowledge of the leaf's

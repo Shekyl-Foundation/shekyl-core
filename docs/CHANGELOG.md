@@ -59,6 +59,70 @@
   resume-path/full `R_k` recheck, and CT-5 poison-reaction items stay routed
   in `FOLLOWUPS.md`. Docs-only; no code or consensus surface touched.
 
+- **archival: Gate 6 Round 2 adversarial pass 2 — GF-1-carve asymmetry +
+  age-stratified R-3 (2026-06-13).** Two sharpenings on the pass-1 landings in
+  `ARCHIVAL_FIREWALL_GATE6.md`. **GF-1-carve is not a balanced fork — the carve
+  is the default trajectory by omission:** gate-4 §3.5 step 5's existing wording
+  ("`P` hybrid signatures on vin") already presumes the account `hybrid_sign_pk`,
+  written before the Round-1 identity-only invariant existed, so the carve
+  happens silently unless explicitly chosen against (the "absence of the claim
+  is a claim of absence" trap). Reframed the §9.6 collateral-out cell + note:
+  collateral-out is the **only `P` path with neither a key image nor a bindable
+  leaf** (the bond is a consensus balance), which is exactly why the account key
+  tempts; carving trades the cleanest Round-1 invariant (account key =
+  identifier, compromise reveals nothing spendable) for "compromise drains the
+  bond." **Recommended disposition:** a **dedicated bond-spend key** committed in
+  the record (own HKDF label + KAT, domain-separated from identity; non-replay
+  from `bond_debit ≤ bonded_total` + tx-height/input binding, no key image
+  needed). Recorded a *receipt-UTXO* custody direction (non-transferable receipt
+  spent on the standard per-output + key-image path — replay-free, partial-unbond
+  = receipt split, value-leg byte-indistinguishable) as a gate-4 custody-model
+  call, not a prescription. Concrete action pinned: **re-word gate-4 §3.5 step 5
+  to name the authorizing key** and resolve at gate-4 source **before the
+  bond-post verifier lands** (consensus rule — wrong-once = fork-to-fix). **R-3
+  reconciliation must be age-stratified, not a re-tuned flat scalar:** the sim's
+  "flat seating cost" stands in for a friction (cooldown, partial-slash, lockup,
+  `bond_duration(age)`) that is worst on the deep tail, so recalibrating it to a
+  network *average* stays structurally optimistic on the binding constraint — the
+  pre-seal requirement is "model friction **age-stratified**," else a re-tuned
+  flat cost looks reconciled while shipping an optimistic floor over the +1 margin
+  it protects. Added a **critical-path-out-of-Round-2** note (§10.11): the
+  GF-1-carve wording fix + the FSM→age-stratified-reconciliation→seal chain are
+  the real path; transport tuning defers to testnet replay. Docs-only.
+
+- **archival: Gate 6 Round 2 adversarial pass 1 — fork dispositions +
+  rebond/unbond scope (2026-06-13).** Worked `ARCHIVAL_FIREWALL_GATE6.md` §10
+  with the reviewer, **verifying the load-bearing claims at source** before
+  landing (Round-1 verify-don't-infer discipline). **Rebond/unbond at genesis
+  (R-1/R-2/R-3):** confirmed bond is consensus-tracked balance (gate-4
+  conservation law), so completing the FSM post-genesis is a hard fork.
+  Source-reframe — the FSM already carries `JoinMarket`/`Rebond`/full `Unbond` +
+  cooldown (`=2 < W`) + `bond_duration(age)`; **voluntary partial-unbond is
+  `HoldingsUpdate` (`post_kind=3`), specified but flagged "V3.1 wire"**
+  (`ARCHIVAL_BOND_GATE4.md` §3.2/§4.4), so R-1 = a V3.1→genesis promotion (+
+  top-up wire), a gate-4/FSM-retool call. §9.6 bond-post row split
+  collateral-in / collateral-out with the **GF-1-carve open question** named
+  (bond-debit vin auth key — account identity vs per-output); §6 R4 re-scoped to
+  **recurring** GF-4/GF-7, GF-10 extended to bond ops. **R-3 verified:** the sim
+  explicitly abstracts release cooldown / partial slash / capital-lockup to "a
+  flat seating cost" (`STAKER_ARCHIVAL_SIM.md` §steady-state #6) and the
+  genesis-seal carry is integer + **+1 deep-tail margin**
+  (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`); since `bond_duration` peaks on the deep
+  tail where the margin lives, the FSM-friction reconciliation compounds the
+  tail-margin finding — **the rebond/unbond FSM is a pre-genesis-seal dependency
+  for the R-3 sim reconciliation.** **§10 forks:** §10.4 bonded-verifier-only +
+  restricted-discovery (L14 oversight *volume* is challenge≡retrieval /
+  population-independent — the real check is challenger *liveness* vs L14b
+  `m`-of-`n`); §10.5 announce → broadcast (event-sensitivity + R3 sequencing
+  hazard); §10.6 own-node/Dandelion secondary (GF-6 shape orthogonal); §10.7
+  crypto over-coupling foreclosed (HKDF one-wayness), real risk is restore
+  co-activation. New **§10.9 `P`↔principal client/circuit isolation** exit pin
+  (forks 1+4: independent Arti clients/guards + restore-flow discipline —
+  `StakeEngine` must not co-launch `P`'s HS with principal sync). Pure-rendezvous
+  genesis lean (§10.8); I2P-closed-at-genesis lean (§10.11). Docs-only; the
+  gate-4/FSM promotion + the GF-1-carve resolution are cross-doc calls, not
+  executed here.
+
 - **archival: Gate 6 Round 2 draft opened — network + transport layer
   (2026-06-13).** Drafted `ARCHIVAL_FIREWALL_GATE6.md` §10 as the opening
   position for the Round 2 adversarial pass (**OPEN, not closed**). The round's
