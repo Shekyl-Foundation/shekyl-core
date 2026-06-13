@@ -39,6 +39,30 @@ code is structured; this file covers *when* to choose Rust.
 The historical reason for keeping things in C++ was inertia. The forward
 direction is Rust.
 
+## The daemon: C++ today, Rust-forward when touched
+
+The daemon is not part of the wallet rewrite. Its glue — RPC, mempool,
+blockchain orchestration — stays C++ for now under the "C++ if all of" test
+above. But the daemon *will* eventually be rewritten in Rust, and every change
+that touches a daemon file for any reason is an opportunity to push the
+C++/Rust boundary forward rather than thicken the C++.
+
+When you touch daemon code:
+
+- Route new logic through the FFI — especially anything matching "Rust if any
+  of" (secrets, crypto contracts, untrusted-input parsing, amount arithmetic).
+  New consensus logic belongs in a `shekyl_*` Rust entry point, not a new C++
+  branch.
+- Keep the C++ to a minimal transport/marshaling shim over that entry point.
+- Leave the file in better Rust-forward shape than you found it
+  (`16-architectural-inheritance.mdc`'s "good shape after my edit").
+
+This is opportunistic boundary-advancement, **not** license for "while we're
+here" daemon migration (`15-deletion-and-debt.mdc`): the touching PR's scope is
+unchanged, and a full daemon rewrite remains a separate planning activity per
+the section below. The payoff is cumulative — each minimal forward cut shrinks
+the eventual daemon-rewrite scope and de-risks the Stage 5 transition.
+
 ## Migration is a planning activity, not a "while we're here" activity
 
 Migrating a C++ subsystem to Rust requires:
