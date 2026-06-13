@@ -160,6 +160,31 @@
   production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
   §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
 
+### Fixed
+
+- **archival: bond load-modify-store no longer wipes the v4 emission-dedup
+  fields (F-S1 / F-E5, PR-E0, 2026-06-13).** `put_archival_bond_record`
+  reconstructs a fresh `ArchivalBondValue` from scalar args and cannot carry the
+  v4 `claimed_settlement_epochs` set or `first_paying_emission_height`. The slash
+  apply/revert paths loaded the full bond, mutated it, then wrote back through
+  that reconstructing writer — silently dropping both v4 fields on every slash
+  and every reorg revert. Added a full-bond writer
+  `BlockchainDB::put_archival_bond_value(p_id, bond)` (LMDB impl + no-op base +
+  testdb stub) that serializes the entire decoded record;
+  `put_archival_bond_record` now delegates to it (its only caller is JoinMarket
+  connect, a fresh-P create where the scalar path is correct).
+  `apply_archival_slash_one` and `revert_archival_slashes_at_height` now write
+  the mutated bond through the full-bond writer, so the dedup state survives a
+  slash and reverts cleanly with `pop_block`. Added a public reader
+  `get_archival_bond_value` and three regression tests in
+  `archival_substrate_lmdb.cpp` (`bond_v4_fields_survive_full_writer`,
+  `bond_v4_fields_survive_load_modify_store`,
+  `bond_v4_claimed_set_survives_reorg_revert`). The
+  `claimed_epochs_check_and_set` C++ FFI stays deferred to its first consumer
+  (the emission write path, PR-E3) per spec §6.3 and `15-deletion-and-debt.mdc`.
+  This is a latent-bug precursor the emission vin (PR-E3) depends on; no emission
+  behavior changes. Docs: `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
+
 ### Changed
 
 - **economics: `shekyl-staking-sim` default backend is now the authoritative

@@ -5032,6 +5032,14 @@ bool BlockchainLMDB::get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
   return !out_pubkey.empty();
 }
 
+bool BlockchainLMDB::get_archival_bond_value(const crypto::hash& p_id,
+  shekyl::db::ArchivalBondValue& out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  return load_archival_bond_value(p_id, out);
+}
+
 bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
   uint64_t /*at_height*/) const
 {
@@ -5149,18 +5157,6 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsCompleteTree
-    && !held_shard_ids.empty())
-  {
-    throw std::runtime_error("FATAL: CompleteTree bond record must not carry shard ids");
-  }
-  if (holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact
-    && held_shard_ids.empty())
-  {
-    throw std::runtime_error("FATAL: ShardSetCompact bond record requires shard ids");
-  }
 
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = hybrid_pubkey;
@@ -5175,6 +5171,29 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
     entry.start_epoch = iv.first;
     entry.end_exclusive = iv.second;
     bond.bad_intervals.push_back(entry);
+  }
+  // claimed_settlement_epochs / first_paying_emission_height stay default
+  // (empty / 0): the sole caller is JoinMarket connect, which starts a fresh P
+  // with no prior emission claims. Load-modify-store callers must instead use
+  // put_archival_bond_value so those v4 fields survive (F-S1).
+  put_archival_bond_value(p_id, bond);
+}
+
+void BlockchainLMDB::put_archival_bond_value(const crypto::hash& p_id,
+  const shekyl::db::ArchivalBondValue& bond)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (bond.holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsCompleteTree
+    && !bond.held_shard_ids.empty())
+  {
+    throw std::runtime_error("FATAL: CompleteTree bond record must not carry shard ids");
+  }
+  if (bond.holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact
+    && bond.held_shard_ids.empty())
+  {
+    throw std::runtime_error("FATAL: ShardSetCompact bond record requires shard ids");
   }
 
   const std::vector<uint8_t> encoded = bond.encode();
@@ -5365,17 +5384,13 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     bond.bad_intervals.push_back(iv);
   }
 
-  std::vector<std::pair<uint64_t, uint64_t>> bad;
-  bad.reserve(bond.bad_intervals.size());
-  for (const auto& iv : bond.bad_intervals)
-    bad.emplace_back(iv.start_epoch, iv.end_exclusive);
-
   if (bond.bonded_total_atomic < slashed_amount)
     throw std::runtime_error("FATAL: per-P bonded_total_atomic underflow on slash");
   bond.bonded_total_atomic -= slashed_amount;
 
-  put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
-    bond.bonded_total_atomic, bond.holdings_kind, shards, bad);
+  // Write the mutated record whole so the v4 claimed-epoch set and
+  // first_paying_emission_height survive the slash (F-S1 / F-E5).
+  put_archival_bond_value(p_id, bond);
 
   const uint64_t bonded_total = get_total_bonded_atomic();
   if (slashed_amount > bonded_total)
@@ -5581,17 +5596,15 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
         bond.bad_intervals.end());
     }
 
-    std::vector<std::pair<uint64_t, uint64_t>> bad;
-    bad.reserve(bond.bad_intervals.size());
-    for (const auto& iv : bond.bad_intervals)
-      bad.emplace_back(iv.start_epoch, iv.end_exclusive);
-
     if (bond.bonded_total_atomic > std::numeric_limits<uint64_t>::max() - entry.slashed_amount)
       throw std::runtime_error("FATAL: per-P bonded_total_atomic overflow on slash revert");
     bond.bonded_total_atomic += entry.slashed_amount;
 
-    put_archival_bond_record(p_id, bond.hybrid_pubkey, bond.join_settlement_epoch,
-      bond.bonded_total_atomic, bond.holdings_kind, bond.held_shard_ids, bad);
+    // Reorg/pop_block path: write the mutated record whole so the v4
+    // claimed-epoch set and first_paying_emission_height survive the revert,
+    // preserving the "dedup state reverts with pop_block" invariant
+    // (F-S1 / F-E5; FOLLOWUPS.md:1652).
+    put_archival_bond_value(p_id, bond);
 
     const uint64_t bonded_total = get_total_bonded_atomic();
     if (bonded_total > std::numeric_limits<uint64_t>::max() - entry.slashed_amount)

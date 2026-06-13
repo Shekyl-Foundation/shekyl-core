@@ -168,18 +168,28 @@ codec (`shekyl_types.h`) with `claimed_settlement_epochs` and
 `claimed_epochs_check_and_set` / `claimed_epochs_contains`
 (`shekyl-archival-retention/src/claimed_epochs.rs`).
 
-**Finding F-S1 (substrate bug, latent today).** `put_archival_bond_record`
+**Finding F-S1 (substrate bug — RESOLVED in PR-E0).** `put_archival_bond_record`
 reconstructs a **fresh** `ArchivalBondValue` from scalar args and does **not**
 set `claimed_settlement_epochs` / `first_paying_emission_height`. The slash
 apply/revert paths load the full bond and then call `put_archival_bond_record`,
-which therefore **wipes** the claimed-epoch set and first-paying height on
+which therefore **wiped** the claimed-epoch set and first-paying height on
 every slash update. **(F-E5, round 1):** the bug is in the writer's
-reconstruction, so it wipes for **any** load-modify-store caller — gate-4
-holdings-update / re-bond flows carry the same latent wipe; PR-E0 enumerates
-all callers, not just slash. There is also **no production LMDB write path** for
-claimed epochs and **no C++ FFI** for `claimed_epochs_check_and_set` yet
-(spec §6.3: "FFI surface deferred to its first consumer" — that consumer is
-this PR). Disposition: §3 PR-E0.
+reconstruction, so it wiped for **any** load-modify-store caller. **Fix
+(PR-E0):** added a full-bond LMDB writer `put_archival_bond_value(p_id, bond)`
+that serializes the entire decoded record; `put_archival_bond_record` now
+delegates to it (the sole remaining caller is JoinMarket connect — a fresh-P
+create with no prior claims, so the scalar-arg path is correct there). The two
+load-modify-store callers (`apply_archival_slash_one`,
+`revert_archival_slashes_at_height`) now mutate the loaded bond in place and
+write through `put_archival_bond_value`, so the v4 fields survive. Caller audit
+confirmed these are the only load-modify-store sites; gate-4 holdings-update /
+re-bond connect paths do not exist yet (genesis: JoinMarket-only) and will be
+written under the same discipline when PR-B1/B2/B3 land. There is still **no
+production LMDB write path** for claimed epochs and **no C++ FFI** for
+`claimed_epochs_check_and_set` — that FFI is deferred to its first consumer,
+the emission write path (PR-E3), per spec §6.3 ("FFI surface deferred to its
+first consumer") and `15-deletion-and-debt.mdc` (no unused surface). Disposition:
+§3 PR-E0 (landed).
 
 ### 1.6 Consensus constants
 
@@ -243,7 +253,7 @@ recorded in full here.
 | F-E2 | consensus / supply | Remainder disposition pinned (R1.B: floor + burn-the-dust) + single-source `reward_arithmetic` both sides | PR-E3 step 5; §8 |
 | F-E3 | consensus / double-mint | Intra-block `(P,E)` uniqueness (check/set fusion or block-assembly pass) | PR-E3 step 3; §8 |
 | F-E4 | security / replay | Binding-message proposal pinned (R1.A) | §2; §8 Q1 |
-| F-E5 | scope | F-S1 affects **every** `put_archival_bond_record` caller, not just slash | PR-E0 widened |
+| F-E5 | scope | F-S1 affects **every** `put_archival_bond_record` caller, not just slash | PR-E0 (landed): full-bond writer; slash apply/revert converted |
 | F-E6 | open | `holdings` (static) vs `held(P,E)` (per-epoch) snapshot semantics | §8 |
 | F-E7 | open | same-tx backing + key-imaged fee double-use | §8 |
 | F-E8 | open | zero-work/zero-reward emission + arithmetic widths | §8 |
@@ -527,24 +537,37 @@ single consensus-activating cut; PR-E4 is removal; PR-E5 is wiring/docs.
 Function-body-replacement contracts (A1) freeze the inert surfaces so PR-E3 is
 a body-fill, not a signature churn.
 
-### PR-E0 — bond-state write-path correctness (precursor, substrate fix)
+### PR-E0 — bond-state write-path correctness (precursor, substrate fix) — LANDED
 
-Scope: fix Finding **F-S1** (widened per **F-E5**). The root cause is that
+Scope: fix Finding **F-S1** (widened per **F-E5**). The root cause was that
 `put_archival_bond_record` reconstructs a fresh `ArchivalBondValue` from scalar
 args, dropping `claimed_settlement_epochs` + `first_paying_emission_height` —
-so the wipe hits **every** load-modify-store caller, not only slash
-(gate-4 holdings-update / re-bond round-trips carry the same latent wipe).
-Disposition: make the writer load-modify-store (preserve all fields) or stop
-routing field-preserving updates through the reconstructing path; **enumerate
-every caller** of `put_archival_bond_record` as part of the fix, not just the
-slash path. Add the C++ FFI for `claimed_epochs_check_and_set` /
-`claimed_epochs_contains` and a full-bond LMDB writer. No emission behavior;
-this is an independent correctness fix that PR-E3 depends on.
-**Gate:** archival LMDB unit tests (`archival_substrate_lmdb.cpp`) extended to
-assert claimed-epoch + first-paying-height survival across **slash apply/revert
-*and* holdings-update / re-bond** cycles (all callers, per F-E5).
-*Reversion: could fold into PR-E3, but it is pre-existing and independently
-testable, so it splits per `15-deletion-and-debt.mdc` bisection discipline.*
+so the wipe hit **every** load-modify-store caller, not only slash.
+Disposition (implemented): added a full-bond LMDB writer
+`put_archival_bond_value(p_id, bond)` (BlockchainDB virtual + no-op base +
+testdb stub + BlockchainLMDB impl) that serializes the whole record;
+`put_archival_bond_record` delegates to it (sole caller: JoinMarket connect,
+fresh-P create — scalar path correct). The two load-modify-store callers
+(`apply_archival_slash_one`, `revert_archival_slashes_at_height`) mutate the
+loaded bond in place and write through the full-bond writer, preserving the v4
+fields. A thin public reader `get_archival_bond_value` was added for the
+regression test. Caller audit (`git grep put_archival_bond_record`) confirmed
+the three callers (connect/apply/revert); no gate-4 holdings-update / re-bond
+connect path exists yet (genesis: JoinMarket-only), so "all callers" is
+satisfied today and the discipline carries to PR-B1/B2/B3 when those paths land.
+The `claimed_epochs_check_and_set` / `claimed_epochs_contains` C++ FFI is **not**
+in this PR: it has no consumer until the emission write path (PR-E3), and adding
+an unused FFI is dead surface (`15-deletion-and-debt.mdc`; spec §6.3 defers the
+FFI to its first consumer). No emission behavior; independent correctness fix
+that PR-E3 depends on.
+**Gate (met):** `archival_substrate_lmdb.cpp` extended with three tests —
+`bond_v4_fields_survive_full_writer`, `bond_v4_fields_survive_load_modify_store`
+(slash apply), `bond_v4_claimed_set_survives_reorg_revert` (slash revert) —
+asserting claimed-epoch + first-paying-height survival across the writer, a
+slash, and its reorg revert. All 17 `archival_substrate_lmdb.*` tests pass.
+*Reversion: could have folded into PR-E3, but it is pre-existing and
+independently testable, so it split per `15-deletion-and-debt.mdc` bisection
+discipline.*
 
 ### PR-E1 — membership-only FFI seam + ML-DSA gate primitive (additive Rust/FFI)
 
@@ -736,8 +759,10 @@ is sized within the normal envelope, not under the §07 carve-out.
   economics-mismatch rejects (incl. the `≤(N_P−1)` dust boundary, R1.B);
   **finalization-boundary + claim-age-boundary KATs** (F-E1); reorg
   dedup-revert roundtrip.
-- **Substrate (PR-E0):** claimed-epoch + first-paying-height survival across
-  slash apply/revert **and** holdings-update / re-bond cycles (all callers, F-E5).
+- **Substrate (PR-E0, landed):** claimed-epoch + first-paying-height survival
+  across the full-bond writer, slash apply, and slash reorg-revert (the three
+  `put_archival_bond_record` callers today; holdings-update / re-bond connect
+  paths land under the same discipline in PR-B1/B2/B3, F-E5).
 - **Deletion (PR-E4):** clean build; legacy tests rewritten to HF1 rules.
 
 ---

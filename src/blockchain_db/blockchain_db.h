@@ -1960,6 +1960,11 @@ public:
   // Gate-4 / shard-registry substrate (default: false until implemented).
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const;
+  // Full-bond reader: returns the complete decoded record (including the v4
+  // claimed-epoch set and first_paying_emission_height) so load-modify-store
+  // callers and tests can observe every field, not just the scalar projections.
+  virtual bool get_archival_bond_value(const crypto::hash& p_id,
+    shekyl::db::ArchivalBondValue& out) const;
   virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t at_height) const;
   virtual bool archival_bond_good_through(const crypto::hash& p_id,
@@ -1977,6 +1982,13 @@ public:
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
+  // Full-bond writer: serializes the entire record. Load-modify-store callers
+  // (slash apply/revert) must write through this rather than
+  // put_archival_bond_record, whose scalar-arg signature cannot carry the v4
+  // claimed-epoch set / first_paying_emission_height and would silently wipe
+  // them (REWARD_EMISSION_VIN_PLAN.md §1.5 F-S1 / F-E5).
+  virtual void put_archival_bond_value(const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond);
   virtual void remove_archival_bond_record(const crypto::hash& p_id);
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count);
