@@ -1,7 +1,14 @@
 # Archival firewall — gate 6 (`P` lifecycle + pseudonym hygiene)
 
-**Status:** **Round 1 draft (2026-06-07).** Crypto layer + `P` hybrid derivation pinned
-below (§9). Network/timing/output rounds still open. Not soundness-closed.
+**Status:** **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9);
+GF-1 per-tx-type verifier contract resolved and GF-2 dual-scan enforcement made architectural;
+reviewer sign-off recorded (§9.8), with post-sign-off review refinements (C-1/C-2/C-3) folded in.
+**Round 2 (network + transport) is drafted and OPEN for the adversarial pass (§10).** Round-1
+carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (§7), and the
+**C-1 confirm-at-source dependency** — the emission vin-layer ML-DSA equality check (a hard merge
+blocker, §9.8) must land before the `archival_p` impl is wired into emission. Round 2 may add an
+**HS-identity HKDF label** to that KAT (GF-9, §10.7). Timing/output rounds still open. Not
+soundness-closed.
 Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
@@ -103,7 +110,10 @@ principal lives or which clearnet IP serves archival bytes.
   items).
 
 **Round-open:** Arti integration surface, peer handshake that presents `P` without
-principal metadata, challenge-delivery path vs fetch path separation.
+principal metadata, challenge-delivery path vs fetch path separation. **→ now drafted in
+§10 (Round 2, open):** GF-12 Arti capability confirmed (§10.3), GF-3 challenge class
+(§10.4), GF-5 pre-join presentation (§10.5), GF-6 wire-size fingerprint (§10.6), GF-9 HS
+key lifecycle (§10.7), heavy-path lever (§10.8).
 
 ### 2.3 Timing layer
 
@@ -119,6 +129,14 @@ must not form a standing correlation channel.
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` per `P` | Emission leg §3 | Default batch; single-epoch claim = test-only |
 | Per-epoch serve-credit ledger resolution | Archival state / F1 | **Public liveness fingerprint** at epoch granularity |
 | `MAX_CLAIM_AGE_W` | Archival state §2.4 | Forfeiture horizon + hot-state bound (not decorrelation — F1 T-A1) |
+
+**`W` vs. batch cap (GF-11, no new pin):** `MAX_CLAIM_AGE_W = 26 >
+MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` is already pinned in
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1. The **batch cap (15)**, not
+the forfeiture horizon (26), is therefore the binding constraint on how many settlement epochs a
+single emission may claim — a `P` cannot legally widen its claim window to the forfeiture horizon
+to thin its timing fingerprint. This ordering is a consensus fact, not a gate-6 decorrelation
+lever.
 
 **E-4 threat (named):** Fine-grained per-epoch retention timeline + shard-set adjacency
 across **`P_old` → `P_new` rotation** re-links identities if rotation is cosmetic
@@ -161,6 +179,13 @@ transfers.
 
 **Round-open:** minimum delay / output-count discipline between last emission and
 drain; change-output handling on bond-funding transfers.
+
+**GF-4 status:** the drain **delay floor** is already pinned (`≥ RELEASE_COOLDOWN ×
+SETTLEMENT_EPOCH_BLOCKS`, [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7), so
+"how long after last emission" is closed. The genuinely-open piece is the **terminal-drain
+output-count discipline** — a single lump sweep still re-links the reward history to one
+principal cluster even with the delay satisfied. That output-count discipline is the **Round 4
+hard exit** (§6), not a Round-1 carry.
 
 ### 2.5 Bond-funding layer (fifth surface)
 
@@ -264,7 +289,9 @@ wallet/daemon defaults that **enforce** the invariants or loud-fail into unsafe 
 
 | Component | Gate-6 responsibilities |
 |-----------|-------------------------|
-| **`shekyl-wallet-core` / `StakeEngine`** | `P` HKDF; dual scan; build emission/drain txs; rotation ceremony; bond-funding UX defaults; local jitter |
+| **`shekyl-wallet-core` / `StakeEngine`** | `P` HKDF; build emission/drain txs; rotation ceremony; bond-funding UX defaults; local jitter |
+| **`StakeEngine` — `P`-scan identification context** | **Sole owner of `P.view_sk` and the `P`-scan pipeline** — a Gate-6 forward requirement on the PHASE_2B FSM retool, not inherited from claim-era §4.6 (§9.6 ownership-boundary clause). `P`-output identification descends from `P`'s `combined_ss`/decap, structurally disjoint from the principal `LedgerEngine` scan; outputs route by which decap matched, never cross-assigned |
+| **`LedgerEngine` — principal-scan context** | Owns principal `view_sk`; **must not** receive `P.view_sk` or `P` decap material; principal scan never claims a `P`-destined output |
 | **`shekyld` (daemon)** | Peer reachability to `P`; challenge routing; optional policy hooks — **must not** require principal identity for archival RPC |
 | **Transport stack** | Onion rendezvous for serving; seeding-path rules (step 2) |
 | **GUI / mobile** | Surface rotation/lapse warnings; no principal↔`P` linking in logs or RPC |
@@ -279,10 +306,10 @@ the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIF
 | Round | Focus | Exit criterion |
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
-| **1** | HKDF/`P_id` wire + crypto layer hooks | **Draft** — §9; reviewer sign-off pending |
-| **2** | Network + transport (L16 → production shape) | Rendezvous path specified; seeding relaxation bounded |
-| **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults |
-| **4** | Output + bond-funding hygiene | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B |
+| **1** | HKDF/`P_id` wire + crypto layer hooks | **Done** (2026-06-13) — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off recorded (§9.8). **Lone carry:** `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` module (impl, §7). |
+| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). Exit checklist + carries: §10.9. |
+| **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults. **Exit gate (R1-named):** within-epoch claim jitter min/max bounds pinned (GF-10). |
+| **4** | Output + bond-funding hygiene | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named):** terminal-drain **output-count** discipline pinned (GF-4 — delay floor already pinned, see §2.4); join-Market structural-distinguishability characterized + minimum separation from bond-funding pinned (GF-7). |
 | **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -292,7 +319,9 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 
 ## 7. Implementation checklist (pre-code)
 
-- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9 — draft).
+- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9).
+- [x] Pin per-tx-type verifier contract — account `hybrid_sign_pk` is bond-record identity only;
+      per-input auth is per-output (GF-1, §9.6).
 - [ ] Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module.
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration).
@@ -303,7 +332,16 @@ schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 - [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
       [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) (review → land).
-- [ ] Stage 3 test vectors: cross-layer linkability negatives.
+- [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
+      cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
+      scan contexts; §9.6).
+- [ ] **C-1 forgery negative (emission vin + stressnet negative suite):** a backing input that
+      proves leaf membership while supplying a `pqc_pk` whose `H(pqc_pk)` does **not** equal the
+      leaf-committed extra scalar must be **rejected** by the emission vin verifier. This test
+      **fails until the vin-layer ML-DSA equality check lands** (§9.8 C-1), making the carried
+      dependency a failing test rather than a remember-to-build item. Add as an explicit negative
+      case alongside the honest-path "staking lifecycle completes 100 full cycles" stressnet
+      criterion.
 
 ---
 
@@ -340,8 +378,13 @@ Reuse the principal salt and wide-reduce discipline:
 salt = salt_for(network, format)
        // e.g. b"shekyl-master-derive-v1-mainnet-bip39"
 
-HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || p_slot.to_le_bytes(), L = …)
+HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || p_slot.to_le_bytes(), L = per-row)
 ```
+
+`L` is **pinned per output** in the table below (it is not a free parameter): `64` for the
+Ed25519 wide-reduce and ML-KEM `d_z` paths, `32` for the ML-DSA-65 seed — matching
+[`account.rs`](../../rust/shekyl-crypto-pq/src/account.rs) (`L=64` wide-reduce) and
+[`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs) `keygen_from_seed(seed: &[u8; 32])`.
 
 | Output | Info label (`LABEL`) | `L` | Consumer |
 |--------|----------------------|-----|----------|
@@ -352,6 +395,16 @@ HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || p_slot.to_le_bytes(), L
 
 **Forbidden info labels on the `P` path:** `shekyl-ed25519-spend`, `shekyl-ed25519-view`,
 `shekyl-ml-kem-768`, and the entire `shekyl-output-derive-v1` / `shekyl-pqc-output` tree.
+
+**Info-string concatenation note (micro, KAT-authoring).** `info = LABEL || p_slot.to_le_bytes()`
+is **not length-prefixed**. It is unambiguous under the current label set — the labels are
+non-prefix-free with respect to each other and `p_slot` is fixed-width (4 B LE) — so no two
+`(LABEL, p_slot)` pairs collide. The only way to break this is **adding a new label** whose bytes
+are a prefix of an existing label's `LABEL || slot` concatenation. **Disposition:** lock a
+single-byte separator (`LABEL || 0x00 || p_slot.to_le_bytes()`) into the `ARCHIVAL_P_DERIVE_V1`
+KAT at manifest-authoring time, so the wire is fixed before any label is ever added. No wire
+change now (the current concatenation is safe and unimplemented); this is a note to the KAT
+author, not a Round-1 reopener.
 
 **ML-KEM intermediary (unchanged function, archival-only input):**
 
@@ -376,10 +429,16 @@ ArchivalPKeys {
   ml_kem_ek, ml_kem_dk:       ML-KEM-768 account keys,
   x25519_pk:                  montgomery(view_pk),   // same map as principal
   hybrid_sign_pk, hybrid_sign_sk: Hybrid{ed25519=spend, ml_dsa=account ML-DSA},
-  hybrid_bond_id:             HybridPublicKey,       // == hybrid_sign_pk; bond-record identity
+  hybrid_bond_id:             HybridPublicKey,       // == hybrid_sign_pk; bond-record IDENTITY only
   p_canonical_id:             [u8; 32],              // §9.5
 }
 ```
+
+**`hybrid_bond_id` is identity-only.** It is the on-wire `P_pubkey` that keys the bond record
+and `p_canonical_id`; it is **never** used as a per-input `PqcAuthentication.hybrid_public_key`.
+Per-input spend authority — including emission backing inputs and the terminal drain — is the
+**per-output** `shekyl-pqc-output` derivation (the §9.6 GF-1 contract). The account ML-DSA key
+inside `hybrid_sign_sk` signs bond-record / emission-identity material, not individual inputs.
 
 **Not persisted at rest:** secret fields are re-derived from `master_seed_64` + `p_slot` on
 wallet open (same discipline as `AllKeysBlob` ML-KEM decap key). Persist only `p_slot` and
@@ -411,28 +470,99 @@ versioning — both bump only on a documented hard-fork / migration (V4 or ident
 
 ### 9.6 Signing and scanning contracts
 
-**Spend / emission (`pqc_auths`):**
+**Signing surfaces by transaction type (`pqc_auths`) — GF-1 contract:**
 
-- `P` transactions use `scheme_id = 1` (`ed25519_ml_dsa_65`).
-- `hybrid_public_key` in each input's `PqcAuthentication` = `hybrid_sign_pk` (account-level,
-  not per-output `shekyl-pqc-output` derivation).
-- Per-output ML-DSA inside FCMP++ leaves still uses the **output** derivation path when
-  constructing spends — account ML-DSA is the container key; output secrets remain per-index.
-  Stage 3 must not conflate the two surfaces.
+`P` transactions use `scheme_id = 1` (`ed25519_ml_dsa_65`). The account-level `hybrid_sign_pk`
+(= `hybrid_bond_id`, §9.4) is the **bond-record identity**: it appears on the wire **only** as
+the `P_pubkey` field feeding `P_canonical_id` (§9.5), and is **never** a per-input
+`PqcAuthentication.hybrid_public_key`. Per-input authentication always uses the **per-output**
+`shekyl-pqc-output` derivation, exactly as principal spends do. The earlier draft conflated the
+container identity with the per-input auth key; they are distinct surfaces and the verifier
+checks each against a different key.
 
-**Dual scan (wallet):**
+| `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
+|-------------|-------------------------------|------------------------------------------|----------|
+| **join-Market / bond-post** (gate 4) | `P_pubkey` **identity** — creates the bond record keyed by `P_canonical_id` | **per-output** (ordinary funding inputs; key image present) | create/lookup `ArchivalBondRecord` by `P_canonical_id`; funding inputs via standard key-image path |
+| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
+| **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
-| Scan path | View material | Output derivation | Must not share |
-|-----------|---------------|-----------------|----------------|
-| Principal | principal `view_sk` | `combined_ss` from principal decap | — |
-| `P` | `P.view_sk` | `combined_ss` from `P` decap | principal view tags, principal `enc_label` domain |
+**Why ordinary `P` transfers carry no identity field:** they are byte-shaped identically to
+principal transfers, so a verifier cannot (and must not) tell a `P` drain from any other
+transfer — that indistinguishability is the firewall property (§4 invariant 1), not a gap.
+Only emission and bond-post transactions self-identify, via the `P_pubkey` field and the
+archival-bond-table lookup. There is no "is this a `P` spend?" branch on the ordinary spend
+path, and so no account-level key on it.
 
-Scanner runs **two independent identification pipelines** keyed on different view secrets.
-Merging into one scan loop without domain separation is a firewall violation.
+**Dual scan (wallet) — GF-2 architectural enforcement:**
 
-**Membership-only emission:** Backing UTXOs are spent on `P`'s keys; verifier omits key
-image from spent set per emission leg — crypto surface unchanged; only the signing keys are
-`P`'s hybrid material.
+| Scan path | View material | Output derivation | Owner | Must not share |
+|-----------|---------------|-----------------|-------|----------------|
+| Principal | principal `view_sk` | `combined_ss` from principal decap | `LedgerEngine` | — |
+| `P` | `P.view_sk` | `combined_ss` from `P` decap | `StakeEngine` | principal view tags, principal `enc_label` domain |
+
+The firewall here is **structural, not a naming convention.** Its soundness rests on the crypto,
+not on which actor runs the scan: each pipeline's per-output secrets descend from a **distinct
+`combined_ss`** (distinct ML-KEM decap key + distinct Ed25519 ECDH), so an output that matches
+one pipeline's `combined_ss` **cannot** match the other's at the full one-time-key check — the
+discriminator is the decap layer, not a downstream label. The output-derive labels
+(`shekyl-pqc-output`, `enc_label`) are **shared by construction**; the domain separation that
+makes them safe lives entirely in the upstream `combined_ss` / decap material, which is why
+pinning that is the load-bearing requirement.
+
+**Ownership boundary (Gate-6 forward requirement on the PHASE_2B retool).** The dual-scan pipeline
+(principal + `P`) is an authoritative genesis pin
+([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.1 carry-over — "`P` HKDF
+sub-wallet … dual scan"). Assigning sole ownership of `P.view_sk` to `StakeEngine` (separate from
+the principal `LedgerEngine` scan) is a Gate-6 **requirement the FSM retool must honor**, not a
+fact inherited from current PHASE_2B text: §4.6's `StakeEngine` trait surface is **claim-era /
+pending retool** (flagged STRATUM in the PHASE_2B header; authority is
+[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)), so it is not yet a binding ownership pin. The
+crypto basis above holds regardless of the actor assignment; this clause pins the assignment so
+the retool lands it rather than leaving it implicit.
+
+A **single shared scan loop is acceptable only** if each candidate output is routed by which
+`combined_ss`/decap matched, with no cross-assignment — an output is emitted to exactly one
+pipeline. Merging the two into one identification context keyed on a single view secret, or
+allowing an output to be tried-then-claimed by both contexts, is a firewall violation.
+
+**Negative test (Round-1 named, folded into §7 cross-layer linkability negatives):** no output
+is ever emitted to both the principal and `P` pipelines; a `P`-destined output presented to the
+principal scan context produces no match, and vice versa. This is the cross-pipeline
+non-cross-assignment test. **Defensive invariant (C-3):** "exactly one pipeline" is cryptographically
+guaranteed at the full one-time-key check (distinct `combined_ss` ⇒ at most one match), so a
+double-match is impossible by construction — the implementation must therefore **loud-fail**
+(not silently pick one) if both pipelines' full-key checks ever pass for a single output. Assert
+the double-match-is-unreachable invariant rather than assuming it.
+
+**Membership-only emission:** Backing UTXOs are spent under `P`'s **per-output** key material
+(not the account key); the verifier omits the key image from the spent set per the emission
+leg. Because there is **no key image** on this path, the entire quantum spend-authority property
+rests on one binding: the membership proof and the ML-DSA check must reference the **same proven
+leaf at the same input index**, not merely each reference *a* leaf. The mechanism that delivers
+this ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7, verified at source 2026-06-13): the
+`Fcmp` membership leg commits `H(pqc_pk)` as an **in-circuit extra leaf scalar**
+(`fcmps::Input::with_extra_scalars`) on the proven leaf, and the per-input challenge binds the
+input index (§4.2/§8.2); the vin layer recomputes `H(pqc_pk)` from the supplied key and demands
+equality with *that leaf's* committed scalar. An attacker who proves membership of a victim's
+leaf cannot substitute their own `pqc_pk` (its hash would not match the leaf-committed scalar),
+and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1):** the in-circuit half is
+implemented in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check is a not-yet-landed
+hard merge blocker** (§9.8 carried dependency). Until it lands, backing ownership reduces to
+classical security. Only the bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
+material; the spend authority is per-output, per the table above.
+
+**"Classical security only" is accurate — there *is* a classical spend-authority belt
+(verified at source 2026-06-13).** "Membership-only" omits the **key image / nullifier** (the
+linkability tag), **not** the spend authority. The `MembershipSpendAuth` `R_O` leg is a
+two-generator Schnorr proof that proves **knowledge of the proven leaf's spend secret `x`**
+([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1: (a) a verifying `R_O` proof implies
+knowledge of the specific `x` via the rewinding extractor; (b) that `x` is the `G`-component of a
+**real tree leaf**; (c) `x = Hs + b` bakes in the recipient spend scalar `b` — i.e. ownership). So
+a **classical** attacker cannot forge a backing claim over a victim's leaf: they cannot produce
+the leaf's `x` (discrete-log hardness). The PQ gap is precisely that a **quantum** attacker can
+recover `x` from on-chain `O` (Shor), which the leaf-bound ML-DSA equality check forecloses. The
+interim is therefore PQ-weak, **not** authority-free — emission may scaffold against the classical
+belt, but the vin ML-DSA check must land before any quantum spend-authority claim holds.
 
 ### 9.7 V4 reversion clause (per `21-reversion-clause-discipline.mdc`)
 
@@ -450,15 +580,278 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - [x] HKDF label table with `-v1` suffixes and `p_slot` binding.
 - [x] Account-level ML-DSA disposition for bond `HybridPublicKey`.
 - [x] `P_canonical_id` wire aligned to emission leg §6.1.
-- [x] Dual-scan and signing-surface separation stated.
+- [x] Dual-scan and signing-surface separation stated (GF-1 per-tx-type contract; GF-2 architectural enforcement).
 - [x] V4 reversion clauses named.
-- [ ] Reviewer sign-off on Round 1 draft.
+- [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
 - [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`).
 - [ ] `shekyl-crypto-pq::archival_p` implementation + unit tests.
 
+**Carried dependencies (confirm-at-source before the impl + emission verifier land):**
+
+- **C-1 — emission backing-input quantum spend-authority binding.** The GF-1 §9.6 emission
+  contract rests entirely on the membership proof and the ML-DSA check binding the **same
+  proven leaf at the same input index**. **Verified at source (2026-06-13,
+  [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
+  `H(pqc_pk)` extra-leaf-scalar binding (`with_extra_scalars`) is index-bound and **implemented**
+  in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
+  the supplied key, demand equality with the leaf-committed scalar) is a **hard merge blocker**
+  named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **not yet landed**.
+  **Obligation:** the emission vin verifier must implement and test this equality check before
+  the `archival_p` impl is wired into emission construction; until it lands, no quantum
+  spend-authority guarantee exists on the backing path (classical security only — the
+  `MembershipSpendAuth` `R_O` leg still proves classical spend-secret knowledge per
+  `FCMP_MEMBERSHIP_ONLY.md` §5.1; "membership-only" omits the key image, not the authority). This
+  is a dependency Gate 6 leans on, not a Gate-6 deliverable — it discharges in the emission vin PR.
+  **Discharge is test-enforced, not memory-enforced:** the §7 `pqc_pk`-mismatch forgery negative
+  (a backing input whose supplied `pqc_pk` does not hash to the leaf-committed extra scalar must be
+  **rejected**) **fails** until the vin equality check lands — so the dependency cannot silently
+  fail to discharge.
+
 ---
 
-## 10. Related documents
+## 10. Round 2 — network + transport layer (draft — OPEN)
+
+**Status:** Draft for the adversarial pass (opened 2026-06-13). **Not closed.** Round 2
+specifies how peers reach `P` and how `P` broadcasts, such that `P`'s network *location* and
+*traffic shape* never link to the principal. It threads the R1-named entry gates
+(GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface.
+
+### 10.0 How Round 2 differs from Round 1 (the bar is different)
+
+Round 1 closed on **algebraic separation** — distinct `combined_ss`/decap make principal/`P`
+outputs uncrossable *by construction* (§9.6). The network layer has **no such clean
+separation**. The firewall here is **defense-in-depth**: a named fingerprint, a bounded +
+*measurable* mitigation, and an **honest residual**. The Round-2 exit bar is therefore *"every
+leak vector is named, the mitigation is specified and testable, and the residual is written
+down,"* **not** *"linkage is impossible."* Treating a probabilistic traffic-analysis surface as
+if it were a proof is the failure mode this round guards against — and it is why the network
+round, not the crypto round, is the harder one.
+
+### 10.1 Threat model (the live observer)
+
+| Adversary | Capability | Must not learn |
+|-----------|------------|----------------|
+| Local / ISP | principal clearnet link timing + volume | that a clearnet link serves/answers for `P` |
+| Malicious peer | initiates challenges, fetches, handshakes vs `P` | `P`'s clearnet IP; any principal-correlated metadata |
+| HS-side observer (rendezvous) | sees `P`'s onion traffic shape + timing | which clearnet node is `P`; correlation to principal txs |
+| Partial passive (GPA-lite) | correlates entry/exit timing on a relay fraction | principal↔`P` circuit co-residency |
+
+**Property:** over `P`'s whole life, no network observer links `P`'s serving / challenge /
+broadcast traffic to (a) the principal's clearnet identity or (b) the principal's wallet
+traffic. Anonymity-network source privacy is **experimental with known residuals**
+([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Privacy Limitations*); Round 2 **inherits
+those residuals** and adds the `P`-specific ones — it does not re-solve Tor.
+
+### 10.2 Two traffic classes (inherited frame)
+
+| Class | Traffic | Transport (proposed) | Latency posture |
+|-------|---------|----------------------|-----------------|
+| Light / privacy-critical | bond announce, emission/drain broadcast, liveness re-proofs, challenge responses | anonymity-routed Levin (Tor) | latency-tolerant; battle-tested fit |
+| Heavy / archival serving | deep-shard fetch responses | **onion-service ↔ Tor-client rendezvous; no clearnet fallback** | worst-case L-regime **by construction** (L16) |
+
+The heavy path's worst-case latency is **not** a Round-2 open question — it is pinned by §2.2
+and the L10/L16 sim findings ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)). Round 2's
+transport work is the **light-class routing**, the **serving-path reachability + key
+lifecycle**, and the single heavy-path lever in §10.8.
+
+### 10.3 GF-12 — Arti onion-service hosting (entry gate: capability confirmed; at-source pin carried)
+
+Per [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc), the
+"embed Arti in-process" fork ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Forks* #1)
+cannot be pinned on training-data recall. **Published-capability check (web, 2026-06 — not yet
+the at-source pin):**
+
+- Arti supports **service-side onion-service hosting** (full vanguards, restricted discovery,
+  client auth) — **done / stable since Arti 1.2.0 (2024-03)**; the older "client-only" notes are
+  stale.
+- Gated by the **`onion-service-service`** feature on `arti-client` (current `0.43.0`,
+  2026-06-01; MSRV 1.89). API: `TorClient::launch_onion_service` /
+  `launch_onion_service_with_hsid`. **Vanguards** require `onion-service-client | -service`;
+  **restricted-discovery** is available (client-auth-gated HS resolution — load-bearing for
+  §10.4 / §10.7). Relay / dir-auth side is *not* done — irrelevant, `P` hosts a service, it is
+  not a relay.
+
+**Disposition (proposed):** the capability question that made GF-12 an entry gate is
+**answered — service-side hosting is stable and feature-flagged.** What remains is the
+**at-source pin** deferred to the transport PR per the dependency-discipline relaxation clause:
+exact workspace version, `onion-service-service` (+ `vanguards`, + `restricted-discovery`)
+feature plumbing, MSRV vs. workspace, and the **`launch_onion_service_with_hsid` key-injection
+API shape** (load-bearing for §10.7). **Embed-vs-external (Fork #1) is therefore decidable in
+Round 2** — embed Arti, Rust-canonical per
+[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — **conditional on**
+that at-source pin, with the external-daemon-over-SOCKS fallback held as the reversion clause
+([`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc))
+if the at-source check fails.
+
+### 10.4 GF-3 — the challenge-response message class must be anonymity-routable
+
+Inherited Shekyl routes only **handshakes, timed syncs, and tx broadcast** over the anonymity
+network ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*P2P Commands*). The archival
+**challenge-response** (a peer challenges `P` to prove retention/liveness; `P` answers) and the
+**liveness re-proof** are a **new Levin message class** that does **not** exist in that
+allowlist. If it falls back to the clearnet P2P path, the exchange **links `P`'s clearnet IP** —
+on the exact traffic the firewall exists for.
+
+**Disposition (proposed):**
+
+- The challenge-response + liveness-re-proof commands are **added to the anonymity-routable
+  command set** as a first-class member; `P` **refuses to answer a challenge that did not arrive
+  over the anonymity transport** — loud refusal, *not* clearnet fallback (the user-absent-context
+  default inversion per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)).
+- Challenges arrive **inbound over `P`'s onion service** (Arti restricted-discovery can gate
+  *who* may resolve `P`'s HS, §10.3); responses return over the **same rendezvous circuit**.
+- **Pin the Levin command IDs** for the new class so the allowlist is enumerable, not "whatever
+  the archival module happens to send."
+
+**Open for the pass:** do challenges originate from **arbitrary peers** (open challenge market)
+or **bonded verifiers only**? The former widens `P`'s inbound exposure; the latter needs a
+verifier-set definition (gate-2/gate-4 surface). The routing rule is identical; the exposure
+surface differs.
+
+### 10.5 GF-5 — pre-join backing presentation is `P`'s first network appearance
+
+Before `P` anchors its bond on-chain (join-Market), it **presents backing** (announce-before-
+anchor: the membership-only backing proofs + the announce). This is **`P`'s first time on the
+network.** If the announce traverses clearnet, or a circuit/stream shared with the principal's
+wallet traffic (stream-reuse leak, [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Stream
+Used Twice*), it links principal↔`P` **at birth** — before any later-layer mitigation can
+matter.
+
+**Disposition (proposed):**
+
+- The pre-join announce/backing presentation **traverses the anonymity transport on a fresh
+  circuit**, with **no principal-correlated stream reuse** and no principal metadata in the
+  payload.
+- The §7 checklist item "pin off-chain announce/backing presentation wire" is the *wire* half;
+  **GF-5 adds the *transport* half** — wire and transport are pinned together, not separately.
+- **Announce-before-anchor** ordering stands, but the announce↔anchor **timing gap** is a
+  standing correlation channel if deterministic → **handed to Round 3** (timing/rotation).
+
+**Open for the pass:** is the announce a **P2P broadcast** (→ it is the tx-broadcast anonymity
+path, already routable) or a **directed presentation to a market coordinator / verifier set**
+(→ a new directed message needing the §10.4 treatment)? This decides whether GF-5 is "reuse the
+broadcast path" or "define a new directed class."
+
+### 10.6 GF-6 — `P`-tx wire-size fingerprint + dummy/fragmentation policy
+
+PQC inflates tx size: a 2-in/2-out FCMP++ tx grows ~2–3 KB → ~7–8 KB — **~14–16 Tor cells** vs
+~4–6 pre-PQC, ~7–8 I2P fragments ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Measured
+v3 Impact*). **`P`-typed txs (emission, bond-post, terminal drain) carry additional
+consensus-special material** (`P_pubkey` vin identity; membership-only backing proofs; the
+carried ML-DSA equality material per §9.8 C-1) — a **distinctive broadcast burst shape** on top
+of the v3 baseline.
+
+**Distinction that must not blur:** on-chain `P`-typing is **public by function** — emission
+txs are consensus-special and anyone parsing the chain sees they are emission txs (by design,
+gate-1/emission-leg). **GF-6 is not about on-chain identifiability.** It is about the
+**broadcast-origin fingerprint**: an observer watching the anonymity transport must not be able
+to say "*that* large archival-shaped burst on *this* circuit is `P`," and pivot to the
+principal.
+
+**Disposition (proposed):**
+
+- **Characterize** the `P`-tx-type burst distribution at **cell (Tor) / fragment (I2P)
+  granularity** for each `P`-tx type, against the ambient v3 mix — i.e. *is a `P` emission burst
+  separable from an ordinary large v3 transfer?*
+- **Decide the policy shape:** fragmentation + dummy padding tuned to a **measured
+  real-to-dummy ratio** that makes `P` bursts statistically indistinguishable from the ambient
+  large-v3 class ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Recommended Testing* #2).
+  This is **measure-then-tune** — Round 2 names the measurement obligation; the tuned constant
+  lands with the testnet replay (carried).
+- **Honest residual:** dummy traffic cannot conceal a large burst unless dummy volume scales
+  with it (same §); the cost/coverage trade is the residual — written down, not papered over.
+
+**Open for the pass (highest leverage):** does `P` broadcast via **its own node** (burst
+originates at `P`'s onion service) or via the **generic tx-broadcast anonymity path** (burst is
+one-of-many on shared outgoing circuits, Dandelion-style)? The latter dilutes the fingerprint
+*structurally*; the former concentrates it.
+
+### 10.7 GF-9 — Tor HS key lifecycle (couples to §2.3 rotation)
+
+`P` hosts a `.onion` to serve archival bytes + accept challenges. Its identity key
+(`ks_hs_id.ed25519_expanded_private` in Arti's keystore, §10.3) **is** `P`'s reachability
+identity. Two failure modes:
+
+1. **Stable across `P` rotation → the `.onion` is a cross-`P_old`→`P_new` linker** that defeats
+   the §2.3 rotation decorrelation (E-4 threat): rotating `P`'s keys while keeping the same
+   `.onion` is **cosmetic rotation**.
+2. **Rotating mid-life → breaks reachability:** peers hold `P`'s `.onion` as the bond-record
+   reachability field; it must be **stable within a single `P`'s life.**
+
+**Disposition (proposed):**
+
+- The HS identity key is **bound to `p_slot`** (§9.2): **stable within a `P`'s life, rotates
+  with `P`.** On rotation, `P` stands up a **new HS under a new key**, migrates the reachability
+  field, and retires `P_old`'s `.onion` on the same schedule as `P_old`'s keys.
+- **Derive the HS ed25519 identity from `master_seed`+`p_slot`** (a §9.3-style HKDF label, e.g.
+  `b"shekyl.archival.p.hs_id.v1"`), injected via `launch_onion_service_with_hsid` (§10.3)
+  rather than Arti-autogenerated. **Why:** the `.onion` becomes **deterministic +
+  seed-recoverable** (survives device loss; fits wallet recovery) and **provably `p_slot`-scoped**
+  (rotation is structural, not operational discipline). This **adds an HKDF label to §9.3 → it
+  must be in the `ARCHIVAL_P_DERIVE_V1` KAT.**
+- **Honest residual:** the live HS private key is a **long-term secret resident on the serving
+  device**; its compromise links `P`'s *location* (not the principal, but `P`'s box). This is
+  the **irreducible serving-side residual** — named, not mitigated away.
+
+**Open for the pass:** does deterministic seed-derivation of the HS key **over-couple** — does
+putting the `.onion` under the same seed create a *recovery-time* correlation (restore wallet →
+re-derive the same `.onion` → an observer who saw `P_old` sees it reappear)? `p_slot` rotation
+should foreclose this, but it is exactly the "convenience that re-links" the pass should attack.
+
+### 10.8 The one heavy-path lever that feeds the sim
+
+[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*The one question that feeds the sim*:
+**does the heavy serving path stay pure-rendezvous (worst-case L-regime, maximal firewall), or
+is there a relaxation that buys bandwidth without linking `P`?** This is the **only** transport
+parameter that moves the staker-archival sim's L-curve position. Round 2 **names and bounds**
+it; it does **not** relax the firewall to chase bandwidth (priority hierarchy per
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc): privacy > performance). Any proposed
+relaxation (e.g. a seeding-path leg over a lighter transport for **public, non-`P`-attributable**
+bytes) must **prove it carries no `P`-attributable metadata** before it is admissible — the
+seeding-path relaxation already flagged in §2.2 and [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+
+### 10.9 Round 2 exit criteria + carried items
+
+**Exit (all required to close Round 2):**
+
+- [ ] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
+      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)**.
+- [ ] **GF-5** — pre-join announce/backing-presentation **transport** pinned (fresh circuit, no
+      principal stream reuse); announce↔anchor timing gap **handed to R3**.
+- [ ] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
+      per `P`-tx type) + dummy/fragmentation **policy shape** decided; tuned ratio **carried to
+      testnet replay**.
+- [ ] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition pinned; **new
+      HKDF label added to §9.3 + `ARCHIVAL_P_DERIVE_V1` KAT**; serving-side key-compromise
+      residual **named**.
+- [ ] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
+      (version/feature/MSRV/`with_hsid` API); external-daemon reversion clause recorded.
+
+**Carried out of Round 2 (named, not silently deferred — per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):**
+
+- **At-source Arti pin** → transport PR (§10.3).
+- **Dummy/fragmentation tuned ratio** → testnet replay (§10.6).
+- **Announce↔anchor + emission-cadence timing** → Round 3.
+- **Heavy-path relaxation decision** → bounded in §10.8; lands with the sim's post-testnet
+  L-curve measurement.
+
+### 10.10 Open questions for the adversarial pass (to work through)
+
+1. **§10.4** — open challenge market vs. bonded-verifier-only challenges? (inbound exposure)
+2. **§10.5** — announce as P2P broadcast vs. directed presentation? (reuse vs. new directed class)
+3. **§10.6** — `P` broadcasts via its own node vs. generic anonymity broadcast path?
+   (concentrated vs. diluted fingerprint — *highest leverage*)
+4. **§10.7** — does deterministic seed-derived `.onion` over-couple at recovery time?
+   (convenience-relink attack)
+5. **§10.8** — is any heavy-path relaxation admissible, or is pure-rendezvous the genesis
+   commitment? (privacy > bandwidth)
+6. **Cross-cutting** — I2P secondary door: kept architecturally open (reversion clause,
+   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) §*Forks* #2) or closed at genesis?
+
+---
+
+## 11. Related documents
 
 | Doc | Relationship |
 |-----|----------------|
@@ -473,6 +866,64 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 
 ## Revision history
 
+- **2026-06-13 (Round 2 draft opened):** Drafted §10 — network + transport layer — as the
+  opening position for the Round 2 adversarial pass (OPEN, not closed). Framed the round's
+  bar as **defense-in-depth** (named fingerprint + measurable mitigation + honest residual),
+  not algebraic separation. Threat model (live observer); two traffic classes (light/Tor,
+  heavy/onion-rendezvous, no clearnet fallback). Threaded the five R1-named entry gates:
+  **GF-12** — Arti **service-side onion-service hosting confirmed** (done/stable since 1.2.0,
+  `onion-service-service` feature on `arti-client` 0.43.0; web-verified, **at-source pin
+  carried** to the transport PR per dependency-discipline), embed-Arti fork decidable on that
+  pin; **GF-3** — challenge/liveness Levin class added to the anonymity-routable set, clearnet
+  fallback refused (loud); **GF-5** — pre-join backing presentation pinned to a fresh anonymity
+  circuit (no principal stream reuse), announce↔anchor timing handed to R3; **GF-6** — `P`-tx
+  broadcast-origin fingerprint characterization obligation + dummy/fragmentation policy shape
+  (on-chain `P`-typing is public-by-function and explicitly *not* the concern), tuned ratio
+  carried to testnet replay; **GF-9** — HS identity key `p_slot`-bound + **seed-derived via a
+  new §9.3 HKDF label** (`launch_onion_service_with_hsid`), serving-side key-compromise residual
+  named. Added the heavy-path relaxation lever (§10.8, privacy > bandwidth) and ten open
+  questions for the pass (§10.10). §6 round table + §2.2 pointers updated; old §10 Related
+  documents renumbered §11.
+- **2026-06-13 (Round 1 C-1 second-order confirmation):** Pressure-test on the C-1 interim
+  characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1
+  (a)/(b)/(c)) that the `MembershipSpendAuth` `R_O` leg proves **classical knowledge of the leaf's
+  spend secret `x`** (= ownership) — "membership-only" omits the **key image/nullifier**, not the
+  spend authority. So "reduces to classical security" is **accurate** (the interim is PQ-weak, not
+  authority-free); added the §9.6 belt clarification. Wired the C-1 dependency to a **failing
+  test**: the §7 `pqc_pk`-mismatch forgery negative (membership proven, non-matching `pqc_pk` ⇒
+  must reject) fails until the vin-layer ML-DSA equality check lands, plus a stressnet negative-case
+  obligation alongside the honest-path 100-cycle criterion.
+- **2026-06-13 (Round 1 post-sign-off review refinements):** Closure-review items on the
+  sign-off itself. **C-1** — recorded the emission backing-input quantum spend-authority binding
+  as a **named carried dependency** (§9.8) rather than a citation that read as closed; verified
+  at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
+  proof and ML-DSA check bind the **same proven leaf at the same input index** (in-circuit
+  `H(pqc_pk)` extra scalar, index-bound — implemented), and that the **vin-layer ML-DSA equality
+  check is a not-yet-landed hard merge blocker** that must precede the `archival_p` impl + emission
+  verifier; sharpened the §9.6 emission row and membership-only paragraph accordingly. **C-2** —
+  re-anchored the GF-2 ownership boundary: the dual-scan pipeline is the authoritative §2.1 genesis
+  pin, but `StakeEngine`'s sole ownership of `P.view_sk` is a Gate-6 **forward requirement on the
+  PHASE_2B FSM retool**, not inherited from claim-era §4.6 (flagged STRATUM); the crypto basis
+  (distinct `combined_ss`/decap) is independent of the actor assignment. **C-3** — added the
+  loud-fail defensive invariant to the cross-pipeline negative test (double-match is unreachable
+  by construction; the impl must assert it, not assume it). Micro — recorded the §9.3 info-string
+  non-prefix-free safety argument + the separator-byte-at-KAT-authoring disposition (no wire change
+  now).
+- **2026-06-13 (Round 1 closed):** Adversarial pass disposition. GF-1 — rewrote §9.6 with a
+  per-tx-type verifier-contract table: account `hybrid_sign_pk` is bond-record **identity only**
+  (`P_pubkey`), never a per-input auth key; emission backing inputs authenticate against the
+  leaf-committed per-output `pqc_pk` (membership-only); fee inputs / ordinary transfers / drains
+  use per-output keys; ordinary `P` transfers carry no `P`-typing. §9.4 `hybrid_bond_id` note
+  strengthened to identity-only. GF-2 — made dual-scan firewall **architectural**: `StakeEngine`
+  owns `P.view_sk` as a separate identification context, separation rests on distinct
+  `combined_ss`/decap (not a naming convention), shared scan loop allowed only with
+  match-routing; named the cross-pipeline non-cross-assignment negative test; added `P`-scan
+  ownership rows to the §5 consumer map. Corrections — GF-8 (§9.3 `L = …` placeholder fixed; `L`
+  values were already pinned in the table), GF-11 (§2.3 cross-ref that `W=26 > 15` is pinned in
+  `ARCHIVAL_TIMING_CONSTANTS` §1), GF-4 (§2.4 note: delay floor already pinned, output-count is
+  the open R4 hard exit). §6 round table + §7 checklist updated; remaining findings folded as
+  named R2/R3/R4 entry/exit criteria. Reviewer sign-off recorded (§9.8); KAT manifest +
+  `archival_p` impl remain the lone carry.
 - **2026-06-07 (Round 1 draft):** §9 — `P` hybrid derivation (HKDF labels, `ArchivalPKeys`,
   `P_canonical_id`, dual-scan, account-level ML-DSA, V4 reversion clauses).
 - **2026-06-07 (Round 0 open):** Initial scaffold — four layers + bond-funding; `P`

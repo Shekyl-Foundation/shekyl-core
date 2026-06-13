@@ -89,6 +89,25 @@ sustainability is unaffected by the recalibration.
   construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
   R1-Q6.
 
+- **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
+  Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
+  `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp`, ≈ line 3756) derives the
+  per-output key-image generator `I = Hp(O)` with `rct::hash_to_p3` /
+  `ge_p3_tobytes` while building `chunk_outputs_blob`, recomputing in C++ a
+  crypto contract the Rust side already owns
+  (`shekyl_fcmp::tree::key_image_generator`, at the FFI boundary as
+  `shekyl_compute_output_key_image`). Per `20-rust-vs-cpp-policy.mdc` §2 (a
+  crypto contract belongs in Rust) this should route through the FFI, not
+  recompute in C++. **Not fixed in the CT audit cleanup:** swapping it in
+  isolation is a "while we're here" daemon change
+  (`15-deletion-and-debt.mdc`) touching consensus-adjacent C++ without the
+  daemon test harness. It folds into the daemon path-assembler migration that
+  already owns this surface (the `assemble_tree_path_for_output` historical-
+  reference / multi-source routing resolution below). **Reopening trigger:**
+  the daemon path-assembler PR opens, **or** any PR touches
+  `on_get_curve_tree_path` for another reason (route the new logic through the
+  FFI per the rule-20 daemon clause then).
+
 - **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
   artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
   (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
@@ -97,24 +116,54 @@ sustainability is unaffected by the recalibration.
   drain replication, KAT-verified), repositioning the bulk-leaf RPC to
   non-forward catch-up + archival. The C++ endpoint and its §6
   reconstruct-root KAT (`SHEKYLD_PREREQUISITES.md` shape) land with the
-  prune-policy PR, which makes refetch reachable. **Reopening trigger:**
-  either R1-Q1 reversion criterion (forward-sync latency budget breach;
-  pre-genesis refetch demand) pulls it earlier. See
-  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
+  prune-policy PR, which makes refetch reachable. The **`SegmentSource` seam
+  (R1-Q5)** rides this row: B3 forbids a public trait without a caller, and
+  this refetch path is its first consumer, so the recorded trait shape
+  (`CT3_SYNC.md` §3 R1-Q5) lands here too. **Reopening trigger:** either R1-Q1
+  reversion criterion (forward-sync latency budget breach; pre-genesis
+  refetch demand) pulls it earlier. See
+  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
+  [`docs/design/CT3_ROUND1_CLOSEOUT.md`](./design/CT3_ROUND1_CLOSEOUT.md) §4.
 
-- **`append_drained` demotion after the client moves to
-  `append_block_deltas` (CT-3a P4, 2026-06-12).** Target: V3.0, at CT-3c
-  closeout; criterion = "no production caller after CT-3b lands."
-  `LeafStore::append_drained` is now a thin wrapper over
-  `append_block_deltas` with empty pending deltas — it advances the tip
-  and freeze clock without maintaining the pending table, so once the
-  client ingests through the deltas API, any mixed use silently breaks
-  drained/pending disjointness and resume exactness. Demote to
-  `#[cfg(test)]` or fold into the KAT harness when the criterion is met.
-  **Criterion met by CT-3b (2026-06-12):** the client ingests through
-  `append_block_deltas`; every remaining `append_drained` caller is a
-  test site. Execute the demotion at CT-3c closeout as scheduled.
-  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
+- **CT-5 rollback error handling: drop-and-reopen poisoned client
+  (CT-3c poison contract, 2026-06-12; machine-enforced 2026-06-13).**
+  Target: V3.0, with the engine refresh wiring (CT-5).
+  `CurveTreeClient::rollback_to_fork` commits the store rollback before
+  rebuilding memory; if a post-store check fails (`FrozenSegmentRkMismatch`,
+  `FrozenSegmentRecordMissing`, duplicate gindex on rebuild, pruned/corrupt
+  shape, etc.), the method returns `Err` with the store authoritative and
+  rolled back but the in-memory client object still stale. **The detection
+  is now self-enforcing:** the client sets an internal poison flag at the
+  store commit and clears it only on full rebuild success, so a stale client
+  fails fast with `ClientError::Poisoned` on every load-bearing call
+  (`ingest_block`, `root_at`, `verify_root`, `rollback_to_fork`) rather than
+  silently ingesting against stale memory or returning a stale root. CT-5's
+  residual obligation is only the *reaction*: map `ClientError::Poisoned`
+  (and, conservatively, any rollback `Err`) to drop-and-reopen rather than
+  retry-with-same-object. **Reopening trigger:** if CT-5 introduces a
+  rollback actor/wrapper that owns this policy centrally, fold the item into
+  that actor's contract and close it.
+  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4 CT-3c.
+
+- **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1
+  disposition, 2026-06-12).** Target: V3.0, with prune-policy / store
+  startup hardening. CT-3c intentionally runs the bounded
+  `verify_frozen_tail` check only on the rollback path so it does not
+  retroactively add an O(segment) startup cost to CT-3b's plain
+  `open(path)` / resume behavior. The DoD's resume-side corruption
+  clause remains tracked here. **Reopening trigger:** measured wallet
+  startup budget leaves room for one segment recomputation, or a
+  corruption/torn-write finding makes startup verification load-bearing
+  before prune-policy lands.
+
+- **Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral,
+  2026-06-12).** Target: V3.0, with prune-policy / store-backed
+  assembly. CT-3c verifies only the boundary-adjacent frozen tail after
+  rollback; full frozen-row verification is O(all frozen leaves) and
+  belongs with the mainnet-scale pruned-store policy rather than the
+  rollback wiring PR. **Reopening trigger:** store-backed assembly or
+  pruned resume needs an all-segment integrity sweep, or audit requires a
+  startup/maintenance mode that pays the full scan cost explicitly.
 
 - **Carry `BlockHeight`/`Gindex` typing across the client → engine seam
   (CT-3a P5, 2026-06-12; client portion closed by CT-3b 2026-06-12).**
@@ -4877,7 +4926,8 @@ one place to confirm each item's relationship to the wallet stack.
      bounded rebuild loop.
 
   **Not a Phase 2a blocker.** The proactive `reference.rs` validity
-  horizon (`select_reference_block`, `PHASE_2A_SEND_PATH.md` §5.4) is the
+  horizon (`should_reanchor`/`select_reference_height`,
+  `PHASE_2A_SEND_PATH.md` §5.4) is the
   interim guard; the reactive path lights up additively when the daemon
   flag lands, with no wallet wire-format break. **Target: V3.1 daemon
   release (Phase 6 end-to-end harness consumes it). Cross-link:

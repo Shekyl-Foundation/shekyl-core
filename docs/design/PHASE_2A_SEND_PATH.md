@@ -551,7 +551,7 @@ stale root is presently indistinguishable from a generic terminal rejection
   old/recent/not-found" from generic verification failure. Tracked as a
   `SHEKYLD_PREREQUISITE` in `docs/FOLLOWUPS.md`.
 - **Interim guard.** The proactive `reference.rs` validity horizon (§5.4 /
-  `select_reference_block`) bounds how stale a built proof can get before the
+  `should_reanchor`, `select_reference_height`) bounds how stale a built proof can get before the
   wallet pre-emptively rebuilds, so the reactive signal is a backstop, not the
   primary defense.
 

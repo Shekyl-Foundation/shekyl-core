@@ -9,8 +9,16 @@ schema gates). **CT-3b landed** (2026-06-12: `open(path)` + resume,
 delta ingest via `append_block_deltas` with store-write-before-commit,
 client API `BlockHeight` retype, restart/staked-lock KATs;
 `SCHEMA_VERSION` 2 → 3 retires CT-3a-window stores whose pending table
-predates delta ingest). CT-3c (reorg rollback wiring) and CT-3d (doc
-closeout) remain.
+predates delta ingest). **CT-3c landed** (2026-06-12: client
+`rollback_to_fork`, rollback partition corrected to the CT-2 drain cutoff,
+rollback-path frozen-tail `R_k` recheck, direct pending-set KAT with
+class-(b) and long-maturity witnesses, persistent `reorg_deep` KAT,
+`append_drained` demoted to test-only). **CT-3d landed** (2026-06-13:
+parent doc closeout — [`CT3_ROUND1_CLOSEOUT.md`](./CT3_ROUND1_CLOSEOUT.md),
+parent §8 #6 / §9 CT-3 row flipped to closed, FOLLOWUPS routing).
+**CT-3 Round 1 complete** — the bulk-leaf RPC (R1-Q1) and `SegmentSource`
+seam (R1-Q5) are deferred-with-recorded-shape, landing with the post-prune
+refetch path.
 
 **Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-3 row:
 "Source-agnostic bulk-segment fetch + delta sync + per-segment root verify
@@ -130,11 +138,15 @@ Audit pin: `chore/ct3-sync-design` branch point off `dev`, 2026-06-11.
   re-scan: the staked maturity class reaches 150,000 blocks (S6). Pending
   candidates must persist (R1-Q2). This falsifies the implicit Round-0
   assumption that drained-leaf persistence suffices.
-- **F4 (sharpened, Round 1 review 2026-06-11).** The truncation partition
-  stands: drain order makes maturity monotone non-decreasing in position
-  (S8), so "first drained position with `maturity > fork_height`" is
+- **F4 (sharpened, Round 1 review 2026-06-11; drain-cutoff correction
+  landed CT-3c 2026-06-12).** The truncation partition stands: drain order
+  makes maturity monotone non-decreasing in position (S8), so "first
+  drained position with `maturity > drained_through(fork_height)`" is
   binary-searchable over `leaf_meta` (B6: confirm the byte layout exposes
-  maturity at impl). But the truncated rows split into **two classes** the
+  maturity at impl). `drained_through(F) = F - 1` for `F > 0` per CT-2:
+  a leaf maturing exactly at the fork height enters only on connection of
+  `F + 1`, so it must be pending after rollback. But the truncated rows
+  split into **two classes** the
   original three-step rollback did not distinguish:
 
   - **(a)** outputs *created* in orphaned blocks (`creation_height >
@@ -185,14 +197,16 @@ Audit pin: `chore/ct3-sync-design` branch point off `dev`, 2026-06-11.
 - **F9 (Round 1 review; B6-class, source-confirmed).** A truncate crossing a
   frozen-but-unpruned segment boundary (reorg deeper than
   `SPENDABLE_AGE + 720` on an archiver holding full leaves) must also roll
-  back `frozen_segments`, or the resume `R_k` recheck recomputes against
+  back `frozen_segments`, or a post-rollback `R_k` recheck recomputes against
   stale freeze records. **Confirmed at source:** the landed primitive
   deletes frozen rows above the boundary *and* the partially-overlapping
   segment, recomputes the freeze cursor, and resets the sync tip in the
   same transaction (`redb_backend.rs:390-407, 429-434`). Residual for
-  CT-3c: assert the resume recheck runs against post-rollback records
-  (§5 addenda). Beyond the plausible-reorg bound, loud failure is
-  acceptable; silent stale metadata is not.
+  CT-3c closed: `CurveTreeClient::rollback_to_fork` explicitly verifies
+  the frozen tail after the store rollback and before memory rebuild. Plain
+  resume and full all-segment sweeps remain tracked in `FOLLOWUPS.md`.
+  Beyond the plausible-reorg bound, loud failure is acceptable; silent
+  stale metadata is not.
 
 ---
 
@@ -248,9 +262,10 @@ refresh layer does not guarantee backwards.
 **Disposition (amended Round 1 review):** rollback = three store operations
 in **one write transaction**:
 
-1. binary-search the first drained position with `maturity > fork_height`
-   (F4 partition) and truncate there, **migrating the truncated rows from
-   drained into the pending table** (not deleting them);
+1. binary-search the first drained position with
+   `maturity > drained_through(fork_height)` (F4 partition; CT-2 drain
+   cutoff) and truncate there, **migrating the truncated rows from drained
+   into the pending table** (not deleting them);
 2. delete pending rows where `creation_height > fork_height` — this catches
    class (a) uniformly, whether the orphaned-block output was still pending
    or had drained and was migrated in step 1;
@@ -392,7 +407,7 @@ Closure verified against the amended text. Three implementation riders
 |----|-------|-----------|
 | **CT-3a** (landed 2026-06-12, PR #128) | Store schema: pending-candidates table (with `creation_height`) + `creation_height` in `leaf_meta`; resume read path (`LeafStore` only, no client change). **Schema gates (binding):** CT-3c's full read/write patterns land as 3a acceptance criteria — maturity partition search, drained→pending row migration (read leaf bytes + meta before delete, same txn — §3.8 rider 3), `creation_height` filter, single-txn `rollback_to_fork` op; **shared truncation internals** factored into a private txn-taking helper used by both `rollback_to_fork` and `truncate_from_tree_position` (§3.8 rider 2) — so 3c never reaches back into a landed 3a. KATs include the F7 synthetic equal-maturity partition-boundary case | `store/redb_backend.rs`, `tests/store_kat.rs` |
 | **CT-3b** (landed 2026-06-12) | Client lifecycle: `open(path)` constructor, resume (rebuild in-memory state from store — gindex-sorted drained ∪ pending union, element-wise identical to a continuous run), delta `ingest_block` via `append_block_deltas` (store-write-before-commit; self-heal path deleted with the inversion); client outward API retyped to `BlockHeight` (P5 client portion); `SCHEMA_VERSION` 2 → 3 (CT-3a-window stores fail open — their pending table predates delta ingest); restart round-trip + staked-lock (B3 both halves) KATs; pruned-store resume refused loudly (F5 remains V3.0) | `client.rs`, `store/redb_backend.rs` |
-| **CT-3c** | Reorg rollback: fork-point search + transactional `rollback_to_fork` + re-sync; `reorg_deep` persistent-path KAT with **direct pending-table row-set equality** post-rollback (§3.8 rider 1; drain-order corroborates); frozen-`R_k` resume recheck (F9 residual) | `client.rs`, `store/`, `tests/` |
+| **CT-3c** (landed 2026-06-12) | Reorg rollback wiring: `CurveTreeClient::rollback_to_fork` over the store single-txn rollback; partition corrected to `drained_through(fork_height)` (CT-2 boundary) while tip/filter remain fork-height-based; post-rollback frozen-tail `R_k` recheck (F9 residual) with structured corruption errors; synthetic direct pending-table row-set KAT with re-draining class-(b) and 150k-lock witnesses (§3.8 rider 1); file-backed `reorg_deep` persistent-path KAT against fresh replay + consensus oracle; `append_drained` demoted to test-only | `client.rs`, `store/redb_backend.rs`, `tests/recon_kat.rs` |
 | **CT-3d** | Doc closeout: parent §8/§9 status updates, `CT3_ROUND1_CLOSEOUT.md` (or pins), CHANGELOG, FOLLOWUPS routing (F5) | docs |
 
 Each lands on `dev` within the 5-day/10-commit guidance; no consensus-rule
@@ -405,13 +420,15 @@ CT-3 changes *where state lives*, not *what is computed*), so
 ## 5. Threat-model addenda placeholder (A3 — due Round 3–4)
 
 Objectives to enumerate at the late round, recorded now so closure cannot
-skip them: store-corruption → forged root (S9 recheck must cover resume),
+skip them: store-corruption → forged root (rollback-path frozen-tail
+recheck landed CT-3c; resume-path/full recheck tracked in `FOLLOWUPS.md`),
 malicious reorg signal → rollback DoS (fork-height validation), pending-table
 poisoning across restart (drain-order divergence ↔ the CT-2 KAT is the net),
 refetch-source lying (parent §7.3 — only if R1-Q5's trait lands with a
 consumer), stale freeze records after a boundary-crossing truncate (F9 —
 source-confirmed freeze-aware at `redb_backend.rs:390-407`; CT-3c asserts
-the resume `R_k` recheck runs against post-rollback records).
+the explicit rollback-path `R_k` recheck runs against post-rollback
+records).
 
 ---
 

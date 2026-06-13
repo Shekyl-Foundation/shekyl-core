@@ -271,6 +271,20 @@ fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
         .collect()
 }
 
+fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
+    let txs = [TxLeafInputs {
+        is_miner: true,
+        leaf_hash_blob: Some(&blk.blob),
+        outputs: &blk.outputs,
+    }];
+    client
+        .ingest_block(BlockLeaves {
+            height: BlockHeight(blk.height),
+            txs: &txs,
+        })
+        .unwrap();
+}
+
 /// End-to-end CT-3 obligation: the **production** `CurveTreeClient` —
 /// ingesting reduced blocks, resolving `h_pqc` from the raw `0x07` blob,
 /// threading the global index, and applying its own reference-height →
@@ -304,6 +318,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
             let reference = ReferenceBlock {
                 height: BlockHeight(blk.height),
                 curve_tree_root: blk.root,
+                block_hash: [0u8; 32],
             };
             if client.verify_root(&reference).is_err() {
                 mismatches.push(blk.height);
@@ -350,6 +365,66 @@ fn client_path_matches_recon_path() {
                 blk.height,
             );
         }
+    }
+}
+
+/// CT-3c persistent-path corroboration: reorg_deep goes through
+/// `CurveTreeClient::rollback_to_fork` and then re-syncs the new suffix.
+/// Direct pending-row equality is asserted in the client unit KAT; this
+/// fixture pins the file-backed rollback path against a fresh replay and
+/// the consensus oracle roots.
+#[test]
+fn persistent_rollback_reorg_deep_matches_fresh_replay() {
+    let f = fixture();
+    let main_tip = f["main_tip"].as_u64().unwrap();
+    let deep_pop = f["deep_pop"].as_u64().unwrap();
+    assert!(
+        deep_pop <= main_tip,
+        "malformed fixture: deep_pop ({deep_pop}) exceeds main_tip ({main_tip})",
+    );
+    let fork = main_tip - deep_pop;
+    let fork_index = usize::try_from(fork).expect("fork height fits usize");
+    let main = decode_client_chain(chain(&f, "main"));
+    let deep = decode_client_chain(chain(&f, "reorg_deep"));
+    assert_eq!(main[fork_index].height, fork);
+    assert_eq!(deep[fork_index].height, fork);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ct3c-reorg.redb");
+    let mut persistent = CurveTreeClient::open(&path).unwrap();
+    for blk in &main {
+        ingest_client_block(&mut persistent, blk);
+    }
+
+    persistent.rollback_to_fork(BlockHeight(fork)).unwrap();
+    for blk in deep.iter().skip(fork_index + 1) {
+        ingest_client_block(&mut persistent, blk);
+    }
+
+    let mut fresh = CurveTreeClient::new();
+    for blk in &deep {
+        ingest_client_block(&mut fresh, blk);
+    }
+
+    assert_eq!(
+        persistent.root_at(BlockHeight(fork)).unwrap(),
+        fresh.root_at(BlockHeight(fork)).unwrap(),
+        "shared-prefix root at fork"
+    );
+    for blk in deep.iter().skip(fork_index + 1) {
+        let height = BlockHeight(blk.height);
+        let persistent_root = persistent.root_at(height).unwrap();
+        assert_eq!(
+            persistent_root,
+            fresh.root_at(height).unwrap(),
+            "persistent/fresh divergence at height {}",
+            blk.height
+        );
+        assert_eq!(
+            persistent_root, blk.root,
+            "persistent root must match consensus oracle at height {}",
+            blk.height
+        );
     }
 }
 

@@ -28,6 +28,138 @@
   `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin, `REWARD_EMISSION_VIN_PLAN.md`
   §9, `STAKER_ARCHIVAL_SIM.md` §L12.
 
+- **docs: CT-4 Round 1 closed — membership-path assembly + reference-block
+  horizon (`shekyl-curve-tree`, 2026-06-13).** Added
+  [`CT4_ROUND1_CLOSEOUT.md`](design/CT4_ROUND1_CLOSEOUT.md) recording the two
+  landed CT-4 surfaces: (1) `assemble_path → AssembledPath` (gated on the §3.3
+  root match, FCMP++ prover `Path` layout pinned at source, C3 `c1+c2+1 ==
+  depth` self-checked) and (2) `reference.rs` validity-horizon arithmetic
+  (`select_reference_height`, `proof_submittable`/`proof_expired`,
+  `should_reanchor`; `REF_ANCHOR_AGE`/`PROOF_VALIDITY_HORIZON`/`REBUILD_AT`).
+  Both landed ahead of their decomposition slot and were hardened by the
+  CT-3↔CT-4 audit (`ReferenceBlock` now carries `block_hash`). Flipped
+  `CURVE_TREE_CLIENT.md` §9 CT-4 row to **Round 1 closed**. Test gates:
+  `assemble_kat` (independent root recompute + `OutputNotDrained`/`RootMismatch`
+  rejection), `reference::tests` (selection/window/aging/re-anchor/reorg), and
+  the archival-retention cross-checks. Deferred-with-reversion-clause: F5
+  store-backed/pruned assembly (rides prune-policy) and the C++ `hash_to_p3`
+  path-RPC FFI migration (rides the daemon path-assembler). Docs-only; no code
+  or consensus surface touched.
+
+- **docs: CT-3 Round 1 closed — CT-3d closeout (`shekyl-curve-tree`,
+  2026-06-13).** Added [`CT3_ROUND1_CLOSEOUT.md`](design/CT3_ROUND1_CLOSEOUT.md)
+  recording the landed persistent-client lifecycle (CT-3a store schema /
+  CT-3b open+resume+delta-ingest / CT-3c reorg rollback), the DoD mapping,
+  and the deferred-with-reversion-clause surfaces. Flipped `CURVE_TREE_CLIENT.md`
+  §9 CT-3 row to **Round 1 closed** and closed §8 #6 (block-derived forward
+  sync is the confirmed default — the §6 reversion criterion fired). Marked
+  `CT3_SYNC.md` CT-3d landed / Round 1 complete. The bulk-leaf RPC endpoint
+  (R1-Q1) and `SegmentSource` seam (R1-Q5) remain deferred-with-recorded-shape,
+  landing with the post-prune refetch path; the F5 store-backed assembly,
+  resume-path/full `R_k` recheck, and CT-5 poison-reaction items stay routed
+  in `FOLLOWUPS.md`. Docs-only; no code or consensus surface touched.
+
+- **archival: Gate 6 Round 2 draft opened — network + transport layer
+  (2026-06-13).** Drafted `ARCHIVAL_FIREWALL_GATE6.md` §10 as the opening
+  position for the Round 2 adversarial pass (**OPEN, not closed**). The round's
+  bar is **defense-in-depth** (named fingerprint + measurable mitigation +
+  honest residual), explicitly *not* algebraic separation — the network layer
+  cannot rest on a proof the way the crypto layer (§9) does. Threat model: live
+  network observer (ISP, malicious peer, HS-side, partial passive); property is
+  that `P`'s serving/challenge/broadcast traffic never links to the principal's
+  clearnet identity or wallet traffic. Two traffic classes: light/privacy-
+  critical over Tor, heavy/archival serving over onion-rendezvous (no clearnet
+  fallback, worst-case L-regime by construction per L16). The five R1-named
+  entry gates were threaded into the draft: **GF-12** — Arti **service-side
+  onion-service hosting confirmed** (done/stable since Arti 1.2.0, 2024-03;
+  `onion-service-service` feature on `arti-client` 0.43.0; web-verified per
+  dependency-discipline, with the **at-source pin carried** to the transport
+  PR), embed-Arti-vs-external fork decidable on that pin; **GF-3** —
+  challenge-response + liveness-re-proof Levin class added to the
+  anonymity-routable set, `P` refuses clearnet-arriving challenges (loud, no
+  fallback); **GF-5** — pre-join backing presentation pinned to a fresh
+  anonymity circuit with no principal stream reuse (it is `P`'s first network
+  appearance), announce↔anchor timing handed to Round 3; **GF-6** — `P`-tx
+  broadcast-origin fingerprint characterization obligation (cell/fragment
+  granularity) + dummy/fragmentation policy shape, with the explicit distinction
+  that on-chain `P`-typing is public-by-function and *not* the concern, tuned
+  ratio carried to testnet replay; **GF-9** — HS identity key `p_slot`-bound +
+  **seed-derived via a new §9.3 HKDF label** (`launch_onion_service_with_hsid`),
+  making `.onion` rotation structural and seed-recoverable, serving-side
+  key-compromise residual named (and the new label must enter the
+  `ARCHIVAL_P_DERIVE_V1` KAT). Added the single heavy-path relaxation lever that
+  feeds the sim (§10.8, privacy > bandwidth) and ten open questions for the pass
+  (§10.10). Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.2, 6, 10 [new], 11
+  [renumbered], revision history).
+
+- **archival: Gate 6 Round 1 closed — `P` lifecycle + pseudonym hygiene
+  (2026-06-13).** Adversarial-pass disposition on `ARCHIVAL_FIREWALL_GATE6.md`
+  §9. GF-1 (critical): rewrote §9.6 with a per-transaction-type verifier
+  contract — the account-level `hybrid_sign_pk` is the bond-record **identity
+  only** (the on-wire `P_pubkey` feeding `P_canonical_id`) and is **never** a
+  per-input `PqcAuthentication.hybrid_public_key`; emission **backing inputs**
+  authenticate against the leaf-committed per-output `pqc_pk` the membership
+  proof binds in-circuit (`FCMP_MEMBERSHIP_ONLY.md` §7, no key image), fee
+  inputs / ordinary transfers / terminal drains use per-output keys, and
+  ordinary `P` transfers carry no `P`-typing (byte-identical to principal
+  transfers — the firewall property, not a gap). This aligns the doc to the
+  already-implemented `FcmpMembershipOnly` contract; no consensus-rule change.
+  GF-2 (high): made the dual-scan firewall **architectural** rather than a
+  naming convention — `StakeEngine` owns `P.view_sk` as an identification
+  context disjoint from the principal `LedgerEngine` scan, separation rests on
+  distinct `combined_ss`/decap material (shared output-derive labels are safe
+  because the discriminator is the decap layer), a shared scan loop is allowed
+  only with match-routing and no cross-assignment, and the cross-pipeline
+  non-cross-assignment negative test is named; added `P`-scan ownership rows to
+  the §5 consumer map. Corrections: GF-8 (the §9.3 `L = …` placeholder was
+  cosmetic — per-row `L` is pinned `64/64/64/32`, matching `account.rs` and
+  `derivation.rs`), GF-11 (`MAX_CLAIM_AGE_W = 26 > MAX_SETTLEMENT_EPOCHS_PER_
+  EMISSION = 15` already pinned in `ARCHIVAL_TIMING_CONSTANTS.md` §1 — added the
+  cross-ref, no new pin), GF-4 (drain delay floor already pinned; the
+  terminal-drain output-count discipline is the remaining Round 4 hard exit).
+  Remaining findings folded into the §6 round table as named criteria: GF-3 /
+  GF-5 / GF-6 / GF-9 / GF-12 as Round 2 entry gates, GF-10 as a Round 3 exit,
+  GF-4 / GF-7 as Round 4 hard exits. Reviewer sign-off recorded (§9.8). Three
+  post-sign-off review refinements folded in: **C-1** — the emission
+  backing-input quantum spend-authority binding is now a **named carried
+  dependency** (§9.8), verified at source (`FCMP_MEMBERSHIP_ONLY.md` §7/§8.2/§9:
+  the membership proof and ML-DSA check bind the **same proven leaf at the same
+  input index** via the in-circuit `H(pqc_pk)` extra scalar — implemented; the
+  vin-layer ML-DSA equality check is a not-yet-landed hard merge blocker that
+  must precede the `archival_p` impl + emission verifier); **C-2** — re-anchored
+  the GF-2 ownership boundary, since PHASE_2B §4.6 is claim-era/pending-retool:
+  `StakeEngine` sole ownership of `P.view_sk` is now a Gate-6 forward requirement
+  on the FSM retool (the §2.1 dual-scan pin is authoritative; the crypto basis is
+  actor-independent); **C-3** — the cross-pipeline negative test now asserts a
+  loud-fail defensive invariant (double-match unreachable by construction). A
+  second-order C-1 confirmation followed: verified at source
+  (`FCMP_MEMBERSHIP_ONLY.md` §5.1) that the `MembershipSpendAuth` `R_O` leg proves
+  **classical knowledge of the leaf's spend secret** (ownership) — "membership-only"
+  omits the key image, not the authority — so the interim "classical security only"
+  characterization is accurate (PQ-weak, not authority-free); and the C-1 dependency
+  is now enforced by a **failing test** (the §7 `pqc_pk`-mismatch forgery negative
+  rejects until the vin-layer ML-DSA equality check lands), with a stressnet
+  negative-case obligation. The
+  `ARCHIVAL_P_DERIVE_V1` KAT manifest + `shekyl-crypto-pq::archival_p`
+  implementation and the C-1 confirm-at-source dependency are the Round-1 carries.
+  Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4,
+  9.6, 9.8, revision history).
+
+- **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
+  2026-06-13).** Sub-PR decomposition (PR-E0…E5) for the `REWARD_EMISSION_LEG.md`
+  §12 emission leg, downstream of the closed consensus spec. Round-0 pre-flight
+  substrate audit recorded against actual code; ML-DSA backing-auth hard merge
+  gate bound to PR-E3; `txin_stake_claim`/`C_stake` deletion surface enumerated;
+  `07-consensus-atomic-cutovers.mdc` evaluated (exception does **not** apply,
+  standard splitting governs). Architecture is **Rust-first**: the new emission
+  consensus logic (untrusted-input parse, amount arithmetic, membership + ML-DSA
+  crypto) lives in Rust behind `shekyl_emission_vin_verify` joining the
+  `shekyl_archival_*`/`shekyl_fcmp_*` FFI family; C++ keeps only the `txin_v`
+  variant + epee/boost/JSON transport shim, pushing the FFI boundary forward for
+  the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
+  production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
+  §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
+
 ### Changed
 
 - **economics: `shekyl-staking-sim` default backend is now the authoritative
@@ -57,23 +189,6 @@
   snapshot ABI = M-2's frozen-input set). Q9/F-E3 (intra-block dedup) flagged as
   the second hard blocker; Q1 gates PR-E2's wire; gating-cluster table + round-2
   leverage order added to §8.
-
-### Added
-
-- **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
-  2026-06-13).** Sub-PR decomposition (PR-E0…E5) for the `REWARD_EMISSION_LEG.md`
-  §12 emission leg, downstream of the closed consensus spec. Round-0 pre-flight
-  substrate audit recorded against actual code; ML-DSA backing-auth hard merge
-  gate bound to PR-E3; `txin_stake_claim`/`C_stake` deletion surface enumerated;
-  `07-consensus-atomic-cutovers.mdc` evaluated (exception does **not** apply,
-  standard splitting governs). Architecture is **Rust-first**: the new emission
-  consensus logic (untrusted-input parse, amount arithmetic, membership + ML-DSA
-  crypto) lives in Rust behind `shekyl_emission_vin_verify` joining the
-  `shekyl_archival_*`/`shekyl_fcmp_*` FFI family; C++ keeps only the `txin_v`
-  variant + epee/boost/JSON transport shim, pushing the FFI boundary forward for
-  the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
-  production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
-  §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
 
 - **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
   key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
@@ -139,6 +254,31 @@
 
 ### Changed
 
+- **crypto: CT-3↔CT-4 audit cleanup — fold the reference-block hash into
+  `ReferenceBlock`; doc-code resync (`shekyl-curve-tree`, 2026-06-13).**
+  `CurveTreeClient::assemble_path` no longer takes a loose positional
+  `reference_block_hash: [u8; 32]`; the hash is now `ReferenceBlock.block_hash`,
+  so the caller supplies the full consensus anchor (`height`, `curve_tree_root`,
+  `block_hash`) as one value. This removes a footgun — output keys, commitments,
+  roots, and block hashes are all `[u8; 32]`, and a positional arg invited a
+  silent swap — and brings the API to the two-arg shape `CURVE_TREE_CLIENT.md`
+  §5 already documents (the third arg was residue of the now-landed §5 horizon
+  work). All call sites (`assemble_kat`, archival-retention crosscheck/serve KATs)
+  and `ReferenceBlock` literals updated; no production caller existed yet (CT-5
+  engine wiring is unbuilt). **Docs resync:** the `assemble.rs` "horizon
+  deferred" comment was stale (`reference.rs` landed `select_reference_height`
+  et al. in CT-4) and is rewritten; `CURVE_TREE_CLIENT.md` §9 CT-4 row flipped
+  from a `select_reference_block`/`client` stub to **Landed** with the real
+  `assemble` + `reference` modules and symbols; the non-existent
+  `select_reference_block` symbol corrected to `select_reference_height` /
+  `should_reanchor` in `FOLLOWUPS.md`, `PHASE_2A_SEND_PATH.md`, and
+  `SHEKYLD_PREREQUISITES.md`. **FFI audit:** recorded (not fixed — it is a
+  planning-activity daemon change per `20-rust-vs-cpp-policy.mdc` /
+  `15-deletion-and-debt.mdc`) that `on_get_curve_tree_path` recomputes the
+  key-image generator `I = Hp(O)` via C++ `hash_to_p3` instead of the existing
+  `shekyl_compute_output_key_image` FFI, folding into the daemon path-assembler
+  migration. No consensus surface touched.
+
 - **fcmp: typed the FCMP++ composition layer to make the verify
   input-context misalignment unrepresentable (2026-06-12).** The
   Copilot rounds on the membership-only PR surfaced a recurring shape
@@ -191,6 +331,33 @@
   of silently reporting zero locked supply.
 
 ### Added
+
+- **crypto: CT-3c persistent reorg rollback (`shekyl-curve-tree`,
+  2026-06-12).** `CurveTreeClient::rollback_to_fork(BlockHeight)` now
+  rolls the redb-backed `LeafStore` back to an inclusive fork point,
+  verifies the boundary-adjacent frozen segment's `R_k`, rebuilds
+  in-memory state from the authoritative store, and resumes forward
+  ingest at `fork + 1`. Rollback partitioning is aligned with CT-2's
+  drain boundary (`maturity > drained_through(fork_height)`, while
+  `sync_tip_height` and the orphan filter remain fork-height based),
+  fixing the off-by-one that would otherwise keep `maturity == fork`
+  rows drained and make the first post-rollback block remove
+  already-drained pending rows. New structured store errors identify
+  frozen-record absence and `R_k` mismatch. Coverage adds the primary
+  direct pending-row equality KAT with a re-draining class-(b) witness
+  and a 150k-lock never-draining witness, plus a file-backed
+  `reorg_deep` rollback/resync KAT against fresh replay and consensus
+  roots. `LeafStore::append_drained` is now test-only so production
+  ingest cannot bypass pending-table maintenance. **Review hardening
+  (2026-06-13):** the rollback poison contract is now machine-enforced —
+  the client sets an internal poison flag at the store commit and clears
+  it only on full rebuild success, so a post-commit failure makes every
+  load-bearing call (`ingest_block`, `root_at`, `verify_root`,
+  `rollback_to_fork`) fail fast with `ClientError::Poisoned` instead of
+  relying on caller prose discipline; `verify_frozen_tail` maps a corrupt
+  freeze-segment counter to `StoreError::CorruptMeta` rather than
+  panicking on the rollback path; and the persistent `reorg_deep` KAT
+  asserts its `deep_pop <= main_tip` fixture invariant explicitly.
 
 - **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
   2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted
