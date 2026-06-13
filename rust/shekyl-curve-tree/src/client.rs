@@ -403,6 +403,7 @@ impl CurveTreeClient {
         self.store
             .rollback_to_fork(fork_height)
             .map_err(ClientError::from)?;
+        self.store.verify_frozen_tail().map_err(ClientError::from)?;
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
         self.next_gindex = rebuilt.next_gindex;
