@@ -24,12 +24,19 @@ use crate::curve::curve_banded;
 use crate::model::{g_age, World};
 use shekyl_archival_retention::{curve_milli, BandedCurveParams, WORK_MILLI_SCALE};
 
-/// Reward curve evaluation backend (PR 1.5: integer imports canonical crate).
+/// Reward curve evaluation backend.
+///
+/// `Integer` imports the canonical `shekyl-archival-retention::reward_arithmetic`
+/// crate — the code the emission vin mints with — and is the **authoritative**
+/// default (PR 1.5, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`). `Float` is the sim's
+/// exploration mirror (`curve_banded`); it is **not** authoritative and over-reads
+/// worst-shard redundancy by up to one replica (the tail-margin finding), so it is
+/// opt-in only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CurveImpl {
     #[default]
-    Float,
     Integer,
+    Float,
 }
 
 #[derive(Debug, Clone)]

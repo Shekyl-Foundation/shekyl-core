@@ -177,14 +177,13 @@ fn consensus_state_kat_v1() {
 }
 
 #[test]
-fn determinism_curve_milli_cross_check() {
+fn curve_milli_plateau_and_scale_pin() {
+    // Plateau + scale golden pins. The comprehensive cross-implementation /
+    // cross-arch determinism vectors — including the Form-C division path
+    // (reward_share_floor / mul_div_floor, the u128-before-divide order) — live
+    // in tests/reward_arithmetic_determinism_kat.rs. (The previous body here was
+    // a same-arch in-process double-call that proved nothing about determinism.)
     let curve = BandedCurveParams::default_provisional();
-    let samples = [0u64, 1, 500, 4_000, 8_000, 16_000, 100_000];
-    for work in samples {
-        let a = curve_milli(work, &curve);
-        let b = curve_milli(work, &curve);
-        assert_eq!(a, b, "determinism failed at work={work}");
-    }
     assert_eq!(curve_milli(16_000, &curve), 8_000);
     assert_eq!(WORK_MILLI_SCALE, 1_000);
 }

@@ -4,6 +4,30 @@
 
 ### Added
 
+- **economics: CI gate enforces the pure-integer contract for `reward_arithmetic`
+  (2026-06-13).** `scripts/ci/check_archival_reward_gates.sh` (run from
+  `check_consensus_invariants.sh`) now rejects `f32`/`f64`, `usize`/`isize`, and
+  atomics in `reward_arithmetic.rs`, with an inline `reward-arith-allow` escape
+  hatch for reviewed-benign uses. This makes the cross-arch bit-identity guarantee
+  (M-1 half (b)) hold *by construction*, not convention:
+  `#![deny(clippy::float_arithmetic)]` only guards float arithmetic, so a `usize`
+  leaking into a credited value would silently drop the aarch64 guarantee from
+  "real" to "emulated-and-hoping" on a future 32-bit target, and qemu-user would
+  not flag it. Docs: `ARCHIVAL_REWARD_ARITHMETIC.md` §Pure-integer contract gate.
+
+- **economics: pre-genesis-seal carry for float-calibrated redundancy floors
+  (tail-margin finding, 2026-06-13).** PR 1.5 showed the float sim over-reads
+  worst-shard redundancy by up to one replica. Genesis-sealed redundancy params
+  that gate sole-sourcing — the L12 `r_target_deep` floor and any sealed
+  `R_target`/redundancy floor — must be re-derived against the integer backend with
+  a +1 deep-tail replica margin **before the seal** (a sealed value cannot move
+  post-genesis without a fork; "watch on testnet" only covers the tunable bands).
+  Availability-scoped (Foundation complete-tree B+C seeds are the durability
+  backstop), not a durability escalation. Tracked as a V3.0 pre-genesis FOLLOWUPS
+  item so it cannot slip into genesis at its float value by omission; cross-refs in
+  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin, `REWARD_EMISSION_VIN_PLAN.md`
+  §9, `STAKER_ARCHIVAL_SIM.md` §L12.
+
 - **docs: CT-4 Round 1 closed — membership-path assembly + reference-block
   horizon (`shekyl-curve-tree`, 2026-06-13).** Added
   [`CT4_ROUND1_CLOSEOUT.md`](design/CT4_ROUND1_CLOSEOUT.md) recording the two
@@ -120,6 +144,51 @@
   implementation and the C-1 confirm-at-source dependency are the Round-1 carries.
   Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§§1-status, 2.3, 2.4, 5, 6, 7, 9.3, 9.4,
   9.6, 9.8, revision history).
+
+- **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
+  2026-06-13).** Sub-PR decomposition (PR-E0…E5) for the `REWARD_EMISSION_LEG.md`
+  §12 emission leg, downstream of the closed consensus spec. Round-0 pre-flight
+  substrate audit recorded against actual code; ML-DSA backing-auth hard merge
+  gate bound to PR-E3; `txin_stake_claim`/`C_stake` deletion surface enumerated;
+  `07-consensus-atomic-cutovers.mdc` evaluated (exception does **not** apply,
+  standard splitting governs). Architecture is **Rust-first**: the new emission
+  consensus logic (untrusted-input parse, amount arithmetic, membership + ML-DSA
+  crypto) lives in Rust behind `shekyl_emission_vin_verify` joining the
+  `shekyl_archival_*`/`shekyl_fcmp_*` FFI family; C++ keeps only the `txin_v`
+  variant + epee/boost/JSON transport shim, pushing the FFI boundary forward for
+  the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
+  production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
+  §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
+
+### Changed
+
+- **economics: `shekyl-staking-sim` default backend is now the authoritative
+  integer `Curve` (2026-06-13).** `--curve-impl=integer` (imports the canonical
+  `shekyl-archival-retention::reward_arithmetic`, the code the emission vin mints
+  with) is the default for all sweeps; `--curve-impl=float` is opt-in exploration
+  only and is no longer authoritative — PR 1.5 (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`)
+  showed the float backend over-reads worst-shard redundancy by up to one replica
+  (the tail-margin finding). An unrecognized `--curve-impl` value now fails loudly
+  (exit 2) instead of silently falling back to float, and every run prints the
+  active backend (with a "NOT authoritative" tag for float). The `CurveImpl`
+  type-level default and the scenario base config flip to `Integer` accordingly;
+  the float↔integer reconciliation tests remain as drift guards. Closes the M-1
+  follow-on "stop treating float as a co-authoritative validation substrate."
+
+- **docs: emission-vin plan readiness review — M-2 promoted to supply keystone
+  (`REWARD_EMISSION_VIN_PLAN.md`, 2026-06-13).** Round-1.5 readiness pass:
+  substrate frozen, **PR-E0 ready to branch now** (zero open deps), PR-E1/E2/E3
+  gated on a named §8 *gating cluster*. **M-2** (numerator as-of-E sourcing) is
+  promoted from a Q10 parenthetical to its own pinned disposition as the
+  **supply-conservation keystone and a PR-E3 hard blocker**: the accumulator
+  schema was pulled and confirmed at source (`ARCHIVAL_CONSENSUS_STATE.md` §3.5
+  persists aggregate `Σwork(E)` + per-shard `R_market(s,E)`, *not* per-P
+  `capped_P(E)`), so the vin reconstructs the numerator and the supply property
+  rests on as-of-E frozen inputs; three are pinned, the fourth (`held(P,E)`) is
+  Q10/F-E6, so **M-2 closes with Q10** and is resolved jointly with Q7 (the
+  snapshot ABI = M-2's frozen-input set). Q9/F-E3 (intra-block dedup) flagged as
+  the second hard blocker; Q1 gates PR-E2's wire; gating-cluster table + round-2
+  leverage order added to §8.
 
 - **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
   key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`

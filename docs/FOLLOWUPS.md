@@ -252,6 +252,36 @@ sustainability is unaffected by the recalibration.
   `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5
   floor sizing close).
 
+- **Re-derive genesis-sealed redundancy params against the integer backend
+  (+1 deep-tail margin) before seal (tail-margin finding, 2026-06-13).** PR 1.5's
+  second-pass scan (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin) found the
+  float sim over-reads worst-shard redundancy by up to one replica: integer
+  flooring discards work-credit float counted as fractional atomic units, so
+  `min_r` biases down and `sole_source_shard_epochs` up, *in-envelope*. Any
+  redundancy/coverage parameter that (a) gates sole-sourcing and (b) is **genesis-
+  sealed** therefore inherits a +1 over-optimism if it was calibrated against the
+  float sim. Concretely, the **genesis-sealed** subset — the L12 genesis deep-
+  replica floor `r_target_deep` and any genesis-sealed `R_target`/redundancy floor
+  (`STAKER_ARCHIVAL_SIM.md` §L12 disposition; the floor size is currently a
+  "post-testnet calibration" pinned *provisionally* against the float sim) — must
+  be **re-derived against the integer backend with a +1 deep-tail replica margin
+  before the genesis seal**, not watched after. This is distinct from the
+  *testnet-tunable* redundancy/`R_target` operating bands, which the verdict doc's
+  reopen criteria already route to "tune against integer + watch
+  `sole_source_shard_epochs` on testnet" — those can move post-genesis; the sealed
+  floor cannot. **Scope (right-sizing):** a sole-source market shard is an
+  *availability* item, not data-loss — the Foundation complete-tree (B+C) seeds are
+  the durability backstop (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree
+  seeds*). The +1 carry is therefore a pre-seal correctness step for the sealed
+  floor only, not a durability escalation. **Reversion:** if the final band review
+  re-derives `r_target_deep` (and any sealed redundancy floor) against the integer
+  backend with the +1 margin, this item closes; if a redundancy param that gates
+  sole-sourcing is found to be testnet-tunable rather than genesis-sealed, it moves
+  to the verdict doc's testnet-watch list instead. Cross-refs:
+  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin + reopen criteria,
+  `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
+  (pre-genesis; blocks the final redundancy-band seal).**
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published

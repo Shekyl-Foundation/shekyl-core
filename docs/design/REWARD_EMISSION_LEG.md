@@ -206,11 +206,39 @@ wrong orderings have different monetary consequences — this is not housekeepin
 |------|------------|---------|
 | **A — post-servo cap (rejected)** | `raw_P = budget·work_P/Σwork_raw` then `reward_P = Curve(raw_P)` | **Rejected.** When any cap binds, `Σ_P raw_P = budget` but `Σ_P Curve(raw_P) < budget` — **budget strands** with no pinned disposition (burn? roll? redistribute?). Anti-concentration is implicit at best. |
 | **B — servo only (rejected)** | `reward_P = budget·work_P/Σwork_raw` (no `Curve`) | **Rejected.** Per-staker aggregate unbounded; V3 gate-list item 1’s servo without the plateau-cap. |
-| **C — cap in numerator, normalize (pinned)** | `reward_P = budget·Curve(work_P)/Σ_{P'} Curve(work_{P'})` | **Genesis pin.** `Σ_P reward_P = budget` whenever `Σ Curve > 0`. A capped whale’s foregone share flows **proportionally** to other market archivers via the rate — the redistribution V3’s “leaves *S* scarce for someone else” prose describes, as a **budget** property not only coverage. |
+| **C — cap in numerator, normalize (pinned)** | `reward_P = budget·Curve(work_P)/Σ_{P'} Curve(work_{P'})` | **Genesis pin.** The real-valued shares satisfy `Σ_P reward_P = budget` exactly whenever `Σ Curve > 0` — unlike A, no budget strands pre-rounding (the integer payout refines this to `≤`; see notation). A capped whale’s foregone share flows **proportionally** to other market archivers via the rate — the redistribution V3’s “leaves *S* scarce for someone else” prose describes, as a **budget** property not only coverage. |
 
 **Notation below:** `capped_P(E) := Curve(work_P(E))` and `Σwork(E) := Σ_{P'∈Market} capped_{P'}(E)`.
-Then `reward_P(E) = budget(E)·capped_P(E)/Σwork(E)` (integer floor per payout; rounding
-disposition pinned at gate 1).
+Then for the **integer payout** (gate-1 pin, 2026-06-13 — floor + burn-the-dust):
+
+```text
+reward_P(E) = floor( budget(E) · capped_P(E) / Σwork(E) )    // u128 numerator before divide
+```
+
+- **Operation order (consensus-determining):** form `budget·capped_P` in **u128** *before*
+  dividing by `Σwork`; no intermediate flooring. `budget`, `capped_P`, `Σwork` accumulate in u64.
+- **Rounding:** floor (integer division).
+- **Remainder — unminted:** the per-epoch shortfall `budget(E) − Σ_P reward_P(E)` is an integer
+  `≤ N_P − 1` atomic units and is **never minted** — not rolled, not redistributed. So
+  `Σ_P reward_P(E) ≤ budget(E)`, supply-safe (under-mint, never over-mint) — the same flavor as
+  §4.5's already-accepted "offline `P`'s share unminted."
+
+This keeps `reward_P(E)` a **pure function of `(P, E, finalized row)`**, which both the §5.4
+zero-tolerance vout compare and wallet↔consensus bit-identity require. Largest-remainder
+(Hamilton) is rejected: it makes `P`'s `+1` depend on the rank of `P`'s fractional remainder
+across the whole market cohort, forcing the per-emission full-ledger re-walk §4.4 exists to avoid
+([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) R1.B). Both the verifier recompute
+and the wallet build path import the canonical `reward_arithmetic` integer `Curve`/Form-C — no
+reimplementation (single-source rule).
+
+**Distinct from the Curve residual (below):** the unminted floor remainder is the integer-division
+dust, **not** the plateau-capped work the reversion clause governs. In form C the *Curve* residual
+is redistributed via the rate (not burned); the *floor* residual is the `≤ (N_P−1)`-atomic dust,
+unminted. Two different residuals — the burn here is chosen explicitly, satisfying the clause below.
+
+**Reopen (rule 21):** revisit only if a gate-1/7 decision elects to **roll or redistribute** the
+remainder (requires cross-epoch / provisional+true-up machinery — §4.5 named-reopen), or if the
+atomic unit is coarsened / `N_P` grows such that `≤ (N_P−1)`-atomic dust becomes monetarily material.
 
 **Reversion clause:** A **deflationary** cap that **burns** the residual
 (`Σ Curve < Σ raw` ⇒ unminted budget destroyed) is a deliberate gate-1/7 monetary policy —
@@ -902,6 +930,7 @@ amounts), bond post/slash reaction.
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
 | [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) | §7.2 verify API — statement, wire, security argument, PQC gate |
+| [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | **Implementation plan** for §12 — sub-PR sequence, pre-flight, ML-DSA hard gate |
 
 ---
 

@@ -46,7 +46,7 @@ jobs:
           # retirement load-bearing rather than cosmetic.
           - name: "ARM v8"
             host: "aarch64-linux-gnu"
-            packages: "python3 gperf g++-aarch64-linux-gnu"
+            packages: "python3 gperf g++-aarch64-linux-gnu qemu-user-static"
             rust_target: "aarch64-unknown-linux-gnu"
           - name: "Win64"
             host: "x86_64-w64-mingw32"
@@ -119,15 +119,21 @@ jobs:
           rustup target add ${{ matrix.toolchain.rust_target }}
         fi
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-    - name: archival KAT tests compile for aarch64 (no-run; no qemu on runner)
+    - name: archival KAT tests run under aarch64 (qemu-user)
       if: matrix.toolchain.host == 'aarch64-linux-gnu'
       run: |
         . "$HOME/.cargo/env"
         cd rust
+        # Execute the cross-compiled tests under qemu so the reward-arithmetic
+        # determinism golden vectors are verified bit-identical on aarch64, not
+        # just compiled (REWARD_EMISSION_VIN_PLAN.md §9, M-1 half (b)).
+        # qemu-user-static is installed via this lane's matrix `packages` list in
+        # the "install dependencies" step (the container runs as root; no sudo).
         export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-        # Cross-compile only: depends runners are x86_64; execution needs qemu.
+        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64-static
+        export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu
         cargo test --locked -p shekyl-archival-retention \
-          --target aarch64-unknown-linux-gnu --no-run
+          --target aarch64-unknown-linux-gnu
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}

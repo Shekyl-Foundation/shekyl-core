@@ -545,17 +545,35 @@ fn main() {
         return;
     }
 
-    let curve_impl = std::env::args()
-        .find_map(|a| {
-            a.strip_prefix("--curve-impl=").map(|v| {
-                if v == "integer" {
-                    CurveImpl::Integer
-                } else {
-                    CurveImpl::Float
+    // Integer is the authoritative backend: it is what the emission vin mints
+    // money with at zero tolerance (REWARD_EMISSION_VIN_PLAN.md §5.4), and PR 1.5
+    // (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed float over-reads worst-shard
+    // redundancy by up to one replica. So sweeps default to integer; float is
+    // opt-in exploration only. An unrecognized value fails loudly rather than
+    // silently falling back to the non-authoritative backend.
+    let curve_impl =
+        match std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string)) {
+            None => CurveImpl::Integer,
+            Some(v) => match v.as_str() {
+                "integer" => CurveImpl::Integer,
+                "float" => CurveImpl::Float,
+                other => {
+                    eprintln!(
+                        "shekyl-staking-sim: unknown --curve-impl={other:?} \
+                     (expected `integer` (authoritative, default) or `float` (exploration only))"
+                    );
+                    std::process::exit(2);
                 }
-            })
-        })
-        .unwrap_or(CurveImpl::Float);
+            },
+        };
+    eprintln!(
+        "shekyl-staking-sim: curve backend = {curve_impl:?}{}",
+        match curve_impl {
+            CurveImpl::Integer => " (authoritative — canonical reward_arithmetic)",
+            CurveImpl::Float =>
+                " (exploration only — NOT authoritative; see ARCHIVAL_SIM_ECONOMICS_VERDICT.md)",
+        }
+    );
 
     let mut cfgs: Vec<_> = build_scenarios()
         .into_iter()
