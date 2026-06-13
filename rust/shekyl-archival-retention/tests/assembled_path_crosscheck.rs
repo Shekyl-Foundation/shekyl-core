@@ -114,10 +114,14 @@ fn assembled_path_verifies_as_segment_opening() {
     }
 
     let tip = blocks.last().expect("non-empty chain");
+    // Distinctive, non-zero, and distinct from the root: lets the assertion
+    // below confirm `block_hash` survives the cross-crate round-trip (built
+    // here, echoed back through `AssembledPath.tree.reference_block`) intact —
+    // a value drop or root swap would not pass.
     let reference = ReferenceBlock {
         height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
-        block_hash: [0u8; 32],
+        block_hash: [0xC7u8; 32],
     };
     let last_drained = reference.height.0.saturating_sub(61);
     let drained_block = blocks
@@ -129,6 +133,12 @@ fn assembled_path_verifies_as_segment_opening() {
     let path = client
         .assemble_path(&founder, &reference)
         .expect("assemble founder path");
+
+    // The caller-supplied block hash crosses the crate boundary intact.
+    assert_eq!(
+        path.tree.reference_block, reference.block_hash,
+        "assembled path must echo the caller-supplied ReferenceBlock::block_hash",
+    );
 
     let cl = path
         .leaf_chunk

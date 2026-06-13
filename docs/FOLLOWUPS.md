@@ -91,7 +91,7 @@ sustainability is unaffected by the recalibration.
 
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
-  `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp` ~`:3756`) derives the
+  `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp`, ≈ line 3756) derives the
   per-output key-image generator `I = Hp(O)` with `rct::hash_to_p3` /
   `ge_p3_tobytes` while building `chunk_outputs_blob`, recomputing in C++ a
   crypto contract the Rust side already owns
