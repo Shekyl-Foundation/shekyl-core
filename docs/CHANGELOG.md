@@ -4,6 +4,24 @@
 
 ### Added
 
+- **docs: CT-4 Round 1 closed — membership-path assembly + reference-block
+  horizon (`shekyl-curve-tree`, 2026-06-13).** Added
+  [`CT4_ROUND1_CLOSEOUT.md`](design/CT4_ROUND1_CLOSEOUT.md) recording the two
+  landed CT-4 surfaces: (1) `assemble_path → AssembledPath` (gated on the §3.3
+  root match, FCMP++ prover `Path` layout pinned at source, C3 `c1+c2+1 ==
+  depth` self-checked) and (2) `reference.rs` validity-horizon arithmetic
+  (`select_reference_height`, `proof_submittable`/`proof_expired`,
+  `should_reanchor`; `REF_ANCHOR_AGE`/`PROOF_VALIDITY_HORIZON`/`REBUILD_AT`).
+  Both landed ahead of their decomposition slot and were hardened by the
+  CT-3↔CT-4 audit (`ReferenceBlock` now carries `block_hash`). Flipped
+  `CURVE_TREE_CLIENT.md` §9 CT-4 row to **Round 1 closed**. Test gates:
+  `assemble_kat` (independent root recompute + `OutputNotDrained`/`RootMismatch`
+  rejection), `reference::tests` (selection/window/aging/re-anchor/reorg), and
+  the archival-retention cross-checks. Deferred-with-reversion-clause: F5
+  store-backed/pruned assembly (rides prune-policy) and the C++ `hash_to_p3`
+  path-RPC FFI migration (rides the daemon path-assembler). Docs-only; no code
+  or consensus surface touched.
+
 - **docs: CT-3 Round 1 closed — CT-3d closeout (`shekyl-curve-tree`,
   2026-06-13).** Added [`CT3_ROUND1_CLOSEOUT.md`](design/CT3_ROUND1_CLOSEOUT.md)
   recording the landed persistent-client lifecycle (CT-3a store schema /
