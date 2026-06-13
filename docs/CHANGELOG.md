@@ -182,8 +182,15 @@
   `bond_v4_claimed_set_survives_reorg_revert`). The
   `claimed_epochs_check_and_set` C++ FFI stays deferred to its first consumer
   (the emission write path, PR-E3) per spec §6.3 and `15-deletion-and-debt.mdc`.
-  This is a latent-bug precursor the emission vin (PR-E3) depends on; no emission
-  behavior changes. Docs: `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
+  Also closed a sibling encode/decode asymmetry in the same write path:
+  `ArchivalBondValue::encode()` serialized any `holdings_kind` byte while
+  `decode()` rejects unknown values, so a writer could persist a record no read
+  path can decode. `encode()` now rejects unknown `holdings_kind` alongside its
+  existing at-rest invariants (bounds, claimed-epoch well-formedness), which
+  protects every writer through the single serialization funnel; regression test
+  `bond_encode_rejects_unknown_holdings_kind`. This is a latent-bug precursor the
+  emission vin (PR-E3) depends on; no emission behavior changes. Docs:
+  `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
 
 ### Changed
 

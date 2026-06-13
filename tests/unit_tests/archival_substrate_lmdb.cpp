@@ -287,6 +287,21 @@ TEST(archival_substrate_lmdb, bond_v4_claimed_invariants_enforced_at_encode)
   EXPECT_THROW(wide_span.encode(), std::runtime_error);
 }
 
+// encode() must reject any holdings_kind decode() would reject, so a write
+// cannot persist a record no read path can decode (encode/decode symmetry).
+TEST(archival_substrate_lmdb, bond_encode_rejects_unknown_holdings_kind)
+{
+  shekyl::db::ArchivalBondValue unknown_kind = baseline_bond();
+  unknown_kind.holdings_kind = 2; // neither ShardSetCompact (0) nor CompleteTree (1)
+  EXPECT_THROW(unknown_kind.encode(), std::runtime_error);
+
+  // The full-bond writer funnels through encode(), so it inherits the rejection
+  // and cannot persist an undecodable record.
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  EXPECT_THROW(db.put_archival_bond_value(make_hash(0x74), unknown_kind), std::runtime_error);
+}
+
 TEST(archival_substrate_lmdb, bond_v4_reject_truncated_claimed_tail)
 {
   shekyl::db::ArchivalBondValue bond = baseline_bond();
