@@ -286,10 +286,12 @@ fn membership_only_multi_input_roundtrip() {
     assert_eq!(FcmpMembershipOnly::proof_size(2, 1), buf.len());
 }
 
-/// §10.1 sizing gauge: the membership-only proof must stay within the
-/// REWARD_EMISSION_LEG.md §10.1 reversion trigger (3x the 1-input FcmpPlusPlus
-/// estimate it was provisionally sized at) — and, proving strictly less, must in fact
-/// be strictly smaller.
+/// §10.1 sizing gauge. The caveat provisionally sized `FcmpMembershipOnly` at the
+/// 1-input `FcmpPlusPlus` order with a reversion trigger at 3x that estimate. The built
+/// proof discharges that trigger by measuring strictly *smaller* than the full proof at
+/// every configuration, so the load-bearing invariant is the exact per-input saving —
+/// pinning it guards against a future change silently reintroducing the key-image
+/// machinery the membership-only leg drops.
 #[test]
 fn membership_only_proof_size() {
     for (inputs, layers) in [(1, 1), (2, 1), (1, 8), (4, 8)] {
@@ -297,8 +299,8 @@ fn membership_only_proof_size() {
         let full = FcmpPlusPlus::proof_size(inputs, layers);
         eprintln!("inputs={inputs} layers={layers}: membership-only {mo} B, full {full} B");
         assert!(mo < full);
-        assert!(mo <= 3 * full);
-        // The SAL-replacement saves exactly 288 B per input (96 B vs 384 B).
+        // The SAL-replacement saves exactly 288 B per input (96 B vs 384 B), which is
+        // well under the §10.1 3x reversion trigger.
         assert_eq!(full - mo, inputs * 288);
     }
 }

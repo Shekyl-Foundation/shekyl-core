@@ -256,8 +256,11 @@ impl FcmpPlusPlus {
     ///
     /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
     ///
-    /// If this function returns an error, the BatchVerifiers MUST be considered corrupted and
-    /// discarded.
+    /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
+    /// input-validation errors (`InvalidKeyImageQuantity`, `InvalidPqcPkHashQuantity`) are returned
+    /// before any statement is queued, so the verifiers are in fact untouched in those cases; an
+    /// error raised once queuing has begun leaves them partially populated. Discarding on any error
+    /// is the safe, uniform contract.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
@@ -384,8 +387,11 @@ impl FcmpMembershipOnly {
     /// This only queues the proofs for batch verification. The BatchVerifiers MUST
     /// also be verified.
     ///
-    /// If this function returns an error, the BatchVerifiers MUST be considered
-    /// corrupted and discarded.
+    /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
+    /// input-validation errors (`EmptyInputs`, `InvalidPqcPkHashQuantity`) are returned
+    /// before any statement is queued, so the verifiers are in fact untouched in those
+    /// cases; an error raised once queuing has begun leaves them partially populated.
+    /// Discarding on any error is the safe, uniform contract.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
