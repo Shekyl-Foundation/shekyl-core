@@ -43,6 +43,21 @@
   the float↔integer reconciliation tests remain as drift guards. Closes the M-1
   follow-on "stop treating float as a co-authoritative validation substrate."
 
+- **docs: emission-vin plan readiness review — M-2 promoted to supply keystone
+  (`REWARD_EMISSION_VIN_PLAN.md`, 2026-06-13).** Round-1.5 readiness pass:
+  substrate frozen, **PR-E0 ready to branch now** (zero open deps), PR-E1/E2/E3
+  gated on a named §8 *gating cluster*. **M-2** (numerator as-of-E sourcing) is
+  promoted from a Q10 parenthetical to its own pinned disposition as the
+  **supply-conservation keystone and a PR-E3 hard blocker**: the accumulator
+  schema was pulled and confirmed at source (`ARCHIVAL_CONSENSUS_STATE.md` §3.5
+  persists aggregate `Σwork(E)` + per-shard `R_market(s,E)`, *not* per-P
+  `capped_P(E)`), so the vin reconstructs the numerator and the supply property
+  rests on as-of-E frozen inputs; three are pinned, the fourth (`held(P,E)`) is
+  Q10/F-E6, so **M-2 closes with Q10** and is resolved jointly with Q7 (the
+  snapshot ABI = M-2's frozen-input set). Q9/F-E3 (intra-block dedup) flagged as
+  the second hard blocker; Q1 gates PR-E2's wire; gating-cluster table + round-2
+  leverage order added to §8.
+
 ### Added
 
 - **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,

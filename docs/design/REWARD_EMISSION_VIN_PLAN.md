@@ -12,6 +12,15 @@ cross-track / sourcing tightenings) is recorded in §R1 (R1.A binding message,
 R1.B remainder, R1.C M-findings); rounds 2–N and the per-sub-PR pre-flight
 passes follow before any implementation cut.
 
+**Readiness disposition (2026-06-13 review).** The arithmetic/economic substrate
+is **frozen** (M-1 both halves, R1.B remainder, the pure-integer contract gate,
+the §3.5 accumulator schema confirmed at source). **PR-E0 is ready to branch
+now** — it is an independent latent-bug precursor with zero open dependencies.
+**PR-E1/E2/E3 are gated** on the §8 *gating cluster*, whose two hard blockers are
+**M-2** (numerator as-of-E sourcing — supply keystone, §R1.C; closes with Q10)
+and **Q9/F-E3** (intra-block dedup atomicity). This is a go for the precursor and
+a not-yet for the acceptance flip — not a monolithic yes.
+
 **Specification of record:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)
 (§5 envelope, §6 bond record, §7 verification, §12 checklist). This document
 is the *implementation plan* downstream of that spec; it does not amend
@@ -354,8 +363,11 @@ R1.B's floor + burn-the-dust + numerator-first recommendation is the crate's
 
 Second-pass review against `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` and
 `ARCHIVAL_CONSENSUS_STATE.md`. M-1 is load-bearing (a cross-document genesis
-dependency neither doc currently connects); M-2/M-3 are precision tightenings
-folding into PR-E3 step 4.
+dependency neither doc currently connects) and is now closed both halves;
+**M-2 is the supply-conservation keystone and a PR-E3 hard blocker** (numerator
+as-of-E sourcing — it does *not* fold quietly into step 4; it gates the
+acceptance flip and closes only with Q10, see below and §8); M-3 is the
+single-source completeness extension to channel 1, a PR-E3 construction mandate.
 
 **M-1 has two halves, both addressed 2026-06-13 — half (a)
 economics-preservation: PASS (PR 1.5), integer `Curve` frozen at milli; half (b)
@@ -449,23 +461,43 @@ construction mandate**, not a closeable item now — it is pinned in R1.B/M-3 an
 restated in §9. Half (b) is therefore **closed**, with the wallet-side import the
 single carry into PR-E3.
 
-**M-2 (supply conservation — resolved: sourcing-discipline pin, not a schema
-gap).** The credited numerator `capped_P(E)` must be P's **exact** term in the
-finalized denominator `Σwork(E)`, or a P over-claims a live-recomputed fat
-numerator against a stale finalized denominator and breaks R1.B's `Σ minted ≤
-budget`. **Traced against `ARCHIVAL_CONSENSUS_STATE.md`:** the §3.5 accumulator
-stores **only the aggregate** `Σwork(E)`; per-P `capped_P(E)` keyed by P is
-named only as a *non-consensus-visible* incremental-maintenance option, not a
-stored record. **But the schema supports as-of-E reconstruction of every
-numerator input** — `serve_credit_bit(P,s,E)` is E-indexed (§3.1);
-`R_market(s,E)` is **finalized-and-immutable at E-close** (§4 invariant 2),
-derivable from the E-indexed ledger (§3.3); `good_through(P,E)` is derivable at
-close from the bond event log (§3.4 / invariant 4); shard `age` as-of-E is a
-deterministic function of `E` and the shard freeze epoch (§3.2). So M-2 is
-**not** a schema gap — it is a **sourcing-discipline requirement on PR-E3 step
-4**: recompute `work_P(E)` from the **same frozen as-of-E snapshot that
-produced `Σwork(E)`**, never live `R_market`/holdings. Pinned to step 4; the
-related `holdings`-snapshot question is §8 item 10 (F-E6).
+**M-2 (supply-conservation keystone — PR-E3 hard blocker; sourcing pin that
+*closes with Q10*).** This is the supply-conservation keystone and a **hard
+blocker for PR-E3**, not a discipline note: the credited numerator
+`capped_P(E)` must be P's **exact** term in the finalized denominator
+`Σwork(E)`, or a P over-claims a live-recomputed fat numerator against a stale
+finalized denominator (`R_market(s)` has drifted up since close as more
+replication landed) and breaks R1.B's `Σ minted ≤ budget` — a silent over-mint.
+
+**Schema confirmed at source (`ARCHIVAL_CONSENSUS_STATE.md`, pulled 2026-06-13).**
+The §3.5 accumulator persists **only the aggregate** `Σwork(E)` plus per-shard
+`R_market(s,E)` and `serve_credit_bit(P,s,E)` (§5 prune table; §3.3); per-P
+`capped_P(E)` keyed by P is named only as a *non-consensus-visible*
+incremental-maintenance option (§3.5), **not** a stored record. **The vin
+therefore reconstructs the numerator**, so the entire supply property rests on
+every as-of-E input being frozen-at-E and queryable-as-of-E.
+
+**The operative pin (numerator side).** The step-4 `work_P(E)` recompute uses
+the **identical as-of-E frozen inputs the denominator was finalized from** — so
+numerator = P's term in the finalized `Σwork(E)` *by construction*, and no input
+reads live state. Three of the four inputs are already pinned frozen-immutable:
+`R_market(s,E)` is single-valued + finalized-and-immutable at E-close (§4
+invariants 1–2, derived from the E-indexed ledger §3.3); `serve_credit_bit(P,s,E)`
+is E-indexed (§3.1); `good_through(P,E)` is derivable at close (§3.4 / invariant
+4) and shard `age` as-of-E is a deterministic function of `E` and the freeze
+epoch (§3.2). **The fourth input, `held(P,E)`, is exactly Q10/F-E6 (§8 item 10),
+still open** — so M-2 is *not* fully resolved: it **cannot close until Q10
+closes** (`held(P,E)` pinned frozen-at-E and queryable-as-of-E). It is **not** a
+schema gap (the schema supports the reconstruction), but it **is** a load-bearing
+sourcing pin gated on Q10, not a closed item.
+
+**Resolve M-2 and Q7 jointly — same question, two sides.** The Q7 FFI snapshot
+*is* the frozen as-of-E state the numerator must source from. Snapshot-by-value
+keeps `shekyl_emission_vin_verify` a pure function of `(P, E, finalized row)` —
+exactly what this pin wants and what makes the verify auditable in isolation — so
+the snapshot struct's field set is precisely M-2's frozen-input set. The two are
+decided together in the round (arithmetic side = M-2, ABI side = Q7), not
+separately.
 
 **M-3 (single-source completeness — extend the mandate to channel 1).** R1.B's
 canonical-crate mandate named the Form-C division + `Curve` (channels 2/3), but
@@ -726,10 +758,36 @@ discipline note, or named forward-action (A5).
 
 ## 8. Open design questions (for the rounds)
 
-1. **ML-DSA vin auth shape (F-E4)** — *proposal pinned in R1.A* for the round
-   to attack (binding message, two auths, cSHAKE family). Remaining: is Auth-P
-   necessary or does the leaf→`P_pubkey` derivation already pin P? ML-DSA-65-only
-   confirmed.
+**Gating cluster (round-2 leverage order).** The substrate is frozen (§R1.C
+M-1, R1.B, the pure-integer gate); **PR-E0 has zero open dependencies and is
+ready to branch now** (§3 PR-E0 — a latent field-wipe precursor independent of
+every open economic question). **PR-E1/E2/E3 are gated** on the cluster below.
+Two are silent over-mint / double-mint blockers that PR-E3 **must not branch
+without** — exactly the class the pre-implementation freeze exists to catch
+before code makes them expensive:
+
+| Item | Gates | Severity | Status |
+|------|-------|----------|--------|
+| **M-2** numerator as-of-E sourcing (§R1.C) | **PR-E3** | **hard blocker** (silent over-mint) | open; **closes with Q10**; resolve jointly with Q7 |
+| **Q9 / F-E3** intra-block `(P,E)` dedup atomicity | **PR-E3** | **hard blocker** (double-mint) | open |
+| **Q7** FFI snapshot vs callbacks | PR-E1/E3 | sequencing | open; resolve jointly with M-2 |
+| **Q10 / F-E6** `held(P,E)` frozen-at-E | PR-E3 (and M-2) | sequencing | open; M-2 depends on it |
+| **Q1 / F-E4** auth count | **PR-E2** (wire freeze) | sequencing | message pinned (R1.A); count open |
+| **Q3 / Q11 (F-E7) / Q12 (F-E8)** | PR-E3 | acceptance-path policy | round-closable; not deep |
+
+Round-2 order of leverage: (1) pull `ARCHIVAL_CONSENSUS_STATE.md` and resolve
+**M-2 + Q7 jointly** (numerator sourcing / snapshot ABI / accumulator schema —
+the supply keystone; schema pulled and confirmed in §R1.C M-2); (2) pin **Q9**'s
+dedup atomicity model; (3) **Q1** auth count (unblocks PR-E2's wire); (4) the
+policy trio **Q3 / Q11 / Q12**. M-2 and Q9 are the two PR-E3 must not branch
+without.
+
+1. **ML-DSA vin auth shape (F-E4) — gates PR-E2 (wire freeze), not just E3.**
+   *Proposal pinned in R1.A* for the round to attack (binding message, two auths,
+   cSHAKE family). Remaining: is Auth-P necessary or does the leaf→`P_pubkey`
+   derivation already pin P? The binding *message* is pinned (R1.A) but the auth
+   *count* is not, and the auth bytes are in the vin wire — so **PR-E2's canonical
+   encoding cannot freeze until this is answered**. ML-DSA-65-only confirmed.
 2. **PR-E4 sequencing** — delete `stake_claim` before or after PR-E3.
 3. **Input distinctness** — does the emission vin require backing-input
    distinctness (membership proof does not dedup, §8.2)? Enforce at vin layer?
@@ -741,12 +799,15 @@ discipline note, or named forward-action (A5).
    vs `holdings` descriptor (interface trails `ARCHIVAL_CONSENSUS_STATE.md`).
 6. **`P_canonical_id`** derivation site (cSHAKE, spec §6.1) — Rust (default
    per §0.1, joins the crypto on the Rust side).
-7. **FFI marshaling boundary (§0.1, PR-E3)** — does `shekyl_emission_vin_verify`
-   take a consensus-state *snapshot struct* (bond record, archival work state,
-   tree root, height/epoch, economics params) by value, or *DB-read callbacks*
-   into C++ LMDB? Snapshot is simpler to audit and keeps the verify pure;
-   callbacks avoid copying large work state. Decide in the rounds; affects the
-   `shekyl_archival_*`-family ABI shape.
+7. **FFI marshaling boundary (§0.1, PR-E3) — gates PR-E1/E3; resolve with M-2.**
+   Does `shekyl_emission_vin_verify` take a consensus-state *snapshot struct*
+   (bond record, archival work state, tree root, height/epoch, economics params)
+   by value, or *DB-read callbacks* into C++ LMDB? Snapshot is simpler to audit
+   and keeps the verify pure; callbacks avoid copying large work state. **Decide
+   jointly with M-2 (§R1.C):** the snapshot struct *is* M-2's frozen as-of-E
+   numerator-input set, so snapshot-by-value is the shape that makes the verify a
+   pure function of `(P, E, finalized row)`. Affects the `shekyl_archival_*`-family
+   ABI shape; sets the FFI seam built in PR-E1.
 
 ### Round-1 open items (must close before PR-E3 code; F-E2/F-E3 consensus-load-bearing)
 
@@ -755,15 +816,20 @@ discipline note, or named forward-action (A5).
    crate's shipped behavior (`reward_share_floor` = floor + "dust stays
    unminted", `mul_div_floor` = u128 numerator-first). Only remaining gate is
    PR 1.5 economic-equivalence for the integer `Curve` (M-1).
-9. **Intra-block `(P,E)` uniqueness (F-E3)** — pick check/set fusion within the
-   connecting tx scope vs an explicit block-assembly uniqueness pass. Consensus
-   double-mint hole until pinned.
-10. **Holdings snapshot semantics (F-E6)** — §6.4.1 says holdings "compatible,"
-    §5.3 "must match," but work is recomputed over per-epoch `held(P,E)` (§4.1),
-    which may differ from *current* holdings if a gate-4 flow ran between epochs.
-    Pin which snapshot the vin `holdings` field must match and how a mid-batch
-    holdings change is handled. (Sibling to M-2's as-of-E numerator-sourcing pin
-    — `held(P,E)` is one of the inputs that must come from the frozen snapshot.)
+9. **Intra-block `(P,E)` uniqueness (F-E3) — PR-E3 hard blocker.** Pick
+   check/set fusion within the connecting tx scope vs an explicit block-assembly
+   uniqueness pass. **Consensus double-mint hole until pinned** — one of the two
+   silent-over-mint blockers (with M-2) that PR-E3 must not branch without; the
+   acceptance path cannot be written around an unpinned dedup atomicity model.
+10. **Holdings snapshot semantics (F-E6) — gates M-2 closure.** §6.4.1 says
+    holdings "compatible," §5.3 "must match," but work is recomputed over
+    per-epoch `held(P,E)` (§4.1), which may differ from *current* holdings if a
+    gate-4 flow ran between epochs. Pin `held(P,E)` **frozen-at-E and
+    queryable-as-of-E**, which snapshot the vin `holdings` field must match, and
+    how a mid-batch holdings change is handled. **Load-bearing for M-2:**
+    `held(P,E)` is the one M-2 numerator input not yet pinned frozen-immutable
+    (the other three are — §R1.C M-2), so **M-2 cannot close until this closes**,
+    and it is decided jointly with Q7 (the snapshot ABI that carries `held(P,E)`).
 11. **Same-tx backing + fee double-use (F-E7)** — §5.2 permits key-imaged fee
     `txin_to_key` alongside keyless membership-only backing; the threat model
     names mixing to launder a key-image spend. Decide whether one output may be
