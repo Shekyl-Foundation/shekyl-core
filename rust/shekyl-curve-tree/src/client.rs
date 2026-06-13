@@ -35,9 +35,11 @@
 //!
 //! Global output indices and leaf entries are *derived* from the replayed
 //! block sequence, never from a persisted counter (derive-don't-accumulate,
-//! `CT2_DRAIN_ORDER.md` §7.1). A reorg is therefore handled by rebuilding
-//! from the post-reorg block list ([`CurveTreeClient::from_blocks`]) — there
-//! is no separate reorg machinery in this client.
+//! `CT2_DRAIN_ORDER.md` §7.1). The production persistent reorg path uses
+//! [`CurveTreeClient::rollback_to_fork`] to roll the store and in-memory
+//! state back to the shared fork point, then resumes forward ingest from
+//! `fork_height + 1`; [`CurveTreeClient::from_blocks`] remains the
+//! ephemeral/KAT replay path.
 //!
 //! ## Not here
 //!
@@ -194,6 +196,14 @@ pub struct CurveTreeClient {
     ingested_tip_height: Option<BlockHeight>,
 }
 
+/// In-memory state reconstructed from a [`LeafStore`] snapshot.
+struct RebuiltState {
+    entries: Vec<LeafEntry>,
+    next_gindex: u64,
+    entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>>,
+    ingested_tip_height: Option<BlockHeight>,
+}
+
 impl Default for CurveTreeClient {
     fn default() -> Self {
         Self::new()
@@ -291,6 +301,22 @@ impl CurveTreeClient {
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
     fn resume(store: LeafStore) -> Result<Self, ClientError> {
+        let rebuilt = Self::rebuild_from_store(&store)?;
+
+        Ok(Self {
+            store,
+            entries: rebuilt.entries,
+            next_gindex: rebuilt.next_gindex,
+            drained_through_counts: Vec::new(),
+            entries_by_maturity: rebuilt.entries_by_maturity,
+            ingested_tip_height: rebuilt.ingested_tip_height,
+        })
+    }
+
+    /// Rebuild the in-memory state from the store's drained and pending
+    /// tables. Callers assign the returned state only after every check
+    /// succeeds so stale memory is never partially overwritten on `Err`.
+    fn rebuild_from_store(store: &LeafStore) -> Result<RebuiltState, ClientError> {
         let stored = store.leaf_count().map_err(ClientError::from)?;
         let drained = store.read_drained_entries().map_err(ClientError::from)?;
         let readable = u64::try_from(drained.len()).expect("drained row count fits u64");
@@ -338,11 +364,9 @@ impl CurveTreeClient {
             Some(tip)
         };
 
-        Ok(Self {
-            store,
+        Ok(RebuiltState {
             entries,
             next_gindex,
-            drained_through_counts: Vec::new(),
             entries_by_maturity,
             ingested_tip_height,
         })
@@ -358,6 +382,35 @@ impl CurveTreeClient {
             client.ingest_block(*block)?;
         }
         Ok(client)
+    }
+
+    /// Roll the persistent client back to `fork_height` (inclusive).
+    ///
+    /// The store-level operation is authoritative and single-transactional:
+    /// it migrates drained-but-now-pending rows back into the pending table,
+    /// drops orphaned rows, and resets the persisted tip to `fork_height`.
+    /// In-memory state is rebuilt from that store snapshot and assigned only
+    /// after rebuild succeeds, so no partial memory overwrite occurs on
+    /// error.
+    ///
+    /// **Poison contract for callers (CT-5).** If this method returns `Err`
+    /// after the store rollback committed but before memory is rebuilt, the
+    /// store is rolled back and authoritative while this client object still
+    /// holds pre-rollback memory. The caller must drop the client and re-open
+    /// it from the store before continuing; do not keep using the stale
+    /// object.
+    pub fn rollback_to_fork(&mut self, fork_height: BlockHeight) -> Result<(), ClientError> {
+        self.store
+            .rollback_to_fork(fork_height)
+            .map_err(ClientError::from)?;
+        self.store.verify_frozen_tail().map_err(ClientError::from)?;
+        let rebuilt = Self::rebuild_from_store(&self.store)?;
+        self.entries = rebuilt.entries;
+        self.next_gindex = rebuilt.next_gindex;
+        self.drained_through_counts = Vec::new();
+        self.entries_by_maturity = rebuilt.entries_by_maturity;
+        self.ingested_tip_height = rebuilt.ingested_tip_height;
+        Ok(())
     }
 
     /// Ingest one block, resolving `h_pqc` per output, threading the global
@@ -643,6 +696,14 @@ mod tests {
         }
     }
 
+    fn staked_raw(lock_blocks: u64) -> RawOutput {
+        RawOutput {
+            output_key: ED25519_BASEPOINT,
+            commitment: Some(ED25519_BASEPOINT),
+            target: TargetKind::StakedKey { lock_blocks },
+        }
+    }
+
     /// One coinbase tx carrying a per-output `0x07` hash blob of `n` × 32
     /// bytes (one well-formed hash per output, as a V3 chain always emits).
     fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
@@ -666,6 +727,29 @@ mod tests {
                     txs: &txs,
                 })
                 .unwrap();
+        }
+    }
+
+    fn ingest_outputs_at(client: &mut CurveTreeClient, height: u64, outputs: &[RawOutput]) {
+        let blob = vec![0x07u8; outputs.len() * 32];
+        let txs = coinbase_block(outputs, &blob);
+        client
+            .ingest_block(BlockLeaves {
+                height: BlockHeight(height),
+                txs: &txs,
+            })
+            .unwrap();
+    }
+
+    fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
+        for height in 0..=tip {
+            if height == 1 {
+                let outputs = [coinbase_raw(), staked_raw(150_000)];
+                ingest_outputs_at(client, height, &outputs);
+            } else {
+                let outputs = [coinbase_raw()];
+                ingest_outputs_at(client, height, &outputs);
+            }
         }
     }
 
@@ -1065,6 +1149,198 @@ mod tests {
                 "height {h}"
             );
         }
+    }
+
+    #[test]
+    fn rollback_to_fork_rebuilds_memory_and_resyncs() {
+        let mut rolled = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut rolled, 0, 70);
+        // Populate the cache before rollback; rollback must clear it rather
+        // than preserving stale cutoff answers from the orphaned suffix.
+        assert_eq!(rolled.drained_leaf_count(BlockHeight(70)), 10);
+        assert!(!rolled.drained_through_counts.is_empty());
+
+        rolled.rollback_to_fork(BlockHeight(65)).unwrap();
+        assert_eq!(rolled.ingested_tip_height, Some(BlockHeight(65)));
+        assert!(rolled.drained_through_counts.is_empty());
+        assert_eq!(rolled.next_gindex, 66);
+        assert_eq!(
+            rolled.store.sync_tip_height().unwrap(),
+            BlockHeight(65),
+            "store tip is the rollback source of truth"
+        );
+
+        ingest_coinbase_blocks(&mut rolled, 66, 70);
+
+        let mut fresh = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut fresh, 0, 70);
+        assert_eq!(rolled.entries, fresh.entries);
+        assert_eq!(rolled.next_gindex, fresh.next_gindex);
+        assert_eq!(
+            rolled.store.read_pending_candidates().unwrap(),
+            fresh.store.read_pending_candidates().unwrap()
+        );
+        assert_eq!(
+            rolled.store.leaf_count().unwrap(),
+            fresh.store.leaf_count().unwrap()
+        );
+        for h in 0..=70u64 {
+            assert_eq!(
+                rolled.root_at(BlockHeight(h)).unwrap(),
+                fresh.root_at(BlockHeight(h)).unwrap(),
+                "height {h}"
+            );
+        }
+    }
+
+    #[test]
+    fn rollback_to_fork_at_tip_is_client_noop() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 10);
+        let entries = client.entries.clone();
+        let next_gindex = client.next_gindex;
+        let pending = client.store.read_pending_candidates().unwrap();
+
+        client.rollback_to_fork(BlockHeight(10)).unwrap();
+        assert_eq!(client.entries, entries);
+        assert_eq!(client.next_gindex, next_gindex);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(10)));
+        assert_eq!(client.store.read_pending_candidates().unwrap(), pending);
+        assert!(client.drained_through_counts.is_empty());
+    }
+
+    #[test]
+    fn rollback_to_fork_above_tip_is_invalid_and_leaves_memory() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 5);
+        let entries = client.entries.clone();
+        let next_gindex = client.next_gindex;
+
+        let err = client.rollback_to_fork(BlockHeight(6)).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Store(StoreError::InvalidRollback {
+                fork_height: 6,
+                sync_tip: 5,
+            })
+        ));
+        assert_eq!(client.entries, entries);
+        assert_eq!(client.next_gindex, next_gindex);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(5)));
+        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(5));
+    }
+
+    #[test]
+    fn rollback_to_genesis_keeps_genesis_and_accepts_height_one() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 10);
+
+        client.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(client.entries.len(), 1);
+        assert_eq!(client.entries[0].gindex, Gindex(0));
+        assert_eq!(client.next_gindex, 1);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(0)));
+        assert_eq!(
+            client.store.read_pending_candidates().unwrap(),
+            vec![client.entries[0]]
+        );
+
+        ingest_coinbase_blocks(&mut client, 1, 1);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(1)));
+        assert_eq!(client.entries.len(), 2);
+        assert_eq!(client.next_gindex, 2);
+    }
+
+    #[test]
+    fn from_blocks_pending_matches_explicit_replay() {
+        // CT-3c's fresh-build oracle is meaningful only because
+        // from_blocks replays the same per-block delta path.
+        let out0 = [coinbase_raw()];
+        let blob0 = [0x07u8; 32];
+        let txs0 = coinbase_block(&out0, &blob0);
+        let out1 = [coinbase_raw(), staked_raw(1_000)];
+        let blob1 = [0x07u8; 64];
+        let txs1 = coinbase_block(&out1, &blob1);
+        let blocks = [
+            BlockLeaves {
+                height: BlockHeight(0),
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: BlockHeight(1),
+                txs: &txs1,
+            },
+        ];
+        let from_blocks = CurveTreeClient::from_blocks(&blocks).unwrap();
+        let mut explicit = CurveTreeClient::new();
+        explicit.ingest_block(blocks[0]).unwrap();
+        explicit.ingest_block(blocks[1]).unwrap();
+
+        assert_eq!(
+            from_blocks.store.read_pending_candidates().unwrap(),
+            explicit.store.read_pending_candidates().unwrap()
+        );
+    }
+
+    #[test]
+    fn rollback_restores_pending_rows_for_redraining_and_long_maturity() {
+        // Primary R1-Q3 gate: a class-(b) leaf created on the shared prefix
+        // (height 5 coinbase, maturity 65) drains only on the orphaned
+        // suffix block 66. Rollback to fork 65 must migrate it back to
+        // pending so the new branch's block 66 drains the same row. The
+        // height-1 staked output pins the never-draining long-maturity half
+        // of the invariant: pending equality catches it even though no
+        // practical root window can.
+        let mut orphaned = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut orphaned, 66);
+        assert!(
+            orphaned
+                .store
+                .read_drained_entries()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.maturity == BlockHeight(65)),
+            "orphaned suffix must drain the class-(b) witness"
+        );
+
+        orphaned.rollback_to_fork(BlockHeight(65)).unwrap();
+
+        let mut fresh_prefix = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut fresh_prefix, 65);
+        assert_eq!(
+            orphaned.store.read_pending_candidates().unwrap(),
+            fresh_prefix.store.read_pending_candidates().unwrap(),
+            "post-rollback pending set must equal fresh shared-prefix replay"
+        );
+        assert!(
+            orphaned
+                .store
+                .read_pending_candidates()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.maturity == BlockHeight(150_001)),
+            "long-maturity staked row stays pending and directly compared"
+        );
+
+        let output = [coinbase_raw()];
+        ingest_outputs_at(&mut orphaned, 66, &output);
+        let mut fresh_redrain = CurveTreeClient::new();
+        ingest_class_b_fixture_prefix(&mut fresh_redrain, 66);
+        assert_eq!(
+            orphaned.store.read_pending_candidates().unwrap(),
+            fresh_redrain.store.read_pending_candidates().unwrap(),
+            "pending set still matches after the class-(b) row re-drains"
+        );
+        assert_eq!(
+            orphaned.store.read_drained_entries().unwrap(),
+            fresh_redrain.store.read_drained_entries().unwrap(),
+            "drain order corroborates the pending-set proof"
+        );
+        assert_eq!(
+            orphaned.root_at(BlockHeight(66)).unwrap(),
+            fresh_redrain.root_at(BlockHeight(66)).unwrap(),
+            "root equality corroborates after re-drain"
+        );
     }
 
     #[test]

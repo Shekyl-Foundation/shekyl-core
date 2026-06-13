@@ -22,74 +22,6 @@ use crate::{Input, Output};
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;
 
-/// Membership-only spend authority (the `R_O` leg of SAL, no key image).
-pub mod membership_only;
-
-/// Build a fixed-width 64-byte domain-separation tag from a human-readable label.
-///
-/// Both SAL-family challenge transcripts (full and membership-only) open with one of
-/// these tags as their first field. The field is 64 bytes — the membership-only label
-/// is 36 bytes and would overflow a 32-byte field — and zero-padded so the challenge
-/// preimage stays length-regular: every field in both preimages is fixed-width, so the
-/// tag occupies an invariant position and cross-type preimage collision requires a
-/// Blake2b collision across differing first blocks. The tag is preimage-only, never on
-/// the wire. See `docs/design/FCMP_MEMBERSHIP_ONLY.md` §4.
-pub(crate) const fn sal_dst(label: &[u8]) -> [u8; 64] {
-    assert!(
-        label.len() <= 64,
-        "SAL DST label exceeds the 64-byte tag field"
-    );
-    let mut tag = [0u8; 64];
-    let mut i = 0;
-    while i < label.len() {
-        tag[i] = label[i];
-        i += 1;
-    }
-    tag
-}
-
-/// Whether every 64-byte tag in `tags` is pairwise distinct.
-///
-/// Backs the `const` distinctness assertions for the domain-separation and
-/// nonce-synthesis tags. A manual byte loop is used because array `PartialEq` is not
-/// `const` under the crate's MSRV; consolidating it here keeps that custom logic in one
-/// audited place rather than repeated per assertion site.
-pub(crate) const fn tags_pairwise_distinct(tags: &[[u8; 64]]) -> bool {
-    let mut i = 0;
-    while i < tags.len() {
-        let mut j = i + 1;
-        while j < tags.len() {
-            let mut identical = true;
-            let mut k = 0;
-            while k < 64 {
-                if tags[i][k] != tags[j][k] {
-                    identical = false;
-                }
-                k += 1;
-            }
-            if identical {
-                return false;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// Domain-separation tag for the full SAL (key-image-carrying) challenge transcript.
-pub(crate) const SAL_FULL_DST: [u8; 64] = sal_dst(b"Shekyl FCMP++ SAL full v1");
-
-/// Domain-separation tag for the membership-only (no key image) challenge transcript.
-pub(crate) const SAL_MEMBERSHIP_ONLY_DST: [u8; 64] =
-    sal_dst(b"Shekyl FCMP++ SAL membership-only v1");
-
-// The two proof types must never share a challenge transcript prefix.
-const _: () = assert!(
-    tags_pairwise_distinct(&[SAL_FULL_DST, SAL_MEMBERSHIP_ONLY_DST]),
-    "SAL domain-separation tags must be distinct"
-);
-
 /// A re-randomized output.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RerandomizedOutput {
@@ -129,28 +61,6 @@ impl RerandomizedOutput {
         let r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
         let r_r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
 
-        Self::with_blinds(output, r_o, r_i, r_r_i, r_c)
-    }
-
-    /// Re-randomize an output with explicit, caller-derived blinds.
-    ///
-    /// Used by the membership-only prove path, whose blinds are synthesized
-    /// RFC-6979-style rather than drawn raw from an RNG
-    /// (`membership_only::membership_only_rerandomize`).
-    ///
-    /// This constructor performs no validation of the blinds. A zero blind yields a
-    /// rerandomized component equal to its base, which is a direct linkability defect
-    /// for the membership-only flow. Any caller deriving blinds (rather than drawing
-    /// them uniformly, where degeneracy is a ~2^-252 event) must run
-    /// [`membership_only::check_nondegenerate`] on the result, as
-    /// `membership_only_rerandomize` does.
-    pub(crate) fn with_blinds(
-        output: Output,
-        r_o: <Ed25519 as Ciphersuite>::F,
-        r_i: <Ed25519 as Ciphersuite>::F,
-        r_r_i: <Ed25519 as Ciphersuite>::F,
-        r_c: <Ed25519 as Ciphersuite>::F,
-    ) -> RerandomizedOutput {
         let O_tilde = output.O() + (EdwardsPoint(*T) * r_o);
         let I_tilde = output.I() + (EdwardsPoint(*FCMP_PLUS_PLUS_U) * r_i);
         let R = (EdwardsPoint(*FCMP_PLUS_PLUS_V) * r_i) + (EdwardsPoint(*T) * r_r_i);
@@ -282,14 +192,6 @@ pub struct SpendAuthAndLinkability {
 }
 
 impl SpendAuthAndLinkability {
-    /// Byte length of a serialized SAL leg: 6 points (`P`, `A`, `B`, `R_O`, `R_P`,
-    /// `R_L`) plus 6 scalars (`s_alpha`, `s_beta`, `s_delta`, `s_y`, `s_z`, `s_r_p`).
-    ///
-    /// Single source of truth for the SAL contribution to [`crate::FcmpPlusPlus::proof_size`].
-    /// Asserted against the actual [`SpendAuthAndLinkability::write`] footprint in the
-    /// crate tests.
-    pub const WIRE_SIZE: usize = 12 * crate::ED25519_REPR_BYTES;
-
     #[allow(clippy::too_many_arguments)]
     fn challenge(
         signable_tx_hash: [u8; 32],
@@ -304,9 +206,6 @@ impl SpendAuthAndLinkability {
     ) -> Scalar {
         let mut transcript = Blake2b512::new();
 
-        // Proof-type domain separation: a full SAL challenge can never collide with a
-        // membership-only challenge (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §4.2).
-        transcript.update(SAL_FULL_DST);
         transcript.update(signable_tx_hash);
         input.transcript(&mut transcript, L);
 

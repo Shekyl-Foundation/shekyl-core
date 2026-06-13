@@ -4,54 +4,6 @@
 
 ### Added
 
-- **docs: reward-emission vin implementation plan (`REWARD_EMISSION_VIN_PLAN.md`,
-  2026-06-13).** Sub-PR decomposition (PR-E0…E5) for the `REWARD_EMISSION_LEG.md`
-  §12 emission leg, downstream of the closed consensus spec. Round-0 pre-flight
-  substrate audit recorded against actual code; ML-DSA backing-auth hard merge
-  gate bound to PR-E3; `txin_stake_claim`/`C_stake` deletion surface enumerated;
-  `07-consensus-atomic-cutovers.mdc` evaluated (exception does **not** apply,
-  standard splitting governs). Architecture is **Rust-first**: the new emission
-  consensus logic (untrusted-input parse, amount arithmetic, membership + ML-DSA
-  crypto) lives in Rust behind `shekyl_emission_vin_verify` joining the
-  `shekyl_archival_*`/`shekyl_fcmp_*` FFI family; C++ keeps only the `txin_v`
-  variant + epee/boost/JSON transport shim, pushing the FFI boundary forward for
-  the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
-  production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
-  §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
-
-- **fcmp: `FcmpMembershipOnly` — spend authority + tree membership, no
-  key image (2026-06-12).** Implements the `REWARD_EMISSION_LEG.md`
-  §7.2 verify API (the §12 sibling-API gap) as a sibling type to
-  `FcmpPlusPlus` in the `shekyl-oxide` FCMP++ crate; first consumer is
-  the emission vin. `MembershipSpendAuth` keeps SAL's `R_O` leg alone
-  (96 B/input — the self-contained `(x, y~)` opening proof over
-  `(G, T)`); the BP+/`P'`/`L` key-image machinery is not carried; the
-  `Fcmp` membership leg, including the `H(pqc_pk)` extra-leaf-scalar
-  binding, is unchanged. Both SAL-family challenge transcripts now open
-  with fixed-width 64-byte zero-padded type tags (the full spend path's
-  transcript changed too — consensus transcript change, migration-free
-  pre-genesis, guarded by a named roundtrip regression), with
-  length-regularity of both preimages verified field-by-field as the
-  invariant the tags rest on. Per-input challenges bind the tx hash and
-  the input index (`u32` LE — forecloses cross-slot transplant); empty
-  input sets reject rather than vacuously verify. All per-proof scalars
-  are synthesized RFC-6979-style (a degraded RNG cannot zero or reuse
-  them) with a loud degenerate-rerandomization guard as backstop, since
-  `O~` freshness is the entire non-linkability property for an input
-  type publicly tagged as archival activity. Measured strictly smaller
-  than the 1-input `FcmpPlusPlus` order it was provisionally sized at
-  (3 104 B vs 3 392 B at 1 layer), closing the §10.1 caveat's size arm.
-  18 tests: roundtrips, cross-type rejection at the deserialization
-  seam (both directions), mixed-type batch rejection (both polarities),
-  freshness/ZeroRng/guard, index-binding, blob-swap, replay, wrong-root,
-  tamper, sizing. Two named gates carried: external review of the
-  soundness reduction (`FCMP_MEMBERSHIP_ONLY.md` §5.5) pre-genesis, and
-  the **ML-DSA backing-auth hard merge gate** on the emission vin PR —
-  the membership-only proof is classically secure only; quantum spend
-  authority lives at the vin (`FCMP_MEMBERSHIP_ONLY.md` §7). Docs:
-  `FCMP_MEMBERSHIP_ONLY.md` (new), emission-leg §7.2/§10.1/§12 + layer
-  table.
-
 - **archival: `ArchivalBondValue` v4 — inline `ClaimedEpochSet` +
   `first_paying_emission_height` (2026-06-12).** Implements the schema
   half of the Stage-3 gate per `REWARD_EMISSION_LEG.md` §6.2/§6.3
@@ -81,35 +33,6 @@
   gates on gate-6 soundness only), `FcmpMembershipOnly` proof-type
   domain-separation requirement made load-bearing (§7.2).
 
-### Changed
-
-- **fcmp: typed the FCMP++ composition layer to make the verify
-  input-context misalignment unrepresentable (2026-06-12).** The
-  Copilot rounds on the membership-only PR surfaced a recurring shape
-  in `shekyl-oxide`'s FCMP++ crate rather than one bug: `proof_size`
-  hard-coded the per-leg byte counts, and `FcmpPlusPlus::verify` took
-  the key images and `H(pqc_pk)` leaf scalars as two parallel `Vec`s
-  whose lengths each needed a guard (one of which misrouted a
-  PQC-count mismatch to the key-image error variant, fixed in PR #129
-  round 3). This change addresses the cause: per-leg wire sizes are now
-  owned by their types (`Input::PARTIAL_WIRE_SIZE`,
-  `SpendAuthAndLinkability::WIRE_SIZE`, `MembershipSpendAuth::WIRE_SIZE`),
-  with `proof_size` composed from them and transitively asserted against
-  the serialized length by the existing roundtrip tests; and
-  `FcmpPlusPlus::verify` takes a single ordered `Vec<InputVerification>`
-  bundling each input's key image with its leaf scalar, so a length
-  mismatch or cross-input transposition is no longer representable as
-  two independently-sized collections. The two count-mismatch error
-  variants (`InvalidKeyImageQuantity`, `InvalidPqcPkHashQuantity`)
-  collapse into one `InvalidInputCount`; the wrapper in `shekyl-fcmp`
-  already does its own granular length checks before calling the oxide
-  layer, so no downstream granularity is lost. The membership-only
-  verify keeps its single `pqc_pk_hashes` `Vec` — it has no second
-  per-input collection by construction, so the bundle is not warranted
-  there (reversion clause: introduce it if a second collection is ever
-  added). No consensus behavior changes; all 18 fcmp++ and 66
-  `shekyl-fcmp` tests pass.
-
 ### Fixed
 
 - **sim: sole-source window tick moved to end-of-epoch (PR #126 Copilot
@@ -135,6 +58,24 @@
   of silently reporting zero locked supply.
 
 ### Added
+
+- **crypto: CT-3c persistent reorg rollback (`shekyl-curve-tree`,
+  2026-06-12).** `CurveTreeClient::rollback_to_fork(BlockHeight)` now
+  rolls the redb-backed `LeafStore` back to an inclusive fork point,
+  verifies the boundary-adjacent frozen segment's `R_k`, rebuilds
+  in-memory state from the authoritative store, and resumes forward
+  ingest at `fork + 1`. Rollback partitioning is aligned with CT-2's
+  drain boundary (`maturity > drained_through(fork_height)`, while
+  `sync_tip_height` and the orphan filter remain fork-height based),
+  fixing the off-by-one that would otherwise keep `maturity == fork`
+  rows drained and make the first post-rollback block remove
+  already-drained pending rows. New structured store errors identify
+  frozen-record absence and `R_k` mismatch. Coverage adds the primary
+  direct pending-row equality KAT with a re-draining class-(b) witness
+  and a 150k-lock never-draining witness, plus a file-backed
+  `reorg_deep` rollback/resync KAT against fresh replay and consensus
+  roots. `LeafStore::append_drained` is now test-only so production
+  ingest cannot bypass pending-table maintenance.
 
 - **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
   2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted

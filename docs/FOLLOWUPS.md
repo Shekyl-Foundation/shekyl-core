@@ -47,20 +47,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **External cryptographic review of the `FcmpMembershipOnly` soundness
-  reduction (2026-06-12).**
-  [`design/FCMP_MEMBERSHIP_ONLY.md`](./design/FCMP_MEMBERSHIP_ONLY.md) §5.5:
-  the (a0)–(c) reduction re-establishes soundness of the subtracted
-  sub-proof, but §7.2 of the emission leg names the proof-type confusion
-  surface load-bearing, and soundness of a sub-proof in isolation is not
-  inherited from the Cypher-Stack review of the full composition. The
-  in-repo argument is necessary, not sufficient: an external eye on §5
-  (the G-preserving rerandomization premise, the binding/extraction step,
-  and the cross-leg `O~` identity) is a named pre-genesis criterion.
-  Until it lands, `FcmpMembershipOnly` is implemented-but-not-genesis-final.
-  Target: V3.0 (genesis freeze gate; schedule with the broader FCMP++
-  audit window so the reviewer has the full-composition context in hand).
-
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
   2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
@@ -102,19 +88,38 @@ sustainability is unaffected by the recalibration.
   pre-genesis refetch demand) pulls it earlier. See
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
 
-- **`append_drained` demotion after the client moves to
-  `append_block_deltas` (CT-3a P4, 2026-06-12).** Target: V3.0, at CT-3c
-  closeout; criterion = "no production caller after CT-3b lands."
-  `LeafStore::append_drained` is now a thin wrapper over
-  `append_block_deltas` with empty pending deltas — it advances the tip
-  and freeze clock without maintaining the pending table, so once the
-  client ingests through the deltas API, any mixed use silently breaks
-  drained/pending disjointness and resume exactness. Demote to
-  `#[cfg(test)]` or fold into the KAT harness when the criterion is met.
-  **Criterion met by CT-3b (2026-06-12):** the client ingests through
-  `append_block_deltas`; every remaining `append_drained` caller is a
-  test site. Execute the demotion at CT-3c closeout as scheduled.
-  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
+- **CT-5 rollback error handling: drop-and-reopen poisoned client
+  (CT-3c poison contract, 2026-06-12).** Target: V3.0, with the engine
+  refresh wiring (CT-5). `CurveTreeClient::rollback_to_fork` commits the
+  store rollback before rebuilding memory; if a post-store check fails
+  (`FrozenSegmentRkMismatch`, `FrozenSegmentRecordMissing`, duplicate
+  gindex on rebuild, pruned/corrupt shape, etc.), the method returns
+  `Err` with the store authoritative and rolled back but the in-memory
+  client object still stale. CT-5 must treat rollback `Err` as
+  drop-and-reopen, not retry-with-same-object. **Reopening trigger:**
+  if CT-5 introduces a rollback actor/wrapper that owns this policy
+  centrally, fold the item into that actor's contract and close it.
+  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4 CT-3c.
+
+- **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1
+  disposition, 2026-06-12).** Target: V3.0, with prune-policy / store
+  startup hardening. CT-3c intentionally runs the bounded
+  `verify_frozen_tail` check only on the rollback path so it does not
+  retroactively add an O(segment) startup cost to CT-3b's plain
+  `open(path)` / resume behavior. The DoD's resume-side corruption
+  clause remains tracked here. **Reopening trigger:** measured wallet
+  startup budget leaves room for one segment recomputation, or a
+  corruption/torn-write finding makes startup verification load-bearing
+  before prune-policy lands.
+
+- **Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral,
+  2026-06-12).** Target: V3.0, with prune-policy / store-backed
+  assembly. CT-3c verifies only the boundary-adjacent frozen tail after
+  rollback; full frozen-row verification is O(all frozen leaves) and
+  belongs with the mainnet-scale pruned-store policy rather than the
+  rollback wiring PR. **Reopening trigger:** store-backed assembly or
+  pruned resume needs an all-segment integrity sweep, or audit requires a
+  startup/maintenance mode that pays the full scan cost explicitly.
 
 - **Carry `BlockHeight`/`Gindex` typing across the client → engine seam
   (CT-3a P5, 2026-06-12; client portion closed by CT-3b 2026-06-12).**
@@ -3065,23 +3070,6 @@ sustainability is unaffected by the recalibration.
   Target: V3.1 if Guix integration lands then; bumps to V3.x
   otherwise. Cross-reference:
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22.
-
-- **Rules-queue: reconcile the priority-ordering statements across
-  scopes (2026-06-12, `FcmpMembershipOnly` review round).** The
-  ordering is currently stated three ways: project memory carries
-  "privacy > security," the privacy/security rule material carries
-  "quantum #1, classical security #2, privacy #3," and
-  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) carries
-  "security and quantum resilience #1, privacy #2." These are
-  plausibly all correct at different scopes (cross-domain product
-  positioning vs. within-crypto-primitive-selection vs. mission
-  arbitration), but a privacy-maximalist chain with three numberings
-  will trip an external reviewer. Disposition: a one-line
-  reconciliation in `00-mission.mdc` (the single source of truth on
-  priority ordering, by its own statement) naming which ranking is
-  canonical at which scope. Non-blocking; fold into the next rules
-  touch. Target: V3.1 (sibling to the other rules-queue entries in
-  this section).
 
 - **Rules-queue: elevate per-gate reviewer-discipline calibration
   into a workspace-wide rule (trigger: RandomX v2 Phase 0 review
