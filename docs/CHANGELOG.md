@@ -59,6 +59,24 @@
 
 ### Added
 
+- **crypto: CT-3c persistent reorg rollback (`shekyl-curve-tree`,
+  2026-06-12).** `CurveTreeClient::rollback_to_fork(BlockHeight)` now
+  rolls the redb-backed `LeafStore` back to an inclusive fork point,
+  verifies the boundary-adjacent frozen segment's `R_k`, rebuilds
+  in-memory state from the authoritative store, and resumes forward
+  ingest at `fork + 1`. Rollback partitioning is aligned with CT-2's
+  drain boundary (`maturity > drained_through(fork_height)`, while
+  `sync_tip_height` and the orphan filter remain fork-height based),
+  fixing the off-by-one that would otherwise keep `maturity == fork`
+  rows drained and make the first post-rollback block remove
+  already-drained pending rows. New structured store errors identify
+  frozen-record absence and `R_k` mismatch. Coverage adds the primary
+  direct pending-row equality KAT with a re-draining class-(b) witness
+  and a 150k-lock never-draining witness, plus a file-backed
+  `reorg_deep` rollback/resync KAT against fresh replay and consensus
+  roots. `LeafStore::append_drained` is now test-only so production
+  ingest cannot bypass pending-table maintenance.
+
 - **crypto: CT-3b persistent client lifecycle (`shekyl-curve-tree`,
   2026-06-12).** `CurveTreeClient::open(path)` resumes from a persisted
   `LeafStore` with no genesis replay: in-memory state is rebuilt as the
