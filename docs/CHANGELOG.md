@@ -167,6 +167,31 @@
 
 ### Changed
 
+- **crypto: CT-3↔CT-4 audit cleanup — fold the reference-block hash into
+  `ReferenceBlock`; doc-code resync (`shekyl-curve-tree`, 2026-06-13).**
+  `CurveTreeClient::assemble_path` no longer takes a loose positional
+  `reference_block_hash: [u8; 32]`; the hash is now `ReferenceBlock.block_hash`,
+  so the caller supplies the full consensus anchor (`height`, `curve_tree_root`,
+  `block_hash`) as one value. This removes a footgun — output keys, commitments,
+  roots, and block hashes are all `[u8; 32]`, and a positional arg invited a
+  silent swap — and brings the API to the two-arg shape `CURVE_TREE_CLIENT.md`
+  §5 already documents (the third arg was residue of the now-landed §5 horizon
+  work). All call sites (`assemble_kat`, archival-retention crosscheck/serve KATs)
+  and `ReferenceBlock` literals updated; no production caller existed yet (CT-5
+  engine wiring is unbuilt). **Docs resync:** the `assemble.rs` "horizon
+  deferred" comment was stale (`reference.rs` landed `select_reference_height`
+  et al. in CT-4) and is rewritten; `CURVE_TREE_CLIENT.md` §9 CT-4 row flipped
+  from a `select_reference_block`/`client` stub to **Landed** with the real
+  `assemble` + `reference` modules and symbols; the non-existent
+  `select_reference_block` symbol corrected to `select_reference_height` /
+  `should_reanchor` in `FOLLOWUPS.md`, `PHASE_2A_SEND_PATH.md`, and
+  `SHEKYLD_PREREQUISITES.md`. **FFI audit:** recorded (not fixed — it is a
+  planning-activity daemon change per `20-rust-vs-cpp-policy.mdc` /
+  `15-deletion-and-debt.mdc`) that `on_get_curve_tree_path` recomputes the
+  key-image generator `I = Hp(O)` via C++ `hash_to_p3` instead of the existing
+  `shekyl_compute_output_key_image` FFI, folding into the daemon path-assembler
+  migration. No consensus surface touched.
+
 - **fcmp: typed the FCMP++ composition layer to make the verify
   input-context misalignment unrepresentable (2026-06-12).** The
   Copilot rounds on the membership-only PR surfaced a recurring shape

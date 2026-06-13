@@ -117,6 +117,7 @@ fn assembled_path_verifies_as_segment_opening() {
     let reference = ReferenceBlock {
         height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
+        block_hash: [0u8; 32],
     };
     let last_drained = reference.height.0.saturating_sub(61);
     let drained_block = blocks
@@ -126,7 +127,7 @@ fn assembled_path_verifies_as_segment_opening() {
     let founder = coinbase_identity(drained_block);
 
     let path = client
-        .assemble_path(&founder, &reference, [0u8; 32])
+        .assemble_path(&founder, &reference)
         .expect("assemble founder path");
 
     let cl = path

@@ -89,6 +89,25 @@ sustainability is unaffected by the recalibration.
   construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
   R1-Q6.
 
+- **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
+  Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
+  `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp` ~`:3756`) derives the
+  per-output key-image generator `I = Hp(O)` with `rct::hash_to_p3` /
+  `ge_p3_tobytes` while building `chunk_outputs_blob`, recomputing in C++ a
+  crypto contract the Rust side already owns
+  (`shekyl_fcmp::tree::key_image_generator`, at the FFI boundary as
+  `shekyl_compute_output_key_image`). Per `20-rust-vs-cpp-policy.mdc` §2 (a
+  crypto contract belongs in Rust) this should route through the FFI, not
+  recompute in C++. **Not fixed in the CT audit cleanup:** swapping it in
+  isolation is a "while we're here" daemon change
+  (`15-deletion-and-debt.mdc`) touching consensus-adjacent C++ without the
+  daemon test harness. It folds into the daemon path-assembler migration that
+  already owns this surface (the `assemble_tree_path_for_output` historical-
+  reference / multi-source routing resolution below). **Reopening trigger:**
+  the daemon path-assembler PR opens, **or** any PR touches
+  `on_get_curve_tree_path` for another reason (route the new logic through the
+  FFI per the rule-20 daemon clause then).
+
 - **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
   artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
   (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
@@ -4877,7 +4896,8 @@ one place to confirm each item's relationship to the wallet stack.
      bounded rebuild loop.
 
   **Not a Phase 2a blocker.** The proactive `reference.rs` validity
-  horizon (`select_reference_block`, `PHASE_2A_SEND_PATH.md` §5.4) is the
+  horizon (`should_reanchor`/`select_reference_height`,
+  `PHASE_2A_SEND_PATH.md` §5.4) is the
   interim guard; the reactive path lights up additively when the daemon
   flag lands, with no wallet wire-format break. **Target: V3.1 daemon
   release (Phase 6 end-to-end harness consumes it). Cross-link:

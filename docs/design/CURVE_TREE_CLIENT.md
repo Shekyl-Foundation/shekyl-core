@@ -279,7 +279,10 @@ impl CurveTreeClient {
 }
 ```
 
-`ReferenceBlock = { height, curve_tree_root }` (the implemented shape);
+`ReferenceBlock = { height, curve_tree_root, block_hash }` (the implemented
+shape — `block_hash` is echoed into `TreeContext::reference_block` for the
+eventual `rctSig.referenceBlock`, supplied by the caller alongside the root so
+the anchor is one value, not a loose positional `[u8; 32]`);
 `tree_depth` is **derived** during assembly (`build_layers(stream).len()`, F4),
 not carried on `ReferenceBlock`, and packed into `TreeContext`. The C3 invariant
 `c1_layers.len() + c2_layers.len() + 1 == tree_depth` is then a self-check (the
@@ -1171,7 +1174,7 @@ canonical tree under replacement at both deepen boundaries.
 | **CT-1** | **Round 1 closed** — see [`CT1_ROUND1_CLOSEOUT.md`](CT1_ROUND1_CLOSEOUT.md). `LeafStore` on **redb** (`CT1_ROUND1_PINS.md`): subtree-aligned segment cache keyed by `R_k` (pin/prune seam, §7.6), height-gated freeze (`end_block_height`), canonical 4×32 Selene-scalar leaf encoding, `build_upper_layers` mixed-composition hot path + `upper_layers_kat`, ACID reorg truncate, `store_kat` Tier A. `CurveTreeClient` mirrors drained leaves into the store on ingest. Remaining: on-disk path wiring (CT-3/CT-5), full-segment freeze KAT at `j=2` scale. | `shekyl-curve-tree/store`, `tests/store_kat.rs`, `tests/upper_layers_kat.rs` |
 | **CT-2** | **Round 1 closed** — see [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Reconstruct-root KAT (`recon_kat.rs`) + production client path (`client.rs`) over `ct2_tier_a.json`: Rust root == C++ header root at every height on `main`, `reorg_deep`, `reorg_shallow`. Tier A pins empty-window boundary (`last_empty=60`, `first_drain=61`), coinbase `+60`, undeepen via `reorg_deep` (fork 140), freeze-lag via shallow reorg. Tier B `#[ignore]` scaffold in `recon_tier_b.rs`. CT-4 `assemble` and CT-1 `store` landed ahead of schedule. Remaining: CT-3 sync, CT-5 engine wiring. | `recon`, `client`, `assemble`, `tests/recon_kat.rs`, `tests/recon_tier_b.rs` |
 | **CT-3** | **Round 1 closed** — see [`CT3_ROUND1_CLOSEOUT.md`](CT3_ROUND1_CLOSEOUT.md). Persistent client lifecycle landed across CT-3a (store schema, PR #128), CT-3b (`open(path)` + resume + delta ingest, `SCHEMA_VERSION` 2→3), CT-3c (`rollback_to_fork`, drain-cutoff partition, frozen-tail `R_k` recheck, PR #132). Block-derived forward sync is the confirmed default (R1-Q1 — the §6 reversion criterion fired: CT-2 landed the replication, KAT-verified); the bulk-leaf RPC (R1-Q1) and `SegmentSource` seam (R1-Q5) are deferred-with-recorded-shape, landing with the post-prune refetch path. Remaining: CT-5 engine wiring consumes the resume+ingest+rollback API. | `client`, `store`, `tests/recon_kat.rs` |
-| **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
+| **CT-4** | **Landed** (with CT-1/CT-2, ahead of schedule). Membership-path assembly (`assemble::assemble_path` → `AssembledPath`, gated on the §3.3 root match) + reference-block selection / validity-horizon arithmetic (`reference`: `select_reference_height`, `reference_block_age`, `proof_submittable`, `proof_expired`, `should_reanchor`, §5). Selection is pure height arithmetic, **not** a `ReferenceBlock` constructor — the client stores no header roots, so the caller binds height→root→hash and supplies the `ReferenceBlock` anchor. Consumed by CT-5. | `assemble`, `reference`, `tests/assemble_kat.rs` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
 | **C++** | `get_curve_tree_leaves` endpoint + KAT (`SHEKYLD_PREREQUISITES.md`) | `core_rpc_server`, separate PR |
 

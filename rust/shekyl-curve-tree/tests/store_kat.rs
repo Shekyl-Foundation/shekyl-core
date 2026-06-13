@@ -149,6 +149,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 let reference = ReferenceBlock {
                     height: BlockHeight(blk.height),
                     curve_tree_root: blk.root,
+                    block_hash: [0u8; 32],
                 };
                 assert!(client.verify_root(&reference).is_ok());
             }

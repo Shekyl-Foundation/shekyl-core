@@ -174,7 +174,7 @@ fn recompute_root(path: &AssembledPath) -> [u8; 32] {
 /// Assemble `target`'s path at `reference` and run all three checks.
 fn check_path(client: &CurveTreeClient, target: &OutputIdentity, reference: &ReferenceBlock) {
     let path = client
-        .assemble_path(target, reference, [0u8; 32])
+        .assemble_path(target, reference)
         .expect("assemble path for a drained coinbase output");
 
     // C3 invariant.
@@ -221,6 +221,7 @@ fn assembled_path_recomputes_to_consensus_root() {
     let reference = ReferenceBlock {
         height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
+        block_hash: [0u8; 32],
     };
 
     // A coinbase at block `b` is drained at `reference.height` iff
@@ -253,12 +254,13 @@ fn assemble_path_rejects_undrained_output() {
     let reference = ReferenceBlock {
         height: BlockHeight(tip.height),
         curve_tree_root: tip.root,
+        block_hash: [0u8; 32],
     };
 
     // The tip's own coinbase has not matured (let alone drained) at the tip,
     // so it is not a leaf in the reference tree: a lookup miss, not a bad path.
     let undrained = coinbase_identity(tip);
-    match client.assemble_path(&undrained, &reference, [0u8; 32]) {
+    match client.assemble_path(&undrained, &reference) {
         Err(shekyl_curve_tree::ClientError::OutputNotDrained { output_key }) => {
             assert_eq!(output_key, undrained.output_key);
         }
@@ -278,8 +280,9 @@ fn assemble_path_rejects_root_mismatch() {
     let bad = ReferenceBlock {
         height: BlockHeight(tip.height),
         curve_tree_root: [0xFFu8; 32],
+        block_hash: [0u8; 32],
     };
-    match client.assemble_path(&founder, &bad, [0u8; 32]) {
+    match client.assemble_path(&founder, &bad) {
         Err(shekyl_curve_tree::ClientError::RootMismatch { height, .. }) => {
             assert_eq!(height, BlockHeight(tip.height));
         }
