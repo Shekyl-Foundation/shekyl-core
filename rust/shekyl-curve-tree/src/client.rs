@@ -35,9 +35,11 @@
 //!
 //! Global output indices and leaf entries are *derived* from the replayed
 //! block sequence, never from a persisted counter (derive-don't-accumulate,
-//! `CT2_DRAIN_ORDER.md` §7.1). A reorg is therefore handled by rebuilding
-//! from the post-reorg block list ([`CurveTreeClient::from_blocks`]) — there
-//! is no separate reorg machinery in this client.
+//! `CT2_DRAIN_ORDER.md` §7.1). The production persistent reorg path uses
+//! [`CurveTreeClient::rollback_to_fork`] to roll the store and in-memory
+//! state back to the shared fork point, then resumes forward ingest from
+//! `fork_height + 1`; [`CurveTreeClient::from_blocks`] remains the
+//! ephemeral/KAT replay path.
 //!
 //! ## Not here
 //!
@@ -380,6 +382,34 @@ impl CurveTreeClient {
             client.ingest_block(*block)?;
         }
         Ok(client)
+    }
+
+    /// Roll the persistent client back to `fork_height` (inclusive).
+    ///
+    /// The store-level operation is authoritative and single-transactional:
+    /// it migrates drained-but-now-pending rows back into the pending table,
+    /// drops orphaned rows, and resets the persisted tip to `fork_height`.
+    /// In-memory state is rebuilt from that store snapshot and assigned only
+    /// after rebuild succeeds, so no partial memory overwrite occurs on
+    /// error.
+    ///
+    /// **Poison contract for callers (CT-5).** If this method returns `Err`
+    /// after the store rollback committed but before memory is rebuilt, the
+    /// store is rolled back and authoritative while this client object still
+    /// holds pre-rollback memory. The caller must drop the client and re-open
+    /// it from the store before continuing; do not keep using the stale
+    /// object.
+    pub fn rollback_to_fork(&mut self, fork_height: BlockHeight) -> Result<(), ClientError> {
+        self.store
+            .rollback_to_fork(fork_height)
+            .map_err(ClientError::from)?;
+        let rebuilt = Self::rebuild_from_store(&self.store)?;
+        self.entries = rebuilt.entries;
+        self.next_gindex = rebuilt.next_gindex;
+        self.drained_through_counts = Vec::new();
+        self.entries_by_maturity = rebuilt.entries_by_maturity;
+        self.ingested_tip_height = rebuilt.ingested_tip_height;
+        Ok(())
     }
 
     /// Ingest one block, resolving `h_pqc` per output, threading the global
@@ -1087,6 +1117,106 @@ mod tests {
                 "height {h}"
             );
         }
+    }
+
+    #[test]
+    fn rollback_to_fork_rebuilds_memory_and_resyncs() {
+        let mut rolled = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut rolled, 0, 70);
+        // Populate the cache before rollback; rollback must clear it rather
+        // than preserving stale cutoff answers from the orphaned suffix.
+        assert_eq!(rolled.drained_leaf_count(BlockHeight(70)), 10);
+        assert!(!rolled.drained_through_counts.is_empty());
+
+        rolled.rollback_to_fork(BlockHeight(65)).unwrap();
+        assert_eq!(rolled.ingested_tip_height, Some(BlockHeight(65)));
+        assert!(rolled.drained_through_counts.is_empty());
+        assert_eq!(rolled.next_gindex, 66);
+        assert_eq!(
+            rolled.store.sync_tip_height().unwrap(),
+            BlockHeight(65),
+            "store tip is the rollback source of truth"
+        );
+
+        ingest_coinbase_blocks(&mut rolled, 66, 70);
+
+        let mut fresh = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut fresh, 0, 70);
+        assert_eq!(rolled.entries, fresh.entries);
+        assert_eq!(rolled.next_gindex, fresh.next_gindex);
+        assert_eq!(
+            rolled.store.read_pending_candidates().unwrap(),
+            fresh.store.read_pending_candidates().unwrap()
+        );
+        assert_eq!(
+            rolled.store.leaf_count().unwrap(),
+            fresh.store.leaf_count().unwrap()
+        );
+        for h in 0..=70u64 {
+            assert_eq!(
+                rolled.root_at(BlockHeight(h)).unwrap(),
+                fresh.root_at(BlockHeight(h)).unwrap(),
+                "height {h}"
+            );
+        }
+    }
+
+    #[test]
+    fn rollback_to_fork_at_tip_is_client_noop() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 10);
+        let entries = client.entries.clone();
+        let next_gindex = client.next_gindex;
+        let pending = client.store.read_pending_candidates().unwrap();
+
+        client.rollback_to_fork(BlockHeight(10)).unwrap();
+        assert_eq!(client.entries, entries);
+        assert_eq!(client.next_gindex, next_gindex);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(10)));
+        assert_eq!(client.store.read_pending_candidates().unwrap(), pending);
+        assert!(client.drained_through_counts.is_empty());
+    }
+
+    #[test]
+    fn rollback_to_fork_above_tip_is_invalid_and_leaves_memory() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 5);
+        let entries = client.entries.clone();
+        let next_gindex = client.next_gindex;
+
+        let err = client.rollback_to_fork(BlockHeight(6)).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Store(StoreError::InvalidRollback {
+                fork_height: 6,
+                sync_tip: 5,
+            })
+        ));
+        assert_eq!(client.entries, entries);
+        assert_eq!(client.next_gindex, next_gindex);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(5)));
+        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(5));
+    }
+
+    #[test]
+    fn rollback_to_genesis_keeps_genesis_and_accepts_height_one() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 10);
+
+        client.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(client.entries.len(), 1);
+        assert_eq!(client.entries[0].gindex, Gindex(0));
+        assert_eq!(client.next_gindex, 1);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(0)));
+        assert_eq!(
+            client.store.read_pending_candidates().unwrap(),
+            vec![client.entries[0]]
+        );
+
+        ingest_coinbase_blocks(&mut client, 1, 1);
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight(1)));
+        assert_eq!(client.entries.len(), 2);
+        assert_eq!(client.next_gindex, 2);
     }
 
     #[test]

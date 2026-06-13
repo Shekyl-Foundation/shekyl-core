@@ -739,11 +739,14 @@ impl LeafStore {
     ///
     /// 1. **Partition search (pruned-range-safe, P1/F7).** Drained rows
     ///    are maturity-sorted in position order (the P7 invariant), so the
-    ///    cut point is `partition_point(maturity > fork_height)` — the
-    ///    *first* index of an equal-maturity run. Probes run over the
-    ///    present suffix `[pruned frontier, leaf_count)` only, so a
-    ///    post-prune store can never `None`-probe. A partition resolving
-    ///    at a non-zero frontier means the cut lands at/below pruned rows:
+    ///    cut point is `partition_point(maturity >
+    ///    drained_through(fork_height))` — the *first* index of an
+    ///    equal-maturity run. A store synced through block `F` has drained
+    ///    leaves through `F - 1`; leaves maturing exactly at `F` enter on
+    ///    connection of block `F + 1` and must be pending after rollback.
+    ///    Probes run over the present suffix `[pruned frontier, leaf_count)`
+    ///    only, so a post-prune store can never `None`-probe. A partition
+    ///    resolving at a non-zero frontier means the cut lands at/below pruned rows:
     ///    [`StoreError::TruncatedIntoPrunedRange`], before any write.
     ///    (Intentionally conservative when `partition == frontier > 0`
     ///    would be a valid exact-boundary cut: pruned segments are buried
@@ -807,13 +810,17 @@ impl LeafStore {
                 Ok(decode_stored_leaf_meta(row.value())?.maturity.0)
             };
             // partition_point over [frontier, leaf_count): first present
-            // position with maturity > fork (maturity is non-decreasing,
-            // P7), which is the first index of an equal-maturity run (F7).
+            // position with maturity > drained_through(fork). Maturity is
+            // non-decreasing (P7), so this lands on the first index of an
+            // equal-maturity run (F7). Height 0 saturates at cutoff 0; no
+            // real leaf has maturity 0, so genesis rollback still truncates
+            // the whole drained tree.
+            let drain_cutoff = fork_height.0.saturating_sub(1);
             let mut lo = frontier;
             let mut hi = leaf_count;
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                if maturity_at(mid)? > fork_height.0 {
+                if maturity_at(mid)? > drain_cutoff {
                     hi = mid;
                 } else {
                     lo = mid + 1;
@@ -1529,7 +1536,7 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         store
             .append_block_deltas(
-                &[entry_created_at(0, 70, 10)],
+                &[entry_created_at(0, 69, 10)],
                 &[entry_created_at(1, 150, 60)],
                 &[],
                 BlockHeight(70),
