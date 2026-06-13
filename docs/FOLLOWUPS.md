@@ -97,10 +97,14 @@ sustainability is unaffected by the recalibration.
   drain replication, KAT-verified), repositioning the bulk-leaf RPC to
   non-forward catch-up + archival. The C++ endpoint and its §6
   reconstruct-root KAT (`SHEKYLD_PREREQUISITES.md` shape) land with the
-  prune-policy PR, which makes refetch reachable. **Reopening trigger:**
-  either R1-Q1 reversion criterion (forward-sync latency budget breach;
-  pre-genesis refetch demand) pulls it earlier. See
-  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1.
+  prune-policy PR, which makes refetch reachable. The **`SegmentSource` seam
+  (R1-Q5)** rides this row: B3 forbids a public trait without a caller, and
+  this refetch path is its first consumer, so the recorded trait shape
+  (`CT3_SYNC.md` §3 R1-Q5) lands here too. **Reopening trigger:** either R1-Q1
+  reversion criterion (forward-sync latency budget breach; pre-genesis
+  refetch demand) pulls it earlier. See
+  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
+  [`docs/design/CT3_ROUND1_CLOSEOUT.md`](./design/CT3_ROUND1_CLOSEOUT.md) §4.
 
 - **CT-5 rollback error handling: drop-and-reopen poisoned client
   (CT-3c poison contract, 2026-06-12; machine-enforced 2026-06-13).**

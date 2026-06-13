@@ -4,6 +4,19 @@
 
 ### Added
 
+- **docs: CT-3 Round 1 closed — CT-3d closeout (`shekyl-curve-tree`,
+  2026-06-13).** Added [`CT3_ROUND1_CLOSEOUT.md`](design/CT3_ROUND1_CLOSEOUT.md)
+  recording the landed persistent-client lifecycle (CT-3a store schema /
+  CT-3b open+resume+delta-ingest / CT-3c reorg rollback), the DoD mapping,
+  and the deferred-with-reversion-clause surfaces. Flipped `CURVE_TREE_CLIENT.md`
+  §9 CT-3 row to **Round 1 closed** and closed §8 #6 (block-derived forward
+  sync is the confirmed default — the §6 reversion criterion fired). Marked
+  `CT3_SYNC.md` CT-3d landed / Round 1 complete. The bulk-leaf RPC endpoint
+  (R1-Q1) and `SegmentSource` seam (R1-Q5) remain deferred-with-recorded-shape,
+  landing with the post-prune refetch path; the F5 store-backed assembly,
+  resume-path/full `R_k` recheck, and CT-5 poison-reaction items stay routed
+  in `FOLLOWUPS.md`. Docs-only; no code or consensus surface touched.
+
 - **archival: Gate 6 Round 2 draft opened — network + transport layer
   (2026-06-13).** Drafted `ARCHIVAL_FIREWALL_GATE6.md` §10 as the opening
   position for the Round 2 adversarial pass (**OPEN, not closed**). The round's
