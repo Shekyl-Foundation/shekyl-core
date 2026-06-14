@@ -16,10 +16,15 @@ and external/graveyard (§5.1, X1–X7). The weight-bearing external finding (X3
 resolved, after running its two load-bearing verifications down against the code,
 to a wallet-side *resolution ambiguity* — NOT a consensus gap: V1 confirms `O` is
 one-time-address-derived (`output.rs:8–28`) so a payer cannot target `O.x` (the
-adversarial precondition is cryptographically unreachable), and the fix is widening
-the wallet's match key to the tree's unique key (`(O, C, h_pqc)` minimal, `gindex`
-total) in CT-5c. A consensus output-key-uniqueness rule is explicitly rejected as a
-privacy regression, and the threat model records why. X1 folded into O1
+adversarial precondition is cryptographically unreachable), and — after V3 confirmed
+the index→gindex binding is locally constructible at the match site (`assemble.rs:89`
+carries `e.gindex`; scanner `global_output_index` is the same `next_output_seq`
+numbering, `ledger_ext.rs:74`/`scan.rs:562`/`recon.rs:122–148`) — the fix resolves
+owned outputs by `gindex`, the tree's actual unique key, in CT-5c. This makes the
+collision case *structurally impossible* (deleted from the threat model, not bounded);
+`(O, C, h_pqc)` is the recorded-but-not-taken fallback. A consensus output-key-uniqueness
+rule is explicitly rejected as a privacy regression, and the threat model records why.
+X1 folded into O1
 (anchor-age is a fingerprinting oracle); X2/X4/X5/X6/X7 confirmed. The §3.4 bugs
 are confirmed against live code — all pre-implementation checklist items are
 closed. CT-5 pre-0 may begin.**
@@ -252,8 +257,13 @@ load-bearing and now a frozen-contract requirement:
   underlying tree state. Equal `ReferenceBlock` does not save you if the tree
   moved under the reads. **Frozen-contract requirement (CT-5c): the read API is a
   single batch message** —
-  `AssembleTx { reference: ReferenceBlock, ids: Vec<OutputIdentity> } ->
-  Vec<AssembledPath>` — so the actor assembles **all N inputs inside one handler
+  `AssembleTx { reference: ReferenceBlock, inputs: Vec<AssembleInput> } ->
+  Vec<AssembledPath>`, where each `AssembleInput` carries the **`gindex` resolution
+  key** (the owned output's `global_output_index`, the tree's unique key per X3 §5.1)
+  and retains the `OutputIdentity` for a post-resolution consistency assertion
+  (resolved leaf's `(O, C, h_pqc)` must equal the expected identity, else
+  gindex/store corruption → error — defense-in-depth, not the resolution path) —
+  so the actor assembles **all N inputs inside one handler
   invocation, under one snapshot**, and the handler runs to completion before any
   `Ingest`/`Rollback` can interleave. There is no per-input message to interleave,
   so the mid-assembly-reorg split is **structurally unrepresentable**, not merely
@@ -560,8 +570,10 @@ hardcode means no placeholder.
 
 **T3 — batch the tx's assembly into one message; the actor handler is the
 snapshot (CT-5c). Upgrades E1 from discipline to type/message shape.** The read
-API is `AssembleTx { reference: ReferenceBlock, ids: Vec<OutputIdentity> } ->
-Vec<AssembledPath>`, not N separate `AssemblePath` calls. The actor assembles all
+API is `AssembleTx { reference: ReferenceBlock, inputs: Vec<AssembleInput> } ->
+Vec<AssembledPath>`, not N separate `AssemblePath` calls, and each `AssembleInput`
+carries the `gindex` resolution key (X3, §5.1) plus the `OutputIdentity` for the
+post-resolution consistency assertion. The actor assembles all
 N inputs in **one handler invocation under one snapshot**; the handler runs to
 completion before any `Ingest`/`Rollback` interleaves, so the mid-assembly-reorg
 split (E1) is **structurally unrepresentable**. One `ReferenceBlock` in the
@@ -776,8 +788,10 @@ existing defense (folded into O1-priv above); the rest confirm inherited
 properties. None inverts a disposition.
 
 - **X3 (Zcash malformed-proof-input class — THE weight-bearing one) — a wallet
-  *resolution-ambiguity* finding, NOT a consensus gap. The fix is to widen the
-  wallet's match key to be as total as the tree's unique key (`gindex`); a
+  *resolution-ambiguity* finding, NOT a consensus gap. The fix resolves owned
+  outputs by `gindex`, the tree's actual unique key (V3-confirmed locally
+  constructible), making the collision case *structurally impossible* — deleted
+  from the threat model, not bounded; `(O, C, h_pqc)` is the recorded fallback. A
   consensus output-key-uniqueness rule is explicitly rejected as a privacy
   regression.** `assemble_path` (`assemble.rs:90–97`) resolves an `OutputIdentity`
   to a position by **first-match** `.position(|e| e.identity.output_key ==
@@ -823,46 +837,105 @@ properties. None inverts a disposition.
     key is weaker than the tree's unique key. Fix it wallet-side, on data the
     wallet already holds.
 
-  **Disposition (a) — widen the wallet's match key in CT-5c, no consensus
-  surface.** Two options, both verified constructible at the match site (V2):
-  - *Minimal (negligible-collision):* match on the full `OutputIdentity` —
-    `(O, C, h_pqc)`. `h_pqc` is already on `OutputIdentity` (`types.rs:55`) and on
-    `ChunkLeaf`/the leaf, **in hand at the `.position()` site** (the match reads
-    `id.h_pqc` / `e.identity.h_pqc`, one field it currently ignores). `h_pqc` is
-    the hash of the output's hybrid public key (`output.rs:18`), so three-field
-    agreement for distinct outputs is cryptographically negligible. One-line
-    tightening in `assemble.rs:92–94`; not type armor (the §3.7 honesty boundary
-    rejects a wallet-side typestate — the defense is the wider key + the V1
-    derivation invariant).
-  - *Total (zero-collision, preferred where available):* resolve an owned output
-    to its exact `gindex`. The wallet already stores `TransferDetails.global_output_index`
-    (`transfer.rs:90`) — and for an *owned* output the content-match is matching
-    the wallet's own output in downloaded data, not querying the daemon for
-    position — so if `global_output_index → gindex` is locally derivable (or the
-    leaf binds them), the wallet resolves to the tree's actual unique key and the
-    ambiguity class is *structurally* eliminated, not merely made negligible. This
-    is the "match should be total, keyed on the tree's real unique key" fix; CT-5c
-    confirms whether the gindex binding is in hand and prefers it, falling back to
-    the `(O, C, h_pqc)` widening if not.
-  - **Failure floor if a collision somehow occurred anyway:** still DoS, never
-    theft — the key image is `I = Hp(O)` (`assemble.rs:110`), a function of `O`
-    alone, so a wrong-duplicate pick cannot yield a spendable proof for an output
-    the wallet doesn't control, and the ledger already runs a burning-bug-drop
-    under the reorg-atomic merge guard (`merge.rs:597`) so own-output selection is
-    pre-deduplicated. A wrong-`h_pqc` leaf yields an *invalid* proof (rejected at
-    submit), never a *leaky* one (O5 / FCMP++ ZK).
-  - **KAT (CT-5c):** two tree leaves sharing `(O, C)` with distinct `h_pqc`;
-    assert `assemble_path` selects the wallet's leaf, not first-by-gindex.
+  **Disposition (a) — resolve owned outputs by `gindex`, the tree's actual unique
+  key, in CT-5c; no consensus surface. The collision case is *deleted*, not
+  bounded.** The two candidate fixes are **not** two points on one quality axis —
+  they close different properties: `(O, C, h_pqc)` makes collision *cryptographically
+  negligible*; `gindex` makes it *structurally impossible*. After V1 the
+  `(O, C, h_pqc)` residual defends only against simultaneous honest collision in
+  three hash-derived 32-byte fields — a probability so far below every other
+  failure in the system that the defense is decorative, and it forces the threat
+  model to *carry the collision-negligibility argument forever*. The `gindex`
+  resolution lets the model **delete** the collision case instead — the same
+  "make the bad state unrepresentable, don't defend against it" discipline as the
+  T1–T3 type contracts and the E1 batch message. So the ordering is inverted from
+  "minimal vs preferred": **`gindex` is *the* fix; `(O, C, h_pqc)` is the fallback,
+  gated on a single binding-derivability check — which the verification below shows
+  *holds*, so the fallback is recorded but not taken.**
+
+  **Why `gindex` is the correct fix, not merely the stronger one.** The
+  `(O, C)` content-match was always solving a problem the wallet does not have for
+  its *own* outputs. The §4.3 content-match exists to avoid *querying the daemon
+  for position* (the privacy property: never ask the daemon "where is my output").
+  But for an owned output the wallet is matching its own output in **downloaded
+  data**, not querying anyone, and it already holds the global index from its own
+  scan (`TransferDetails.global_output_index`, `transfer.rs:90`). First-match on a
+  weak content key is a *vestige* of treating owned-output resolution as if it were
+  locating an arbitrary output — which it is not.
+
+  **V3 (hinge verification) — the index→gindex binding IS locally constructible at
+  `assemble.rs:92`, confirmed at source, no daemon query:**
+  - The `drained` stream at the match site is `Vec<LeafEntry>`, each carrying
+    `e.gindex` (`assemble.rs:89`, `LeafEntry.gindex` `types.rs:141`). Tree position
+    `P` = index in `drained`, so "global index `G` sits at tree position `P`" is
+    `drained.position(|e| e.gindex == G)` — entirely local.
+  - The numbering matches, **resting on the no-legacy genesis invariant**: the
+    scanner sets `global_output_index = output.index_on_blockchain()`
+    (`ledger_ext.rs:74`), accumulated as a coinbase-first per-tx base plus the
+    intra-tx index `o` (`scan.rs:562`, base advanced at `scan.rs:735–738`,
+    miner-tx-first at `scan.rs:672–678`); the curve-tree `gindex` is the **same**
+    `next_output_seq` counter (`types.rs:116`, mirrors `blockchain_db.cpp:360`),
+    locally recomputed coinbase-first over every output (`recon.rs:144–148`). They
+    agree because **every Shekyl tx is V2** (`RCTTypeFcmpPlusPlusPqc` minimum, no V1
+    — `60-no-monero-legacy.mdc`): the scanner advances its base only for
+    `Transaction::V2` (`scan.rs:735`, a Monero-legacy guard that is vacuously
+    always-true under FCMP++), and the curve-tree counts every output
+    unconditionally, so "count every V2 output" = "count every output." Were a V1
+    tx ever admissible, the scanner would skip its outputs while the tree counted
+    them and the two numberings would diverge — so the binding's soundness is the
+    genesis no-V1 invariant, not an unconditional property of the two counters.
+    (The `output_index_for_first_ringct_output` name and the `V2` guard are
+    Monero-legacy residue — a rule-60 dead-naming / vacuous-guard cleanup
+    candidate, FOLLOWUPS, not CT-5 scope; flagged so the inherited naming isn't
+    mistaken for a live RingCT/V1 distinction.)
+  - On any consensus-valid chain `gindex` is **dense-equals-daemon** (every
+    consensus output is leaf-eligible and commitment-bearing — `client.rs:278–296`);
+    the sparse-gindex degradation is confined to consensus-unreachable outputs,
+    which never produce a `drained` leaf and which the wallet never owns — so it
+    does not touch the owned-output resolution path.
+  - The owned output is always a leaf (the wallet can only own tagged/staked,
+    i.e. leaf-eligible, outputs), so its gindex is present in `drained` and the
+    match resolves exactly.
+
+  **The fix (CT-5c):** thread the owned input's `global_output_index` into the
+  assembly input (it rides the batch `AssembleTx` message alongside the
+  `ReferenceBlock`, aligning with T1/T3 — the engine has it per input from
+  `TransferDetails`), and resolve `leaf_pos = drained.position(|e| e.gindex ==
+  Gindex(G))`. Keyed on the tree's actual unique key, the resolution is **total**:
+  there is no collision case. The `(O, C)`/`(O, C, h_pqc)` content-match is deleted
+  from the owned-output path.
+  - **Reorg-safety (inherits X2).** `gindex`/`next_output_seq` can renumber across
+    a reorg, but the wallet resolves by its own `TransferDetails.global_output_index`,
+    which is rewound/rescanned inside the **same `handle_reorg` atomic** as the tree
+    rollback (X2, `merge.rs:337/595–602`) — so the resolution key moves with the
+    tree, never lagging it. Spendable outputs are ≥`SPENDABLE_AGE` deep and below
+    the shallow reference anchor; a reorg deep enough to renumber one triggers the
+    CT-5d re-anchor + rescan (E5), which re-resolves against the rebuilt index.
+  - **Test obligation collapses:** the total fix has **no collision case to test**
+    — the KAT is "resolves to the correct `gindex`," full stop. (The probabilistic
+    fallback would have required a `(O, C)`-collision-with-distinct-`h_pqc` KAT
+    *and* a standing negligibility argument; the total fix deletes both.)
+  - **`(O, C, h_pqc)` fallback (not taken):** would apply only if V3 had shown the
+    index→gindex binding required a daemon query or a structure the client does not
+    hold — which it does not. Recorded so the fallback's gate is explicit;
+    `h_pqc` is on `OutputIdentity` (`types.rs:55`) and in hand if ever needed.
+  - **Failure floor (retained backstop, either fix):** even if a collision somehow
+    occurred, it degrades to DoS, never theft — the key image is `I = Hp(O)`
+    (`assemble.rs:110`), a function of `O` alone, so a wrong pick cannot yield a
+    spendable proof for an output the wallet doesn't control; the ledger already
+    runs a burning-bug-drop under the reorg-atomic merge guard (`merge.rs:597`); a
+    wrong leaf yields an *invalid* proof, never a *leaky* one (O5 / FCMP++ ZK).
+    This is the constant-time-failure instinct applied to resolution: the floor
+    holds regardless of which resolution fix lands.
   - **Reopening clause (A4):** revisit **only** if the one-time-address derivation
-    is found to let a sender target an existing `O.x` — that is a derivation
-    finding upstream of X3, not a content-match one, and the consensus question
-    would still resolve against an output-key index. Absent that, X3 is closed by
-    the wallet-side widening. **Cited at the §4.3 content-match contract**
-    (CURVE_TREE_CLIENT.md): the match rests on the tree's `gindex`-uniqueness, on
-    the V1 one-time-address derivation (sender cannot target `O.x`), and on the
-    widened `(O, C, h_pqc)` / `gindex` resolution — and the threat model records
-    **why the chain does *not* need an output-key index** (a privacy regression),
-    so the next proposal to add one has the disposition already on file.
+    is found to let a sender target an existing `O.x` — a derivation finding
+    upstream of X3, not a content-match one, and the consensus question would still
+    resolve against an output-key index. **Cited at the §4.3 content-match
+    contract** (CURVE_TREE_CLIENT.md): owned-output resolution is keyed on the
+    tree's `gindex`-uniqueness (total), resting on the V1 derivation (sender cannot
+    target `O.x`) and the V3 local index→gindex binding — and the threat model
+    records **why the chain does *not* need an output-key index** (a privacy
+    regression), so the next proposal to add one has the disposition on file.
 
 - **X2 (reorg double-spend-against-self class) — CONFIRMED: selection state
   rebuilds inside the same reorg-atomic transition, not lazily.** The failure
@@ -946,9 +1019,14 @@ properties. None inverts a disposition.
 **External pass net:** X3 resolves to a **wallet-side resolution ambiguity, not a
 consensus gap** — its adversarial precondition is cryptographically unreachable
 (V1: `O` is one-time-address-derived, a payer cannot target `O.x`), so the residual
-is negligible honest collision, and the fix is to widen the wallet's match key to
-match the tree's unique key (minimally `(O, C, h_pqc)`, ideally `gindex` via
-`TransferDetails.global_output_index`). A consensus output-key-uniqueness rule is
+is negligible honest collision. V3 then confirmed the index→gindex binding is
+locally constructible at the match site (the `drained` leaf stream carries
+`e.gindex`, and the scanner's `global_output_index` is the same `next_output_seq`
+numbering), so the fix **resolves owned outputs by `gindex`** — the tree's actual
+unique key — making the collision case *structurally impossible* (deleted from the
+threat model, not bounded). `(O, C, h_pqc)` is the recorded fallback, gated on a
+binding-derivability check that V3 shows holds, so it is not taken. A consensus
+output-key-uniqueness rule is
 **explicitly rejected** — it is a privacy regression (a chain-wide output-key
 index, the linkability surface FCMP++/Monero deliberately avoid), and it wouldn't
 even close the threat. The threat model now records *why* the chain doesn't need
@@ -1016,18 +1094,22 @@ boundary).
   `ReferenceBlock`) and **delete the free `tree_depth: u8` param** (T2 — depth
   derived from `AssembledPath.tree`); migrate tests. The §3.7 deletions are the
   E1 closure and the §3.4 bug-class barriers, landed as type changes not
-  discipline notes. **Widen the wallet's resolution key to the tree's unique key
-  (X3) — `assemble.rs:92–94` matches the full `OutputIdentity` `(O, C, h_pqc)`,
-  not `(O, C)`; prefer resolving owned outputs to `gindex` via
-  `TransferDetails.global_output_index` if the binding is in hand (total,
-  zero-collision).** No consensus change — X3 is a wallet resolution ambiguity,
-  not a consensus gap, and its adversarial precondition is unreachable (V1). **Confirm + align coinbase
+  discipline notes. **Resolve owned outputs by `gindex`, the tree's unique key
+  (X3) — thread the owned input's `global_output_index` (`TransferDetails`,
+  `transfer.rs:90`) into the batch `AssembleTx` message (T1/T3-aligned) and match
+  `drained.position(|e| e.gindex == Gindex(G))` (`assemble.rs:89–94`); delete the
+  `(O, C)` content-match on the owned path.** Total resolution, collision case
+  *deleted* (V3-confirmed locally constructible — `drained` carries `e.gindex`,
+  scanner `global_output_index` is the same `next_output_seq` numbering). No
+  consensus change — X3 is a wallet resolution ambiguity, not a consensus gap, and
+  its adversarial precondition is unreachable (V1); `(O, C, h_pqc)` is the recorded
+  fallback (not taken). **Confirm + align coinbase
   `eligible_height` with the type-specific tree maturity (X5)** so selection and
   tree-insertion agree (or confirm coinbase never sets a spendable `eligible_height`).
   DoD: real-root proof builds + submits in the `TestDaemon`
   harness; C3 precondition holds; the raw-`[u8;32]`-reference and free-`tree_depth`
-  call paths no longer exist (grep-clean); **X3 KAT (two leaves sharing `(O, C)`,
-  distinct `h_pqc` → wallet's leaf selected, not first-by-gindex); X5 KAT
+  call paths no longer exist (grep-clean); **X3 KAT (owned output resolves to the
+  correct `gindex` — no collision case to test); X5 KAT
   (coinbase tx attempt at reference between `+10` and `+60` → no wrong-leaf
   assembly).**
 - **CT-5d — proactive horizon guard + closeout.** `should_reanchor` rebuild loop
@@ -1058,6 +1140,23 @@ boundary).
   caveat.
 - **`CURVE_TREE_CLIENT.md` §9 CT-5 row** → "Round 1 closed" with the landed
   modules/symbols at closeout (CT-5d).
+- **`CURVE_TREE_CLIENT.md` §4.3 content-match contract (X3, CT-5c)** → record that
+  owned-output resolution is keyed on `gindex` (the tree's unique key), resting on
+  the V1 derivation (a payer cannot target `O.x`) and the V3 local index→gindex
+  binding (which itself rests on the no-V1 genesis invariant, §5.1); and record
+  **why the chain does not need an output-key index** (privacy regression), so the
+  next proposal to add one finds the disposition on file.
+- **Rule-60 `ringct`/`V2` naming residue — FOLLOWUPS V3.0 (landed 2026-06-14).**
+  The public field `ScannableBlock.output_index_for_first_ringct_output`
+  (`shekyl-oxide` `rpc/src/lib.rs:80`) and the `matches!(tx, Transaction::V2)`
+  index-advance guard (`scan.rs:735`) are Monero-legacy naming / a vacuously-
+  always-true guard under FCMP++ (no V1 txs). Not CT-5 scope and not a correctness
+  bug (the §5.1 V3 binding rests on the no-V1 genesis invariant either way). Placed
+  in the **V3.0 pre-genesis queue** (not CT-5d) because `ScannableBlock` is a public
+  RPC type — the rename is free pre-genesis, breaking post-genesis. The FOLLOWUPS
+  entry also records the four-version disambiguation (era `V3` ≠ tx-format `2` ≠
+  hardfork `1` ≠ proof `FcmpPlusPlusPqc`) so the "is `V2` a protocol bug?" question
+  is answered on file.
 - **`PHASE_2A_SEND_PATH.md`** — the F1/F2 synthetic-vector notes get a back-ref
   to CT-5 as the production replacement; §3.6 `ProofStale` interim-guard note
   cross-links the landed `should_reanchor` wiring.
@@ -1108,13 +1207,17 @@ boundary).
   (adversarial precondition cryptographically unreachable); V2 — `h_pqc`
   (`types.rs:55`) and `TransferDetails.global_output_index` (`transfer.rs:90`) are
   both in hand at the match site. X3 is a wallet *resolution ambiguity*, NOT a
-  consensus gap; the fix is widening the match key to the tree's unique key
-  (`(O, C, h_pqc)` minimal, `gindex` total) in CT-5c — a consensus output-key
-  index is rejected as a privacy regression.** X1 folded into O1-priv; X2/X4
+  consensus gap; V3 confirmed the index→gindex binding is locally constructible,
+  so the fix resolves owned outputs by `gindex` (the tree's unique key) in CT-5c —
+  collision *structurally impossible* (deleted, not bounded), `(O, C, h_pqc)` the
+  recorded fallback; a consensus output-key index is rejected as a privacy
+  regression.** X1 folded into O1-priv; X2/X4
   confirmed clean; X5 single-source + coinbase align (CT-5c); X6 pin-discipline;
   X7 leaf-blob bound (CT-5a). No disposition inverted.
 - [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
-- [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
+- [x] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending; **X3 adds
+  `CURVE_TREE_CLIENT.md` §4.3 gindex-resolution citation (CT-5c) and the rule-60
+  `first_ringct`/`V2`-guard FOLLOWUPS row (CT-5d)**.
 - [x] **E1 (closed, upgraded)** — tx-scoped read-snapshot atomicity vs C1:
   resolved by the batch `AssembleTx` message (§3.7 T3) — all N inputs assemble in
   one handler under one snapshot, mid-assembly-reorg split unrepresentable;
@@ -1159,13 +1262,15 @@ treatment is in the cited section; this is the audit index.
 ### External threat pass (X1–X7) — disposition log
 
 Graveyard-mapped pass, integrated 2026-06-14. X3 is the only real gap and closes
-to a match tightening, not a consensus citation (the honest correction).
+to a wallet-side `gindex` resolution — the tree's actual unique key — making the
+collision case structurally impossible (deleted, not bounded), not a consensus
+citation (the honest correction).
 
 | ID | Class (incident) | Exposed? | Disposition | Lands |
 |----|------------------|----------|-------------|-------|
 | **X1** | Monero decoy-timing deanonymization | Successor risk: anchor-age fingerprint | `REF_ANCHOR_AGE` is **consensus-uniform** across implementations (privacy, not just reorg-safety); never a config knob | §5 O1-priv |
 | **X2** | Reorg double-spend-against-self (Electrum-class) | No | **Confirmed** — selection state (`LedgerIndexes`) rebuilt inside the same `handle_reorg` atomic under one write guard (`merge.rs:337/595–602`), not lazily | §5.1 |
-| **X3** | Zcash malformed-proof-input / wrong-leaf | **Wallet resolution ambiguity, not a consensus gap; adversarial precondition unreachable (V1)** | **Widen wallet match key to the tree's unique key — `(O, C, h_pqc)` minimal (`types.rs:55`), `gindex` total (`transfer.rs:90`); CT-5c + KAT. Consensus output-key index REJECTED (privacy regression). V1: `O` one-time-address-derived (`output.rs:8–28`), payer can't target `O.x`** | §5.1, §6 |
+| **X3** | Zcash malformed-proof-input / wrong-leaf | **Wallet resolution ambiguity, not a consensus gap; adversarial precondition unreachable (V1)** | **Resolve owned outputs by `gindex` — the tree's unique key — in CT-5c: collision *structurally impossible* (deleted, not bounded). V3-confirmed locally constructible: `drained` carries `e.gindex` (`assemble.rs:89`/`types.rs:141`) and scanner `global_output_index` is the same `next_output_seq` numbering (`ledger_ext.rs:74`/`scan.rs:562`/`recon.rs:122–148`). `(O, C, h_pqc)` recorded fallback (not taken). KAT = "resolves to correct gindex" (no collision case). Consensus output-key index REJECTED (privacy regression). V1: `O` one-time-address-derived (`output.rs:8–28`)** | §5.1, §6 |
 | **X4** | Ingest timing side-channel (owned vs not) | No | **Confirmed** — `collect_block_leaves` ingests every output identically (no ownership check, `recon.rs:136–163`); constant-w.r.t.-ownership makes the E4 buffer privacy-neutral | §5.1 |
 | **X5** | Maturity off-by-one / two-sources spendability | Common path no; coinbase sub-check | **Confirmed single source** (`eligible_height` field read by both balance + C2); coinbase `+10` vs tree `+60` aligned in CT-5c, backstopped by `OutputNotDrained` (DoS floor) | §5.1, §6 |
 | **X6** | Supply-chain / dependency substitution (Ledger Connect-Kit) | Discipline | New edges (`shekyl-curve-tree`, `kameo`/`redb`) **exact-pinned**; CT-5a dependency-discipline review covers the edge | §5.1, §6 |

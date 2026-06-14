@@ -61,6 +61,46 @@ sustainability is unaffected by the recalibration.
   Target: V3.0 (genesis freeze gate; schedule with the broader FCMP++
   audit window so the reviewer has the full-composition context in hand).
 
+- **Rename the `ringct` Monero-legacy residue in `shekyl-oxide` (rule-60
+  dead-naming; surfaced in the CT-5 design closure, 2026-06-14).** The public
+  field `ScannableBlock.output_index_for_first_ringct_output`
+  (`rust/shekyl-oxide/shekyl-oxide/rpc/src/lib.rs:80`, set at `:714/730/737`)
+  and the `matches!(tx, Transaction::V2 { .. })` index-advance guard in the
+  scanner (`rust/shekyl-scanner/src/scan.rs:735`, consuming the field at
+  `:391/562/654`) carry CryptoNote/Monero naming that no longer maps to a live
+  distinction: under FCMP++ there is no RingCT-vs-pre-RingCT split and no V1
+  transaction, so "first **ringct** output" means "first output" and the
+  `Transaction::V2` guard is vacuously always-true. Rename to ownership-neutral
+  terms (e.g. `output_index_for_first_output` / `first_output_index`; the field's
+  own docstring already says "confidential outputs") and drop or comment the
+  vacuous guard. **This is naming-only — no wire-format, consensus, or behavior
+  change** (the binding the CT-5 §5.1 V3 verification rests on holds either way,
+  *because* every Shekyl tx is wire-format v2). Placed in the **V3.0 pre-genesis
+  queue specifically because `ScannableBlock` is a public RPC type**: a field
+  rename is free pre-genesis and a breaking API change post-genesis
+  (`16-architectural-inheritance.mdc` pre-genesis discount). Bundle with the next
+  PR that touches `shekyl-oxide`'s RPC surface. Target: V3.0.
+
+  *Version-concept disambiguation (recorded so the "is `V2` a protocol bug?"
+  question does not recur).* Shekyl carries four distinct, orthogonal "version"
+  notions; none contradicts "V3 at genesis":
+  - **Product / cryptographic-era generation = "V3"** (FCMP++ + hybrid PQC from
+    genesis; "V4" = lattice-only). This is `00-mission.mdc` branding, **not an
+    on-chain integer** — no wire field equals 3.
+  - **Transaction wire-format version = 2** (`SHEKYL_MIN_TX_VERSION`,
+    `lib.rs:42`; `Transaction::V2`, `version() == 2`, the `version != 2`
+    deserializer reject). The inherited CryptoNote binary-layout version, frozen
+    at 2; the `V2` in the scanner guard is *this*.
+  - **Block hard-fork version (`major_version`) = 1 at genesis**
+    (`SHEKYL_MIN_HF_VERSION`, `lib.rs:45`), deliberately reset (no Monero HF
+    history).
+  - **Proof / RCT type = `FcmpPlusPlusPqc`** (`fcmp.rs`), the only type accepted
+    from genesis.
+
+  "V3 at genesis" is realized on-chain as `tx-format=2` + `hardfork=1` +
+  `proof=FcmpPlusPlusPqc`. The `V2`/`ringct` naming is a clarity wart, not a
+  protocol-version defect.
+
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
   2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
