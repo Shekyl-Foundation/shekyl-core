@@ -31,6 +31,10 @@ members = [
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 
+    # Foundational state-shaped domain newtypes — heights, indices, hashes,
+    # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
+    "shekyl-types",
+
     # Vendored monero-oxide protocol crates
     "shekyl-oxide/crypto/helioselene",
     "shekyl-oxide/crypto/divisors",

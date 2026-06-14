@@ -1,0 +1,26 @@
+[package]
+name = "shekyl-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Foundational state-shaped domain newtypes (heights, indices, hashes, timestamps) shared across the Shekyl wallet/consensus stack"
+
+[dependencies]
+serde = { workspace = true }
+# `postcard_schema::Schema` is opt-in: only crates that persist these
+# newtypes into snapshot-checked blocks (today `shekyl-engine-state`) need
+# the derive. Foundational consumers (difficulty, consensus, economics)
+# stay free of the dependency. See `42-serialization-policy.mdc` for why the
+# named schema matters once a type lands in a persisted block.
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"], optional = true }
+
+[features]
+schema = ["dep:postcard-schema"]
+
+[dev-dependencies]
+postcard = { version = "1", features = ["alloc"] }
+
+[lints]
+workspace = true
