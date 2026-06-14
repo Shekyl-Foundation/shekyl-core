@@ -37,6 +37,40 @@
 //! epoch-granularity sweep to "resolve" a sub-epoch effect would over-read the
 //! model (cf. the float-vs-integer over-read, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`).
 //! We report the bound and flag where the window would *start* to bite.
+//!
+//! **Conditionality — what these numbers mean (review pass 2026-06-13).** Four
+//! caveats bound the harness's claims; the first two change what the number
+//! *means*, not just its value:
+//!
+//! - **Cover is conditional on §10.9 isolation, multiplicatively.** The decoys
+//!   model assumes the target is *indistinguishable* from background — which is
+//!   exactly what circuit/key isolation buys. Without isolation the principal's
+//!   activity is attributable directly (the target is *named*, not in a crowd),
+//!   so no window helps. Formally `P(link) = P(link|iso)·P(iso) +
+//!   P(link|¬iso)·P(¬iso)` with `P(link|¬iso) ≈ 1`; this harness measures only
+//!   `P(link|iso)`. The standoff is a **multiplier on isolation, never additive**.
+//! - **The harness is channel-agnostic; the rate must bind to the *actual*
+//!   channel.** "Candidate events in a window" is not specific to on-chain
+//!   funding spends. Post-isolation the residual correlation channel is
+//!   concurrent *network* activity, so the correct decoy rate is the
+//!   network-event rate, not the funding-tx rate swept here (a proxy). Testnet
+//!   must measure the rate of the channel that actually carries the leak.
+//! - **The window cap is anti-griefing (liveness), not privacy.** A maximum
+//!   announce↔bond separation is a *ceiling* (don't let announced-but-unbonded
+//!   `P`s linger); privacy wants the separation *large and random* — a floor.
+//!   The privacy-load-bearing controls (minimum effective spread + the
+//!   uniform-independent draw) are **wallet-only and consensus-unenforceable**
+//!   (consensus sees neither the FCMP++-hidden funding source nor off-chain
+//!   principal activity). Per finding 4 a shared trigger both loses its own
+//!   cover and injects a surge that degrades everyone's — so the draw is a hard
+//!   conformance requirement (published test vector), not a "default."
+//! - **These are nominal cover under honest traffic — an upper bound.** Poisson
+//!   decoys are honest background. Against an adversary that *observes* (marks
+//!   which background it can attribute elsewhere) and *injects* (announce-then-
+//!   not-bond seeding, bounded by the membership-only backing requirement),
+//!   effective cover is lower and unquantified (the RingCT nominal-vs-effective
+//!   lesson). S-3's modeled observer, not a passive rate measurement, is the
+//!   testnet target.
 
 use serde::Serialize;
 
