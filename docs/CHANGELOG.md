@@ -242,6 +242,15 @@
 
 ### Fixed
 
+- **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
+  (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
+  but the landed `reference.rs` defines `REBUILD_AT = FCMP_REFERENCE_BLOCK_MAX_AGE
+  / 2 = 50` (MAX_AGE = 100), pinned by a const-eval assert and `reference::tests`
+  — and §5/§5.2 already say 50. The `47` was stale arithmetic. Corrected to 50
+  and marked the open question **CLOSED** (value landed + pinned), with the
+  reopening criterion retained (measured propagation/confirmation latency).
+  Docs-only.
+
 - **archival: bond load-modify-store no longer wipes the v4 emission-dedup
   fields (F-S1 / F-E5, PR-E0, 2026-06-13).** `put_archival_bond_record`
   reconstructs a fresh `ArchivalBondValue` from scalar args and cannot carry the

@@ -1089,8 +1089,13 @@ canonical tree under replacement at both deepen boundaries.
    leaks nothing; it is a perf/memory tradeoff, not a privacy one. **Tracked in
    `FOLLOWUPS.md`** (V3.x perf), reopening on a measured wallet-refresh
    bottleneck.
-3. **`REBUILD_AT` default (§5.2).** `MAX_AGE/2 = 47` is a first cut; confirm
-   against expected propagation + confirmation latency.
+3. **`REBUILD_AT` default (§5.2). CLOSED (landed in `reference.rs`).**
+   `REBUILD_AT = MAX_AGE / 2 = 50` (MAX_AGE = 100), pinned by a const-eval
+   assert and `reference::tests`. The half-`MAX_AGE` margin leaves room for
+   propagation + a confirmation attempt; as a local wallet-hygiene parameter
+   (not consensus, not privacy-observable, §5.2) it is tunable without a
+   uniformity cost. Reopening criterion: measured propagation + confirmation
+   latency shows the half-window margin is too tight or too loose.
 4. **Set-B enumeration (§4.2). CLOSED (2026-06).** Grep-driven audit at
    `key.rs` enumerated the full engine-side secret set (`SourceSecretsBundle`
    fields, `OutputClaim`'s `amount`/`handle`/`key_image`, plus the stack-frame
