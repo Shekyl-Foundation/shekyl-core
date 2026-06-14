@@ -155,8 +155,9 @@ pub struct StandoffResult {
     pub thin_cover_frac: f64,
     /// Mean adversary single-guess link probability (1/set under uniform).
     pub link_prob_mean: f64,
-    /// Share of mass where the bond-post precedes the entry event (causal: 0;
-    /// inversion: ~0.5) — cases the "spend-before-bond" heuristic cannot include.
+    /// Share of mass where the bond-post *strictly* precedes the entry event
+    /// (causal: 0; inversion: `0.5·W/(W+1)` under the discrete gap model) — cases
+    /// the "spend-before-bond" heuristic cannot include.
     pub inversion_prior_break: f64,
     /// Standoff entry latency as a fraction of one settlement epoch.
     pub entry_latency_frac_epoch: f64,
@@ -274,7 +275,14 @@ fn run(cfg: &StandoffConfig) -> StandoffResult {
         anon_set_p05: p05,
         thin_cover_frac: thin as f64 / n as f64,
         link_prob_mean: link_sum / n as f64,
-        inversion_prior_break: if cfg.inversion { 0.5 } else { 0.0 },
+        // Discrete gap model: P(bond strictly precedes entry) = P(bond_first)·P(s>0)
+        // = 0.5·W/(W+1). Zero at W=0, where the two events always coincide and no
+        // inversion is possible — so the constant 0.5 over-reported that edge.
+        inversion_prior_break: if cfg.inversion {
+            0.5 * cfg.window_blocks as f64 / (cfg.window_blocks as f64 + 1.0)
+        } else {
+            0.0
+        },
         entry_latency_frac_epoch,
         homeostasis_free: entry_latency_frac_epoch <= HOMEOSTASIS_FREE_FRAC_EPOCH,
     }

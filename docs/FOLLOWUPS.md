@@ -374,7 +374,7 @@ sustainability is unaffected by the recalibration.
   events while passing the ±600 bound): the gap must be **drawn directly**
   (`s ~ U[0,600]`, fair per-`P` order-coin). The vector asserts on the realized
   `(spread, order)` *distribution* over a sample (uniform spread via
-  KS-against-uniform + excess-mass-near-zero; balanced independent order — and
+  **discrete chi-square GoF** + excess-mass-near-zero; balanced independent order — and
   order-balance alone is insufficient, since the trap's coin still looks fair).
   Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
   `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`

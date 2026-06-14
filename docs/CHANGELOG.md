@@ -417,6 +417,23 @@
 
 ### Fixed
 
+- **archival: standoff harness review-response fixes (PR137, 2026-06-14).**
+  Resolved Copilot review findings on `rust/shekyl-staking-sim/src/standoff.rs`
+  and the standoff docs: (1) `run()` guarded with `assert!(cfg.trials > 0)` (an
+  empty `sets` indexed `p05` / divided by zero) and dropped to private (no caller
+  outside the module); (2) both block→minute conversions centralized in a
+  `blocks_to_minutes` helper that casts to `f64` before multiplying and maps the
+  `u64::MAX` "no finite window" sentinel (returned by `recommended_window_blocks`
+  for `rate <= 0`) to infinity, removing a `u64` overflow; (3) `inversion_prior_break`
+  computed from the discrete gap model `0.5·W/(W+1)` instead of a constant `0.5`
+  — accurate for the integer gap and correctly `0` at `W=0` (events coincide, no
+  inversion possible); the `--standoff` report's inversion arm now reads `0.49834`
+  (was `0.5`), all other metrics byte-identical. Also fixed a doc inconsistency in
+  `STAKER_ARCHIVAL_SIM.md` and `FOLLOWUPS.md` (the spread test was described as
+  continuous "KS against uniform" in one place and the correct discrete chi-square
+  GoF in another — unified on the discrete chi-square the implementation uses).
+  fmt + clippy clean; 49 sim tests green.
+
 - **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
   (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
   but the landed `reference.rs` defines `REBUILD_AT = FCMP_REFERENCE_BLOCK_MAX_AGE

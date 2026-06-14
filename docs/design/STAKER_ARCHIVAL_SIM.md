@@ -3573,8 +3573,9 @@ but four things bound the result; the first two change the meaning, not just the
   second at `t0 + s`. That yields uniform separation, *free* inversion (the coin), max latency 600,
   and per-`P` independence (`t0` is the principal's private intent). **The published test vector must
   reject the triangular construction** — it asserts on the *distribution* of the realized
-  `(spread, order)` over a large sample (uniform spread: KS against `U[0, 600]` + an
-  excess-mass-near-zero / first-decile detector; balanced, per-`P`-independent order), **not** the
+  `(spread, order)` over a large sample (uniform spread: **discrete chi-square GoF** against the
+  uniform on `[0, 600]` + an excess-mass-near-zero / first-decile detector; balanced,
+  per-`P`-independent order), **not** the
   ±600 bound alone (which the trap also passes). Order-balance alone is *not* sufficient — the trap's
   order-coin still looks fair while its spread is zero-peaked, so the spread distribution is the
   load-bearing check. This is executable in the harness as the reference for the vector:
