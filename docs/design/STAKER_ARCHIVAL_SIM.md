@@ -3581,6 +3581,39 @@ but four things bound the result; the first two change the meaning, not just the
   `draw_entry_gap` / `summarize_gaps` in `standoff.rs`, with `correct_draw_is_well_distributed`
   (the correct draw is flat) and `double_jitter_trap_fails_the_same_check` (the same summary rejects
   the trap) as the validating tests.
+- **"Uniform-*independent*" has two independence dimensions a marginal gap test cannot see — both
+  must be in the conformance vector.** The uniform/trap checks above nail the *marginal*; they are
+  structurally blind to *independence*, and the gap is the wrong input for both failures:
+  - **Population anchor-independence (the catastrophic shared-trigger mode, finding 4).** The gap is
+    anchor-agnostic — a wallet bonding at "next epoch boundary + uniform gap" draws a *perfect*
+    uniform spread (passes every gap test) while every wallet's anchor `t0` snaps to the same
+    boundary, so the **absolute bond times** cluster and the candidate set collapses to ~1.01 (worse
+    than the triangular trap's merely-bad). The bug is in the anchor, not the gap, so it needs a
+    **separate harness on absolute times**: a population of `N` wallets with independent private
+    intents, asserting the realized bond times do not cluster, with an **epoch-snapped population as
+    the negative**. Landed: `population_bond_time` / `max_bin_share` +
+    `population_anchor_independence_disperses_shared_trigger_clusters`.
+  - **Serial independence across a `P`'s repeated draws (now load-bearing).** A marginal GoF cannot
+    see autocorrelation; a weak PRNG can produce a beautiful uniform marginal with correlated
+    successive draws. This was moot when a `P` drew one gap in its life, but **rebond / partial-unbond
+    / re-entry at genesis** make a `P` draw several gaps over its lifetime — and a conformant-but-weak
+    wallet's correlated successive gaps make those recurring bond ops linkable to each other (exactly
+    the recurring-surface exposure). For a *cross-wallet* vector (different implementations, different
+    PRNGs — cannot assume SplitMix64), add a **lag-1 autocorrelation / runs probe** on a single
+    wallet's gap sequence. Landed: `lag1_autocorr` +
+    `serial_independence_reference_passes_correlated_fails`.
+- **The grade is a discrete GoF at a strict grading alpha — not continuous KS, not research alpha.**
+  Three conformance-gate-specific cautions: (i) the gap is **integer blocks**, so continuous KS is
+  mis-calibrated and conservative — use **chi-square against the discrete uniform** (`chi_square_uniform`,
+  graded by `chi_square_grades_uniform_at_strict_alpha`); (ii) pick **alpha for a grading gate, not
+  research** — a naive `p < 0.05` false-fails ~5 % of correct wallets by sampling chance, so set the
+  threshold strict (**~1e-6**, via `chi_square_upper_crit` at `Z_ALPHA_1E6`) where a correct wallet
+  essentially never false-fails while the trap (a gross deviation) still fails by orders of magnitude;
+  (iii) **"fixed seed" means reference-determinism, not a PRNG mandate** — the seeded SplitMix64
+  sequence makes the *reference* reproducible for others to match their statistics against; it must
+  not become "all wallets emit this exact sequence" (that grades the implementation, not the
+  property, and false-fails a correct wallet with a different CSPRNG). Grade the property
+  (uniform-independent) statistically.
 - **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
   (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
   adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**

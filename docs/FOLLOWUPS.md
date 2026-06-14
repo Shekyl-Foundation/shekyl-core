@@ -309,7 +309,23 @@ sustainability is unaffected by the recalibration.
   order-balance alone is insufficient, since the trap's coin still looks fair).
   Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
   `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`
-  in `rust/shekyl-staking-sim/src/standoff.rs`.
+  in `rust/shekyl-staking-sim/src/standoff.rs`. **"Uniform-*independent*" has two
+  independence dimensions a marginal gap test cannot see, both now in the suite:**
+  (i) **population anchor-independence** — the catastrophic shared-trigger mode
+  (epoch-snapped anchors pass the gap test but cluster absolute bond times → set
+  ~1.01); separate harness on absolute times with an epoch-snapped negative
+  (`population_bond_time` / `max_bin_share` +
+  `population_anchor_independence_disperses_shared_trigger_clusters`); (ii)
+  **serial independence** — load-bearing now that rebond/partial-unbond/re-entry
+  make a `P` draw several gaps over its life; a lag-1 autocorrelation / runs probe
+  (`lag1_autocorr` + `serial_independence_reference_passes_correlated_fails`),
+  required for a *cross-wallet* vector that cannot assume SplitMix64. **Grade
+  form:** discrete chi-square (not continuous KS — the gap is integer blocks) at a
+  **strict grading alpha ~1e-6** (`chi_square_uniform` / `chi_square_upper_crit` /
+  `Z_ALPHA_1E6`; `chi_square_grades_uniform_at_strict_alpha`), so a correct wallet
+  essentially never false-fails while the trap fails by orders of magnitude. The
+  fixed seed is **reference-determinism, not a PRNG mandate** — grade the property,
+  not the implementation.
   (2b) **Exit-seam standoff geometry (separate envelope; ties GF-4 + the
   partial-unbond genesis item).** The ±600 entry envelope does *not* cover the
   exit seam. Pin a **separate** standoff for terminal drain *and* recurring

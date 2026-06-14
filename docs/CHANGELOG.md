@@ -4,6 +4,28 @@
 
 ### Added
 
+- **archival: standoff conformance suite gains the two independence probes +
+  discrete-GoF grade (2026-06-13).** The marginal uniform/trap tests are
+  structurally blind to the *independent* half of "uniform-independent draw";
+  added the two probes the marginal cannot see (`rust/shekyl-staking-sim/src/standoff.rs`):
+  (1) **population anchor-independence** — the catastrophic shared-trigger mode
+  (an epoch-snapped anchor passes every gap test while clustering absolute bond
+  times → candidate set ~1.01); `population_bond_time` / `max_bin_share` +
+  `population_anchor_independence_disperses_shared_trigger_clusters` with an
+  epoch-snapped negative. (2) **serial independence** — load-bearing now that
+  rebond/partial-unbond/re-entry make a `P` draw several gaps over its life (a
+  weak PRNG yields a uniform marginal with correlated successive draws, linking
+  recurring bond ops); `lag1_autocorr` +
+  `serial_independence_reference_passes_correlated_fails`. Also added the
+  grading form: a **discrete** chi-square against the uniform (`chi_square_uniform`,
+  not continuous KS — the gap is integer blocks) at a **strict grading alpha
+  ~1e-6** (`chi_square_upper_crit` / `Z_ALPHA_1E6`;
+  `chi_square_grades_uniform_at_strict_alpha`), chosen so a correct wallet
+  essentially never false-fails while the trap fails by orders of magnitude; the
+  fixed seed is reference-determinism, **not** a PRNG mandate. Suite is 49 sim
+  tests green; economic sweep + `--standoff` report untouched. Docs:
+  `STAKER_ARCHIVAL_SIM.md` §*Construction and per-seam geometry*, `FOLLOWUPS.md`.
+
 - **archival: executable reference for the standoff draw conformance vector
   (2026-06-13).** Added `draw_entry_gap` (the conformance-correct direct draw:
   `s ~ U[0,600]` + fair order-coin) and `summarize_gaps` (realized
