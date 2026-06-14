@@ -85,6 +85,22 @@
   re-sim (the reframings are meaning-changes, not value-changes); no consensus
   surface touched yet (the consensus questions are opened, not decided).
 
+- **docs: track five CT deferrals in FOLLOWUPS (CT survey cleanup,
+  2026-06-13).** A CT-* state survey found five pieces of real deferred work
+  recorded only inside design/closeout docs, not in the central `FOLLOWUPS.md`
+  ledger. Added a tracked row (target version + reopening trigger per
+  `21-reversion-clause-discipline.mdc`) for each, with back-references from the
+  source docs so they are bisect-locatable both ways: (1) **CT-2 Tier B**
+  reconstruct-root KATs (staked/non-coinbase maturity, the `recon_tier_b.rs`
+  `#[ignore]` set) — V3.0, after CT-5; (2) **CT-1 full-segment freeze/prune KAT
+  at `j=2`** (~26k leaves/segment vs the CI-scale `j=0`/Tier-A coverage) — V3.0,
+  with prune-policy; (3) **wallet-local `O.x → position` match index** (§4.3
+  scan cost) — V3.x perf; (4) **confirm segment layer `j` / shard size `E`
+  against mainnet leaf growth** (§7.2.2, level-2 ≈26k provisional) — V3.x, with
+  the `ArchivalEngine` shard policy; (5) **anonymized (Tor/I2P) routing for
+  non-forward segment fetch** (§7.4) — V3.0, riding the `SegmentSource` seam.
+  Docs-only; no code or consensus surface touched.
+
 - **economics: CI gate enforces the pure-integer contract for `reward_arithmetic`
   (2026-06-13).** `scripts/ci/check_archival_reward_gates.sh` (run from
   `check_consensus_invariants.sh`) now rejects `f32`/`f64`, `usize`/`isize`, and
@@ -398,6 +414,52 @@
   the Stage-5 cutover (`10-shekyl-first.mdc`, `20-rust-vs-cpp-policy.mdc`). No
   production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
   §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
+
+### Fixed
+
+- **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
+  (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
+  but the landed `reference.rs` defines `REBUILD_AT = FCMP_REFERENCE_BLOCK_MAX_AGE
+  / 2 = 50` (MAX_AGE = 100), pinned by a const-eval assert and `reference::tests`
+  — and §5/§5.2 already say 50. The `47` was stale arithmetic. Corrected to 50
+  and marked the open question **CLOSED** (value landed + pinned), with the
+  reopening criterion retained (measured propagation/confirmation latency).
+  Docs-only.
+
+- **archival: bond load-modify-store no longer wipes the v4 emission-dedup
+  fields (F-S1 / F-E5, PR-E0, 2026-06-13).** `put_archival_bond_record`
+  reconstructs a fresh `ArchivalBondValue` from scalar args and cannot carry the
+  v4 `claimed_settlement_epochs` set or `first_paying_emission_height`. The slash
+  apply/revert paths loaded the full bond, mutated it, then wrote back through
+  that reconstructing writer — silently dropping both v4 fields on every slash
+  and every reorg revert. Added a full-bond writer
+  `BlockchainDB::put_archival_bond_value(p_id, bond)` (LMDB impl + no-op base +
+  testdb stub) that serializes the entire decoded record;
+  `put_archival_bond_record` now delegates to it (its only caller is JoinMarket
+  connect, a fresh-P create where the scalar path is correct).
+  `apply_archival_slash_one` and `revert_archival_slashes_at_height` now write
+  the mutated bond through the full-bond writer, so the dedup state survives a
+  slash and reverts cleanly with `pop_block`. Added a public reader
+  `get_archival_bond_value` and three regression tests in
+  `archival_substrate_lmdb.cpp` (`bond_v4_fields_survive_full_writer`,
+  `bond_v4_fields_survive_load_modify_store`,
+  `bond_v4_claimed_set_survives_reorg_revert`). The
+  `claimed_epochs_check_and_set` C++ FFI stays deferred to its first consumer
+  (the emission write path, PR-E3) per spec §6.3 and `15-deletion-and-debt.mdc`.
+  Also closed a sibling encode/decode asymmetry in the same write path:
+  `ArchivalBondValue::encode()` serialized any `holdings_kind` byte while
+  `decode()` rejects unknown values, so a writer could persist a record no read
+  path can decode. `encode()` now rejects unknown `holdings_kind` alongside its
+  existing at-rest invariants (bounds, claimed-epoch well-formedness), which
+  protects every writer through the single serialization funnel; regression test
+  `bond_encode_rejects_unknown_holdings_kind`. Because `apply_archival_slash_one`
+  was moved to public scope for the slash regression tests, it now carries the
+  same `check_open()` + active-write-txn precondition the internal scheduler
+  enforces, so direct invocation without a write txn fails loudly instead of
+  dereferencing a null `*m_write_txn`; regression test
+  `apply_slash_requires_active_write_txn`. This is a latent-bug precursor the
+  emission vin (PR-E3) depends on; no emission behavior changes. Docs:
+  `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
 
 ### Changed
 

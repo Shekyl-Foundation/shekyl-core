@@ -648,6 +648,16 @@ struct ArchivalBondValue {
         {
             throw std::runtime_error("ArchivalBondValue encode: bounds exceeded");
         }
+        // decode() rejects any holdings_kind outside the two known values, so a
+        // serializer that accepted them would persist a record no read path can
+        // decode. Reject here to keep encode/decode symmetric — a write that
+        // round-trips is the at-rest contract, surfaced loudly rather than
+        // deferred to the next scan's decode failure.
+        if (holdings_kind != kHoldingsShardSetCompact
+            && holdings_kind != kHoldingsCompleteTree)
+        {
+            throw std::runtime_error("ArchivalBondValue encode: unknown holdings_kind");
+        }
         // The claimed set's order and span invariants are maintained by the
         // Rust dedup helper; a violation here is a writer bug, surfaced loudly
         // rather than deferred to the next decode.

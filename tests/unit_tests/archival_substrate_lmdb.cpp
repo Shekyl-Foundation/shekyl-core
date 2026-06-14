@@ -287,6 +287,21 @@ TEST(archival_substrate_lmdb, bond_v4_claimed_invariants_enforced_at_encode)
   EXPECT_THROW(wide_span.encode(), std::runtime_error);
 }
 
+// encode() must reject any holdings_kind decode() would reject, so a write
+// cannot persist a record no read path can decode (encode/decode symmetry).
+TEST(archival_substrate_lmdb, bond_encode_rejects_unknown_holdings_kind)
+{
+  shekyl::db::ArchivalBondValue unknown_kind = baseline_bond();
+  unknown_kind.holdings_kind = 2; // neither ShardSetCompact (0) nor CompleteTree (1)
+  EXPECT_THROW(unknown_kind.encode(), std::runtime_error);
+
+  // The full-bond writer funnels through encode(), so it inherits the rejection
+  // and cannot persist an undecodable record.
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  EXPECT_THROW(db.put_archival_bond_value(make_hash(0x74), unknown_kind), std::runtime_error);
+}
+
 TEST(archival_substrate_lmdb, bond_v4_reject_truncated_claimed_tail)
 {
   shekyl::db::ArchivalBondValue bond = baseline_bond();
@@ -395,4 +410,144 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 2u);
   EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
+}
+
+// ── F-S1: v4 fields survive the load-modify-store writers ───────────────────
+//
+// put_archival_bond_record rebuilds a fresh ArchivalBondValue from scalar args
+// and cannot carry claimed_settlement_epochs / first_paying_emission_height.
+// The slash apply/revert load-modify-store paths therefore write through the
+// full-bond writer put_archival_bond_value; before that fix they silently wiped
+// the v4 fields (REWARD_EMISSION_VIN_PLAN.md §1.5 F-S1 / F-E5). These tests pin
+// that the v4 fields round-trip the writer and survive both a slash and its
+// reorg revert.
+
+namespace {
+
+// Seed record carrying populated v4 fields. The claimed set {100,105,126} spans
+// exactly W=26 (the legal max), and first_paying is a non-sentinel height.
+shekyl::db::ArchivalBondValue bond_with_v4_fields(const std::vector<uint64_t>& shards,
+  uint64_t bonded_total)
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x0A, 0x0B, 0x0C};
+  bond.join_settlement_epoch = 2;
+  bond.bonded_total_atomic = bonded_total;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = shards;
+  bond.claimed_settlement_epochs = {100, 105, 126};
+  bond.first_paying_emission_height = 1234567;
+  return bond;
+}
+
+} // namespace
+
+TEST(archival_substrate_lmdb, bond_v4_fields_survive_full_writer)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x71);
+
+  const shekyl::db::ArchivalBondValue written =
+    bond_with_v4_fields({7, 9}, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  db.put_archival_bond_value(p_id, written);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, written.claimed_settlement_epochs);
+  EXPECT_EQ(read.first_paying_emission_height, written.first_paying_emission_height);
+  EXPECT_EQ(read.bonded_total_atomic, written.bonded_total_atomic);
+  EXPECT_EQ(read.held_shard_ids, written.held_shard_ids);
+}
+
+TEST(archival_substrate_lmdb, bond_v4_fields_survive_load_modify_store)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x72);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t settlement_epoch = 3;
+  const uint64_t slash_height = 5000;
+
+  const shekyl::db::ArchivalBondValue seed = bond_with_v4_fields({7, 9}, 2 * floor);
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, settlement_epoch, floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  // The slash mutation took effect: shard 7 dropped, per-P balance debited.
+  EXPECT_EQ(read.bonded_total_atomic, floor);
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_TRUE(read.holds_shard(9));
+  // The F-S1 regression: the v4 dedup fields survived the load-modify-store.
+  EXPECT_EQ(read.claimed_settlement_epochs, seed.claimed_settlement_epochs);
+  EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
+}
+
+// apply_archival_slash_one is public (scheduler + tests). Without an active
+// write txn its mutating helpers would dereference a null *m_write_txn (UB);
+// the precondition must reject that loudly instead.
+TEST(archival_substrate_lmdb, apply_slash_requires_active_write_txn)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x75);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+  db.put_archival_bond_value(p_id, bond_with_v4_fields({7, 9}, 2 * floor));
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+  // Close the batch so no write txn is active when the public entry is called.
+  fixture.db.batch_stop();
+
+  uint32_t seq = 0;
+  EXPECT_THROW(
+    lmdb.apply_archival_slash_one(6000, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor),
+    std::runtime_error);
+
+  // Restore an active batch for TempLMDB teardown symmetry.
+  fixture.db.batch_start();
+}
+
+TEST(archival_substrate_lmdb, bond_v4_claimed_set_survives_reorg_revert)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x73);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t settlement_epoch = 3;
+  const uint64_t slash_height = 6000;
+
+  const shekyl::db::ArchivalBondValue seed = bond_with_v4_fields({7, 9}, 2 * floor);
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, settlement_epoch, floor);
+  db.revert_archival_slashes_at_height(slash_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  // The reorg revert restored the slash mutation.
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_TRUE(read.holds_shard(9));
+  // The v4 dedup state survived both the slash and its revert: the
+  // "dedup reverts with pop_block" invariant (FOLLOWUPS.md:1652) holds.
+  EXPECT_EQ(read.claimed_settlement_epochs, seed.claimed_settlement_epochs);
+  EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
 }

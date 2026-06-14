@@ -460,6 +460,8 @@ private:
 
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const override;
+  virtual bool get_archival_bond_value(const crypto::hash& p_id,
+    shekyl::db::ArchivalBondValue& out) const override;
   virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t at_height) const override;
   virtual bool archival_bond_good_through(const crypto::hash& p_id,
@@ -476,6 +478,8 @@ private:
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
+  virtual void put_archival_bond_value(const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond) override;
   virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count) override;
@@ -582,8 +586,16 @@ private:
   bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
     uint64_t settlement_epoch) const;
+
+public:
+  // Single-slash load-modify-store helper. Production caller is the private
+  // process_archival_slash_for_epoch; exposed here so the bond field-preservation
+  // regression test can drive the load-modify-store path directly
+  // (REWARD_EMISSION_VIN_PLAN.md §1.5 F-S1).
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
+
+private:
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
   void prune_archival_epochs_before(uint64_t prune_below_epoch);

@@ -43,7 +43,7 @@ cargo test -p shekyl-curve-tree
 ## 3. Deferred (not Round 1)
 
 - On-disk `LeafStore::open(path)` wiring in engine / sync (CT-3, CT-5).
-- Full-segment freeze + prune retention KAT at production `j=2` leaf count (~26k leaves/segment).
+- Full-segment freeze + prune retention KAT at production `j=2` leaf count (~26k leaves/segment). **Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md)** (V3.0, with prune-policy / store-backed assembly).
 - redb file shrink after prune (cosmetic; documented in pins).
 - `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` codegen dedup (PHASE_2B; `FOLLOWUPS.md`).
 
