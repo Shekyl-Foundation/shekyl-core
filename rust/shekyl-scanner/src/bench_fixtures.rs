@@ -340,7 +340,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         extra: extra_serialized,
     };
 
-    let tx: Transaction<Pruned> = Transaction::V2 {
+    let tx: Transaction<Pruned> = Transaction::V3 {
         prefix: tx_prefix,
         proofs: Some(PrunedProofs {
             base: ProofBase {
@@ -373,9 +373,9 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         curve_tree_root: [0u8; 32],
     };
 
-    // Minimal miner-tx: V2, single Input::Gen, no outputs (per the
+    // Minimal miner-tx: v3, single Input::Gen, no outputs (per the
     // `make_synthetic_block` precedent in engine-core's test_support).
-    let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
+    let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V3 {
         prefix: TransactionPrefix {
             additional_timelock: Timelock::None,
             inputs: vec![Input::Gen(0)],
@@ -386,7 +386,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
     };
 
     let block = Block::new(header, miner_tx, vec![placeholder_tx_hash])
-        .expect("Block::new accepts a V2 miner-tx + one tx hash");
+        .expect("Block::new accepts a v3 miner-tx + one tx hash");
 
     ScannableBlock {
         block,

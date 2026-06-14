@@ -1,4 +1,4 @@
-//! Wire adapter: assemble `shekyl_oxide::transaction::Transaction::V2` and serialize.
+//! Wire adapter: assemble `shekyl_oxide::transaction::Transaction::V3` and serialize.
 //!
 //! This module is the **sole** importer of `shekyl_oxide::transaction::Transaction`
 //! in the `shekyl-tx-builder` crate (`sign.rs` stays format-agnostic).
@@ -204,7 +204,7 @@ pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderErro
     let n_out = input.output_keys.len();
     let proofs = build_proofs(input, n_in, n_out);
 
-    let tx: Transaction<NotPruned> = Transaction::V2 {
+    let tx: Transaction<NotPruned> = Transaction::V3 {
         prefix,
         proofs: Some(proofs),
     };

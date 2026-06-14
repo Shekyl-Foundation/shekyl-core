@@ -72,7 +72,7 @@ fn block_round_trip_does_not_misalign_miner_tx() {
     // The §3.6 #2 regression: with the six-field header the miner transaction is
     // read at the correct offset. A full-block round-trip exercises exactly the
     // `BlockHeader::read` → `Transaction::read` boundary that mis-aligned before.
-    let miner_transaction = Transaction::V2 {
+    let miner_transaction = Transaction::V3 {
         prefix: TransactionPrefix {
             additional_timelock: Timelock::None,
             inputs: vec![Input::Gen(500)],

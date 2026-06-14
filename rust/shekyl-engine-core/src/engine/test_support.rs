@@ -25,7 +25,7 @@
 //!   and the hybrid `Engine<SoloSigner, TestDaemon>` tests
 //!   (consumed as the engine's `D: DaemonEngine` slot).
 //! - [`make_synthetic_block`]: minimal-valid `ScannableBlock`
-//!   constructor (V2 miner transaction with `Input::Gen`, no
+//!   constructor (v3 miner transaction with `Input::Gen`, no
 //!   regular outputs, no non-miner transactions). Tests that need
 //!   a recoverable owned output build their own
 //!   `ScannableBlock` rather than extending this helper, because
@@ -580,7 +580,7 @@ impl DaemonEngine for TestDaemon {
 /// Build a minimal-valid `ScannableBlock` for `height` with the
 /// chosen `parent_hash`. The produced block has:
 ///
-/// - V2 miner transaction with `Input::Gen(height)` (passes
+/// - v3 miner transaction with `Input::Gen(height)` (passes
 ///   [`Block::new`]'s coinbase check).
 /// - No outputs in the miner transaction.
 /// - No non-miner transactions.
@@ -610,13 +610,13 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         extra: vec![],
     };
 
-    let miner_tx = Transaction::V2 {
+    let miner_tx = Transaction::V3 {
         prefix: miner_prefix,
         proofs: None,
     };
 
     let block = Block::new(header, miner_tx, vec![]).expect(
-        "Block::new accepts a V2 miner-tx-only block by construction; \
+        "Block::new accepts a v3 miner-tx-only block by construction; \
          the only failure mode is a non-Gen first input or wrong input count, \
          neither of which applies here",
     );

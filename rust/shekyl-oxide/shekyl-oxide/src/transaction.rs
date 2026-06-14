@@ -376,7 +376,11 @@ impl TransactionPrefix {
 
     fn hash(&self) -> [u8; 32] {
         let mut buf = vec![];
-        write_varint(&2u8, &mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
+        // The version varint is the first field of the C++ `transaction_prefix`
+        // serialization, so it is part of the prefix hash preimage. Shekyl's
+        // sole transaction version is 3; emitting 2 here would desync the tx
+        // hash from the daemon's `get_transaction_prefix_hash`.
+        write_varint(&3u8, &mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
         self.write(&mut buf)
             .expect("write failed but <Vec as io::Write> doesn't fail");
         keccak256(buf)
@@ -436,15 +440,19 @@ mod sealed {
 }
 pub use sealed::*;
 
-/// A Shekyl transaction (always version 2).
+/// A Shekyl transaction (always version 3).
 ///
-/// Shekyl does not support v1 (CryptoNote) transactions. All transactions use v2
-/// with FCMP++ proofs.
+/// Shekyl does not support v1 (CryptoNote) or v2 (Monero RingCT) transactions.
+/// Every transaction is version 3 with FCMP++ proofs from genesis
+/// (`CURRENT_TRANSACTION_VERSION` in `src/cryptonote_config.h`; the daemon
+/// rejects `tx.version < 3`). The single enum variant reflects that there is
+/// exactly one admissible wire version.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Transaction<P: PotentiallyPruned = NotPruned> {
-    /// A version 2 transaction with FCMP++ proofs (or coinbase with no proofs).
-    V2 {
+    /// The Shekyl transaction (version 3) with FCMP++ proofs (or a coinbase with
+    /// no proofs).
+    V3 {
         /// The transaction's prefix.
         prefix: TransactionPrefix,
         /// The transaction's proofs (None for coinbase).
@@ -454,29 +462,29 @@ pub enum Transaction<P: PotentiallyPruned = NotPruned> {
 
 #[allow(private_bounds)]
 impl<P: PotentiallyPruned> Transaction<P> {
-    /// Get the version of this transaction (always 2).
+    /// Get the version of this transaction (always 3).
     pub fn version(&self) -> u8 {
-        2
+        3
     }
 
     /// Get the TransactionPrefix of this transaction.
     pub fn prefix(&self) -> &TransactionPrefix {
         match self {
-            Transaction::V2 { prefix, .. } => prefix,
+            Transaction::V3 { prefix, .. } => prefix,
         }
     }
 
     /// Get a mutable reference to the TransactionPrefix of this transaction.
     pub fn prefix_mut(&mut self) -> &mut TransactionPrefix {
         match self {
-            Transaction::V2 { prefix, .. } => prefix,
+            Transaction::V3 { prefix, .. } => prefix,
         }
     }
 
     /// Write the Transaction.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        write_varint(&2u8, w)?;
-        let Transaction::V2 { prefix, proofs } = self;
+        write_varint(&3u8, w)?;
+        let Transaction::V3 { prefix, proofs } = self;
         prefix.write(w)?;
         match proofs {
             None => w.write_all(&[0])?,
@@ -496,22 +504,22 @@ impl<P: PotentiallyPruned> Transaction<P> {
     /// Read a Transaction.
     pub fn read<R: Read>(r: &mut R) -> io::Result<Self> {
         let version: u64 = read_varint(r)?;
-        if version != 2 {
+        if version != 3 {
             Err(io::Error::other(
-                "only v2 transactions are supported by Shekyl",
+                "only v3 transactions are supported by Shekyl",
             ))?;
         }
         let prefix = TransactionPrefix::read(r)?;
 
         let proofs = P::Proofs::read(prefix.inputs.len(), prefix.outputs.len(), r)?;
-        Ok(Transaction::V2 { prefix, proofs })
+        Ok(Transaction::V3 { prefix, proofs })
     }
 }
 
 impl Transaction<NotPruned> {
     /// The hash of the transaction.
     pub fn hash(&self) -> [u8; 32] {
-        let Transaction::V2 { prefix, proofs } = self;
+        let Transaction::V3 { prefix, proofs } = self;
         let mut hashes = Vec::with_capacity(96);
 
         hashes.extend(prefix.hash());
@@ -542,7 +550,7 @@ impl Transaction<NotPruned> {
     ///
     /// Returns None if the transaction is a coinbase (without proofs).
     pub fn signature_hash(&self) -> Option<[u8; 32]> {
-        let Transaction::V2 { prefix, proofs } = self;
+        let Transaction::V3 { prefix, proofs } = self;
         let proofs = proofs.as_ref()?;
 
         let mut hashes = Vec::with_capacity(96);
@@ -568,7 +576,7 @@ impl Transaction<NotPruned> {
     /// Calculate the transaction's weight.
     pub fn weight(&self) -> usize {
         let blob_size = self.serialize().len();
-        let Transaction::V2 { prefix, proofs } = self;
+        let Transaction::V3 { prefix, proofs } = self;
         if proofs.is_none() {
             return blob_size;
         }
@@ -578,8 +586,8 @@ impl Transaction<NotPruned> {
 
 impl From<Transaction<NotPruned>> for Transaction<Pruned> {
     fn from(tx: Transaction<NotPruned>) -> Transaction<Pruned> {
-        let Transaction::V2 { prefix, proofs } = tx;
-        Transaction::V2 {
+        let Transaction::V3 { prefix, proofs } = tx;
+        Transaction::V3 {
             prefix,
             proofs: proofs.map(|proofs| PrunedProofs { base: proofs.base }),
         }

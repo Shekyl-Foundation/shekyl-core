@@ -1572,7 +1572,7 @@ mod tests {
             use shekyl_oxide::transaction::Transaction;
             let mut cursor: &[u8] = &built.tx_bytes;
             let tx = Transaction::read(&mut cursor).expect("built tx parses");
-            let Transaction::V2 { prefix, .. } = &tx;
+            let Transaction::V3 { prefix, .. } = &tx;
             let n_in = prefix.inputs.len();
             let n_out = prefix.outputs.len();
             let predicted = crate::engine::tx_fee_model::predict_weight(
@@ -2288,7 +2288,7 @@ mod tests {
 
         let mut cursor: &[u8] = &built.tx_bytes;
         let tx = Transaction::read(&mut cursor).expect("built tx parses");
-        let Transaction::V2 { prefix, .. } = &tx;
+        let Transaction::V3 { prefix, .. } = &tx;
         let n_in = prefix.inputs.len();
         let n_out = prefix.outputs.len();
 

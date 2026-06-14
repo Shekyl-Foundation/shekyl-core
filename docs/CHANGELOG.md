@@ -417,6 +417,26 @@
 
 ### Fixed
 
+- **oxide: transaction wire version corrected from 2 to 3 (2026-06-14).**
+  `shekyl-oxide`'s `Transaction` hardcoded wire version 2, but Shekyl's sole
+  admissible transaction version is 3 (`CURRENT_TRANSACTION_VERSION`,
+  `src/cryptonote_config.h`; the daemon rejects `tx.version < 3`). The Rust
+  reader gated on `version != 2` and so rejected every real Shekyl
+  transaction — including the genesis coinbase — a latent correctness bug on
+  the RPC sync path that was masked only by the absence of a live v3 chain.
+  Fixed the four version scalars (`Transaction::read` gate, `write` emit,
+  `version()`, and the `TransactionPrefix::hash` preimage — the last keeps the
+  tx hash in sync with the daemon's `get_transaction_prefix_hash`) and renamed
+  the single enum variant `Transaction::V2` → `Transaction::V3` so the type
+  reflects the one admissible wire version. The scanner's coinbase
+  `tx.version() != 2` guard was corrected to `!= 3` in lockstep. New
+  cross-language KAT (`rust/shekyl-oxide/shekyl-oxide/src/tests/transaction.rs`
+  `real_mainnet_genesis_tx_parses_as_v3`) parses the verbatim mainnet
+  `GENESIS_TX` and asserts version 3 + coinbase shape; the synthetic
+  round-trip test is now `v3_coinbase_round_trip`. Prerequisite for the CT-5a
+  genesis-seed facility. No consensus or wire-format change — the wire was
+  always v3; only the Rust constant was wrong.
+
 - **archival: standoff harness review-response fixes (PR137, 2026-06-14).**
   Resolved Copilot review findings on `rust/shekyl-staking-sim/src/standoff.rs`
   and the standoff docs: (1) `run()` guarded with `assert!(cfg.trials > 0)` (an
