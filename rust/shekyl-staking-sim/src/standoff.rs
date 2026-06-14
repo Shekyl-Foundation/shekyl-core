@@ -427,7 +427,8 @@ pub fn run_full_report() -> StandoffReport {
 /// directly `s ~ U[0, window]` and flip a fair order-coin; returns
 /// `(spread_blocks, bond_first)`. Uniform separation, fair inversion, max
 /// latency `window`, per-`P` independence (caller supplies an independent rng).
-pub fn draw_entry_gap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
+#[cfg(test)]
+fn draw_entry_gap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
     let s = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
     let bond_first = rng.unit() < 0.5;
     (s.min(window), bond_first)
@@ -437,6 +438,7 @@ pub fn draw_entry_gap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
 /// rather than merely to pass the correct shape: independently jitter both
 /// event-times in `[0, window]` around the common anchor; the realized
 /// separation is `|a - b|` — triangular, peaked at zero.
+#[cfg(test)]
 fn draw_entry_gap_double_jitter_trap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
     let a = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
     let b = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
@@ -448,8 +450,9 @@ fn draw_entry_gap_double_jitter_trap(window: u64, rng: &mut SplitMix64) -> (u64,
 /// `mean_spread ≈ window/2`, `bond_first_frac ≈ 0.5`, `first_decile_frac ≈ 0.10`,
 /// `max_decile_dev` small; the triangular trap collapses `mean_spread` toward
 /// `window/3` and spikes `first_decile_frac` / `max_decile_dev`.
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize)]
-pub struct GapSampleStats {
+struct GapSampleStats {
     pub n: usize,
     pub mean_spread: f64,
     pub max_spread: u64,
@@ -462,7 +465,8 @@ pub struct GapSampleStats {
 }
 
 /// Summarize a realized sample. `window` defines the decile bucketing.
-pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
+#[cfg(test)]
+fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
     let n = samples.len();
     let mut deciles = [0usize; 10];
     let mut spread_sum = 0u128;
@@ -518,12 +522,14 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
 
 /// Upper-tail standard-normal quantile for alpha = 1e-6 (z ≈ 4.7534), used to
 /// derive the chi-square grading threshold.
-pub const Z_ALPHA_1E6: f64 = 4.753_424;
+#[cfg(test)]
+const Z_ALPHA_1E6: f64 = 4.753_424;
 
 /// Chi-square goodness-of-fit against the **discrete** uniform on `[0, window]`,
 /// `n_bins` equal-width bins; returns the statistic (df = `n_bins - 1`). Reject
 /// uniformity when it exceeds `chi_square_upper_crit(n_bins - 1, Z_ALPHA_1E6)`.
-pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -> f64 {
+#[cfg(test)]
+fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -> f64 {
     let n = samples.len() as f64;
     let mut obs = vec![0usize; n_bins];
     for &(s, _) in samples {
@@ -542,7 +548,8 @@ pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -
 /// Wilson-Hilferty chi-square upper quantile (critical value) for `df` degrees
 /// of freedom at upper-tail normal quantile `z`. Dependency-free; accurate well
 /// past the margin the strict alpha needs.
-pub fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
+#[cfg(test)]
+fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
     let a = 2.0 / (9.0 * df);
     let t = 1.0 - a + z * a.sqrt();
     df * t * t * t
@@ -551,7 +558,8 @@ pub fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
 /// Lag-1 autocorrelation of one wallet's gap sequence — the serial-independence
 /// probe. `≈ 0` (~`1/sqrt(M)`) for independent draws; large for a correlated
 /// (weak-PRNG) sequence with the same marginal.
-pub fn lag1_autocorr(gaps: &[u64]) -> f64 {
+#[cfg(test)]
+fn lag1_autocorr(gaps: &[u64]) -> f64 {
     let m = gaps.len();
     if m < 2 {
         return 0.0;
@@ -576,6 +584,7 @@ pub fn lag1_autocorr(gaps: &[u64]) -> f64 {
 /// catastrophic shared-trigger mode); otherwise `t0` is independent over
 /// `[0, span)`. The gap is drawn *correctly* in both arms — the isolated bug is
 /// in the anchor, not the gap.
+#[cfg(test)]
 fn population_bond_time(
     window: u64,
     span: u64,
@@ -591,6 +600,7 @@ fn population_bond_time(
 /// Concentration of a population's bond times: the share in the most-occupied
 /// `bin_width`-wide bin. Dispersed (independent anchors) ⇒ small; clustered
 /// (shared trigger) ⇒ → 1.
+#[cfg(test)]
 fn max_bin_share(times: &[u64], bin_width: u64) -> f64 {
     use std::collections::HashMap;
     let mut bins: HashMap<u64, usize> = HashMap::new();
