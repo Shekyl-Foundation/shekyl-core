@@ -329,6 +329,11 @@ pub(crate) fn apply_scan_result_to_state(
         spent_key_images,
         stake_events,
         reorg_rewind,
+        // CT-5 §3.2 transit fields: populated by the producer (commit 3),
+        // consumed by the merge-driven ingest in CT-5a commit 4. Deliberately
+        // not read here yet (A1 frozen-contract, write-but-not-read).
+        block_leaves: _,
+        block_curve_tree_roots: _,
     } = result;
 
     if let Some(rewind) = reorg_rewind {
@@ -695,6 +700,8 @@ mod tests {
             spent_key_images: vec![],
             stake_events: vec![],
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("birthday merge");
         assert_eq!(ledger.height(), 1000);
@@ -741,6 +748,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.height(), 3);
@@ -760,6 +769,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
 
@@ -772,6 +783,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, second).unwrap_err();
         assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
@@ -789,6 +802,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
 
@@ -800,6 +815,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
         assert_eq!(ledger.height(), 2);
@@ -820,6 +837,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.transfers().len(), 1);
@@ -846,6 +865,8 @@ mod tests {
             }],
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("spend merge ok");
         assert!(ledger.transfers()[0].spent);
@@ -888,6 +909,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
@@ -908,6 +931,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
@@ -924,6 +949,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, third).expect("third merge ok");
@@ -949,6 +976,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first ok");
         assert_eq!(ledger.height(), 5);
@@ -968,6 +997,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: Some(ReorgRewind { fork_height: 3 }),
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("reorg ok");
         assert_eq!(ledger.height(), 5);
@@ -995,6 +1026,8 @@ mod tests {
                 },
             }],
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.height(), 1);
@@ -1018,6 +1051,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1036,6 +1071,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         match err {
@@ -1061,6 +1098,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1082,6 +1121,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1102,6 +1143,8 @@ mod tests {
             }],
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1120,6 +1163,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1167,6 +1212,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1234,6 +1281,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1279,6 +1328,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1347,6 +1398,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1470,6 +1523,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let _ =
             apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
@@ -1500,6 +1555,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
@@ -1584,6 +1641,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");

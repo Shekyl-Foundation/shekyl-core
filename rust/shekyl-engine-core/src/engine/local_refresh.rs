@@ -165,6 +165,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
+use super::curve_tree_decode;
 use super::diagnostics::{
     DiagnosticSink, MalformedKind, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
 };
@@ -173,7 +174,9 @@ use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgre
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
 use super::view_material::ViewMaterial;
-use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
+use crate::scan::{
+    DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind, ScanResult, StakeEvent,
+};
 
 /// Maximum retries for transient per-block RPC failures.
 ///
@@ -616,6 +619,12 @@ impl RefreshEngine for LocalRefresh {
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
             let stake_events: Vec<StakeEvent> = Vec::new();
             let mut reorg_rewind: Option<ReorgRewind> = None;
+            // CT-5 §3.2 transit fields (A1 frozen-contract): the full per-block
+            // leaf set and the consensus header `curve_tree_root`, materialized
+            // here where the `ScannableBlock` is in hand and carried on
+            // `ScanResult` for the merge-driven ingest (CT-5a commit 4).
+            let mut block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)> = Vec::new();
+            let mut block_curve_tree_roots: Vec<(u64, [u8; 32])> = Vec::new();
 
             let mut h = original_start;
             while h < end {
@@ -669,6 +678,8 @@ impl RefreshEngine for LocalRefresh {
                             block_hashes.retain(|(bh, _)| *bh < fork_height);
                             new_transfers.retain(|t| t.block_height < fork_height);
                             spent_key_images.retain(|k| k.block_height < fork_height);
+                            block_leaves.retain(|(bh, _)| *bh < fork_height);
+                            block_curve_tree_roots.retain(|(bh, _)| *bh < fork_height);
 
                             h = fork_height;
                             continue;
@@ -745,6 +756,26 @@ impl RefreshEngine for LocalRefresh {
                     }
                 }
 
+                // CT-5 §3.2 (R1-Q2/Q3): materialize the full per-block leaf
+                // set and capture the consensus header `curve_tree_root`
+                // *before* `scan_with_cancel` consumes `scannable`. The decode
+                // reproduces the daemon's drain order; the per-tx X7 buffer
+                // bound is defense-in-depth behind the excessive-outputs
+                // pre-pass above, so a `DecodeError` here maps to the same
+                // `Malformed` disposition.
+                let leaves = curve_tree_decode::decode_block_leaves(&scannable).map_err(|e| {
+                    let curve_tree_decode::DecodeError::ExcessiveOutputs { .. } = e;
+                    emit_state.try_emit(
+                        diagnostics,
+                        RefreshDiagnostic::DaemonMalformed {
+                            kind: MalformedKind::ExcessiveOutputs,
+                        },
+                    );
+                    LocalRefreshError::Malformed
+                })?;
+                block_leaves.push((h, leaves));
+                block_curve_tree_roots.push((h, scannable.block.header.curve_tree_root));
+
                 // Per-output safe-point cancellation (checkpoint 5)
                 // via Scanner::scan_with_cancel. The closure reads
                 // cancel.is_cancelled() at the top of each output
@@ -819,6 +850,8 @@ impl RefreshEngine for LocalRefresh {
                 spent_key_images,
                 stake_events,
                 reorg_rewind,
+                block_leaves,
+                block_curve_tree_roots,
             })
         }
     }

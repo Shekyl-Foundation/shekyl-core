@@ -69,9 +69,9 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
 use kameo::message::{Context, Message};
 
-use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs,
-};
+use shekyl_curve_tree::{BlockHeight, BlockLeaves, ClientError, CurveTreeClient, TxLeafInputs};
+
+use crate::scan::OwnedTxLeaves;
 
 // ---------------------------------------------------------------------------
 // Actor
@@ -129,23 +129,6 @@ impl Actor for CurveTreeActor {
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
-
-/// Owned, `Send` mirror of [`TxLeafInputs`] for the [`IngestBlock`] message.
-///
-/// [`BlockLeaves`] / [`TxLeafInputs`] borrow (`leaf_hash_blob: Option<&[u8]>`,
-/// `outputs: &[RawOutput]`); a `kameo` message must own its payload (`Send +
-/// 'static`). The producer materializes these owned vecs (CT-5a commit 3), and
-/// the [`IngestBlock`] handler re-borrows them into a [`BlockLeaves`] inside the
-/// actor task.
-#[allow(dead_code)] // populated by the producer in a later commit; today: constructed by tests.
-pub(crate) struct OwnedTxLeaves {
-    /// Whether this is the block's coinbase (miner) transaction.
-    pub is_miner: bool,
-    /// The validated `tx_extra 0x07` curve-tree leaf-hash blob, if present.
-    pub leaf_hash_blob: Option<Vec<u8>>,
-    /// The transaction's outputs in on-chain order.
-    pub outputs: Vec<RawOutput>,
-}
 
 /// Actor message for [`CurveTreeClient::ingest_block`]: append one block's
 /// leaves at the next consecutive height. Carries [`BlockHeight`] across the

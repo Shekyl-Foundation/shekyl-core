@@ -183,6 +183,10 @@ pub(crate) mod chain_economics_source;
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.
 pub(crate) mod curve_tree_actor;
+// `ScannableBlock` -> per-block leaf set decode (CT-5 §3.2, R1-Q3): reproduces
+// the daemon's consensus drain order so the producer can materialize the full
+// leaf set the merge feeds to `curve_tree_actor`.
+pub(crate) mod curve_tree_decode;
 pub mod daemon;
 pub(crate) mod diagnostics;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
