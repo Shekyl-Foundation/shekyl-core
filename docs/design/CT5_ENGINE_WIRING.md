@@ -1,10 +1,26 @@
 # CT-5 — engine wiring: production CurveTreeClient into the 2A signer (design — Round 1, OPEN)
 
-**Status:** Round 1 open (2026-06-13). Substrate audit complete and
-source-pinned (§3). No code yet — this doc is the frozen contract and
-threat-model frame the implementation cuts against, per
-`05-system-thinking.mdc` (spec first, code second). Design rounds run to
-closure before any production commit.
+**Status:** Round 2 dispositions resolved (2026-06-14). Round 1 closed
+R1-Q1–R1-Q6 (§4); Round 2 applied three standing architectural principles
+(below) and revised R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold). No code yet —
+this doc is the frozen contract and threat-model frame the implementation cuts
+against, per `05-system-thinking.mdc` (spec first, code second). A closure-review
+round (and the A3 threat pass against §5) precedes any production commit.
+
+**Standing principles this design is held to** (operator directive, 2026-06-14;
+they govern every CT-5 disposition):
+
+1. **Rust-first, push the FFI boundary.** This is the Rust wallet rewrite; the
+   C++ surface goes away at Stage 5. New logic is Rust — including daemon-side
+   work when a CT-5 change touches the daemon (route through a `shekyl_*` FFI
+   entry point, keep C++ a marshaling shim) per `20-rust-vs-cpp-policy.mdc`.
+2. **`shekyl-oxide` is ours to rewrite** (except vendored crypto primitives).
+   Extending its block types for Shekyl consensus (§3.6, pre-0) is normal work,
+   not fork-fighting.
+3. **Maximize the actor pattern; derive over hold.** Public state lives behind a
+   `kameo` actor with a `Clone` handle (mirror `KeyActor`); the engine holds the
+   handle, not the state. Prefer re-deriving a value from owned state over
+   persisting it.
 
 **Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-5 row:
 "Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A
@@ -91,9 +107,10 @@ client and the 2A signer, adding no consensus rule and no new crypto primitive.
 - The C2 gate rejects an output whose `eligible_height > reference_height` with
   a clean `OutputNotYetSpendable { eligible_height, reference_block_height,
   wait_blocks }` (2A §3.7.5 point 3), not an opaque assembly miss.
-- The structural no-secrets test extends over the engine's client ownership: the
-  `CurveTreeClient` and `AssembledPath` carry no secret-bearing field (parent
-  §4.1/§4.2; the secrets are added only in `sign_bridge` → `SpendInput`).
+- The structural no-secrets test extends over the `CurveTreeHandle` message
+  surface: the `CurveTreeActor` messages, `CurveTreeClient`, and `AssembledPath`
+  carry no secret-bearing field (parent §4.1/§4.2; the secrets are added only in
+  `sign_bridge` → `SpendInput`).
 - `cargo fmt` / `clippy -D warnings` / `cargo test` clean across
   `shekyl-engine-core` and `shekyl-curve-tree`.
 
@@ -149,21 +166,42 @@ ledger, daemon, refresh, pending-tx (`engine/mod.rs:6–24`). The ledger snapsho
 that refresh advances and the signer reads is reached via
 `self.ledger.with_ledger_block(...)` (`local_pending_tx.rs:613, 656, 775`).
 
-**Decision (R1-Q1, open):** where the client lives, how it is opened, and the
-single-writer discipline `ingest_block`/`rollback_to_fork` require
-(`&mut self`). Candidates:
+**Decision (R1-Q1, RESOLVED Round 2 — `CurveTreeActor` + `CurveTreeHandle`).**
+Draft history: Round-1 first leaned "refresh-owned writer" (corrected by the
+lock-free-producer model — `mod.rs:525–528`), then "plain `Engine` field under
+the shared RwLock." Round 2 applies the actor principle and lands on the
+`KeyActor` shape (`key_actor.rs`):
 
-- **(a)** A field on `Engine`, opened in the engine constructor against a path
-  derived from the wallet dir, behind the same interior-mutability the ledger
-  uses so refresh (writer) and pending-tx (reader) share it.
-- **(b)** A sub-state owned by the refresh engine (the only writer), with the
-  signer reading an immutable assembled path handed across the
-  superset/projection boundary (2A §3.7.9) rather than holding the client.
+- A **`CurveTreeActor`** (`kameo`) owns the `CurveTreeClient` privately; its
+  single-threaded message loop serializes writes (matching redb's single-writer
+  txn). Fail-stop on panic (`on_panic → ControlFlow::Break`) collapses every
+  handle call to a terminal error — the same shape as the client's `Poisoned`
+  contract, so R1-Q4 reopen = actor respawn.
+- `Engine` holds a `Clone` **`CurveTreeHandle`** (not the client), exactly as it
+  holds `KeyEngineHandle` in place of an `AllKeysBlob` field.
+- Writers send `Ingest` / `Rollback`; the signer sends `AssemblePath` (read).
+  "Sole writer" becomes **sole ingest-sender** (the merge); the signer is
+  read-only over the handle.
 
-Pull toward **(b)**: refresh is the sole `&mut` user (ingest + rollback); the
-signer only needs `&self` `assemble_path`. The client's single-writer/
-single-reader shape (CT-1 redb single write txn) matches refresh-writes /
-signer-reads cleanly. R1-Q1 resolves the exact ownership cell and the open path.
+**Consistency without a shared lock (the Round-2 change from the field design).**
+The merge does `handle.ingest(leaves@H).await` and **commits the ledger to `H`
+only on ack**; on ingest failure the ledger does not advance and the refresh
+attempt aborts/retries. Cross-divergence is still caught by the height invariant
+(`NonConsecutiveBlockHeight` → loud, never silent) and healed by respawn + resync
+(R1-Q4). This is derive>hold at the consistency layer: the tree *derives* its
+agreement with the ledger from the height check rather than a lock *holding* the
+two tips lockstep. The `ask().await` runs under the engine's `tokio::sync::RwLock`
+write guard — legal and precedented (the merge post-pass already `ask`s the key
+actor under the guard; `key_actor.rs` §"Integration"), and brief (local redb
+work, no network).
+
+**Counterpoint recorded (why this is a preference, not a forced move).**
+`KeyActor`'s load-bearing justification is secret isolation; the curve tree is
+**public data** (parent §4.1/§4.2 no-secrets test), so the actor here does not
+buy a secret-containment property — it buys fail-stop, single-writer, and
+message-discipline consistency with the rest of the engine. Adopted per the
+standing actor principle; the cost is the two-phase ingest-ack-before-commit
+ordering above.
 
 ### 3.2 Forward ingest (the refresh producer)
 
@@ -181,31 +219,38 @@ Its input is `BlockLeaves { height, txs: &[TxLeafInputs] }` where
 `TxLeafInputs { is_miner, leaf_hash_blob, outputs: &[RawOutput] }` and
 `RawOutput { output_key, commitment, target }` (`client.rs:66–97`).
 
-**Decision (R1-Q2, open):** ingest *site* and *ordering* relative to the ledger
-merge.
+**Decision (R1-Q2, RESOLVED — merge drives the actor ingest; `ScanResult` grows
+a transit leaf set + header root).** The merge (`apply_scan_result_to_state`,
+`merge.rs:440–464`) sends `handle.ingest(...)` and commits the ledger on ack
+(R1-Q1). The producer decodes what it already parses and carries it forward on
+`ScanResult` as **transit** data (not persisted state — consistent with
+derive>hold):
 
-- The producer has a `ScannableBlock` in hand after `fetch_block_with_retry`;
-  decoding it to `BlockLeaves` there is natural, but the producer holds `&self`
-  and runs before the merge that advances the canonical tip.
-- The merge (`apply_scan_result_to_state`) is the height-ordered, `&mut`,
-  post-validation point where the ledger tip actually advances — the natural
-  place to advance the tree tip in lockstep so the two never diverge across a
-  cancelled/failed refresh.
+- The **full per-block leaf set** (all on-chain outputs, not just owned).
+  `ScanResult` today carries `block_hashes` + `new_transfers`, but
+  `new_transfers` is **wallet-owned only** (`scan.rs:101`); the tree contains
+  every output, so the producer materializes all of them where the
+  `ScannableBlock` is in hand.
+- The **per-block header `curve_tree_root`** (from pre-0's parser, 32 B/height),
+  consumed by the merge's §3.3 ingest-time verify (R1-Q6) and then discarded.
 
-Pull toward **ingest in the merge loop** (`merge.rs:440–464`), driven from the
-`block_hashes` + per-height transfer data the merge already iterates: it keeps
-tree-tip and ledger-tip atomic w.r.t. the same `&mut` state transition and
-inherits the merge's height ordering. The producer would carry the *raw leaf
-inputs* (decoded `BlockLeaves` data) forward on `ScanResult` rather than
-ingesting mid-scan. R1-Q2 resolves site + what `ScanResult` must carry. This is
-the **A1 frozen-contract** question: what new field(s) `ScanResult` grows.
+This is the **A1 frozen-contract** decision — the two new `ScanResult` fields are
+frozen here; both are transit-only (dropped after merge), so no persistence /
+schema impact.
 
-**Decision (R1-Q3, open):** the `ScannableBlock → BlockLeaves` decode — which
-outputs become leaves (coinbase vs non-coinbase maturity, `is_miner`,
-`leaf_hash_blob` provenance) must match the CT-2 drain-order replication exactly
-(parent §6 / CT2_DRAIN_ORDER.md). The decode adapter is the highest
-inheritance-risk surface (it reproduces consensus leaf-insertion order); it gets
-a dedicated KAT against the CT-2 oracle.
+Rejected alternative: producer sends leaves straight to the tree actor,
+bypassing the merge. It avoids growing `ScanResult` but decouples tree-ingest
+from the ledger commit, so the ingest-ack-before-commit ordering (R1-Q1) can no
+longer gate the ledger advance — reintroducing O2. Rejected on correctness.
+
+**Decision (R1-Q3, RESOLVED — dedicated decode KAT vs the CT-2 oracle).** The
+`ScannableBlock → BlockLeaves` decode (which outputs become leaves; coinbase vs
+non-coinbase maturity, `is_miner`, `leaf_hash_blob` provenance) must match the
+CT-2 drain-order replication exactly (parent §6 / `CT2_DRAIN_ORDER.md`). This is
+the highest inheritance-risk surface (it reproduces consensus leaf-insertion
+order), so it gets a dedicated KAT (A2 audit-against-actual-code) asserting the
+engine-path decode reproduces the `ct2_tier_a.json` oracle leaf stream. Lands in
+CT-5a (§6).
 
 ### 3.3 Reorg rollback + poison recovery
 
@@ -220,20 +265,18 @@ sets `poisoned = true`, rebuilds in-memory, clears `poisoned` on success. If it
 fails between truncate and rebuild the client stays `Poisoned`; the recovery
 contract is **drop the client and `open()` again** (`client.rs:169–177`).
 
-**Decision (R1-Q4, open):** CT-5 calls `rollback_to_fork(fork_height)` in the
-same `handle_reorg` transition (`merge.rs:337`), *before or after* the ledger
-rewind, and on `Err(ClientError::Poisoned)` (or any rollback error) drops and
-reopens the client, then re-syncs forward from the fork. Open sub-points:
-
-1. Ordering vs the ledger rewind (tree and ledger must agree on the post-fork
-   tip; if one rewinds and the other doesn't, the next `ingest_block` either
-   `NonConsecutiveBlockHeight`-errors or silently diverges).
-2. Whether drop-and-reopen is automatic (engine self-heals) or surfaced as a
-   refresh error the caller retries. Pull toward **automatic reopen** — a poison
-   is a transient persistence hiccup, not a user-actionable fault, and refresh
-   already retries blocks.
-3. The poison reaction must not lose the ledger's reorg progress; it re-runs the
-   same forward sync the ledger does.
+**Decision (R1-Q4, RESOLVED — rollback in `handle_reorg`, automatic
+drop-and-reopen).** CT-5 calls `rollback_to_fork(fork_height)` inside the same
+`handle_reorg` transition (`merge.rs:337`), under the write guard, atomic with
+`LedgerIndexes::handle_reorg`, so tree and ledger agree on the post-fork tip (if
+they didn't, the next `ingest_block` would `NonConsecutiveBlockHeight`-error —
+the desired fail-closed behavior, not silent divergence). On
+`Err(ClientError::Poisoned)` (or any rollback error, or a fail-stopped actor) the
+engine **automatically respawns** the `CurveTreeActor` (drop + reopen the client
+in a fresh task) and re-runs the same forward sync the ledger does: a poison is a
+transient persistence hiccup, not a user-actionable fault, and refresh already
+retries. Respawn is the actor-shape form of drop-and-reopen (R1-Q1); the path is
+exercised by a KAT (O3, §5).
 
 ### 3.4 Real path assembly (replacing the synthetic vectors)
 
@@ -265,15 +308,14 @@ copy `leaf_chunk` / `c1_layers` / `c2_layers` into `TxInputSigningContext`
 `sign_bridge` → `SpendInput` (`tx-builder/types.rs:232–271`), so the
 secret-locality boundary is unchanged.
 
-**Decision (R1-Q5, open):** the `synthetic_tree` module's disposition.
+**Decision (R1-Q5, RESOLVED — delete `synthetic_tree`, migrate tests).**
 Per `60-no-monero-legacy.mdc` / `15-deletion-and-debt.mdc` it is pre-genesis
 scaffolding with no users — **deleted, not gated**, once `assemble_path` is the
-producer. Tests that depend on synthetic vectors migrate to the real client over
-the CT-2 fixture (the `TestDaemon` harness fakes the daemon, not the tree, so
-its proof-validity tests gain real coverage). R1-Q5 confirms the deletion set
-and the test migration, applying the A4 reversion clause (the module reopens
-only if a non-daemon test surface genuinely needs synthetic vectors — none
-identified).
+producer (CT-5c). Tests that depend on synthetic vectors migrate to the real
+client over the CT-2 fixture (the `TestDaemon` harness fakes the daemon, not the
+tree, so its proof-validity tests gain real coverage). A4 reversion clause: the
+module reopens only if a non-daemon test surface genuinely needs synthetic
+vectors — none identified.
 
 ### 3.5 Reference-block selection + proactive horizon
 
@@ -299,34 +341,99 @@ At build time (`local_pending_tx.rs` build path) CT-5:
    reference_height)` can drive a pre-emptive rebuild before submit (the interim
    `ProofStale` guard; 2A §3.6).
 
-**Decision (R1-Q6, open):** the source of the **header `curve_tree_root` at the
-reference height**. The ledger records `block_hash_at(h)` (`local_pending_tx.rs:615`);
-does it record the per-height `curve_tree_root` the proof must bind to, or is
-that fetched/derived? The client reconstructs roots but stores no header roots
-(parent §3.3 — root is *verified* against the header, the caller supplies it).
-R1-Q6 pins where the engine reads the header `curve_tree_root` at an arbitrary
-past height. This is the load-bearing data-availability question for §3.5; if
-the ledger does not retain per-height curve-tree roots, CT-5 grows that
-retention (small, append-only) or sources it from the synced header.
+**Decision (R1-Q6, RESOLVED — wire §3.3 fully; header-parser prerequisite).**
+The initial draft framed this as "without the header root the proof cannot be
+bound." **That was wrong.** `assemble_path` reconstructs the root from leaves,
+and CT-2 proved that reconstruction equals the consensus root at every height
+(`recon_kat.rs` on `ct2_tier_a.json`), so the wallet *can* bind a proof to its
+**own reconstructed** root and the daemon will accept it. What the header root
+actually buys is the **§3.3 integrity defense**: `assemble_path` is "gated on
+the §3.3 root match," comparing its reconstruction against the caller-supplied
+`ReferenceBlock.curve_tree_root`. Supply the *self-reconstructed* root and that
+gate is a **tautology**; supply the *header* root and it catches a lying/buggy
+daemon, turning a silent submit-time failure into a **detected DoS** (parent
+§3.3; threat O5, §5).
+
+Per `00-mission.mdc` priority-1 (security is a precondition), CT-5 wires §3.3
+**fully**, not the tautological gate. That requires a real source of the
+header-committed `curve_tree_root` — and the substrate audit found there is
+**none today** (§3.6). The fix is a prerequisite PR (§6, CT-5 pre-0) that teaches
+the Rust block parser the consensus field.
+
+**Derive, don't hold (Round 2).** The header root is *not* retained per height —
+no `42-serialization-policy.mdc` schema bump. Instead:
+
+- **Verify at ingest (transient).** Each ingested block carries its header root
+  (pre-0); the merge reconstructs the new root and compares — loud DoS on
+  mismatch. This is *continuous* §3.3 (every block), strictly stronger than a
+  point-in-time send check, and the header root is held only for the duration of
+  the comparison, then dropped.
+- **Re-derive at send.** The reference-height root is reconstructed from the
+  already-held tree (the drain-cutoff reconstruction `assemble_path` performs as
+  of `reference.height`). Because §3.3 was enforced at ingest, the wallet's
+  reconstruction at `H_ref` equals consensus, so the proof binds and the daemon
+  accepts it. The `ReferenceBlock.curve_tree_root` the signer supplies is this
+  re-derived value; `assemble_path`'s internal gate is then a defense-in-depth
+  consistency check, not the primary §3.3 defense (which lives at ingest).
+
+The only held state is the tree itself, which genuinely cannot be re-derived
+per-send at scale (the entire point of CT-1/CT-2/CT-3 persistence) — so holding
+it is the justified exception to derive>hold, and the cheaply-derivable header
+root is not held.
+
+### 3.6 The header-`curve_tree_root` availability gap (prerequisite finding)
+
+The consensus C++ `block_header` serializes `curve_tree_root` after `nonce`
+(`src/cryptonote_basic/cryptonote_basic.h:723`, inside `BEGIN_SERIALIZE` /
+`END_SERIALIZE` at `:735`). The **Rust** `shekyl-oxide` `BlockHeader` does **not**
+carry or parse it: `BlockHeader::read` reads `{hardfork_version,
+hardfork_signal, timestamp, previous, nonce}` and stops
+(`rust/shekyl-oxide/shekyl-oxide/src/block.rs:43–68`); the field is absent from
+`Block`, `ScannableBlock`, and the RPC types. `curve_tree_root` appears nowhere
+in `shekyl-engine-state` / `shekyl-engine-core`.
+
+Two consequences:
+
+1. **CT-5's §3.3 wiring is blocked** until the Rust header carries the root.
+2. **Latent correctness concern (flag, confirm in pre-0):** a 5-field Rust
+   parser reading a 6-field consensus header would **mis-align** on real Shekyl
+   blocks (it would read the 32-byte `curve_tree_root` as the start of the miner
+   transaction). The Rust block path works in tests today only because they feed
+   synthetic / Monero-format blocks without the field. This suggests the parser
+   fix is needed for the Rust block deserializer to be correct against real
+   consensus blocks at all — **independent of CT-5** — which is why it lands as a
+   prerequisite PR, not folded into CT-5a (R1-Q6 sequencing decision).
+
+**Disposition:** **CT-5 pre-0** (prerequisite PR, §6) extends `shekyl-oxide`
+`BlockHeader` to parse/serialize `curve_tree_root` gated on `hardfork_version`,
+with a round-trip + cross-check KAT against a real consensus header. Reopening
+/ scope note (A4): if pre-0 surfaces that the field is conditionally present
+(e.g. only from a given hard fork), the gate is `hardfork_version`-keyed per
+`60-no-monero-legacy.mdc` (Shekyl min HF is 1; the field is present from
+genesis, so no dead pre-genesis branch).
 
 ---
 
 ## 4. Round-1 open questions (agenda)
 
-Consolidated from §3. Each resolves to a pinned disposition before closure.
+Consolidated from §3. All six resolved 2026-06-14 (§3); two corrected the
+initial pull (struck through).
 
-| ID | Question | Pull (provisional) |
-|----|----------|--------------------|
-| **R1-Q1** | Where the `CurveTreeClient` lives + open path + single-writer cell (§3.1) | refresh-owned writer, signer reads `&self` |
-| **R1-Q2** | Ingest site (producer vs merge) + what `ScanResult` carries (§3.2) | ingest in the merge loop; carry decoded leaf inputs on `ScanResult` |
-| **R1-Q3** | `ScannableBlock → BlockLeaves` decode = consensus drain order (§3.2) | dedicated KAT vs CT-2 oracle; reuse CT2_DRAIN_ORDER |
-| **R1-Q4** | Reorg ordering + automatic poison drop-and-reopen (§3.3) | rollback in `handle_reorg` transition; auto-reopen |
-| **R1-Q5** | `synthetic_tree` deletion set + test migration (§3.4) | delete (no users); migrate tests to real client + CT-2 fixture |
-| **R1-Q6** | Source of header `curve_tree_root` at reference height (§3.5) | from synced header; grow ledger retention only if absent |
+| ID | Question | Resolution |
+|----|----------|------------|
+| **R1-Q1** | Where the `CurveTreeClient` lives + single-writer cell (§3.1) | ~~refresh-owned~~ → ~~`Engine` field under the RwLock~~ → **`CurveTreeActor` + `Clone` `CurveTreeHandle`** (Round 2, mirror `KeyActor`); merge is sole ingest-sender; consistency via ingest-ack-before-ledger-commit |
+| **R1-Q2** | Ingest site + what `ScanResult` carries (§3.2) | **merge drives `handle.ingest`**, commits ledger on ack; `ScanResult` grows **two transit fields** — full per-block leaf set + per-block header root (both dropped after merge) — A1 frozen |
+| **R1-Q3** | `ScannableBlock → BlockLeaves` decode = consensus drain order (§3.2) | **dedicated KAT vs the `ct2_tier_a.json` oracle** (A2); lands CT-5a |
+| **R1-Q4** | Reorg ordering + poison handling (§3.3) | **rollback in `handle_reorg`** under the same guard, atomic with the ledger rewind; **automatic** drop-and-reopen |
+| **R1-Q5** | `synthetic_tree` disposition (§3.4) | **delete** (no users); migrate tests to the real client + CT-2 fixture; lands CT-5c |
+| **R1-Q6** | Source of header `curve_tree_root` (§3.5) | ~~from synced header~~ → ~~retain per-height (schema bump)~~ → **derive>hold (Round 2): verify at ingest, re-derive at send, no schema bump**; pre-0 parser PR still required so ingest can read the header root |
 
-**R1-Q6 is the gating question** — if the engine cannot supply the header
-`curve_tree_root` at an arbitrary reference height, the assembled proof cannot be
-bound, and the answer reshapes ledger retention. It is resolved first.
+**R1-Q6 was the gating question, and the gate moved.** The proof can bind to
+the wallet's self-reconstructed root (CT-2 equality), so binding is *not*
+blocked — but the §3.3 lying-daemon defense requires the header root, which the
+Rust parser does not carry today (§3.6). Resolving it surfaced a prerequisite
+PR (CT-5 pre-0) that is arguably needed for the Rust block deserializer to be
+correct against real consensus blocks at all.
 
 ---
 
@@ -344,20 +451,26 @@ note, or (c) named forward-action.
    the confirmed tip-as-reference bug.
 2. **Tree/ledger tip divergence across reorg (O2).** Ledger rewinds, tree does
    not (or vice versa), so the next ingest diverges silently. *Defense:*
-   R1-Q4 atomic rollback in the same `handle_reorg` transition;
+   ingest-ack-before-ledger-commit (R1-Q1) gates the ledger advance on tree
+   success; R1-Q4 rollback in the same `handle_reorg` transition;
    `NonConsecutiveBlockHeight` is a loud failure, not silent drift. *Disposition
    (a).*
-3. **Poison left unhandled (O3).** A failed rollback leaves a `Poisoned` client
-   that then serves stale paths. *Defense:* `ensure_live()` fail-closes every
-   client method; R1-Q4 drop-and-reopen. *Disposition (a):* the poison contract
-   is machine-enforced; CT-5 must exercise the reopen path in a KAT.
+3. **Poison left unhandled (O3).** A failed rollback (or fail-stopped actor)
+   leaves a dead handle that then serves stale paths. *Defense:* `ensure_live()`
+   fail-closes every client method, and a fail-stopped `CurveTreeActor` collapses
+   every handle call to a terminal error; R1-Q4 respawn. *Disposition (a):* the
+   poison/fail-stop contract is machine-enforced; CT-5 must exercise the respawn
+   path in a KAT.
 4. **Secret leak via the new ownership (O4).** The engine now holds a tree
-   client on the orchestrator side. *Defense:* the client is public-data-only
-   (parent §4.1/§4.2 structural no-secrets test); `AssembledPath` carries no
-   secret; secrets enter only in `sign_bridge → SpendInput`. *Disposition (a):*
-   extend the no-secrets structural test over the engine's client field
-   (architectural-inheritance §, `16-architectural-inheritance.mdc` — orchestrator
-   must not become a secret holder).
+   handle. *Defense:* the client is public-data-only (parent §4.1/§4.2 structural
+   no-secrets test); `AssembledPath` and every `CurveTreeActor` message carry no
+   secret; secrets enter only in `sign_bridge → SpendInput`. The actor boundary
+   *reinforces* this: like `KeyActor`, no `&`-state escapes the task, but unlike
+   `KeyActor` the contained state is public, so the boundary is consistency- not
+   secrecy-load-bearing (§3.1 counterpoint). *Disposition (a):* extend the
+   no-secrets structural test over the handle's message types
+   (`16-architectural-inheritance.mdc` — orchestrator must not become a secret
+   holder).
 5. **Lying-daemon DoS via leaf inputs (O5).** A malicious daemon feeds bad
    leaves; the reconstructed root won't match the header. *Defense:* parent §3.3
    root-vs-header verify (DoS only, never a witness leak); `assemble_path` is
@@ -372,22 +485,39 @@ note, or (c) named forward-action.
 
 ## 6. Sub-PR decomposition (A1 — function-body replacement; provisional)
 
-Boundaries are provisional until R1-Q1/Q2/Q6 close (they decide field shapes).
-Each sub-PR lands ≤ the `06-branching.mdc` 5-day / 10-commit envelope; none is a
-consensus-atomic cutover (`07-consensus-atomic-cutovers.mdc` not invoked — the
-synthetic→real swap is flag-decomposable behind the assembler boundary).
+Boundaries are firm now that R1-Q1/Q2/Q6 are resolved (they decided the field
+shapes). Each sub-PR lands ≤ the `06-branching.mdc` 5-day / 10-commit envelope;
+none is a consensus-atomic cutover (`07-consensus-atomic-cutovers.mdc` not
+invoked — the synthetic→real swap is flag-decomposable behind the assembler
+boundary).
 
-- **CT-5a — client lifecycle + ingest (no signer change).** Add the
-  `shekyl-curve-tree` dependency, the ownership cell (R1-Q1), open/resume on
-  engine open, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and ingest
-  in the chosen site (R1-Q2). Reorg rollback + poison reopen (R1-Q4). The signer
-  still uses synthetic vectors. DoD: refresh + reorg KAT root-matches the CT-2
-  oracle through the engine path.
-- **CT-5b — reference selection + header-root availability (R1-Q6).** Wire
-  `select_reference_height`, the C2 gate, and the header `curve_tree_root`
-  source. Lands the `ReferenceBlock` construction the signer will consume; the
-  signer still builds synthetic paths but against the *real* reference
-  selection. DoD: C2 `OutputNotYetSpendable` KAT.
+- **CT-5 pre-0 — `shekyl-oxide` block-header parser (prerequisite, R1-Q6 / §3.6).**
+  Extend `BlockHeader` (`rust/shekyl-oxide/shekyl-oxide/src/block.rs`) to
+  parse/serialize `curve_tree_root` after `nonce`, matching the consensus
+  serialization (`src/cryptonote_basic/cryptonote_basic.h:723/735`), gated on
+  `hardfork_version`. Thread it through `Block` / `ScannableBlock` so the refresh
+  path can read it. DoD: header round-trip KAT + a cross-check that a real
+  consensus-serialized header deserializes with the field intact (confirms the
+  latent mis-alignment in §3.6 #2 is closed). This lands **before** CT-5a; it is
+  not folded in, because the parser correctness is independent of the engine
+  wiring.
+- **CT-5a — actor lifecycle + ingest (no signer change).** Add the
+  `shekyl-curve-tree` dependency, the **`CurveTreeActor` + `CurveTreeHandle`**
+  (R1-Q1, mirror `KeyActor`), spawn on engine open with the `Engine` holding the
+  handle, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and the
+  merge-driven `handle.ingest` with ingest-ack-before-ledger-commit (R1-Q2).
+  Reorg rollback + actor respawn (R1-Q4). The signer still uses synthetic
+  vectors. DoD: refresh + reorg KAT root-matches the CT-2 oracle through the
+  engine path; respawn KAT (O3).
+- **CT-5b — reference selection + §3.3 verify (R1-Q6, derive>hold).** Wire
+  `select_reference_height`, the C2 gate, the **§3.3 ingest-time verify**
+  (reconstructed root == pre-0 header root → loud DoS on mismatch), and the
+  **send-time re-derivation** of the reference-height root from the actor (no
+  retention, no schema bump). Lands the `ReferenceBlock` construction (height +
+  re-derived root + block hash from the ledger reorg window) the signer will
+  consume; the signer still builds synthetic paths but against the *real*
+  reference selection. DoD: C2 `OutputNotYetSpendable` KAT + a §3.3
+  mismatch-rejection KAT (O5).
 - **CT-5c — assembler cutover + `synthetic_tree` deletion (R1-Q5).** Replace
   `signing_assembly`/`sign_bridge` synthetic vectors with `assemble_path`; delete
   `synthetic_tree`; migrate tests. DoD: real-root proof builds + submits in the
@@ -419,18 +549,26 @@ synthetic→real swap is flag-decomposable behind the assembler boundary).
 ## 8. Review checklist (pre-implementation)
 
 - [ ] §1 scope + DoD agreed (real-root proof in `TestDaemon`; reorg KAT vs CT-2
-  oracle; C2 clean error; no-secrets test over engine client).
+  oracle; C2 clean error; no-secrets test over the `CurveTreeHandle` surface).
 - [ ] §2 contract confirmed — CT-5 adds **no** new client API; C1
   one-`ReferenceBlock`-per-tx upheld.
-- [ ] R1-Q1 client ownership + open path + single-writer cell.
-- [ ] R1-Q2 ingest site + `ScanResult` field growth (A1 frozen contract).
-- [ ] R1-Q3 `BlockLeaves` decode = CT-2 drain order (dedicated KAT).
-- [ ] R1-Q4 reorg ordering + automatic poison drop-and-reopen.
-- [ ] R1-Q5 `synthetic_tree` deletion set + test migration (A4 reversion clause).
-- [ ] R1-Q6 **(gating)** header `curve_tree_root` source at reference height.
+- [x] R1-Q1 client ownership — **resolved (Round 2):** `CurveTreeActor` +
+  `CurveTreeHandle`; merge sole ingest-sender; ingest-ack-before-commit (§3.1).
+- [x] R1-Q2 ingest site + `ScanResult` growth — **resolved:** merge-driven actor
+  ingest, two transit fields (leaf set + header root), A1 frozen (§3.2).
+- [x] R1-Q3 `BlockLeaves` decode = CT-2 drain order — **resolved:** dedicated
+  KAT vs the oracle (§3.2).
+- [x] R1-Q4 reorg ordering + poison handling — **resolved:** rollback in
+  `handle_reorg`, automatic reopen (§3.3).
+- [x] R1-Q5 `synthetic_tree` disposition — **resolved:** delete + migrate tests
+  (§3.4).
+- [x] R1-Q6 header `curve_tree_root` source — **resolved (Round 2):** derive>hold
+  — verify at ingest, re-derive at send, no schema bump; pre-0 parser PR still
+  required (§3.5/§3.6).
 - [ ] §3.4 confirmed bug fixed: reference block = `tip − REF_ANCHOR_AGE`, not the
   tip (`local_pending_tx.rs:781`); `tree_depth` derived, not `1u8` (`:657`).
 - [ ] §5 threat objectives O1–O6 each routed (a)/(b)/(c).
-- [ ] §6 sub-PR boundaries confirmed after R1-Q1/Q2/Q6 close.
+- [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
 - [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
+- [ ] **Closure-review round** + A3 threat pass against §5 before first commit.
 
