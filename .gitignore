@@ -162,3 +162,6 @@ build-sync/
 # build directory (CMake -B build-randomx-v2-diff per
 # RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 + R6-D3).
 build-randomx-v2-diff/
+
+# Claude settings
+.claude/

@@ -4281,4 +4281,69 @@ gate).
 
 ---
 
+## 2026-06-14 — Time fields: block-height vs wall-clock dichotomy + the `BlockHeight`/`Timestamp`/`BlockCount` type trio
+
+**Decision.** Every time-shaped field in the wallet stack is classified onto
+exactly one of two clocks, carried by a distinct newtype so the clock is
+visible in the field's signature and cross-clock arithmetic does not compile:
+
+- **`BlockHeight`** (absolute chain instant) for any deadline that is
+  evaluated by consensus or compared against on-chain events — output
+  maturity/spendability, stake-claim windows (`from_height`/`to_height`,
+  `stake_lock_until`), `eligible_height`, `spent_height`, reorg `fork_height`,
+  `built_at_height`.
+- **`Timestamp`** (wall-clock Unix seconds, UTC) for off-chain, human-facing,
+  cross-party, or wallet-local-audit deadlines — `PaymentRequest.created_at` /
+  `expiry`, `SpendIntent.created_at` / `expires_at`,
+  `AddressProvenance.first_imported_at` / `last_used_at`.
+- **`BlockCount`** (relative block duration, à la `Duration` vs `Instant`),
+  distinct from `BlockHeight`, for spans such as `StakeTier.lock_blocks`.
+  Permitted arithmetic: `BlockHeight + BlockCount = BlockHeight`,
+  `BlockHeight − BlockHeight = BlockCount`; `BlockHeight + BlockHeight` and
+  `BlockHeight − Timestamp` do not compile.
+
+Two consequential deletions follow from the classification:
+
+- **`oxide::Timelock::Time(u64)` is removed.** Consensus output locks are
+  block-height only (`Timelock::None | Block(BlockHeight)`).
+- **The RPC `TransferParams.unlock_time: u64` field is dropped**, not
+  newtyped. The V3 `TxRequest` is `{dest, amount, priority}` with no unlock
+  field; the legacy CryptoNote dual-mode `unlock_time` contradicts that
+  design. If a send-time lock is ever wanted it returns as
+  `unlock_height: BlockHeight`.
+
+**Rationale.** CryptoNote represented two fundamentally different kinds of
+deadline with one `uint64`, and even let a single field be *either* clock
+(`Timelock::Block | Time`, the `unlock_time` overload) — a value whose clock
+you cannot tell from its type. The classification test is: (1) who evaluates
+the deadline — consensus → height, a local wallet or a cross-party message →
+wall-clock candidate; (2) what it is compared against — on-chain events →
+height, human intent → wall-clock; (3) what breaks if the clock is wrong — a
+fork or a *manipulable* lock → height (block timestamps are miner-influenced
+within the median-time-past window, so a time-based consensus lock is fuzzy
+and attackable — the rejected Monero `Timelock::Time` precedent), versus a
+cosmetic "invoice expired 4 minutes early" → wall-clock, whose blast radius is
+contained to non-consensus UX. Wall-clock wins for invoice/intent/provenance
+fields specifically because they must be evaluable by an *unsynced* or
+*third-party* wallet (a payer reading a `shekyl:…?expiry=` URI) and chain
+binding for the one case that needs it (multisig `SpendIntent`) is already
+carried separately by `reference_block_height` + `reference_block_hash` +
+`chain_state_fingerprint` + `tx_counter`. This extends the established
+`PendingTx` decision ("**No clock-based TTL** — the real expiration condition
+is chain state") by naming the *other* class explicitly rather than treating
+every deadline as chain state.
+
+**Reference.**
+[`docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md`](design/RAW_TYPE_NEWTYPE_MIGRATION.md)
+§7 (PR D — the work plan this decision governs);
+[`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
+(`PendingTx` no-clock-TTL precedent; V3 `TxRequest` shape). Implementation
+sites: `rust/shekyl-oxide/shekyl-oxide/src/transaction.rs` (`Timelock`,
+`StakeClaim`), `rust/shekyl-engine-state/src/payment_request.rs`,
+`rust/shekyl-engine-core/src/multisig/v31/intent.rs`,
+`rust/shekyl-address/src/multisig_address.rs`,
+`rust/shekyl-engine-rpc/src/types.rs` (`unlock_time` removal).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
