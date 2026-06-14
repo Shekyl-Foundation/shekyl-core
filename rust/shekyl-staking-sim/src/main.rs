@@ -539,30 +539,36 @@ fn print_standoff_report() {
     eprintln!(
         "Charter: hide P ↔ principal (GF-7), not P ↔ rewards. Background funding-spend rate is a"
     );
-    eprintln!(
-        "  SWEPT pre-testnet assumption (like fetch_latency_per_unit), not a measurement."
-    );
+    eprintln!("  SWEPT pre-testnet assumption (like fetch_latency_per_unit), not a measurement.");
     eprintln!(
         "Homeostasis: standoff entry latency = window/epoch (epoch={} blk); free ≤ {:.2} epoch.",
         report.settlement_epoch_blocks, report.homeostasis_free_frac_epoch
     );
-    eprintln!(
-        "  Economic dynamics are epoch-quantized (~13.9 d); obfuscation-useful windows are"
-    );
+    eprintln!("  Economic dynamics are epoch-quantized (~13.9 d); obfuscation-useful windows are");
     eprintln!("  minutes-to-hours — two orders smaller, so the standoff is off the economic axis.");
     eprintln!();
     eprintln!(
         "  set = candidate funders (1 target + Poisson background decoys); link = 1/set (uniform);"
     );
-    eprintln!(
-        "  thin = P(set ≤ 2) (the tail an averaged window hides); invBrk = share where bond"
-    );
+    eprintln!("  thin = P(set ≤ 2) (the tail an averaged window hides); invBrk = share where bond");
     eprintln!("  precedes entry (causal 0; inversion ~0.5); latΕ = entry latency / epoch.");
     eprintln!();
     eprintln!(
         "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>6} {:>7} {:>5}",
-        "scenario", "axis", "win", "win_min", "rate", "inv", "shr", "setMean", "setP05", "thin",
-        "link", "invBrk", "latΕ", "free",
+        "scenario",
+        "axis",
+        "win",
+        "win_min",
+        "rate",
+        "inv",
+        "shr",
+        "setMean",
+        "setP05",
+        "thin",
+        "link",
+        "invBrk",
+        "latΕ",
+        "free",
     );
     for r in &report.results {
         eprintln!(

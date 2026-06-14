@@ -211,7 +211,20 @@ impl SplitMix64 {
     }
 }
 
-pub fn run(cfg: &StandoffConfig) -> StandoffResult {
+/// Blocks → wall-clock minutes in `f64`. Casting before the multiply avoids a
+/// `u64 * u64` intermediate overflow, and the `u64::MAX` "no finite window"
+/// sentinel from `recommended_window_blocks` maps to infinity (consistent with
+/// `funding_spend_interval_minutes`).
+fn blocks_to_minutes(blocks: u64) -> f64 {
+    if blocks == u64::MAX {
+        f64::INFINITY
+    } else {
+        blocks as f64 * BLOCK_TIME_SEC as f64 / 60.0
+    }
+}
+
+fn run(cfg: &StandoffConfig) -> StandoffResult {
+    assert!(cfg.trials > 0, "standoff::run requires trials > 0");
     let search_width = if cfg.inversion {
         2.0 * cfg.window_blocks as f64
     } else {
@@ -252,7 +265,7 @@ pub fn run(cfg: &StandoffConfig) -> StandoffResult {
         name: cfg.name.clone(),
         axis: cfg.axis,
         window_blocks: cfg.window_blocks,
-        window_minutes: (cfg.window_blocks * BLOCK_TIME_SEC) as f64 / 60.0,
+        window_minutes: blocks_to_minutes(cfg.window_blocks),
         net_funding_rate_per_block: cfg.net_funding_rate_per_block,
         inversion: cfg.inversion,
         shared_trigger: cfg.shared_trigger,
@@ -299,7 +312,7 @@ fn recommendation(rate: f64) -> StandoffRecommendation {
             f64::INFINITY
         },
         recommended_window_blocks: w,
-        recommended_window_minutes: (w * BLOCK_TIME_SEC) as f64 / 60.0,
+        recommended_window_minutes: blocks_to_minutes(w),
         entry_latency_frac_epoch: frac,
         homeostasis_free: frac <= HOMEOSTASIS_FREE_FRAC_EPOCH,
     }
@@ -592,9 +605,17 @@ fn population_bond_time(
     shared: bool,
     rng: &mut SplitMix64,
 ) -> u64 {
-    let t0 = if shared { boundary } else { (rng.unit() * span as f64) as u64 };
+    let t0 = if shared {
+        boundary
+    } else {
+        (rng.unit() * span as f64) as u64
+    };
     let (s, bond_first) = draw_entry_gap(window, rng);
-    if bond_first { t0 } else { t0 + s }
+    if bond_first {
+        t0
+    } else {
+        t0 + s
+    }
 }
 
 /// Concentration of a population's bond times: the share in the most-occupied
@@ -725,13 +746,31 @@ mod tests {
         // order — well-distributed, not merely within ±window.
         let window = 600u64;
         let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-        let sample: Vec<(u64, bool)> = (0..200_000).map(|_| draw_entry_gap(window, &mut rng)).collect();
+        let sample: Vec<(u64, bool)> = (0..200_000)
+            .map(|_| draw_entry_gap(window, &mut rng))
+            .collect();
         let st = summarize_gaps(&sample, window);
         // Uniform ⇒ mean ≈ window/2, first decile ≈ 0.10, all deciles flat.
-        assert!((st.mean_spread - 300.0).abs() < 6.0, "mean_spread = {}", st.mean_spread);
-        assert!((st.bond_first_frac - 0.5).abs() < 0.01, "order = {}", st.bond_first_frac);
-        assert!((st.first_decile_frac - 0.10).abs() < 0.01, "first decile = {}", st.first_decile_frac);
-        assert!(st.max_decile_dev < 0.02, "max decile dev = {}", st.max_decile_dev);
+        assert!(
+            (st.mean_spread - 300.0).abs() < 6.0,
+            "mean_spread = {}",
+            st.mean_spread
+        );
+        assert!(
+            (st.bond_first_frac - 0.5).abs() < 0.01,
+            "order = {}",
+            st.bond_first_frac
+        );
+        assert!(
+            (st.first_decile_frac - 0.10).abs() < 0.01,
+            "first decile = {}",
+            st.first_decile_frac
+        );
+        assert!(
+            st.max_decile_dev < 0.02,
+            "max decile dev = {}",
+            st.max_decile_dev
+        );
         assert_eq!(st.max_spread, window);
     }
 
@@ -741,17 +780,34 @@ mod tests {
         // the trap satisfies the ±window bound but its separation is zero-peaked.
         let window = 600u64;
         let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-        let sample: Vec<(u64, bool)> =
-            (0..200_000).map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng)).collect();
+        let sample: Vec<(u64, bool)> = (0..200_000)
+            .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
+            .collect();
         let st = summarize_gaps(&sample, window);
         // Triangular ⇒ mean collapses toward window/3, mass piles into the first
         // decile, and the uniformity probe blows past the correct-draw tolerance.
-        assert!(st.mean_spread < 250.0, "trap mean_spread = {} (should be << 300)", st.mean_spread);
-        assert!(st.first_decile_frac > 0.15, "trap first decile = {} (should spike)", st.first_decile_frac);
-        assert!(st.max_decile_dev > 0.05, "trap max decile dev = {}", st.max_decile_dev);
+        assert!(
+            st.mean_spread < 250.0,
+            "trap mean_spread = {} (should be << 300)",
+            st.mean_spread
+        );
+        assert!(
+            st.first_decile_frac > 0.15,
+            "trap first decile = {} (should spike)",
+            st.first_decile_frac
+        );
+        assert!(
+            st.max_decile_dev > 0.05,
+            "trap max decile dev = {}",
+            st.max_decile_dev
+        );
         // The order coin can still look fair — proving order-balance alone is not
         // sufficient; the spread distribution is the load-bearing check.
-        assert!((st.bond_first_frac - 0.5).abs() < 0.02, "trap order = {}", st.bond_first_frac);
+        assert!(
+            (st.bond_first_frac - 0.5).abs() < 0.02,
+            "trap order = {}",
+            st.bond_first_frac
+        );
     }
 
     #[test]
@@ -763,14 +819,22 @@ mod tests {
         let n_bins = 60;
         let crit = chi_square_upper_crit((n_bins - 1) as f64, Z_ALPHA_1E6);
         let mut rng = SplitMix64(0x5EED_1234_ABCD_0001);
-        let good: Vec<(u64, bool)> =
-            (0..200_000).map(|_| draw_entry_gap(window, &mut rng)).collect();
-        let bad: Vec<(u64, bool)> =
-            (0..200_000).map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng)).collect();
+        let good: Vec<(u64, bool)> = (0..200_000)
+            .map(|_| draw_entry_gap(window, &mut rng))
+            .collect();
+        let bad: Vec<(u64, bool)> = (0..200_000)
+            .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
+            .collect();
         let chi_good = chi_square_uniform(&good, window, n_bins);
         let chi_bad = chi_square_uniform(&bad, window, n_bins);
-        assert!(chi_good < crit, "correct chi2 {chi_good} should be < crit {crit}");
-        assert!(chi_bad > 10.0 * crit, "trap chi2 {chi_bad} should blow past crit {crit}");
+        assert!(
+            chi_good < crit,
+            "correct chi2 {chi_good} should be < crit {crit}"
+        );
+        assert!(
+            chi_bad > 10.0 * crit,
+            "trap chi2 {chi_bad} should blow past crit {crit}"
+        );
     }
 
     #[test]
@@ -785,14 +849,22 @@ mod tests {
         let boundary = 120_000u64; // a multiple of bin ⇒ the cluster sits cleanly inside it
         let n = 5_000usize;
         let mut rng = SplitMix64(0xA11C_E5B0_1234_5678);
-        let indep: Vec<u64> =
-            (0..n).map(|_| population_bond_time(window, span, boundary, false, &mut rng)).collect();
-        let shared: Vec<u64> =
-            (0..n).map(|_| population_bond_time(window, span, boundary, true, &mut rng)).collect();
+        let indep: Vec<u64> = (0..n)
+            .map(|_| population_bond_time(window, span, boundary, false, &mut rng))
+            .collect();
+        let shared: Vec<u64> = (0..n)
+            .map(|_| population_bond_time(window, span, boundary, true, &mut rng))
+            .collect();
         let share_indep = max_bin_share(&indep, bin);
         let share_shared = max_bin_share(&shared, bin);
-        assert!(share_indep < 0.05, "independent anchors should disperse, got {share_indep}");
-        assert!(share_shared > 0.9, "shared trigger should cluster, got {share_shared}");
+        assert!(
+            share_indep < 0.05,
+            "independent anchors should disperse, got {share_indep}"
+        );
+        assert!(
+            share_shared > 0.9,
+            "shared trigger should cluster, got {share_shared}"
+        );
     }
 
     #[test]
@@ -803,8 +875,7 @@ mod tests {
         let window = 600u64;
         let m = 20_000usize;
         let mut rng = SplitMix64(0x5E11_A1B2_C3D4_E5F6);
-        let reference: Vec<u64> =
-            (0..m).map(|_| draw_entry_gap(window, &mut rng).0).collect();
+        let reference: Vec<u64> = (0..m).map(|_| draw_entry_gap(window, &mut rng).0).collect();
         // Correlated negative: a small-step wrapped walk — uniform-ish marginal,
         // strong lag-1 autocorrelation (consecutive draws differ by ≤ 20).
         let mut correlated = Vec::with_capacity(m);
@@ -816,7 +887,13 @@ mod tests {
         }
         let r_ref = lag1_autocorr(&reference).abs();
         let r_corr = lag1_autocorr(&correlated).abs();
-        assert!(r_ref < 0.05, "reference lag-1 autocorr {r_ref} should be ~0");
-        assert!(r_corr > 0.5, "correlated lag-1 autocorr {r_corr} should be large");
+        assert!(
+            r_ref < 0.05,
+            "reference lag-1 autocorr {r_ref} should be ~0"
+        );
+        assert!(
+            r_corr > 0.5,
+            "correlated lag-1 autocorr {r_corr} should be large"
+        );
     }
 }
