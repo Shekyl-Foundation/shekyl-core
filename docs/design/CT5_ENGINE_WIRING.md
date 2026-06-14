@@ -1,11 +1,15 @@
-# CT-5 — engine wiring: production CurveTreeClient into the 2A signer (design — Round 1, OPEN)
+# CT-5 — engine wiring: production CurveTreeClient into the 2A signer (design — Round 2, review integrated)
 
-**Status:** Round 2 dispositions resolved (2026-06-14). Round 1 closed
-R1-Q1–R1-Q6 (§4); Round 2 applied three standing architectural principles
-(below) and revised R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold). No code yet —
-this doc is the frozen contract and threat-model frame the implementation cuts
-against, per `05-system-thinking.mdc` (spec first, code second). A closure-review
-round (and the A3 threat pass against §5) precedes any production commit.
+**Status:** Round 2 dispositions resolved + review integrated (2026-06-14).
+Round 1 closed R1-Q1–R1-Q6 (§4); Round 2 applied three standing architectural
+principles (below), revised R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold), and
+absorbed the Round-2 review (E1–E9, §9). **Two findings are held for the closure
+round before any code — E1 (read-path snapshot atomicity vs C1) and E2
+(under-guard `await` lock-ordering); both are costs the actor shape introduces,
+not reasons to avoid it.** No code yet — this doc is the frozen contract and
+threat-model frame the implementation cuts against, per `05-system-thinking.mdc`
+(spec first, code second). The closure-review round (and the A3 threat pass
+against §5) precedes any production commit.
 
 **Standing principles this design is held to** (operator directive, 2026-06-14;
 they govern every CT-5 disposition):
@@ -195,13 +199,63 @@ write guard — legal and precedented (the merge post-pass already `ask`s the ke
 actor under the guard; `key_actor.rs` §"Integration"), and brief (local redb
 work, no network).
 
-**Counterpoint recorded (why this is a preference, not a forced move).**
-`KeyActor`'s load-bearing justification is secret isolation; the curve tree is
-**public data** (parent §4.1/§4.2 no-secrets test), so the actor here does not
-buy a secret-containment property — it buys fail-stop, single-writer, and
-message-discipline consistency with the rest of the engine. Adopted per the
-standing actor principle; the cost is the two-phase ingest-ack-before-commit
-ordering above.
+**Why the actor, stated correctly (Round-2 review, E0).** The load-bearing
+reason is **not** the standing principle and **not** secret isolation (the tree
+is public data — parent §4.1/§4.2 no-secrets test — so unlike `KeyActor` the
+actor buys no secret-containment here). It is **redb's single-writer transaction
+model**: `CurveTreeClient` wraps a redb store that permits exactly one write
+transaction at a time, and `ingest_block` / `rollback_to_fork` are `&mut self`.
+*Something* must serialize those writes; the actor's message loop is the natural
+serializer for a resource that is already single-writer at the storage layer.
+This argument holds even without the standing principle, which is why it is the
+honest justification. Fail-stop-on-panic then yields the `Poisoned` contract for
+free as actor-death.
+
+**A4 reversion target.** If E1/E2 (below) resolve badly in the closure round,
+the fallback is **not** "plain `Engine` field" — it is `RwLock<CurveTreeClient>`
+with the writer side funneled through the merge, which preserves the same
+single-writer discipline without the cross-actor read latency. Recorded so the
+actor decision has an explicit escape hatch; not expected to be needed.
+
+**E1 (HELD for closure) — the read path crosses the actor boundary.**
+`assemble_path` is `&self`, but behind the actor the signer sends an
+`AssemblePath` message and awaits a reply. Two unclosed consequences:
+
+- *Latency / write-serialization.* A send with N inputs is N `AssemblePath`
+  messages, each queued behind any in-flight `Ingest` from the refresh loop;
+  refresh can delay assembly, and N inputs serialize through one mailbox.
+  Invisible at Tier-A scale, but to be acknowledged. redb supports **concurrent
+  read txns alongside the single writer**, so the actor *could* serve
+  `AssemblePath` as a concurrent read rather than through the write loop — but
+  only if structured for it; "single-threaded loop serializes writes" as written
+  does not. Closure round decides whether reads are spawned concurrently.
+- *C1 read-side mirror (the load-bearing half).* C1 (one `ReferenceBlock` per tx)
+  is structurally upheld because all inputs share one `ReferenceBlock` **value** —
+  but if a tx's N `AssemblePath` calls interleave with an `Ingest`+`Rollback`
+  (reorg mid-assembly), inputs `1..k` assemble against the pre-rollback tree and
+  `k+1..N` against the post-rollback tree: same `ReferenceBlock`, different
+  underlying tree state. Equal `ReferenceBlock` does not save you if the tree
+  moved under the reads. **Frozen-contract requirement (before CT-5c):** a tx's
+  full set of `assemble_path` calls is **atomic w.r.t. writes** — a single redb
+  **read txn opened once per tx and reused across all N inputs** (snapshot
+  isolation), or a brief write-exclusion spanning the tx. This is the read-side
+  mirror of C1, and the actor boundary is exactly what makes it non-obvious.
+
+**E2 (HELD for closure) — `ask().await` under the engine write guard: confirm,
+don't assert.** Holding a `tokio::sync::RwLock` write guard across an `.await`
+that round-trips to another actor is the classic async-deadlock shape if the
+awaited actor ever (directly or transitively) wants that same engine lock — and
+it would deadlock only under the triggering interleaving, passing every test
+until production. The fix is a stated **lock-ordering invariant**, grounded in
+the substrate: the `CurveTreeActor`, like `KeyActor` (whose struct holds only
+`local: LocalKeys`, no engine reference — `key_actor.rs`), is spawned with **leaf
+resources only** (the store handle), so no handler (`Ingest` / `Rollback` /
+`AssemblePath`) can acquire the engine lock. **Respawn-on-poison (R1-Q4) is
+driven engine-side** — the merge detects the failed `ask` and respawns *after*
+the `ask` returns, never from inside a handler awaited under the guard — so the
+one path that might want engine state to re-open does not run under the lock.
+Invariant to pin in the closure round: *the curve-tree actor never acquires the
+engine lock; the engine may hold its lock across a curve-tree `ask`.*
 
 ### 3.2 Forward ingest (the refresh producer)
 
@@ -238,10 +292,22 @@ This is the **A1 frozen-contract** decision — the two new `ScanResult` fields 
 frozen here; both are transit-only (dropped after merge), so no persistence /
 schema impact.
 
+**Recorded cost (E4) — this is not a free transit field.** Materializing *all*
+outputs per block (not just wallet-owned) is a per-block allocation proportional
+to total chain output count, on the **refresh hot path**, where today the
+producer only materializes owned transfers. At mainnet block sizes this is the
+difference between scan-for-mine (small) and buffer-every-output (large) on every
+block. It is **O(outputs-per-block), released per block** — a throughput /
+allocation cost, **not** a leak or an unbounded buffer. It is necessary if the
+tree ingests via the merge, and it is named here as the **price of the
+ingest-ack-before-commit ordering** so a future profiling finding inherits a
+recorded disposition rather than re-litigating it.
+
 Rejected alternative: producer sends leaves straight to the tree actor,
-bypassing the merge. It avoids growing `ScanResult` but decouples tree-ingest
-from the ledger commit, so the ingest-ack-before-commit ordering (R1-Q1) can no
-longer gate the ledger advance — reintroducing O2. Rejected on correctness.
+bypassing the merge. It avoids this buffering but decouples tree-ingest from the
+ledger commit, so the ingest-ack-before-commit ordering (R1-Q1) can no longer
+gate the ledger advance — reintroducing O2. Rejected on correctness; the
+buffering above is the named price of that correctness.
 
 **Decision (R1-Q3, RESOLVED — dedicated decode KAT vs the CT-2 oracle).** The
 `ScannableBlock → BlockLeaves` decode (which outputs become leaves; coinbase vs
@@ -404,13 +470,30 @@ Two consequences:
    consensus blocks at all — **independent of CT-5** — which is why it lands as a
    prerequisite PR, not folded into CT-5a (R1-Q6 sequencing decision).
 
-**Disposition:** **CT-5 pre-0** (prerequisite PR, §6) extends `shekyl-oxide`
-`BlockHeader` to parse/serialize `curve_tree_root` gated on `hardfork_version`,
-with a round-trip + cross-check KAT against a real consensus header. Reopening
-/ scope note (A4): if pre-0 surfaces that the field is conditionally present
-(e.g. only from a given hard fork), the gate is `hardfork_version`-keyed per
-`60-no-monero-legacy.mdc` (Shekyl min HF is 1; the field is present from
-genesis, so no dead pre-genesis branch).
+**Disposition (E3 — standalone correctness fix, surfaced by CT-5).** **CT-5
+pre-0** (prerequisite PR, §6) extends `shekyl-oxide` `BlockHeader` to
+parse/serialize `curve_tree_root` gated on `hardfork_version`, with a round-trip
++ cross-check KAT against a real consensus header. This is **not** a CT-5 detail
+— it is a block-deserializer correctness bug that CT-5 happened to find, the same
+shape as keeping a schema-version stamp independent of its triggering PR. It
+lands and is verified **in its own right**: if CT-5 slips for an unrelated
+reason, the parser fix does not slip with it, and the closeout records it as
+"block-deserializer correctness fix, surfaced by CT-5."
+
+**Verify at pre-0 which of two states holds** (changes nothing about the fix,
+but records the bug's true severity):
+
+- **(a) not-yet-exercised:** no real Shekyl block has ever been deserialized by
+  the Rust path (plausible pre-genesis). Then pre-0 is "needed for correctness
+  at all," exactly as framed.
+- **(b) compensating offset:** something downstream absorbs the 32 extra bytes
+  that the audit did not surface. Then the fix interacts with that offset and
+  pre-0 must remove it too.
+
+State which one was found in the pre-0 PR. Reopening / scope note (A4): if pre-0
+surfaces that the field is conditionally present (e.g. only from a given hard
+fork), the gate is `hardfork_version`-keyed per `60-no-monero-legacy.mdc` (Shekyl
+min HF is 1; the field is present from genesis, so no dead pre-genesis branch).
 
 ---
 
@@ -449,6 +532,23 @@ note, or (c) named forward-action.
    (§2), C2 selection gate, C3 path precondition, proactive `should_reanchor`.
    *Disposition (a):* the §3.5 reference-selection fix is the direct remedy for
    the confirmed tip-as-reference bug.
+   - **O1-sub (E5) — reorg replaces the reference block while the tip stays above
+     it.** `should_reanchor` (`reference.rs:189`) catches two cases: age ≥
+     `REBUILD_AT` (=50), and reference *above* the tip (age `None`, a reorg that
+     rewound past it). It does **not** catch a reorg of depth ≥ `REF_ANCHOR_AGE`
+     (=6) whose fork height is ≤ the reference height but whose new chain still
+     extends above it: the reference block is orphaned, yet age is `Some(< 50)`,
+     so the age predicate stays quiet. The constants do **not** foreclose this —
+     the reorg-depth bound is 720 (`ARCHIVAL_REORG_DEPTH_BLOCKS`), far above
+     `REF_ANCHOR_AGE`=6 — so this is a real sub-case, not an unreachable one. It
+     degrades to a **submit-time daemon rejection** (DoS, never a witness leak —
+     consistent with the O5 posture), but the proactive guard should catch it.
+     *Defense (engine-side, CT-5d):* the reanchor trigger composes
+     `should_reanchor(tip, ref_height)` **with** a reorg-fork-crossing check —
+     any pending tx whose `reference_height ≥ handle_reorg.fork_height` is forced
+     to re-anchor, regardless of age. Only the engine knows the reorg fork height
+     (`reference.rs` sees only tip + reference), so this composition is CT-5's
+     responsibility, not the curve-tree crate's. *Disposition (a).*
 2. **Tree/ledger tip divergence across reorg (O2).** Ledger rewinds, tree does
    not (or vice versa), so the next ingest diverges silently. *Defense:*
    ingest-ack-before-ledger-commit (R1-Q1) gates the ledger advance on tree
@@ -506,9 +606,19 @@ boundary).
   (R1-Q1, mirror `KeyActor`), spawn on engine open with the `Engine` holding the
   handle, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and the
   merge-driven `handle.ingest` with ingest-ack-before-ledger-commit (R1-Q2).
-  Reorg rollback + actor respawn (R1-Q4). The signer still uses synthetic
-  vectors. DoD: refresh + reorg KAT root-matches the CT-2 oracle through the
-  engine path; respawn KAT (O3).
+  Reorg rollback + actor respawn (R1-Q4). Engine call sites carry `BlockHeight`
+  across the actor message boundary (not unwrapped to `u64`), **closing the
+  CT-3a P5 cross-seam item** (`FOLLOWUPS.md` "Carry `BlockHeight`/`Gindex`
+  typing across the client → engine seam"). The signer still uses synthetic
+  vectors. **(E6b note for reviewers:** CT-5a carries the per-block header-root
+  transit field on `ScanResult` but does **not** consume it — the §3.3 verify is
+  CT-5b — so for one PR the field is write-but-not-read. This is the frozen
+  contract, not dead code; do not "helpfully" remove it.) DoD: refresh + reorg
+  KAT root-matches the CT-2 oracle through the engine path **and asserts
+  pending-table equality post-reorg, not only root equality** (the CT-3c
+  green-positive-for-broken-migration lesson; a coinbase-only fixture cannot
+  exercise class-(b) pending migration, so this DoD **inherits the Tier-B
+  non-coinbase fixture dependency** — E6a); respawn KAT (O3).
 - **CT-5b — reference selection + §3.3 verify (R1-Q6, derive>hold).** Wire
   `select_reference_height`, the C2 gate, the **§3.3 ingest-time verify**
   (reconstructed root == pre-0 header root → loud DoS on mismatch), and the
@@ -523,8 +633,19 @@ boundary).
   `synthetic_tree`; migrate tests. DoD: real-root proof builds + submits in the
   `TestDaemon` harness; C3 precondition holds.
 - **CT-5d — proactive horizon guard + closeout.** `should_reanchor` rebuild loop
-  for pending txs; parent §9 CT-5 row → closed; `CT5_ROUND1_CLOSEOUT.md`;
-  FOLLOWUPS/CHANGELOG. DoD: horizon KAT; docs resync (`91-documentation-after-plans.mdc`).
+  for pending txs, composed with the **reorg-fork-crossing trigger** (O1-sub /
+  E5: re-anchor any pending tx whose `reference_height ≥ fork_height`, regardless
+  of age). Note the cost (E6c): each re-anchor re-assembles the pending tx's N
+  inputs → N more actor round-trips per re-anchor (E1). Closeout obligations:
+  parent §9 CT-5 row → closed; **`recon_tier_b.rs` un-ignored** — CT-5c landing
+  is the trigger that ungates the five Tier-B `#[ignore]` tests, the Stage-2
+  closer (`FOLLOWUPS.md` "CT-2 Tier B reconstruct-root KATs"); **close the CT-5
+  poison drop-and-reopen FOLLOWUPS item** (absorbed by R1-Q4 respawn — the
+  reaction is now done, so the item closes rather than carries); add the new
+  FOLLOWUPS row **"unify multisig intent reference-age validation onto
+  `reference.rs` predicates post-CT-5"** (E8). `CT5_ROUND1_CLOSEOUT.md`;
+  FOLLOWUPS/CHANGELOG. DoD: horizon KAT + reorg-fork-crossing re-anchor KAT; docs
+  resync (`91-documentation-after-plans.mdc`).
 
 ---
 
@@ -542,6 +663,14 @@ boundary).
 - **`PHASE_2A_SEND_PATH.md`** — the F1/F2 synthetic-vector notes get a back-ref
   to CT-5 as the production replacement; §3.6 `ProofStale` interim-guard note
   cross-links the landed `should_reanchor` wiring.
+- **Multisig reference-age unification (E8) — FOLLOWUPS row, not CT-5 scope.**
+  `multisig/v31/intent.rs` already embeds `FCMP_REFERENCE_BLOCK_MIN_AGE` /
+  `FCMP_REFERENCE_BLOCK_MAX_AGE` for intent validation (`:56–61`, `:310/:320`).
+  Once CT-5 establishes the canonical single-signer reference-selection + C2-gate
+  flow in `reference.rs`, multisig's intent validation should route through the
+  same predicates rather than its own constant embedding — else two
+  reference-selection implementations drift (the hazard `21-reversion-clause-discipline.mdc`
+  guards). Not CT-5 scope; recorded as the FOLLOWUPS row CT-5d adds.
 - **`CHANGELOG.md`** — per sub-PR.
 
 ---
@@ -570,5 +699,33 @@ boundary).
 - [ ] §5 threat objectives O1–O6 each routed (a)/(b)/(c).
 - [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
 - [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
-- [ ] **Closure-review round** + A3 threat pass against §5 before first commit.
+- [ ] **E1 (HELD)** — tx-scoped read-snapshot atomicity vs C1: pin the
+  one-read-txn-per-tx (or brief-exclusion) contract; decide concurrent reads.
+- [ ] **E2 (HELD)** — pin the lock-ordering invariant (curve-tree actor never
+  acquires the engine lock; respawn is engine-side) and confirm against the
+  `CurveTreeActor` handlers.
+- [ ] **Closure-review round** + A3 threat pass against §5 before first commit;
+  E1/E2 are the gating items the closure round exists to catch.
+
+---
+
+## 9. Round-2 review findings (E1–E9) — disposition log
+
+External review of the Round-2 doc, integrated 2026-06-14. Each finding's full
+treatment is in the cited section; this is the audit index.
+
+| ID | Finding | Disposition | Lands |
+|----|---------|-------------|-------|
+| **E0** | Actor justification was "standing principle"; real reason is redb single-writer | Justification corrected; A4 reversion target named (`RwLock<CurveTreeClient>`) | §3.1 |
+| **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **HELD for closure** — one redb read-txn per tx (snapshot isolation) across all N inputs; concurrent-read decision | §3.1, §8 |
+| **E2** | `ask().await` under the engine write guard asserted, not verified | **HELD for closure** — lock-ordering invariant stated + grounded (`KeyActor` holds no engine ref; respawn engine-side) | §3.1, §8 |
+| **E3** | §3.6 mis-alignment is a standalone block-deserializer bug | pre-0 framed as independent correctness fix; verify (a) not-yet-exercised vs (b) compensating-offset | §3.6, §6 |
+| **E4** | Full leaf set is a real refresh-path cost, not free transit | Cost named (O(outputs/block), released per block) as the price of ingest-ack-before-commit | §3.2 |
+| **E5** | Reorg can orphan the reference block while tip stays above it; `should_reanchor` (age) misses it | O1-sub added; CT-5d composes `should_reanchor` with a reorg-fork-crossing trigger | §5 O1, §6 |
+| **E6a** | Reorg KAT must assert pending-table equality (CT-3c lesson); inherits Tier-B fixture | CT-5a DoD updated | §6 |
+| **E6b** | `ScanResult` header-root field is write-but-not-read in CT-5a | Reviewer note added so it is not removed | §6 |
+| **E6c** | Re-anchor = N more actor round-trips per pending tx | Cost noted | §6 |
+| **E7** | FOLLOWUPS reconciliation: poison closes, `BlockHeight` seam closes, Tier B ungated | CT-5a closes the `BlockHeight` seam; CT-5d closes poison + ungates Tier B | §6 |
+| **E8** | Multisig already embeds the reference-age constants — drift hazard | FOLLOWUPS row (CT-5d): unify multisig intent onto `reference.rs` predicates | §7 |
+| **E9** | Title stale ("Round 1, OPEN") | Retitled "Round 2, review integrated"; closure gate kept | header |
 
