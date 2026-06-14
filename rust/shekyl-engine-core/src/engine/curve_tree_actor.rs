@@ -63,6 +63,7 @@
 //! [`docs/design/CT5_ENGINE_WIRING.md`]: ../../../../../docs/design/CT5_ENGINE_WIRING.md
 
 use std::ops::ControlFlow;
+use std::path::Path;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
@@ -274,6 +275,33 @@ impl CurveTreeHandle {
         );
         let actor = CurveTreeActor::spawn(client);
         Self { actor }
+    }
+
+    /// Open (or create + resume) the persistent [`CurveTreeClient`] at `path`
+    /// and spawn the actor over it — the single open-then-spawn entry point.
+    ///
+    /// [`CurveTreeClient::open`] resumes from the store's contents with **no
+    /// genesis replay** (`CT3_SYNC.md` §3.1 / R1-Q2), so this is cheap on an
+    /// already-synced store and is also the **reopen** half of the R1-Q4
+    /// drop-and-reopen respawn: the engine drops the dead [`CurveTreeHandle`]
+    /// (its last [`ActorRef`] clone going away stops the fail-stopped actor and
+    /// drops the old [`CurveTreeClient`], releasing the redb file), then calls
+    /// this against the same `path` to reattach to the persisted state. The
+    /// caller (commit 5's reorg/poison path) is responsible for ensuring the
+    /// prior actor has fully stopped before reopening, so the redb single-writer
+    /// lock is free.
+    ///
+    /// `assemble` uses this for the initial open: `path` is the curve-tree store
+    /// sibling of the wallet files
+    /// ([`curve_tree_store_path_from`](shekyl_engine_file::paths::curve_tree_store_path_from)).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called with no ambient Tokio runtime (see [`Self::spawn`]).
+    #[allow(dead_code)] // reopen half is wired by the R1-Q4 respawn in commit 5.
+    pub(crate) fn open_and_spawn(path: impl AsRef<Path>) -> Result<Self, ClientError> {
+        let client = CurveTreeClient::open(path)?;
+        Ok(Self::spawn(client))
     }
 
     /// Ingest one block's leaves at `height` (must equal the client's ingested

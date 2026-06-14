@@ -734,6 +734,27 @@ impl Engine<SoloSigner> {
         // `merge_view_secret` was derived above (step 3(a)) before this
         // consuming spawn.
         let key = super::key_actor::KeyEngineHandle::spawn(keys);
+
+        // CT-5a commit 2: open the FCMP++ curve-tree store *beside the wallet
+        // files* (`docs/design/CT5_ENGINE_WIRING.md` §3.1) and spawn the actor
+        // over it. The store is the `.curvetree` sibling of the `.wallet` /
+        // `.wallet.keys` pair; `open_and_spawn` resumes from its contents with
+        // no genesis replay (R1-Q2). It requires the same ambient runtime the
+        // `KeyEngineHandle::spawn` above already asserts, so it is grouped here
+        // with the other actor spawn. A store-open failure is a wallet-file
+        // boundary failure (the store is a wallet companion file), so it maps to
+        // `IoError::WalletFile` with a curve-tree-store detail prefix rather than
+        // a new error variant (which would force a downstream RPC-tier match).
+        let curve_tree = {
+            let store_path =
+                shekyl_engine_file::paths::curve_tree_store_path_from(file.base_path());
+            super::curve_tree_actor::CurveTreeHandle::open_and_spawn(&store_path).map_err(|e| {
+                OpenError::Io(IoError::WalletFile {
+                    detail: format!("curve-tree store open failed: {e:?}"),
+                })
+            })?
+        };
+
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
         let fee_snapshot_source = super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
         let submitter = std::sync::Arc::new(
@@ -775,6 +796,7 @@ impl Engine<SoloSigner> {
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,
@@ -900,6 +922,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,
@@ -917,6 +940,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,

@@ -280,6 +280,7 @@ use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
+use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::key_actor::{HandleDerivationViewSecret, KeyEngineHandle};
 use crate::engine::local_ledger::LedgerState;
 use crate::engine::traits::{
@@ -406,6 +407,24 @@ pub struct Engine<
     // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
     #[allow(dead_code)]
     key: KeyEngineHandle,
+
+    /// Handle to the wallet's [`CurveTreeActor`](super::curve_tree_actor::CurveTreeActor),
+    /// which owns the FCMP++ [`CurveTreeClient`](shekyl_curve_tree::CurveTreeClient)
+    /// — the `redb`-backed leaf store living beside the wallet files (CT-5,
+    /// `docs/design/CT5_ENGINE_WIRING.md` §3.1). Opened and spawned in
+    /// [`assemble`](Self::assemble); its `Drop` (last handle clone going away)
+    /// stops the actor and closes the store on engine close. Unlike `key` the
+    /// curve tree carries **no secret** (public on-chain material only), so the
+    /// actor has no `on_stop` zeroization; durability is per-ingest, not
+    /// at-close, so the async actor shutdown loses nothing.
+    //
+    // `#[allow(dead_code)]`: at commit 2 the handle is held but not *read* — the
+    // merge path's `handle.ingest` read site lands in commit 4 and the reorg
+    // `rollback_to_fork` read site in commit 5 (per
+    // `docs/design/CT5_ENGINE_WIRING.md`). The allow is reopened for deletion
+    // then, per `21-reversion-clause-discipline.mdc`.
+    #[allow(dead_code)]
+    curve_tree: CurveTreeHandle,
 
     /// Construction-time view-secret projection for the merge post-pass
     /// ([`Engine::apply_scan_result`]), per `STAGE_2_KEY_ENGINE_ACTOR.md` §6
@@ -649,6 +668,7 @@ impl<
             .field("state_wrap_key", &self.state_wrap_key)
             .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("key", &"<redacted: KeyEngineHandle>")
+            .field("curve_tree", &"<opaque: CurveTreeHandle>")
             .field("merge_view_secret", &"<redacted: view secret>")
             .field("ledger", &"<…>")
             .field("outstanding_pending_txs", &self.pending.outstanding())
@@ -884,6 +904,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,
@@ -901,6 +922,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,
@@ -933,6 +955,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending: _old,
@@ -950,6 +973,7 @@ impl<
             state_wrap_key,
             prefs_hmac_key,
             key,
+            curve_tree,
             merge_view_secret,
             ledger,
             pending,
