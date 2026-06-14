@@ -598,6 +598,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         timestamp: height,
         previous: parent_hash,
         nonce: 0,
+        curve_tree_root: [0u8; 32],
     };
 
     let miner_prefix = TransactionPrefix {

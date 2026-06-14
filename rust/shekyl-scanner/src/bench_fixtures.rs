@@ -370,6 +370,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         timestamp: 0,
         previous: [0u8; 32],
         nonce: 0,
+        curve_tree_root: [0u8; 32],
     };
 
     // Minimal miner-tx: V2, single Input::Gen, no outputs (per the

@@ -1310,6 +1310,7 @@ mod cancel_tests {
             timestamp: 0,
             previous: [0u8; 32],
             nonce: 0,
+            curve_tree_root: [0u8; 32],
         };
         let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
             prefix: TransactionPrefix {
