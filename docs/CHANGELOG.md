@@ -59,6 +59,100 @@
   resume-path/full `R_k` recheck, and CT-5 poison-reaction items stay routed
   in `FOLLOWUPS.md`. Docs-only; no code or consensus surface touched.
 
+- **archival: staking-sim `--standoff` mode — funding-seam entry-standoff
+  anonymity model (2026-06-13).** New self-contained sub-report
+  (`rust/shekyl-staking-sim/src/standoff.rs`, peer to `--timing-cluster` /
+  `--failure-confirmation`) executing the Gate 6 §10.12 pass-4 BUILD target.
+  Monte-Carlo (200k trials/arm, reproducible SplitMix64) over candidate-set size
+  = 1 target + Poisson background funding-shaped decoys, sweeping window width ×
+  background rate × inversion × trigger-independence, with an analytical
+  homeostasis bound (entry latency = window/epoch; economic dynamics are
+  epoch-quantized at 10_000 blocks, so a minutes-to-hours window is off the
+  economic axis — not re-simmed, to avoid over-reading the epoch-granularity
+  model). Findings: anonymity is **rate-driven, not width-driven** (the background
+  funding-spend rate is the load-bearing *unmeasured* input, swept like
+  `fetch_latency_per_unit`); the **inversion carries the low-activity worst case**
+  (link 0.52→0.32, thin-cover 56%→20% where set-enlargement can't help); a
+  **shared trigger is catastrophic** (candidate set 16→1.01 — uniform-independent
+  draws mandatory); the standoff is **homeostasis-free ≤ ~1000 blocks**.
+  **Recommended: 600-block (~20 h) uniform-independent window, inversion on**;
+  testnet must measure the background rate. Recorded in `STAKER_ARCHIVAL_SIM.md`
+  §*Funding-seam entry standoff* and `ARCHIVAL_FIREWALL_GATE6.md` §10.12. New code
+  + docs; 5 unit tests; existing 325-scenario economic sweep untouched (new mode
+  is opt-in via `--standoff`).
+
+- **archival: Gate 6 Round 2 adversarial pass 4 — cadence closed, standoff
+  promoted (2026-06-13).** Added the organizing principle behind the close: the
+  firewall protects **P ↔ principal (a linkage)**, not **P ↔ its own rewards (a
+  conceded-public function of contribution)**. Earning-function obfuscation
+  (reward-magnitude *banding* — distinct from the sealed `g` operating-band in
+  `REWARD_EMISSION_LEG.md` — and pay-every-block) spends the anti-whale/trilemma
+  budget twice on a conceded property; the seam mitigation (standoff + inversion)
+  touches no economic quantity and is **off the trilemma's axis**. Cross-`P`
+  sybil correlation resolves to seam protection too (signature is timing/pattern,
+  not magnitude), and FCMP++/RingCT already hides seam amounts — leaving
+  timing + origin as the public seam leak. Resolved the two live pass-3 §10.12
+  scenarios in `ARCHIVAL_FIREWALL_GATE6.md`. **CLOSED the pay-every-block / implicit
+  accumulator-emission path and corrected the pass-3 over-claim** that
+  accumulator credit "deletes GF-6/GF-10." Reasoning: Shekyl staker payments are
+  a **roll-call** (every accrual keyed to `P_canonical_id` because dedup demands
+  it — confidential staking was rejected), so continuous attributed payment makes
+  an absence a **one-block edge** at the GF-4 exit rather than crowd-cover; and
+  **consensus cannot mint a hidden-recipient output** (it holds no ephemeral
+  secret — the miner coinbase is private only as sender-to-self), so a per-block
+  reward is either publicly-derivable (every `P`'s reward stream traceable to
+  `P_canonical_id`) or an invisible accrual that, auto-compounded to exit,
+  **concentrates** into the terminal event (worse GF-4) and destroys the
+  claim-timing decorrelation lever. The periodic-claim model is the better spot
+  given public attribution (claims timing-decorrelatable; decoupled from unstake
+  per R0-D6). The obfuscation being reached for needs **membership-hiding claims =
+  the confidential-staking machinery already rejected**, so this is the S-4 bridge
+  cost in disguise; the real question (reopen confidential staking?) folds into
+  S-5. **PROMOTED the funding-seam entry standoff + inversion to a build target**
+  for the S-3 adversary sim (the door, GF-7), sharpened past "smooth vs surge":
+  candidate-set sizing *for the targeted principal* (not window width); the
+  **low-activity principal** as the worst case (set-enlargement can't help, only
+  the inversion does); trigger-independence as the clustering knob; and
+  **enumerate the separable funding events first** (prep-spend vs. announce vs.
+  bond-post tx — ties to the S-2 ledger). Quick dispositions: terminal-lump →
+  existing wallet-side GF-4 fragmentation (no consensus mechanism); per-block
+  accrual rejected (more state churn + reorg surface for the same exposure);
+  seed compromise = named residual (recoverability ⟺ single-point-of-failure),
+  weight on key hygiene. Docs-only.
+
+- **archival: Gate 6 Round 2 adversarial pass 3 — end-to-end trace +
+  cross-layer findings (2026-06-13).** An end-to-end `P`-lifecycle trace
+  (key-gen → announce → bond-post → serving → emission → bond-adjustment →
+  exit) surfaced **model-level findings the per-round decomposition is blind to
+  by construction**; landed as a new §10.12 (S-1…S-6) in
+  `ARCHIVAL_FIREWALL_GATE6.md`. **S-1:** the money seams (GF-7 funding-in, GF-4
+  value-out) are the only findings protecting principal↔`P` unlinkability and the
+  only two still deferred — they sit at the on-chain ∧ network ∧ timing
+  conjunction no single layer owns (deferral ≠ ownership). **S-2 (build first,
+  cheapest):** specified the missing **fused, per-observer, whole-life exposure
+  ledger** (observer × lifecycle-event matrix + per-observer fusion closure,
+  conceded cells marked distinctly from leaked) — the §10.1 table is only
+  per-adversary "must not learn." **S-3:** privacy is named, not measured (325
+  economic scenarios, 0 adversary); reframed as the **privacy axis of the R-3
+  reconciliation already gating the seal** — deliverable is an adversary sim on
+  the funding/exit timing seams (`P(link | T_obs)` vs standoff / jitter / batch).
+  **S-4:** labeled the onion↔`P_canonical_id` bridge a **conceded staking-model
+  cost** traceable to the confidential-staking rejection, *not* closable at the
+  network layer. **S-5:** longevity-vs-privacy named a **model-level pre-seal
+  question** — long-lived `P` is the worst bridge structure, but rotation
+  relocates the seam (fresh GF-7 per rotation) and reopens the bond FSM
+  (bond = consensus balance), so the answer is open. **S-6:** pinned **key
+  locality** — the always-on serving box holds only the `P`-subtree, never the
+  master seed (cold-derive + provision; HKDF one-wayness preserves
+  recoverability), extending the §10.9 isolation pin from circuits to keys.
+  Recorded three sim scenarios: variable announce↔funding standoff; randomized
+  0–9-block entry incl. `P`-before-bond; and **implicit accumulator emission**
+  (deterministic Σwork credit with no broadcast claim **deletes** GF-6/GF-10 by
+  folding them into GF-4 — vs. *literal* per-block pay, which **sharpens** the
+  unbond cessation edge). Prioritization: ledger → adversary sim → longevity
+  question, all pre-seal. Docs-only; the ledger/sim/model calls live in their
+  home docs (`STAKER_ARCHIVAL_SIM`, `REWARD_EMISSION_LEG`, staking model).
+
 - **archival: Gate 6 Round 2 adversarial pass 2 — GF-1-carve asymmetry +
   age-stratified R-3 (2026-06-13).** Two sharpenings on the pass-1 landings in
   `ARCHIVAL_FIREWALL_GATE6.md`. **GF-1-carve is not a balanced fork — the carve

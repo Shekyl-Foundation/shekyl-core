@@ -3455,3 +3455,55 @@ drain spacing) remain open per timing doc §7.
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`
   borderline failures (`0.062` at strict `<0.05`).
+
+### Funding-seam entry standoff (Gate 6 §10.12 pass-4; 2026-06-13)
+
+**Authority:** [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §10.12. Closes the §7
+"wallet jitter default" open item flagged in the timing-cluster pin above (T-A4).
+
+**Charter (pass-4 organizing principle):** hide **P ↔ principal** (GF-7), *not* **P ↔ its own
+rewards** (`P_canonical_id` is a conceded-public earner). The standoff decorrelates `P`'s observable
+entry event from the bond-post; the **inversion** (`P` may appear *before* its bond is staked,
+feasible because the announce is membership-only backing over principal outputs that exist pre-bond)
+removes the adversary's ordering prior. The mitigation touches **no economic quantity** — it is off
+the trilemma axis.
+
+**Harness:** `cargo run -p shekyl-staking-sim -- --standoff`
+(`rust/shekyl-staking-sim/src/standoff.rs`). Monte-Carlo (200k trials/arm, SplitMix64, reproducible)
+over candidate-set size = 1 target + Poisson background funding-shaped decoys.
+
+**Homeostasis is analytical, not re-simmed.** Economic dynamics are epoch-quantized
+(`SETTLEMENT_EPOCH_BLOCKS = 10_000` ≈ 13.9 d); the standoff adds at most `window_blocks` of entry
+latency = `window/epoch` of one epoch. Re-running the epoch-granularity sweep to resolve a sub-epoch
+effect would over-read the model (cf. the float-vs-integer over-read,
+[`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](ARCHIVAL_SIM_ECONOMICS_VERDICT.md)). **Free ≤ 0.10 epoch
+(≈ 1000 blocks ≈ 1.4 d)** — two orders above any obfuscation-useful window.
+
+**Findings:**
+
+1. **Window vs. anonymity set** (background rate `0.02` ≈ 1 funding-spend/1.7 h): candidate-set mean
+   `1 → 7 → 13 → 25` across windows `0 → 300 → 600 → 1200` blocks; the **thin-cover tail**
+   `P(set ≤ 2)` reaches **0 % at 600 blocks** (~20 h). Homeostasis-free holds through 600
+   (`latΕ = 0.06`) and **trips at 1200** (`latΕ = 0.12`).
+2. **Anonymity is rate-driven, not width-driven** (the load-bearing finding). At a fixed 300-block
+   window, the set is `2.5` (thin 56 %) at rate `0.005` but `16` (thin 0 %) at rate `0.05`. The
+   window's value depends entirely on the **background funding-spend rate, which is unmeasured
+   pre-testnet** — a swept assumption flagged like `fetch_latency_per_unit` (L10). The recommendation
+   is conditional on the measured rate.
+3. **The inversion carries the low-activity worst case.** In the thin regime (rate `0.005`, where
+   set-enlargement *cannot* lift cover), enabling inversion cuts single-guess link probability
+   `0.52 → 0.32` and thin-cover `56 % → 20 %`, and breaks the ordering prior in ~50 % of cases — the
+   structural gain width alone can't buy. Inversion should be **on**.
+4. **Trigger independence is decisive.** A shared trigger (everyone jittering off a common epoch
+   boundary) collapses the candidate set `16 → 1.01` and link `0.067 → 0.997` — a detectable surge
+   separable from background traffic, destroying all cover regardless of width. **Uniform-independent
+   draws are mandatory.**
+
+**Recommendation:** **window = 600 blocks (~20 h), uniform-independent draw, inversion enabled**
+(symmetric ±600 envelope). Rationale: thin-cover → 0 % and set mean ≈ 13 at moderate background
+traffic (rate ≥ 0.02), comfortably homeostasis-free (`latΕ = 0.06`), and the inversion both breaks the
+ordering prior and covers the low-activity principal that a wider symmetric window cannot. The window
+cap is a candidate consensus bound (max announce↔bond separation, with announce-before-bond permitted);
+the draw within it is a wallet-side uniform default. **Testnet must measure the background
+funding-spend rate** — at low traffic (rate ≤ 0.005) set≥10 is unbuyable by width under the
+homeostasis ceiling, and the inversion (not a wider window) is the lever.
