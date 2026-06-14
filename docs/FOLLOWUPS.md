@@ -391,6 +391,77 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
+- **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
+  cold-start cover residual (standoff sim review pass, 2026-06-13).** The
+  `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
+  `ARCHIVAL_FIREWALL_GATE6.md` §10.12) recommends a 600-block uniform-independent
+  window with inversion on, but the review pass surfaced four carries, two of
+  which are consensus-rule / genesis-seal surfaces:
+  (1) **Consensus surface (Gate 4 timing).** Support **announce-before-bond**
+  (inversion); the max announce↔bond separation is an **anti-griefing ceiling**,
+  *not* a privacy control — label it as such in the consensus rule. **Open:**
+  whether a per-block bond-post smoothing rate-limit is worth adding as the one
+  consensus-side surge backstop — it is *partial* (smooths the chain bond-post,
+  not the network announce) and *not free* (saturable as a liveness-griefing
+  vector), so the decision trades a privacy-surge risk for a liveness risk.
+  (2) **Wallet conformance (genesis privacy floor).** The uniform-independent
+  draw is wallet-only and consensus-unenforceable; a shared trigger collapses the
+  set to ~1 and injects a cover-degrading surge. Promote it from "default" to a
+  **hard conformance requirement with a published test vector**, with the
+  reference wallet nailing and documenting it. The test vector must specifically
+  reject the **independent-double-jitter construction** (jittering two event-times
+  around a common anchor → triangular, zero-peaked separation that clusters the
+  events while passing the ±600 bound): the gap must be **drawn directly**
+  (`s ~ U[0,600]`, fair per-`P` order-coin). The vector asserts on the realized
+  `(spread, order)` *distribution* over a sample (uniform spread via
+  **discrete chi-square GoF** + excess-mass-near-zero; balanced independent order — and
+  order-balance alone is insufficient, since the trap's coin still looks fair).
+  Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
+  `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`
+  in `rust/shekyl-staking-sim/src/standoff.rs`. **"Uniform-*independent*" has two
+  independence dimensions a marginal gap test cannot see, both now in the suite:**
+  (i) **population anchor-independence** — the catastrophic shared-trigger mode
+  (epoch-snapped anchors pass the gap test but cluster absolute bond times → set
+  ~1.01); separate harness on absolute times with an epoch-snapped negative
+  (`population_bond_time` / `max_bin_share` +
+  `population_anchor_independence_disperses_shared_trigger_clusters`); (ii)
+  **serial independence** — load-bearing now that rebond/partial-unbond/re-entry
+  make a `P` draw several gaps over its life; a lag-1 autocorrelation / runs probe
+  (`lag1_autocorr` + `serial_independence_reference_passes_correlated_fails`),
+  required for a *cross-wallet* vector that cannot assume SplitMix64. **Grade
+  form:** discrete chi-square (not continuous KS — the gap is integer blocks) at a
+  **strict grading alpha ~1e-6** (`chi_square_uniform` / `chi_square_upper_crit` /
+  `Z_ALPHA_1E6`; `chi_square_grades_uniform_at_strict_alpha`), so a correct wallet
+  essentially never false-fails while the trap fails by orders of magnitude. The
+  fixed seed is **reference-determinism, not a PRNG mandate** — grade the property,
+  not the implementation.
+  (2b) **Exit-seam standoff geometry (separate envelope; ties GF-4 + the
+  partial-unbond genesis item).** The ±600 entry envelope does *not* cover the
+  exit seam. Pin a **separate** standoff for terminal drain *and* recurring
+  partial-unbond (`HoldingsUpdate`): **one-sided** (no inversion — collateral is
+  not spendable before the 20_000-block release cooldown), latency measured **from
+  cooldown expiry** (the cooldown deterministically pins the earliest spend, so
+  the standoff's job is to break that fixed-offset tell), cost ≤ 600 blocks on top
+  of cooldown = 0.06 epoch additional availability latency. Weaker cover per unit
+  latency than the entry seam (600-block search width, not 1200) — so the
+  thin-regime gap-toward-max bias matters more here.
+  (3) **Cold-start weak-cover residual (pre-seal, tied to L12).** Thinnest genesis
+  traffic + longest-lived foundational `P`s coincide. **Decision to record before
+  seal:** accept documented weak early-`P` cover, *or* foundation-inject decoy
+  funding (a foundation-trust/centralization cost that is *self-undercutting* —
+  foundation decoys are attributable and thus discounted by a sophisticated
+  adversary, per carry 4). Lean: document the residual; no non-attributable decoy
+  source exists short of reopening confidential staking (S-5).
+  (4) **Effective-vs-nominal cover (testnet, S-3 modeled observer).** The sim
+  measures *nominal* cover under honest Poisson traffic — an upper bound. Testnet
+  must probe **effective** cover against an observe-and-inject adversary, and must
+  measure the **network-event rate of the actual post-§10.9-isolation channel**,
+  not the on-chain funding-spend rate the sim proxied. Cover is `P(link |
+  isolation holds)` — a multiplier on §10.9, never additive. Cross-refs:
+  `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
+  caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
+  1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published

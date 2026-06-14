@@ -4,6 +4,87 @@
 
 ### Added
 
+- **archival: standoff conformance suite gains the two independence probes +
+  discrete-GoF grade (2026-06-13).** The marginal uniform/trap tests are
+  structurally blind to the *independent* half of "uniform-independent draw";
+  added the two probes the marginal cannot see (`rust/shekyl-staking-sim/src/standoff.rs`):
+  (1) **population anchor-independence** — the catastrophic shared-trigger mode
+  (an epoch-snapped anchor passes every gap test while clustering absolute bond
+  times → candidate set ~1.01); `population_bond_time` / `max_bin_share` +
+  `population_anchor_independence_disperses_shared_trigger_clusters` with an
+  epoch-snapped negative. (2) **serial independence** — load-bearing now that
+  rebond/partial-unbond/re-entry make a `P` draw several gaps over its life (a
+  weak PRNG yields a uniform marginal with correlated successive draws, linking
+  recurring bond ops); `lag1_autocorr` +
+  `serial_independence_reference_passes_correlated_fails`. Also added the
+  grading form: a **discrete** chi-square against the uniform (`chi_square_uniform`,
+  not continuous KS — the gap is integer blocks) at a **strict grading alpha
+  ~1e-6** (`chi_square_upper_crit` / `Z_ALPHA_1E6`;
+  `chi_square_grades_uniform_at_strict_alpha`), chosen so a correct wallet
+  essentially never false-fails while the trap fails by orders of magnitude; the
+  fixed seed is reference-determinism, **not** a PRNG mandate. Suite is 49 sim
+  tests green; economic sweep + `--standoff` report untouched. Docs:
+  `STAKER_ARCHIVAL_SIM.md` §*Construction and per-seam geometry*, `FOLLOWUPS.md`.
+
+- **archival: executable reference for the standoff draw conformance vector
+  (2026-06-13).** Added `draw_entry_gap` (the conformance-correct direct draw:
+  `s ~ U[0,600]` + fair order-coin) and `summarize_gaps` (realized
+  `(spread, order)` distribution: mean spread, order balance, first-decile mass,
+  decile uniformity probe) to `rust/shekyl-staking-sim/src/standoff.rs`, with two
+  validating tests — `correct_draw_is_well_distributed` (flat spread, balanced
+  order) and `double_jitter_trap_fails_the_same_check` (the *same* summary
+  rejects the triangular double-jitter trap; notably the trap's order-coin still
+  looks fair, proving the spread distribution is the load-bearing check, not order
+  balance). This makes the published wallet test vector executable rather than
+  prose: the vector asserts on the realized spread *and* order over a sample, not
+  the ±600 bound alone. No model change to the economic sweep; opt-in `--standoff`
+  report untouched.
+
+- **archival: standoff construction + per-seam geometry pinned (2026-06-13).**
+  Two conformance-critical construction details folded into the funding-seam
+  entry-standoff spec (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* →
+  *Construction and per-seam geometry*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12).
+  (1) **Draw the gap directly**, do not independently jitter two event-times
+  around a common anchor: the difference of two uniforms is triangular/zero-peaked
+  and clusters the events (near-zero effective standoff) while passing the ±600
+  bound — a conformance trap that matters because the draw is wallet-side and
+  unenforceable. Correct shape: place event 1 at the private intent `t0`, draw
+  `s ~ U[0,600]`, event 2 at `t0+s`, fair order-coin (uniform separation, free
+  inversion, max latency 600, per-`P` independence). The published test vector
+  must reject the triangular construction. (2) **The 600 is per-seam:** the ±600
+  symmetric envelope is the **entry** seam (announce↔bond, inversion-eligible,
+  1200-block search width); the **exit** seam (terminal drain + recurring
+  partial-unbond) is a *separate, one-sided* standoff (no inversion — collateral
+  isn't spendable before the 20_000-block release cooldown) whose latency is
+  measured **from cooldown expiry** (breaking the deterministic fixed-offset
+  cooldown tell), so symmetric entry/exit = two independent 600-block draws, each
+  free on its own seam. Also recorded: width is the expensive axis (proven
+  rate-driven), so the cheap thin-regime levers are biasing the gap toward the
+  max and the inversion, not a wider window. `FOLLOWUPS.md` item extended (test
+  vector must reject double-jitter; exit-seam geometry named). Docs + harness
+  doc-comment; no model change, no re-sim.
+
+- **archival: standoff recommendation reframed after review pass — cap is
+  anti-griefing, cover is conditional on isolation (2026-06-13).** Folded four
+  review-pass carries into the `--standoff` recommendation
+  (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
+  caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12), two of which change what the
+  number *means*: (a) the max announce↔bond cap is an **anti-griefing ceiling,
+  not a privacy control** — the privacy floor (minimum spread + uniform-independent
+  draw) is wallet-only and consensus-unenforceable, so the draw is promoted to a
+  **hard conformance requirement with a published test vector**, and a per-block
+  bond-post smoothing rate-limit is opened as the one (partial, non-free)
+  consensus-side surge backstop; (b) the measured cover is **`P(link | §10.9
+  isolation holds)` — a multiplier on isolation, never additive** — and the
+  rate that drives it is the post-isolation network-event rate, not the on-chain
+  funding-spend rate the sim proxied. Carried as named residuals: cold-start weak
+  cover (pre-seal, L12; foundation-decoy injection is self-undercutting per the
+  injected-decoy critique) and nominal-vs-effective cover (testnet must probe the
+  S-3 modeled observer, not a passive honest-rate measurement). New `FOLLOWUPS.md`
+  V3.0 item; harness doc-comments updated so the code stops overclaiming. No
+  re-sim (the reframings are meaning-changes, not value-changes); no consensus
+  surface touched yet (the consensus questions are opened, not decided).
+
 - **docs: track five CT deferrals in FOLLOWUPS (CT survey cleanup,
   2026-06-13).** A CT-* state survey found five pieces of real deferred work
   recorded only inside design/closeout docs, not in the central `FOLLOWUPS.md`
@@ -74,6 +155,100 @@
   landing with the post-prune refetch path; the F5 store-backed assembly,
   resume-path/full `R_k` recheck, and CT-5 poison-reaction items stay routed
   in `FOLLOWUPS.md`. Docs-only; no code or consensus surface touched.
+
+- **archival: staking-sim `--standoff` mode — funding-seam entry-standoff
+  anonymity model (2026-06-13).** New self-contained sub-report
+  (`rust/shekyl-staking-sim/src/standoff.rs`, peer to `--timing-cluster` /
+  `--failure-confirmation`) executing the Gate 6 §10.12 pass-4 BUILD target.
+  Monte-Carlo (200k trials/arm, reproducible SplitMix64) over candidate-set size
+  = 1 target + Poisson background funding-shaped decoys, sweeping window width ×
+  background rate × inversion × trigger-independence, with an analytical
+  homeostasis bound (entry latency = window/epoch; economic dynamics are
+  epoch-quantized at 10_000 blocks, so a minutes-to-hours window is off the
+  economic axis — not re-simmed, to avoid over-reading the epoch-granularity
+  model). Findings: anonymity is **rate-driven, not width-driven** (the background
+  funding-spend rate is the load-bearing *unmeasured* input, swept like
+  `fetch_latency_per_unit`); the **inversion carries the low-activity worst case**
+  (link 0.52→0.32, thin-cover 56%→20% where set-enlargement can't help); a
+  **shared trigger is catastrophic** (candidate set 16→1.01 — uniform-independent
+  draws mandatory); the standoff is **homeostasis-free ≤ ~1000 blocks**.
+  **Recommended: 600-block (~20 h) uniform-independent window, inversion on**;
+  testnet must measure the background rate. Recorded in `STAKER_ARCHIVAL_SIM.md`
+  §*Funding-seam entry standoff* and `ARCHIVAL_FIREWALL_GATE6.md` §10.12. New code
+  + docs; 5 unit tests; existing 325-scenario economic sweep untouched (new mode
+  is opt-in via `--standoff`).
+
+- **archival: Gate 6 Round 2 adversarial pass 4 — cadence closed, standoff
+  promoted (2026-06-13).** Added the organizing principle behind the close: the
+  firewall protects **P ↔ principal (a linkage)**, not **P ↔ its own rewards (a
+  conceded-public function of contribution)**. Earning-function obfuscation
+  (reward-magnitude *banding* — distinct from the sealed `g` operating-band in
+  `REWARD_EMISSION_LEG.md` — and pay-every-block) spends the anti-whale/trilemma
+  budget twice on a conceded property; the seam mitigation (standoff + inversion)
+  touches no economic quantity and is **off the trilemma's axis**. Cross-`P`
+  sybil correlation resolves to seam protection too (signature is timing/pattern,
+  not magnitude), and FCMP++/RingCT already hides seam amounts — leaving
+  timing + origin as the public seam leak. Resolved the two live pass-3 §10.12
+  scenarios in `ARCHIVAL_FIREWALL_GATE6.md`. **CLOSED the pay-every-block / implicit
+  accumulator-emission path and corrected the pass-3 over-claim** that
+  accumulator credit "deletes GF-6/GF-10." Reasoning: Shekyl staker payments are
+  a **roll-call** (every accrual keyed to `P_canonical_id` because dedup demands
+  it — confidential staking was rejected), so continuous attributed payment makes
+  an absence a **one-block edge** at the GF-4 exit rather than crowd-cover; and
+  **consensus cannot mint a hidden-recipient output** (it holds no ephemeral
+  secret — the miner coinbase is private only as sender-to-self), so a per-block
+  reward is either publicly-derivable (every `P`'s reward stream traceable to
+  `P_canonical_id`) or an invisible accrual that, auto-compounded to exit,
+  **concentrates** into the terminal event (worse GF-4) and destroys the
+  claim-timing decorrelation lever. The periodic-claim model is the better spot
+  given public attribution (claims timing-decorrelatable; decoupled from unstake
+  per R0-D6). The obfuscation being reached for needs **membership-hiding claims =
+  the confidential-staking machinery already rejected**, so this is the S-4 bridge
+  cost in disguise; the real question (reopen confidential staking?) folds into
+  S-5. **PROMOTED the funding-seam entry standoff + inversion to a build target**
+  for the S-3 adversary sim (the door, GF-7), sharpened past "smooth vs surge":
+  candidate-set sizing *for the targeted principal* (not window width); the
+  **low-activity principal** as the worst case (set-enlargement can't help, only
+  the inversion does); trigger-independence as the clustering knob; and
+  **enumerate the separable funding events first** (prep-spend vs. announce vs.
+  bond-post tx — ties to the S-2 ledger). Quick dispositions: terminal-lump →
+  existing wallet-side GF-4 fragmentation (no consensus mechanism); per-block
+  accrual rejected (more state churn + reorg surface for the same exposure);
+  seed compromise = named residual (recoverability ⟺ single-point-of-failure),
+  weight on key hygiene. Docs-only.
+
+- **archival: Gate 6 Round 2 adversarial pass 3 — end-to-end trace +
+  cross-layer findings (2026-06-13).** An end-to-end `P`-lifecycle trace
+  (key-gen → announce → bond-post → serving → emission → bond-adjustment →
+  exit) surfaced **model-level findings the per-round decomposition is blind to
+  by construction**; landed as a new §10.12 (S-1…S-6) in
+  `ARCHIVAL_FIREWALL_GATE6.md`. **S-1:** the money seams (GF-7 funding-in, GF-4
+  value-out) are the only findings protecting principal↔`P` unlinkability and the
+  only two still deferred — they sit at the on-chain ∧ network ∧ timing
+  conjunction no single layer owns (deferral ≠ ownership). **S-2 (build first,
+  cheapest):** specified the missing **fused, per-observer, whole-life exposure
+  ledger** (observer × lifecycle-event matrix + per-observer fusion closure,
+  conceded cells marked distinctly from leaked) — the §10.1 table is only
+  per-adversary "must not learn." **S-3:** privacy is named, not measured (325
+  economic scenarios, 0 adversary); reframed as the **privacy axis of the R-3
+  reconciliation already gating the seal** — deliverable is an adversary sim on
+  the funding/exit timing seams (`P(link | T_obs)` vs standoff / jitter / batch).
+  **S-4:** labeled the onion↔`P_canonical_id` bridge a **conceded staking-model
+  cost** traceable to the confidential-staking rejection, *not* closable at the
+  network layer. **S-5:** longevity-vs-privacy named a **model-level pre-seal
+  question** — long-lived `P` is the worst bridge structure, but rotation
+  relocates the seam (fresh GF-7 per rotation) and reopens the bond FSM
+  (bond = consensus balance), so the answer is open. **S-6:** pinned **key
+  locality** — the always-on serving box holds only the `P`-subtree, never the
+  master seed (cold-derive + provision; HKDF one-wayness preserves
+  recoverability), extending the §10.9 isolation pin from circuits to keys.
+  Recorded three sim scenarios: variable announce↔funding standoff; randomized
+  0–9-block entry incl. `P`-before-bond; and **implicit accumulator emission**
+  (deterministic Σwork credit with no broadcast claim **deletes** GF-6/GF-10 by
+  folding them into GF-4 — vs. *literal* per-block pay, which **sharpens** the
+  unbond cessation edge). Prioritization: ledger → adversary sim → longevity
+  question, all pre-seal. Docs-only; the ledger/sim/model calls live in their
+  home docs (`STAKER_ARCHIVAL_SIM`, `REWARD_EMISSION_LEG`, staking model).
 
 - **archival: Gate 6 Round 2 adversarial pass 2 — GF-1-carve asymmetry +
   age-stratified R-3 (2026-06-13).** Two sharpenings on the pass-1 landings in
@@ -241,6 +416,30 @@
   §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
 
 ### Fixed
+
+- **archival: standoff harness review-response fixes (PR137, 2026-06-14).**
+  Resolved Copilot review findings on `rust/shekyl-staking-sim/src/standoff.rs`
+  and the standoff docs: (1) `run()` guarded with `assert!(cfg.trials > 0)` (an
+  empty `sets` indexed `p05` / divided by zero) and dropped to private (no caller
+  outside the module); (2) both block→minute conversions centralized in a
+  `blocks_to_minutes` helper that casts to `f64` before multiplying and maps the
+  `u64::MAX` "no finite window" sentinel (returned by `recommended_window_blocks`
+  for `rate <= 0`) to infinity, removing a `u64` overflow; (3) `inversion_prior_break`
+  computed from the discrete gap model `0.5·W/(W+1)` instead of a constant `0.5`
+  — accurate for the integer gap and correctly `0` at `W=0` (events coincide, no
+  inversion possible); the `--standoff` report's inversion arm now reads `0.49834`
+  (was `0.5`), all other metrics byte-identical. Also fixed a doc inconsistency in
+  `STAKER_ARCHIVAL_SIM.md` and `FOLLOWUPS.md` (the spread test was described as
+  continuous "KS against uniform" in one place and the correct discrete chi-square
+  GoF in another — unified on the discrete chi-square the implementation uses).
+  Follow-up review round: (4) `search_width_blocks` now reports the width that
+  actually feeds the decoy model — the surge cluster width under a shared trigger,
+  not the inversion-adjusted window — so the shared-trigger arms read `3.0` instead
+  of the misleading window value (`anon_set` unchanged; the model already used the
+  cluster internally); (5) `recommendation()`'s `entry_latency_frac_epoch` maps the
+  `u64::MAX` "no finite window" sentinel to `∞` (was a huge finite number), keeping
+  `homeostasis_free` meaningful and consistent with `recommended_window_minutes`.
+  fmt + clippy clean; 49 sim tests green.
 
 - **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
   (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
