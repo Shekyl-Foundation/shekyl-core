@@ -4,6 +4,22 @@
 
 ### Added
 
+- **docs: track five CT deferrals in FOLLOWUPS (CT survey cleanup,
+  2026-06-13).** A CT-* state survey found five pieces of real deferred work
+  recorded only inside design/closeout docs, not in the central `FOLLOWUPS.md`
+  ledger. Added a tracked row (target version + reopening trigger per
+  `21-reversion-clause-discipline.mdc`) for each, with back-references from the
+  source docs so they are bisect-locatable both ways: (1) **CT-2 Tier B**
+  reconstruct-root KATs (staked/non-coinbase maturity, the `recon_tier_b.rs`
+  `#[ignore]` set) — V3.0, after CT-5; (2) **CT-1 full-segment freeze/prune KAT
+  at `j=2`** (~26k leaves/segment vs the CI-scale `j=0`/Tier-A coverage) — V3.0,
+  with prune-policy; (3) **wallet-local `O.x → position` match index** (§4.3
+  scan cost) — V3.x perf; (4) **confirm segment layer `j` / shard size `E`
+  against mainnet leaf growth** (§7.2.2, level-2 ≈26k provisional) — V3.x, with
+  the `ArchivalEngine` shard policy; (5) **anonymized (Tor/I2P) routing for
+  non-forward segment fetch** (§7.4) — V3.0, riding the `SegmentSource` seam.
+  Docs-only; no code or consensus surface touched.
+
 - **economics: CI gate enforces the pure-integer contract for `reward_arithmetic`
   (2026-06-13).** `scripts/ci/check_archival_reward_gates.sh` (run from
   `check_consensus_invariants.sh`) now rejects `f32`/`f64`, `usize`/`isize`, and
@@ -225,6 +241,15 @@
   §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
 
 ### Fixed
+
+- **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
+  (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
+  but the landed `reference.rs` defines `REBUILD_AT = FCMP_REFERENCE_BLOCK_MAX_AGE
+  / 2 = 50` (MAX_AGE = 100), pinned by a const-eval assert and `reference::tests`
+  — and §5/§5.2 already say 50. The `47` was stale arithmetic. Corrected to 50
+  and marked the open question **CLOSED** (value landed + pinned), with the
+  reopening criterion retained (measured propagation/confirmation latency).
+  Docs-only.
 
 - **archival: bond load-modify-store no longer wipes the v4 emission-dedup
   fields (F-S1 / F-E5, PR-E0, 2026-06-13).** `put_archival_bond_record`

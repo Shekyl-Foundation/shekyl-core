@@ -1086,9 +1086,16 @@ canonical tree under replacement at both deepen boundaries.
 2. **Match-cost at scale (§4.3).** Linear `O.x` scan over a multi-million-leaf
    range is the naive cost. Is an in-store `O.x → position` index (built locally
    from downloaded leaves, never queried) warranted? It is wallet-local so it
-   leaks nothing; it is a perf/΅memory tradeoff, not a privacy one.
-3. **`REBUILD_AT` default (§5.2).** `MAX_AGE/2 = 47` is a first cut; confirm
-   against expected propagation + confirmation latency.
+   leaks nothing; it is a perf/memory tradeoff, not a privacy one. **Tracked in
+   `FOLLOWUPS.md`** (V3.x perf), reopening on a measured wallet-refresh
+   bottleneck.
+3. **`REBUILD_AT` default (§5.2). CLOSED (landed in `reference.rs`).**
+   `REBUILD_AT = MAX_AGE / 2 = 50` (MAX_AGE = 100), pinned by a const-eval
+   assert and `reference::tests`. The half-`MAX_AGE` margin leaves room for
+   propagation + a confirmation attempt; as a local wallet-hygiene parameter
+   (not consensus, not privacy-observable, §5.2) it is tunable without a
+   uniformity cost. Reopening criterion: measured propagation + confirmation
+   latency shows the half-window margin is too tight or too loose.
 4. **Set-B enumeration (§4.2). CLOSED (2026-06).** Grep-driven audit at
    `key.rs` enumerated the full engine-side secret set (`SourceSecretsBundle`
    fields, `OutputClaim`'s `amount`/`handle`/`key_image`, plus the stack-frame
@@ -1123,6 +1130,7 @@ canonical tree under replacement at both deepen boundaries.
 8. **Derive `E` as a subtree level (§7.2.2).** Levels are coarse: 38 / 684 /
    25,992 / … leaves. No clean ~10k level — level 2 (≈26k) is provisional; confirm
    against mainnet leaf-growth and the shard-count × per-shard-storage tradeoff.
+   **Tracked in `FOLLOWUPS.md`** (V3.x, with the `ArchivalEngine` shard policy).
 9. **Pin vs evict / prune policy (§7.6).** Minimal wallet prunes non-owned leaves
    of frozen segments to `R_k` but keeps owned-output chunks forever; staker pins
    full shards. The `LeafStore` API must expose both without a V3.x restructure —
@@ -1135,7 +1143,8 @@ canonical tree under replacement at both deepen boundaries.
 11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
     Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
     anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
-    bolting it on at V3.x.
+    bolting it on at V3.x. **Tracked in `FOLLOWUPS.md`** (V3.0, riding the
+    `SegmentSource` seam's first consumer).
 12. **`build_upper_layers` factor (§7.7, CT-1).** Single-composition holds today
     only for from-leaves consumers. The wallet's steady-state hot path is
     from-cached-`R_k` (O(whole tree) per root if it calls `build_layers(all_leaves)`),

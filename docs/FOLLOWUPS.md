@@ -178,6 +178,75 @@ sustainability is unaffected by the recalibration.
   internal-oracle surface and stay bare by design. See
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
 
+- **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
+  classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
+  Target: V3.0, ordered after CT-5. `recon_tier_b.rs` carries five
+  `#[ignore]` Tier-B tests (mixed-maturity gindex ordering, multi-tx
+  coinbase-first + tx-hash order, staked max-lock/spendable, reorg-with-spend,
+  adversarial `tx_extra 0x07` daemon parity) as compile-time drift canaries —
+  no fake passes. Tier B is blocked on a fixture (`ct2_tier_b.json`) that
+  requires minting real regular/staked outputs, which needs real local path
+  assembly (CT-3 + CT-5), not the synthetic `TreeContext` vectors 2a-4's
+  `TestDaemon` uses (a real regtest daemon rejects synthetic proofs).
+  **Reopening trigger:** CT-5 lands the engine wiring so a regtest can mint a
+  non-coinbase output and append the Tier-B oracle; then un-ignore the tests
+  and (for the adversarial `0x07` case) add the C++ duplicate/malformed-tag
+  oracle. See [`docs/design/CT2_ROUND1_CLOSEOUT.md`](./design/CT2_ROUND1_CLOSEOUT.md)
+  §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
+  §8.2.
+
+- **Full-segment freeze + prune-retention KAT at production `j=2` leaf count
+  (CT-1 Round 1 deferral, tracked 2026-06-13).** Target: V3.0, with the
+  prune-policy / store-backed assembly work (`CURVE_TREE_CLIENT.md` §8 #9).
+  CT-1's freeze/prune mechanism is KAT'd at CI scale (`upper_layers_kat` at
+  `j=0`; `store_kat` Tier A ~150 leaves), but the production segment layer is
+  `j=2` (~26k leaves/segment), which no current fixture exercises. The
+  mechanism is layer-agnostic by construction, so this is coverage at scale,
+  not an unverified code path. **Reopening trigger:** store-backed assembly or
+  the prune-policy PR lands (it operates on real `j=2` segments), or an audit
+  requires the full-scale freeze/prune KAT explicitly. See
+  [`docs/design/CT1_ROUND1_CLOSEOUT.md`](./design/CT1_ROUND1_CLOSEOUT.md) §3
+  and the `CURVE_TREE_CLIENT.md` §9 CT-1 row.
+
+- **Wallet-local `O.x → position` match index (`CurveTreeClient` §4.3 scan
+  cost, CT Round 0 Q2, tracked 2026-06-13).** Target: V3.x performance work
+  (`15-deletion-and-debt.mdc` V3.2). Output matching (§4.3) is a linear `O.x`
+  scan over the drained-leaf range; at a multi-million-leaf mainnet tree that
+  is the naive cost. An in-store `O.x → position` index built locally from
+  downloaded leaves (never queried, so it leaks nothing — a perf/memory
+  tradeoff, not a privacy one) would cut it. Deferred because correctness does
+  not depend on it and the index is additive to the store schema. **Reopening
+  trigger:** profiling shows the linear match scan is a wallet-refresh
+  bottleneck at projected mainnet leaf counts. See
+  [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §4.3 /
+  §8 #2.
+
+- **Confirm segment layer `j` / shard size `E` against mainnet leaf growth
+  (CT Round 0 Q8, tracked 2026-06-13).** Target: V3.x, with the archival
+  shard-count policy (`CURVE_TREE_CLIENT.md` §7.2.2 / §7.6; the `ArchivalEngine`
+  is out of CT scope). Segments are subtree-aligned, so `E` (outputs per frozen
+  segment) is a coarse function of the chosen level: 38 / 684 / 25,992 / …
+  leaves. Level 2 (≈26k) is the provisional pin (`CT1_ROUND1_PINS.md`); there
+  is no clean ~10k level. The right level trades shard count against per-shard
+  storage and depends on mainnet leaf-growth data not yet available.
+  **Reopening trigger:** mainnet (or representative testnet) leaf-growth data
+  exists, or the `ArchivalEngine` shard-count/storage policy lands and needs
+  the level fixed. See [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)
+  §7.2.2 / §8 #8.
+
+- **Anonymized (Tor/I2P) routing for non-forward segment fetch (CT Round 0
+  Q11, tracked 2026-06-13).** Target: V3.0, with the `SegmentSource` seam /
+  bulk-leaf refetch path (the `get_curve_tree_leaves` row above). The
+  source-agnostic segment fetch (§7.4) must inherit mandatory anonymization so
+  a wallet's catch-up / archival fetches do not deanonymize it at the network
+  layer; the seam belongs against `ANONYMITY_NETWORKS.md`, not bolted on at
+  V3.x. The `get_curve_tree_leaves` / `SegmentSource` row tracks the *seam*;
+  this item tracks wiring it to the routing layer. **Reopening trigger:** the
+  `SegmentSource` seam lands (its first consumer is the refetch path) — wire
+  the fetch to the anonymity transport in the same PR. See
+  [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §7.4 /
+  §8 #11.
+
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   single-image amendment).** The per-binary Rust-image selection in
   `cmake/BuildRust.cmake` structurally gives every binary one Rust
