@@ -30,6 +30,7 @@ mod retrieval;
 mod reward;
 use reward::CurveImpl;
 mod scenarios;
+mod standoff;
 mod timing_cluster;
 mod transport;
 
@@ -532,9 +533,90 @@ fn print_timing_cluster_report() {
     }
 }
 
+fn print_standoff_report() {
+    let report = standoff::run_full_report();
+    eprintln!("shekyl-staking-sim — funding-seam entry-standoff anonymity (ARCHIVAL_FIREWALL_GATE6.md §10.12)");
+    eprintln!(
+        "Charter: hide P ↔ principal (GF-7), not P ↔ rewards. Background funding-spend rate is a"
+    );
+    eprintln!(
+        "  SWEPT pre-testnet assumption (like fetch_latency_per_unit), not a measurement."
+    );
+    eprintln!(
+        "Homeostasis: standoff entry latency = window/epoch (epoch={} blk); free ≤ {:.2} epoch.",
+        report.settlement_epoch_blocks, report.homeostasis_free_frac_epoch
+    );
+    eprintln!(
+        "  Economic dynamics are epoch-quantized (~13.9 d); obfuscation-useful windows are"
+    );
+    eprintln!("  minutes-to-hours — two orders smaller, so the standoff is off the economic axis.");
+    eprintln!();
+    eprintln!(
+        "  set = candidate funders (1 target + Poisson background decoys); link = 1/set (uniform);"
+    );
+    eprintln!(
+        "  thin = P(set ≤ 2) (the tail an averaged window hides); invBrk = share where bond"
+    );
+    eprintln!("  precedes entry (causal 0; inversion ~0.5); latΕ = entry latency / epoch.");
+    eprintln!();
+    eprintln!(
+        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>6} {:>7} {:>5}",
+        "scenario", "axis", "win", "win_min", "rate", "inv", "shr", "setMean", "setP05", "thin",
+        "link", "invBrk", "latΕ", "free",
+    );
+    for r in &report.results {
+        eprintln!(
+            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>6.2} {:>7.4} {:>5}",
+            r.name,
+            r.axis,
+            r.window_blocks,
+            r.window_minutes,
+            r.net_funding_rate_per_block,
+            if r.inversion { "Y" } else { "n" },
+            if r.shared_trigger { "Y" } else { "n" },
+            r.anon_set_mean,
+            r.anon_set_p05,
+            r.thin_cover_frac,
+            r.link_prob_mean,
+            r.inversion_prior_break,
+            r.entry_latency_frac_epoch,
+            if r.homeostasis_free { "Y" } else { "n" },
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Recommended window for set≥{:.0} (independent trigger, no inversion — conservative):",
+        report.target_anon_set
+    );
+    eprintln!(
+        "{:>8} {:>14} {:>10} {:>10} {:>8} {:>5}",
+        "rate", "spend_int_min", "rec_win", "rec_min", "latΕ", "free",
+    );
+    for rec in &report.recommendations {
+        eprintln!(
+            "{:>8.3} {:>14.1} {:>10} {:>10.0} {:>8.4} {:>5}",
+            rec.net_funding_rate_per_block,
+            rec.funding_spend_interval_minutes,
+            rec.recommended_window_blocks,
+            rec.recommended_window_minutes,
+            rec.entry_latency_frac_epoch,
+            if rec.homeostasis_free { "Y" } else { "n" },
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing standoff report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--standoff") {
+        print_standoff_report();
         return;
     }
 
