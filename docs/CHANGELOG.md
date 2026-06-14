@@ -242,6 +242,32 @@
 
 ### Fixed
 
+- **oxide: deserialize the consensus block-header `curve_tree_root` (CT-5 pre-0,
+  block-deserializer correctness fix surfaced by CT-5, 2026-06-14).** The Rust
+  `shekyl-oxide` `BlockHeader` parsed only five fields and stopped at `nonce`
+  (`block.rs`), while the consensus C++ `block_header` serializes a sixth field —
+  the FCMP++ `curve_tree_root` — after `nonce`
+  (`src/cryptonote_basic/cryptonote_basic.h`, `FIELD(curve_tree_root)`). On a real
+  six-field block this left 32 bytes unconsumed and `Block::read` mis-aligned the
+  following miner transaction (parsing the root's first byte as the tx-version
+  varint → `version != 2` reject), so `Block::read` would **fail loudly** on any
+  real Shekyl block. **Severity verified at source as "not-yet-exercised":** no
+  real consensus block had ever been deserialized by the Rust path (tests fed
+  synthetic five-field blocks); there was **no compensating offset** (the only
+  block-hash special-case is the unrelated inherited `202612` Monero test-vector
+  remap), and `serialize_pow_hash` hashed the five-field header so the Rust block
+  hash could not match consensus. This fix adds `curve_tree_root: [u8; 32]` to
+  `BlockHeader` and reads/writes it **unconditionally** after `nonce` — never gated
+  on `hardfork_version`, because the field is present from genesis (Shekyl minimum
+  hard fork is 1) and a version gate would be a dead pre-genesis branch
+  (`60-no-monero-legacy.mdc`). It also corrects `Block::hash()` (the preimage now
+  includes the root) and thus `ReferenceBlock.block_hash`, which CT-5 depends on.
+  KATs: header round-trip preserving the root, a consensus field-layout cross-check
+  (six-field byte order matching the C++ `BEGIN_SERIALIZE`), and a full-block
+  round-trip proving the miner transaction no longer mis-aligns. Establishes
+  block-header/block deserialization correctness for the first time; lands ahead of
+  CT-5a per `CT5_ENGINE_WIRING.md` §3.6 / §6 (R1-Q6, E3).
+
 - **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3
   (2026-06-13).** §8 open-question #3 read `MAX_AGE/2 = 47` as a "first cut",
   but the landed `reference.rs` defines `REBUILD_AT = FCMP_REFERENCE_BLOCK_MAX_AGE

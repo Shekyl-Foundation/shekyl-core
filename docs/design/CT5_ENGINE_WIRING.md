@@ -564,6 +564,18 @@ surfaces that the field is conditionally present (e.g. only from a given hard
 fork), the gate is `hardfork_version`-keyed per `60-no-monero-legacy.mdc` (Shekyl
 min HF is 1; the field is present from genesis, so no dead pre-genesis branch).
 
+**Landed (CT-5 pre-0, `fix/block-header-curve-tree-root`).** State found: **(a)
+not-yet-exercised** — confirmed at source (no compensating offset; the five-field
+`serialize_pow_hash` could not match consensus). `BlockHeader` now reads/writes
+`curve_tree_root` after `nonce` **unconditionally** (the scope-note's "field is
+present from genesis" leg → no `hardfork_version` gate, which would be a dead
+pre-genesis branch per `60-no-monero-legacy.mdc`). `ScannableBlock`/`Block`
+expose it through the public `block.header` path (no new field needed). KATs:
+header round-trip, consensus field-layout cross-check (six-field byte order vs
+the C++ `BEGIN_SERIALIZE`), and a full-block round-trip proving the miner tx no
+longer mis-aligns. Establishes header/block deserialization correctness for the
+first time and corrects `Block::hash()` / `ReferenceBlock.block_hash`.
+
 ### 3.7 Type-enforced contracts (make the §3.4 / E1 bug classes unrepresentable)
 
 `20-rust-vs-cpp-policy.mdc` #2: a cryptographic contract is enforced by the type
@@ -1089,16 +1101,20 @@ none is a consensus-atomic cutover (`07-consensus-atomic-cutovers.mdc` not
 invoked — the synthetic→real swap is flag-decomposable behind the assembler
 boundary).
 
-- **CT-5 pre-0 — `shekyl-oxide` block-header parser (prerequisite, R1-Q6 / §3.6).**
-  Extend `BlockHeader` (`rust/shekyl-oxide/shekyl-oxide/src/block.rs`) to
-  parse/serialize `curve_tree_root` after `nonce`, matching the consensus
-  serialization (`src/cryptonote_basic/cryptonote_basic.h:723/735`), gated on
-  `hardfork_version`. Thread it through `Block` / `ScannableBlock` so the refresh
-  path can read it. DoD: header round-trip KAT + a cross-check that a real
-  consensus-serialized header deserializes with the field intact (confirms the
-  latent mis-alignment in §3.6 #2 is closed). This lands **before** CT-5a; it is
-  not folded in, because the parser correctness is independent of the engine
-  wiring.
+- **CT-5 pre-0 — `shekyl-oxide` block-header parser (prerequisite, R1-Q6 / §3.6).
+  DONE (`fix/block-header-curve-tree-root`).** Extended `BlockHeader`
+  (`rust/shekyl-oxide/shekyl-oxide/src/block.rs`) to parse/serialize
+  `curve_tree_root` after `nonce`, matching the consensus serialization
+  (`src/cryptonote_basic/cryptonote_basic.h:723/735`). **Implemented unconditional,
+  not `hardfork_version`-gated:** the C++ `BEGIN_SERIALIZE` block carries no version
+  guard and the field is present from genesis (Shekyl min HF 1), so a gate would be
+  a dead pre-genesis branch (`60-no-monero-legacy.mdc`) — the §3.6 scope-note's
+  "present from genesis" leg. Threading is automatic: `ScannableBlock.block.header`
+  is the public read path, no new `Block`/`ScannableBlock` field. DoD met: header
+  round-trip KAT + consensus field-layout cross-check + full-block round-trip
+  proving the §3.6 #2 mis-alignment is closed (`src/tests/block.rs`). Lands
+  **before** CT-5a, not folded in, because the parser correctness is independent of
+  the engine wiring.
 - **CT-5a — actor lifecycle + ingest (no signer change).** Add the
   `shekyl-curve-tree` dependency (**exact-pinned; the CT-5a dependency-discipline
   review covers this edge and any new `kameo`/`redb` edge — X6**), the

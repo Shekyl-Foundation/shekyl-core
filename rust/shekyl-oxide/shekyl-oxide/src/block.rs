@@ -36,6 +36,15 @@ pub struct BlockHeader {
     /// Miners should increment this while attempting to find a block with a hash satisfying the PoW
     /// rules.
     pub nonce: u32,
+    /// The FCMP++ curve tree root committing to the chain's outputs after this block.
+    ///
+    /// Serialized after `nonce` in the consensus header, matching the C++
+    /// `block_header` (`src/cryptonote_basic/cryptonote_basic.h`, `FIELD(curve_tree_root)`
+    /// in `BEGIN_SERIALIZE`/`END_SERIALIZE`). The C++ serializes it unconditionally
+    /// from genesis (Shekyl minimum hard fork is 1; there is no pre-FCMP++ block), so
+    /// this field is always present and is never gated on `hardfork_version` — a
+    /// version gate would be a dead pre-genesis branch (`60-no-monero-legacy.mdc`).
+    pub curve_tree_root: [u8; 32],
 }
 
 impl BlockHeader {
@@ -45,7 +54,8 @@ impl BlockHeader {
         write_varint(&self.hardfork_signal, w)?;
         write_varint(&self.timestamp, w)?;
         w.write_all(&self.previous)?;
-        w.write_all(&self.nonce.to_le_bytes())
+        w.write_all(&self.nonce.to_le_bytes())?;
+        w.write_all(&self.curve_tree_root)
     }
 
     /// Serialize the BlockHeader to a `Vec<u8>`.
@@ -64,6 +74,7 @@ impl BlockHeader {
             timestamp: read_varint(r)?,
             previous: read_bytes(r)?,
             nonce: read_bytes(r).map(u32::from_le_bytes)?,
+            curve_tree_root: read_bytes(r)?,
         })
     }
 }
