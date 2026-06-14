@@ -3455,3 +3455,187 @@ drain spacing) remain open per timing doc §7.
   *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
   residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`
   borderline failures (`0.062` at strict `<0.05`).
+
+### Funding-seam entry standoff (Gate 6 §10.12 pass-4; 2026-06-13)
+
+**Authority:** [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §10.12. Closes the §7
+"wallet jitter default" open item flagged in the timing-cluster pin above (T-A4).
+
+**Charter (pass-4 organizing principle):** hide **P ↔ principal** (GF-7), *not* **P ↔ its own
+rewards** (`P_canonical_id` is a conceded-public earner). The standoff decorrelates `P`'s observable
+entry event from the bond-post; the **inversion** (`P` may appear *before* its bond is staked,
+feasible because the announce is membership-only backing over principal outputs that exist pre-bond)
+removes the adversary's ordering prior. The mitigation touches **no economic quantity** — it is off
+the trilemma axis.
+
+**Harness:** `cargo run -p shekyl-staking-sim -- --standoff`
+(`rust/shekyl-staking-sim/src/standoff.rs`). Monte-Carlo (200k trials/arm, SplitMix64, reproducible)
+over candidate-set size = 1 target + Poisson background funding-shaped decoys.
+
+**Homeostasis is analytical, not re-simmed.** Economic dynamics are epoch-quantized
+(`SETTLEMENT_EPOCH_BLOCKS = 10_000` ≈ 13.9 d); the standoff adds at most `window_blocks` of entry
+latency = `window/epoch` of one epoch. Re-running the epoch-granularity sweep to resolve a sub-epoch
+effect would over-read the model (cf. the float-vs-integer over-read,
+[`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](ARCHIVAL_SIM_ECONOMICS_VERDICT.md)). **Free ≤ 0.10 epoch
+(≈ 1000 blocks ≈ 1.4 d)** — two orders above any obfuscation-useful window.
+
+**Findings:**
+
+1. **Window vs. anonymity set** (background rate `0.02` ≈ 1 funding-spend/1.7 h): candidate-set mean
+   `1 → 7 → 13 → 25` across windows `0 → 300 → 600 → 1200` blocks; the **thin-cover tail**
+   `P(set ≤ 2)` reaches **0 % at 600 blocks** (~20 h). Homeostasis-free holds through 600
+   (`latΕ = 0.06`) and **trips at 1200** (`latΕ = 0.12`).
+2. **Anonymity is rate-driven, not width-driven** (the load-bearing finding). At a fixed 300-block
+   window, the set is `2.5` (thin 56 %) at rate `0.005` but `16` (thin 0 %) at rate `0.05`. The
+   window's value depends entirely on the **background funding-spend rate, which is unmeasured
+   pre-testnet** — a swept assumption flagged like `fetch_latency_per_unit` (L10). The recommendation
+   is conditional on the measured rate.
+3. **The inversion carries the low-activity worst case.** In the thin regime (rate `0.005`, where
+   set-enlargement *cannot* lift cover), enabling inversion cuts single-guess link probability
+   `0.52 → 0.32` and thin-cover `56 % → 20 %`, and breaks the ordering prior in ~50 % of cases — the
+   structural gain width alone can't buy. Inversion should be **on**.
+4. **Trigger independence is decisive.** A shared trigger (everyone jittering off a common epoch
+   boundary) collapses the candidate set `16 → 1.01` and link `0.067 → 0.997` — a detectable surge
+   separable from background traffic, destroying all cover regardless of width. **Uniform-independent
+   draws are mandatory.**
+
+**Recommendation:** **window = 600 blocks (~20 h), uniform-independent draw, inversion enabled**
+(symmetric ±600 envelope). Rationale: thin-cover → 0 % and set mean ≈ 13 at moderate background
+traffic (rate ≥ 0.02), comfortably homeostasis-free (`latΕ = 0.06`), and the inversion both breaks the
+ordering prior and covers the low-activity principal that a wider symmetric window cannot. The window
+cap is a candidate consensus bound, but as an **anti-griefing ceiling** (max announce↔bond separation,
+with announce-before-bond permitted) — *not* a privacy control; the privacy floor is the
+uniform-independent draw, which is wallet-only and therefore a **hard conformance requirement with a
+published test vector**, not a default (see caveats below). **Testnet must measure the background
+funding-spend rate** — at low traffic (rate ≤ 0.005) set≥10 is unbuyable by width under the
+homeostasis ceiling, and the inversion (not a wider window) is the lever.
+
+**Conditionality and caveats (review pass, 2026-06-13) — what the numbers mean.**
+The window/inversion/draw *shape* is right and the standoff sits off the trilemma axis as claimed,
+but four things bound the result; the first two change the meaning, not just the value:
+
+1. **The cap is anti-griefing, not privacy.** A "max announce↔bond ≤ 600" rule is a *liveness
+   ceiling* (don't let announced-but-unbonded `P`s linger), not a privacy floor — privacy wants the
+   separation large and random. The privacy-load-bearing controls are a **minimum effective spread**
+   and the **uniform-independent draw**, and both are **wallet-only and consensus-unenforceable**:
+   consensus sees neither the FCMP++-hidden funding source nor the principal's off-chain activity, so
+   it cannot police the draw. Finding 4 makes this load-bearing in the worst way — a single popular
+   wallet shipping "bond at the next epoch boundary" injects a detectable surge that degrades cover
+   for *everyone* drawing in the window, and nothing in consensus can stop it. **Disposition:** the
+   draw is a **hard conformance requirement with a published test vector** (reference wallet nails it
+   and documents it loudly), not a "wallet-side default." **Open consensus question:** the one lever
+   consensus *has* is the bond-post it can see — a per-block bond-post budget that defers excess posts
+   would make a shared-trigger spike unconstructible on-chain. It is only a **partial** backstop (it
+   smooths the chain event, not the network announce it can't see, so wallet conformance on the
+   announce draw stays load-bearing) and it is **not free** (an attacker can saturate the budget to
+   delay honest entrants — a liveness-griefing risk traded for the privacy-surge risk). Carried to
+   `FOLLOWUPS.md` / Gate 4 timing.
+2. **Cover is conditional on §10.9 isolation, multiplicatively.** The harness models background as
+   *indistinguishable* funding-shaped decoys — indistinguishability that **§10.9 circuit/key
+   isolation is what buys**. Without isolation the principal's activity is attributable directly (the
+   target is *named*, not in a crowd) and no window helps. So these numbers are `P(link | isolation
+   holds)`; the unconditional `P(link) = P(link|iso)·P(iso) + P(link|¬iso)·P(¬iso)` with
+   `P(link|¬iso) ≈ 1`. **The standoff is a multiplier on isolation, never an independent additive
+   mitigation.** Corollary: post-isolation the residual channel is concurrent *network* activity, so
+   the rate that actually drives cover is the **network-event rate, not the on-chain funding-spend
+   rate** swept here (a proxy). The harness is channel-agnostic ("candidate events in a window"), so
+   the structure transfers, but **testnet must measure the rate of the actual channel**, or the
+   rate-driven finding is calibrated against a proxy.
+3. **Cold-start is the structural worst case (named pre-seal residual).** The rate that drives cover
+   is lowest at genesis (a cold chain has the thinnest funding/network traffic), and the earliest
+   `P`s are the foundational, longest-lived stakers — so the **weakest cover and the longest exposure
+   window coincide on the actors who matter most for bootstrap** (tie-in: L12 cold-start). Inversion-on
+   is the right call but the thin numbers (link 0.32, thin-cover 20 %) are not strong. The obvious
+   remedy — **foundation-injected decoy funding** — is undercut by caveat 4: foundation decoys are
+   foundation-*attributable* (keys, patterns, origin), so a sophisticated adversary discounts them and
+   early-`P` cover does not actually rise. The honest lean is **document weak early cover as a named
+   residual** unless a *non-attributable* decoy source exists (which does not, short of reopening
+   confidential staking). Do not let "rate ≥ 0.02" quietly assume a steady-state rate the genesis
+   chain will not have.
+4. **The set is nominal cover under honest traffic — an upper bound.** Poisson decoys are honest
+   background; the RingCT decade's lesson is that nominal anonymity set ≠ effective set against an
+   adversary that **observes** (marks which background it can attribute elsewhere) and **injects**
+   (announce-then-not-bond seeding, bounded but not foreclosed by the membership-only backing
+   requirement). So "set ≈ 13 at rate 0.02" is an **upper bound**; effective adversarial cover is
+   lower and unquantified. The testnet target is **S-3's modeled observer**, not a passive rate
+   measurement.
+
+**Construction and per-seam geometry (conformance-critical, 2026-06-13).**
+
+- **Draw the gap directly — do *not* independently jitter two event-times around a common anchor.**
+  The sim assumes the separation between the two seam events is `s ~ U[0, 600]` with a random order.
+  The obvious-but-wrong build picks an intent time `t0` and independently draws an announce offset and
+  a bond offset in `[0, 600]`; their *difference* is **triangular, peaked at zero** — the events
+  cluster together most of the time, the precise opposite of a standoff, while still satisfying "both
+  within 600" and "separation ≤ 600" on paper. This is a **conformance trap**, and it matters
+  precisely because the draw is wallet-side and consensus-unenforceable (caveat 1). **Correct shape:**
+  at `t0`, flip a fair coin for order, place the first event at `t0`, draw `s ~ U[0, 600]`, place the
+  second at `t0 + s`. That yields uniform separation, *free* inversion (the coin), max latency 600,
+  and per-`P` independence (`t0` is the principal's private intent). **The published test vector must
+  reject the triangular construction** — it asserts on the *distribution* of the realized
+  `(spread, order)` over a large sample (uniform spread: **discrete chi-square GoF** against the
+  uniform on `[0, 600]` + an excess-mass-near-zero / first-decile detector; balanced,
+  per-`P`-independent order), **not** the
+  ±600 bound alone (which the trap also passes). Order-balance alone is *not* sufficient — the trap's
+  order-coin still looks fair while its spread is zero-peaked, so the spread distribution is the
+  load-bearing check. This is executable in the harness as the reference for the vector:
+  `draw_entry_gap` / `summarize_gaps` in `standoff.rs`, with `correct_draw_is_well_distributed`
+  (the correct draw is flat) and `double_jitter_trap_fails_the_same_check` (the same summary rejects
+  the trap) as the validating tests.
+- **"Uniform-*independent*" has two independence dimensions a marginal gap test cannot see — both
+  must be in the conformance vector.** The uniform/trap checks above nail the *marginal*; they are
+  structurally blind to *independence*, and the gap is the wrong input for both failures:
+  - **Population anchor-independence (the catastrophic shared-trigger mode, finding 4).** The gap is
+    anchor-agnostic — a wallet bonding at "next epoch boundary + uniform gap" draws a *perfect*
+    uniform spread (passes every gap test) while every wallet's anchor `t0` snaps to the same
+    boundary, so the **absolute bond times** cluster and the candidate set collapses to ~1.01 (worse
+    than the triangular trap's merely-bad). The bug is in the anchor, not the gap, so it needs a
+    **separate harness on absolute times**: a population of `N` wallets with independent private
+    intents, asserting the realized bond times do not cluster, with an **epoch-snapped population as
+    the negative**. Landed: `population_bond_time` / `max_bin_share` +
+    `population_anchor_independence_disperses_shared_trigger_clusters`.
+  - **Serial independence across a `P`'s repeated draws (now load-bearing).** A marginal GoF cannot
+    see autocorrelation; a weak PRNG can produce a beautiful uniform marginal with correlated
+    successive draws. This was moot when a `P` drew one gap in its life, but **rebond / partial-unbond
+    / re-entry at genesis** make a `P` draw several gaps over its lifetime — and a conformant-but-weak
+    wallet's correlated successive gaps make those recurring bond ops linkable to each other (exactly
+    the recurring-surface exposure). For a *cross-wallet* vector (different implementations, different
+    PRNGs — cannot assume SplitMix64), add a **lag-1 autocorrelation / runs probe** on a single
+    wallet's gap sequence. Landed: `lag1_autocorr` +
+    `serial_independence_reference_passes_correlated_fails`.
+- **The grade is a discrete GoF at a strict grading alpha — not continuous KS, not research alpha.**
+  Three conformance-gate-specific cautions: (i) the gap is **integer blocks**, so continuous KS is
+  mis-calibrated and conservative — use **chi-square against the discrete uniform** (`chi_square_uniform`,
+  graded by `chi_square_grades_uniform_at_strict_alpha`); (ii) pick **alpha for a grading gate, not
+  research** — a naive `p < 0.05` false-fails ~5 % of correct wallets by sampling chance, so set the
+  threshold strict (**~1e-6**, via `chi_square_upper_crit` at `Z_ALPHA_1E6`) where a correct wallet
+  essentially never false-fails while the trap (a gross deviation) still fails by orders of magnitude;
+  (iii) **"fixed seed" means reference-determinism, not a PRNG mandate** — the seeded SplitMix64
+  sequence makes the *reference* reproducible for others to match their statistics against; it must
+  not become "all wallets emit this exact sequence" (that grades the implementation, not the
+  property, and false-fails a correct wallet with a different CSPRNG). Grade the property
+  (uniform-independent) statistically.
+- **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
+  (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
+  adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
+  (terminal drain, and now the *recurring* partial-unbond `HoldingsUpdate`) is a **separate standoff
+  with its own envelope and its own latency budget** — and it differs structurally on two axes:
+  (i) it is **one-sided** (no inversion: collateral is not spendable before the **20_000-block
+  release cooldown**, so the drain cannot precede the unbond), so a 600-block exit window buys a
+  600-block search width, *not* 1200 — the exit seam is inherently weaker cover per unit latency than
+  the entry seam; (ii) its latency lands on **funds availability measured from cooldown expiry, not
+  from the unbond event**, because the cooldown already pins the earliest spend deterministically — so
+  the exit standoff's job is specifically to **break that deterministic fixed-offset tell** (without
+  it, the drain fires at exactly cooldown-expiry, trivially linkable to the unbond). Cost: ≤ 600
+  blocks *on top of* the 20_000-block cooldown = **0.06 epoch of additional availability latency**,
+  free on its own seam. Symmetric entry/exit protection is therefore **two independent 600-block
+  draws**, each free on its own seam — but the exit one must be stated explicitly; "±600 envelope"
+  describes the entry seam and does not imply the exit.
+- **Thin-regime: the cheap lever is gap-shape and inversion, not width.** Width is the *expensive*
+  axis (the rate-driven finding: a wider window trips homeostasis above ~1000 blocks and barely moves
+  thin-regime cover, which is rate-limited not width-limited). If more cover than rate-at-600 is wanted
+  in the thin regime, the free levers are (a) **biasing the gap distribution toward the max** — 600 is
+  already homeostasis-free, and positioning the true event far from the bond-post anchor defeats a
+  *nearest-spend* proximity heuristic when any background exists (modest, adversary-model-dependent),
+  and (b) **leaning on the inversion** (the proven thin-regime lever, finding 3). Neither widens the
+  window; both stay off the economic axis.
