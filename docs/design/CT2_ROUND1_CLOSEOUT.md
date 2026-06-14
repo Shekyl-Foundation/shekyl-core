@@ -75,6 +75,7 @@ leaf/root rules change (`gen_ct2_fixture.py` records provenance on regen).
 **Reopen when:** Phase 2A regtest can mint regular/staked outputs and append a
 Tier B oracle. **Not a 2A gate:** bootstrap FCMP spend proves against
 coinbase-only tree — exactly Tier A shape (`CT2_DRAIN_ORDER.md` §8.2 acyclicity).
+**Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md)** (V3.0, ordered after CT-5).
 
 Tier B tests are `#[ignore]` with compile-time drift canaries — no fake passes.
 
