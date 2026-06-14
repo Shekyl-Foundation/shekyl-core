@@ -3503,7 +3503,59 @@ effect would over-read the model (cf. the float-vs-integer over-read,
 (symmetric ±600 envelope). Rationale: thin-cover → 0 % and set mean ≈ 13 at moderate background
 traffic (rate ≥ 0.02), comfortably homeostasis-free (`latΕ = 0.06`), and the inversion both breaks the
 ordering prior and covers the low-activity principal that a wider symmetric window cannot. The window
-cap is a candidate consensus bound (max announce↔bond separation, with announce-before-bond permitted);
-the draw within it is a wallet-side uniform default. **Testnet must measure the background
+cap is a candidate consensus bound, but as an **anti-griefing ceiling** (max announce↔bond separation,
+with announce-before-bond permitted) — *not* a privacy control; the privacy floor is the
+uniform-independent draw, which is wallet-only and therefore a **hard conformance requirement with a
+published test vector**, not a default (see caveats below). **Testnet must measure the background
 funding-spend rate** — at low traffic (rate ≤ 0.005) set≥10 is unbuyable by width under the
 homeostasis ceiling, and the inversion (not a wider window) is the lever.
+
+**Conditionality and caveats (review pass, 2026-06-13) — what the numbers mean.**
+The window/inversion/draw *shape* is right and the standoff sits off the trilemma axis as claimed,
+but four things bound the result; the first two change the meaning, not just the value:
+
+1. **The cap is anti-griefing, not privacy.** A "max announce↔bond ≤ 600" rule is a *liveness
+   ceiling* (don't let announced-but-unbonded `P`s linger), not a privacy floor — privacy wants the
+   separation large and random. The privacy-load-bearing controls are a **minimum effective spread**
+   and the **uniform-independent draw**, and both are **wallet-only and consensus-unenforceable**:
+   consensus sees neither the FCMP++-hidden funding source nor the principal's off-chain activity, so
+   it cannot police the draw. Finding 4 makes this load-bearing in the worst way — a single popular
+   wallet shipping "bond at the next epoch boundary" injects a detectable surge that degrades cover
+   for *everyone* drawing in the window, and nothing in consensus can stop it. **Disposition:** the
+   draw is a **hard conformance requirement with a published test vector** (reference wallet nails it
+   and documents it loudly), not a "wallet-side default." **Open consensus question:** the one lever
+   consensus *has* is the bond-post it can see — a per-block bond-post budget that defers excess posts
+   would make a shared-trigger spike unconstructible on-chain. It is only a **partial** backstop (it
+   smooths the chain event, not the network announce it can't see, so wallet conformance on the
+   announce draw stays load-bearing) and it is **not free** (an attacker can saturate the budget to
+   delay honest entrants — a liveness-griefing risk traded for the privacy-surge risk). Carried to
+   `FOLLOWUPS.md` / Gate 4 timing.
+2. **Cover is conditional on §10.9 isolation, multiplicatively.** The harness models background as
+   *indistinguishable* funding-shaped decoys — indistinguishability that **§10.9 circuit/key
+   isolation is what buys**. Without isolation the principal's activity is attributable directly (the
+   target is *named*, not in a crowd) and no window helps. So these numbers are `P(link | isolation
+   holds)`; the unconditional `P(link) = P(link|iso)·P(iso) + P(link|¬iso)·P(¬iso)` with
+   `P(link|¬iso) ≈ 1`. **The standoff is a multiplier on isolation, never an independent additive
+   mitigation.** Corollary: post-isolation the residual channel is concurrent *network* activity, so
+   the rate that actually drives cover is the **network-event rate, not the on-chain funding-spend
+   rate** swept here (a proxy). The harness is channel-agnostic ("candidate events in a window"), so
+   the structure transfers, but **testnet must measure the rate of the actual channel**, or the
+   rate-driven finding is calibrated against a proxy.
+3. **Cold-start is the structural worst case (named pre-seal residual).** The rate that drives cover
+   is lowest at genesis (a cold chain has the thinnest funding/network traffic), and the earliest
+   `P`s are the foundational, longest-lived stakers — so the **weakest cover and the longest exposure
+   window coincide on the actors who matter most for bootstrap** (tie-in: L12 cold-start). Inversion-on
+   is the right call but the thin numbers (link 0.32, thin-cover 20 %) are not strong. The obvious
+   remedy — **foundation-injected decoy funding** — is undercut by caveat 4: foundation decoys are
+   foundation-*attributable* (keys, patterns, origin), so a sophisticated adversary discounts them and
+   early-`P` cover does not actually rise. The honest lean is **document weak early cover as a named
+   residual** unless a *non-attributable* decoy source exists (which does not, short of reopening
+   confidential staking). Do not let "rate ≥ 0.02" quietly assume a steady-state rate the genesis
+   chain will not have.
+4. **The set is nominal cover under honest traffic — an upper bound.** Poisson decoys are honest
+   background; the RingCT decade's lesson is that nominal anonymity set ≠ effective set against an
+   adversary that **observes** (marks which background it can attribute elsewhere) and **injects**
+   (announce-then-not-bond seeding, bounded but not foreclosed by the membership-only backing
+   requirement). So "set ≈ 13 at rate 0.02" is an **upper bound**; effective adversarial cover is
+   lower and unquantified. The testnet target is **S-3's modeled observer**, not a passive rate
+   measurement.

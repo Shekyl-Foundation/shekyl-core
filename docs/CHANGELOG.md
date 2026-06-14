@@ -4,6 +4,27 @@
 
 ### Added
 
+- **archival: standoff recommendation reframed after review pass — cap is
+  anti-griefing, cover is conditional on isolation (2026-06-13).** Folded four
+  review-pass carries into the `--standoff` recommendation
+  (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
+  caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12), two of which change what the
+  number *means*: (a) the max announce↔bond cap is an **anti-griefing ceiling,
+  not a privacy control** — the privacy floor (minimum spread + uniform-independent
+  draw) is wallet-only and consensus-unenforceable, so the draw is promoted to a
+  **hard conformance requirement with a published test vector**, and a per-block
+  bond-post smoothing rate-limit is opened as the one (partial, non-free)
+  consensus-side surge backstop; (b) the measured cover is **`P(link | §10.9
+  isolation holds)` — a multiplier on isolation, never additive** — and the
+  rate that drives it is the post-isolation network-event rate, not the on-chain
+  funding-spend rate the sim proxied. Carried as named residuals: cold-start weak
+  cover (pre-seal, L12; foundation-decoy injection is self-undercutting per the
+  injected-decoy critique) and nominal-vs-effective cover (testnet must probe the
+  S-3 modeled observer, not a passive honest-rate measurement). New `FOLLOWUPS.md`
+  V3.0 item; harness doc-comments updated so the code stops overclaiming. No
+  re-sim (the reframings are meaning-changes, not value-changes); no consensus
+  surface touched yet (the consensus questions are opened, not decided).
+
 - **economics: CI gate enforces the pure-integer contract for `reward_arithmetic`
   (2026-06-13).** `scripts/ci/check_archival_reward_gates.sh` (run from
   `check_consensus_invariants.sh`) now rejects `f32`/`f64`, `usize`/`isize`, and

@@ -1147,8 +1147,23 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   catastrophic** (set `16→1.01` — uniform-independent draws mandatory); and the standoff is
   **homeostasis-free ≤ ~1000 blocks** (economic dynamics are epoch-quantized at 10_000 blocks, so a
   minutes-to-hours window is off the economic axis — the pass-4 principle, confirmed). **Recommended:
-  600-block (~20 h) uniform-independent window, inversion on**; the window cap is a candidate
-  consensus bound, the draw a wallet-side default, and testnet must measure the background rate.
+  600-block (~20 h) uniform-independent window, inversion on.** Four conditionalities bound the
+  number (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and caveats*); the
+  first two change what it *means*: (i) **the cap is anti-griefing, not privacy** — a max
+  announce↔bond separation is a liveness *ceiling*; the privacy floor (minimum spread + the
+  uniform-independent draw) is **wallet-only and consensus-unenforceable** (consensus sees neither the
+  FCMP++-hidden funding nor off-chain principal activity), so the draw is a **hard conformance
+  requirement with a published test vector**, not a default — with an open consensus question of a
+  per-block bond-post smoothing rate-limit as a *partial* (chain-side only) and *non-free*
+  (liveness-griefing) backstop; (ii) **cover is conditional on §10.9 isolation, multiplicatively** —
+  the numbers are `P(link | isolation holds)`, the standoff is a multiplier on isolation, never
+  additive, and the rate that actually drives cover is the **network-event rate post-isolation, not
+  the on-chain funding-spend rate** the sim proxied; (iii) **cold-start is the structural worst case**
+  — thinnest genesis traffic + longest-lived foundational `P`s coincide, foundation-injected decoys
+  are self-undercutting (attributable → discounted per (iv)), so weak early cover is a **named pre-seal
+  residual** (L12); (iv) the measured set is **nominal honest-traffic cover, an upper bound** —
+  effective cover against an observe-and-inject adversary (the S-3 modeled observer, the testnet
+  target) is lower and unquantified.
 - **CLOSE — pay-every-block / implicit accumulator emission (corrects the pass-3 over-claim).** The
   pass-3 entry claimed accumulator credit "deletes GF-6/GF-10." **That was wrong.** The borrowed
   intuition (a quiet validator lost in the crowd) needs an *anonymous* crowd; Shekyl staker payments

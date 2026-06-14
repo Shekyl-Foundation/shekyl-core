@@ -282,6 +282,41 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
+- **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
+  cold-start cover residual (standoff sim review pass, 2026-06-13).** The
+  `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
+  `ARCHIVAL_FIREWALL_GATE6.md` §10.12) recommends a 600-block uniform-independent
+  window with inversion on, but the review pass surfaced four carries, two of
+  which are consensus-rule / genesis-seal surfaces:
+  (1) **Consensus surface (Gate 4 timing).** Support **announce-before-bond**
+  (inversion); the max announce↔bond separation is an **anti-griefing ceiling**,
+  *not* a privacy control — label it as such in the consensus rule. **Open:**
+  whether a per-block bond-post smoothing rate-limit is worth adding as the one
+  consensus-side surge backstop — it is *partial* (smooths the chain bond-post,
+  not the network announce) and *not free* (saturable as a liveness-griefing
+  vector), so the decision trades a privacy-surge risk for a liveness risk.
+  (2) **Wallet conformance (genesis privacy floor).** The uniform-independent
+  draw is wallet-only and consensus-unenforceable; a shared trigger collapses the
+  set to ~1 and injects a cover-degrading surge. Promote it from "default" to a
+  **hard conformance requirement with a published test vector**, with the
+  reference wallet nailing and documenting it.
+  (3) **Cold-start weak-cover residual (pre-seal, tied to L12).** Thinnest genesis
+  traffic + longest-lived foundational `P`s coincide. **Decision to record before
+  seal:** accept documented weak early-`P` cover, *or* foundation-inject decoy
+  funding (a foundation-trust/centralization cost that is *self-undercutting* —
+  foundation decoys are attributable and thus discounted by a sophisticated
+  adversary, per carry 4). Lean: document the residual; no non-attributable decoy
+  source exists short of reopening confidential staking (S-5).
+  (4) **Effective-vs-nominal cover (testnet, S-3 modeled observer).** The sim
+  measures *nominal* cover under honest Poisson traffic — an upper bound. Testnet
+  must probe **effective** cover against an observe-and-inject adversary, and must
+  measure the **network-event rate of the actual post-§10.9-isolation channel**,
+  not the on-chain funding-spend rate the sim proxied. Cover is `P(link |
+  isolation holds)` — a multiplier on §10.9, never additive. Cross-refs:
+  `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
+  caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
+  1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published
