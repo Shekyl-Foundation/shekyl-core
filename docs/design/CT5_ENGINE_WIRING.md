@@ -11,8 +11,17 @@ an enforceable two-clause structural invariant), and E5 (reorg-orphans-reference
 type-enforced contracts (T1–T3) that make the §3.4 / E1 bug classes
 unrepresentable rather than discipline-avoided.** This doc is now the frozen contract and threat-model frame the
 implementation cuts against, per `05-system-thinking.mdc` (spec first, code
-second). **The A3 threat pass (§5, O1–O6) is complete and the §3.4 bugs are
-confirmed against live code — all pre-implementation checklist items are
+second). **The A3 threat pass is complete on both faces — internal (§5, O1–O6)
+and external/graveyard (§5.1, X1–X7). The weight-bearing external finding (X3)
+resolved, after running its two load-bearing verifications down against the code,
+to a wallet-side *resolution ambiguity* — NOT a consensus gap: V1 confirms `O` is
+one-time-address-derived (`output.rs:8–28`) so a payer cannot target `O.x` (the
+adversarial precondition is cryptographically unreachable), and the fix is widening
+the wallet's match key to the tree's unique key (`(O, C, h_pqc)` minimal, `gindex`
+total) in CT-5c. A consensus output-key-uniqueness rule is explicitly rejected as a
+privacy regression, and the threat model records why. X1 folded into O1
+(anchor-age is a fingerprinting oracle); X2/X4/X5/X6/X7 confirmed. The §3.4 bugs
+are confirmed against live code — all pre-implementation checklist items are
 closed. CT-5 pre-0 may begin.**
 
 **Standing principles this design is held to** (operator directive, 2026-06-14;
@@ -666,6 +675,28 @@ only) holds across all six.
      `REF_ANCHOR_AGE` value carries its own reversion clause (`reference.rs:80`):
      it moves only on a `MIN_AGE` consensus change or an observed deep-reorg-rate
      change, not by preference. *Disposition (a).*
+   - **O1-priv (X1) — `REF_ANCHOR_AGE` is a wallet-fingerprinting oracle, not
+     only an E5 cost lever (external pass, Monero decoy-timing lesson).** FCMP++
+     full-chain membership removes the decoy-selection deanonymization class
+     structurally (no ring, no decoy distribution to fingerprint), but the
+     *successor* risk survives: the reference-block choice is a wallet-side
+     timing signal. Every Shekyl wallet anchors at `tip − REF_ANCHOR_AGE`; two
+     wallets spending at the same tip anchor at the same height, which is the
+     privacy-preserving outcome **only while the anchor age is uniform across all
+     wallet implementations**. A divergent anchor age (a config knob, or a second
+     implementation choosing a different value) makes the reference height a
+     wallet-software fingerprint the way decoy-algorithm version once fingerprinted
+     Monero wallets. The E5 reversion clause already pins `REF_ANCHOR_AGE` to the
+     consensus `MIN_AGE` and forbids "by preference" changes; X1 sharpens *why*:
+     the constraint is **consensus-uniformity**, not merely stability — if a
+     second Shekyl wallet ever ships, its anchor age is a **consensus-conformance
+     requirement, not a config option**, because a per-wallet anchor age is a
+     deanonymization oracle (`00-mission.mdc` priority-2: privacy is never a
+     setting). *Disposition (b):* discipline note — `REF_ANCHOR_AGE` is never
+     surfaced as user/wallet configuration; any future wallet implementation
+     treats it as consensus-derived. No CT-5 code change (the single Shekyl-oxide
+     implementation already derives it from `MIN_AGE`); recorded so the constraint
+     is privacy-load-bearing, not just reorg-safety-load-bearing.
 2. **Tree/ledger tip divergence across reorg (O2).** Ledger rewinds, tree does
    not (or vice versa), so the next ingest diverges silently. *Defense:*
    ingest-ack-before-ledger-commit (R1-Q1) gates the ledger advance on tree
@@ -733,6 +764,199 @@ only) holds across all six.
    O(work-per-block), released per block, and the resilience review owns the
    aggregate bound.
 
+### 5.1 External threat pass (X1–X7 — privacy-coin failure graveyard, complete 2026-06-14)
+
+The A3 pass (O1–O6) reasons from CT-5's own surfaces. This pass reasons from the
+graveyard — how *other* privacy coins and sync wallets were actually exploited —
+and maps each class to whether CT-5 is exposed. The weight-bearing finding (X3)
+resolved — after running its two load-bearing verifications down against the code
+— to a **wallet-side resolution ambiguity, not a consensus gap**, with an
+adversarial precondition that is cryptographically unreachable; X1 sharpened an
+existing defense (folded into O1-priv above); the rest confirm inherited
+properties. None inverts a disposition.
+
+- **X3 (Zcash malformed-proof-input class — THE weight-bearing one) — a wallet
+  *resolution-ambiguity* finding, NOT a consensus gap. The fix is to widen the
+  wallet's match key to be as total as the tree's unique key (`gindex`); a
+  consensus output-key-uniqueness rule is explicitly rejected as a privacy
+  regression.** `assemble_path` (`assemble.rs:90–97`) resolves an `OutputIdentity`
+  to a position by **first-match** `.position(|e| e.identity.output_key ==
+  id.output_key && e.identity.commitment == id.commitment)` — keyed on `(O, C)`
+  only, *not* `h_pqc`, *not* `gindex`. The whole blast radius is: two leaves at
+  different gindexes sharing both `O.x` and `C.x`, and the wallet picks the
+  lower-gindex one. The tree is sound (`gindex` is the total unique key,
+  `DuplicateGindex` = store corruption, `client.rs:361`); the ambiguity is purely
+  that the *wallet's resolution key is weaker than the tree's unique key*.
+
+  **Why NOT a consensus rule (privacy > security > correctness — the priority
+  order points away from consensus).** The reflex to close X3 by making
+  `output_key` unique at consensus is the move that has bitten other coins, and it
+  is wrong here at every level of the hierarchy:
+  - *Privacy (decisive).* A consensus output-key-uniqueness rule forces every
+    validator to maintain and consult a **global index of every output key ever
+    seen**, and forces block construction to prove non-membership in it. On a
+    transparent chain that is free; on a *privacy* chain it is exactly the kind of
+    chain-wide, cross-output linkable structure FCMP++ exists to keep from being
+    load-bearing. Monero deliberately does **not** enforce global output-key
+    uniqueness for this reason — it tolerates key reuse and handles the
+    consequences in the wallet, because the alternative is a canonical linkability
+    surface. Solving a narrow wallet bug by adding a chain-wide privacy-adjacent
+    index is disqualified under `00-mission.mdc` priority-2 alone.
+  - *Security (the rule wouldn't even close it).* The dangerous case is not two
+    *honest* outputs colliding by chance (negligible at 32-byte key space) — it is
+    an *adversary* paying you, crafting an output that collides with one of your
+    existing `(O.x, C.x)`. **Verified unreachable (V1, load-bearing):** `O` is a
+    one-time address, `O = ho*G + B + y*T` (`output.rs:14/28`), where `ho` and `y`
+    come from `derive_output_secrets(combined_ss, output_index)` and `combined_ss =
+    combine(x25519_ss, ml_kem_ss)` is the hybrid-KEM shared secret from
+    `HybridKEM.Encap(recipient_pk)` (`output.rs:8–28`). `B` (recipient spend key)
+    is fixed and `ho`/`y` are hash outputs over a KEM-derived secret — so a payer
+    cannot drive `O.x` to a chosen target without grinding a
+    hash-composed-with-scalar-mult preimage (a ~32-byte match), and `O` always
+    lands in *your* key space, not an arbitrary one. The adversarial-collision
+    precondition is therefore cryptographically hard, which **downgrades X3 from
+    "adversarial wrong-leaf assembly" to "negligible honest collision"** — a class
+    that does not warrant a consensus rule. (If the derivation *did* let a sender
+    target `O.x`, that would be a derivation finding far upstream of X3, and a
+    consensus rule still wouldn't be the fix — the derivation would.)
+  - *Correctness (where the fix belongs).* The bug is simply that the resolution
+    key is weaker than the tree's unique key. Fix it wallet-side, on data the
+    wallet already holds.
+
+  **Disposition (a) — widen the wallet's match key in CT-5c, no consensus
+  surface.** Two options, both verified constructible at the match site (V2):
+  - *Minimal (negligible-collision):* match on the full `OutputIdentity` —
+    `(O, C, h_pqc)`. `h_pqc` is already on `OutputIdentity` (`types.rs:55`) and on
+    `ChunkLeaf`/the leaf, **in hand at the `.position()` site** (the match reads
+    `id.h_pqc` / `e.identity.h_pqc`, one field it currently ignores). `h_pqc` is
+    the hash of the output's hybrid public key (`output.rs:18`), so three-field
+    agreement for distinct outputs is cryptographically negligible. One-line
+    tightening in `assemble.rs:92–94`; not type armor (the §3.7 honesty boundary
+    rejects a wallet-side typestate — the defense is the wider key + the V1
+    derivation invariant).
+  - *Total (zero-collision, preferred where available):* resolve an owned output
+    to its exact `gindex`. The wallet already stores `TransferDetails.global_output_index`
+    (`transfer.rs:90`) — and for an *owned* output the content-match is matching
+    the wallet's own output in downloaded data, not querying the daemon for
+    position — so if `global_output_index → gindex` is locally derivable (or the
+    leaf binds them), the wallet resolves to the tree's actual unique key and the
+    ambiguity class is *structurally* eliminated, not merely made negligible. This
+    is the "match should be total, keyed on the tree's real unique key" fix; CT-5c
+    confirms whether the gindex binding is in hand and prefers it, falling back to
+    the `(O, C, h_pqc)` widening if not.
+  - **Failure floor if a collision somehow occurred anyway:** still DoS, never
+    theft — the key image is `I = Hp(O)` (`assemble.rs:110`), a function of `O`
+    alone, so a wrong-duplicate pick cannot yield a spendable proof for an output
+    the wallet doesn't control, and the ledger already runs a burning-bug-drop
+    under the reorg-atomic merge guard (`merge.rs:597`) so own-output selection is
+    pre-deduplicated. A wrong-`h_pqc` leaf yields an *invalid* proof (rejected at
+    submit), never a *leaky* one (O5 / FCMP++ ZK).
+  - **KAT (CT-5c):** two tree leaves sharing `(O, C)` with distinct `h_pqc`;
+    assert `assemble_path` selects the wallet's leaf, not first-by-gindex.
+  - **Reopening clause (A4):** revisit **only** if the one-time-address derivation
+    is found to let a sender target an existing `O.x` — that is a derivation
+    finding upstream of X3, not a content-match one, and the consensus question
+    would still resolve against an output-key index. Absent that, X3 is closed by
+    the wallet-side widening. **Cited at the §4.3 content-match contract**
+    (CURVE_TREE_CLIENT.md): the match rests on the tree's `gindex`-uniqueness, on
+    the V1 one-time-address derivation (sender cannot target `O.x`), and on the
+    widened `(O, C, h_pqc)` / `gindex` resolution — and the threat model records
+    **why the chain does *not* need an output-key index** (a privacy regression),
+    so the next proposal to add one has the disposition already on file.
+
+- **X2 (reorg double-spend-against-self class) — CONFIRMED: selection state
+  rebuilds inside the same reorg-atomic transition, not lazily.** The failure
+  class (chain view rewinds, spendable-set rebuild deferred, tx in the window
+  selects a phantom output) does not apply: `apply_scan_result_to_state`
+  (`merge.rs:329–339`) runs the whole merge under one `self.ledger.write()` guard
+  (`merge.rs:209`) and calls `indexes.handle_reorg(ledger, fork_height)` **before**
+  any per-height additive event. `LedgerIndexes` owns the selection state
+  (`staker_pool` + transfer indices), so the spendable-set rebuild is *inside* the
+  same atomic; the `merge.rs:595–602` comment confirms inserted indices are
+  "post-burning-bug-drop and post-reorg-rewind by construction … same write guard."
+  The third leg (E5 pending-tx reference re-anchor) closes the remaining surface.
+  *Disposition (a):* no change; the engine reorg KAT (§6, E6a) asserts pending-table
+  equality post-reorg, which exercises exactly this atomicity.
+
+- **X4 (timing side-channel on ingest class) — CONFIRMED: ingest cost is constant
+  w.r.t. ownership; the full-leaf-set buffer is privacy-neutral.** The "wallet does
+  more work on blocks containing its outputs" leak does not apply: `collect_block_leaves`
+  (`recon.rs:136–163`) iterates **every** output and calls `try_build_leaf` with no
+  ownership check — the tree ingests every consensus output identically whether owned
+  or not. The per-block ingest work is a function of outputs-per-block, **not** of
+  which outputs are the wallet's, so a local observer cannot infer owned-output
+  positions from ingest timing. *Disposition (b):* discipline note — the
+  constant-time-w.r.t.-ownership property of the ingest path is what makes the E4
+  full-leaf-set buffer privacy-neutral (the crypto-path constant-time discipline,
+  lifted to ingest); CT-5 must not introduce an owned-output fast-path in ingest.
+
+- **X5 (maturity off-by-one / two-sources-of-truth class) — CONFIRMED single source
+  for the common path; coinbase sub-check flagged.** `eligible_height` is the single
+  field both balance display (`balance.rs:61`, `current_height >= td.eligible_height`)
+  and the C2 selection gate read — selection does **not** re-derive maturity, it reads
+  the stored field (the CT-2/CT-3 "single enforcer" property holds). **But** the
+  scanner sets `eligible_height = block_height + SPENDABLE_AGE` with `SPENDABLE_AGE = 10`
+  **unconditionally** (`ledger_ext.rs:111`, `transfer.rs:25`), while the curve-tree
+  `maturity_height` is **type-specific** — coinbase `60`, regular `10`, staked
+  `max(lock, 10)` (`recon.rs:82–85`, `COINBASE_LOCK_WINDOW = 60`). For regular
+  outputs (the common case) `10 == 10`, no divergence. For **coinbase**, selection
+  would mark an output spendable at `+10` while the tree inserts it at `+60`.
+  *Disposition (a) — confirm + align in CT-5c:* the divergence is **backstopped** —
+  `assemble_path` returns `ClientError::OutputNotDrained` (`assemble.rs:95`) if the
+  leaf is not yet drained at the reference height, so a too-optimistic coinbase
+  `eligible_height` degrades to a **clean assembly error (DoS floor), not a wrong
+  proof.** CT-5c must (1) confirm whether coinbase outputs reach `from_wallet_output`
+  with the flat `+10` (vs a separate claim/stake path that never sets a spendable
+  `eligible_height`), and (2) if they do, align the coinbase `eligible_height` to the
+  type-specific window so selection and tree-insertion agree, removing the
+  OutputNotDrained-as-stuck-funds UX. **KAT:** coinbase output, tx attempt at
+  reference between `+10` and `+60`; assert no wrong-leaf assembly (either gated at
+  selection or clean OutputNotDrained, never a malformed path).
+
+- **X6 (supply-chain / dependency-substitution class) — discipline note.** CT-5
+  adds a `shekyl-curve-tree` dependency edge to `shekyl-engine-core` and (if the
+  actor is `kameo`) puts a new framework dependency adjacent to the signer — the
+  Ledger Connect-Kit lesson is that the wallet's most-trusted component (the signing
+  path) is the highest-value supply-chain target. *Disposition (b):* new dependency
+  edges (`shekyl-curve-tree`, and `kameo`/`redb` to the extent newly introduced to
+  this crate) are **exact-pinned** in the workspace `Cargo.toml`
+  (`= "x.y.z"` posture, matching the `fips203 = "=0.4.3"` precedent), and the CT-5a
+  PR's dependency-discipline review (`17-dependency-discipline.mdc`) explicitly covers
+  the new edge — version, feature flags, and audit posture verified at source, not
+  from training-data recall.
+
+- **X7 (RPC/daemon trust-boundary confusion class) — leaf-set blob size must be
+  bounded by the consensus block-size limit before buffering.** O5 covers the lying
+  daemon for leaf *content*; the Electrum lesson is broader — every daemon-sourced
+  field the wallet trusts without bound is a surface, including ones that seem
+  innocuous. CT-5 newly buffers the **full per-block leaf set** (E4), daemon-controlled
+  in *size*; an enormous leaf blob is a memory-exhaustion DoS if the materialization
+  trusts the blob length. *Disposition (a) — assert the bound at pre-0/CT-5a:* the
+  leaf-set materialization inherits the consensus block-size limit rather than
+  trusting the daemon's blob length — "the daemon wouldn't send something that large"
+  is exactly the assumption Electrum servers exploited. The fetch path's block-size
+  validation must gate **before** the E4 buffer allocation; CT-5a's DoD asserts the
+  buffer size is bounded by the consensus block-size constant, not by the received
+  length.
+
+- **X1 (Monero decoy-timing deanonymization class)** — folded into **O1-priv**
+  above (`REF_ANCHOR_AGE` consensus-uniformity as a wallet-fingerprinting defense,
+  not only an E5 cost lever).
+
+**External pass net:** X3 resolves to a **wallet-side resolution ambiguity, not a
+consensus gap** — its adversarial precondition is cryptographically unreachable
+(V1: `O` is one-time-address-derived, a payer cannot target `O.x`), so the residual
+is negligible honest collision, and the fix is to widen the wallet's match key to
+match the tree's unique key (minimally `(O, C, h_pqc)`, ideally `gindex` via
+`TransferDetails.global_output_index`). A consensus output-key-uniqueness rule is
+**explicitly rejected** — it is a privacy regression (a chain-wide output-key
+index, the linkability surface FCMP++/Monero deliberately avoid), and it wouldn't
+even close the threat. The threat model now records *why* the chain doesn't need
+that index. X2/X4 confirm clean; X5 confirms single-source
+with a coinbase alignment to land in CT-5c; X6/X7 are a pin-discipline note and a
+buffer-bound assertion. The threat model has now looked at the graveyard as well as
+at itself.
+
 ---
 
 ## 6. Sub-PR decomposition (A1 — function-body replacement; provisional)
@@ -754,10 +978,15 @@ boundary).
   not folded in, because the parser correctness is independent of the engine
   wiring.
 - **CT-5a — actor lifecycle + ingest (no signer change).** Add the
-  `shekyl-curve-tree` dependency, the **`CurveTreeActor` + `CurveTreeHandle`**
+  `shekyl-curve-tree` dependency (**exact-pinned; the CT-5a dependency-discipline
+  review covers this edge and any new `kameo`/`redb` edge — X6**), the
+  **`CurveTreeActor` + `CurveTreeHandle`**
   (R1-Q1, mirror `KeyActor`), spawn on engine open with the `Engine` holding the
   handle, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and the
   merge-driven `handle.ingest` with ingest-ack-before-ledger-commit (R1-Q2).
+  **The per-block leaf-set materialization (E4) bounds its buffer by the consensus
+  block-size limit *before* allocation, not by the daemon's received blob length
+  (X7); DoD asserts the bound.**
   Reorg rollback + actor respawn (R1-Q4). Engine call sites carry `BlockHeight`
   across the actor message boundary (not unwrapped to `u64`), **closing the
   CT-3a P5 cross-seam item** (`FOLLOWUPS.md` "Carry `BlockHeight`/`Gindex`
@@ -787,9 +1016,20 @@ boundary).
   `ReferenceBlock`) and **delete the free `tree_depth: u8` param** (T2 — depth
   derived from `AssembledPath.tree`); migrate tests. The §3.7 deletions are the
   E1 closure and the §3.4 bug-class barriers, landed as type changes not
-  discipline notes. DoD: real-root proof builds + submits in the `TestDaemon`
+  discipline notes. **Widen the wallet's resolution key to the tree's unique key
+  (X3) — `assemble.rs:92–94` matches the full `OutputIdentity` `(O, C, h_pqc)`,
+  not `(O, C)`; prefer resolving owned outputs to `gindex` via
+  `TransferDetails.global_output_index` if the binding is in hand (total,
+  zero-collision).** No consensus change — X3 is a wallet resolution ambiguity,
+  not a consensus gap, and its adversarial precondition is unreachable (V1). **Confirm + align coinbase
+  `eligible_height` with the type-specific tree maturity (X5)** so selection and
+  tree-insertion agree (or confirm coinbase never sets a spendable `eligible_height`).
+  DoD: real-root proof builds + submits in the `TestDaemon`
   harness; C3 precondition holds; the raw-`[u8;32]`-reference and free-`tree_depth`
-  call paths no longer exist (grep-clean).
+  call paths no longer exist (grep-clean); **X3 KAT (two leaves sharing `(O, C)`,
+  distinct `h_pqc` → wallet's leaf selected, not first-by-gindex); X5 KAT
+  (coinbase tx attempt at reference between `+10` and `+60` → no wrong-leaf
+  assembly).**
 - **CT-5d — proactive horizon guard + closeout.** `should_reanchor` rebuild loop
   for pending txs, composed with the **reorg-fork-crossing trigger** (O1-sub /
   E5: re-anchor any pending tx whose `reference_height ≥ fork_height`, regardless
@@ -861,6 +1101,18 @@ boundary).
   both; line citations verified accurate.
 - [x] §5 threat objectives O1–O6 each routed (a)/(b)/(c) — **A3 pass complete**;
   three sub-findings (O1-sub, O3-sub, O5 boundary) recorded inline; no blocker.
+- [x] **§5.1 external threat pass (X1–X7) complete** — graveyard mapped; **X3
+  run down (the weight-bearing one) with its two load-bearing verifications:
+  V1 — `O` is one-time-address-derived (`output.rs:8–28`, `O = ho*G + B + y*T`,
+  `ho`/`y` from the hybrid-KEM secret), so a payer cannot target `O.x`
+  (adversarial precondition cryptographically unreachable); V2 — `h_pqc`
+  (`types.rs:55`) and `TransferDetails.global_output_index` (`transfer.rs:90`) are
+  both in hand at the match site. X3 is a wallet *resolution ambiguity*, NOT a
+  consensus gap; the fix is widening the match key to the tree's unique key
+  (`(O, C, h_pqc)` minimal, `gindex` total) in CT-5c — a consensus output-key
+  index is rejected as a privacy regression.** X1 folded into O1-priv; X2/X4
+  confirmed clean; X5 single-source + coinbase align (CT-5c); X6 pin-discipline;
+  X7 leaf-blob bound (CT-5a). No disposition inverted.
 - [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
 - [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
 - [x] **E1 (closed, upgraded)** — tx-scoped read-snapshot atomicity vs C1:
@@ -876,9 +1128,11 @@ boundary).
 - [x] **E5 (closed)** — `REF_ANCHOR_AGE=6` confirmed production (deferred-insertion
   maturity, reorg-safety-margin rationale); CT-5d composes the reorg-fork-crossing
   re-anchor trigger; depth-7–10 KAT specified (§5 O1-sub).
-- [x] **Closure-review round complete** (E1/E2/E5 finished); **A3 threat pass
-  complete** (O1–O6, three sub-findings); **§3.4 bug confirmed against live code**.
-  All pre-implementation checklist items are now closed — CT-5 pre-0 may begin.
+- [x] **Closure-review round complete** (E1/E2/E5 finished); **A3 internal threat
+  pass complete** (O1–O6, three sub-findings); **A3 external threat pass complete**
+  (§5.1, X1–X7, one real gap X3 closing to a CT-5c match tightening); **§3.4 bug
+  confirmed against live code**. All pre-implementation checklist items are now
+  closed — CT-5 pre-0 may begin.
 
 ---
 
@@ -901,4 +1155,19 @@ treatment is in the cited section; this is the audit index.
 | **E7** | FOLLOWUPS reconciliation: poison closes, `BlockHeight` seam closes, Tier B ungated | CT-5a closes the `BlockHeight` seam; CT-5d closes poison + ungates Tier B | §6 |
 | **E8** | Multisig already embeds the reference-age constants — drift hazard | FOLLOWUPS row (CT-5d): unify multisig intent onto `reference.rs` predicates | §7 |
 | **E9** | Title stale ("Round 1, OPEN") | Retitled "Round 2, review integrated"; closure gate kept | header |
+
+### External threat pass (X1–X7) — disposition log
+
+Graveyard-mapped pass, integrated 2026-06-14. X3 is the only real gap and closes
+to a match tightening, not a consensus citation (the honest correction).
+
+| ID | Class (incident) | Exposed? | Disposition | Lands |
+|----|------------------|----------|-------------|-------|
+| **X1** | Monero decoy-timing deanonymization | Successor risk: anchor-age fingerprint | `REF_ANCHOR_AGE` is **consensus-uniform** across implementations (privacy, not just reorg-safety); never a config knob | §5 O1-priv |
+| **X2** | Reorg double-spend-against-self (Electrum-class) | No | **Confirmed** — selection state (`LedgerIndexes`) rebuilt inside the same `handle_reorg` atomic under one write guard (`merge.rs:337/595–602`), not lazily | §5.1 |
+| **X3** | Zcash malformed-proof-input / wrong-leaf | **Wallet resolution ambiguity, not a consensus gap; adversarial precondition unreachable (V1)** | **Widen wallet match key to the tree's unique key — `(O, C, h_pqc)` minimal (`types.rs:55`), `gindex` total (`transfer.rs:90`); CT-5c + KAT. Consensus output-key index REJECTED (privacy regression). V1: `O` one-time-address-derived (`output.rs:8–28`), payer can't target `O.x`** | §5.1, §6 |
+| **X4** | Ingest timing side-channel (owned vs not) | No | **Confirmed** — `collect_block_leaves` ingests every output identically (no ownership check, `recon.rs:136–163`); constant-w.r.t.-ownership makes the E4 buffer privacy-neutral | §5.1 |
+| **X5** | Maturity off-by-one / two-sources spendability | Common path no; coinbase sub-check | **Confirmed single source** (`eligible_height` field read by both balance + C2); coinbase `+10` vs tree `+60` aligned in CT-5c, backstopped by `OutputNotDrained` (DoS floor) | §5.1, §6 |
+| **X6** | Supply-chain / dependency substitution (Ledger Connect-Kit) | Discipline | New edges (`shekyl-curve-tree`, `kameo`/`redb`) **exact-pinned**; CT-5a dependency-discipline review covers the edge | §5.1, §6 |
+| **X7** | RPC/daemon trust-boundary (Electrum malicious-server) | **Yes (DoS)** | Leaf-set buffer bounded by **consensus block-size limit before allocation**, not by daemon blob length; CT-5a DoD asserts it | §5.1, §6 |
 
