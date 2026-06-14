@@ -1,15 +1,16 @@
 # CT-5 — engine wiring: production CurveTreeClient into the 2A signer (design — Round 2, review integrated)
 
-**Status:** Round 2 dispositions resolved + review integrated (2026-06-14).
-Round 1 closed R1-Q1–R1-Q6 (§4); Round 2 applied three standing architectural
-principles (below), revised R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold), and
-absorbed the Round-2 review (E1–E9, §9). **Two findings are held for the closure
-round before any code — E1 (read-path snapshot atomicity vs C1) and E2
-(under-guard `await` lock-ordering); both are costs the actor shape introduces,
-not reasons to avoid it.** No code yet — this doc is the frozen contract and
-threat-model frame the implementation cuts against, per `05-system-thinking.mdc`
-(spec first, code second). The closure-review round (and the A3 threat pass
-against §5) precedes any production commit.
+**Status:** Closure round complete (2026-06-14). Round 1 closed R1-Q1–R1-Q6
+(§4); Round 2 applied three standing architectural principles (below), revised
+R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold), and absorbed the Round-2 review
+(E1–E9, §9). **The closure round finished the three gating findings: E1
+(read-path snapshot atomicity — frozen as one-read-txn-per-tx), E2 (under-guard
+`await` — promoted to an enforceable two-clause structural invariant), and E5
+(reorg-orphans-reference — `REF_ANCHOR_AGE=6` confirmed production, trigger added
+to CT-5d).** This doc is now the frozen contract and threat-model frame the
+implementation cuts against, per `05-system-thinking.mdc` (spec first, code
+second). The A3 threat pass against §5 and the §3.4 bug-fix confirmation remain
+the only open checklist items before CT-5 pre-0 begins.
 
 **Standing principles this design is held to** (operator directive, 2026-06-14;
 they govern every CT-5 disposition):
@@ -217,9 +218,10 @@ with the writer side funneled through the merge, which preserves the same
 single-writer discipline without the cross-actor read latency. Recorded so the
 actor decision has an explicit escape hatch; not expected to be needed.
 
-**E1 (HELD for closure) — the read path crosses the actor boundary.**
+**E1 (CLOSED, closure round) — the read path crosses the actor boundary.**
 `assemble_path` is `&self`, but behind the actor the signer sends an
-`AssemblePath` message and awaits a reply. Two unclosed consequences:
+`AssemblePath` message and awaits a reply. Two consequences, the second
+load-bearing and now a frozen-contract requirement:
 
 - *Latency / write-serialization.* A send with N inputs is N `AssemblePath`
   messages, each queued behind any in-flight `Ingest` from the refresh loop;
@@ -241,21 +243,31 @@ actor decision has an explicit escape hatch; not expected to be needed.
   isolation), or a brief write-exclusion spanning the tx. This is the read-side
   mirror of C1, and the actor boundary is exactly what makes it non-obvious.
 
-**E2 (HELD for closure) — `ask().await` under the engine write guard: confirm,
-don't assert.** Holding a `tokio::sync::RwLock` write guard across an `.await`
-that round-trips to another actor is the classic async-deadlock shape if the
-awaited actor ever (directly or transitively) wants that same engine lock — and
-it would deadlock only under the triggering interleaving, passing every test
-until production. The fix is a stated **lock-ordering invariant**, grounded in
-the substrate: the `CurveTreeActor`, like `KeyActor` (whose struct holds only
-`local: LocalKeys`, no engine reference — `key_actor.rs`), is spawned with **leaf
-resources only** (the store handle), so no handler (`Ingest` / `Rollback` /
-`AssemblePath`) can acquire the engine lock. **Respawn-on-poison (R1-Q4) is
-driven engine-side** — the merge detects the failed `ask` and respawns *after*
-the `ask` returns, never from inside a handler awaited under the guard — so the
-one path that might want engine state to re-open does not run under the lock.
-Invariant to pin in the closure round: *the curve-tree actor never acquires the
-engine lock; the engine may hold its lock across a curve-tree `ask`.*
+**E2 (CLOSED, closure round) — `ask().await` under the engine write guard:
+verified, and the invariant promoted to enforceable form.** Holding a
+`tokio::sync::RwLock` write guard across an `.await` that round-trips to another
+actor is the classic async-deadlock shape if the awaited actor ever (directly or
+transitively) wants that same engine lock — deadlocking only under the triggering
+interleaving, passing every test until production. The substrate confirms the
+property today (`KeyActor`'s struct holds only `local: LocalKeys`, no engine
+reference — `key_actor.rs`), **but "happens not to hold a reference today" is a
+fact about current code that a future "let the actor read engine config for X"
+change silently breaks.** The durable form is a *structural constraint*, pinned
+with the same review status as the no-secrets test:
+
+> **Two-clause lock-ordering invariant (CT-5a structural rule).**
+> 1. The `CurveTreeActor` struct owns **only the store handle** and holds **no
+>    `Engine` / `EngineHandle` / engine-lock reference** of any kind. A field
+>    addition that reaches back for engine state fails review **on this rule** —
+>    not on someone re-deriving the deadlock analysis.
+> 2. Respawn-on-poison (R1-Q4) runs **engine-side, after the failed `ask`
+>    returns** — never inside a handler awaited under the guard. The one path
+>    that might want engine state to re-open does not run under the lock.
+
+Corollary: *the curve-tree actor never acquires the engine lock; the engine may
+hold its lock across a curve-tree `ask`.* CT-5a lands clause 1 as a structural
+review item (the same enforceable shape as `no_secrets`), not a one-time build
+confirmation.
 
 ### 3.2 Forward ingest (the refresh producer)
 
@@ -535,20 +547,37 @@ note, or (c) named forward-action.
    - **O1-sub (E5) — reorg replaces the reference block while the tip stays above
      it.** `should_reanchor` (`reference.rs:189`) catches two cases: age ≥
      `REBUILD_AT` (=50), and reference *above* the tip (age `None`, a reorg that
-     rewound past it). It does **not** catch a reorg of depth ≥ `REF_ANCHOR_AGE`
-     (=6) whose fork height is ≤ the reference height but whose new chain still
-     extends above it: the reference block is orphaned, yet age is `Some(< 50)`,
-     so the age predicate stays quiet. The constants do **not** foreclose this —
-     the reorg-depth bound is 720 (`ARCHIVAL_REORG_DEPTH_BLOCKS`), far above
-     `REF_ANCHOR_AGE`=6 — so this is a real sub-case, not an unreachable one. It
-     degrades to a **submit-time daemon rejection** (DoS, never a witness leak —
-     consistent with the O5 posture), but the proactive guard should catch it.
-     *Defense (engine-side, CT-5d):* the reanchor trigger composes
+     rewound past it). It does **not** catch a reorg whose fork height is ≤ the
+     reference height but whose new chain still extends above it: the reference
+     block is orphaned, yet age is `Some(< 50)`, so the age predicate stays quiet.
+     A reorg deeper than `REF_ANCHOR_AGE` (=6) is exactly this shape.
+     **Constant confirmed production, not placeholder:**
+     `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` (`config/consensus_constants.json:4`),
+     `REF_ANCHOR_AGE = MIN_AGE + 1 = 6` (`reference.rs:83`). It is deliberately
+     shallow: maturity is enforced by *deferred tree insertion* (coinbase 60,
+     regular 10, staked max(lock,10) — `FCMP_PLUS_PLUS.md:434`), so `MIN_AGE`
+     carries **only** a reorg safety margin, and 5 blocks is the consensus
+     design's "sufficient for the referenced tree state to be stable."
+     **Frequency, framed correctly:** that same premise bounds E5 — the design
+     *assumes* reorgs deeper than ~5 blocks are rare; if they were common,
+     `MIN_AGE=5` would be a **consensus** safety problem upstream of E5, not a
+     refresh-cost one. So the E5 trigger is **rare but bursty**: when a deep reorg
+     does fire it orphans *every* in-flight proof at once (all anchor at
+     `tip − 6`), so the cost concentrates as `pending_txs × N`-assemblies in one
+     burst — this is where E5 couples with E6c (N round-trips per re-anchor),
+     analyzed separately but joined by the shallow anchor. Absent the guard it
+     degrades to **submit-time daemon rejection** (DoS, never a witness leak —
+     O5 posture). *Defense (engine-side, CT-5d):* the reanchor trigger composes
      `should_reanchor(tip, ref_height)` **with** a reorg-fork-crossing check —
      any pending tx whose `reference_height ≥ handle_reorg.fork_height` is forced
-     to re-anchor, regardless of age. Only the engine knows the reorg fork height
-     (`reference.rs` sees only tip + reference), so this composition is CT-5's
-     responsibility, not the curve-tree crate's. *Disposition (a).*
+     to re-anchor regardless of age. Only the engine knows the fork height
+     (`reference.rs` sees only tip + reference), so this is CT-5's responsibility,
+     not the curve-tree crate's. **KAT (raised priority):** pending tx at
+     `reference_height`, reorg of depth 7–10 crossing it, assert re-anchor fires
+     — not an edge case, the normal deep-reorg-with-pending-tx interaction. The
+     `REF_ANCHOR_AGE` value carries its own reversion clause (`reference.rs:80`):
+     it moves only on a `MIN_AGE` consensus change or an observed deep-reorg-rate
+     change, not by preference. *Disposition (a).*
 2. **Tree/ledger tip divergence across reorg (O2).** Ledger rewinds, tree does
    not (or vice versa), so the next ingest diverges silently. *Defense:*
    ingest-ack-before-ledger-commit (R1-Q1) gates the ledger advance on tree
@@ -699,13 +728,17 @@ boundary).
 - [ ] §5 threat objectives O1–O6 each routed (a)/(b)/(c).
 - [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
 - [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
-- [ ] **E1 (HELD)** — tx-scoped read-snapshot atomicity vs C1: pin the
-  one-read-txn-per-tx (or brief-exclusion) contract; decide concurrent reads.
-- [ ] **E2 (HELD)** — pin the lock-ordering invariant (curve-tree actor never
-  acquires the engine lock; respawn is engine-side) and confirm against the
-  `CurveTreeActor` handlers.
-- [ ] **Closure-review round** + A3 threat pass against §5 before first commit;
-  E1/E2 are the gating items the closure round exists to catch.
+- [x] **E1 (closed)** — tx-scoped read-snapshot atomicity vs C1: frozen as
+  one-read-txn-per-tx (snapshot isolation) across all N inputs; concurrent-read
+  option flagged for CT-5c structuring (§3.1).
+- [x] **E2 (closed)** — two-clause structural lock-ordering invariant pinned
+  with no-secrets-test review status; substrate-confirmed (`KeyActor` holds no
+  engine ref); respawn is engine-side (§3.1).
+- [x] **E5 (closed)** — `REF_ANCHOR_AGE=6` confirmed production (deferred-insertion
+  maturity, reorg-safety-margin rationale); CT-5d composes the reorg-fork-crossing
+  re-anchor trigger; depth-7–10 KAT specified (§5 O1-sub).
+- [x] **Closure-review round complete** (E1/E2/E5 finished). Remaining before
+  first commit: **A3 threat pass against §5**, and the §3.4 bug-fix confirmation.
 
 ---
 
@@ -717,11 +750,11 @@ treatment is in the cited section; this is the audit index.
 | ID | Finding | Disposition | Lands |
 |----|---------|-------------|-------|
 | **E0** | Actor justification was "standing principle"; real reason is redb single-writer | Justification corrected; A4 reversion target named (`RwLock<CurveTreeClient>`) | §3.1 |
-| **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **HELD for closure** — one redb read-txn per tx (snapshot isolation) across all N inputs; concurrent-read decision | §3.1, §8 |
-| **E2** | `ask().await` under the engine write guard asserted, not verified | **HELD for closure** — lock-ordering invariant stated + grounded (`KeyActor` holds no engine ref; respawn engine-side) | §3.1, §8 |
+| **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **CLOSED** — frozen: one redb read-txn per tx (snapshot isolation) across all N inputs; concurrent-read option flagged | §3.1, §8 |
+| **E2** | `ask().await` under the engine write guard asserted, not verified | **CLOSED** — promoted to enforceable two-clause structural invariant (actor holds no engine ref; respawn engine-side), no-secrets-test review status | §3.1, §8 |
 | **E3** | §3.6 mis-alignment is a standalone block-deserializer bug | pre-0 framed as independent correctness fix; verify (a) not-yet-exercised vs (b) compensating-offset | §3.6, §6 |
 | **E4** | Full leaf set is a real refresh-path cost, not free transit | Cost named (O(outputs/block), released per block) as the price of ingest-ack-before-commit | §3.2 |
-| **E5** | Reorg can orphan the reference block while tip stays above it; `should_reanchor` (age) misses it | O1-sub added; CT-5d composes `should_reanchor` with a reorg-fork-crossing trigger | §5 O1, §6 |
+| **E5** | Reorg can orphan the reference block while tip stays above it; `should_reanchor` (age) misses it | **CLOSED** — `REF_ANCHOR_AGE=6` confirmed production (rare-but-bursty, couples with E6c); CT-5d reorg-fork-crossing trigger + depth-7–10 KAT | §5 O1, §6 |
 | **E6a** | Reorg KAT must assert pending-table equality (CT-3c lesson); inherits Tier-B fixture | CT-5a DoD updated | §6 |
 | **E6b** | `ScanResult` header-root field is write-but-not-read in CT-5a | Reviewer note added so it is not removed | §6 |
 | **E6c** | Re-anchor = N more actor round-trips per pending tx | Cost noted | §6 |
