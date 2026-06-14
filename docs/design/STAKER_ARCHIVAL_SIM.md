@@ -3559,3 +3559,43 @@ but four things bound the result; the first two change the meaning, not just the
    requirement). So "set ≈ 13 at rate 0.02" is an **upper bound**; effective adversarial cover is
    lower and unquantified. The testnet target is **S-3's modeled observer**, not a passive rate
    measurement.
+
+**Construction and per-seam geometry (conformance-critical, 2026-06-13).**
+
+- **Draw the gap directly — do *not* independently jitter two event-times around a common anchor.**
+  The sim assumes the separation between the two seam events is `s ~ U[0, 600]` with a random order.
+  The obvious-but-wrong build picks an intent time `t0` and independently draws an announce offset and
+  a bond offset in `[0, 600]`; their *difference* is **triangular, peaked at zero** — the events
+  cluster together most of the time, the precise opposite of a standoff, while still satisfying "both
+  within 600" and "separation ≤ 600" on paper. This is a **conformance trap**, and it matters
+  precisely because the draw is wallet-side and consensus-unenforceable (caveat 1). **Correct shape:**
+  at `t0`, flip a fair coin for order, place the first event at `t0`, draw `s ~ U[0, 600]`, place the
+  second at `t0 + s`. That yields uniform separation, *free* inversion (the coin), max latency 600,
+  and per-`P` independence (`t0` is the principal's private intent). **The published test vector must
+  reject the triangular construction** (e.g. KS against `U[0, 600]` on the realized gap + an
+  excess-mass-near-zero detector), not merely check the ±600 bound — and the fair, per-`P`-independent
+  coin is part of conformance (a biased or shared coin re-introduces an ordering prior).
+- **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
+  (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
+  adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
+  (terminal drain, and now the *recurring* partial-unbond `HoldingsUpdate`) is a **separate standoff
+  with its own envelope and its own latency budget** — and it differs structurally on two axes:
+  (i) it is **one-sided** (no inversion: collateral is not spendable before the **20_000-block
+  release cooldown**, so the drain cannot precede the unbond), so a 600-block exit window buys a
+  600-block search width, *not* 1200 — the exit seam is inherently weaker cover per unit latency than
+  the entry seam; (ii) its latency lands on **funds availability measured from cooldown expiry, not
+  from the unbond event**, because the cooldown already pins the earliest spend deterministically — so
+  the exit standoff's job is specifically to **break that deterministic fixed-offset tell** (without
+  it, the drain fires at exactly cooldown-expiry, trivially linkable to the unbond). Cost: ≤ 600
+  blocks *on top of* the 20_000-block cooldown = **0.06 epoch of additional availability latency**,
+  free on its own seam. Symmetric entry/exit protection is therefore **two independent 600-block
+  draws**, each free on its own seam — but the exit one must be stated explicitly; "±600 envelope"
+  describes the entry seam and does not imply the exit.
+- **Thin-regime: the cheap lever is gap-shape and inversion, not width.** Width is the *expensive*
+  axis (the rate-driven finding: a wider window trips homeostasis above ~1000 blocks and barely moves
+  thin-regime cover, which is rate-limited not width-limited). If more cover than rate-at-600 is wanted
+  in the thin regime, the free levers are (a) **biasing the gap distribution toward the max** — 600 is
+  already homeostasis-free, and positioning the true event far from the bond-post anchor defeats a
+  *nearest-spend* proximity heuristic when any background exists (modest, adversary-model-dependent),
+  and (b) **leaning on the inversion** (the proven thin-regime lever, finding 3). Neither widens the
+  window; both stay off the economic axis.

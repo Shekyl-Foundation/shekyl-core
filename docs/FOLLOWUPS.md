@@ -299,7 +299,22 @@ sustainability is unaffected by the recalibration.
   draw is wallet-only and consensus-unenforceable; a shared trigger collapses the
   set to ~1 and injects a cover-degrading surge. Promote it from "default" to a
   **hard conformance requirement with a published test vector**, with the
-  reference wallet nailing and documenting it.
+  reference wallet nailing and documenting it. The test vector must specifically
+  reject the **independent-double-jitter construction** (jittering two event-times
+  around a common anchor → triangular, zero-peaked separation that clusters the
+  events while passing the ±600 bound): the gap must be **drawn directly**
+  (`s ~ U[0,600]`, fair per-`P` order-coin), verified by KS-against-uniform +
+  excess-mass-near-zero on the realized gap.
+  (2b) **Exit-seam standoff geometry (separate envelope; ties GF-4 + the
+  partial-unbond genesis item).** The ±600 entry envelope does *not* cover the
+  exit seam. Pin a **separate** standoff for terminal drain *and* recurring
+  partial-unbond (`HoldingsUpdate`): **one-sided** (no inversion — collateral is
+  not spendable before the 20_000-block release cooldown), latency measured **from
+  cooldown expiry** (the cooldown deterministically pins the earliest spend, so
+  the standoff's job is to break that fixed-offset tell), cost ≤ 600 blocks on top
+  of cooldown = 0.06 epoch additional availability latency. Weaker cover per unit
+  latency than the entry seam (600-block search width, not 1200) — so the
+  thin-regime gap-toward-max bias matters more here.
   (3) **Cold-start weak-cover residual (pre-seal, tied to L12).** Thinnest genesis
   traffic + longest-lived foundational `P`s coincide. **Decision to record before
   seal:** accept documented weak early-`P` cover, *or* foundation-inject decoy

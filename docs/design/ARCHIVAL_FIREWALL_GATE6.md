@@ -1163,7 +1163,18 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   are self-undercutting (attributable → discounted per (iv)), so weak early cover is a **named pre-seal
   residual** (L12); (iv) the measured set is **nominal honest-traffic cover, an upper bound** —
   effective cover against an observe-and-inject adversary (the S-3 modeled observer, the testnet
-  target) is lower and unquantified.
+  target) is lower and unquantified. **Construction + geometry (conformance-critical):** the gap
+  must be **drawn directly** (`s ~ U[0,600]`, fair order-coin: place event 1 at the private intent
+  `t0`, event 2 at `t0+s`) — *not* by independently jittering two event-times around a common anchor,
+  whose *difference* is triangular/zero-peaked and clusters the events (a conformance trap the test
+  vector must reject, since the draw is unenforceable). The **600 is per-seam**: the ±600 symmetric
+  envelope is the **entry** seam (announce↔bond, inversion-eligible, 1200-block search width); the
+  **exit** seam (terminal drain + recurring partial-unbond) is a *separate, one-sided* standoff (no
+  inversion — collateral isn't spendable before the 20_000-block release cooldown) whose latency is
+  measured **from cooldown expiry** (it breaks the deterministic fixed-offset cooldown tell), so
+  symmetric entry/exit = two independent 600-block draws, each free on its own seam — state the exit
+  one explicitly. **Width is the expensive axis** (proven rate-driven); the cheap thin-regime levers
+  are biasing the gap toward the max (600 is already free) and the inversion, not a wider window.
 - **CLOSE — pay-every-block / implicit accumulator emission (corrects the pass-3 over-claim).** The
   pass-3 entry claimed accumulator credit "deletes GF-6/GF-10." **That was wrong.** The borrowed
   intuition (a quiet validator lost in the crowd) needs an *anonymous* crowd; Shekyl staker payments

@@ -4,6 +4,30 @@
 
 ### Added
 
+- **archival: standoff construction + per-seam geometry pinned (2026-06-13).**
+  Two conformance-critical construction details folded into the funding-seam
+  entry-standoff spec (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* →
+  *Construction and per-seam geometry*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12).
+  (1) **Draw the gap directly**, do not independently jitter two event-times
+  around a common anchor: the difference of two uniforms is triangular/zero-peaked
+  and clusters the events (near-zero effective standoff) while passing the ±600
+  bound — a conformance trap that matters because the draw is wallet-side and
+  unenforceable. Correct shape: place event 1 at the private intent `t0`, draw
+  `s ~ U[0,600]`, event 2 at `t0+s`, fair order-coin (uniform separation, free
+  inversion, max latency 600, per-`P` independence). The published test vector
+  must reject the triangular construction. (2) **The 600 is per-seam:** the ±600
+  symmetric envelope is the **entry** seam (announce↔bond, inversion-eligible,
+  1200-block search width); the **exit** seam (terminal drain + recurring
+  partial-unbond) is a *separate, one-sided* standoff (no inversion — collateral
+  isn't spendable before the 20_000-block release cooldown) whose latency is
+  measured **from cooldown expiry** (breaking the deterministic fixed-offset
+  cooldown tell), so symmetric entry/exit = two independent 600-block draws, each
+  free on its own seam. Also recorded: width is the expensive axis (proven
+  rate-driven), so the cheap thin-regime levers are biasing the gap toward the
+  max and the inversion, not a wider window. `FOLLOWUPS.md` item extended (test
+  vector must reject double-jitter; exit-seam geometry named). Docs + harness
+  doc-comment; no model change, no re-sim.
+
 - **archival: standoff recommendation reframed after review pass — cap is
   anti-griefing, cover is conditional on isolation (2026-06-13).** Folded four
   review-pass carries into the `--standoff` recommendation
