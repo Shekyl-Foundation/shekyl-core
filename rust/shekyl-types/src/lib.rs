@@ -102,8 +102,12 @@ macro_rules! scalar_u64 {
 macro_rules! hash32 {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
+        // `PartialOrd`/`Ord` (lexicographic over the bytes) so these hashes
+        // can key the `BTreeMap`/`BTreeSet`s that wallet-state uses for
+        // deterministic txid/block ordering — the engine-state txid maps that
+        // PR C migrates require `Ord` keys.
         #[derive(
-            Clone, Copy, PartialEq, Eq, Hash,
+            Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
             ::serde::Serialize, ::serde::Deserialize,
         )]
         #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]

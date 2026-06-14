@@ -119,18 +119,43 @@ fn hash_display_is_lowercase_hex() {
     );
 }
 
+#[test]
+fn hashes_order_lexicographically_for_btree_keys() {
+    // Hashes must be `Ord` so they can key the `BTreeMap`/`BTreeSet`s that
+    // wallet-state uses for deterministic txid ordering (PR C). Ordering is
+    // lexicographic over the raw bytes, matching `[u8; 32]`.
+    use std::collections::BTreeSet;
+
+    let mut a = [0u8; 32];
+    a[0] = 1;
+    let mut b = [0u8; 32];
+    b[0] = 2;
+
+    assert!(TxHash::from_bytes(a) < TxHash::from_bytes(b));
+
+    let set: BTreeSet<TxHash> = [b, a].into_iter().map(TxHash::from_bytes).collect();
+    let ordered: Vec<[u8; 32]> = set.into_iter().map(TxHash::to_bytes).collect();
+    assert_eq!(
+        ordered,
+        vec![a, b],
+        "BTreeSet must yield byte-lexicographic order"
+    );
+}
+
 #[cfg(feature = "schema")]
 #[test]
 fn schema_is_derivable() {
     // The snapshot harness (in `shekyl-engine-state`) introspects this once a
-    // type lands in a persisted block; assert the derive is present and the
-    // named schemas for a height and a hash are distinct.
+    // type lands in a persisted block. `Schema::SCHEMA` is a `&NamedType`;
+    // assert the derive carries each type's own name (the stable schema
+    // identity the harness keys on) rather than comparing brittle `Debug`
+    // strings that can drift across `postcard-schema` releases.
     use postcard_schema::Schema;
-    let height = BlockHeight::SCHEMA;
-    let hash = TxHash::SCHEMA;
+    assert_eq!(BlockHeight::SCHEMA.name, "BlockHeight");
+    assert_eq!(TxHash::SCHEMA.name, "TxHash");
     assert_ne!(
-        format!("{height:?}"),
-        format!("{hash:?}"),
+        BlockHeight::SCHEMA.name,
+        TxHash::SCHEMA.name,
         "distinct newtypes must carry distinct named schemas"
     );
 }
