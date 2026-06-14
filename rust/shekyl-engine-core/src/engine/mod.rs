@@ -179,6 +179,10 @@
 
 pub mod capability;
 pub(crate) mod chain_economics_source;
+// CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
+// Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
+// (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.
+pub(crate) mod curve_tree_actor;
 pub mod daemon;
 pub(crate) mod diagnostics;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
