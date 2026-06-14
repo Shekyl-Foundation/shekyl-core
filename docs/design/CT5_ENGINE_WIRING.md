@@ -4,13 +4,16 @@
 (§4); Round 2 applied three standing architectural principles (below), revised
 R1-Q1 (→ actor) and R1-Q6 (→ derive-not-hold), and absorbed the Round-2 review
 (E1–E9, §9). **The closure round finished the three gating findings: E1
-(read-path snapshot atomicity — frozen as one-read-txn-per-tx), E2 (under-guard
-`await` — promoted to an enforceable two-clause structural invariant), and E5
-(reorg-orphans-reference — `REF_ANCHOR_AGE=6` confirmed production, trigger added
-to CT-5d).** This doc is now the frozen contract and threat-model frame the
+(read-path snapshot atomicity — upgraded to a type/message-shape guarantee via
+the batch `AssembleTx` message, §3.7 T3), E2 (under-guard `await` — promoted to
+an enforceable two-clause structural invariant), and E5 (reorg-orphans-reference
+— `REF_ANCHOR_AGE=6` confirmed production, trigger added to CT-5d). §3.7 adds the
+type-enforced contracts (T1–T3) that make the §3.4 / E1 bug classes
+unrepresentable rather than discipline-avoided.** This doc is now the frozen contract and threat-model frame the
 implementation cuts against, per `05-system-thinking.mdc` (spec first, code
-second). The A3 threat pass against §5 and the §3.4 bug-fix confirmation remain
-the only open checklist items before CT-5 pre-0 begins.
+second). **The A3 threat pass (§5, O1–O6) is complete and the §3.4 bugs are
+confirmed against live code — all pre-implementation checklist items are
+closed. CT-5 pre-0 may begin.**
 
 **Standing principles this design is held to** (operator directive, 2026-06-14;
 they govern every CT-5 disposition):
@@ -231,17 +234,28 @@ load-bearing and now a frozen-contract requirement:
   `AssemblePath` as a concurrent read rather than through the write loop — but
   only if structured for it; "single-threaded loop serializes writes" as written
   does not. Closure round decides whether reads are spawned concurrently.
-- *C1 read-side mirror (the load-bearing half).* C1 (one `ReferenceBlock` per tx)
-  is structurally upheld because all inputs share one `ReferenceBlock` **value** —
-  but if a tx's N `AssemblePath` calls interleave with an `Ingest`+`Rollback`
-  (reorg mid-assembly), inputs `1..k` assemble against the pre-rollback tree and
+- *C1 read-side mirror (the load-bearing half) — resolved by message shape, not
+  discipline (see §3.7).* C1 (one `ReferenceBlock` per tx) is structurally upheld
+  because all inputs share one `ReferenceBlock` **value** — but if a tx's N
+  per-input assembly calls interleave with an `Ingest`+`Rollback` (reorg
+  mid-assembly), inputs `1..k` assemble against the pre-rollback tree and
   `k+1..N` against the post-rollback tree: same `ReferenceBlock`, different
   underlying tree state. Equal `ReferenceBlock` does not save you if the tree
-  moved under the reads. **Frozen-contract requirement (before CT-5c):** a tx's
-  full set of `assemble_path` calls is **atomic w.r.t. writes** — a single redb
-  **read txn opened once per tx and reused across all N inputs** (snapshot
-  isolation), or a brief write-exclusion spanning the tx. This is the read-side
-  mirror of C1, and the actor boundary is exactly what makes it non-obvious.
+  moved under the reads. **Frozen-contract requirement (CT-5c): the read API is a
+  single batch message** —
+  `AssembleTx { reference: ReferenceBlock, ids: Vec<OutputIdentity> } ->
+  Vec<AssembledPath>` — so the actor assembles **all N inputs inside one handler
+  invocation, under one snapshot**, and the handler runs to completion before any
+  `Ingest`/`Rollback` can interleave. There is no per-input message to interleave,
+  so the mid-assembly-reorg split is **structurally unrepresentable**, not merely
+  discipline-avoided. The `Vec` is bounded by `FCMP_MAX_INPUTS_PER_TX = 8`. (A
+  lifetime-guard session type — `TxAssembler<'a>` owning a redb read-txn — was
+  rejected: the read-txn lifetime cannot cross the actor message channel; the
+  batch message is the actor-native encoding of the same atomicity. §3.7.)
+  *Latency note:* the batch is still serialized against the write loop; redb's
+  concurrent-read support means the actor *could* serve `AssembleTx` off a
+  concurrent read txn rather than the write loop — a perf option, orthogonal to
+  the correctness the batch shape already guarantees; closure decides.
 
 **E2 (CLOSED, closure round) — `ask().await` under the engine write guard:
 verified, and the invariant promoted to enforceable form.** Holding a
@@ -507,6 +521,67 @@ surfaces that the field is conditionally present (e.g. only from a given hard
 fork), the gate is `hardfork_version`-keyed per `60-no-monero-legacy.mdc` (Shekyl
 min HF is 1; the field is present from genesis, so no dead pre-genesis branch).
 
+### 3.7 Type-enforced contracts (make the §3.4 / E1 bug classes unrepresentable)
+
+`20-rust-vs-cpp-policy.mdc` #2: a cryptographic contract is enforced by the type
+system at every use site, not by documentation. The §3.4 bugs and the E1
+read-atomicity hazard are all expressible **only because the current API permits
+them**; the cutover removes the permission. No *new* type vocabulary is added —
+`ReferenceBlock`, `BlockHeight` / `Gindex`, and `AssembledPath` already exist; the
+move is to make them the **only representable path**. This is a deletion-and-shape
+discipline, not a type-zoo expansion (`15-deletion-and-debt.mdc`).
+
+**T1 — `ReferenceBlock` is the only assembly input; delete the raw `[u8;32]`
+reference parameter (CT-5c).** The tip-as-reference bug (§3.4) exists because
+`assemble_tx_to_sign(.., reference_block: [u8;32], ..)` collapsed a three-field
+concept (height + curve-tree root + block hash) to one 32-byte field, so a *tip
+hash* and a *reference-block hash* shared a type and the confusion compiled.
+`ReferenceBlock { height, curve_tree_root, block_hash }` already carries the three
+together; consuming it (and **deleting** the raw `[u8;32]` param, not bypassing
+it — `60-no-monero-legacy.mdc`) makes "pass a lone tip hash" a type error: you
+cannot satisfy a value that demands a height and a root as well. The three-field
+shape *is* the barrier.
+
+**T2 — derive `tree_depth` from `AssembledPath`; delete the free `tree_depth: u8`
+parameter (CT-5c).** The `1u8` placeholder (§3.4) is possible only because depth
+is a caller-supplied scalar. `AssembledPath.tree.tree_depth` already carries the
+real depth from `assemble_path`; the signer reads it from the path, and the free
+parameter is removed. "Derive over hold" applied to a single scalar — no place to
+hardcode means no placeholder.
+
+**T3 — batch the tx's assembly into one message; the actor handler is the
+snapshot (CT-5c). Upgrades E1 from discipline to type/message shape.** The read
+API is `AssembleTx { reference: ReferenceBlock, ids: Vec<OutputIdentity> } ->
+Vec<AssembledPath>`, not N separate `AssemblePath` calls. The actor assembles all
+N inputs in **one handler invocation under one snapshot**; the handler runs to
+completion before any `Ingest`/`Rollback` interleaves, so the mid-assembly-reorg
+split (E1) is **structurally unrepresentable**. One `ReferenceBlock` in the
+message also makes C1's per-tx value-equality the only expressible shape. Bounded
+by `FCMP_MAX_INPUTS_PER_TX = 8`. *Rejected alternative:* a lifetime-guard session
+type `TxAssembler<'a>` owning the redb read-txn — the read-txn lifetime cannot
+cross the actor message channel, so the guard cannot span the N reads; the batch
+message is the actor-native encoding of the same atomicity. (If the A4 reversion
+to `RwLock<CurveTreeClient>` is ever taken, the lifetime guard *does* become
+available and is the better shape there — recorded so the reversion carries its
+own type story.)
+
+**Explicitly NOT type-preventable (honesty boundary — do not fake a type here):**
+
+- **O3 respawn-bound** — a retry counter + escalation; "the disk is permanently
+  corrupt" is not a representable value. Runtime budget (§5 O3-sub).
+- **E5 reorg-fork-crossing** — `reference_height ≥ fork_height ⇒ reanchor` is a
+  comparison against a reorg *event*, not a value invariant. Logic (§5 O1-sub /
+  CT-5d).
+- **O5 lying-daemon gate** — already a *store* invariant (single-writer actor +
+  ingest-verify ⇒ the store holds only verified state, so `assemble` reads
+  verified state by construction). A per-call typestate would be redundant with
+  the store invariant — adding one is the speculative-extensibility failure
+  `21-reversion-clause-discipline.mdc` warns against.
+
+T1/T2 land as deletions in CT-5c; T3 reshapes the CT-5c actor read API and is the
+E1 closure (§3.1). The cross-seam `BlockHeight` adoption (E7, CT-5a) is the same
+class as T1 — a newtype displacing a raw `u64` at a confusion-prone boundary.
+
 ---
 
 ## 4. Round-1 open questions (agenda)
@@ -532,18 +607,31 @@ correct against real consensus blocks at all.
 
 ---
 
-## 5. Threat-model frame (A3 — late-round addendum, opened early)
+## 5. Threat-model frame (A3 — pass complete 2026-06-14)
 
 CT-5 is orchestration (no new crypto, no new consensus rule), so the §3.7.x
 security boundaries are inherited, not re-litigated. The objectives below are
 the active-defense pass; each routes to (a) in-scope absorption, (b) discipline
-note, or (c) named forward-action.
+note, or (c) named forward-action. **The A3 pass surfaced three sub-findings —
+O1-sub (E1 read-snapshot makes C1 sufficient), O3-sub (respawn must be bounded
+or a corrupt store livelocks), and the O5 boundary (consistent-liar caught at
+consensus, never a leak) — each recorded inline.** No objective inverted to a
+blocker; the security property (no witness leak; lying-daemon degrades to DoS
+only) holds across all six.
 
 1. **Wrong-root / stale-snapshot spend (O1).** A built proof anchored at the
    wrong height or a stale root. *Defense:* C1 single-`ReferenceBlock`-per-tx
-   (§2), C2 selection gate, C3 path precondition, proactive `should_reanchor`.
+   (§2), **plus the E1 read-snapshot atomicity that makes C1 sufficient** — C1's
+   equal-`ReferenceBlock`-*value* across N inputs does **not** prevent a wrong-root
+   spend on its own, because a reorg interleaving N per-input assembly reads would
+   assemble different inputs against different tree states under one
+   `ReferenceBlock` value (A3 finding: C1 value-equality is necessary, not
+   sufficient). The batch `AssembleTx` message (E1, §3.1 / §3.7 T3) is the half
+   that closes it — all N assemble in one handler under one snapshot, so the
+   interleaving is structurally unrepresentable. C2 selection gate, C3 path
+   precondition, and proactive `should_reanchor` complete the defense.
    *Disposition (a):* the §3.5 reference-selection fix is the direct remedy for
-   the confirmed tip-as-reference bug.
+   the confirmed tip-as-reference bug; E1's snapshot is the structural backstop.
    - **O1-sub (E5) — reorg replaces the reference block while the tip stays above
      it.** `should_reanchor` (`reference.rs:189`) catches two cases: age ≥
      `REBUILD_AT` (=50), and reference *above* the tip (age `None`, a reorg that
@@ -590,6 +678,20 @@ note, or (c) named forward-action.
    every handle call to a terminal error; R1-Q4 respawn. *Disposition (a):* the
    poison/fail-stop contract is machine-enforced; CT-5 must exercise the respawn
    path in a KAT.
+   - **O3-sub (A3 finding) — respawn must be bounded, or a deterministically
+     corrupt store livelocks.** R1-Q4 frames respawn as "a poison is a transient
+     persistence hiccup; refresh already retries." That holds for a transient
+     fault (a truncate-without-rebuild crash that a reopen repairs). It does
+     **not** hold for a genuinely corrupt redb file (disk failure): reopen → poison
+     → respawn → reopen, an unbounded loop that no test surfaces because tests use
+     clean stores. *Defense:* respawn is **bounded by the existing refresh
+     retry/cancel budget** (couples with O6) — a respawn count exceeding the budget
+     escalates the persistence error to a **surfaced fault** rather than looping
+     silently; at that point the poison is no longer transient and is
+     user-actionable (re-sync from a clean store). CT-5d's respawn KAT (O3) must
+     include the bounded-retry-then-surface path, not only the happy respawn.
+     *Disposition (a) for the bound; (c) for the escalation wiring, recorded for
+     the refresh-resilience review with O6.*
 4. **Secret leak via the new ownership (O4).** The engine now holds a tree
    handle. *Defense:* the client is public-data-only (parent §4.1/§4.2 structural
    no-secrets test); `AssembledPath` and every `CurveTreeActor` message carry no
@@ -605,10 +707,31 @@ note, or (c) named forward-action.
    root-vs-header verify (DoS only, never a witness leak); `assemble_path` is
    gated on the root match. *Disposition (b):* discipline note — CT-5 must not
    weaken the gate by assembling before the root is verified.
+   - **O5 boundary (A3 finding) — the ingest verify catches an *inconsistent*
+     liar; a *consistent* liar is caught at consensus, and neither leaks the
+     witness.** The header root the §3.3 verify compares against comes from the
+     same daemon that supplied the leaves (the Rust parser reads it from the
+     daemon's block header — §3.6). So the ingest-time verify only catches a
+     daemon that lies about leaves but *not* about the header (an inconsistent
+     liar); a daemon that supplies bad leaves *and* a matching bad header root
+     passes ingest. That is **not** a hole, because the proof built against the
+     liar's view is rejected by honest nodes at submit (its `referenceBlock` root
+     is non-canonical) — still DoS, never a leak. The witness-no-leak property is
+     independent of leaf honesty entirely: spend secrets come from the wallet's
+     own keys, never the daemon's leaves, and FCMP++ zero-knowledge means a
+     malformed membership path yields an *invalid* proof, not a *leaky* one. The
+     ingest verify is defense-in-depth (fail-fast on the common inconsistent
+     liar); consensus rejection is the backstop for the consistent liar.
+     *Disposition (b) holds — the gate ordering is the discipline; the security
+     property does not rest on the ingest verify alone.*
 6. **Resource exhaustion on reorg storm (O6).** Repeated deep rollbacks +
    re-sync. *Disposition (c):* forward-action — bounded only by the existing
    refresh retry/cancel budget; no new bound in CT-5, recorded for the refresh
-   resilience review.
+   resilience review. *A3 cross-references:* this is the budget the O3-sub bound
+   draws on (respawn shares the retry envelope), and the E4 per-block full-leaf-set
+   allocation (§3.2) is the per-block re-ingest cost under a storm — both are
+   O(work-per-block), released per block, and the resilience review owns the
+   aggregate bound.
 
 ---
 
@@ -657,10 +780,16 @@ boundary).
   consume; the signer still builds synthetic paths but against the *real*
   reference selection. DoD: C2 `OutputNotYetSpendable` KAT + a §3.3
   mismatch-rejection KAT (O5).
-- **CT-5c — assembler cutover + `synthetic_tree` deletion (R1-Q5).** Replace
-  `signing_assembly`/`sign_bridge` synthetic vectors with `assemble_path`; delete
-  `synthetic_tree`; migrate tests. DoD: real-root proof builds + submits in the
-  `TestDaemon` harness; C3 precondition holds.
+- **CT-5c — assembler cutover + `synthetic_tree` deletion + type-enforced contracts
+  (R1-Q5, §3.7).** Replace `signing_assembly`/`sign_bridge` synthetic vectors with
+  the batch `AssembleTx` message (T3); delete `synthetic_tree`; **delete the raw
+  `reference_block: [u8;32]` param** (T1 — `assemble_tx_to_sign` consumes
+  `ReferenceBlock`) and **delete the free `tree_depth: u8` param** (T2 — depth
+  derived from `AssembledPath.tree`); migrate tests. The §3.7 deletions are the
+  E1 closure and the §3.4 bug-class barriers, landed as type changes not
+  discipline notes. DoD: real-root proof builds + submits in the `TestDaemon`
+  harness; C3 precondition holds; the raw-`[u8;32]`-reference and free-`tree_depth`
+  call paths no longer exist (grep-clean).
 - **CT-5d — proactive horizon guard + closeout.** `should_reanchor` rebuild loop
   for pending txs, composed with the **reorg-fork-crossing trigger** (O1-sub /
   E5: re-anchor any pending tx whose `reference_height ≥ fork_height`, regardless
@@ -706,9 +835,9 @@ boundary).
 
 ## 8. Review checklist (pre-implementation)
 
-- [ ] §1 scope + DoD agreed (real-root proof in `TestDaemon`; reorg KAT vs CT-2
+- [x] §1 scope + DoD agreed (real-root proof in `TestDaemon`; reorg KAT vs CT-2
   oracle; C2 clean error; no-secrets test over the `CurveTreeHandle` surface).
-- [ ] §2 contract confirmed — CT-5 adds **no** new client API; C1
+- [x] §2 contract confirmed — CT-5 adds **no** new client API; C1
   one-`ReferenceBlock`-per-tx upheld.
 - [x] R1-Q1 client ownership — **resolved (Round 2):** `CurveTreeActor` +
   `CurveTreeHandle`; merge sole ingest-sender; ingest-ack-before-commit (§3.1).
@@ -723,22 +852,33 @@ boundary).
 - [x] R1-Q6 header `curve_tree_root` source — **resolved (Round 2):** derive>hold
   — verify at ingest, re-derive at send, no schema bump; pre-0 parser PR still
   required (§3.5/§3.6).
-- [ ] §3.4 confirmed bug fixed: reference block = `tip − REF_ANCHOR_AGE`, not the
-  tip (`local_pending_tx.rs:781`); `tree_depth` derived, not `1u8` (`:657`).
-- [ ] §5 threat objectives O1–O6 each routed (a)/(b)/(c).
+- [x] §3.4 bug **confirmed against live code (A2)**: `tip_hash =
+  block_hash_at(synced)` (`local_pending_tx.rs:615`) is passed as the
+  `reference_block` 5th arg of `assemble_tx_to_sign` (`:781`; signature
+  `signing_assembly.rs:34`) and propagated into `TreeContext` via
+  `synthetic_tree_context` (`:51`) — reference is the tip, not `tip −
+  REF_ANCHOR_AGE`. `tree_depth = 1u8` hardcoded (`:657`). CT-5 §3.5 / §3.4 fix
+  both; line citations verified accurate.
+- [x] §5 threat objectives O1–O6 each routed (a)/(b)/(c) — **A3 pass complete**;
+  three sub-findings (O1-sub, O3-sub, O5 boundary) recorded inline; no blocker.
 - [x] §6 sub-PR boundaries firm (R1-Q1/Q2/Q6 resolved); pre-0 prerequisite added.
 - [ ] §7 parent §9 row + 2A back-refs; §5.4 confirmed-not-pending.
-- [x] **E1 (closed)** — tx-scoped read-snapshot atomicity vs C1: frozen as
-  one-read-txn-per-tx (snapshot isolation) across all N inputs; concurrent-read
-  option flagged for CT-5c structuring (§3.1).
+- [x] **E1 (closed, upgraded)** — tx-scoped read-snapshot atomicity vs C1:
+  resolved by the batch `AssembleTx` message (§3.7 T3) — all N inputs assemble in
+  one handler under one snapshot, mid-assembly-reorg split unrepresentable;
+  concurrent-read remains a CT-5c perf option (§3.1).
+- [x] **§3.7 type-enforced contracts** — T1 (`ReferenceBlock`-only, delete raw
+  `[u8;32]`), T2 (derive `tree_depth`, delete free param), T3 (batch
+  `AssembleTx`); not-type-preventable list recorded (O3/E5/O5). Land in CT-5c.
 - [x] **E2 (closed)** — two-clause structural lock-ordering invariant pinned
   with no-secrets-test review status; substrate-confirmed (`KeyActor` holds no
   engine ref); respawn is engine-side (§3.1).
 - [x] **E5 (closed)** — `REF_ANCHOR_AGE=6` confirmed production (deferred-insertion
   maturity, reorg-safety-margin rationale); CT-5d composes the reorg-fork-crossing
   re-anchor trigger; depth-7–10 KAT specified (§5 O1-sub).
-- [x] **Closure-review round complete** (E1/E2/E5 finished). Remaining before
-  first commit: **A3 threat pass against §5**, and the §3.4 bug-fix confirmation.
+- [x] **Closure-review round complete** (E1/E2/E5 finished); **A3 threat pass
+  complete** (O1–O6, three sub-findings); **§3.4 bug confirmed against live code**.
+  All pre-implementation checklist items are now closed — CT-5 pre-0 may begin.
 
 ---
 
@@ -750,7 +890,7 @@ treatment is in the cited section; this is the audit index.
 | ID | Finding | Disposition | Lands |
 |----|---------|-------------|-------|
 | **E0** | Actor justification was "standing principle"; real reason is redb single-writer | Justification corrected; A4 reversion target named (`RwLock<CurveTreeClient>`) | §3.1 |
-| **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **CLOSED** — frozen: one redb read-txn per tx (snapshot isolation) across all N inputs; concurrent-read option flagged | §3.1, §8 |
+| **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **CLOSED + upgraded to type/message shape (T3)** — batch `AssembleTx` message assembles all N inputs in one handler under one snapshot; mid-assembly-reorg split structurally unrepresentable | §3.1, §3.7, §8 |
 | **E2** | `ask().await` under the engine write guard asserted, not verified | **CLOSED** — promoted to enforceable two-clause structural invariant (actor holds no engine ref; respawn engine-side), no-secrets-test review status | §3.1, §8 |
 | **E3** | §3.6 mis-alignment is a standalone block-deserializer bug | pre-0 framed as independent correctness fix; verify (a) not-yet-exercised vs (b) compensating-offset | §3.6, §6 |
 | **E4** | Full leaf set is a real refresh-path cost, not free transit | Cost named (O(outputs/block), released per block) as the price of ingest-ack-before-commit | §3.2 |
