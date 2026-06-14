@@ -25,9 +25,33 @@ collision case *structurally impossible* (deleted from the threat model, not bou
 `(O, C, h_pqc)` is the recorded-but-not-taken fallback. A consensus output-key-uniqueness
 rule is explicitly rejected as a privacy regression, and the threat model records why.
 X1 folded into O1
-(anchor-age is a fingerprinting oracle); X2/X4/X5/X6/X7 confirmed. The §3.4 bugs
+(anchor-age is a fingerprinting oracle); X2/X4/X6/X7 confirmed; X5 run down to a
+bounded CT-5c `eligible_height` fix (coinbase flows through `from_wallet_output`
+with the flat `+10`; align via the ignored `additional_timelock`). The §3.4 bugs
 are confirmed against live code — all pre-implementation checklist items are
 closed. CT-5 pre-0 may begin.**
+
+**Decisions frozen (irreversible once implemented — the load-bearing choices, so
+the closure reviewer and CT-5c implementer find them at the top, not derived from
+the finding logs §9):**
+
+1. **`CurveTreeClient` lives behind a `kameo` actor**, on the redb single-writer
+   argument (not "standing principle"); engine holds a `Clone` handle. Reversion
+   target: `RwLock<CurveTreeClient>`. — §3.1 (E0).
+2. **Derive > hold for the root:** bind to the self-reconstructed root; the header
+   `curve_tree_root` *defends at ingest*, it is not held as truth. — §3.6 / R1-Q6.
+3. **pre-0 is a prerequisite, not CT-5 proper:** add `curve_tree_root` to the Rust
+   `BlockHeader` (read/write/hash). E3 verified **(a)** — this *establishes*
+   block-header/hash correctness for the first time (no real block has ever
+   deserialized through the Rust path); also fixes `ReferenceBlock.block_hash`. — §3.6 / §6.
+4. **X3 resolves owned outputs by `gindex`** (the tree's unique key), making the
+   collision case structurally impossible (deleted, not bounded). No consensus
+   output-key index (privacy regression). Wallet-conformance requirement (X3 × X1).
+   — §5.1 / §7.
+5. **Batch `AssembleTx` message:** all N inputs assemble in one handler under one
+   snapshot — mid-assembly-reorg split is type-unrepresentable. — §3.7 T3 / §3.1.
+6. **`REF_ANCHOR_AGE` is consensus-uniform** across wallet implementations (privacy
+   fingerprint, not just reorg-safety); never a config knob. — §5 O1 / X1.
 
 **Standing principles this design is held to** (operator directive, 2026-06-14;
 they govern every CT-5 disposition):
@@ -963,28 +987,48 @@ properties. None inverts a disposition.
   full-leaf-set buffer privacy-neutral (the crypto-path constant-time discipline,
   lifted to ingest); CT-5 must not introduce an owned-output fast-path in ingest.
 
-- **X5 (maturity off-by-one / two-sources-of-truth class) — CONFIRMED single source
-  for the common path; coinbase sub-check flagged.** `eligible_height` is the single
-  field both balance display (`balance.rs:61`, `current_height >= td.eligible_height`)
-  and the C2 selection gate read — selection does **not** re-derive maturity, it reads
-  the stored field (the CT-2/CT-3 "single enforcer" property holds). **But** the
-  scanner sets `eligible_height = block_height + SPENDABLE_AGE` with `SPENDABLE_AGE = 10`
-  **unconditionally** (`ledger_ext.rs:111`, `transfer.rs:25`), while the curve-tree
-  `maturity_height` is **type-specific** — coinbase `60`, regular `10`, staked
-  `max(lock, 10)` (`recon.rs:82–85`, `COINBASE_LOCK_WINDOW = 60`). For regular
-  outputs (the common case) `10 == 10`, no divergence. For **coinbase**, selection
-  would mark an output spendable at `+10` while the tree inserts it at `+60`.
-  *Disposition (a) — confirm + align in CT-5c:* the divergence is **backstopped** —
-  `assemble_path` returns `ClientError::OutputNotDrained` (`assemble.rs:95`) if the
-  leaf is not yet drained at the reference height, so a too-optimistic coinbase
+- **X5 (maturity off-by-one / two-sources-of-truth class) — CONFIRMED single source;
+  coinbase grep run down to a CT-5c *code change*, not a confirmation.** `eligible_height`
+  is the single field both balance display (`balance.rs:61`, `current_height >=
+  td.eligible_height`) and the C2 selection gate read — selection does **not** re-derive
+  maturity, it reads the stored field (the CT-2/CT-3 "single enforcer" property holds).
+  **But** the scanner sets `eligible_height = block_height + SPENDABLE_AGE` with
+  `SPENDABLE_AGE = 10` **unconditionally** (`ledger_ext.rs:111`, `transfer.rs:25`), while
+  the curve-tree `maturity_height` is **type-specific** — coinbase `60`, regular `10`,
+  staked `max(lock, 10)` (`recon.rs:82–85`, `COINBASE_LOCK_WINDOW = 60`). For regular
+  outputs (the common case) `10 == 10`, no divergence. For **coinbase**, selection would
+  mark an output spendable at `+10` while the tree inserts it at `+60`.
+
+  **The coinbase grep (run down at the V1/V3 bar, resolving the disposition's open
+  fork): coinbase *does* flow through `from_wallet_output` with the flat `+10` — so X5
+  is a CT-5c code change, not a confirmation.** `from_wallet_output`
+  (`ledger_ext.rs:61–116`) has **no coinbase/miner branch**: it sets `eligible_height =
+  block_height + SPENDABLE_AGE` for every owned output and accounts for staking
+  separately (`stake_lock_until`, `:67`). Miner-ness is **not** a `WalletOutput` field
+  (`output.rs:208–214` — `absolute_id`, `relative_id`, `data`, `metadata`, `staking`);
+  the coinbase lock instead rides `WalletOutput::additional_timelock()`
+  (`output.rs:248`, "Additional timelock beyond the default 10-block lock window"),
+  which `from_wallet_output` currently **ignores**. So the divergence is real *and the
+  fix is constructible at this exact site* from data the scanner already holds:
+  `eligible_height = max(block_height + SPENDABLE_AGE, timelock_height(additional_timelock),
+  stake_lock_until)` — the latest of the default window, the explicit/coinbase timelock,
+  and any stake lock. (This also subsumes any non-coinbase explicit timelock, which is
+  ignored today by the same omission; coinbase `+60` is the concrete instance.) The
+  precondition for the hazard to bite is a **mining wallet owning its own coinbase**
+  (coinbase outputs are scannable to the miner's address, inherited from CryptoNote);
+  for non-mining wallets there is nothing to own and the divergence is inert.
+
+  *Backstop (why this is sizing, not safety):* the divergence is **backstopped** —
+  `assemble_path` returns `ClientError::OutputNotDrained` (`assemble.rs:95`) if the leaf
+  is not yet drained at the reference height, so a too-optimistic coinbase
   `eligible_height` degrades to a **clean assembly error (DoS floor), not a wrong
-  proof.** CT-5c must (1) confirm whether coinbase outputs reach `from_wallet_output`
-  with the flat `+10` (vs a separate claim/stake path that never sets a spendable
-  `eligible_height`), and (2) if they do, align the coinbase `eligible_height` to the
-  type-specific window so selection and tree-insertion agree, removing the
-  OutputNotDrained-as-stuck-funds UX. **KAT:** coinbase output, tx attempt at
-  reference between `+10` and `+60`; assert no wrong-leaf assembly (either gated at
-  selection or clean OutputNotDrained, never a malformed path).
+  proof.** The grep settles the PR scope: CT-5c **aligns `from_wallet_output`'s
+  `eligible_height` to incorporate `additional_timelock`** (a bounded edit at one site),
+  removing the OutputNotDrained-as-stuck-funds UX. **KAT:** coinbase output owned by a
+  mining wallet, tx attempt at reference between `+10` and `+60`; assert the output is
+  **gated at selection** (post-fix `eligible_height = +60`), and — pre-fix safety
+  invariant — that an over-optimistic `eligible_height` yields clean OutputNotDrained,
+  never a malformed path.
 
 - **X6 (supply-chain / dependency-substitution class) — discipline note.** CT-5
   adds a `shekyl-curve-tree` dependency edge to `shekyl-engine-core` and (if the
@@ -1103,9 +1147,14 @@ boundary).
   scanner `global_output_index` is the same `next_output_seq` numbering). No
   consensus change — X3 is a wallet resolution ambiguity, not a consensus gap, and
   its adversarial precondition is unreachable (V1); `(O, C, h_pqc)` is the recorded
-  fallback (not taken). **Confirm + align coinbase
-  `eligible_height` with the type-specific tree maturity (X5)** so selection and
-  tree-insertion agree (or confirm coinbase never sets a spendable `eligible_height`).
+  fallback (not taken). **Align `from_wallet_output`'s `eligible_height` to incorporate
+  `additional_timelock` (X5 — confirmed code change, not a confirmation).** Coinbase
+  flows through `from_wallet_output` (`ledger_ext.rs:61–116`) with the flat `+10`, but
+  the tree matures it at `+60` and the coinbase lock rides
+  `WalletOutput::additional_timelock()` (`output.rs:248`), ignored today; set
+  `eligible_height = max(block_height + SPENDABLE_AGE, timelock_height(additional_timelock),
+  stake_lock_until)` so selection and tree-insertion agree. Bounded one-site edit;
+  `OutputNotDrained` backstops it DoS-never-theft.
   DoD: real-root proof builds + submits in the `TestDaemon`
   harness; C3 precondition holds; the raw-`[u8;32]`-reference and free-`tree_depth`
   call paths no longer exist (grep-clean); **X3 KAT (owned output resolves to the
@@ -1145,7 +1194,16 @@ boundary).
   the V1 derivation (a payer cannot target `O.x`) and the V3 local index→gindex
   binding (which itself rests on the no-V1 genesis invariant, §5.1); and record
   **why the chain does not need an output-key index** (privacy regression), so the
-  next proposal to add one finds the disposition on file.
+  next proposal to add one finds the disposition on file. **Also record the
+  wallet-conformance corollary (X3 × X1):** owned-output resolution **by `gindex`
+  is a wallet-conformance requirement, not a single-implementation choice** — like
+  `REF_ANCHOR_AGE` consensus-uniformity (X1), a divergent resolution is a
+  correctness/fingerprinting hazard. A second wallet implementation that kept an
+  `(O, C)` content-match would diverge in the (negligible-but-nonzero) collision
+  case, and — load-bearing — would have to independently encode the **no-V1 genesis
+  invariant** the `index→gindex` binding rests on (V3); the `gindex` resolution makes
+  that invariant the *only* thing a second implementation must honor, rather than a
+  re-derivation of the content-match's collision reasoning.
 - **Rule-60 `ringct`/`V2` naming residue — FOLLOWUPS V3.0 (landed 2026-06-14).**
   The public field `ScannableBlock.output_index_for_first_ringct_output`
   (`shekyl-oxide` `rpc/src/lib.rs:80`) and the `matches!(tx, Transaction::V2)`
@@ -1249,7 +1307,7 @@ treatment is in the cited section; this is the audit index.
 | **E0** | Actor justification was "standing principle"; real reason is redb single-writer | Justification corrected; A4 reversion target named (`RwLock<CurveTreeClient>`) | §3.1 |
 | **E1** | `assemble_path` crosses the actor boundary; C1 read-side not closed | **CLOSED + upgraded to type/message shape (T3)** — batch `AssembleTx` message assembles all N inputs in one handler under one snapshot; mid-assembly-reorg split structurally unrepresentable | §3.1, §3.7, §8 |
 | **E2** | `ask().await` under the engine write guard asserted, not verified | **CLOSED** — promoted to enforceable two-clause structural invariant (actor holds no engine ref; respawn engine-side), no-secrets-test review status | §3.1, §8 |
-| **E3** | §3.6 mis-alignment is a standalone block-deserializer bug | pre-0 framed as independent correctness fix; verify (a) not-yet-exercised vs (b) compensating-offset | §3.6, §6 |
+| **E3** | §3.6 mis-alignment is a standalone block-deserializer bug | **CLOSED — (a) verified at source.** C++ header is 6-field (`curve_tree_root` last, `cryptonote_basic.h:723/735`); Rust reads 5 (`block.rs:60–68`), so `Block::read` mis-aligns at the miner tx and **fails loudly** on any real block (root's first byte parsed as tx-version → `version != 2` reject, `block.rs:212–215`) — it has never been fed one (tests use synthetic 5-field blocks). **No compensating offset:** the only hash special-case is the unrelated inherited `202612` Monero test-vector remap (`block.rs:201`), and `serialize_pow_hash` (`block.rs:170–184`) hashes the 5-field header so the Rust block hash *cannot* match consensus for a real block. pre-0 therefore **establishes** correctness for the first time — its KAT is a genuine new guarantee (6-field round-trip + Rust block hash == consensus incl. `curve_tree_root`), **not** a proof-of-inertness against a compensation. Also fixes `ReferenceBlock.block_hash` correctness, which X3/CT-5 depend on. | §3.6, §6 |
 | **E4** | Full leaf set is a real refresh-path cost, not free transit | Cost named (O(outputs/block), released per block) as the price of ingest-ack-before-commit | §3.2 |
 | **E5** | Reorg can orphan the reference block while tip stays above it; `should_reanchor` (age) misses it | **CLOSED** — `REF_ANCHOR_AGE=6` confirmed production (rare-but-bursty, couples with E6c); CT-5d reorg-fork-crossing trigger + depth-7–10 KAT | §5 O1, §6 |
 | **E6a** | Reorg KAT must assert pending-table equality (CT-3c lesson); inherits Tier-B fixture | CT-5a DoD updated | §6 |
@@ -1272,7 +1330,7 @@ citation (the honest correction).
 | **X2** | Reorg double-spend-against-self (Electrum-class) | No | **Confirmed** — selection state (`LedgerIndexes`) rebuilt inside the same `handle_reorg` atomic under one write guard (`merge.rs:337/595–602`), not lazily | §5.1 |
 | **X3** | Zcash malformed-proof-input / wrong-leaf | **Wallet resolution ambiguity, not a consensus gap; adversarial precondition unreachable (V1)** | **Resolve owned outputs by `gindex` — the tree's unique key — in CT-5c: collision *structurally impossible* (deleted, not bounded). V3-confirmed locally constructible: `drained` carries `e.gindex` (`assemble.rs:89`/`types.rs:141`) and scanner `global_output_index` is the same `next_output_seq` numbering (`ledger_ext.rs:74`/`scan.rs:562`/`recon.rs:122–148`). `(O, C, h_pqc)` recorded fallback (not taken). KAT = "resolves to correct gindex" (no collision case). Consensus output-key index REJECTED (privacy regression). V1: `O` one-time-address-derived (`output.rs:8–28`)** | §5.1, §6 |
 | **X4** | Ingest timing side-channel (owned vs not) | No | **Confirmed** — `collect_block_leaves` ingests every output identically (no ownership check, `recon.rs:136–163`); constant-w.r.t.-ownership makes the E4 buffer privacy-neutral | §5.1 |
-| **X5** | Maturity off-by-one / two-sources spendability | Common path no; coinbase sub-check | **Confirmed single source** (`eligible_height` field read by both balance + C2); coinbase `+10` vs tree `+60` aligned in CT-5c, backstopped by `OutputNotDrained` (DoS floor) | §5.1, §6 |
+| **X5** | Maturity off-by-one / two-sources spendability | Common path no; coinbase is a **code change** | **Single source confirmed** (`eligible_height` read by both balance + C2). **Coinbase grep resolves to a CT-5c *code change*, not a confirmation:** `from_wallet_output` (`ledger_ext.rs:61–116`) sets `eligible_height = block_height + SPENDABLE_AGE` (flat +10) for *every* output — no coinbase branch — while the tree matures coinbase at +60. Miner-ness is not a `WalletOutput` field, but the coinbase lock rides `additional_timelock()` (`output.rs:248`), currently **ignored** at this site. Fix (constructible here): `eligible_height = max(block_height + SPENDABLE_AGE, timelock_height(additional_timelock), stake_lock_until)`. Precondition = mining wallets owning coinbase; `OutputNotDrained` (DoS floor) backstops it DoS-never-theft regardless | §5.1, §6 |
 | **X6** | Supply-chain / dependency substitution (Ledger Connect-Kit) | Discipline | New edges (`shekyl-curve-tree`, `kameo`/`redb`) **exact-pinned**; CT-5a dependency-discipline review covers the edge | §5.1, §6 |
 | **X7** | RPC/daemon trust-boundary (Electrum malicious-server) | **Yes (DoS)** | Leaf-set buffer bounded by **consensus block-size limit before allocation**, not by daemon blob length; CT-5a DoD asserts it | §5.1, §6 |
 
