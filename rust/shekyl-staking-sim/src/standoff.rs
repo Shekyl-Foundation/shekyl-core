@@ -71,6 +71,29 @@
 //!   effective cover is lower and unquantified (the RingCT nominal-vs-effective
 //!   lesson). S-3's modeled observer, not a passive rate measurement, is the
 //!   testnet target.
+//!
+//! **Construction the harness assumes (conformance-critical).** The model assumes the
+//! gap between the two seam events is drawn *directly* as `s ~ U[0, window]` with a
+//! random order (the inversion coin). The obvious wrong implementation —
+//! independently jittering both event-times in `[0, window]` around a common
+//! intent anchor `t0` — yields a separation that is the *difference of two
+//! uniforms*: **triangular, peaked at zero**, i.e. the events cluster together
+//! most of the time, the precise opposite of a standoff. That wrong build
+//! satisfies "both within `window`" and "separation ≤ `window`" on paper while
+//! delivering near-zero effective standoff. Correct shape: at `t0`, flip a coin
+//! for order, place the first event at `t0`, draw `s ~ U[0, window]`, place the
+//! second at `t0 + s` (uniform separation, free inversion, max latency `window`,
+//! per-`P` independence since `t0` is the principal's private intent). The
+//! published conformance test vector must reject the triangular construction.
+//!
+//! **`window` is per-seam.** This harness models the *entry* seam
+//! (announce↔bond, order-symmetric, inversion-eligible). The *exit* seam
+//! (terminal drain + recurring partial-unbond) is a separate standoff with its
+//! own envelope, modeled nowhere here: it is **one-sided** (collateral is not
+//! spendable before the 20_000-block release cooldown, so there is no
+//! inversion), and its latency is measured **from cooldown expiry, not from the
+//! unbond event** (the cooldown already pins the earliest spend deterministically;
+//! the standoff's job is to break that fixed-offset tell).
 
 use serde::Serialize;
 
