@@ -224,6 +224,43 @@
   production code lands against the plan. Cross-refs: `REWARD_EMISSION_LEG.md`
   §13, `FCMP_MEMBERSHIP_ONLY.md` §9.
 
+### Fixed
+
+- **archival: bond load-modify-store no longer wipes the v4 emission-dedup
+  fields (F-S1 / F-E5, PR-E0, 2026-06-13).** `put_archival_bond_record`
+  reconstructs a fresh `ArchivalBondValue` from scalar args and cannot carry the
+  v4 `claimed_settlement_epochs` set or `first_paying_emission_height`. The slash
+  apply/revert paths loaded the full bond, mutated it, then wrote back through
+  that reconstructing writer — silently dropping both v4 fields on every slash
+  and every reorg revert. Added a full-bond writer
+  `BlockchainDB::put_archival_bond_value(p_id, bond)` (LMDB impl + no-op base +
+  testdb stub) that serializes the entire decoded record;
+  `put_archival_bond_record` now delegates to it (its only caller is JoinMarket
+  connect, a fresh-P create where the scalar path is correct).
+  `apply_archival_slash_one` and `revert_archival_slashes_at_height` now write
+  the mutated bond through the full-bond writer, so the dedup state survives a
+  slash and reverts cleanly with `pop_block`. Added a public reader
+  `get_archival_bond_value` and three regression tests in
+  `archival_substrate_lmdb.cpp` (`bond_v4_fields_survive_full_writer`,
+  `bond_v4_fields_survive_load_modify_store`,
+  `bond_v4_claimed_set_survives_reorg_revert`). The
+  `claimed_epochs_check_and_set` C++ FFI stays deferred to its first consumer
+  (the emission write path, PR-E3) per spec §6.3 and `15-deletion-and-debt.mdc`.
+  Also closed a sibling encode/decode asymmetry in the same write path:
+  `ArchivalBondValue::encode()` serialized any `holdings_kind` byte while
+  `decode()` rejects unknown values, so a writer could persist a record no read
+  path can decode. `encode()` now rejects unknown `holdings_kind` alongside its
+  existing at-rest invariants (bounds, claimed-epoch well-formedness), which
+  protects every writer through the single serialization funnel; regression test
+  `bond_encode_rejects_unknown_holdings_kind`. Because `apply_archival_slash_one`
+  was moved to public scope for the slash regression tests, it now carries the
+  same `check_open()` + active-write-txn precondition the internal scheduler
+  enforces, so direct invocation without a write txn fails loudly instead of
+  dereferencing a null `*m_write_txn`; regression test
+  `apply_slash_requires_active_write_txn`. This is a latent-bug precursor the
+  emission vin (PR-E3) depends on; no emission behavior changes. Docs:
+  `REWARD_EMISSION_VIN_PLAN.md` §1.5 / §3 PR-E0.
+
 ### Changed
 
 - **economics: `shekyl-staking-sim` default backend is now the authoritative

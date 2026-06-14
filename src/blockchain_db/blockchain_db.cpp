@@ -1330,6 +1330,12 @@ bool BlockchainDB::get_archival_bond_hybrid_pubkey(const crypto::hash& /*p_id*/,
   return false;
 }
 
+bool BlockchainDB::get_archival_bond_value(const crypto::hash& /*p_id*/,
+  shekyl::db::ArchivalBondValue& /*out*/) const
+{
+  return false;
+}
+
 bool BlockchainDB::archival_bond_holds_shard(const crypto::hash& /*p_id*/, uint64_t /*shard_id*/,
   uint64_t /*at_height*/) const
 {
@@ -1365,6 +1371,11 @@ void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
+{
+}
+
+void BlockchainDB::put_archival_bond_value(const crypto::hash& /*p_id*/,
+  const shekyl::db::ArchivalBondValue& /*bond*/)
 {
 }
 
