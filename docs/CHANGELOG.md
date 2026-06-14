@@ -432,6 +432,13 @@
   `STAKER_ARCHIVAL_SIM.md` and `FOLLOWUPS.md` (the spread test was described as
   continuous "KS against uniform" in one place and the correct discrete chi-square
   GoF in another — unified on the discrete chi-square the implementation uses).
+  Follow-up review round: (4) `search_width_blocks` now reports the width that
+  actually feeds the decoy model — the surge cluster width under a shared trigger,
+  not the inversion-adjusted window — so the shared-trigger arms read `3.0` instead
+  of the misleading window value (`anon_set` unchanged; the model already used the
+  cluster internally); (5) `recommendation()`'s `entry_latency_frac_epoch` maps the
+  `u64::MAX` "no finite window" sentinel to `∞` (was a huge finite number), keeping
+  `homeostasis_free` meaningful and consistent with `recommended_window_minutes`.
   fmt + clippy clean; 49 sim tests green.
 
 - **docs: correct stale `REBUILD_AT` default in `CURVE_TREE_CLIENT.md` §8 #3

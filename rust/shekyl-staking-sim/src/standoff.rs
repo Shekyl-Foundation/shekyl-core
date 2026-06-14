@@ -145,7 +145,10 @@ pub struct StandoffResult {
     pub net_funding_rate_per_block: f64,
     pub inversion: bool,
     pub shared_trigger: bool,
-    /// Effective search width the adversary must consider (blocks).
+    /// Effective search width feeding the decoy model (blocks): the
+    /// inversion-adjusted window in the normal path, or the surge cluster width
+    /// under a shared trigger (where the separable surge collapses the effective
+    /// width the adversary must consider).
     pub search_width_blocks: f64,
     /// Mean candidate-set size (1 target + background decoys).
     pub anon_set_mean: f64,
@@ -270,7 +273,7 @@ fn run(cfg: &StandoffConfig) -> StandoffResult {
         net_funding_rate_per_block: cfg.net_funding_rate_per_block,
         inversion: cfg.inversion,
         shared_trigger: cfg.shared_trigger,
-        search_width_blocks: search_width,
+        search_width_blocks: decoy_width,
         anon_set_mean: mean,
         anon_set_p05: p05,
         thin_cover_frac: thin as f64 / n as f64,
@@ -311,7 +314,14 @@ pub struct StandoffRecommendation {
 
 fn recommendation(rate: f64) -> StandoffRecommendation {
     let w = recommended_window_blocks(rate);
-    let frac = w as f64 / SETTLEMENT_EPOCH_BLOCKS as f64;
+    // u64::MAX is the "no finite window" sentinel (rate <= 0); keep the latency
+    // fraction infinite (not a huge finite number) so homeostasis_free stays
+    // meaningful and consistent with recommended_window_minutes = ∞.
+    let frac = if w == u64::MAX {
+        f64::INFINITY
+    } else {
+        w as f64 / SETTLEMENT_EPOCH_BLOCKS as f64
+    };
     StandoffRecommendation {
         net_funding_rate_per_block: rate,
         funding_spend_interval_minutes: if rate > 0.0 {
