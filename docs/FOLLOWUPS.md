@@ -303,8 +303,13 @@ sustainability is unaffected by the recalibration.
   reject the **independent-double-jitter construction** (jittering two event-times
   around a common anchor → triangular, zero-peaked separation that clusters the
   events while passing the ±600 bound): the gap must be **drawn directly**
-  (`s ~ U[0,600]`, fair per-`P` order-coin), verified by KS-against-uniform +
-  excess-mass-near-zero on the realized gap.
+  (`s ~ U[0,600]`, fair per-`P` order-coin). The vector asserts on the realized
+  `(spread, order)` *distribution* over a sample (uniform spread via
+  KS-against-uniform + excess-mass-near-zero; balanced independent order — and
+  order-balance alone is insufficient, since the trap's coin still looks fair).
+  Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
+  `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`
+  in `rust/shekyl-staking-sim/src/standoff.rs`.
   (2b) **Exit-seam standoff geometry (separate envelope; ties GF-4 + the
   partial-unbond genesis item).** The ±600 entry envelope does *not* cover the
   exit seam. Pin a **separate** standoff for terminal drain *and* recurring

@@ -4,6 +4,20 @@
 
 ### Added
 
+- **archival: executable reference for the standoff draw conformance vector
+  (2026-06-13).** Added `draw_entry_gap` (the conformance-correct direct draw:
+  `s ~ U[0,600]` + fair order-coin) and `summarize_gaps` (realized
+  `(spread, order)` distribution: mean spread, order balance, first-decile mass,
+  decile uniformity probe) to `rust/shekyl-staking-sim/src/standoff.rs`, with two
+  validating tests — `correct_draw_is_well_distributed` (flat spread, balanced
+  order) and `double_jitter_trap_fails_the_same_check` (the *same* summary
+  rejects the triangular double-jitter trap; notably the trap's order-coin still
+  looks fair, proving the spread distribution is the load-bearing check, not order
+  balance). This makes the published wallet test vector executable rather than
+  prose: the vector asserts on the realized spread *and* order over a sample, not
+  the ±600 bound alone. No model change to the economic sweep; opt-in `--standoff`
+  report untouched.
+
 - **archival: standoff construction + per-seam geometry pinned (2026-06-13).**
   Two conformance-critical construction details folded into the funding-seam
   entry-standoff spec (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* →

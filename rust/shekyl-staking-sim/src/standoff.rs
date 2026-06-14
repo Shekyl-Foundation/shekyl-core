@@ -412,6 +412,85 @@ pub fn run_full_report() -> StandoffReport {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reference draw + sample summary for the wallet conformance test vector.
+//
+// The harness's cover numbers assume the seam gap is drawn *directly* and
+// uniformly with a fair order-coin. The wallet draw is unenforceable, so the
+// published test vector must verify the realized sample's *distribution* — the
+// actual spread between the two events and the order — not merely the ±window
+// bound (which the triangular double-jitter trap also satisfies). The functions
+// below are the executable reference for that vector.
+// ---------------------------------------------------------------------------
+
+/// Conformance-correct entry-seam draw. At the private intent `t0`, draw the gap
+/// directly `s ~ U[0, window]` and flip a fair order-coin; returns
+/// `(spread_blocks, bond_first)`. Uniform separation, fair inversion, max
+/// latency `window`, per-`P` independence (caller supplies an independent rng).
+pub fn draw_entry_gap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
+    let s = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
+    let bond_first = rng.unit() < 0.5;
+    (s.min(window), bond_first)
+}
+
+/// The conformance TRAP, kept here so the test vector is *validated to reject it*
+/// rather than merely to pass the correct shape: independently jitter both
+/// event-times in `[0, window]` around the common anchor; the realized
+/// separation is `|a - b|` — triangular, peaked at zero.
+fn draw_entry_gap_double_jitter_trap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
+    let a = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
+    let b = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
+    (a.abs_diff(b).min(window), a >= b)
+}
+
+/// Distribution summary of a `(spread, bond_first)` sample — the quantities the
+/// conformance vector asserts on. A correct (uniform) draw gives
+/// `mean_spread ≈ window/2`, `bond_first_frac ≈ 0.5`, `first_decile_frac ≈ 0.10`,
+/// `max_decile_dev` small; the triangular trap collapses `mean_spread` toward
+/// `window/3` and spikes `first_decile_frac` / `max_decile_dev`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GapSampleStats {
+    pub n: usize,
+    pub mean_spread: f64,
+    pub max_spread: u64,
+    pub bond_first_frac: f64,
+    /// Mass in the first decile `[0, window/10)`; uniform ⇒ ~0.10.
+    pub first_decile_frac: f64,
+    /// Largest |decile bucket share − 0.10| over the 10 deciles (coarse
+    /// uniformity probe, a stand-in for the KS statistic the vector spec names).
+    pub max_decile_dev: f64,
+}
+
+/// Summarize a realized sample. `window` defines the decile bucketing.
+pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
+    let n = samples.len();
+    let mut deciles = [0usize; 10];
+    let mut spread_sum = 0u128;
+    let mut bond_first = 0usize;
+    let mut max_spread = 0u64;
+    for &(s, bf) in samples {
+        spread_sum += s as u128;
+        max_spread = max_spread.max(s);
+        if bf {
+            bond_first += 1;
+        }
+        let idx = ((s as f64 / (window as f64 + 1.0)) * 10.0).floor() as usize;
+        deciles[idx.min(9)] += 1;
+    }
+    let max_decile_dev = deciles
+        .iter()
+        .map(|&c| (c as f64 / n as f64 - 0.10).abs())
+        .fold(0.0_f64, f64::max);
+    GapSampleStats {
+        n,
+        mean_spread: spread_sum as f64 / n as f64,
+        max_spread,
+        bond_first_frac: bond_first as f64 / n as f64,
+        first_decile_frac: deciles[0] as f64 / n as f64,
+        max_decile_dev,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,5 +596,41 @@ mod tests {
         let r = run(&cfg);
         assert!(r.homeostasis_free);
         assert!(r.entry_latency_frac_epoch < 0.10);
+    }
+
+    #[test]
+    fn correct_draw_is_well_distributed() {
+        // The conformance check the wallet test vector encodes: a large sample of
+        // the realized (spread, order) must be uniform in spread and balanced in
+        // order — well-distributed, not merely within ±window.
+        let window = 600u64;
+        let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
+        let sample: Vec<(u64, bool)> = (0..200_000).map(|_| draw_entry_gap(window, &mut rng)).collect();
+        let st = summarize_gaps(&sample, window);
+        // Uniform ⇒ mean ≈ window/2, first decile ≈ 0.10, all deciles flat.
+        assert!((st.mean_spread - 300.0).abs() < 6.0, "mean_spread = {}", st.mean_spread);
+        assert!((st.bond_first_frac - 0.5).abs() < 0.01, "order = {}", st.bond_first_frac);
+        assert!((st.first_decile_frac - 0.10).abs() < 0.01, "first decile = {}", st.first_decile_frac);
+        assert!(st.max_decile_dev < 0.02, "max decile dev = {}", st.max_decile_dev);
+        assert_eq!(st.max_spread, window);
+    }
+
+    #[test]
+    fn double_jitter_trap_fails_the_same_check() {
+        // Validates that the conformance summary *rejects* the triangular trap —
+        // the trap satisfies the ±window bound but its separation is zero-peaked.
+        let window = 600u64;
+        let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
+        let sample: Vec<(u64, bool)> =
+            (0..200_000).map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng)).collect();
+        let st = summarize_gaps(&sample, window);
+        // Triangular ⇒ mean collapses toward window/3, mass piles into the first
+        // decile, and the uniformity probe blows past the correct-draw tolerance.
+        assert!(st.mean_spread < 250.0, "trap mean_spread = {} (should be << 300)", st.mean_spread);
+        assert!(st.first_decile_frac > 0.15, "trap first decile = {} (should spike)", st.first_decile_frac);
+        assert!(st.max_decile_dev > 0.05, "trap max decile dev = {}", st.max_decile_dev);
+        // The order coin can still look fair — proving order-balance alone is not
+        // sufficient; the spread distribution is the load-bearing check.
+        assert!((st.bond_first_frac - 0.5).abs() < 0.02, "trap order = {}", st.bond_first_frac);
     }
 }

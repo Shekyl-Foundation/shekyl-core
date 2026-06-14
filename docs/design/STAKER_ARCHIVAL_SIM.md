@@ -3572,9 +3572,15 @@ but four things bound the result; the first two change the meaning, not just the
   at `t0`, flip a fair coin for order, place the first event at `t0`, draw `s ~ U[0, 600]`, place the
   second at `t0 + s`. That yields uniform separation, *free* inversion (the coin), max latency 600,
   and per-`P` independence (`t0` is the principal's private intent). **The published test vector must
-  reject the triangular construction** (e.g. KS against `U[0, 600]` on the realized gap + an
-  excess-mass-near-zero detector), not merely check the ±600 bound — and the fair, per-`P`-independent
-  coin is part of conformance (a biased or shared coin re-introduces an ordering prior).
+  reject the triangular construction** — it asserts on the *distribution* of the realized
+  `(spread, order)` over a large sample (uniform spread: KS against `U[0, 600]` + an
+  excess-mass-near-zero / first-decile detector; balanced, per-`P`-independent order), **not** the
+  ±600 bound alone (which the trap also passes). Order-balance alone is *not* sufficient — the trap's
+  order-coin still looks fair while its spread is zero-peaked, so the spread distribution is the
+  load-bearing check. This is executable in the harness as the reference for the vector:
+  `draw_entry_gap` / `summarize_gaps` in `standoff.rs`, with `correct_draw_is_well_distributed`
+  (the correct draw is flat) and `double_jitter_trap_fails_the_same_check` (the same summary rejects
+  the trap) as the validating tests.
 - **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
   (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
   adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
