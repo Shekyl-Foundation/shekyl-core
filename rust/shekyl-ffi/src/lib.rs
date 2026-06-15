@@ -4783,7 +4783,7 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
             shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-                spend_secret: ss,
+                spend_secret: zeroize::Zeroizing::new(ss),
                 output_key: ok,
             }
         })

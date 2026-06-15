@@ -79,8 +79,8 @@ pub struct HybridKemPublicKey {
     pub ml_kem: Vec<u8>,
 }
 
-#[derive(Clone, Zeroize)]
-#[zeroize(drop)]
+// Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct HybridKemSecretKey {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
@@ -112,8 +112,8 @@ pub struct HybridCiphertext {
 
 /// Combined shared secret after HKDF combination of X25519 and ML-KEM.
 /// 64 bytes: sufficient for HKDF-Expand derivation of per-output keys.
-#[derive(Clone, Zeroize)]
-#[zeroize(drop)]
+// Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SharedSecret(pub [u8; 64]);
 
 impl std::fmt::Debug for SharedSecret {

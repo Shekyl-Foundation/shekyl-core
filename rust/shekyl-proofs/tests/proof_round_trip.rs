@@ -336,7 +336,7 @@ fn test_04_reserve_proof_round_trip() {
         entries.push(ReserveOutputEntry {
             proof_secrets: ps,
             key_image: ki_result.key_image,
-            spend_secret: *ki_result.spend_secret_x,
+            spend_secret: zeroize::Zeroizing::new(*ki_result.spend_secret_x),
             output_key: ctx.on_chain[i].output_key,
         });
 

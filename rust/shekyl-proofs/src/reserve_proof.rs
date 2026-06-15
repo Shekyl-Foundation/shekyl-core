@@ -25,7 +25,7 @@ use curve25519_dalek::{
     scalar::Scalar,
 };
 use sha2::{Digest, Sha512};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_generators::T as T_LAZY;
 
@@ -47,7 +47,18 @@ const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
 pub struct ReserveOutputEntry {
     pub proof_secrets: ProofSecrets,
     pub key_image: KeyImage,
-    pub spend_secret: [u8; 32],
+    /// Per-output spend secret. Wrapped in `Zeroizing` so the wallet secret
+    /// wipes on drop (rule 35) — `ReserveOutputEntry` is otherwise un-`Zeroize`d
+    /// because `KeyImage`/`output_key` are public.
+    ///
+    /// NOTE: `generate_reserve_proof` does not currently read this field — it
+    /// derives `x = ho + b` from the global `spend_secret_key` and
+    /// `proof_secrets.ho`. The field (and the bytes the FFI copies into it)
+    /// appear dead; removing it would shrink the secret surface further but
+    /// touches the C ABI (rule 40), so it is filed as a follow-up rather than
+    /// done here. Until then, `Zeroizing` ensures the stored secret cannot
+    /// linger unwiped.
+    pub spend_secret: Zeroizing<[u8; 32]>,
     pub output_key: [u8; 32],
 }
 
