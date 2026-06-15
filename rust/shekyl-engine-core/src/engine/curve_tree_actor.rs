@@ -149,6 +149,25 @@ pub(crate) struct RollbackToFork {
     pub fork_height: BlockHeight,
 }
 
+/// Actor message reading [`CurveTreeClient::ingested_tip_height`]: the tree's
+/// authoritative resume cursor (`None` when fresh). Carries no payload.
+///
+/// **D2 — cursor-driven resume (`CT5_ENGINE_WIRING.md` §3.2.1.1).** The forward
+/// / backfill ingest driver reads its resume point from this message on every
+/// iteration and holds **no** driver-local fetch-frontier field, so a reorg that
+/// rewinds the cursor ([`RollbackToFork`] rebuilds it from the store) is
+/// observed on the next read. Counter-drift is unrepresentable, not merely
+/// forbidden by discipline.
+///
+/// The reply is `Result<Option<BlockHeight>, ClientError>` for collapse
+/// uniformity with [`IngestBlock`] / [`RollbackToFork`] (so the one
+/// [`collapse_send_error`] maps every transport failure to
+/// [`CurveTreeHandleError::Unavailable`]); the handler is infallible and always
+/// replies `Ok`, so the [`CurveTreeHandleError::Client`] arm is unreachable for
+/// this message.
+#[allow(dead_code)] // queried by the merge/backfill driver in a later commit-4 slice; today: tests only.
+pub(crate) struct IngestedTipHeight;
+
 impl Message<IngestBlock> for CurveTreeActor {
     type Reply = Result<(), ClientError>;
 
@@ -184,6 +203,19 @@ impl Message<RollbackToFork> for CurveTreeActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.client.rollback_to_fork(msg.fork_height)
+    }
+}
+
+impl Message<IngestedTipHeight> for CurveTreeActor {
+    type Reply = Result<Option<BlockHeight>, ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: IngestedTipHeight,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Infallible cursor read; wrapped in `Ok` only for collapse uniformity.
+        Ok(self.client.ingested_tip_height())
     }
 }
 
@@ -313,6 +345,23 @@ impl CurveTreeHandle {
             .await
             .map_err(collapse_send_error)
     }
+
+    /// Read the tree's authoritative resume cursor
+    /// ([`CurveTreeClient::ingested_tip_height`]): the last ingested height, or
+    /// `None` when fresh. The forward / backfill driver calls this every
+    /// iteration to compute its next height (`tip + 1`, `BlockHeight(0)` when
+    /// `None`) instead of holding a local frontier (D2). On a stopped actor it
+    /// returns [`CurveTreeHandleError::Unavailable`]; the read itself never
+    /// produces [`CurveTreeHandleError::Client`].
+    #[allow(dead_code)] // queried by the merge/backfill driver in a later commit-4 slice; today: tests only.
+    pub(crate) async fn ingested_tip_height(
+        &self,
+    ) -> Result<Option<BlockHeight>, CurveTreeHandleError> {
+        self.actor
+            .ask(IngestedTipHeight)
+            .await
+            .map_err(collapse_send_error)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +411,7 @@ mod tests {
         assert_send::<CurveTreeActor>();
         assert_send::<IngestBlock>();
         assert_send::<RollbackToFork>();
+        assert_send::<IngestedTipHeight>();
         assert_send::<OwnedTxLeaves>();
     }
 
@@ -382,5 +432,22 @@ mod tests {
         let (_dir, client) = fresh_client();
         let handle = CurveTreeHandle::spawn(client);
         assert!(handle.actor.is_alive(), "actor is alive after spawn");
+    }
+
+    /// Cursor-read `ask` round-trip on a fresh client returns `None` — the
+    /// `BlockHeight(0)` resume point for a from-genesis ingest (D2). This pins
+    /// the transport + reply type + collapse for [`IngestedTipHeight`]; the
+    /// non-`None` (post-ingest, post-rollback) cursor behavior is proven at the
+    /// client level (`ingested_tip_height_getter_tracks_cursor`) and exercised
+    /// end-to-end once the merge-driven ingest fixtures land.
+    #[tokio::test]
+    async fn cursor_read_on_fresh_client_is_none() {
+        let (_dir, client) = fresh_client();
+        let handle = CurveTreeHandle::spawn(client);
+        let tip = handle
+            .ingested_tip_height()
+            .await
+            .expect("cursor read on a live actor");
+        assert_eq!(tip, None, "a fresh client has no ingested tip");
     }
 }
