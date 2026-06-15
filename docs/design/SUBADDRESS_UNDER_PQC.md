@@ -1226,6 +1226,87 @@ merchant UX at launch" with Priority-2 discipline. The merge is **not**
 **Relay/adversary in transit** cannot swap sentinel for tag if the slot is
 **authenticated in the transaction binding layer** (below).
 
+##### Indistinguishability invariant (normative)
+
+For every output, the on-wire `enc_label` octets are computationally
+indistinguishable from uniform random to any party **without** the per-output
+`k_label` (i.e., every non-recipient), **independent of the plaintext**
+(sentinel or meaningful tag). Concretely `enc_label = plaintext XOR
+k_label[..8]`, where `k_label` is HKDF-derived from the per-output
+`combined_ss` (`derivation.rs`); under the PRF assumption on that derivation
+`k_label[..8]` is indistinguishable from uniform, so:
+
+1. **Per-plaintext uniformity.** `enc_label` is uniform for *any* fixed
+   plaintext — XOR of a constant with a uniform key is uniform.
+2. **Real-vs-sentinel identity.** The real-label and sentinel wire
+   distributions are *identical* (both uniform). Populating a real label
+   withholds nothing from an observer that a sentinel does not.
+
+`enc_label` is the **only** output field that exists purely as a
+fingerprint-hiding construct: `enc_amount` carries a genuine value on every
+output (no have-it/don't-have-it distinction to mask), whereas `enc_label`
+carries real information on a small fraction of outputs and exists on the rest
+**solely so that fraction does not stand out**. The universal masking — every
+output, from genesis, regardless of any wallet-layer flag — *is* the mechanism
+that delivers the invariant. There is no cleartext-constant wire path; writing
+the sentinel directly into `enc_label` is forbidden (`label.rs`).
+
+**Consensus corollary.** The prehash / tx-binding layer binds `enc_label`
+**content-agnostically** (presence + exact 9-byte size, not plaintext);
+validation is byte-identical for sentinel and meaningful tags. The 8-byte
+per-output channel capacity is therefore unconditionally on the wire from
+genesis — a determined sender can populate it whether or not any sanctioned
+tooling is "enabled."
+
+The invariant is enforced by a statistical KAT
+(`shekyl-crypto-pq` `label` tests, `real_label_indistinguishable_from_sentinel`):
+real-label and sentinel `enc_label` samples drawn through the **real**
+`derive_output_secrets` path each pass a strict-alpha uniformity test and a
+two-sample homogeneity test, so a regression that made the two distinguishable
+(a low-entropy `k_label`, a content-dependent or variable-length encoding)
+fails CI.
+
+##### Gate retirement — R2-F8 wallet flag (2026-06-15)
+
+The §5.7.10 split has **two** decisions: the **Wire** decision (mandatory
+uniform slot — *irreversible, unchanged*) and the **Wallet (product)** flag
+(`cooperative_payment_requests`, default off). The wallet flag is **retired**;
+real-label population is no longer gated. Rationale, against the invariant
+above:
+
+- **No privacy value.** Gating real-label population withholds nothing from an
+  observer — the wire bytes are uniform either way (invariant §1–2). The
+  privacy posture is identical gated or not, and the universal byte tax + the
+  masking discipline are paid from genesis regardless. A standing gate is
+  therefore *strictly dominated*: full universal cost, zero observer-facing
+  benefit.
+- **No consensus value.** The binding is content-agnostic (corollary above).
+- **The gate never suppressed the capability**, only the sanctioned path — the
+  8-byte channel is unconditionally on the wire.
+- **What the gate actually stood in for** was a *test-coverage interlock* on
+  the untested merchant-population plumbing (`shekyl:` URI → `rid` → output
+  construction), not a fundamental-risk control. The real-label path is exactly
+  as safe to an observer as the sentinel path it already runs (both are
+  `plaintext XOR k_label`). Once the invariant is stated and tested, the gate
+  is pure feature-suppression.
+
+**Disposition:** state + test the invariant (done), then remove the flag, the
+`SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` env, the `cooperative_enabled` FFI/Rust
+parameters, and the `cooperative_payment_requests_enabled` readers (C++ and
+Rust). The send path echoes the `rid` whenever the `shekyl:` URI carries one;
+the receive path always classifies/matches. **Wallet/GUI tooling deciding
+whether to emit `rid`-bearing URIs is the de-facto feature boundary — that is a
+product-readiness choice, not a privacy decision** (it never was one).
+
+**Reversion clause (`21-reversion-clause-discipline.mdc`).** Reopening
+criterion: if a future change makes the real-label and sentinel wire
+distributions distinguishable to a non-recipient — e.g. a variable-length or
+content-dependent label encoding, or a `k_label` derivation that is not a PRF
+— the `real_label_indistinguishable_from_sentinel` KAT fails and the
+populate-by-default disposition must be re-evaluated (and a gate reintroduced
+only if the invariant cannot be restored). The **Wire** mandatory-uniform pin
+is *not* reopened by this clause; it remains irreversible per the table above.
+
 ##### Rejected: optional-at-wire (fatal — §4.9)
 
 Do **not** implement:
@@ -1338,7 +1419,9 @@ not "unattributed" — only possible if wire were optional (rejected).
 - [x] Foundation pin adopted — **5-T** (§6.4, 2026-05-31).
 - [x] Logical tag plaintext layout — §5.7.11.
 - [x] Per-output granularity — §5.7.11 (change/payment outputs identical).
-- [x] V3.0 wallet posture — sentinel-only at launch; tag UX flag later.
+- [x] V3.0 wallet posture — sentinel default; real-label population ungated
+  (R2-F8 flag retired 2026-06-15, see *Gate retirement* above). GUI tooling
+  emitting `rid` URIs is the de-facto feature boundary.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
 - [x] `enc_label` wire field in `rctSigBase` (+ 1-byte `label_tag` parallel to amount).
 - [x] Tx-hash binding via `serialize_rctsig_base`; FCMP++ leaf explicitly excluded.

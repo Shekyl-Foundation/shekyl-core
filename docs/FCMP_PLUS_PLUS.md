@@ -1756,6 +1756,14 @@ serialized immediately after `enc_amounts` and before `outPk`:
 - `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
+- **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`
+  §5.7.10).** `enc_label` octets are computationally indistinguishable from
+  uniform to any non-recipient, *independent of plaintext*; the real-label and
+  sentinel wire distributions are identical. Real-label population is therefore
+  **ungated** (the R2-F8 `cooperative_payment_requests` wallet flag was retired
+  2026-06-15) — it withholds nothing from an observer that the sentinel does
+  not. The mandatory-uniform-wire pin is unchanged. Enforced by the
+  `real_label_indistinguishable_from_sentinel` statistical KAT.
 
 ### Witness Header (256 bytes)
 
