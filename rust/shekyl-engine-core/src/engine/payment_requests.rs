@@ -7,6 +7,7 @@
 
 use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri};
 use shekyl_engine_state::{LocalLabel, PaymentRequest, PaymentRequestId, PaymentRequestState};
+use shekyl_units::AtomicUnits;
 
 use super::traits::{DaemonEngine, PendingTxEngine, RefreshEngine};
 use super::{Engine, EngineSignerKind, LocalLedger};
@@ -15,7 +16,7 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 #[derive(Clone, Debug)]
 pub struct NewPaymentRequest {
     pub label: String,
-    pub amount_atomic: u64,
+    pub amount_atomic: AtomicUnits,
     pub created_at: u64,
     pub expiry: Option<u64>,
 }
@@ -97,7 +98,7 @@ impl<
         let label = (!req.label.is_empty()).then(|| req.label.expose().as_str());
         Some(format_payment_uri(
             address,
-            Some(req.amount_atomic),
+            Some(req.amount_atomic.to_raw()),
             label,
             Some(req.id.as_u64()),
             req.expiry,
