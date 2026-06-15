@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **wallet/crypto-pq: retire the `enc_label` real-label gate; prove the
+  indistinguishability invariant (2026-06-15, `feat/enc-label-ungate`).** The
+  cooperative-payment-request gate (`operational.cooperative_payment_requests`,
+  env `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS`, `payment_request_flag.rs`, and the
+  `cooperative_enabled` parameters threaded through `outbound_label.rs`,
+  `attribution.rs`, `merge.rs`, the FFI, and `cryptonote_tx_utils.cpp`) is
+  **deleted**. The gate delivered no privacy or consensus value: the universal
+  sentinel-XOR-`k_label` masking is mandatory and active on every output from
+  genesis, so a non-recipient sees uniform-random 8 bytes whether the plaintext
+  is a sentinel or a real label — gated or not. The gate was a *test-coverage*
+  interlock standing in for an unwritten invariant, now discharged. Real-label
+  population is ungated: send echoes the URI `rid` when present; receive always
+  classifies/matches. The indistinguishability invariant is now stated
+  normatively in `SUBADDRESS_UNDER_PQC.md` §5.7.10 (cross-referenced from
+  `FCMP_PLUS_PLUS.md` §4) and proven by the statistical KAT
+  `real_label_indistinguishable_from_sentinel` in `shekyl-crypto-pq/src/label.rs`
+  (chi-square uniformity + homogeneity over the real `derive_output_secrets`
+  path, with a plaintext-on-wire negative control). GUI tooling emitting `rid`
+  URIs is the de-facto feature boundary. **Breaking:** wallet config files
+  carrying `cooperative_payment_requests` no longer deserialize (`deny_unknown_fields`);
+  acceptable pre-genesis (`rm -rf ~/.shekyl`). Docs: `WALLET_PREFS.md`,
+  `FOLLOWUPS.md`.
+
 ### Added
 
 - **archival: standoff conformance suite gains the two independence probes +
