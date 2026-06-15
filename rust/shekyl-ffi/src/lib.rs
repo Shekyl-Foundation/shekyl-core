@@ -4732,6 +4732,10 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     let Some(bsk) = arr32_from_ptr(spend_secret_key) else {
         return false;
     };
+    // Master spend secret: own it in `Zeroizing` so the stack copy wipes on
+    // every return path (rule 35). `&bsk` deref-coerces to `&[u8; 32]` at the
+    // `generate_reserve_proof` call site below.
+    let bsk = zeroize::Zeroizing::new(bsk);
     let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
@@ -4761,6 +4765,7 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
         return false;
     };
 
+    use zeroize::Zeroize;
     let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n)
         .map(|i| {
             let base = i * 128;
@@ -4780,12 +4785,24 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
             ss.copy_from_slice(&ss_bytes[i * 32..(i + 1) * 32]);
             ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
 
-            shekyl_proofs::reserve_proof::ReserveOutputEntry {
+            let entry = shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
                 spend_secret: zeroize::Zeroizing::new(ss),
                 output_key: ok,
-            }
+            };
+            // The entry now owns its own copies (`ProofSecrets` is
+            // `ZeroizeOnDrop`; `spend_secret` is `Zeroizing`). Wipe the plain
+            // `[u8; 32]` stack copies of the *secret* inputs so no unprotected
+            // duplicate outlives this iteration; `zeroize()` uses volatile
+            // writes the optimizer cannot elide. `ki`/`ok` are public (key
+            // image, output key) and need no wipe.
+            ho.zeroize();
+            y.zeroize();
+            z.zeroize();
+            k_amount.zeroize();
+            ss.zeroize();
+            entry
         })
         .collect();
 
