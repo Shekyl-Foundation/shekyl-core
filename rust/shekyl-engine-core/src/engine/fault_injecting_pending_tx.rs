@@ -260,7 +260,7 @@ mod tests {
         let pending = wrapper.build(standard_request()).await.expect("build ok");
         assert_eq!(wrapper.outstanding(), 1);
         let hash = wrapper.submit(pending.id).await.expect("submit ok");
-        assert_eq!(hash.to_bytes(), [1u8; 32]);
+        assert_eq!(hash.as_bytes(), &[1u8; 32]);
         assert_eq!(wrapper.queued_build_failures(), 0);
         assert_eq!(wrapper.queued_submit_failures(), 0);
     }

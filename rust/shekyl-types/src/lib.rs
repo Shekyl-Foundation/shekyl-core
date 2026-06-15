@@ -108,7 +108,7 @@ macro_rules! hash32 {
         // PR C migrates require `Ord` keys.
         #[derive(
             Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::serde::Serialize, ::serde::Deserialize, ::zeroize::Zeroize,
         )]
         #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
         #[serde(transparent)]

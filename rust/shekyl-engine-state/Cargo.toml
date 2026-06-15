@@ -41,6 +41,11 @@ shekyl-staking = { path = "../shekyl-staking" }
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
 # stays fork-`u64` and converts at the `commitment_bytes` serializer edge.
 shekyl-units = { path = "../shekyl-units" }
+# Canonical `TxHash` newtype for `TransferDetails::tx_hash` /
+# `PaymentRequest::matched_tx_hash`. No `schema` feature needed: those blocks
+# derive `Schema` via wire-native mirror structs, so the persisted schema and
+# its snapshot are unchanged by the newtype (it is transparent over `[u8; 32]`).
+shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
 serde_json = "1"

@@ -177,7 +177,9 @@ fn check_tx_keys_no_orphans(
             + sync_state.pending_tx_hashes.len(),
     );
     for t in &ledger.transfers {
-        live.insert(t.tx_hash);
+        // `live` unifies typed transfer hashes with the still-raw `tx_meta` /
+        // `pending_tx_hashes` keys; convert at this boundary.
+        live.insert(t.tx_hash.to_bytes());
     }
     for h in tx_meta.scanned_pool_txs.keys() {
         live.insert(*h);
@@ -338,7 +340,7 @@ mod tests {
     /// override whatever field(s) they need.
     fn mk_transfer(seed: u8, block_height: u64) -> TransferDetails {
         TransferDetails {
-            tx_hash: [seed; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
             internal_output_index: u64::from(seed),
             global_output_index: u64::from(seed),
             block_height,

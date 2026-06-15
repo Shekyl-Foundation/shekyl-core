@@ -101,7 +101,9 @@ fn input_context_from_transfer(
 
     Ok(TxInputSigningContext {
         handle,
-        tx_hash: td.tx_hash,
+        // Signing context crosses into the crypto/FCMP layer, which takes raw
+        // `[u8; 32]` (rule 18); convert at this edge.
+        tx_hash: td.tx_hash.to_bytes(),
         internal_output_index: td.internal_output_index,
         amount: td.amount(),
         key_image,

@@ -620,7 +620,8 @@ pub(crate) fn populate_engine_handle_fields(
     );
     for &i in inserted {
         let td = &mut ledger.transfers[i];
-        let key = (td.tx_hash, td.internal_output_index);
+        // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
+        let key = (td.tx_hash.to_bytes(), td.internal_output_index);
         let Some(ciphertext) = residue.get(&key) else {
             continue;
         };
@@ -638,7 +639,7 @@ pub(crate) fn populate_engine_handle_fields(
         if td.output_handle.is_none() {
             td.output_handle = Some(derive_output_handle(
                 view_secret,
-                &td.tx_hash,
+                td.tx_hash.as_bytes(),
                 td.internal_output_index,
             ));
         }
@@ -1179,7 +1180,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         assert!(td.source_ciphertext.is_none());
         assert!(td.output_handle.is_none());
@@ -1194,7 +1195,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer still present");
         let stored_ct = td
             .source_ciphertext
@@ -1249,7 +1250,7 @@ mod tests {
         let m = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == matched_tx && t.internal_output_index == matched_idx)
+            .find(|t| t.tx_hash.to_bytes() == matched_tx && t.internal_output_index == matched_idx)
             .expect("matched transfer present");
         assert!(m.source_ciphertext.is_some());
         assert!(m.output_handle.is_some());
@@ -1257,7 +1258,9 @@ mod tests {
         let u = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == unmatched_tx && t.internal_output_index == unmatched_idx)
+            .find(|t| {
+                t.tx_hash.to_bytes() == unmatched_tx && t.internal_output_index == unmatched_idx
+            })
             .expect("unmatched transfer present");
         assert!(u.source_ciphertext.is_none());
         assert!(u.output_handle.is_none());
@@ -1304,7 +1307,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         let stored_ct = td
             .source_ciphertext
@@ -1361,11 +1364,13 @@ mod tests {
         let sentinel_ct = ciphertext_for_seed(0xEE);
         let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
         for td in &mut ledger.transfers {
-            if td.tx_hash == tx_hash_a && td.internal_output_index == internal_idx_a {
+            if td.tx_hash.to_bytes() == tx_hash_a && td.internal_output_index == internal_idx_a {
                 // Transfer A: source_ciphertext pre-populated, output_handle still None.
                 td.source_ciphertext = Some(sentinel_ct.clone());
                 td.output_handle = None;
-            } else if td.tx_hash == tx_hash_b && td.internal_output_index == internal_idx_b {
+            } else if td.tx_hash.to_bytes() == tx_hash_b
+                && td.internal_output_index == internal_idx_b
+            {
                 // Transfer B: output_handle pre-populated, source_ciphertext still None.
                 td.source_ciphertext = None;
                 td.output_handle = Some(sentinel_handle);
@@ -1383,7 +1388,9 @@ mod tests {
         let td_a = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash_a && t.internal_output_index == internal_idx_a)
+            .find(|t| {
+                t.tx_hash.to_bytes() == tx_hash_a && t.internal_output_index == internal_idx_a
+            })
             .expect("transfer A present");
         // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
         let stored_ct_a = td_a
@@ -1404,7 +1411,9 @@ mod tests {
         let td_b = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash_b && t.internal_output_index == internal_idx_b)
+            .find(|t| {
+                t.tx_hash.to_bytes() == tx_hash_b && t.internal_output_index == internal_idx_b
+            })
             .expect("transfer B present");
         // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
         assert_eq!(
@@ -1527,7 +1536,7 @@ mod tests {
             .transfers()
             .iter()
             .take(100)
-            .map(|td| (td.tx_hash, td.internal_output_index))
+            .map(|td| (td.tx_hash.to_bytes(), td.internal_output_index))
             .collect();
         for (i, key) in prior_keys.iter().enumerate() {
             residue.insert(*key, ciphertext_for_seed(u8::try_from(i & 0xFF).unwrap()));
@@ -1598,7 +1607,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         assert!(td.source_ciphertext.is_none());
         assert!(td.output_handle.is_none());

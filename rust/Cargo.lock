@@ -3965,6 +3965,7 @@ dependencies = [
  "shekyl-oxide",
  "shekyl-scanner",
  "shekyl-staking",
+ "shekyl-types",
  "shekyl-units",
  "thiserror",
  "tracing",
@@ -4214,6 +4215,7 @@ dependencies = [
  "shekyl-rpc",
  "shekyl-scanner",
  "shekyl-staking",
+ "shekyl-types",
  "shekyl-units",
  "thiserror",
  "tokio",
@@ -4301,6 +4303,7 @@ dependencies = [
  "postcard",
  "postcard-schema",
  "serde",
+ "zeroize",
 ]
 
 [[package]]

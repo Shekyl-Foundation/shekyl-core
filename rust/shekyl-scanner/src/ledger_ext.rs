@@ -69,7 +69,7 @@ impl TransferDetailsExt for TransferDetails {
             None => (false, 0, 0),
         };
         TransferDetails {
-            tx_hash: output.transaction(),
+            tx_hash: shekyl_types::TxHash::from_bytes(output.transaction()),
             internal_output_index: output.index_in_transaction(),
             global_output_index: output.index_on_blockchain(),
             block_height,

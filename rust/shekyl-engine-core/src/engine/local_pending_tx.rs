@@ -1321,9 +1321,8 @@ mod tests {
 
     impl TransactionSubmitter for TestTransactionSubmitter {
         async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-            Ok(TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(
-                &tx_bytes,
-            )))
+            let hash = shekyl_crypto_hash::cn_fast_hash(&tx_bytes);
+            Ok(TxHash::from_bytes(hash))
         }
     }
 
@@ -1455,7 +1454,7 @@ mod tests {
             td.source_ciphertext = Some(ciphertext.clone());
             td.output_handle = Some(derive_output_handle(
                 blob.view_sk.as_canonical_bytes(),
-                &td.tx_hash,
+                td.tx_hash.as_bytes(),
                 output_index,
             ));
 

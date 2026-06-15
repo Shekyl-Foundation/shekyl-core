@@ -182,8 +182,8 @@ impl ReservationId {
 /// single definition workspace-wide (`18-type-placement.mdc`: re-export,
 /// never redefine). Built from raw bytes via [`TxHash::from_bytes`].
 ///
-/// Phase 1 stub: [`phase1_tx_hash`] encodes the [`ReservationId`] in
-/// little-endian at offsets `0..8`, with the remaining bytes left zero.
+/// Phase 1 stub: `phase1_tx_hash` (in `local_pending_tx`) encodes the
+/// [`ReservationId`] in little-endian at offsets `0..8`, the rest left zero.
 /// Phase 2a replaces submit with a real daemon broadcast call whose
 /// response carries the daemon's reported tx hash; callers compare the
 /// bytes as opaque either way and never rely on the stub bit pattern.
