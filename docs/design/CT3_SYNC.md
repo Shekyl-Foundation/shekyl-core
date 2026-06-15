@@ -265,7 +265,10 @@ genesis-to-tip extraction is cheap enough that block-derived stays the
 forward-sync default; the bulk-leaf RPC remains deferred as a *fetch-cost*
 optimization with its original reversion clause (a)/(b) intact. The genesis
 backfill is block-derived, not RPC-driven. No new round opens in this doc; the
-feed shape is designed in `CT5_ENGINE_WIRING.md` §3.2.1 (R3-Q1–R3-Q5).
+feed shape is designed in `CT5_ENGINE_WIRING.md` §3.2.1 (Round 3, closed
+2026-06-15, R3-Q1–R3-Q6) — fork three, a genesis-anchored feed, and a
+two-cursor merge splitting display (detection, tree-independent) from spend
+(tree-verified).
 
 **Reversion-clause (a) axis pinned.** The falsified premise was false only on
 the **fetch** axis (a floored wallet does not get `0..birthday` blocks from the
