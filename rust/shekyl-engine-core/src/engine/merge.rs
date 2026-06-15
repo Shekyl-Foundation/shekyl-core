@@ -1177,7 +1177,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         assert!(td.source_ciphertext.is_none());
         assert!(td.output_handle.is_none());
@@ -1192,7 +1192,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer still present");
         let stored_ct = td
             .source_ciphertext
@@ -1247,7 +1247,7 @@ mod tests {
         let m = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash.to_bytes() == matched_tx && t.internal_output_index == matched_idx)
+            .find(|t| t.tx_hash.as_bytes() == &matched_tx && t.internal_output_index == matched_idx)
             .expect("matched transfer present");
         assert!(m.source_ciphertext.is_some());
         assert!(m.output_handle.is_some());
@@ -1256,7 +1256,7 @@ mod tests {
             .transfers()
             .iter()
             .find(|t| {
-                t.tx_hash.to_bytes() == unmatched_tx && t.internal_output_index == unmatched_idx
+                t.tx_hash.as_bytes() == &unmatched_tx && t.internal_output_index == unmatched_idx
             })
             .expect("unmatched transfer present");
         assert!(u.source_ciphertext.is_none());
@@ -1304,7 +1304,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         let stored_ct = td
             .source_ciphertext
@@ -1361,11 +1361,11 @@ mod tests {
         let sentinel_ct = ciphertext_for_seed(0xEE);
         let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
         for td in &mut ledger.transfers {
-            if td.tx_hash.to_bytes() == tx_hash_a && td.internal_output_index == internal_idx_a {
+            if td.tx_hash.as_bytes() == &tx_hash_a && td.internal_output_index == internal_idx_a {
                 // Transfer A: source_ciphertext pre-populated, output_handle still None.
                 td.source_ciphertext = Some(sentinel_ct.clone());
                 td.output_handle = None;
-            } else if td.tx_hash.to_bytes() == tx_hash_b
+            } else if td.tx_hash.as_bytes() == &tx_hash_b
                 && td.internal_output_index == internal_idx_b
             {
                 // Transfer B: output_handle pre-populated, source_ciphertext still None.
@@ -1386,7 +1386,7 @@ mod tests {
             .transfers()
             .iter()
             .find(|t| {
-                t.tx_hash.to_bytes() == tx_hash_a && t.internal_output_index == internal_idx_a
+                t.tx_hash.as_bytes() == &tx_hash_a && t.internal_output_index == internal_idx_a
             })
             .expect("transfer A present");
         // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
@@ -1409,7 +1409,7 @@ mod tests {
             .transfers()
             .iter()
             .find(|t| {
-                t.tx_hash.to_bytes() == tx_hash_b && t.internal_output_index == internal_idx_b
+                t.tx_hash.as_bytes() == &tx_hash_b && t.internal_output_index == internal_idx_b
             })
             .expect("transfer B present");
         // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
@@ -1604,7 +1604,7 @@ mod tests {
         let td = ledger
             .transfers()
             .iter()
-            .find(|t| t.tx_hash.to_bytes() == tx_hash && t.internal_output_index == internal_idx)
+            .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
         assert!(td.source_ciphertext.is_none());
         assert!(td.output_handle.is_none());

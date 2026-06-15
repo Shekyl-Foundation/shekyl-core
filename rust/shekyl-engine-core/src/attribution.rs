@@ -190,8 +190,14 @@ mod tests {
         let rid = 0x00_00_00_00_12_34_u64;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 500)];
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(500), 10, [2u8; 32], 1, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(500),
+            10,
+            shekyl_types::TxHash::from_bytes([2u8; 32]),
+            1,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_output_index, Some(1));
@@ -204,8 +210,14 @@ mod tests {
         let mut reqs = vec![sample_request(rid, 1)];
         // Amount mismatch (echo carries rid=99 but request expects amount 1,
         // transfer is for 2) ⇒ no match, but the echo is still classified.
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(2), 0, [0u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(2),
+            0,
+            shekyl_types::TxHash::from_bytes([0u8; 32]),
+            0,
+            &mut reqs,
+        );
         assert!(matches!(attr, ReceiveAttribution::LabelUnknown { .. }));
         assert_eq!(reqs[0].state, PaymentRequestState::Pending);
     }
@@ -216,8 +228,14 @@ mod tests {
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 100)];
         reqs[0].state = PaymentRequestState::Expired;
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(100), 10, [3u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(100),
+            10,
+            shekyl_types::TxHash::from_bytes([3u8; 32]),
+            0,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
     }
