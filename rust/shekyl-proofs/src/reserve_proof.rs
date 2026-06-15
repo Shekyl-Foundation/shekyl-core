@@ -49,11 +49,11 @@ const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
 /// (wipes its HKDF scalars), and `key_image` / `output_key` are public
 /// on-chain values (a key image is a published nullifier). A reserve proof's
 /// spend authority is the *global* master key passed to
-/// [`generate_reserve_proof`] as `spend_secret_key`; there is no per-output
-/// spend secret. (A vestigial per-output `spend_secret` field — a
-/// subaddress-era artifact the prover never read — was removed in the
-/// shekyl-types secret-hardening sweep, along with the FFI `spend_secrets`
-/// parameter that fed it; V3.0 has no subaddresses.)
+/// [`generate_reserve_proof`] as `spend_secret_key` (the prover derives
+/// `x = ho + b` from it); there is no per-output spend secret. (A vestigial
+/// per-output `spend_secret` field, which the prover never read, was removed
+/// in the secret-hardening sweep along with the FFI `spend_secrets` parameter
+/// that fed it.)
 pub struct ReserveOutputEntry {
     pub proof_secrets: ProofSecrets,
     pub key_image: KeyImage,

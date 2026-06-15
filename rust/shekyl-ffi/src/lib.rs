@@ -4713,7 +4713,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
 /// - `spend_secret_key`: 32 bytes.
 /// - `address`: `address_len` bytes.
 /// - `proof_secrets`: `output_count * 128` bytes.
-/// - `key_images`, `spend_secrets`, `output_keys`: `output_count * 32` each.
+/// - `key_images`, `output_keys`: `output_count * 32` each.
 /// - `proof_out`: writable `ShekylBuffer`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_generate_reserve_proof(

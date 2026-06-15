@@ -11610,10 +11610,10 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
     memcpy(ki_buf.data() + i * 32, &td.m_key_image, 32);
 
     // No per-output spend secret is passed to the prover: a reserve proof's
-    // spend authority is the single master `spend_sk` below, and V3.0 has no
-    // subaddresses. (The former per-output subaddress-spend-key derivation +
-    // `ss_buf` plumbing was vestigial — the Rust prover never read it — and
-    // was removed with the FFI `spend_secrets` parameter.)
+    // spend authority is the single master `spend_sk` below. The former
+    // per-output subaddress-spend-key derivation + `ss_buf` plumbing was
+    // vestigial — the Rust prover never read it (it always uses the master
+    // key) — and was removed along with the FFI `spend_secrets` parameter.
 
     crypto::public_key out_pk = td.get_public_key();
     memcpy(ok_buf.data() + i * 32, &out_pk, 32);
