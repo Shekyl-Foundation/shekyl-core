@@ -3602,8 +3602,10 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
 /// Returns `-3` on UTF-8 / URI parse failure.
 ///
 /// # Safety
-/// `uri` must be a valid NUL-terminated UTF-8 C string; `out_plaintext` must
-/// point to 8 writable bytes.
+/// `uri` must be a valid pointer to a NUL-terminated C string (readable
+/// through the NUL); `out_plaintext` must point to 8 writable bytes. UTF-8 is
+/// **not** a safety precondition — a non-UTF-8 `uri` is a normal `-3` return
+/// (with the sentinel already written), not undefined behavior.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
     uri: *const std::ffi::c_char,
