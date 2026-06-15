@@ -3257,6 +3257,83 @@ mod start_refresh_integration_tests {
         }
     }
 
+    /// CT-5a §3.2 (R3-Q6 / D4) reorg KAT for the ingest pre-pass's
+    /// rollback path: a reorg result must roll the tree back to keep
+    /// `fork_height - 1` (the last common height) and then resume from the
+    /// tree's own cursor onto the new fork — never from a driver-local
+    /// frontier (counter drift is unrepresentable because the driver holds
+    /// no frontier).
+    ///
+    /// The witness is a deliberately **shorter** fork. A forward feed
+    /// takes the tree to tip `5`. A reorg at `fork_height = 3` carries a
+    /// new range `3..5` (heights `3, 4` only). The pre-pass must drop the
+    /// orphaned suffix (old heights `3, 4, 5`), re-ingest `3, 4`, and land
+    /// at tip `4`. Tip `4 != 5` is unambiguous: without the rollback the
+    /// tree would still report `5`; reaching `4` proves the suffix was
+    /// dropped and the cursor (not a stale counter) drove the resume.
+    ///
+    /// Drives [`Engine::ingest_scan_result_into_curve_tree`] directly with
+    /// hand-built [`ScanResult`]s — the pre-pass reads only
+    /// `reorg_rewind` / `processed_height_range` / `block_leaves` (and the
+    /// daemon for the genesis backfill), so the merge-invariant fields stay
+    /// at their `empty_at` defaults. Leaves are empty (synthetic blocks are
+    /// empty-leaf); the non-coinbase sub-birthday-sibling completeness KAT
+    /// remains Tier-B-gated to CT-5c.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
+        const MASTER_SEED: [u8; 32] = [
+            0x3e, 0x07, 0x6b, 0xac, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+            0xf0, 0xe1, 0xd2, 0xc3,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // chain[0] = genesis, backfilled by the pre-pass; chain[1..=5] are
+        // the producer-range heights of the forward feed.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Forward feed: range 1..6, empty leaves; genesis backfilled from
+        // the daemon. Tree tip -> 5.
+        let mut forward = ScanResult::empty_at(1, None);
+        forward.processed_height_range = 1..6;
+        forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_into_curve_tree(&forward)
+                .await
+                .expect("forward feed ingests genesis-through-tip");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "forward feed leaves the tree at tip 5",
+            );
+        }
+
+        // Reorg at fork_height = 3 onto a shorter fork (range 3..5).
+        let mut reorg = ScanResult::empty_at(3, None);
+        reorg.processed_height_range = 3..5;
+        reorg.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 3 });
+        reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_into_curve_tree(&reorg)
+                .await
+                .expect("reorg feed rolls back and resumes");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(4)),
+                "tree rolled back to keep fork_height-1 (=2) then resumed on \
+                 the shorter fork to tip 4, dropping the orphaned height 5",
+            );
+        }
+    }
+
     /// Exercise the §5.2 retry contract end-to-end. Composition: a
     /// 6-block [`TestDaemon`] chain (heights 0..=5) drives the producer
     /// from `synced_height = 0`. The producer slot is a
