@@ -832,12 +832,16 @@ impl RefreshEngine for LocalRefresh {
                 // `watch::Sender::send` returns `Err(_)` only when
                 // every receiver has been dropped, in which case
                 // the producer is being cancelled anyway.
-                _ = progress.send(RefreshProgress {
-                    height: h,
-                    blocks_processed: block_hashes.len() as u64,
-                    blocks_total: end.saturating_sub(original_start),
-                    phase: RefreshPhase::Scanning,
-                });
+                // Per-block scanning ping: the pending-incoming summary is
+                // assembled once at the orchestrator from the full
+                // `ScanResult` (see `run_refresh_task`), so the streaming
+                // per-block frame carries the zeroed display fields.
+                _ = progress.send(RefreshProgress::phase_only(
+                    h,
+                    block_hashes.len() as u64,
+                    end.saturating_sub(original_start),
+                    RefreshPhase::Scanning,
+                ));
 
                 h += 1;
             }

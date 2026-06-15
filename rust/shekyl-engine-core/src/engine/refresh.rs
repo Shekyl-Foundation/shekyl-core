@@ -377,6 +377,22 @@ pub enum RefreshPhase {
 ///   retry boundaries because each attempt re-fetches the tip;
 ///   static within an attempt.
 /// - `phase`: see [`RefreshPhase`].
+/// - `pending_incoming_count` / `pending_incoming_atomic_units`: the
+///   per-attempt "you have incoming" summary (CT-5 §3.2.1 D3 display
+///   surface) — the count and summed amount of [`DetectedTransfer`]
+///   entries the producer recovered this attempt. Transient: it
+///   reflects the in-flight attempt, resets to `0` on
+///   `RefreshPhase::Retrying`, and is `0` on attempts that detect
+///   nothing. It is the detection ("received") signal, decoupled from
+///   spendability — a detected output can be displayed before its
+///   curve-tree membership is provable.
+/// - `rebuilding_membership`: `true` while the curve tree is behind the
+///   ledger (the ledger has confirmed blocks the tree has not yet
+///   ingested), i.e. the adopting / tree-wiped wallet whose backfill is
+///   in progress. Spending may be temporarily gated
+///   ([`SendError::SpendUnavailableRebuilding`](super::error::SendError::SpendUnavailableRebuilding))
+///   while this holds. The forward-from-genesis common case never sets
+///   it (tree and ledger advance in lockstep).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RefreshProgress {
@@ -392,9 +408,44 @@ pub struct RefreshProgress {
 
     /// Current phase of the refresh.
     pub phase: RefreshPhase,
+
+    /// Count of outputs detected ("received") this attempt. See the
+    /// type docstring's pending-incoming field semantics.
+    pub pending_incoming_count: u64,
+
+    /// Summed amount (atomic units) of the outputs detected this
+    /// attempt. See the type docstring's pending-incoming semantics.
+    pub pending_incoming_atomic_units: u64,
+
+    /// `true` while the curve tree lags the ledger (rebuild in
+    /// progress); spending may be temporarily gated. See the type
+    /// docstring.
+    pub rebuilding_membership: bool,
 }
 
 impl RefreshProgress {
+    /// Construct a phase-transition snapshot with the curve-tree
+    /// display fields zeroed (no per-attempt detection, not rebuilding)
+    /// — the common shape for the seed, retry, and cancel pings that do
+    /// not carry a pending-incoming summary. The merge / success
+    /// emissions that *do* carry the summary build the literal directly.
+    pub(crate) const fn phase_only(
+        height: u64,
+        blocks_processed: u64,
+        blocks_total: u64,
+        phase: RefreshPhase,
+    ) -> Self {
+        Self {
+            height,
+            blocks_processed,
+            blocks_total,
+            phase,
+            pending_incoming_count: 0,
+            pending_incoming_atomic_units: 0,
+            rebuilding_membership: false,
+        }
+    }
+
     /// Synthetic zero-height baseline. **Test helpers only** —
     /// production seeders (today: [`Engine::start_refresh`])
     /// override `height` with the wallet's current `synced_height`
@@ -405,13 +456,26 @@ impl RefreshProgress {
     /// blank starting value.
     #[cfg(test)]
     pub(crate) const fn initial() -> Self {
-        Self {
-            height: 0,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        }
+        Self::phase_only(0, 0, 0, RefreshPhase::Scanning)
     }
+}
+
+/// Whether the curve tree lags the ledger and is therefore rebuilding
+/// membership data. `tree_cursor` is the tree's last-ingested height
+/// ([`super::curve_tree_actor::CurveTreeHandle::ingested_tip_height`]),
+/// `None` when the tree is fresh; `ledger_synced` is the ledger's
+/// confirmed tip. The tree is behind iff its covered height (treating a
+/// fresh tree as `0`) is strictly below the ledger tip — i.e. there are
+/// confirmed blocks whose leaves the tree has not yet ingested. A fresh
+/// wallet syncing from genesis (`ledger_synced == 0`) is not rebuilding;
+/// only an adopting / tree-wiped wallet (ledger ahead of a lagging tree)
+/// is.
+fn membership_rebuilding(
+    tree_cursor: Option<shekyl_curve_tree::BlockHeight>,
+    ledger_synced: u64,
+) -> bool {
+    let covered = tree_cursor.map_or(0, |h| h.0);
+    covered < ledger_synced
 }
 
 /// RAII handle to a refresh task spawned by
@@ -1046,6 +1110,23 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
 
         let summary = summarize(&result, attempt);
 
+        // Pending-incoming ("you have received") display summary for this
+        // attempt (CT-5 §3.2.1 D3). Detection is decoupled from
+        // spendability: these outputs surface on the progress channel as
+        // soon as the scan finds them, independent of whether the curve
+        // tree can yet prove their membership. `u64`-summed with
+        // saturation so a pathological amount set can never panic the
+        // refresh task.
+        let pending_incoming_count = summary.transfers_detected as u64;
+        let pending_incoming_atomic_units = result.new_transfers.iter().fold(0u64, |acc, dt| {
+            acc.saturating_add(dt.output.amount().to_raw())
+        });
+        let merge_height = summary
+            .processed_height_range
+            .end
+            .saturating_sub(1)
+            .max(current_synced);
+
         // Pre-merge cancel checkpoint. The producer returned a valid
         // `ScanResult`, but the user fired `cancel` between the last
         // per-block check inside `RefreshEngine::produce_scan_result` and now. The
@@ -1067,15 +1148,36 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // observe success or a retry. `blocks_total` mirrors
         // `blocks_processed`: the producer is done, so total equals
         // processed at this phase transition.
+        //
+        // `rebuilding_membership` is read from the tree cursor *before*
+        // the ingest pre-pass below runs: it is the adopting / tree-wiped
+        // wallet's state (ledger ahead of a lagging tree) and is the
+        // window during which the backfill is in flight. On a long
+        // adopting backfill this is the phase a subscriber observes for
+        // the entire catch-up, so the "rebuilding membership data" status
+        // surfaces here, not after the pre-pass has already healed it.
+        let rebuilding_membership = {
+            let cursor = {
+                let g = engine_arc.read().await;
+                g.curve_tree.ingested_tip_height().await
+            };
+            // A cursor read failure is not fatal to the display ping
+            // (the ingest pre-pass below surfaces a real fault
+            // terminally); treat an unreadable cursor as not-rebuilding
+            // so a transient actor hiccup cannot flip the UI to a
+            // spurious "rebuilding" state.
+            cursor
+                .ok()
+                .is_some_and(|c| membership_rebuilding(c, current_synced))
+        };
         _ = progress.send(RefreshProgress {
-            height: summary
-                .processed_height_range
-                .end
-                .saturating_sub(1)
-                .max(current_synced),
+            height: merge_height,
             blocks_processed: summary.blocks_processed,
             blocks_total: summary.blocks_processed,
             phase: RefreshPhase::Merging,
+            pending_incoming_count,
+            pending_incoming_atomic_units,
+            rebuilding_membership,
         });
 
         // Merge under the **read** lock on the outer engine: per the
@@ -1129,11 +1231,26 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
 
         match merge {
             Ok(()) => {
-                // No terminal `Done` progress phase: the completion
-                // oneshot is the authoritative success signal. Once
-                // we drop `progress` on return, the receiver's next
-                // `changed().await` returns `RecvError`, which is
-                // the watch-channel idiom for "no further updates."
+                // Final `Merging`-phase frame carrying the per-attempt
+                // pending-incoming summary with `rebuilding_membership:
+                // false` — the ingest pre-pass above acked the full range
+                // before this merge (ack-before-commit), so the tree is
+                // now caught up to the ledger and any rebuild window has
+                // closed. This lets a subscriber that samples only the
+                // terminal frame still observe "you received X" without a
+                // stale rebuilding flag. The completion oneshot remains
+                // the authoritative success signal; there is no terminal
+                // `Done` phase (dropping `progress` on return yields
+                // `RecvError`, the watch idiom for "no further updates").
+                _ = progress.send(RefreshProgress {
+                    height: merge_height,
+                    blocks_processed: summary.blocks_processed,
+                    blocks_total: summary.blocks_processed,
+                    phase: RefreshPhase::Merging,
+                    pending_incoming_count,
+                    pending_incoming_atomic_units,
+                    rebuilding_membership: false,
+                });
                 _ = completion.send(Ok(summary));
                 return;
             }
@@ -1150,12 +1267,12 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 // re-derives `blocks_total` from a fresh snapshot +
                 // daemon-tip read; the orchestrator no longer owns
                 // that value after the C5 trait-dispatch migration.
-                _ = progress.send(RefreshProgress {
-                    height: current_synced,
-                    blocks_processed: 0,
-                    blocks_total: 0,
-                    phase: RefreshPhase::Retrying,
-                });
+                _ = progress.send(RefreshProgress::phase_only(
+                    current_synced,
+                    0,
+                    0,
+                    RefreshPhase::Retrying,
+                ));
                 last_concurrent_mutation =
                     Some(RefreshError::ConcurrentMutation { wallet, result });
                 continue;
@@ -1312,12 +1429,12 @@ impl<
         // - `completion`: oneshot for the terminal
         //   `RefreshSummary` / `RefreshError`. `RefreshHandle::join`
         //   awaits this.
-        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress {
-            height: synced_height,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        });
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
+            synced_height,
+            0,
+            0,
+            RefreshPhase::Scanning,
+        ));
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let cancel_token = CancellationToken::new();
 
@@ -1494,12 +1611,12 @@ impl<
         // so the producer's `progress.send(...)` calls are no-ops
         // (best-effort sends to a no-subscriber watch channel
         // silently succeed by replacing the buffered latest value).
-        let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress {
-            height: 0,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        });
+        let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
+            0,
+            0,
+            0,
+            RefreshPhase::Scanning,
+        ));
 
         self.refresh_with(opts, |_attempt, snapshot| {
             let result = runtime
@@ -2371,12 +2488,12 @@ mod refresh_handle_tests {
 
         let mut rx = handle.progress();
         progress_tx
-            .send(RefreshProgress {
-                height: 42,
-                blocks_processed: 7,
-                blocks_total: 100,
-                phase: RefreshPhase::Scanning,
-            })
+            .send(RefreshProgress::phase_only(
+                42,
+                7,
+                100,
+                RefreshPhase::Scanning,
+            ))
             .expect("subscriber alive");
         rx.changed().await.expect("update delivered");
         let snap = *rx.borrow();
@@ -2559,12 +2676,12 @@ mod refresh_handle_tests {
         let mut rx = handle.progress();
 
         progress_tx
-            .send(RefreshProgress {
-                height: 100,
-                blocks_processed: 50,
-                blocks_total: 200,
-                phase: RefreshPhase::Scanning,
-            })
+            .send(RefreshProgress::phase_only(
+                100,
+                50,
+                200,
+                RefreshPhase::Scanning,
+            ))
             .expect("subscriber alive");
         rx.changed().await.expect("scanning update delivered");
         let mid = *rx.borrow();
@@ -3240,6 +3357,111 @@ mod start_refresh_integration_tests {
                 "tree cursor covers genesis (backfilled) through the producer range tip"
             );
         }
+
+        // Bounded poll for slot release so a regression cannot hang the
+        // suite (mirrors the sibling hybrid tests).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
+    }
+
+    /// CT-5 §3.2.1 D3 pure-logic KAT for the `rebuilding_membership`
+    /// predicate that drives the [`RefreshProgress`] display flag. The
+    /// flag is "ledger ahead of a lagging tree," which is exactly the
+    /// adopting / tree-wiped wallet; the forward-from-genesis common case
+    /// (`ledger_synced == 0`, fresh tree) must never read as rebuilding.
+    #[test]
+    fn membership_rebuilding_predicate() {
+        use super::membership_rebuilding;
+        use shekyl_curve_tree::BlockHeight;
+
+        // Fresh wallet from genesis: tree fresh, ledger at 0 — both at
+        // the floor, nothing to rebuild.
+        assert!(
+            !membership_rebuilding(None, 0),
+            "a fresh-from-genesis wallet is not rebuilding"
+        );
+        // Adopting wallet: ledger loaded at 5, tree freshly wiped — the
+        // backfill is the rebuild window.
+        assert!(
+            membership_rebuilding(None, 5),
+            "an adopting wallet with a fresh tree and a non-zero ledger is rebuilding"
+        );
+        // Partially-rebuilt tree still behind the ledger.
+        assert!(
+            membership_rebuilding(Some(BlockHeight(3)), 5),
+            "a tree cursor below the ledger tip is rebuilding"
+        );
+        // Caught up: tree cursor equals the ledger tip.
+        assert!(
+            !membership_rebuilding(Some(BlockHeight(5)), 5),
+            "a tree caught up to the ledger is not rebuilding"
+        );
+        // Tree ahead of the ledger (does not occur under ack-before-
+        // commit, but the predicate must not flag it).
+        assert!(
+            !membership_rebuilding(Some(BlockHeight(7)), 5),
+            "a tree ahead of the ledger is not rebuilding"
+        );
+    }
+
+    /// CT-5 §3.2.1 D3 wiring KAT: a forward-from-genesis hybrid refresh
+    /// surfaces the pending-incoming display fields on the progress
+    /// channel, and the common case is *not* flagged as rebuilding. The
+    /// fixture is coinbase-only/empty-leaf (no wallet-addressed outputs),
+    /// so the detected count is `0`; the load-bearing assertion is that
+    /// the terminal frame carries `rebuilding_membership == false`
+    /// (tree and ledger advanced in lockstep, no backfill gap). The
+    /// `rebuilding == true` path and a non-zero pending-incoming amount
+    /// require a divergent adopting state and a wallet-addressed
+    /// (non-coinbase) fixture respectively — both Tier-B-gated to CT-5c,
+    /// same as the sibling completeness KATs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_refresh_from_genesis_surfaces_not_rebuilding() {
+        const MASTER_SEED: [u8; 32] = [
+            0x4b, 0x2d, 0x9a, 0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xa9, 0xba,
+            0xcb, 0xdc, 0xed, 0xfe, 0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96,
+            0xa5, 0xb4, 0xc3, 0xd2,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+        // Hold a progress receiver across the join so the watch channel
+        // retains its terminal frame for inspection afterwards.
+        let progress = handle.progress();
+        handle
+            .join()
+            .await
+            .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
+
+        let terminal = *progress.borrow();
+        assert!(
+            !terminal.rebuilding_membership,
+            "a forward-from-genesis refresh advances tree and ledger in lockstep, \
+             so the terminal frame is not flagged as rebuilding"
+        );
+        assert_eq!(
+            terminal.pending_incoming_count, 0,
+            "a coinbase-only fixture has no wallet-addressed outputs to detect"
+        );
+        assert_eq!(
+            terminal.pending_incoming_atomic_units, 0,
+            "no detected outputs means a zero pending-incoming amount"
+        );
 
         // Bounded poll for slot release so a regression cannot hang the
         // suite (mirrors the sibling hybrid tests).

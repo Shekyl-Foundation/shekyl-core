@@ -29,6 +29,35 @@
 
 ### Added
 
+- **wallet: surface the pending-incoming summary and rebuild status on the
+  refresh progress channel (CT-5a commit 4b-2, 2026-06-15,
+  `feat/ct-5a-curve-tree-actor`).** `RefreshProgress` (the `watch`-channel
+  refresh signal) gains three fields, no new persisted state:
+  `pending_incoming_count` / `pending_incoming_atomic_units` (the per-attempt
+  "you received" summary — the count and summed amount of outputs the scan
+  detected this attempt) and `rebuilding_membership` (`true` while the curve
+  tree lags the ledger, i.e. the adopting / tree-wiped wallet whose backfill is
+  in flight and whose spends may be temporarily gated by 4b-1's
+  `SendError::SpendUnavailableRebuilding`). Detection is decoupled from
+  spendability: a received output is displayed as soon as the scan finds it,
+  independent of whether its curve-tree membership is yet provable. The
+  orchestrator (`run_refresh_task`) assembles the summary once from the full
+  `ScanResult` and emits it on the pre-merge `Merging` frame (with
+  `rebuilding_membership` read from the tree cursor *before* the ingest
+  pre-pass, so a long adopting backfill surfaces the rebuild status for its
+  whole duration) and on the terminal success frame (`rebuilding_membership:
+  false` — the pre-pass acked the full range under ack-before-commit, so the
+  tree is caught up). The forward-from-genesis common case never flags
+  rebuilding (tree and ledger advance in lockstep). Per-block scanning frames
+  and the seed/retry/cancel pings carry the zeroed display fields via the new
+  `RefreshProgress::phase_only` constructor. KATs: `membership_rebuilding_predicate`
+  (the pure ledger-ahead-of-tree predicate across fresh/adopting/caught-up/
+  ahead) and `hybrid_refresh_from_genesis_surfaces_not_rebuilding` (the wiring
+  smoke test). A non-zero pending-incoming amount and the `rebuilding == true`
+  path need a wallet-addressed (non-coinbase) fixture and a divergent adopting
+  state respectively — both Tier-B-gated to CT-5c. Implements CT-5 §3.2.1 D3
+  display surface. Docs: `CT5_ENGINE_WIRING.md`.
+
 - **archival: standoff conformance suite gains the two independence probes +
   discrete-GoF grade (2026-06-13).** The marginal uniform/trap tests are
   structurally blind to the *independent* half of "uniform-independent draw";

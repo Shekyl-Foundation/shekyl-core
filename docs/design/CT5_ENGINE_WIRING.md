@@ -706,6 +706,24 @@ but a UX-surprising regression, so it is **not silent**: the wallet surfaces
 reject spends. The surfacing rides with the display-decoupling commit (4b), not
 the correctness commit (4).
 
+**D3 — landed (4b-1 + 4b-2).** The spend-side gate landed in commit 4b-1:
+`LocalPendingTx::build` caps the spendable set at `min(synced_height,
+tree_cursor)` and surfaces the lag as `SendError::SpendUnavailableRebuilding`
+(→ `BuildErrorKind::RebuildingMembershipData`) rather than a misleading
+`InsufficientFunds`. The display side landed in commit 4b-2: `RefreshProgress`
+gains `pending_incoming_count` / `pending_incoming_atomic_units` (the
+per-attempt detected-output summary, decoupled from spendability) and
+`rebuilding_membership` (the ledger-ahead-of-tree predicate,
+`refresh::membership_rebuilding`). The orchestrator emits the summary on the
+pre-merge `Merging` frame — reading the tree cursor *before* the ingest
+pre-pass, so a long adopting backfill surfaces "rebuilding membership data" for
+its whole duration — and on the terminal success frame with
+`rebuilding_membership: false` (the pre-pass acked the range under
+ack-before-commit, so the tree is caught up). The `rebuilding == true` and
+non-zero pending-incoming-amount KATs are Tier-B-gated to CT-5c (divergent
+adopting state / non-coinbase fixture); 4b-2 lands the pure-predicate KAT and
+the forward-from-genesis wiring smoke test.
+
 **D4 — R3-Q5 KATs inherit the Tier-B gate; name the green-positive hazard in
 commit 4's DoD.** Commit 4 lands with the **reorg-into-backfill KAT** (R3-Q6:
 resume-from-cursor) which *is* coinbase-fixture-expressible (it tests cursor
