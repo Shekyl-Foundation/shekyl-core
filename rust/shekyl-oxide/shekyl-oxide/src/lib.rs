@@ -19,6 +19,9 @@ pub mod block;
 /// Transaction structs and functionality.
 pub mod transaction;
 
+/// Per-network genesis block facility (Core, daemon-reusable).
+pub mod genesis;
+
 #[cfg(test)]
 mod tests;
 
