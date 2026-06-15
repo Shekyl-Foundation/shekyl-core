@@ -4713,7 +4713,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
 /// - `spend_secret_key`: 32 bytes.
 /// - `address`: `address_len` bytes.
 /// - `proof_secrets`: `output_count * 128` bytes.
-/// - `key_images`, `spend_secrets`, `output_keys`: `output_count * 32` each.
+/// - `key_images`, `output_keys`: `output_count * 32` each.
 /// - `proof_out`: writable `ShekylBuffer`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_generate_reserve_proof(
@@ -4724,12 +4724,15 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     message_len: usize,
     proof_secrets_ptr: *const u8,
     key_images: *const u8,
-    spend_secrets: *const u8,
     output_keys: *const u8,
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let Some(bsk) = arr32_from_ptr(spend_secret_key) else {
+    // Master spend secret: read the C bytes *directly* into a `Zeroizing`
+    // buffer so no intermediate plaintext stack copy ever exists (rule 30
+    // direct-write; rule 35 wipe-on-drop). `&bsk` deref-coerces to `&[u8; 32]`
+    // at the `generate_reserve_proof` call site below.
+    let Some(bsk) = zeroizing_arr32_from_ptr(spend_secret_key) else {
         return false;
     };
     let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
@@ -4754,13 +4757,11 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images, n * 32) }) else {
         return false;
     };
-    let Some(ss_bytes) = (unsafe { slice_from_ptr(spend_secrets, n * 32) }) else {
-        return false;
-    };
     let Some(ok_bytes) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
 
+    use zeroize::Zeroize;
     let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n)
         .map(|i| {
             let base = i * 128;
@@ -4774,18 +4775,26 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
             k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
 
             let mut ki = [0u8; 32];
-            let mut ss = [0u8; 32];
             let mut ok = [0u8; 32];
             ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-            ss.copy_from_slice(&ss_bytes[i * 32..(i + 1) * 32]);
             ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
 
-            shekyl_proofs::reserve_proof::ReserveOutputEntry {
+            let entry = shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-                spend_secret: ss,
                 output_key: ok,
-            }
+            };
+            // The entry now owns its own copies; `ProofSecrets` is
+            // `ZeroizeOnDrop`. Wipe the plain `[u8; 32]` stack copies of the
+            // *secret* inputs (the HKDF scalars) so no unprotected duplicate
+            // outlives this iteration; `zeroize()` uses volatile writes the
+            // optimizer cannot elide. `ki`/`ok` are public (key image, output
+            // key) and need no wipe.
+            ho.zeroize();
+            y.zeroize();
+            z.zeroize();
+            k_amount.zeroize();
+            entry
         })
         .collect();
 
@@ -4896,6 +4905,20 @@ fn arr32_from_ptr(ptr: *const u8) -> Option<[u8; 32]> {
     let mut arr = [0u8; 32];
     unsafe { std::ptr::copy_nonoverlapping(ptr, arr.as_mut_ptr(), 32) };
     Some(arr)
+}
+
+/// Read 32 **secret** bytes from a C pointer directly into a `Zeroizing`
+/// buffer, so no intermediate plaintext stack copy ever exists (rule 30
+/// direct-write) and the bytes wipe on drop (rule 35). Use this instead of
+/// [`arr32_from_ptr`] for key material (e.g. a wallet spend secret); the
+/// non-secret variant is fine for public 32-byte values.
+fn zeroizing_arr32_from_ptr(ptr: *const u8) -> Option<zeroize::Zeroizing<[u8; 32]>> {
+    if ptr.is_null() {
+        return None;
+    }
+    let mut buf = zeroize::Zeroizing::new([0u8; 32]);
+    unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+    Some(buf)
 }
 
 #[cfg(test)]

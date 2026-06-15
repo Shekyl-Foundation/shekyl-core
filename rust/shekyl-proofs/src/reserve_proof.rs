@@ -44,10 +44,19 @@ const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
 // ── Per-output entry ────────────────────────────────────────────────
 
 /// Input data for one output in a reserve proof (prover side).
+///
+/// Holds no bare secret of its own: `proof_secrets` is itself `ZeroizeOnDrop`
+/// (wipes its HKDF scalars), and `key_image` / `output_key` are public
+/// on-chain values (a key image is a published nullifier). A reserve proof's
+/// spend authority is the *global* master key passed to
+/// [`generate_reserve_proof`] as `spend_secret_key` (the prover derives
+/// `x = ho + b` from it); there is no per-output spend secret. (A vestigial
+/// per-output `spend_secret` field, which the prover never read, was removed
+/// in the secret-hardening sweep along with the FFI `spend_secrets` parameter
+/// that fed it.)
 pub struct ReserveOutputEntry {
     pub proof_secrets: ProofSecrets,
     pub key_image: KeyImage,
-    pub spend_secret: [u8; 32],
     pub output_key: [u8; 32],
 }
 

@@ -11590,7 +11590,6 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
 
   std::vector<uint8_t> ps_buf(n * 128);
   std::vector<uint8_t> ki_buf(n * 32);
-  std::vector<uint8_t> ss_buf(n * 32);
   std::vector<uint8_t> ok_buf(n * 32);
 
   for (uint32_t i = 0; i < n; ++i)
@@ -11610,18 +11609,11 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
 
     memcpy(ki_buf.data() + i * 32, &td.m_key_image, 32);
 
-    crypto::secret_key subaddr_spend_skey = spend_sk;
-    if (!td.m_subaddr_index.is_zero())
-    {
-      crypto::secret_key m_sub = m_account.get_device().get_subaddress_secret_key(
-          m_account.get_keys().m_view_secret_key, td.m_subaddr_index);
-      crypto::secret_key tmp = subaddr_spend_skey;
-      sc_add(reinterpret_cast<unsigned char*>(&subaddr_spend_skey),
-             reinterpret_cast<unsigned char*>(&m_sub),
-             reinterpret_cast<unsigned char*>(&tmp));
-    }
-    memcpy(ss_buf.data() + i * 32, &subaddr_spend_skey, 32);
-    memwipe(&subaddr_spend_skey, sizeof(subaddr_spend_skey));
+    // No per-output spend secret is passed to the prover: a reserve proof's
+    // spend authority is the single master `spend_sk` below. The former
+    // per-output subaddress-spend-key derivation + `ss_buf` plumbing was
+    // vestigial — the Rust prover never read it (it always uses the master
+    // key) — and was removed along with the FFI `spend_secrets` parameter.
 
     crypto::public_key out_pk = td.get_public_key();
     memcpy(ok_buf.data() + i * 32, &out_pk, 32);
@@ -11632,10 +11624,9 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
       reinterpret_cast<const uint8_t*>(&spend_sk),
       reinterpret_cast<const uint8_t*>(addr_blob.data()), addr_blob.size(),
       reinterpret_cast<const uint8_t*>(message.data()), message.size(),
-      ps_buf.data(), ki_buf.data(), ss_buf.data(), ok_buf.data(), n,
+      ps_buf.data(), ki_buf.data(), ok_buf.data(), n,
       &proof_buf);
   memwipe(ps_buf.data(), ps_buf.size());
-  memwipe(ss_buf.data(), ss_buf.size());
   THROW_WALLET_EXCEPTION_IF(!gen_ok, error::wallet_internal_error,
       "Rust shekyl_generate_reserve_proof failed");
 

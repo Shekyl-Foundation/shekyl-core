@@ -756,7 +756,8 @@ bool shekyl_verify_tx_proof_inbound(
 
 /// Generate reserve proof (prove ownership of unspent outputs).
 /// proof_secrets: output_count * 128 bytes — packed per output.
-/// spend_secrets: output_count * 32 bytes — per-output subaddress spend secret.
+/// Spend authority is the single master spend_secret_key; there is no
+/// per-output spend secret (the prover derives x = ho + b from the master).
 bool shekyl_generate_reserve_proof(
     const uint8_t* spend_secret_key,       // 32 bytes (master)
     const uint8_t* address,                // address_len bytes
@@ -765,7 +766,6 @@ bool shekyl_generate_reserve_proof(
     size_t message_len,
     const uint8_t* proof_secrets,          // output_count * 128 bytes
     const uint8_t* key_images,             // output_count * 32 bytes
-    const uint8_t* spend_secrets,          // output_count * 32 bytes
     const uint8_t* output_keys,            // output_count * 32 bytes
     uint32_t output_count,
     ShekylBuffer* proof_out);
