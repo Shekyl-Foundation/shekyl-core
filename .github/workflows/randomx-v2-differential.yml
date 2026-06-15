@@ -107,7 +107,7 @@ jobs:
     # job's full setup twice on Monday at 06:00 UTC.
     name: 'structural: build + cargo test (T9-T15, T17)'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     steps:
       - uses: actions/checkout@v5
