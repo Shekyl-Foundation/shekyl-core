@@ -193,12 +193,14 @@ mod tests {
         // 4096 outputs × 8 octets = 32_768 samples/arm ⇒ ~128 expected per
         // 256-value bucket; the uniformity statistic has df = 255.
         const N: u32 = 4096;
-        // Strict rejection threshold for df = 255. Wilson–Hilferty at α ≈ 1e-6
-        // gives ≈ 377; 400 leaves margin so a correct PRF (chi2 ≈ 255 ± 22.6)
-        // never false-fails, while a degenerate key lands in the tens of
-        // thousands. The seed is fixed (reference-determinism, not a PRNG
-        // mandate); the chi-square is the grading instrument.
-        const CHI2_DF255_REJECT: f64 = 400.0;
+        // Strict rejection threshold for df = 255, *derived* (not hand-picked)
+        // from the Wilson–Hilferty chi-square upper quantile at α = 1e-6
+        // (≈ 377.3). A correct PRF (chi2 ≈ 255 ± 22.6) sits ~5.4σ below it, so
+        // false-fails occur at ~α by construction, while a degenerate key lands
+        // in the tens of thousands. Computing it from df + α keeps the test
+        // correct if N/df ever change. The seed is fixed (reference-determinism,
+        // not a PRNG mandate); the chi-square is the grading instrument.
+        let reject = chi_square_upper_crit(255.0, Z_ALPHA_1E6);
 
         let real = encode_request_plaintext(0x0000_1234_5678_9ABC).expect("valid rid");
         assert!(!is_sentinel_plaintext(&real));
@@ -249,12 +251,12 @@ mod tests {
         // (1) Per-plaintext uniformity: real-label and sentinel enc_label are
         //     both uniform under the real derivation path.
         assert!(
-            chi2_sentinel < CHI2_DF255_REJECT,
-            "sentinel enc_label not uniform: chi2={chi2_sentinel:.1}"
+            chi2_sentinel < reject,
+            "sentinel enc_label not uniform: chi2={chi2_sentinel:.1} (reject>={reject:.1})"
         );
         assert!(
-            chi2_real < CHI2_DF255_REJECT,
-            "real-label enc_label not uniform: chi2={chi2_real:.1}"
+            chi2_real < reject,
+            "real-label enc_label not uniform: chi2={chi2_real:.1} (reject>={reject:.1})"
         );
 
         // (2) Homogeneity: the real-label and sentinel wire distributions are
@@ -271,15 +273,31 @@ mod tests {
             })
             .sum();
         assert!(
-            homogeneity_chi2 < CHI2_DF255_REJECT,
-            "real-label distinguishable from sentinel: chi2={homogeneity_chi2:.1}"
+            homogeneity_chi2 < reject,
+            "real-label distinguishable from sentinel: chi2={homogeneity_chi2:.1} (reject>={reject:.1})"
         );
 
         // Negative control: the same uniformity instrument that the real path
         // passes must reject plaintext-on-the-wire, or the test is vacuous.
         assert!(
-            chi2_broken > CHI2_DF255_REJECT,
-            "uniformity instrument failed to reject plaintext-on-wire: chi2={chi2_broken:.1}"
+            chi2_broken > reject,
+            "uniformity instrument failed to reject plaintext-on-wire: chi2={chi2_broken:.1} (reject>={reject:.1})"
         );
+    }
+
+    /// Upper-tail standard-normal quantile for α = 1e-6 (z ≈ 4.7534). Same
+    /// constant the staking-sim conformance suite uses
+    /// (`shekyl-staking-sim::standoff`); duplicated here as a literal rather
+    /// than taking a dev-dependency on a sim crate that opts out of the
+    /// workspace cast lints.
+    const Z_ALPHA_1E6: f64 = 4.753_424;
+
+    /// Wilson–Hilferty chi-square upper-tail critical value for `df` degrees of
+    /// freedom at normal upper quantile `z`. Dependency-free; mirrors
+    /// `standoff::chi_square_upper_crit`.
+    fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
+        let a = 2.0 / (9.0 * df);
+        let t = 1.0 - a + z * a.sqrt();
+        df * t * t * t
     }
 }
