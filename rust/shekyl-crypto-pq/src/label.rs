@@ -170,4 +170,113 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, hash_label_plaintext_for_display(&SENTINEL_PLAINTEXT));
     }
+
+    /// Normative `enc_label` indistinguishability invariant
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.10): the on-wire octets are
+    /// indistinguishable from uniform to a non-recipient **independent of
+    /// plaintext**, and the real-label / sentinel wire distributions are
+    /// identical. This is the test that retires the R2-F8 wallet gate — it
+    /// proves the real-label path is exactly as safe to an observer as the
+    /// sentinel path it already runs, so gating real-label population delivers
+    /// no privacy benefit.
+    ///
+    /// Both arms are drawn through the **real** `derive_output_secrets` path
+    /// (not a synthetic uniform key) so a plumbing regression — a low-entropy
+    /// `k_label`, a content-dependent encoding — fails CI. A zero-key negative
+    /// control (plaintext straight onto the wire) proves the grading instrument
+    /// actually bites.
+    #[test]
+    fn real_label_indistinguishable_from_sentinel() {
+        use crate::derivation::derive_output_secrets;
+        use sha2::{Digest, Sha512};
+
+        // 4096 outputs × 8 octets = 32_768 samples/arm ⇒ ~128 expected per
+        // 256-value bucket; the uniformity statistic has df = 255.
+        const N: u64 = 4096;
+        // Strict rejection threshold for df = 255. Wilson–Hilferty at α ≈ 1e-6
+        // gives ≈ 377; 400 leaves margin so a correct PRF (chi2 ≈ 255 ± 22.6)
+        // never false-fails, while a degenerate key lands in the tens of
+        // thousands. The seed is fixed (reference-determinism, not a PRNG
+        // mandate); the chi-square is the grading instrument.
+        const CHI2_DF255_REJECT: f64 = 400.0;
+
+        let real = encode_request_plaintext(0x0000_1234_5678_9ABC).expect("valid rid");
+        assert!(!is_sentinel_plaintext(&real));
+
+        let mut sentinel_hist = [0u64; 256];
+        let mut real_hist = [0u64; 256];
+        let mut broken_hist = [0u64; 256];
+
+        for i in 0..N {
+            // Deterministic per-output combined_ss; models an independent
+            // hybrid shared secret per output, as seen by a non-recipient.
+            let mut h = Sha512::new();
+            Digest::update(&mut h, b"shekyl/label-indist-test-v1");
+            Digest::update(&mut h, i.to_le_bytes());
+            let combined_ss = h.finalize();
+            let secrets = derive_output_secrets(combined_ss.as_ref(), i);
+
+            let enc_sentinel = encrypt_label_plaintext(&SENTINEL_PLAINTEXT, &secrets.k_label);
+            let enc_real = encrypt_label_plaintext(&real, &secrets.k_label);
+            // Negative control: a zero key leaks the plaintext onto the wire
+            // (enc == plaintext, constant across outputs).
+            let enc_broken = encrypt_label_plaintext(&real, &[0u8; 32]);
+
+            for b in 0..8 {
+                sentinel_hist[enc_sentinel[b] as usize] += 1;
+                real_hist[enc_real[b] as usize] += 1;
+                broken_hist[enc_broken[b] as usize] += 1;
+            }
+        }
+
+        let expected = (N * 8) as f64 / 256.0;
+        let uniformity_chi2 = |hist: &[u64; 256]| -> f64 {
+            hist.iter()
+                .map(|&o| {
+                    let d = o as f64 - expected;
+                    d * d / expected
+                })
+                .sum()
+        };
+
+        let chi2_sentinel = uniformity_chi2(&sentinel_hist);
+        let chi2_real = uniformity_chi2(&real_hist);
+        let chi2_broken = uniformity_chi2(&broken_hist);
+
+        // (1) Per-plaintext uniformity: real-label and sentinel enc_label are
+        //     both uniform under the real derivation path.
+        assert!(
+            chi2_sentinel < CHI2_DF255_REJECT,
+            "sentinel enc_label not uniform: chi2={chi2_sentinel:.1}"
+        );
+        assert!(
+            chi2_real < CHI2_DF255_REJECT,
+            "real-label enc_label not uniform: chi2={chi2_real:.1}"
+        );
+
+        // (2) Homogeneity: the real-label and sentinel wire distributions are
+        //     statistically identical (2×256 contingency, df = 255).
+        let homogeneity_chi2: f64 = (0..256)
+            .map(|b| {
+                let s = sentinel_hist[b] as f64;
+                let r = real_hist[b] as f64;
+                if s + r == 0.0 {
+                    0.0
+                } else {
+                    (s - r) * (s - r) / (s + r)
+                }
+            })
+            .sum();
+        assert!(
+            homogeneity_chi2 < CHI2_DF255_REJECT,
+            "real-label distinguishable from sentinel: chi2={homogeneity_chi2:.1}"
+        );
+
+        // Negative control: the same uniformity instrument that the real path
+        // passes must reject plaintext-on-the-wire, or the test is vacuous.
+        assert!(
+            chi2_broken > CHI2_DF255_REJECT,
+            "uniformity instrument failed to reject plaintext-on-wire: chi2={chi2_broken:.1}"
+        );
+    }
 }
