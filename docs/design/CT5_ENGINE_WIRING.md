@@ -31,6 +31,22 @@ with the flat `+10`; align via the ignored `additional_timelock`). The §3.4 bug
 are confirmed against live code — all pre-implementation checklist items are
 closed. CT-5 pre-0 may begin.**
 
+**Post-closure pin (Round 3, 2026-06-15) — R1-Q2 ingest-feed amendment (§3.2.1).**
+A CT-5a-implementation substrate finding falsifies the §3.2 / CT-3 R1-Q1
+premise that *"the refresh loop already delivers every block; CT-5 connects
+it."* It does not: the refresh producer is **birthday-floored and
+`synced_height + 1`-based** (`local_refresh.rs:589`), so its block range is
+governed by owned-output economics, while the curve tree's range is governed by
+anonymity-set completeness (a global tree **from genesis**, `client.rs:476`,
+CT3_SYNC.md:112). These are different ranges and always will be. Per
+`21-reversion-clause-discipline.mdc` this is a post-closure pin, **not** a
+reopening of Round 1: the merge-driven per-block ingest *mechanism* (R1-Q2)
+stands; what is amended is the *feed* that drives it — it must be a
+genesis-anchored tree-leaf feed independent of the floor. §3.2.1 records the
+finding, the cost-asymmetry measurement that selects the resolution, the CT-3
+R1-Q1 reopening it triggers, and the Round-3 design questions for the feed
+shape. **CT-5a commit 4 (merge-driven ingest) is gated on §3.2.1 closing.**
+
 **Decisions frozen (irreversible once implemented — the load-bearing choices, so
 the closure reviewer and CT-5c implementer find them at the top, not derived from
 the finding logs §9):**
@@ -342,6 +358,13 @@ Its input is `BlockLeaves { height, txs: &[TxLeafInputs] }` where
 `TxLeafInputs { is_miner, leaf_hash_blob, outputs: &[RawOutput] }` and
 `RawOutput { output_key, commitment, target }` (`client.rs:66–97`).
 
+> **Amended by §3.2.1 (Round-3 post-closure pin, 2026-06-15).** The mechanism
+> below (merge drives `handle.ingest`, commit-on-ack) stands. The clause "the
+> producer decodes what it already parses and carries it forward" is the part
+> amended: the *owned-output* producer is birthday-floored, so it cannot be the
+> tree's leaf source for `0..birthday`. The tree gets a separate
+> genesis-anchored feed; see §3.2.1.
+
 **Decision (R1-Q2, RESOLVED — merge drives the actor ingest; `ScanResult` grows
 a transit leaf set + header root).** The merge (`apply_scan_result_to_state`,
 `merge.rs:440–464`) sends `handle.ingest(...)` and commits the ledger on ack
@@ -386,6 +409,170 @@ the highest inheritance-risk surface (it reproduces consensus leaf-insertion
 order), so it gets a dedicated KAT (A2 audit-against-actual-code) asserting the
 engine-path decode reproduces the `ct2_tier_a.json` oracle leaf stream. Lands in
 CT-5a (§6).
+
+### 3.2.1 Post-closure pin (Round 3) — the tree feed is genesis-anchored, not producer-driven
+
+**Status: OPEN (Round-3 design round; gates CT-5a commit 4).** Recorded
+2026-06-15 from a CT-5a-implementation substrate finding. Per
+`21-reversion-clause-discipline.mdc` this is a post-closure pin on a
+substrate falsification, not a reopening of the closed Round-1 disposition:
+the R1-Q2 *mechanism* (merge drives `handle.ingest`, commit-on-ack, §3.2)
+stands unchanged; what is amended is the *feed* that drives it.
+
+**The finding.** §3.2 and CT-3 R1-Q1 both rest on the premise that the
+wallet's refresh loop delivers every block from genesis, so wiring the tree to
+the merge is "free." The premise is false. Two facts about the producer:
+
+- **`synced_height + 1` start.** `produce_scan_result` begins at
+  `original_start = synced_height + 1` (`local_refresh.rs:589`), not at
+  `BlockHeight(0)`. The genesis-off-by-one case.
+- **Birthday floor.** A floored wallet deliberately does **not** scan
+  `0..birthday` — by design, there is nothing of its own there. The larger
+  case, and load-bearing: removing/lowering the floor re-introduces the exact
+  full-genesis owned-output scan cost the floor exists to avoid.
+
+The tree client requires the opposite: strictly consecutive heights **from
+genesis** (`expected = 0` when fresh, `client.rs:476`; CT3_SYNC.md:112 S3).
+The producer's range is governed by **owned-output economics**; the tree's
+range is governed by **anonymity-set completeness**. These are different
+ranges and always will be — there is no birthday shortcut to a *global*
+anonymity set, by construction. Genesis-off-by-one and the birthday gap are
+two instances of one mismatch; a genesis-seed step fixes only the first and
+leaves floored wallets with a tree missing `0..birthday`, i.e. **silent
+corrupt membership for every output below the floor**. This is the
+`16-architectural-inheritance.mdc` shape: the merge-drives-ingest trait
+surface is right, but "the producer's blocks are the tree's blocks" is the
+inherited-from-Monero falsehood (Monero's wallet has no genesis-anchored
+global structure to maintain).
+
+**The resolution: fork three — separate the feeds.** The owned-output scanner
+keeps its birthday floor. The tree gets its own genesis-to-tip leaf feed that
+ignores both `synced_height + 1` and the floor. They share block fetches where
+ranges overlap (`birthday..tip` fetched once, feeding both consumers); the
+tree additionally pulls `0..birthday`. There is no special "genesis seed"
+step — there is a genesis-anchored tree feed of which height 0 is simply the
+first block.
+
+**Why fork three and not "un-defer the bulk-leaf RPC" — the cost-asymmetry
+measurement.** The hinge is the per-output cost of feeding the tree
+(leaf-extract) vs. feeding the owned-output scanner (trial-decrypt), measured
+against live code:
+
+- **Leaf extraction** (`curve_tree_decode.rs`): per output, a byte-copy of
+  `output_key`/`commitment`, a commitment-index lookup, and a `target`
+  classification. **Zero elliptic-curve ops, zero KEM, zero per-output
+  hashing.**
+- **Owned-output trial-decrypt** (`scan.rs` `scan_transaction`): per output,
+  an Ed25519 point decompression (`output.key.decompress()`) **plus a hybrid
+  KEM decapsulation** — X25519 ECDH **and** ML-KEM-768 lattice decapsulation
+  (`scan_output_recover_with_ml_kem_dk`, `shared_key.rs`), then further hashing
+  on a match. **Two-to-three orders of magnitude more per output.**
+
+So leaf extraction is cheap relative to trial-decrypt. Genesis-to-tip
+leaf-extraction for the tree is therefore *not* equivalent to an unfloored
+scan: the floor's saving is the expensive trial-decrypt below birthday, which
+fork three preserves. The bulk-leaf RPC (deferred in CT-3 R1-Q1) would make
+even the *block fetch* cheap, but it is not required for correctness — fork
+three is correct today with block-derived extraction. The bulk RPC becomes a
+fetch-cost optimization, not a correctness prerequisite.
+
+**Rejected (recorded so it is not re-proposed): segment-root partial tree.**
+Holding only the `R_k` segment-root commitments for `0..birthday` and full
+leaves only above it. The cost measurement kills it: its sole justification was
+avoiding sub-birthday work, but that work is now measured as *cheap*
+(extraction, not scan), so the shortcut saves the cheap axis while adding the
+genuinely hard thing — a store-backed path-assembly that serves scattered
+sub-birthday siblings on demand, which is unbuilt (F5) and carries the
+targeted-fetch ownership-oracle risk. It trades cheap, correct, simple
+genesis-to-tip extraction for an expensive, unbuilt, privacy-fraught partial
+structure: a worse design dressed as an optimization.
+
+**CT-3 R1-Q1 reopening (narrowed).** CT-3 R1-Q1 deferred the bulk-leaf RPC on
+the reasoning that "forward sync is block-derived and the wallet gets every
+block from the refresh loop anyway." That reasoning assumed genesis-anchored
+block delivery, which the birthday floor falsifies for any wallet flooring
+above genesis: such a wallet must run a **separate genesis-to-tip block fetch
+for the tree**, which the deferral's cost model did not account for. The
+reversion clause's spirit ("forward-sync data-source decision rested on a
+producer behavior that doesn't hold") is triggered. **Disposition:** the
+reopening resolves to *"the tree gets its own full-range block feed"* (fork
+three), **not** *"un-defer the bulk RPC"* — the cost asymmetry above shows
+block-derived extraction is cheap enough that the bulk RPC stays deferred as a
+fetch-cost optimization with its original reversion clause intact. Recorded
+against CT-3 R1-Q1 so the deferral's premise correction is auditable from
+both docs.
+
+The falsified premise was false in a *bounded* way — false on the **fetch**
+axis (a floored wallet does not get `0..birthday` blocks from the refresh
+loop), true on the **extraction** axis (extraction stays cheap). The narrowed
+reopening trigger names the axis it fires on so it is measurable, not vague:
+**the fetch cost becomes load-bearing when genesis-to-tip block download for
+the tree dominates fresh-wallet sync wall-time to the point where bulk-leaf
+fetch would materially cut it** — leaves are a fraction of block bytes (no
+`tx_extra` beyond the `0x07` tag, no signatures, no range proofs). That is a
+bandwidth/wall-time measurement against a real chain length, so it is a
+**post-genesis observation** (cannot be decided pre-genesis) — the trigger is
+"measured on fresh-wallet sync wall-time, post-genesis."
+
+**F5 coupling (one scaling axis, two deferred items).** Path assembly reads
+the **in-memory leaf vec**: `assemble_path` runs
+`build_layers(assemble_leaf_stream(&self.entries, …))` (`assemble.rs:84–85`)
+— the store-backed `root_at` is only the integrity gate (`assemble.rs:71–75`),
+the branches come from `entries`. So the genesis-anchored feed makes the
+in-memory `entries` vec **genesis-to-tip-sized** (it is what the feed fills).
+F5's deferral (store-backed assembly; R1-Q6 V3.0 whole-tree-in-memory
+disposition) is therefore *coupled* to this feed: F5's firing condition is
+"in-memory tree exceeds budget," which is the **same post-genesis-measurement
+class** as the bulk-RPC trigger above — both are functions of **chain length**,
+both correctly wait for the same field data. Recording the coupling here so the
+two deferrals are seen as one scaling axis, not two independent "revisit if
+slow"s.
+
+**Round-3 design questions (must close before CT-5a commit 4 lands the
+mechanism):**
+
+- **R3-Q1 — feed driver shape.** Second output on `produce_scan_result`
+  (tree-leaf vec spanning the tree's range) vs. a second producer/loop
+  dedicated to the tree. Constraint: the shared `birthday..tip` block fetch
+  must happen once, not twice.
+- **R3-Q2 — fresh-wallet genesis backfill.** On a fresh floored wallet the
+  tree must ingest `0..birthday` before (or concurrent with) the first
+  owned-output merge. Sequencing vs. the ingest-ack-before-commit ordering
+  (R1-Q1): does genesis backfill run as its own pre-roll, or interleave?
+- **R3-Q3 — `synced_height` for the tree (RESOLVED, confirmed in code).** The
+  tree has its own last-ingested cursor `ingested_tip_height: Option<BlockHeight>`
+  (`client.rs:205`), `None` when fresh; `ingest_block` computes
+  `expected = ingested_tip_height + 1` (or `BlockHeight(0)` when `None`,
+  `client.rs:476–478`). It is structurally decoupled from the wallet's
+  `synced_height`. The merge must compute the tree's next expected height from
+  this cursor, not `synced_height`. (Mechanism only; R3-Q1/Q2 still drive how
+  the feed reaches that height.)
+- **R3-Q4 — already-synced wallet adopting the tree.** A wallet that synced
+  owned outputs *before* the tree existed (or after a tree-store wipe) has
+  `synced_height ≫ 0` but a fresh tree. The tree feed must backfill
+  `0..synced_height` independent of the owned-output cursor. Same mechanism as
+  R3-Q2, different trigger.
+- **R3-Q5 — DoD impact.** Does fork three change the CT-5a commit-6 KATs
+  (root-match through the engine path)? The genesis-anchored feed must be the
+  thing under test, not the floored producer.
+
+**Genesis-feed source (RESOLVED, confirmed in code) — no genesis special
+case.** The genesis block's leaves flow through the *same* decode path as every
+other block: `curve_tree_decode.rs` has no `genesis` / `height == 0` /
+chain-params branch (grep-clean), and the client's `ingest_block` expects
+`BlockHeight(0)` when fresh by construction (`client.rs:476`). So the genesis
+feed is "fetch block 0, run the same decode, ingest at `BlockHeight(0)`,"
+identical to every height — there is no hand-built genesis leaf set and no
+second source of truth. The "genesis seed step" from earlier rounds fully
+dissolves: there is no special genesis step, only a feed that *starts* at 0
+(ignoring the floor and `synced_height + 1`). The remaining R3-Q1/Q2 work is
+purely "where does the tree feed's block source come from for `0..start`," and
+the answer must keep genesis as `chain[0]` fetched the same way as any block —
+if it ever routes around the daemon for genesis, that reintroduces the
+two-sources-of-truth hazard and is rejected.
+
+Until R3-Q1/Q2/Q4/Q5 close, the §3.2 mechanism is specified but **unfed**;
+CT-5a commit 4 does not land. (R3-Q3 and the genesis-feed source are resolved.)
 
 ### 3.3 Reorg rollback + poison recovery
 
@@ -649,7 +836,7 @@ initial pull (struck through).
 | ID | Question | Resolution |
 |----|----------|------------|
 | **R1-Q1** | Where the `CurveTreeClient` lives + single-writer cell (§3.1) | ~~refresh-owned~~ → ~~`Engine` field under the RwLock~~ → **`CurveTreeActor` + `Clone` `CurveTreeHandle`** (Round 2, mirror `KeyActor`); merge is sole ingest-sender; consistency via ingest-ack-before-ledger-commit |
-| **R1-Q2** | Ingest site + what `ScanResult` carries (§3.2) | **merge drives `handle.ingest`**, commits ledger on ack; `ScanResult` grows **two transit fields** — full per-block leaf set + per-block header root (both dropped after merge) — A1 frozen |
+| **R1-Q2** | Ingest site + what `ScanResult` carries (§3.2) | **merge drives `handle.ingest`**, commits ledger on ack; `ScanResult` grows **two transit fields** — full per-block leaf set + per-block header root (both dropped after merge) — A1 frozen. **Feed amended by §3.2.1 (Round 3): genesis-anchored, not the floored producer** |
 | **R1-Q3** | `ScannableBlock → BlockLeaves` decode = consensus drain order (§3.2) | **dedicated KAT vs the `ct2_tier_a.json` oracle** (A2); lands CT-5a |
 | **R1-Q4** | Reorg ordering + poison handling (§3.3) | **rollback in `handle_reorg`** under the same guard, atomic with the ledger rewind; **automatic** drop-and-reopen |
 | **R1-Q5** | `synthetic_tree` disposition (§3.4) | **delete** (no users); migrate tests to the real client + CT-2 fixture; lands CT-5c |
@@ -1122,6 +1309,12 @@ boundary).
   (R1-Q1, mirror `KeyActor`), spawn on engine open with the `Engine` holding the
   handle, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and the
   merge-driven `handle.ingest` with ingest-ack-before-ledger-commit (R1-Q2).
+  **The merge-driven ingest (commit 4) is gated on §3.2.1 (Round-3) closing:
+  the tree feed is genesis-anchored, not the birthday-floored producer; the
+  ingest *mechanism* below is unchanged but its *feed* is pending R3-Q1/Q2/Q4/Q5
+  (R3-Q3 cursor + genesis-feed source resolved in code).
+  Commits for the actor lifecycle, the decode + KAT, and reorg/respawn are not
+  gated and may proceed.**
   **The per-block leaf-set materialization (E4) bounds its buffer by the consensus
   block-size limit *before* allocation, not by the daemon's received blob length
   (X7); DoD asserts the bound.**
@@ -1256,6 +1449,8 @@ boundary).
   `CurveTreeHandle`; merge sole ingest-sender; ingest-ack-before-commit (§3.1).
 - [x] R1-Q2 ingest site + `ScanResult` growth — **resolved:** merge-driven actor
   ingest, two transit fields (leaf set + header root), A1 frozen (§3.2).
+  **Mechanism stands; feed amended by §3.2.1 (Round-3 post-closure pin) — the
+  tree feed is genesis-anchored, not the birthday-floored producer.**
 - [x] R1-Q3 `BlockLeaves` decode = CT-2 drain order — **resolved:** dedicated
   KAT vs the oracle (§3.2).
 - [x] R1-Q4 reorg ordering + poison handling — **resolved:** rollback in
