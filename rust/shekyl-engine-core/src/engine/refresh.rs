@@ -1104,6 +1104,24 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // primitive at M3b), so the outer engine read-guard `g` is
         // held only for the bounded, compute-only merge — no `.await`
         // runs while it is held.
+        // CT-5a §3.2 (R1-Q2): feed the curve tree this result's height
+        // range (genesis/birthday catch-up + per-range ingest, cursor-
+        // driven) BEFORE the ledger merge, so the ledger tip never
+        // advances past the tree (ack-before-commit, O2). The ingest is
+        // idempotent under the retry loop — a re-produced result is
+        // skipped up to the tree's own cursor — and terminal on failure
+        // (the loop retries only `ConcurrentMutation`). The outer engine
+        // read-guard is held across the ingest's `.await`s, which is
+        // sound: the curve-tree actor never acquires the engine lock, and
+        // the merge below takes a fresh guard for its synchronous body.
+        if let Err(e) = {
+            let g = engine_arc.read().await;
+            g.ingest_scan_result_into_curve_tree(&result).await
+        } {
+            _ = completion.send(Err(e));
+            return;
+        }
+
         let merge = {
             let g = engine_arc.read().await;
             g.apply_scan_result(result)
@@ -1484,7 +1502,7 @@ impl<
         });
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            runtime
+            let result = runtime
                 .block_on(self.refresh.produce_scan_result(
                     snapshot.clone(),
                     &self.daemon,
@@ -1493,7 +1511,13 @@ impl<
                     progress_tx.clone(),
                     &sink,
                 ))
-                .map_err(Into::into)
+                .map_err(Into::<RefreshError>::into)?;
+            // CT-5a §3.2 (R1-Q2): feed the curve tree this result's range
+            // before `refresh_with` merges it (ack-before-commit, O2).
+            // Cursor-driven + idempotent, so re-running it on a retried
+            // attempt is safe. Mirrors the async `run_refresh_task` path.
+            runtime.block_on(self.ingest_scan_result_into_curve_tree(&result))?;
+            Ok(result)
         })
     }
 
@@ -3127,6 +3151,98 @@ mod start_refresh_integration_tests {
         // slot guard drops as the function returns). Poll briefly
         // for slot release; bounded so a regression does not hang
         // the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
+    }
+
+    /// CT-5a §3.2 (R1-Q2) forward-path KAT: a hybrid refresh feeds the
+    /// curve tree the full genesis-anchored range ahead of the ledger
+    /// merge (ack-before-commit, O2). Where
+    /// [`hybrid_linear_scan_5_blocks_advances_synced_height`] asserts the
+    /// *ledger* tip, this asserts the *tree* cursor: a fresh wallet whose
+    /// producer range is `1..6` must leave the tree's
+    /// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight(5))`
+    /// — height `0` came from the genesis/birthday backfill (daemon-
+    /// fetched + decoded by the ingest pre-pass, since the producer's
+    /// floored range never includes it), heights `1..6` from the
+    /// producer's `block_leaves`. The two-source feed is the §3.2.1 R3-Q1
+    /// shape; this proves it runs through the live `run_refresh_task`
+    /// wiring, not just the unit helper.
+    ///
+    /// The reorg resume-from-cursor KAT (D4) and the non-coinbase
+    /// sub-birthday-sibling completeness KAT (Tier-B-gated, CT-5c) are
+    /// the named follow-ons; this fixture is coinbase-only/empty-leaf, so
+    /// it proves the cursor advances over the full range but not the
+    /// membership-path correctness of non-coinbase siblings.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
+        const MASTER_SEED: [u8; 32] = [
+            0xc7, 0x5e, 0xed, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+            0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1a, 0x1b, 0x1c,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // 6 blocks at heights 0..=5: chain[0] = genesis; the producer
+        // scans 1..=5 from synced_height 0, and the ingest pre-pass
+        // backfills height 0 from the daemon.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Pre-refresh: a fresh tree has no ingested tip.
+        {
+            let g = arc.read().await;
+            let tip = g
+                .curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read on the live actor");
+            assert_eq!(tip, None, "a fresh wallet's curve tree has no ingested tip");
+        }
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+        let summary = handle
+            .join()
+            .await
+            .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
+        assert_eq!(summary.processed_height_range, 1..6);
+
+        // Post-refresh: the tree cursor covers genesis-through-tip. The
+        // merge advanced the ledger only after this ingest acked
+        // (ack-before-commit), so the tree tip is never behind the ledger.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.synced_height(),
+                5,
+                "post-refresh ledger tip matches the producer range upper bound"
+            );
+            let tip = g
+                .curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read on the live actor");
+            assert_eq!(
+                tip,
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "tree cursor covers genesis (backfilled) through the producer range tip"
+            );
+        }
+
+        // Bounded poll for slot release so a regression cannot hang the
+        // suite (mirrors the sibling hybrid tests).
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             tokio::task::yield_now().await;

@@ -321,6 +321,39 @@ pub enum RefreshError {
         /// message.
         context: &'static str,
     },
+
+    /// Curve-tree ingest failed while feeding the tree the result's
+    /// height range **ahead of** the ledger merge — the
+    /// ack-before-commit half of CT-5 §3.2 (R1-Q2) under the fork-three
+    /// genesis-anchored feed (§3.2.1). The tree is updated and
+    /// acknowledged before [`super::Engine::apply_scan_result`] advances
+    /// the ledger, so the ledger tip never outruns the tree (O2).
+    ///
+    /// **Terminal, not retried.** The refresh retry loop retries only
+    /// [`Self::ConcurrentMutation`]; a retry would re-run the same
+    /// cursor-driven ingest and hit the same failure. Surfacing here
+    /// keeps the ledger from advancing past an un-updated tree rather
+    /// than silently diverging the two tips.
+    ///
+    /// `context` is a compile-time-fixed classification named at the
+    /// call site — no daemon/scanner bytes flow in, matching the
+    /// `&'static str`-only discipline of
+    /// [`Self::InternalInvariantViolation`]. Daemon transport failures
+    /// during the genesis/birthday backfill fetch surface through
+    /// [`Self::Io`] (the established `fetch_block_hash_at` mapping), not
+    /// here; this variant covers the tree-feed-specific steps (backfill
+    /// block decode, the actor ingest/rollback handshake).
+    ///
+    /// A fail-stopped actor ([`super::curve_tree_actor::CurveTreeHandleError::Unavailable`])
+    /// maps here today; the engine-side respawn that would make it
+    /// transient lands in CT-5a commit 5 (R1-Q4).
+    #[error("curve-tree ingest failed: {context}")]
+    CurveTreeIngest {
+        /// Compile-time-fixed name of the ingest failure class, named
+        /// at the call site so audit can read every distinguishable
+        /// case from source.
+        context: &'static str,
+    },
 }
 
 // --- Ledger ----------------------------------------------------------------
