@@ -517,7 +517,7 @@ mod tests {
 
     fn mk_transfer(seed: u8, block_height: u64, key_image: Option<KeyImage>) -> TransferDetails {
         TransferDetails {
-            tx_hash: [seed; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
             internal_output_index: u64::from(seed),
             global_output_index: u64::from(seed),
             block_height,

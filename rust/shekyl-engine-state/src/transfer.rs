@@ -12,6 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_oxide::primitives::Commitment;
+use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -85,7 +86,7 @@ pub struct FcmpPrecomputedPath {
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     pub internal_output_index: u64,
     pub global_output_index: u64,
     pub block_height: u64,
@@ -356,7 +357,7 @@ mod tests {
 
     fn sample() -> TransferDetails {
         TransferDetails {
-            tx_hash: [0xAB; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([0xAB; 32]),
             internal_output_index: 3,
             global_output_index: 1234,
             block_height: 100,
@@ -412,7 +413,7 @@ mod tests {
         });
         td.output_handle = Some(shekyl_crypto_pq::handle::derive_output_handle(
             &[0x77; 32],
-            &td.tx_hash,
+            td.tx_hash.as_bytes(),
             td.internal_output_index,
         ));
         td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));

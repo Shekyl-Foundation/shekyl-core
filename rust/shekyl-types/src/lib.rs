@@ -108,7 +108,7 @@ macro_rules! hash32 {
         // PR C migrates require `Ord` keys.
         #[derive(
             Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::serde::Serialize, ::serde::Deserialize, ::zeroize::Zeroize,
         )]
         #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
         #[serde(transparent)]
@@ -131,6 +131,20 @@ macro_rules! hash32 {
             /// Borrow the raw bytes (e.g. for a hash input or a map key).
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
+            }
+        }
+
+        // Generic byte-view for the whole family of `&[u8]` / `AsRef<[u8]>`
+        // consumers (`hex::encode`, hashers, length-prefixed writers). This is
+        // the single point that keeps a typed hash usable as bytes wherever a
+        // generic byte sink is wanted, so call sites need no `.as_bytes()`
+        // sprinkling. It does **not** weaken type distinctness: a function that
+        // names `&$name` still accepts only `$name`; only generic byte APIs are
+        // satisfied. Distinct from the fixed-size `&[u8; 32]` accessor above,
+        // which the crypto layer needs (rule 18).
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
                 &self.0
             }
         }

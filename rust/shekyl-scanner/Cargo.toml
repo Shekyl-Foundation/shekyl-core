@@ -29,6 +29,9 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-units = { path = "../shekyl-units" }
+# `TxHash` newtype: the scanner lifts oxide's raw `[u8; 32]` txid into the
+# typed domain at the `from_wallet_output` boundary.
+shekyl-types = { path = "../shekyl-types" }
 
 [features]
 default = ["std"]

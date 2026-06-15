@@ -9,6 +9,10 @@ description = "Foundational state-shaped domain newtypes (heights, indices, hash
 
 [dependencies]
 serde = { workspace = true }
+# Hash newtypes derive `Zeroize` so they can sit in `Zeroize`-deriving
+# containers (e.g. `TransferDetails`), matching `AtomicUnits`. Non-secret
+# data, but the wipe must compile where the container wipes structurally.
+zeroize = { version = "^1.5", features = ["zeroize_derive"] }
 # `postcard_schema::Schema` is opt-in: only crates that persist these
 # newtypes into snapshot-checked blocks (today `shekyl-engine-state`) need
 # the derive. Foundational consumers (difficulty, consensus, economics)

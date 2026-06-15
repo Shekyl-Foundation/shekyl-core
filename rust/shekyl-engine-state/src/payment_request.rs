@@ -8,6 +8,7 @@
 //! Normative: `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.9, §5.7.11.
 
 use serde::{Deserialize, Serialize};
+use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::local_label::LocalLabel;
@@ -88,7 +89,7 @@ pub struct PaymentRequest {
     pub expiry: Option<u64>,
     pub state: PaymentRequestState,
     #[serde(default)]
-    pub matched_tx_hash: Option<[u8; 32]>,
+    pub matched_tx_hash: Option<TxHash>,
     #[serde(default)]
     pub matched_output_index: Option<u64>,
 }

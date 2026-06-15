@@ -91,7 +91,7 @@ mod tests {
     fn make_td(amount: u64, height: u64) -> TransferDetails {
         use crate::transfer::SPENDABLE_AGE;
         TransferDetails {
-            tx_hash: [0u8; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
             internal_output_index: 0,
             global_output_index: 0,
             block_height: height,

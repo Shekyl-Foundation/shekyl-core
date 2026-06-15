@@ -417,7 +417,7 @@ mod tests {
         let tx_hash = [seed; 32];
         let internal_output_index = u64::from(seed);
         TransferDetails {
-            tx_hash,
+            tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
             internal_output_index,
             global_output_index: 1_000 + u64::from(seed),
             block_height: 100,

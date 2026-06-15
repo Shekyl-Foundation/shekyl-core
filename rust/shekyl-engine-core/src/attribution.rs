@@ -13,6 +13,7 @@ use shekyl_crypto_pq::label::{
 use shekyl_engine_state::{
     LedgerBlock, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
+use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 type LabelResidue = HashMap<([u8; 32], u64), [u8; 8]>;
@@ -78,7 +79,8 @@ pub(crate) fn apply_receive_attributions(
         let Some(td) = ledger.transfer_mut(idx) else {
             continue;
         };
-        let key = (td.tx_hash, td.internal_output_index);
+        // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
+        let key = (td.tx_hash.to_bytes(), td.internal_output_index);
         let label_pt = residue
             .get(&key)
             .copied()
@@ -104,7 +106,7 @@ pub fn match_inbound_attribution(
     label_plaintext: &[u8; 8],
     amount_atomic: AtomicUnits,
     _block_height: u64,
-    tx_hash: [u8; 32],
+    tx_hash: TxHash,
     output_index: u64,
     payment_requests: &mut [PaymentRequest],
 ) -> ReceiveAttribution {
@@ -175,7 +177,7 @@ mod tests {
             &shekyl_crypto_pq::label::sentinel_plaintext(),
             AtomicUnits::from_raw(100),
             10,
-            [1u8; 32],
+            shekyl_types::TxHash::from_bytes([1u8; 32]),
             0,
             &mut reqs,
         );
@@ -188,8 +190,14 @@ mod tests {
         let rid = 0x00_00_00_00_12_34_u64;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 500)];
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(500), 10, [2u8; 32], 1, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(500),
+            10,
+            shekyl_types::TxHash::from_bytes([2u8; 32]),
+            1,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_output_index, Some(1));
@@ -202,8 +210,14 @@ mod tests {
         let mut reqs = vec![sample_request(rid, 1)];
         // Amount mismatch (echo carries rid=99 but request expects amount 1,
         // transfer is for 2) ⇒ no match, but the echo is still classified.
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(2), 0, [0u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(2),
+            0,
+            shekyl_types::TxHash::from_bytes([0u8; 32]),
+            0,
+            &mut reqs,
+        );
         assert!(matches!(attr, ReceiveAttribution::LabelUnknown { .. }));
         assert_eq!(reqs[0].state, PaymentRequestState::Pending);
     }
@@ -214,8 +228,14 @@ mod tests {
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 100)];
         reqs[0].state = PaymentRequestState::Expired;
-        let attr =
-            match_inbound_attribution(&pt, AtomicUnits::from_raw(100), 10, [3u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            &pt,
+            AtomicUnits::from_raw(100),
+            10,
+            shekyl_types::TxHash::from_bytes([3u8; 32]),
+            0,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
     }
@@ -225,7 +245,7 @@ mod tests {
         use shekyl_engine_state::LedgerBlock;
 
         let rid = 7;
-        let tx_hash = [0xAB; 32];
+        let tx_hash = shekyl_types::TxHash::from_bytes([0xAB; 32]);
         let mut reqs = vec![sample_request(rid, 50)];
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(tx_hash);
@@ -244,7 +264,7 @@ mod tests {
         use shekyl_oxide::primitives::Commitment;
 
         let rid = 8;
-        let tx_hash = [0xCD; 32];
+        let tx_hash = shekyl_types::TxHash::from_bytes([0xCD; 32]);
         let mut reqs = vec![sample_request(rid, 50)];
         reqs[0].state = PaymentRequestState::Matched;
         reqs[0].matched_tx_hash = Some(tx_hash);

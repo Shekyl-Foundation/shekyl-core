@@ -51,7 +51,7 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
     let key = &key_scalar * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
     TransferDetails {
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         internal_output_index: seed & 0xff,
         global_output_index: seed,
         block_height: height,

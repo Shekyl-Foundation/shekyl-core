@@ -65,6 +65,7 @@ use shekyl_engine_state::{
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
 use shekyl_oxide::primitives::Commitment;
+use shekyl_types::TxHash;
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
@@ -348,7 +349,7 @@ pub struct MergeProjectionBenchFixture {
 /// fields — a shape mismatch would let the bench measure the wrong thing.
 fn unpopulated_transfer(seed: u64) -> TransferDetails {
     let lo = (seed & 0xff) as u8;
-    let tx_hash = [lo; 32];
+    let tx_hash = TxHash::from_bytes([lo; 32]);
     TransferDetails {
         tx_hash,
         internal_output_index: seed,
@@ -384,7 +385,8 @@ impl MergeProjectionBenchFixture {
         for i in 0..n {
             let seed = i as u64;
             let td = unpopulated_transfer(seed);
-            let key = (td.tx_hash, td.internal_output_index);
+            // residue is keyed by the scanner's raw `[u8; 32]` txid; convert.
+            let key = (td.tx_hash.to_bytes(), td.internal_output_index);
             // A realistically-sized on-chain hybrid ciphertext (~1088-byte
             // ML-KEM + 32-byte X25519), so the per-output `clone()` in the
             // post-pass reflects production memcpy cost.

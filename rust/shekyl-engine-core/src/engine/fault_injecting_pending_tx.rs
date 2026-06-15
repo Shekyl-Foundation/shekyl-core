@@ -221,7 +221,7 @@ mod tests {
             &self,
             _id: ReservationId,
         ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
-            async { Ok(TxHash([1u8; 32])) }
+            async { Ok(TxHash::from_bytes([1u8; 32])) }
         }
 
         fn discard(
@@ -260,7 +260,7 @@ mod tests {
         let pending = wrapper.build(standard_request()).await.expect("build ok");
         assert_eq!(wrapper.outstanding(), 1);
         let hash = wrapper.submit(pending.id).await.expect("submit ok");
-        assert_eq!(hash.0, [1u8; 32]);
+        assert_eq!(hash.as_bytes(), &[1u8; 32]);
         assert_eq!(wrapper.queued_build_failures(), 0);
         assert_eq!(wrapper.queued_submit_failures(), 0);
     }
