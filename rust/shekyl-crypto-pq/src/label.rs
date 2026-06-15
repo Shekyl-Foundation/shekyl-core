@@ -192,7 +192,7 @@ mod tests {
 
         // 4096 outputs × 8 octets = 32_768 samples/arm ⇒ ~128 expected per
         // 256-value bucket; the uniformity statistic has df = 255.
-        const N: u64 = 4096;
+        const N: u32 = 4096;
         // Strict rejection threshold for df = 255. Wilson–Hilferty at α ≈ 1e-6
         // gives ≈ 377; 400 leaves margin so a correct PRF (chi2 ≈ 255 ± 22.6)
         // never false-fails, while a degenerate key lands in the tens of
@@ -203,9 +203,12 @@ mod tests {
         let real = encode_request_plaintext(0x0000_1234_5678_9ABC).expect("valid rid");
         assert!(!is_sentinel_plaintext(&real));
 
-        let mut sentinel_hist = [0u64; 256];
-        let mut real_hist = [0u64; 256];
-        let mut broken_hist = [0u64; 256];
+        // u32 counts: max per arm is N*8 = 32_768, exactly representable in
+        // both u32 and f64, so `f64::from` is lossless (the workspace denies
+        // `cast_precision_loss` for crypto crates — see rust/Cargo.toml).
+        let mut sentinel_hist = [0u32; 256];
+        let mut real_hist = [0u32; 256];
+        let mut broken_hist = [0u32; 256];
 
         for i in 0..N {
             // Deterministic per-output combined_ss; models an independent
@@ -214,7 +217,7 @@ mod tests {
             Digest::update(&mut h, b"shekyl/label-indist-test-v1");
             Digest::update(&mut h, i.to_le_bytes());
             let combined_ss = h.finalize();
-            let secrets = derive_output_secrets(combined_ss.as_ref(), i);
+            let secrets = derive_output_secrets(combined_ss.as_ref(), u64::from(i));
 
             let enc_sentinel = encrypt_label_plaintext(&SENTINEL_PLAINTEXT, &secrets.k_label);
             let enc_real = encrypt_label_plaintext(&real, &secrets.k_label);
@@ -229,11 +232,11 @@ mod tests {
             }
         }
 
-        let expected = (N * 8) as f64 / 256.0;
-        let uniformity_chi2 = |hist: &[u64; 256]| -> f64 {
+        let expected = f64::from(N * 8) / 256.0;
+        let uniformity_chi2 = |hist: &[u32; 256]| -> f64 {
             hist.iter()
                 .map(|&o| {
-                    let d = o as f64 - expected;
+                    let d = f64::from(o) - expected;
                     d * d / expected
                 })
                 .sum()
@@ -258,8 +261,8 @@ mod tests {
         //     statistically identical (2×256 contingency, df = 255).
         let homogeneity_chi2: f64 = (0..256)
             .map(|b| {
-                let s = sentinel_hist[b] as f64;
-                let r = real_hist[b] as f64;
+                let s = f64::from(sentinel_hist[b]);
+                let r = f64::from(real_hist[b]);
                 if s + r == 0.0 {
                     0.0
                 } else {
