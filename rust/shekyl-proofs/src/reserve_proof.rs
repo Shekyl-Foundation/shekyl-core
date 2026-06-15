@@ -25,7 +25,7 @@ use curve25519_dalek::{
     scalar::Scalar,
 };
 use sha2::{Digest, Sha512};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 use shekyl_generators::T as T_LAZY;
 
@@ -44,21 +44,19 @@ const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
 // ── Per-output entry ────────────────────────────────────────────────
 
 /// Input data for one output in a reserve proof (prover side).
+///
+/// Holds no bare secret of its own: `proof_secrets` is itself `ZeroizeOnDrop`
+/// (wipes its HKDF scalars), and `key_image` / `output_key` are public
+/// on-chain values (a key image is a published nullifier). A reserve proof's
+/// spend authority is the *global* master key passed to
+/// [`generate_reserve_proof`] as `spend_secret_key`; there is no per-output
+/// spend secret. (A vestigial per-output `spend_secret` field — a
+/// subaddress-era artifact the prover never read — was removed in the
+/// shekyl-types secret-hardening sweep, along with the FFI `spend_secrets`
+/// parameter that fed it; V3.0 has no subaddresses.)
 pub struct ReserveOutputEntry {
     pub proof_secrets: ProofSecrets,
     pub key_image: KeyImage,
-    /// Per-output spend secret. Wrapped in `Zeroizing` so the wallet secret
-    /// wipes on drop (rule 35) — `ReserveOutputEntry` is otherwise un-`Zeroize`d
-    /// because `KeyImage`/`output_key` are public.
-    ///
-    /// NOTE: `generate_reserve_proof` does not currently read this field — it
-    /// derives `x = ho + b` from the global `spend_secret_key` and
-    /// `proof_secrets.ho`. The field (and the bytes the FFI copies into it)
-    /// appear dead; removing it would shrink the secret surface further but
-    /// touches the C ABI (rule 40), so it is filed as a follow-up rather than
-    /// done here. Until then, `Zeroizing` ensures the stored secret cannot
-    /// linger unwiped.
-    pub spend_secret: Zeroizing<[u8; 32]>,
     pub output_key: [u8; 32],
 }
 
