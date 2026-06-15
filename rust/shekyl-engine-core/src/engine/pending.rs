@@ -177,14 +177,17 @@ impl ReservationId {
 
 /// Result of [`Engine::submit_pending_tx`].
 ///
-/// Phase 1 stub: the bytes encode the [`ReservationId`] in
-/// little-endian at offsets `0..8`, with the remaining bytes left
-/// zero. Phase 2a replaces submit with a real daemon broadcast call
-/// whose response carries the daemon's reported tx hash; callers
-/// compare the field as opaque bytes either way and never rely on the
-/// stub bit pattern.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TxHash(pub [u8; 32]);
+/// The canonical [`TxHash`] from `shekyl-types`, re-exported here so the
+/// pending-tx surface keeps its `pending::TxHash` path while there is a
+/// single definition workspace-wide (`18-type-placement.mdc`: re-export,
+/// never redefine). Built from raw bytes via [`TxHash::from_bytes`].
+///
+/// Phase 1 stub: [`phase1_tx_hash`] encodes the [`ReservationId`] in
+/// little-endian at offsets `0..8`, with the remaining bytes left zero.
+/// Phase 2a replaces submit with a real daemon broadcast call whose
+/// response carries the daemon's reported tx hash; callers compare the
+/// bytes as opaque either way and never rely on the stub bit pattern.
+pub use shekyl_types::TxHash;
 
 // `FeePriority` migrated to `engine::fee_estimator` per PR 5
 // C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
@@ -697,7 +700,7 @@ pub(crate) fn submit_pending_tx_in_state(
 
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&id.0.to_le_bytes());
-    Ok(TxHash(bytes))
+    Ok(TxHash::from_bytes(bytes))
 }
 
 /// Discard a reservation. Returns `true` if the handle was known,
@@ -1219,7 +1222,7 @@ mod tests {
         );
 
         // Stub TxHash encodes the reservation id in the first 8 bytes.
-        assert_eq!(&tx_hash.0[..8], &pending.id.raw().to_le_bytes());
+        assert_eq!(&tx_hash.as_bytes()[..8], &pending.id.raw().to_le_bytes());
     }
 
     #[test]

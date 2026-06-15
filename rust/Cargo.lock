@@ -3879,6 +3879,7 @@ dependencies = [
  "shekyl-simple-request-rpc",
  "shekyl-staking",
  "shekyl-tx-builder",
+ "shekyl-types",
  "shekyl-units",
  "tempfile",
  "thiserror",

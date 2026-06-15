@@ -277,7 +277,7 @@ impl DaemonEngine for DaemonClient {
                 });
             };
 
-            let hash = TxHash(tx.hash());
+            let hash = TxHash::from_bytes(tx.hash());
 
             let resp = self.publish_transaction(&tx).await?;
             Ok(submit_outcome_from_response(&resp, hash))
@@ -423,7 +423,7 @@ mod tests {
     /// A `status == "OK"` reply is a fresh accept into the pool.
     #[test]
     fn submit_ok_maps_to_submitted() {
-        let hash = TxHash([7u8; 32]);
+        let hash = TxHash::from_bytes([7u8; 32]);
         let resp = TxRelayResponse {
             status: "OK".to_string(),
             ..Default::default()
@@ -440,7 +440,7 @@ mod tests {
     /// unmodeled surface (the F1 trim contract).
     #[test]
     fn submit_ok_tolerates_unmodeled_daemon_fields() {
-        let hash = TxHash([1u8; 32]);
+        let hash = TxHash::from_bytes([1u8; 32]);
         let resp: TxRelayResponse = serde_json::from_value(json!({
             "status": "OK",
             "not_relayed": true,
@@ -462,7 +462,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::DoubleSpend
             }
@@ -477,7 +477,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::FeeTooLow
             }
@@ -495,7 +495,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::Malformed
             }
@@ -515,7 +515,7 @@ mod tests {
         }))
         .expect("unmodeled rejection flag tolerated");
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::Malformed
             }
@@ -532,7 +532,7 @@ mod tests {
             fee_too_low: true,
         };
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash([0u8; 32])),
+            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::DoubleSpend
             }

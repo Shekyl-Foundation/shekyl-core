@@ -41,6 +41,9 @@ shekyl-address = { path = "../shekyl-address" }
 # (`TxRecipient`/`PendingTx` fees, `OutputClaim` secret amount,
 # `OutputSelector`/`FeeEstimator` targets, claim/multisig-intent amounts).
 shekyl-units = { path = "../shekyl-units" }
+# Canonical state-shaped newtypes; `TxHash` is re-exported from
+# `engine::pending` (no local redefinition — see `18-type-placement.mdc`).
+shekyl-types = { path = "../shekyl-types" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }

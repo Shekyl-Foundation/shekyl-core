@@ -382,7 +382,7 @@ fn map_signer_error(err: &SignerError) -> SendError {
 fn phase1_tx_hash(id: ReservationId) -> TxHash {
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&id.raw().to_le_bytes());
-    TxHash(bytes)
+    TxHash::from_bytes(bytes)
 }
 
 #[allow(private_bounds)]
@@ -546,7 +546,7 @@ where
         let tx_hash = state
             .in_flight
             .get(&id)
-            .map(|flight| TxHash(shekyl_crypto_hash::cn_fast_hash(&flight.tx_bytes)))
+            .map(|flight| TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&flight.tx_bytes)))
             .unwrap_or_else(|| phase1_tx_hash(id));
 
         emit_pending_tx_diagnostic(
@@ -1321,7 +1321,9 @@ mod tests {
 
     impl TransactionSubmitter for TestTransactionSubmitter {
         async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-            Ok(TxHash(shekyl_crypto_hash::cn_fast_hash(&tx_bytes)))
+            Ok(TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(
+                &tx_bytes,
+            )))
         }
     }
 
@@ -1592,7 +1594,7 @@ mod tests {
         let tx_hash = pending.submit(built.id).await.expect("submit ok");
         assert_eq!(
             tx_hash,
-            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
         );
         assert_eq!(pending.outstanding(), 0);
 
@@ -2309,7 +2311,7 @@ mod tests {
         let tx_hash = pending.submit(built.id).await.expect("submit ok");
         assert_eq!(
             tx_hash,
-            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
         );
         assert_eq!(daemon.submitted_count(), 1);
 
@@ -2348,7 +2350,7 @@ mod tests {
             .expect("daemon dedup accepts identical bytes");
         assert_eq!(
             hash_again,
-            TxHash(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
+            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
         );
         assert_eq!(daemon.submitted_count(), 1);
 

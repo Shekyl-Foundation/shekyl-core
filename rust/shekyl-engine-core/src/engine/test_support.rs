@@ -563,7 +563,7 @@ impl DaemonEngine for TestDaemon {
     ) -> impl Send + std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         let state = self.state.clone();
         async move {
-            let hash = TxHash(shekyl_crypto_hash::cn_fast_hash(&tx_bytes));
+            let hash = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&tx_bytes));
             let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.submit_errors.pop_front() {
                 return Err(err);
@@ -827,7 +827,10 @@ mod tests {
         let outcome = daemon.submit_transaction(bytes.clone()).await.unwrap();
         match outcome {
             TxSubmitOutcome::Submitted { hash } => {
-                assert_eq!(hash, TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes)));
+                assert_eq!(
+                    hash,
+                    TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes))
+                );
             }
             other => panic!("expected Submitted, got {other:?}"),
         }
@@ -847,7 +850,7 @@ mod tests {
         let second = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let third = daemon.submit_transaction(bytes.clone()).await.unwrap();
 
-        let expected = TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(matches!(second, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
         assert!(matches!(third, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
@@ -902,7 +905,7 @@ mod tests {
         let bytes = b"tx-delta".to_vec();
         let first = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let second_via_clone = clone.submit_transaction(bytes.clone()).await.unwrap();
-        let expected = TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
             matches!(second_via_clone, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected)

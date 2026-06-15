@@ -37,7 +37,7 @@ where
     D: DaemonEngine,
 {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-        let local_hash = TxHash(cn_fast_hash(&tx_bytes));
+        let local_hash = TxHash::from_bytes(cn_fast_hash(&tx_bytes));
         let outcome = self
             .daemon
             .submit_transaction(tx_bytes)
