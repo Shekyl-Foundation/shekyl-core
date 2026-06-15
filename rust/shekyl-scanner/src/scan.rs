@@ -425,7 +425,7 @@ impl InternalScanner {
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
-        if tx.version() != 2 {
+        if tx.version() != 3 {
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
@@ -468,7 +468,7 @@ impl InternalScanner {
 
             let (enc_amount, amount_tag_on_chain, enc_label, label_tag_on_chain, commitment_bytes) =
                 match &tx {
-                    Transaction::V2 {
+                    Transaction::V3 {
                         proofs: Some(ref proofs),
                         ..
                     } => match proofs.base.encrypted_amounts.get(o) {
@@ -688,7 +688,7 @@ impl InternalScanner {
         // `scan_transaction_with_cancel`'s per-output check
         // (iter 0) is necessary but not sufficient on its own —
         // for transactions where the per-output loop never runs
-        // (zero outputs; `tx.version() != 2`; malformed `extra`;
+        // (zero outputs; `tx.version() != 3`; malformed `extra`;
         // oversized per the defense-in-depth size gate) the
         // inner check is bypassed by the early-return paths
         // before any per-output iteration. Without this outer
@@ -732,7 +732,7 @@ impl InternalScanner {
                 }
             }
 
-            if matches!(tx, Transaction::V2 { .. }) {
+            if matches!(tx, Transaction::V3 { .. }) {
                 output_index_for_first_ringct_output += u64::try_from(tx.prefix().outputs.len())
                     .expect("couldn't convert amount of outputs (usize) to u64")
             }
@@ -958,7 +958,7 @@ mod gate_tests {
                 staking: None,
             })
             .collect();
-        Transaction::V2 {
+        Transaction::V3 {
             prefix: TransactionPrefix {
                 additional_timelock: Timelock::None,
                 // Non-miner classification — [`Input::ToKey`] (rather
@@ -1088,7 +1088,7 @@ mod gate_tests {
 ///   `is_cancelled()` check before delegating to the inner
 ///   helper. This delivers the F11-S between-tx safe-point even
 ///   when the inner per-output loop never runs (zero outputs,
-///   `tx.version() != 2`, malformed `extra`, or oversized per
+///   `tx.version() != 3`, malformed `extra`, or oversized per
 ///   the defense-in-depth size gate); without it cancellation
 ///   could be deferred by `N_txs × O(1)-per-tx-skip` cost.
 /// - **Never-cancels equivalence:** a closure that returns
@@ -1139,7 +1139,7 @@ mod cancel_tests {
                 staking: None,
             })
             .collect();
-        Transaction::V2 {
+        Transaction::V3 {
             prefix: TransactionPrefix {
                 additional_timelock: Timelock::None,
                 inputs: vec![Input::ToKey {
@@ -1265,7 +1265,7 @@ mod cancel_tests {
     /// outer `scan_with_cancel` per-tx loop.
     ///
     /// Build a `ScannableBlock` consisting of a miner-only block
-    /// (V2 miner-tx with `Input::Gen(0)` and no outputs; no
+    /// (v3 miner-tx with `Input::Gen(0)` and no outputs; no
     /// additional non-miner transactions). With this shape, the
     /// inner `scan_transaction_with_cancel`'s per-output loop
     /// runs zero iterations for the miner tx — so the inner
@@ -1312,7 +1312,7 @@ mod cancel_tests {
             nonce: 0,
             curve_tree_root: [0u8; 32],
         };
-        let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
+        let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V3 {
             prefix: TransactionPrefix {
                 additional_timelock: Timelock::None,
                 inputs: vec![Input::Gen(0)],
@@ -1322,7 +1322,7 @@ mod cancel_tests {
             proofs: None,
         };
         let block = Block::new(header, miner_tx, vec![])
-            .expect("Block::new accepts a V2 miner-tx + zero additional tx hashes");
+            .expect("Block::new accepts a v3 miner-tx + zero additional tx hashes");
         let scannable = ScannableBlock {
             block,
             transactions: vec![],

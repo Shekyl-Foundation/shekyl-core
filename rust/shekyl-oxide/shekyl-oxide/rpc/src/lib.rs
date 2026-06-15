@@ -718,7 +718,7 @@ pub trait Rpc: Sync + Clone {
                 .chain(block.transactions.iter().zip(&transactions))
             {
                 // If this isn't a RingCT output, or there are no outputs, move to the next TX
-                if (!matches!(tx, Transaction::V2 { .. })) || tx.prefix().outputs.is_empty() {
+                if (!matches!(tx, Transaction::V3 { .. })) || tx.prefix().outputs.is_empty() {
                     continue;
                 }
 

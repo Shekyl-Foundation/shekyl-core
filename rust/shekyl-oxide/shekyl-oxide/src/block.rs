@@ -143,7 +143,7 @@ impl Block {
 
     /// The zero-indexed position of this block within the blockchain.
     pub fn number(&self) -> usize {
-        let Transaction::V2 { prefix, .. } = &self.miner_transaction;
+        let Transaction::V3 { prefix, .. } = &self.miner_transaction;
         match prefix.inputs.first() {
             Some(Input::Gen(number)) => *number,
             _ => panic!("invalid miner transaction accepted into block"),
