@@ -5410,15 +5410,25 @@ mod tests {
     }
 
     #[test]
-    fn label_plaintext_for_payment_uri_null_ptr_returns_minus_four() {
-        let mut out = [0u8; 8];
-        out.fill(0x42);
+    fn label_plaintext_for_payment_uri_null_out_returns_minus_four() {
         let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
-        // SAFETY: null out buffer; uri is valid.
+        // SAFETY: valid uri; out is null (the case under test).
         let rc =
             unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), std::ptr::null_mut()) };
         assert_eq!(rc, -4);
-        assert_eq!(out, [0x42; 8], "output untouched on -4");
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_null_uri_leaves_out_untouched() {
+        // The "-4 on null pointer, output untouched" contract is only
+        // observable when a real out buffer is passed: a null `uri` must
+        // return -4 before any write, so the caller's buffer is preserved.
+        let mut out = [0x42u8; 8];
+        // SAFETY: out is a valid 8-byte buffer; uri is null (the case under test).
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(std::ptr::null(), out.as_mut_ptr()) };
+        assert_eq!(rc, -4);
+        assert_eq!(out, [0x42; 8], "output untouched on -4 (null uri)");
     }
 
     #[test]
