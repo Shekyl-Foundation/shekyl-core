@@ -772,6 +772,9 @@ impl Engine<SoloSigner> {
             fee_snapshot_source,
             submitter,
             std::sync::Arc::clone(&ledger),
+            // CT-5 §3.2.1 D1/D3 (commit 4b): share the curve-tree actor handle so
+            // the spend path gates selection on `min(synced_height, tree_cursor)`.
+            Some(curve_tree.clone()),
             std::sync::Arc::new(super::TracingDiagnosticSink),
             super::pending::ReservationTTLConfig::default(),
             network,

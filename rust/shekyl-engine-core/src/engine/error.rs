@@ -440,6 +440,52 @@ pub enum SendError {
         /// Human-readable reason as named at the call site.
         reason: &'static str,
     },
+
+    /// The wallet holds enough matured, non-reserved balance to cover the
+    /// spend, but the funds are **not yet spendable** because the FCMP++
+    /// curve tree is still rebuilding the membership data behind the
+    /// already-synced ledger tip (CT-5 §3.2.1, D3). This is the
+    /// adopting-wallet / tree-store-rebuild case: `synced_height` is ahead
+    /// of the tree's `ingested_tip_height`, so a membership proof cannot be
+    /// built for outputs the tree has not yet covered.
+    ///
+    /// Distinct from [`Self::InsufficientFunds`] precisely so the wallet does
+    /// **not** show a misleading "insufficient funds" when the real, honest
+    /// state is "spending temporarily unavailable while membership data
+    /// rebuilds" (`82-failure-mode-ux.mdc`). The shortfall resolves on its
+    /// own as the background backfill catches the tree up to `synced_height`;
+    /// no user action is required beyond waiting for the rebuild to finish.
+    #[error(
+        "spending temporarily unavailable: rebuilding membership data \
+         (need {needed} atomic units, {spendable_now} spendable now, \
+         {pending_rebuild} pending rebuild)"
+    )]
+    SpendUnavailableRebuilding {
+        /// Total amount-plus-fee the build attempted to cover.
+        needed: u64,
+        /// Balance spendable right now — matured, non-reserved, **and**
+        /// already covered by the curve tree.
+        spendable_now: u64,
+        /// Matured, non-reserved balance that is blocked only by the
+        /// in-progress tree rebuild and becomes spendable as the backfill
+        /// advances the tree to `synced_height`.
+        pending_rebuild: u64,
+    },
+
+    /// The FCMP++ curve-tree actor could not be queried for its
+    /// `ingested_tip_height` at build time, so the spendable set cannot be
+    /// computed (CT-5 §3.2.1). Distinct from
+    /// [`Self::SpendUnavailableRebuilding`]: that is the *benign, self-healing*
+    /// "tree is behind" state (the cursor read **succeeded** and returned a
+    /// height below `synced_height`); this is a *hard* infrastructure failure
+    /// (the cursor read **failed** — the actor is fail-stopped). It is terminal
+    /// until the engine-side actor respawn (R1-Q4) lands; a retry against a
+    /// dead actor reproduces it.
+    #[error("curve-tree unavailable: {detail}")]
+    CurveTreeUnavailable {
+        /// Stringified [`CurveTreeHandleError`](super::curve_tree_actor::CurveTreeHandleError).
+        detail: String,
+    },
 }
 
 // --- PendingTx lifecycle ---------------------------------------------------
