@@ -13,6 +13,7 @@ use shekyl_crypto_pq::label::{
 use shekyl_engine_state::{
     LedgerBlock, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
+use shekyl_units::AtomicUnits;
 
 type LabelResidue = HashMap<([u8; 32], u64), [u8; 8]>;
 
@@ -86,7 +87,7 @@ pub(crate) fn apply_receive_attributions(
         let attribution = match_inbound_attribution(
             cooperative_enabled,
             &label_pt,
-            td.amount().to_raw(),
+            td.amount(),
             td.block_height,
             td.tx_hash,
             td.internal_output_index,
@@ -100,7 +101,7 @@ pub(crate) fn apply_receive_attributions(
 pub fn match_inbound_attribution(
     cooperative_enabled: bool,
     label_plaintext: &[u8; 8],
-    amount_atomic: u64,
+    amount_atomic: AtomicUnits,
     _block_height: u64,
     tx_hash: [u8; 32],
     output_index: u64,
@@ -161,7 +162,7 @@ mod tests {
         PaymentRequest {
             id: PaymentRequestId(id),
             label: LocalLabel::from_str("inv"),
-            amount_atomic: amount,
+            amount_atomic: AtomicUnits::from_raw(amount),
             created_at: 1,
             expiry: None,
             state: PaymentRequestState::Pending,
@@ -176,7 +177,7 @@ mod tests {
         let attr = match_inbound_attribution(
             true,
             &shekyl_crypto_pq::label::sentinel_plaintext(),
-            100,
+            AtomicUnits::from_raw(100),
             10,
             [1u8; 32],
             0,
@@ -191,7 +192,15 @@ mod tests {
         let rid = 0x00_00_00_00_12_34_u64;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 500)];
-        let attr = match_inbound_attribution(true, &pt, 500, 10, [2u8; 32], 1, &mut reqs);
+        let attr = match_inbound_attribution(
+            true,
+            &pt,
+            AtomicUnits::from_raw(500),
+            10,
+            [2u8; 32],
+            1,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_output_index, Some(1));
@@ -202,7 +211,15 @@ mod tests {
         let rid = 99;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 1)];
-        let attr = match_inbound_attribution(false, &pt, 1, 0, [0u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            false,
+            &pt,
+            AtomicUnits::from_raw(1),
+            0,
+            [0u8; 32],
+            0,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Unattributed);
     }
 
@@ -212,7 +229,15 @@ mod tests {
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 100)];
         reqs[0].state = PaymentRequestState::Expired;
-        let attr = match_inbound_attribution(true, &pt, 100, 10, [3u8; 32], 0, &mut reqs);
+        let attr = match_inbound_attribution(
+            true,
+            &pt,
+            AtomicUnits::from_raw(100),
+            10,
+            [3u8; 32],
+            0,
+            &mut reqs,
+        );
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
     }

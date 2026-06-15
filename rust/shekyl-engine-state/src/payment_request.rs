@@ -8,6 +8,7 @@
 //! Normative: `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.9, §5.7.11.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
 use crate::local_label::LocalLabel;
 
@@ -81,7 +82,7 @@ pub struct PaymentRequest {
     pub id: PaymentRequestId,
     #[serde(with = "crate::serde_helpers::local_label")]
     pub label: LocalLabel,
-    pub amount_atomic: u64,
+    pub amount_atomic: AtomicUnits,
     pub created_at: u64,
     #[serde(default)]
     pub expiry: Option<u64>,
@@ -97,6 +98,11 @@ pub struct PaymentRequest {
 struct PaymentRequestSchema {
     id: PaymentRequestId,
     label: String,
+    // Wire-native `u64`, not `AtomicUnits`: the latter is
+    // `#[serde(transparent)]`/`#[repr(transparent)]` over `u64`, so the
+    // postcard wire bytes are identical and the schema snapshot stays stable
+    // (no `BOOKKEEPING_BLOCK_VERSION` bump). Keeping the mirror on the wire
+    // type is the documented pattern in `42-serialization-policy.mdc`.
     amount_atomic: u64,
     created_at: u64,
     expiry: Option<u64>,
@@ -164,7 +170,7 @@ mod tests {
         let req = PaymentRequest {
             id: PaymentRequestId(0x0000_1234_5678_9ABC),
             label: LocalLabel::from_str("INV-2026-0042"),
-            amount_atomic: 150_000_000_000,
+            amount_atomic: AtomicUnits::from_raw(150_000_000_000),
             created_at: 100,
             expiry: Some(200),
             state: PaymentRequestState::Pending,
