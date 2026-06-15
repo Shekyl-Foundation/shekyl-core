@@ -69,7 +69,6 @@ pub(crate) fn rewind_matched_payment_requests_after_reorg(
 pub(crate) fn apply_receive_attributions(
     payment_requests: &mut [PaymentRequest],
     ledger: &mut LedgerBlock,
-    cooperative_enabled: bool,
     residue: &LabelResidue,
     inserted: &[usize],
 ) {
@@ -87,7 +86,6 @@ pub(crate) fn apply_receive_attributions(
             .copied()
             .unwrap_or_else(shekyl_crypto_pq::label::sentinel_plaintext);
         let attribution = match_inbound_attribution(
-            cooperative_enabled,
             &label_pt,
             td.amount(),
             td.block_height,
@@ -100,8 +98,11 @@ pub(crate) fn apply_receive_attributions(
 }
 
 /// Core matching rules per `SUBADDRESS_UNDER_PQC.md` §5.7.9 (rid + amount).
+///
+/// Ungated (R2-F8 wallet flag retired 2026-06-15): a sentinel plaintext maps
+/// to `Unattributed`, so always classifying is a no-op for non-cooperative
+/// senders and the natural behavior for cooperative ones.
 pub fn match_inbound_attribution(
-    cooperative_enabled: bool,
     label_plaintext: &[u8; 8],
     amount_atomic: AtomicUnits,
     _block_height: u64,
@@ -109,10 +110,6 @@ pub fn match_inbound_attribution(
     output_index: u64,
     payment_requests: &mut [PaymentRequest],
 ) -> ReceiveAttribution {
-    if !cooperative_enabled {
-        return ReceiveAttribution::Unattributed;
-    }
-
     match classify_label_plaintext(label_plaintext) {
         LabelPlaintextKind::Sentinel => ReceiveAttribution::Unattributed,
         LabelPlaintextKind::Unknown(pt) => ReceiveAttribution::LabelUnknown {
@@ -174,10 +171,9 @@ mod tests {
     }
 
     #[test]
-    fn sentinel_yields_unattributed_when_cooperative_on() {
+    fn sentinel_yields_unattributed() {
         let mut reqs = vec![sample_request(1, 100)];
         let attr = match_inbound_attribution(
-            true,
             &shekyl_crypto_pq::label::sentinel_plaintext(),
             AtomicUnits::from_raw(100),
             10,
@@ -190,39 +186,28 @@ mod tests {
     }
 
     #[test]
-    fn cooperative_rid_match_tier1() {
+    fn rid_match_tier1() {
         let rid = 0x00_00_00_00_12_34_u64;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 500)];
-        let attr = match_inbound_attribution(
-            true,
-            &pt,
-            AtomicUnits::from_raw(500),
-            10,
-            shekyl_types::TxHash::from_bytes([2u8; 32]),
-            1,
-            &mut reqs,
-        );
+        let attr =
+            match_inbound_attribution(&pt, AtomicUnits::from_raw(500), 10, [2u8; 32], 1, &mut reqs);
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_output_index, Some(1));
     }
 
     #[test]
-    fn feature_off_ignores_request_tag() {
+    fn rid_echo_without_matching_request_is_label_unknown() {
         let rid = 99;
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 1)];
-        let attr = match_inbound_attribution(
-            false,
-            &pt,
-            AtomicUnits::from_raw(1),
-            0,
-            shekyl_types::TxHash::from_bytes([0u8; 32]),
-            0,
-            &mut reqs,
-        );
-        assert_eq!(attr, ReceiveAttribution::Unattributed);
+        // Amount mismatch (echo carries rid=99 but request expects amount 1,
+        // transfer is for 2) ⇒ no match, but the echo is still classified.
+        let attr =
+            match_inbound_attribution(&pt, AtomicUnits::from_raw(2), 0, [0u8; 32], 0, &mut reqs);
+        assert!(matches!(attr, ReceiveAttribution::LabelUnknown { .. }));
+        assert_eq!(reqs[0].state, PaymentRequestState::Pending);
     }
 
     #[test]
@@ -231,15 +216,8 @@ mod tests {
         let pt = encode_request_plaintext(rid).unwrap();
         let mut reqs = vec![sample_request(rid, 100)];
         reqs[0].state = PaymentRequestState::Expired;
-        let attr = match_inbound_attribution(
-            true,
-            &pt,
-            AtomicUnits::from_raw(100),
-            10,
-            shekyl_types::TxHash::from_bytes([3u8; 32]),
-            0,
-            &mut reqs,
-        );
+        let attr =
+            match_inbound_attribution(&pt, AtomicUnits::from_raw(100), 10, [3u8; 32], 0, &mut reqs);
         assert_eq!(attr, ReceiveAttribution::Matched(PaymentRequestId(rid)));
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
     }

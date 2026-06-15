@@ -1616,8 +1616,17 @@ sustainability is unaffected by the recalibration.
   URI parse, outbound `construct_output_labeled` + C++ send-path hook; product
   flag `operational.cooperative_payment_requests` / env
   `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` (default off) — **merged to `dev`
-  2026-06-08**. **Does not
-  block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
+  2026-06-08**. **Gate retired 2026-06-15** (`feat/enc-label-ungate`): the
+  flag, env var, `payment_request_flag.rs`, and the `cooperative_enabled`
+  FFI/Rust parameters were deleted. Real-label population is now ungated —
+  send echoes `rid` when the URI carries one; receive always classifies/matches.
+  Justification: the `enc_label` indistinguishability invariant
+  (`SUBADDRESS_UNDER_PQC.md` §5.7.10, statistical KAT
+  `real_label_indistinguishable_from_sentinel`) proves the real-label wire is
+  indistinguishable from the sentinel to a non-recipient, so the gate had no
+  privacy/consensus value — only the test-coverage interlock it has now
+  discharged. GUI tooling emitting `rid` URIs is the de-facto feature boundary.
+  **Does not block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
   (Phase 2c / 4b, not cleanup):** Rust cooperative outbound in `build_pending_tx`;
   `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry enforcement;
   `shekyl-wallet-rpc` methods (not C++ `wallet2_ffi`); GUI reconcile. See
