@@ -64,7 +64,9 @@ fn sample_transfer(seed: u64) -> TransferDetails {
     let tx_hash = [lo; 32];
     let internal_output_index = seed;
     TransferDetails {
-        tx_hash,
+        // keep the raw `[u8; 32]` local for the `derive_output_handle` call
+        // below (crypto takes `&[u8; 32]`); wrap only at the typed field.
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         internal_output_index,
         global_output_index: 1_000 + seed,
         block_height: 100,
