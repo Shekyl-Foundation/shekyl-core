@@ -9,7 +9,7 @@ description = "Foundational monetary-amount newtype (AtomicUnits) with checked-o
 build = "build.rs"
 
 [dependencies]
-zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+zeroize = { workspace = true }
 serde = { workspace = true }
 
 [build-dependencies]

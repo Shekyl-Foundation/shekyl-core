@@ -29,7 +29,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 fips204 = "0.4.6"
 rand_core = { version = "0.6", features = ["std"] }
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 thiserror.workspace = true
 serde.workspace = true
 hex = { version = "0.4", features = ["serde"] }

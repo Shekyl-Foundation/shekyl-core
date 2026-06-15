@@ -34,7 +34,7 @@ hkdf = "0.12"
 thiserror.workspace = true
 
 # Zeroize HMAC key material on drop.
-zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+zeroize = { workspace = true }
 
 # Structured warnings on tamper / quarantine events.
 tracing = "0.1"

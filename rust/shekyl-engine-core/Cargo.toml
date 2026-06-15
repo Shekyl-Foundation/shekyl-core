@@ -139,7 +139,7 @@ curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 # `AllKeysBlob` and handing ownership to `Scanner` / `ViewPair`.
 # `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
 # ensures the scanner's local copies do the same.
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 # `kameo` actor framework — Stage 2 `KeyEngine` actor migration
 # (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). `KeyActor` owns
 # `AllKeysBlob` inside its task; `Engine` holds a `KeyEngineHandle`
