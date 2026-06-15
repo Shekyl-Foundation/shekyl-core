@@ -157,7 +157,7 @@ impl LedgerIndexes {
             let pub_key_bytes = td.key.compress().to_bytes();
             if self.pub_keys.contains_key(&pub_key_bytes) {
                 warn!(
-                    tx = hex::encode(td.tx_hash.as_bytes()),
+                    tx = hex::encode(td.tx_hash),
                     output_idx = td.internal_output_index,
                     "duplicate output key detected (potential burning bug) -- skipping"
                 );

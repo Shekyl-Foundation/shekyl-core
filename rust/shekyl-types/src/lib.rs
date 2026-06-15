@@ -135,6 +135,20 @@ macro_rules! hash32 {
             }
         }
 
+        // Generic byte-view for the whole family of `&[u8]` / `AsRef<[u8]>`
+        // consumers (`hex::encode`, hashers, length-prefixed writers). This is
+        // the single point that keeps a typed hash usable as bytes wherever a
+        // generic byte sink is wanted, so call sites need no `.as_bytes()`
+        // sprinkling. It does **not** weaken type distinctness: a function that
+        // names `&$name` still accepts only `$name`; only generic byte APIs are
+        // satisfied. Distinct from the fixed-size `&[u8; 32]` accessor above,
+        // which the crypto layer needs (rule 18).
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 // Iterate by reference: avoids copying the `[u8; 32]` out of

@@ -337,7 +337,7 @@ impl Drop for TransferDetails {
 impl std::fmt::Debug for TransferDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransferDetails")
-            .field("tx_hash", &hex::encode(self.tx_hash.as_bytes()))
+            .field("tx_hash", &hex::encode(self.tx_hash))
             .field("internal_output_index", &self.internal_output_index)
             .field("global_output_index", &self.global_output_index)
             .field("block_height", &self.block_height)

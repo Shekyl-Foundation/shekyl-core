@@ -142,6 +142,22 @@ fn hashes_order_lexicographically_for_btree_keys() {
     );
 }
 
+#[test]
+fn hashes_are_viewable_as_bytes() {
+    // `AsRef<[u8]>` is the single point that lets a typed hash flow into
+    // generic byte sinks (`hex::encode`, hashers, length-prefixed writers)
+    // without per-call-site `.as_bytes()`. Pin the slice it yields.
+    let mut bytes = [0u8; 32];
+    bytes[0] = 0xDE;
+    bytes[31] = 0xAD;
+    let tx = TxHash::from_bytes(bytes);
+    let block = BlockHash::from_bytes(bytes);
+    let tx_ref: &[u8] = tx.as_ref();
+    let block_ref: &[u8] = block.as_ref();
+    assert_eq!(tx_ref, &bytes[..]);
+    assert_eq!(block_ref, &bytes[..]);
+}
+
 #[cfg(feature = "schema")]
 #[test]
 fn schema_is_derivable() {
