@@ -53,19 +53,6 @@ using namespace epee;
 
 namespace {
 
-bool cooperative_payment_requests_enabled()
-{
-  // Process-global env flag; cache once per process (send hot path).
-  static const bool enabled = []() {
-    const char* v = std::getenv("SHEKYL_COOPERATIVE_PAYMENT_REQUESTS");
-    if (!v)
-      return false;
-    return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
-           std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0;
-  }();
-  return enabled;
-}
-
 ShekylOutputData construct_output_for_destination(
     const crypto::secret_key& tx_key,
     const uint8_t* pk_x25519,
@@ -77,12 +64,11 @@ ShekylOutputData construct_output_for_destination(
     const std::string& original_uri)
 {
   uint8_t label_pt[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  const bool cooperative = cooperative_payment_requests_enabled();
   if (!original_uri.empty() && original_uri.compare(0, 7, "shekyl:") == 0)
   {
-    const int32_t label_rc = shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), cooperative, label_pt);
+    const int32_t label_rc = shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), label_pt);
     if (label_rc == -3)
-      LOG_PRINT_L1("cooperative payment URI parse failed; using sentinel enc_label for output");
+      LOG_PRINT_L1("payment URI parse failed; using sentinel enc_label for output");
     else if (label_rc != 0)
       LOG_PRINT_L1("shekyl_label_plaintext_for_payment_uri failed (rc=" << label_rc << "); using sentinel enc_label");
   }

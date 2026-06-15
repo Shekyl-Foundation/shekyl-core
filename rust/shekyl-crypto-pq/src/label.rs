@@ -170,4 +170,142 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, hash_label_plaintext_for_display(&SENTINEL_PLAINTEXT));
     }
+
+    /// Normative `enc_label` indistinguishability invariant
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.10): the on-wire octets are
+    /// indistinguishable from uniform to a non-recipient **independent of
+    /// plaintext**, and the real-label / sentinel wire distributions are
+    /// identical. This is the test that retires the R2-F8 wallet gate — it
+    /// proves the real-label path is exactly as safe to an observer as the
+    /// sentinel path it already runs, so gating real-label population delivers
+    /// no privacy benefit.
+    ///
+    /// Both arms are drawn through the **real** `derive_output_secrets` path
+    /// (not a synthetic uniform key) so a plumbing regression — a low-entropy
+    /// `k_label`, a content-dependent encoding — fails CI. A zero-key negative
+    /// control (plaintext straight onto the wire) proves the grading instrument
+    /// actually bites.
+    #[test]
+    fn real_label_indistinguishable_from_sentinel() {
+        use crate::derivation::derive_output_secrets;
+        use sha2::{Digest, Sha512};
+
+        // 4096 outputs × 8 octets = 32_768 samples/arm ⇒ ~128 expected per
+        // bucket.
+        const N: u32 = 4096;
+        // enc_label octets are bytes ⇒ BUCKETS possible values per position.
+        // The chi-square degrees of freedom (uniformity *and* the 2×BUCKETS
+        // homogeneity contingency alike) are BUCKETS − 1; deriving df and the
+        // per-bucket expectation from BUCKETS keeps them in lockstep if the
+        // width ever changes, rather than repeating 255/256 as literals.
+        const BUCKETS: usize = 256;
+        let buckets_f64 = f64::from(u32::try_from(BUCKETS).expect("BUCKETS fits u32"));
+        let df = buckets_f64 - 1.0;
+        // Strict rejection threshold, *derived* (not hand-picked) from the
+        // Wilson–Hilferty chi-square upper quantile at α = 1e-6 (≈ 377.3 for
+        // df = 255). A correct PRF (chi2 ≈ df ± sqrt(2·df)) sits ~5.4σ below it,
+        // so false-fails occur at ~α by construction, while a degenerate key
+        // lands in the tens of thousands. The seed is fixed (reference-
+        // determinism, not a PRNG mandate); the chi-square is the grading
+        // instrument.
+        let reject = chi_square_upper_crit(df, Z_ALPHA_1E6);
+
+        let real = encode_request_plaintext(0x0000_1234_5678_9ABC).expect("valid rid");
+        assert!(!is_sentinel_plaintext(&real));
+
+        // u32 counts: max per arm is N*8 = 32_768, exactly representable in
+        // both u32 and f64, so `f64::from` is lossless (the workspace denies
+        // `cast_precision_loss` for crypto crates — see rust/Cargo.toml).
+        let mut sentinel_hist = [0u32; BUCKETS];
+        let mut real_hist = [0u32; BUCKETS];
+        let mut broken_hist = [0u32; BUCKETS];
+
+        for i in 0..N {
+            // Deterministic per-output combined_ss; models an independent
+            // hybrid shared secret per output, as seen by a non-recipient.
+            let mut h = Sha512::new();
+            Digest::update(&mut h, b"shekyl/label-indist-test-v1");
+            Digest::update(&mut h, i.to_le_bytes());
+            let combined_ss = h.finalize();
+            let secrets = derive_output_secrets(combined_ss.as_ref(), u64::from(i));
+
+            let enc_sentinel = encrypt_label_plaintext(&SENTINEL_PLAINTEXT, &secrets.k_label);
+            let enc_real = encrypt_label_plaintext(&real, &secrets.k_label);
+            // Negative control: a zero key leaks the plaintext onto the wire
+            // (enc == plaintext, constant across outputs).
+            let enc_broken = encrypt_label_plaintext(&real, &[0u8; 32]);
+
+            for b in 0..8 {
+                sentinel_hist[enc_sentinel[b] as usize] += 1;
+                real_hist[enc_real[b] as usize] += 1;
+                broken_hist[enc_broken[b] as usize] += 1;
+            }
+        }
+
+        let expected = f64::from(N * 8) / buckets_f64;
+        let uniformity_chi2 = |hist: &[u32; BUCKETS]| -> f64 {
+            hist.iter()
+                .map(|&o| {
+                    let d = f64::from(o) - expected;
+                    d * d / expected
+                })
+                .sum()
+        };
+
+        let chi2_sentinel = uniformity_chi2(&sentinel_hist);
+        let chi2_real = uniformity_chi2(&real_hist);
+        let chi2_broken = uniformity_chi2(&broken_hist);
+
+        // (1) Per-plaintext uniformity: real-label and sentinel enc_label are
+        //     both uniform under the real derivation path.
+        assert!(
+            chi2_sentinel < reject,
+            "sentinel enc_label not uniform: chi2={chi2_sentinel:.1} (reject>={reject:.1})"
+        );
+        assert!(
+            chi2_real < reject,
+            "real-label enc_label not uniform: chi2={chi2_real:.1} (reject>={reject:.1})"
+        );
+
+        // (2) Homogeneity: the real-label and sentinel wire distributions are
+        //     statistically identical (2×BUCKETS contingency, df = BUCKETS − 1).
+        let homogeneity_chi2: f64 = (0..BUCKETS)
+            .map(|b| {
+                let s = f64::from(sentinel_hist[b]);
+                let r = f64::from(real_hist[b]);
+                if s + r == 0.0 {
+                    0.0
+                } else {
+                    (s - r) * (s - r) / (s + r)
+                }
+            })
+            .sum();
+        assert!(
+            homogeneity_chi2 < reject,
+            "real-label distinguishable from sentinel: chi2={homogeneity_chi2:.1} (reject>={reject:.1})"
+        );
+
+        // Negative control: the same uniformity instrument that the real path
+        // passes must reject plaintext-on-the-wire, or the test is vacuous.
+        assert!(
+            chi2_broken > reject,
+            "uniformity instrument failed to reject plaintext-on-wire: chi2={chi2_broken:.1} (reject>={reject:.1})"
+        );
+    }
+
+    /// Upper-tail standard-normal quantile for α = 1e-6 (z ≈ 4.7534). Same
+    /// constant the staking-sim conformance suite uses
+    /// (`shekyl-staking-sim::standoff`); duplicated here as a literal rather
+    /// than taking a dev-dependency on a sim crate that opts out of the
+    /// workspace cast lints.
+    const Z_ALPHA_1E6: f64 = 4.753_424;
+
+    /// Wilson–Hilferty chi-square upper-tail critical value for `df` degrees of
+    /// freedom at normal upper quantile `z`. Dependency-free; mirrors
+    /// `standoff::chi_square_upper_crit`.
+    fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
+        let a = 2.0 / (9.0 * df);
+        let t = 1.0 - a + z * a.sqrt();
+        df * t * t * t
+    }
 }

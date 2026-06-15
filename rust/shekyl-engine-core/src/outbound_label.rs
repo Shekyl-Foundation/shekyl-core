@@ -3,21 +3,25 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Outbound `enc_label` plaintext selection for cooperative sends (FA-8c).
+//! Outbound `enc_label` plaintext selection for payment-request sends.
+//!
+//! Ungated: the `enc_label` indistinguishability invariant
+//! (`SUBADDRESS_UNDER_PQC.md` §5.7.10) makes real-label wire octets
+//! indistinguishable from sentinel octets to any non-recipient, so populating a
+//! `rid` echo withholds nothing from an observer. The de-facto feature
+//! boundary is whether the `shekyl:` URI carries a `rid` — a product/GUI
+//! choice, not a privacy one (the R2-F8 wallet gate was retired 2026-06-15).
 
 use shekyl_address::PaymentUri;
 use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
 
 /// Label plaintext to encrypt in `construct_output` for a destination.
 ///
-/// When cooperative payment requests are disabled, always returns the
-/// normative sentinel. When enabled and `uri.rid` is present, echoes the
-/// REQUEST tag per `SUBADDRESS_UNDER_PQC.md` §5.7.11.
+/// Echoes the REQUEST tag when `uri.rid` is present and u48-encodable (per
+/// `SUBADDRESS_UNDER_PQC.md` §5.7.11); a missing or out-of-range `rid` yields
+/// the normative sentinel.
 #[must_use]
-pub fn label_plaintext_for_payment_uri(cooperative_enabled: bool, uri: &PaymentUri) -> [u8; 8] {
-    if !cooperative_enabled {
-        return sentinel_plaintext();
-    }
+pub fn label_plaintext_for_payment_uri(uri: &PaymentUri) -> [u8; 8] {
     let Some(rid) = uri.rid else {
         return sentinel_plaintext();
     };
@@ -31,16 +35,16 @@ mod tests {
     use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
 
     #[test]
-    fn cooperative_off_always_sentinel() {
-        let uri = parse_payment_uri("shekyl:addr?rid=42").unwrap();
-        let pt = label_plaintext_for_payment_uri(false, &uri);
+    fn no_rid_is_sentinel() {
+        let uri = parse_payment_uri("shekyl:addr?amount=1").unwrap();
+        let pt = label_plaintext_for_payment_uri(&uri);
         assert_eq!(classify_label_plaintext(&pt), LabelPlaintextKind::Sentinel);
     }
 
     #[test]
-    fn cooperative_on_echoes_rid() {
+    fn rid_is_echoed() {
         let uri = parse_payment_uri("shekyl:addr?rid=12345").unwrap();
-        let pt = label_plaintext_for_payment_uri(true, &uri);
+        let pt = label_plaintext_for_payment_uri(&uri);
         assert_eq!(
             classify_label_plaintext(&pt),
             LabelPlaintextKind::Request(12345)

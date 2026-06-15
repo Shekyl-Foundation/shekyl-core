@@ -21,7 +21,6 @@ pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
 pub mod outbound_label;
-pub mod payment_request_flag;
 pub mod scan;
 pub mod workflow;
 

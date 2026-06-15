@@ -235,13 +235,6 @@ pub struct OperationalPrefs {
     /// auto-lock.
     #[serde(default)]
     pub inactivity_lock_timeout: u32,
-
-    /// Cooperative payment-request label echo + rid matching (FA-8).
-    /// Default off at V3.0; override with env
-    /// `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS=1`. See
-    /// `SUBADDRESS_UNDER_PQC.md` §5.7.9.
-    #[serde(default)]
-    pub cooperative_payment_requests: bool,
 }
 
 impl Default for OperationalPrefs {
@@ -258,7 +251,6 @@ impl Default for OperationalPrefs {
             ignore_outputs_below: AtomicUnits::ZERO,
             merge_destinations: false,
             inactivity_lock_timeout: 0,
-            cooperative_payment_requests: false,
         }
     }
 }
