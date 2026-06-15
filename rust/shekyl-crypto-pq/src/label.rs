@@ -191,16 +191,24 @@ mod tests {
         use sha2::{Digest, Sha512};
 
         // 4096 outputs × 8 octets = 32_768 samples/arm ⇒ ~128 expected per
-        // 256-value bucket; the uniformity statistic has df = 255.
+        // bucket.
         const N: u32 = 4096;
-        // Strict rejection threshold for df = 255, *derived* (not hand-picked)
-        // from the Wilson–Hilferty chi-square upper quantile at α = 1e-6
-        // (≈ 377.3). A correct PRF (chi2 ≈ 255 ± 22.6) sits ~5.4σ below it, so
-        // false-fails occur at ~α by construction, while a degenerate key lands
-        // in the tens of thousands. Computing it from df + α keeps the test
-        // correct if N/df ever change. The seed is fixed (reference-determinism,
-        // not a PRNG mandate); the chi-square is the grading instrument.
-        let reject = chi_square_upper_crit(255.0, Z_ALPHA_1E6);
+        // enc_label octets are bytes ⇒ BUCKETS possible values per position.
+        // The chi-square degrees of freedom (uniformity *and* the 2×BUCKETS
+        // homogeneity contingency alike) are BUCKETS − 1; deriving df and the
+        // per-bucket expectation from BUCKETS keeps them in lockstep if the
+        // width ever changes, rather than repeating 255/256 as literals.
+        const BUCKETS: usize = 256;
+        let buckets_f64 = f64::from(u32::try_from(BUCKETS).expect("BUCKETS fits u32"));
+        let df = buckets_f64 - 1.0;
+        // Strict rejection threshold, *derived* (not hand-picked) from the
+        // Wilson–Hilferty chi-square upper quantile at α = 1e-6 (≈ 377.3 for
+        // df = 255). A correct PRF (chi2 ≈ df ± sqrt(2·df)) sits ~5.4σ below it,
+        // so false-fails occur at ~α by construction, while a degenerate key
+        // lands in the tens of thousands. The seed is fixed (reference-
+        // determinism, not a PRNG mandate); the chi-square is the grading
+        // instrument.
+        let reject = chi_square_upper_crit(df, Z_ALPHA_1E6);
 
         let real = encode_request_plaintext(0x0000_1234_5678_9ABC).expect("valid rid");
         assert!(!is_sentinel_plaintext(&real));
@@ -208,9 +216,9 @@ mod tests {
         // u32 counts: max per arm is N*8 = 32_768, exactly representable in
         // both u32 and f64, so `f64::from` is lossless (the workspace denies
         // `cast_precision_loss` for crypto crates — see rust/Cargo.toml).
-        let mut sentinel_hist = [0u32; 256];
-        let mut real_hist = [0u32; 256];
-        let mut broken_hist = [0u32; 256];
+        let mut sentinel_hist = [0u32; BUCKETS];
+        let mut real_hist = [0u32; BUCKETS];
+        let mut broken_hist = [0u32; BUCKETS];
 
         for i in 0..N {
             // Deterministic per-output combined_ss; models an independent
@@ -234,8 +242,8 @@ mod tests {
             }
         }
 
-        let expected = f64::from(N * 8) / 256.0;
-        let uniformity_chi2 = |hist: &[u32; 256]| -> f64 {
+        let expected = f64::from(N * 8) / buckets_f64;
+        let uniformity_chi2 = |hist: &[u32; BUCKETS]| -> f64 {
             hist.iter()
                 .map(|&o| {
                     let d = f64::from(o) - expected;
@@ -260,8 +268,8 @@ mod tests {
         );
 
         // (2) Homogeneity: the real-label and sentinel wire distributions are
-        //     statistically identical (2×256 contingency, df = 255).
-        let homogeneity_chi2: f64 = (0..256)
+        //     statistically identical (2×BUCKETS contingency, df = BUCKETS − 1).
+        let homogeneity_chi2: f64 = (0..BUCKETS)
             .map(|b| {
                 let s = f64::from(sentinel_hist[b]);
                 let r = f64::from(real_hist[b]);

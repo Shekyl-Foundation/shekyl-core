@@ -529,9 +529,10 @@ ShekylOutputData shekyl_construct_output_labeled(
 
 /// Label plaintext for a payment URI (ungated; see SUBADDRESS_UNDER_PQC.md
 /// §5.7.10). Parses `shekyl:…?rid=…` and returns 0 on success (REQUEST
-/// plaintext if `rid` present, else sentinel). On -3 (parse/UTF-8 failure)
-/// the output is still the sentinel plaintext. -4 is returned on null pointer
-/// without writing `out_plaintext`.
+/// plaintext if a valid u48-encodable `rid` is present, else sentinel — a
+/// missing or out-of-range `rid` also yields the sentinel with rc 0). On -3
+/// (parse/UTF-8 failure) the output is still the sentinel plaintext. -4 is
+/// returned on null pointer without writing `out_plaintext`.
 int32_t shekyl_label_plaintext_for_payment_uri(
     const char* uri,
     uint8_t* out_plaintext);

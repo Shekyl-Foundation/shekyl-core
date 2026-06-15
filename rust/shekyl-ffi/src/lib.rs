@@ -3588,8 +3588,9 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
 
 /// Select the 8-byte `enc_label` plaintext for a payment URI.
 ///
-/// Echoes the `rid` REQUEST tag when the `shekyl:` URI carries one; otherwise
-/// writes the sentinel plaintext. Ungated: the `enc_label` indistinguishability
+/// Echoes the `rid` REQUEST tag when the `shekyl:` URI carries a valid
+/// (u48-encodable) `rid`; a missing or out-of-range `rid` falls back to the
+/// sentinel plaintext. Ungated: the `enc_label` indistinguishability
 /// invariant (`SUBADDRESS_UNDER_PQC.md` §5.7.10) makes the real-label wire
 /// octets indistinguishable from the sentinel to any non-recipient, so there is
 /// no privacy/consensus gate — emitting a `rid` URI (a GUI/product choice) is
