@@ -137,7 +137,10 @@ macro_rules! hash32 {
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                for byte in self.0 {
+                // Iterate by reference: avoids copying the `[u8; 32]` out of
+                // `&self`, and `&self.0` is the form the workspace's denied
+                // `explicit_iter_loop` clippy lint requires over `.iter()`.
+                for &byte in &self.0 {
                     write!(f, "{byte:02x}")?;
                 }
                 Ok(())
