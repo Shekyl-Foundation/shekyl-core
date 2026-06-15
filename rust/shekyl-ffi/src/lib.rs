@@ -3586,12 +3586,20 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
     }
 }
 
-/// Select the 8-byte label plaintext for a cooperative payment URI (FA-8c).
+/// Select the 8-byte `enc_label` plaintext for a payment URI.
+///
+/// Echoes the `rid` REQUEST tag when the `shekyl:` URI carries one; otherwise
+/// writes the sentinel plaintext. Ungated: the `enc_label` indistinguishability
+/// invariant (`SUBADDRESS_UNDER_PQC.md` §5.7.10) makes the real-label wire
+/// octets indistinguishable from the sentinel to any non-recipient, so there is
+/// no privacy/consensus gate — emitting a `rid` URI (a GUI/product choice) is
+/// the only feature boundary. (The R2-F8 `cooperative_enabled` flag was retired
+/// 2026-06-15.)
 ///
 /// Returns `0` on success and writes plaintext to `out_plaintext` (8 bytes).
 /// Returns `-4` on null pointer (output untouched). On all other returns the
 /// output is the sentinel plaintext so C callers never read uninitialized bytes.
-/// Returns `-3` on UTF-8 / URI parse failure when `cooperative_enabled` is true.
+/// Returns `-3` on UTF-8 / URI parse failure.
 ///
 /// # Safety
 /// `uri` must be a valid NUL-terminated UTF-8 C string; `out_plaintext` must
@@ -3599,7 +3607,6 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
     uri: *const std::ffi::c_char,
-    cooperative_enabled: bool,
     out_plaintext: *mut u8,
 ) -> i32 {
     if uri.is_null() || out_plaintext.is_null() {
@@ -3609,9 +3616,6 @@ pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
     let sentinel = sentinel_plaintext();
     unsafe {
         std::ptr::copy_nonoverlapping(sentinel.as_ptr(), out_plaintext, 8);
-    }
-    if !cooperative_enabled {
-        return 0;
     }
     let cstr = unsafe { std::ffi::CStr::from_ptr(uri) };
     let Ok(uri_str) = cstr.to_str() else {
@@ -5409,34 +5413,30 @@ mod tests {
         out.fill(0x42);
         let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
         // SAFETY: null out buffer; uri is valid.
-        let rc = unsafe {
-            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, std::ptr::null_mut())
-        };
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), std::ptr::null_mut()) };
         assert_eq!(rc, -4);
         assert_eq!(out, [0x42; 8], "output untouched on -4");
     }
 
     #[test]
-    fn label_plaintext_for_payment_uri_coop_off_writes_sentinel() {
+    fn label_plaintext_for_payment_uri_no_rid_writes_sentinel() {
         use shekyl_crypto_pq::label::sentinel_plaintext;
         let mut out = [0u8; 8];
-        let uri = std::ffi::CString::new("not-a-valid-uri").unwrap();
-        // SAFETY: valid pointers; cooperative off must not parse.
-        let rc = unsafe {
-            shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), false, out.as_mut_ptr())
-        };
+        let uri = std::ffi::CString::new("shekyl:addr1abc?amount=1").unwrap();
+        // SAFETY: valid pointers.
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
         assert_eq!(rc, 0);
         assert_eq!(out, sentinel_plaintext());
     }
 
     #[test]
-    fn label_plaintext_for_payment_uri_coop_on_rid_echo() {
+    fn label_plaintext_for_payment_uri_rid_echo() {
         use shekyl_crypto_pq::label::encode_request_plaintext;
         let rid = 0x1234_u64;
         let uri = std::ffi::CString::new(format!("shekyl:addr1abc?rid={rid}")).unwrap();
         let mut out = [0u8; 8];
-        let rc =
-            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
         assert_eq!(rc, 0);
         assert_eq!(out, encode_request_plaintext(rid).unwrap());
     }
@@ -5446,8 +5446,7 @@ mod tests {
         use shekyl_crypto_pq::label::sentinel_plaintext;
         let uri = std::ffi::CString::new("shekyl:").unwrap();
         let mut out = [0u8; 8];
-        let rc =
-            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), true, out.as_mut_ptr()) };
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
         assert_eq!(rc, -3);
         assert_eq!(out, sentinel_plaintext());
     }

@@ -90,7 +90,6 @@ use crate::{
         traits::{DaemonEngine, LedgerEngine},
         Engine, EngineSignerKind, RefreshError,
     },
-    payment_request_flag::cooperative_payment_requests_enabled,
     scan::{ScanResult, StakeEvent},
 };
 
@@ -203,7 +202,6 @@ impl<
         // ordering is not required.
         let detection_residue = collect_detection_residue(&result);
         let label_residue = collect_label_residue(&result.new_transfers);
-        let cooperative = cooperative_payment_requests_enabled(&self.prefs);
         let reorg_fork_height = result.reorg_rewind.as_ref().map(|r| r.fork_height);
 
         let mut guard = self.ledger.write();
@@ -238,7 +236,6 @@ impl<
         apply_receive_attributions(
             &mut state.ledger.bookkeeping.payment_requests,
             &mut state.ledger.ledger,
-            cooperative,
             &label_residue,
             &inserted,
         );
