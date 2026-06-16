@@ -108,6 +108,28 @@ fn best_response(
         }
     };
 
+    // L18 faithful-freeze pre-charge (Copilot PR#148 findings #4/#5). Under a release
+    // cooldown, the collateral of a deep shard *held at epoch start* is committed for THIS
+    // epoch whether the shard is kept (still bonded) or voluntarily dropped: a drop sends
+    // that collateral into release cooldown (gate-4 §4.4), frozen *from the drop epoch
+    // itself*, so it cannot refund a fresh acquisition in the same best-response. The
+    // pre-genesis model let a same-epoch drop instantly recycle its bond — which made the
+    // cooldown *amplify* drop-to-reallocate churn (a move a cooldown-aware actor never makes,
+    // §L18 detector validation) and overstated freeze harm (see `STAKER_ARCHIVAL_SIM.md`
+    // §L18 "faithful-freeze reconciliation"). Such held-at-start deep shards are
+    // "pre-charged": their bond seeds `used_bond` below and a same-epoch drop never refunds
+    // it. Locked deep shards are always pre-charged (they cannot be dropped). With
+    // `release_cooldown_epochs == 0` only locked shards pre-charge, so a drop refunds its bond
+    // the same epoch — byte-identical to the no-cooldown model (every `c0` arm is unchanged).
+    let cooldown_active = ap.release_cooldown_epochs > 0 && bonded;
+    let precharged: Vec<bool> = (0..n_shard)
+        .map(|s| {
+            world.holdings[actor][s]
+                && world.shards[s].is_deep(ap.deep_threshold)
+                && (world.locks[actor][s] > 0 || cooldown_active)
+        })
+        .collect();
+
     // Forced set: deep shards under an unexpired retention commitment cannot be
     // dropped (the L9 lock), so they are retained regardless of present net value.
     let cap_storage = cap_storage as f64;
@@ -117,15 +139,21 @@ fn best_response(
 
     let mut new_held = vec![false; n_shard];
     let mut used_storage = 0.0f64;
+    // Bond budget consumed this epoch, seeded with every PRE-CHARGED deep bond (capital
+    // committed at epoch start that this epoch cannot free); the greedy fill below charges
+    // FRESH bond only for non-pre-charged deep selections. A voluntarily dropped pre-charged
+    // shard stays counted here — its collateral is frozen, not reusable this epoch.
     let mut used_bond = 0.0f64;
+    for s in 0..n_shard {
+        if precharged[s] {
+            used_bond += bond_cost(world.shards[s].age);
+        }
+    }
     for s in 0..n_shard {
         if world.locks[actor][s] > 0 && world.holdings[actor][s] {
             new_held[s] = true;
-            let deep = world.shards[s].is_deep(ap.deep_threshold);
-            used_storage += stor_cost(deep);
-            if deep {
-                used_bond += bond_cost(world.shards[s].age);
-            }
+            // Bond already in `used_bond` via the pre-charge seed; add only storage.
+            used_storage += stor_cost(world.shards[s].is_deep(ap.deep_threshold));
         }
     }
 
@@ -168,9 +196,13 @@ fn best_response(
         if used_storage + stor_cost(deep) > cap_storage {
             continue;
         }
-        // Capital budget on posted bonds. Skip shards whose bond would overrun
-        // remaining capital; keep scanning (a cheaper deep shard may fit).
-        if deep && bonded && used_bond + bond > capital {
+        // Capital budget on posted bonds. A pre-charged deep shard (held at epoch start under
+        // an active cooldown) costs no fresh capital to keep — its bond is already in
+        // `used_bond`; only a fresh deep acquisition (or any deep shard in the no-cooldown
+        // regime) draws from the remaining budget. Skip shards whose bond would overrun it;
+        // keep scanning (a cheaper deep shard may fit).
+        let charges_bond = deep && bonded && !precharged[s];
+        if charges_bond && used_bond + bond > capital {
             continue;
         }
         // Acquisition-rate bound (L10): a *fresh* deep fetch (not already held) consumes
@@ -198,7 +230,7 @@ fn best_response(
         }
         new_held[s] = true;
         used_storage += stor_cost(deep);
-        if deep && bonded {
+        if charges_bond {
             used_bond += bond;
         }
         if fresh_deep {
@@ -232,16 +264,22 @@ fn best_response(
         // advance_epoch each epoch until seated).
     }
 
-    // L18 release-cooldown escrow: a *voluntary* drop of a bonded (deep) shard frees a
+    // L18 release-cooldown escrow: a *voluntary* drop of a bonded (deep) shard freezes a
     // **flat** `ARCHIVAL_BOND_FLOOR` (modeled as `bond_rate`, per gate-4 §8.1 — per-shard
-    // capital is depth-flat) that does not return to spendable capital for
-    // `release_cooldown_epochs`. Pushed per dropped shard, so re-adding the same shard
+    // capital is depth-flat) for `release_cooldown_epochs` epochs, anchored at the drop epoch
+    // ≡ last-served epoch (the sim is serve-until-drop: a held seated shard always serves, and
+    // a locked shard serves until its lock clears, so a voluntary drop's last-served epoch is
+    // the drop epoch). The drop epoch is already the FIRST frozen epoch — the shard was
+    // pre-charged above, so its collateral could not refund a same-epoch acquisition. This
+    // escrow carries the freeze through the remaining best-responses: pushed with
+    // `epochs_remaining = release_cooldown_epochs`, and because `advance_epoch` decrements each
+    // entry *before* the next best-response (see model.rs), it is observed frozen for exactly
+    // `release_cooldown_epochs - 1` later epochs. Pre-charge (drop epoch) + escrow (the next
+    // C-1) = the full C-epoch freeze; do not "fix" the decrement-before-act by pushing `+1` or
+    // the drop epoch is double-counted. Pushed per dropped shard, so re-adding the same shard
     // inside the window needs *fresh* capital (the 2× anti-dodge bite — P2B-7 Pin 3).
-    // Anchor = drop epoch ≡ last-served epoch (the sim is serve-until-drop: a held
-    // seated shard always serves, and a locked shard serves until its lock clears, so a
-    // voluntary drop's last-served epoch is the drop epoch). Slash-style losses (L11
-    // exit, age-1 recycle) clear holdings outside `best_response` and never reach here,
-    // so only voluntary drops cool. Inert when `release_cooldown_epochs == 0`.
+    // Slash-style losses (L11 exit, age-1 recycle) clear holdings outside `best_response` and
+    // never reach here, so only voluntary drops cool. Inert when `release_cooldown_epochs == 0`.
     if ap.release_cooldown_epochs > 0 && bonded {
         for s in 0..n_shard {
             if was_held[s] && !new_held[s] && world.shards[s].is_deep(ap.deep_threshold) {

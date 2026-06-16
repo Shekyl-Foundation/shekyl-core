@@ -270,10 +270,16 @@ impl World {
                 }
             }
             // L18 release-cooldown escrow: tick each frozen entry one epoch closer to
-            // release; drop entries that reach 0 (capital returns to spendable). A
-            // drop posted this epoch is frozen through the next `RELEASE_COOLDOWN_EPOCHS`
-            // best-responses (the entry is pushed after `advance_epoch` runs, so it is
-            // not decremented in its own drop epoch). No-op when no escrow is live.
+            // release; drop entries that reach 0 (capital returns to spendable). This
+            // decrement runs *before* this epoch's best-responses, so an entry pushed with
+            // `epochs_remaining = release_cooldown_epochs` is observed frozen for
+            // `release_cooldown_epochs - 1` of these later best-responses; the drop epoch
+            // itself is the first frozen epoch, enforced separately in `best_response` by
+            // pre-charging the dropped shard's collateral (it cannot refund a same-epoch
+            // acquisition). Pre-charge (drop epoch) + escrow (the next C-1) span the full
+            // `RELEASE_COOLDOWN_EPOCHS` — the faithful-freeze fix for Copilot PR#148 #4/#5
+            // that closes the pre-genesis off-by-one (escrow alone froze only C-1). No-op
+            // when no escrow is live.
             for e in self.cooling[a].iter_mut() {
                 e.1 = e.1.saturating_sub(1);
             }
@@ -333,9 +339,12 @@ impl World {
     /// **It never fires in the L18 sweep — but the preclusion is a rationality property of
     /// the cooldown-aware `best_response`, not a structural impossibility**
     /// (`STAKER_ARCHIVAL_SIM.md` §L18 detector validation). `best_response` budgets on
-    /// `effective_capital = capital − Σ frozen` (it *sees* the cooldown), so it never makes
-    /// the one move that strands an actor — the futile drop-to-reallocate (drop A to fund B
-    /// while A's freed collateral is frozen and useless this window). It instead points
+    /// `effective_capital = capital − Σ frozen` and additionally **pre-charges** the
+    /// collateral of every deep shard held at epoch start (it *sees* the cooldown from the
+    /// drop epoch onward, not just the epoch after), so it never makes the one move that
+    /// strands an actor — the futile drop-to-reallocate (drop A to fund B while A's freed
+    /// collateral is frozen and useless this window, the drop epoch included). It instead
+    /// points
     /// scarce budget at the *thinnest* (most scarcity-profitable) shards and *holds* them
     /// (condition i fails); the shards that stay under target are in absolute shortage
     /// (nobody can afford them), never frozen-but-idle. So a sweep reading of `0` means the
@@ -351,6 +360,16 @@ impl World {
     /// reads are the co-occurrence upper bound and the structural `oldest_min_committed`
     /// floor, which *are* complementary detectors.
     pub fn freeze_blocks_recoverage(&self, s: usize, bond_rate: f64) -> bool {
+        // A zero (or absent) bond floor is not "one floor of frozen capital": with
+        // `bond_rate <= 0` no release-cooldown escrow is ever pushed (`best_response` only
+        // escrows on a *bonded* actor's voluntary deep drop), so `frozen_capital` is
+        // identically 0 and the willing-and-able-but-frozen state cannot exist. Without this
+        // guard the `frozen_capital(a) + 1e-9 >= bond_rate` conjunct would be trivially true
+        // at `bond_rate <= 0` (any non-negative frozen total clears a non-positive floor),
+        // reporting spurious causal freeze-harm in the unbonded arms where no freeze occurs.
+        if bond_rate <= 0.0 {
+            return false;
+        }
         (0..self.actors.len()).any(|a| {
             self.active[a]
                 && !self.holdings[a][s]

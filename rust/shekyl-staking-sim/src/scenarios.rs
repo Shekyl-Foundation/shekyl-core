@@ -552,10 +552,14 @@ pub struct ScenarioResult {
     /// on seated replicas. Timing-depressed under backfill lag (reads the lag regime, not
     /// the freeze), so reported but not the gate.
     pub oldest_min_serving_r: f64,
-    /// **Oldest-band redundancy margin** (L18 seal gate): `oldest_min_committed_r −
-    /// r_target_deepest`. The seal requires `≥ 1` (one redundancy seat above target on
-    /// the deepest tail). On a failing arm, `r_target_deep + |deficit|` is the actionable
-    /// reopen floor (raise `r_target_deep` / foundation floor by the deficit, no re-run).
+    /// **Oldest-band redundancy margin** (L18 seal gate `deep_margin`):
+    /// `oldest_min_committed_r − r_target_deepest`. The seal is **hold-the-floor**:
+    /// `deep_margin` requires `>= 0` (the freeze must not erode the committed oldest-band
+    /// min below `r_target_deep`). The `+1` redundancy seat is *provisioned* into
+    /// `r_target_deep` (`= availability_floor + 1`), not an extra `>= 1` requirement layered
+    /// on top — the buffered `hu_buf_*` arms confirm no budget buys an emergent seat above
+    /// the floor. On a failing arm, `r_target_deep + |deficit|` is the actionable reopen
+    /// floor (raise `r_target_deep` / foundation floor by the deficit, no re-run).
     pub oldest_margin: f64,
     /// **Oldest-band margin on the serving view** (L18, diagnostic): `oldest_min_serving_r
     /// − r_target_deepest`. Lag-depressed; reported as the freeze×lag-compounded read, not
@@ -3764,8 +3768,10 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // Seal read — ABSOLUTE gates at cooldown=2 on the age-scaled-DURATION arm (`s4`, the
     // realistic composition; `s0` flat is the contrast): `deep_history`
     // (`deep_frac_under_target < 0.10`, COMMITTED), `sole_source_clean` (`ssSE == 0`), and
-    // the +1 margin (`deep_margin`, `oldest_margin >= 1`, on the COMMITTED oldest-band
-    // min). The freeze's clean channel is the capital budget (a frozen floor stands one
+    // the hold-the-floor margin (`deep_margin`, `oldest_margin >= 0` on the COMMITTED
+    // oldest-band min — the freeze must not erode it below `r_target_deep`, into which the
+    // +1 seat is provisioned). The freeze's clean channel is the capital budget (a frozen
+    // floor stands one
     // fewer bond), which is lag-immune — so the committed reads isolate the freeze, while
     // the SERVING reads (`serving_deep_under`, `oldest_margin_serving`) are
     // backfill-lag-depressed and read the lag regime, not the freeze. Two latency arms:

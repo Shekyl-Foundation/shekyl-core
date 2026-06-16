@@ -591,9 +591,40 @@ sustainability is unaffected by the recalibration.
   can't backfill fast); (ii) **wallet-conformance guard (candidate, wallet-side, V3.1):** warn
   or refuse a `HoldingsUpdate` drop whose freed capital is visibly being redeployed within the
   cooldown — same conformance posture as the standoff draw above. **Target: V3.0 — closed for
-  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur). Cross-refs:
+  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur).
+  **Correction (faithful-freeze, Copilot PR#148 #4/#5, 2026-06-16):** the freeze model above
+  was one epoch too lenient *and* let `best_response` recycle a dropped bond in the same epoch
+  (the drop-to-reallocate move finding (d) claimed was precluded). The fix pre-charges held
+  deep collateral so a same-epoch drop cannot refund a fresh acquisition (pre-charge + escrow
+  span the full `RELEASE_COOLDOWN_EPOCHS`; `c0` arms stay byte-identical). **Calibration is
+  unchanged** — both models clear every `c2` gate, so `RELEASE_COOLDOWN = 2`, `r_target_deep =
+  floor + 1`, `age_weight = 3`, and the no-foundation-widening disposition all stand; the
+  binding `committed_deep_under` only *improves* (`0.0138 → 0.0000`), strengthening the seal.
+  Two findings above are superseded: the finding-(d) `c4` "cliff" was an **artifact** of the
+  spurious churn (gone; floor holds at `6` at `c4`, churn flat across all cooldown durations),
+  confirming the finding-(c)/rationality-preclusion thesis in the budget arithmetic; and
+  finding (c)'s "no market lever buys slack" no longer holds — see the new mid-band-lever item
+  below. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation". Cross-refs:
   `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
   `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+
+- **Mid-band `age_weight` lever — emergent cushion above `r_target_deep` (surfaced by the
+  faithful-freeze fix, 2026-06-16).** Under the corrected L18 model (no spurious same-epoch
+  churn) the deep-tail reward premium *does* buy emergent redundancy where the pre-fix model
+  showed none: at `age_weight ≥ 7` the committed oldest band settles at a **7th** replica
+  (`oldest_min_committed = 7`, `oldest_margin = 1`) versus the provisioned floor of `6` at
+  genesis `age_weight = 3`. This reopens economics finding 6 (which concluded the `1/R` reward
+  is anti-over-replication "by construction" and no lever buys slack) — the conclusion was
+  correct under the artifact churn but not under the faithful model. It moves **no shipped
+  genesis number** (genesis stays `age_weight = 3`, `oMrg = 0`); it is a *new optimization
+  option* for running mid-band (a self-correcting cushion the current no-cushion posture
+  lacks), answering the earlier "is there a lever to run closer to the middle of a protective
+  band?" question in the affirmative. Needs its own pass: confirm robustness across seeds/budget,
+  characterize the `age_weight`→cushion curve and its cost (higher deep-tail premium = more
+  emission to archival), and decide whether genesis should price in a mid-band `age_weight` or
+  keep the minimal floor+no-cushion posture. **Target: V3.0 pre-seal (decision), or V3.1
+  (if the minimal posture is kept and the cushion is deferred).** Cross-refs:
+  `STAKER_ARCHIVAL_SIM.md` §L18 finding 6 + "Faithful-freeze reconciliation".
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

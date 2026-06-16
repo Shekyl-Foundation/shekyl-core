@@ -31,6 +31,30 @@
 
 ### Changed
 
+- **archival-sim: faithful `HoldingsUpdate` release-cooldown freeze — pre-charge
+  held deep collateral; close the same-epoch drop-to-reallocate recycle (Copilot
+  PR#148 #4/#5, 2026-06-16, `feat/standoff-shared-crate`).** The L18 freeze model
+  was one epoch too lenient (escrow pushed `epochs_remaining = C` but
+  `advance_epoch` decrements before the next best-response, so capital froze for
+  `C − 1`) and, more materially, let `best_response` recycle a voluntarily-dropped
+  bond *within the same epoch* — the futile drop-to-reallocate move the cooldown
+  exists to prevent and that finding 3's prose already claimed was precluded.
+  `best_response` now **pre-charges** the collateral of every deep shard held at
+  epoch start (it seeds `used_bond`, so a same-epoch drop cannot refund a fresh
+  acquisition); pre-charge (drop epoch) + escrow (next `C − 1`) span the full
+  `RELEASE_COOLDOWN_EPOCHS`. `release_cooldown_epochs == 0` pre-charges only locked
+  shards, so every `c0` arm is byte-identical to the pre-cooldown baselines. **The
+  seal verdict and every shipped genesis parameter are unchanged** (`RELEASE_COOLDOWN
+  = 2`, `r_target_deep = floor + 1`, `age_weight = 3`, no foundation widening): both
+  the old and faithful models clear all `c2` gates, so this strengthens the seal
+  (binding `committed_deep_under` moves `0.0138 → 0.0000`) rather than altering
+  calibration. The model correction reveals the `c4` "cliff" was an artifact of the
+  spurious churn (gone; floor holds at `6`), confirms the rationality-preclusion
+  thesis in the budget arithmetic, and surfaces a mid-band `age_weight` lever
+  (`aw ≥ 7` reaches a 7th oldest-band replica) now tracked in `FOLLOWUPS.md`. Also
+  guards `freeze_blocks_recoverage` against `bond_rate <= 0` (#1) and aligns the
+  `oldest_margin` doc comments to the implemented `>= 0` hold-the-floor gate (#2/#3).
+  Docs: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation".
 - **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`
   to `gungraun 0.19` (2026-06-16, `chore/bench-gungraun-migration`).**
   `iai-callgrind` was renamed to `gungraun` upstream from 0.17.0 and the 0.16.x
