@@ -231,13 +231,14 @@ A bond-post transaction contains:
 ```text
 ArchivalBondPostVin {
   P_pubkey:              HybridPublicKey,
+  bond_spend_pk:         Option<HybridPublicKey>, // present iff post_kind == JoinMarket (commits the debit authorizer, §4.1)
   p_canonical_id:        [u8; 32],             // hint; verifier recomputes (emission §6.1)
   post_kind:             BondPostKind,         // §3.5
   holdings:              HoldingsDescriptor,
   bonded_total_atomic:   u64,                  // must equal bond_floor(holdings) post-connect
   bond_credit:           u64,                  // cleartext; 0 unless credit path (§3.2 table)
   bond_debit:            u64,                  // cleartext; 0 unless debit path (§3.2 table)
-  pqc_auths:             [...],                // P hybrid spend auth (gate-6 §9.6)
+  pqc_auths:             [...],                // bond-vin auth: identity key on credit, bond_spend_pk on debit (gate-6 §9.6)
 }
 
 enum BondPostKind {
@@ -257,9 +258,12 @@ Vin type tag **`5`** (`txin_archival_bond_post`). Varint discipline matches gate
 ```text
 u8                      vin_type = 5
 varint                  hybrid_pubkey_len   (≤ 2048)
-[hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()
+[hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()   // P_pubkey (identity)
 [32]                    p_canonical_id      (hint; verifier recomputes)
 u8                      post_kind           (0=JoinMarket, 1=Rebond, 2=Unbond, 3=HoldingsUpdate)
+// if post_kind == 0 (JoinMarket): the dedicated bond-spend key is committed into the record
+varint                  bond_spend_pk_len   (≤ 2048)            // present iff post_kind == 0
+[bond_spend_pk_len]     bond_spend_pk.to_canonical_bytes()      // present iff post_kind == 0
 u8                      holdings_kind       (0=ShardSetCompact, 1=CompleteTree)
 // if holdings_kind == 0:
 varint                  shard_count         (≤ 4096)
@@ -280,6 +284,7 @@ sig_preimage = cSHAKE256(
   input         = tx_prefix_hash
                   || p_canonical_id
                   || post_kind_u8
+                  || encode_bond_spend_commitment   // JoinMarket: bond_spend_pk canonical bytes; else empty
                   || encode_holdings_descriptor
                   || bonded_total_atomic_le64
                   || bond_credit_le64
@@ -288,11 +293,28 @@ sig_preimage = cSHAKE256(
 ```
 
 `encode_holdings_descriptor` is the on-wire holdings section (`holdings_kind` byte plus
-optional shard-id varint list). On-wire amount fields use varints; preimage uses fixed
-`le64`.
+optional shard-id varint list). `encode_bond_spend_commitment` is `bond_spend_pk`'s canonical
+bytes on the `JoinMarket` path and **empty** on every other `post_kind` — so the establishing
+identity-key signature (below) binds the committed debit authorizer at creation, foreclosing a
+key-swap at join. On-wire amount fields use varints; preimage uses fixed `le64`.
+
+**Bond-vin authorizing key (GF-1, gate-6 §9.6).** The `pqc_auths[]` entry aligned with the bond
+vin verifies against:
+
+- **credit / identity-establishing paths** (`bond_debit == 0`: `JoinMarket`, `Rebond`,
+  `HoldingsUpdate` add-shard) — the **identity key `P_pubkey`** (`= hybrid_sign_pk`). The funded
+  value arrives via standard `txin_to_key` inputs (key images, self-authorizing); the bond-vin
+  signature only proves control of `P_canonical_id`.
+- **debit paths** (`bond_debit > 0`: `Unbond`, `HoldingsUpdate` drop-shard) — the record's
+  committed **`bond_spend_pk`**, never `P_pubkey`.
+
+The account identity key therefore **never authorizes a value-out**, preserving the Round-1
+identity-only invariant (gate-6 §9.6 GF-1).
 
 **JoinMarket path:** reject if `ArchivalBondRecord` already exists for `P_canonical_id`;
-`bond_credit == bond_floor(holdings)`; credit `bonded_total_atomic` and `total_bonded_atomic`.
+require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into the new record**
+(immutable debit authorizer, §4.1); `bond_credit == bond_floor(holdings)`; credit
+`bonded_total_atomic` and `total_bonded_atomic`.
 
 **Rebond path:** require existing record with `good_standing == false` (post-slash);
 `bond_credit` restores `== bond_floor`; append re-bond event to interval log (F3).
@@ -332,12 +354,22 @@ reversion clause).
 
 ### 3.5 Verify order (consensus) — bond-post tx
 
-1. Structural — tx type, single bond vin, `P_canonical_id` recomputation matches.
+1. Structural — tx type, single bond vin, `P_canonical_id` recomputation matches. On
+   `JoinMarket`, `bond_spend_pk` field present and well-formed (`scheme_id = 1`); on every other
+   `post_kind`, `bond_spend_pk` field **absent** (it lives in the record).
 2. `post_kind` preconditions — join / re-bond / unbond / holdings-update paths.
 3. **Term rigidity** — `bond_credit` / `bond_debit` match §3.2 allowed-terms table (one
    direction only).
 4. **Floor equality** — post-connect `bonded_total_atomic == bond_floor(holdings)`.
-5. `P` hybrid signatures on vin.
+5. **Bond-vin authorization (GF-1, gate-6 §9.6)** — the `pqc_auths[]` entry aligned with the
+   bond vin verifies against the **dedicated bond-spend key on debit paths** and the **identity
+   key on credit paths**:
+   - `bond_debit > 0` (`Unbond`, `HoldingsUpdate` drop) → verify against the record's committed
+     `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
+     authorize a debit (identity-only invariant).
+   - `bond_debit == 0` (`JoinMarket`, `Rebond`, `HoldingsUpdate` add) → verify against
+     `P_pubkey`; on `JoinMarket` this signature also binds the committed `bond_spend_pk` via the
+     sig-preimage (§3.4.1).
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
    When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
    proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
@@ -355,6 +387,7 @@ slash paths.
 ```text
 ArchivalBondRecord {
   P_pubkey:                  HybridPublicKey,
+  bond_spend_pk:             HybridPublicKey,   // debit authorizer (GF-1); committed at JoinMarket, immutable
   holdings:                  HoldingsDescriptor,
   bonded_total_atomic:       u64,
   good_standing:             bool,
@@ -369,6 +402,20 @@ ArchivalBondRecord {
 
 **Deprecated name:** `first_emission_height` → split into `join_market_height` +
 `first_paying_emission_height`. Pre-genesis docs/code use new names only.
+
+**`bond_spend_pk` — dedicated bond-debit authorizer (GF-1, gate-6 §9.6).** A `HybridPublicKey`
+(`scheme_id = 1`, Ed25519 + ML-DSA-65), **domain-separated from `P_pubkey`** by its own HKDF
+labels (gate-6 §9.3 `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`). It is committed
+**once, at `JoinMarket`** (bound into the post sig-preimage, §3.4.1) and is **immutable for the
+record's life**; it authorizes every later `bond_debit` (`Unbond`, `HoldingsUpdate` drop, §3.5
+step 5). This keeps `P_pubkey` (`= hybrid_sign_pk`) **identity-only** — its compromise reveals
+nothing spendable — rather than carving the Round-1 identity-only invariant by letting the
+account key authorize value-out. It is **not** a custody-model change: the bond stays a
+consensus-tracked balance under §3.2 (no key image, no receipt UTXO), so §3.2's round-1 seal is
+untouched; `bond_spend_pk` only names *which* key signs the debit. *Rotation:* the key is fixed
+per record; re-keying is a full `Unbond` + re-`JoinMarket` (the same model as `P` rotation,
+gate-6 §9.2). Reopen per `21-reversion-clause-discipline.mdc` only if a production need for
+in-place bond-spend-key rotation emerges (it would be a new consensus op, not a wallet choice).
 
 **`Market` predicate:** §2.2 (per-epoch; includes `E ≥ E_join + 1` and `good_through(E)`).
 
@@ -545,6 +592,11 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic`.
 - [ ] Rebond / Unbond / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
       FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)).
+- [ ] **Dedicated bond-spend key (GF-1, gate-6 §9.6)** — commit `bond_spend_pk` into the record
+      on `JoinMarket` connect (§4.1); verify `bond_debit` paths' bond-vin `pqc_auths` against the
+      committed `bond_spend_pk` and **reject** the account `P_pubkey` as a debit authorizer (§3.5
+      step 5); add the `bond_spend_pk` field + `JoinMarket`-conditional bytes to `bond_wire`
+      (§3.4.1). Pairs with the gate-6 `shekyl-archival-p-bond-spend-*` HKDF labels + KAT.
 - [x] **KAT phase-1 (bonded-aggregation sub-invariant only):** `gate4_lifecycle_kat_v1.json` +
       `gate4_lifecycle_kat.rs` — join wire, serve at `E_first`, `verify_conservation_snapshot`
       on `total_bonded == Σ_P bonded_total`. **Three qualifiers on closure:**
@@ -617,3 +669,12 @@ backlog are independent value flows (§3.5).
   §6 table, §8 checklist). Full bond lifecycle ships at genesis; FSM actions tracked in
   `PHASE_2B_FSM_RETOOL.md`; age-stratified mobility-friction sim reconciliation is a pre-seal
   dependency.
+- **2026-06-16 (GF-1-carve resolved):** Dedicated **`bond_spend_pk`** authorizes `bond_debit`,
+  named explicitly at source so the carve does not happen by inertia. Added `bond_spend_pk` to
+  `ArchivalBondRecord` (§4.1, committed at `JoinMarket`, immutable) and `ArchivalBondPostVin`
+  (§3.4, `JoinMarket`-only wire field, §3.4.1) bound into the post sig-preimage; re-worded §3.5
+  step 5 to split bond-vin auth — `bond_spend_pk` on debit (`Unbond`/`HoldingsUpdate` drop),
+  `P_pubkey` on credit — so the account identity key never authorizes a value-out (Round-1
+  identity-only invariant preserved). Custody model (§3.2) **unchanged** — still consensus-balance,
+  no key image / receipt UTXO. Gate-6 §9.3 adds the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`
+  HKDF labels + KAT obligation. Closes `ARCHIVAL_FIREWALL_GATE6.md` §10.11 GF-1-carve.

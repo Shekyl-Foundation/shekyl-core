@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **archival: GF-1-carve resolved — dedicated bond-spend key authorizes bond debits
+  (2026-06-16, `feat/gf1-dedicated-bond-spend-key`).** Releasing bonded collateral
+  (`bond_debit`: `Unbond`, `HoldingsUpdate` drop-shard) is now authorized by a **dedicated
+  `bond_spend_pk`** — a hybrid `scheme_id = 1` (Ed25519 + ML-DSA-65) keypair committed into the
+  `ArchivalBondRecord` at `JoinMarket` and immutable for the record's life — **not** the account
+  identity key (`P_pubkey` / `hybrid_sign_pk`). This was the last open "carve": gate-4 §3.5 step
+  5 previously read "`P` hybrid signatures on vin," which, implemented at face value, would have
+  silently made the account identity key spend the bond — turning its compromise surface from
+  "reveals nothing spendable" into "drains the bond." Naming a domain-separated debit key at
+  source keeps the Round-1 identity-only invariant intact and compromise-isolates bond-spend
+  authority. The key is derived under two new HKDF labels
+  (`shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`), bound into the bond-post sig-preimage
+  at `JoinMarket`, and added to the `ARCHIVAL_P_DERIVE_V1` KAT obligation. Credit/identity paths
+  (`JoinMarket`, `Rebond`, `HoldingsUpdate` add-shard) still authorize against `P_pubkey`; the
+  account key never authorizes a value-out. The consensus-balance custody model (gate-4 §3.2,
+  sealed Round 1) is **unchanged** — no key image, no receipt UTXO; the receipt-UTXO alternative
+  was declined with a named reopen criterion. Spec-only (no code yet); pairs with the gate-4
+  implementation checklist item. Docs: `ARCHIVAL_BOND_GATE4.md` (§3.4 / §3.4.1 / §3.5 / §4.1 / §8
+  / revision 2026-06-16), `ARCHIVAL_FIREWALL_GATE6.md` (§9.3 / §9.4 / §9.6 / §10.11 / §7 /
+  revision 2026-06-16).
 - **archival: `HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope
   (2026-06-15).** The full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
   Unbond`) ships at **V3.0**, promoted from deferred-V3.1. Bond balance is
