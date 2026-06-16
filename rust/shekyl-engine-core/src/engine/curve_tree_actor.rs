@@ -90,7 +90,6 @@ use crate::scan::OwnedTxLeaves;
 /// The actor's single-threaded message loop serializes access to `client`,
 /// which is the redb single-writer property the actor exists to enforce
 /// (§3.1).
-#[allow(dead_code)] // CT-5a wires the handle into Engine in a later commit; today: tests only.
 pub(crate) struct CurveTreeActor {
     /// The wallet's FCMP++ curve-tree client (redb-backed, public material).
     ///
@@ -139,7 +138,6 @@ impl Actor for CurveTreeActor {
 /// Actor message for [`CurveTreeClient::ingest_block`]: append one block's
 /// leaves at the next consecutive height. Carries [`BlockHeight`] across the
 /// actor boundary (not an unwrapped `u64`) — the CT-3a P5 cross-seam typing.
-#[allow(dead_code)] // dispatched by the merge path in a later commit; today: tests only.
 pub(crate) struct IngestBlock {
     /// The block's height (must equal the client's ingested-tip + 1).
     pub height: BlockHeight,
@@ -149,7 +147,6 @@ pub(crate) struct IngestBlock {
 
 /// Actor message for [`CurveTreeClient::rollback_to_fork`]: drop all leaves
 /// after `fork_height` on a reorg. Carries [`BlockHeight`] across the boundary.
-#[allow(dead_code)] // dispatched by the reorg path in a later commit; today: tests only.
 pub(crate) struct RollbackToFork {
     /// The last height that survives the reorg; leaves above it are dropped.
     pub fork_height: BlockHeight,
@@ -171,7 +168,6 @@ pub(crate) struct RollbackToFork {
 /// [`CurveTreeHandleError::Unavailable`]); the handler is infallible and always
 /// replies `Ok`, so the [`CurveTreeHandleError::Client`] arm is unreachable for
 /// this message.
-#[allow(dead_code)] // queried by the merge/backfill driver in a later commit-4 slice; today: tests only.
 pub(crate) struct IngestedTipHeight;
 
 /// Test-only actor message reading [`CurveTreeClient::root_at`]: the
@@ -263,7 +259,6 @@ impl Message<RootAt> for CurveTreeActor {
 /// maps to [`Unavailable`](CurveTreeHandleError::Unavailable), which is
 /// terminal until the engine-side R1-Q4 respawn (clause 2).
 #[derive(Debug)]
-#[allow(dead_code)] // surfaced by the merge/reorg paths in later commits; today: tests only.
 pub(crate) enum CurveTreeHandleError {
     /// The client returned an error inside the handler.
     Client(ClientError),
@@ -309,7 +304,6 @@ const REOPEN_LOCK_RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 const REOPEN_LOCK_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(2);
 
 #[derive(Clone)]
-#[allow(dead_code)] // constructed once Engine wiring lands (commit 2); today: tests only.
 pub(crate) struct CurveTreeHandle {
     /// Shared, swappable strong reference to the curve-tree actor's mailbox.
     /// All clones of this handle share the one cell, so [`Self::respawn`]
@@ -333,7 +327,6 @@ impl CurveTreeHandle {
     /// # Panics
     ///
     /// Panics if called with no ambient Tokio runtime; the message names the fix.
-    #[allow(dead_code)] // CT-5a wires this into Engine in commit 2; today: tests only.
     pub(crate) fn spawn(client: CurveTreeClient) -> Self {
         Self {
             actor: Arc::new(Mutex::new(Self::spawn_actor(client))),
@@ -426,7 +419,6 @@ impl CurveTreeHandle {
     /// on a short poll until the lock is free, bounded by
     /// [`REOPEN_LOCK_RELEASE_TIMEOUT`] so a store that never frees up surfaces its
     /// error rather than spinning forever.
-    #[allow(dead_code)] // wired by Engine::respawn_curve_tree (commit 5) + tests.
     pub(crate) async fn respawn(&self, path: impl AsRef<Path>) -> Result<(), ClientError> {
         let old = self.actor_ref();
         old.kill();
@@ -454,7 +446,6 @@ impl CurveTreeHandle {
     /// Ingest one block's leaves at `height` (must equal the client's ingested
     /// tip plus one). Routes through the actor `ask`; on a stopped actor it
     /// returns [`CurveTreeHandleError::Unavailable`].
-    #[allow(dead_code)] // dispatched by the merge path in commit 4; today: tests only.
     pub(crate) async fn ingest(
         &self,
         height: BlockHeight,
@@ -467,7 +458,6 @@ impl CurveTreeHandle {
     }
 
     /// Roll the client back to `fork_height` on a reorg.
-    #[allow(dead_code)] // dispatched by the reorg path in commit 5; today: tests only.
     pub(crate) async fn rollback_to_fork(
         &self,
         fork_height: BlockHeight,
@@ -485,7 +475,6 @@ impl CurveTreeHandle {
     /// `None`) instead of holding a local frontier (D2). On a stopped actor it
     /// returns [`CurveTreeHandleError::Unavailable`]; the read itself never
     /// produces [`CurveTreeHandleError::Client`].
-    #[allow(dead_code)] // queried by the merge/backfill driver in a later commit-4 slice; today: tests only.
     pub(crate) async fn ingested_tip_height(
         &self,
     ) -> Result<Option<BlockHeight>, CurveTreeHandleError> {

@@ -557,9 +557,13 @@ pub(crate) fn apply_scan_result_to_state(
         spent_key_images,
         stake_events,
         reorg_rewind,
-        // CT-5 §3.2 transit fields: populated by the producer (commit 3),
-        // consumed by the merge-driven ingest in CT-5a commit 4. Deliberately
-        // not read here yet (A1 frozen-contract, write-but-not-read).
+        // CT-5 §3.2 transit fields. `block_leaves` is consumed by the
+        // curve-tree ingest pre-pass (`ingest_scan_result_into_curve_tree`,
+        // CT-5a commit 4) that runs *before* this merge; it is ignored here
+        // because `apply_scan_result_to_state` only advances ledger/index
+        // state. `block_curve_tree_roots` is the write-but-not-read transit
+        // field (E6b): the producer populates it; the §3.3 ingest-time verify
+        // that consumes it lands in CT-5b, so nothing reads it yet.
         block_leaves: _,
         block_curve_tree_roots: _,
     } = result;
@@ -610,10 +614,16 @@ pub(crate) fn apply_scan_result_to_state(
     // with len-equality these three rules pigeonhole into "exactly one
     // entry per height in range," which is what the per-height apply
     // loop relies on.
+    // `start == end` returned early above, but an inverted range
+    // (`start > end`) is a producer-contract violation, not a panic — a
+    // hostile daemon must not be able to crash the merge with `start > end`
+    // (X7). Treat it as `MalformedScanResult`, like the shape checks below.
     let range_len_u64 = processed_height_range
         .end
         .checked_sub(processed_height_range.start)
-        .expect("start <= end checked above");
+        .ok_or(RefreshError::MalformedScanResult {
+            reason: "processed_height_range end precedes start",
+        })?;
     let expected_len =
         usize::try_from(range_len_u64).map_err(|_| RefreshError::MalformedScanResult {
             reason: "processed_height_range length exceeds usize",

@@ -422,12 +422,11 @@ pub struct Engine<
     /// actor has no `on_stop` zeroization; durability is per-ingest, not
     /// at-close, so the async actor shutdown loses nothing.
     //
-    // `#[allow(dead_code)]`: at commit 2 the handle is held but not *read* — the
-    // merge path's `handle.ingest` read site lands in commit 4 and the reorg
-    // `rollback_to_fork` read site in commit 5 (per
-    // `docs/design/CT5_ENGINE_WIRING.md`). The allow is reopened for deletion
-    // then, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
+    // The handle is read on the merge ingest path (`handle.ingest` /
+    // `rollback_to_fork`, CT-5a commits 4–5) and the spend-gate cursor read, so
+    // the prior `#[allow(dead_code)]` (held-but-not-read at commit 2) has been
+    // deleted now that its read sites landed, per
+    // `21-reversion-clause-discipline.mdc`.
     curve_tree: CurveTreeHandle,
 
     /// Construction-time view-secret projection for the merge post-pass
