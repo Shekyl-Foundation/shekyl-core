@@ -3,14 +3,22 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/balance.rs`.
+//! gungraun companion to `benches/balance.rs`.
 //!
 //! Same workload (build N synthetic `TransferDetails`, compute
 //! `BalanceSummary`) measured via Valgrind's Callgrind for
 //! deterministic instruction-count metrics. Tier-1 CI gate input.
 
+// Bench fns receive their fixture by value per gungraun's
+// `#[benches::with_setup]` contract, and the by-value drop is part of the
+// measured hot path — taking `&[T]` would change the instruction count and
+// break baseline comparability. `gungraun-macros` does not auto-suppress
+// `needless_pass_by_value` the way `iai-callgrind-macros` did, so allow it
+// explicitly.
+#![allow(clippy::needless_pass_by_value)]
+
 use curve25519_dalek::Scalar;
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};

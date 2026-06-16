@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_key_merge_projection.rs`.
 //!
 //! Same workload (the §5.3 / §8.1 6-i construction-time view-secret
@@ -14,7 +14,7 @@
 //! class (bidirectional ±10% slowdown / ±25% speedup).
 //!
 //! Unlike the actor dispatch paths, the merge post-pass is synchronous
-//! and runtime-free, so it is iai-friendly: no async scheduling, no
+//! and runtime-free, so it is gungraun-friendly: no async scheduling, no
 //! threads for Valgrind to serialize, a clean deterministic count.
 //!
 //! # Workload class
@@ -40,14 +40,14 @@
 //! # Single measured invocation (idempotent-once)
 //!
 //! The projection only populates `None` fields, so it is one-shot per
-//! fixture. iai-callgrind builds a fresh fixture via `setup` and measures
+//! fixture. gungraun builds a fresh fixture via `setup` and measures
 //! exactly one `run_projection`, so the full batch's work is measured
 //! once — matching the criterion sibling's `iter_batched` per-invocation
 //! fresh-fixture shape.
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{
     build_merge_projection_fixture, drop_merge_projection_fixture, MergeProjectionBenchFixture,
 };

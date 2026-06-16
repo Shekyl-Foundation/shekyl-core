@@ -23,13 +23,13 @@
 //! cost here is negligible against a refresh's other work, eager 6-i
 //! stays and 6-ii remains deferred; a surprise here reopens §8.1.
 //!
-//! # iai sibling
+//! # gungraun sibling
 //!
 //! Unlike the actor dispatch paths, this post-pass is **synchronous and
 //! runtime-free**, so it has a deterministic instruction count and a
-//! paired iai-callgrind sibling
+//! paired gungraun sibling
 //! (`engine_trait_bench_key_merge_projection_iai.rs`). The pair restores
-//! the criterion+iai discipline (`docs/design/STAGE_0_HARNESS.md`) that
+//! the criterion+gungraun discipline (`docs/design/STAGE_0_HARNESS.md`) that
 //! the actor paths reason-deviate from.
 //!
 //! # Threshold class / naming

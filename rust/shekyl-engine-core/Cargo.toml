@@ -173,17 +173,19 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
-# `iai-callgrind` is the deterministic-instructions sibling for the
+# `gungraun` is the deterministic-instructions sibling for the
 # criterion wall-clock benches in this crate. The CI gate
-# (`ci/benchmarks` workflow) routes through iai-callgrind
+# (`ci/benchmarks` workflow) routes through gungraun
 # `instructions` for percentage-threshold checking; criterion stays
 # as the Tier-2 informational column. Engine-surface benches
-# (`engine_trait_bench_*`) ship as criterion + iai-callgrind pairs
-# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.16" matching
+# (`engine_trait_bench_*`) ship as criterion + gungraun pairs
+# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.19" matching
 # the workspace consensus (shekyl-engine-state, shekyl-engine-file,
 # shekyl-scanner, shekyl-tx-builder) and the runner version the
-# `ci/benchmarks` workflow installs (`^0.16`).
-iai-callgrind = "0.16"
+# `ci/benchmarks` workflow installs (`^0.19`). Migrated from
+# `iai-callgrind = "0.16"` per
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+gungraun = "0.19"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
@@ -304,7 +306,7 @@ required-features = ["bench-internals"]
 # Stage 1 PR 3 close-out: trivial pure-read `KeyEngine::
 # account_public_address` pair. Workload class is "trivial pure-read"
 # (returns a borrow into a cached `AccountPublicAddress` field on
-# `LocalKeys` with no per-call derivation); iai-callgrind is the
+# `LocalKeys` with no per-call derivation); gungraun is the
 # load-bearing signal because criterion `median_ns` reflects
 # optimizer amortization across the iteration loop. The fixture is
 # `Box<LocalKeys>` rather than `(Box<Engine<...>>, TempDir)` per the
@@ -372,7 +374,7 @@ required-features = ["bench-internals"]
 # view-secret projection (`populate_engine_handle_fields`) over a batch of
 # 256 freshly-merged outputs. Evidence for (not a gate on) the §8.1 6-ii
 # deferral decision. Synchronous + runtime-free, so it gets a full
-# criterion + iai-callgrind pair (unlike the actor dispatch paths).
+# criterion + gungraun pair (unlike the actor dispatch paths).
 [[bench]]
 name = "engine_trait_bench_key_merge_projection"
 harness = false

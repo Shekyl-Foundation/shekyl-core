@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/scan_transaction.rs`
+//! gungraun companion to `benches/scan_transaction.rs`
 //! (PR 4 §3.1 / F11-S substrate).
 //!
 //! Callgrind simulation produces deterministic per-iteration
@@ -13,7 +13,7 @@
 //! `[library_benchmark]` here measures one `Scanner::scan` call
 //! against a freshly-constructed `ScannableBlock`; the setup
 //! (constructing the block + scanner) runs outside the measured
-//! region per iai-callgrind's `with_setup` semantics, so the
+//! region per gungraun's `with_setup` semantics, so the
 //! reported counts isolate scan-time cost.
 //!
 //! ## Group classification
@@ -27,7 +27,7 @@
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use zeroize::Zeroizing;
 
 use shekyl_scanner::{

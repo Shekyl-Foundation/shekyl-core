@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to the §5.3 **B9** composition baseline
+//! gungraun companion to the §5.3 **B9** composition baseline
 //! (`engine_trait_bench_key_dispatch.rs`'s
 //! `engine_trait_bench_key_dispatch_baseline_claim_mine`).
 //!
@@ -10,7 +10,7 @@
 //! measures **only** the deterministic crypto baseline
 //! (`LocalKeys::try_claim_output` over a `Mine` output): X25519 view-tag
 //! match + hybrid ML-KEM-768 decap + HKDF + key-image + handle insert.
-//! There is deliberately **no** iai sibling for the actor `ask` paths —
+//! There is deliberately **no** gungraun sibling for the actor `ask` paths —
 //! they are cross-thread async round-trips whose Callgrind
 //! instruction counts fold in nondeterministic runtime-scheduling
 //! machinery (Valgrind serializes all threads onto one simulated core).
@@ -38,7 +38,7 @@
 //! `account_public_address` bench, this path runs a full hybrid KEM
 //! decapsulation and HKDF expansion plus a key-image scalar-mult, so the
 //! expected `instructions` count is **large** (millions, dominated by
-//! ML-KEM-768). iai-callgrind's determinism makes it the stable
+//! ML-KEM-768). gungraun's determinism makes it the stable
 //! regression signal for the crypto cost; the criterion sibling carries
 //! the wall-clock ratio that B9's "within 5%" envelope is checked
 //! against.
@@ -64,7 +64,7 @@ use std::hint::black_box;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{
     build_key_baseline_fixture, drop_key_baseline_fixture, KeyBaselineBenchFixture,
 };
@@ -97,7 +97,7 @@ fn poll_ready<F: Future>(fut: F) -> F::Output {
         Poll::Ready(v) => v,
         Poll::Pending => {
             panic!(
-                "baseline iai bench future did not complete in one poll; \
+                "baseline gungraun bench future did not complete in one poll; \
                     LocalKeys::try_claim_output is expected to be synchronous"
             )
         }

@@ -9,7 +9,7 @@
 # Two triggers, three jobs:
 #
 #   pull_request → dev
-#     - capture-pr:       runs the Rust iai-callgrind harness on the PR
+#     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
 #     - compare:          fetches `bench-baseline/baseline.json`, runs
@@ -34,7 +34,7 @@
 #                         it does not yet exist. Never merges into
 #                         `dev` or `main`.
 #
-# Implementation scope: **Rust + iai-callgrind only** (Tier 1).
+# Implementation scope: **Rust + gungraun only** (Tier 1).
 # C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
 # deferred per `docs/MID_REWIRE_HARDENING.md` §3.3 implementation
 # notes / §6.1 upgrade path. Criterion numbers are still captured
@@ -135,13 +135,15 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
+      - name: install gungraun-runner
         run: |
           # Pin to the lib-side version declared in the bench crates'
-          # Cargo.toml (0.16.x today); SemVer-compatible patch drift
-          # is fine, but we do not want a surprise 0.17 slipping in
-          # and breaking the handshake protocol.
-          cargo install iai-callgrind-runner --version '^0.16' --locked
+          # Cargo.toml (0.19.x today); SemVer-compatible patch drift
+          # is fine, but we do not want a surprise 0.20 slipping in
+          # and breaking the handshake protocol. Migrated from
+          # `iai-callgrind-runner ^0.16` per
+          # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+          cargo install gungraun-runner --version '^0.19' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -353,7 +355,7 @@ jobs:
           # Build the bench binary as an ordinary `--release` binary
           # (not under valgrind) so samply can sample it. The bench
           # harness defines `#[library_benchmark]` entry points; the
-          # resulting binary, when run without the iai-callgrind
+          # resulting binary, when run without the gungraun
           # protocol env, exits after a trivial handshake. That's
           # enough for samply to attach; for deeper profiles we
           # invoke it with cargo criterion instead.
@@ -406,8 +408,8 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
-        run: cargo install iai-callgrind-runner --version '^0.16' --locked
+      - name: install gungraun-runner
+        run: cargo install gungraun-runner --version '^0.19' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -436,7 +438,7 @@ jobs:
           **Tip file:**
           - \`baseline.json\` — \`shekyl_rust_v0\`-schema envelope
             captured on a GitHub-hosted \`ubuntu-latest\` runner.
-          - \`baseline.iai.snapshot\` — raw iai-callgrind stdout
+          - \`baseline.iai.snapshot\` — raw gungraun stdout
             corresponding to the same capture.
 
           Current source commit: \`${CAPTURE_SOURCE_SHA}\`.

@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_economics_base_emission_at.rs`.
 //!
 //! `EconomicsEngine` is `pub(crate)` in `shekyl-engine-core`, so the
@@ -19,7 +19,7 @@
 //! signal under the `engine_trait_bench_*` threshold class
 //! (bidirectional ±10% slowdown / ±25% speedup).
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working
+//! Requires `cargo install gungraun-runner` and a working
 //! Valgrind install. See `docs/design/STAGE_0_HARNESS.md` §3 for the
 //! existing harness substrate this bench plugs into.
 //!
@@ -30,7 +30,7 @@
 //! so the dominant cost is `ECONOMICS_BENCH_HEIGHT` iterations of
 //! checked arithmetic — `instructions` is expected to be proportional
 //! to the bench height, not in the trivial-pure-read range. The method
-//! reads nothing from `ChainEconomicsSource`. iai-callgrind's
+//! reads nothing from `ChainEconomicsSource`. gungraun's
 //! deterministic instruction count is the load-bearing signal; the
 //! criterion sibling is the Tier-2 informational column.
 //!
@@ -67,11 +67,11 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_economics_base_emission_at` stem so PR
 //! reviewers grepping for the workload find consistent surface across
-//! the criterion / iai pair and the manifest row.
+//! the criterion / gungraun pair and the manifest row.
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::engine_economics_base_emission_at_for_bench;
 use shekyl_engine_core::{Engine, SoloSigner};
 use tempfile::TempDir;

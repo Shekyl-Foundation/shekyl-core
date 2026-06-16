@@ -31,17 +31,17 @@
 //!   §5.3 records the dispatch cost against the cheapest real op as
 //!   evidence for (not a gate on) the §8.3 view-scan split.
 //!
-//! # No iai-callgrind sibling for the actor paths
+//! # No gungraun sibling for the actor paths
 //!
-//! The `ask` is a cross-thread async round-trip; iai-callgrind runs
+//! The `ask` is a cross-thread async round-trip; gungraun runs
 //! under Callgrind (Valgrind serializes threads onto a simulated single
 //! core), so an `ask`'s instruction count folds in nondeterministic
 //! runtime-scheduling machinery rather than the clean deterministic
-//! signal iai exists for. The actor paths are criterion-only by design —
-//! a reasoned, reversion-claused deviation from the criterion+iai
-//! pairing discipline (`docs/design/STAGE_0_HARNESS.md`): reopen the iai
+//! signal gungraun exists for. The actor paths are criterion-only by design —
+//! a reasoned, reversion-claused deviation from the criterion+gungraun
+//! pairing discipline (`docs/design/STAGE_0_HARNESS.md`): reopen the gungraun
 //! sibling if a deterministic async-dispatch measurement method lands.
-//! Only the deterministic-crypto baseline gets an iai sibling
+//! Only the deterministic-crypto baseline gets a gungraun sibling
 //! (`engine_trait_bench_key_dispatch_baseline_iai.rs`).
 //!
 //! # Threshold class / frozen baseline

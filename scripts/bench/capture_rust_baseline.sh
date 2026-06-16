@@ -9,7 +9,7 @@
 #
 # Outputs (all overwritten atomically at the end):
 #   docs/benchmarks/shekyl_rust_v0.json           structured envelope
-#   docs/benchmarks/shekyl_rust_v0.iai.snapshot   raw iai-callgrind stdout
+#   docs/benchmarks/shekyl_rust_v0.iai.snapshot   raw gungraun stdout
 #
 # This script is run by humans, not CI. The CI workflow (commit 3.3)
 # runs a similar capture path optimized for per-PR comparison; this
@@ -19,9 +19,9 @@
 # Requires:
 #   - rustup-managed toolchain (see rust-toolchain.toml)
 #   - valgrind (>= 3.22 recommended) on PATH
-#   - iai-callgrind-runner on PATH (cargo install iai-callgrind-runner)
+#   - gungraun-runner on PATH (cargo install gungraun-runner)
 #   - python3 (for JSON assembly; jq-only would be painful given the
-#     iai-callgrind stdout parse)
+#     gungraun stdout parse)
 
 set -euo pipefail
 
@@ -47,10 +47,10 @@ need() {
 }
 need cargo
 need valgrind
-need iai-callgrind-runner
+need gungraun-runner
 need python3
 
-# ---- benches: crate : criterion-target : iai-callgrind-target [: features] -
+# ---- benches: crate : criterion-target : gungraun-target [: features] -
 #
 # Row format is `:`-delimited:
 #
@@ -94,7 +94,7 @@ BENCHES=(
 )
 
 # Clean criterion output so the envelope reflects this run only.
-# iai-callgrind output is regenerated on every run; no cleanup needed.
+# gungraun output is regenerated on every run; no cleanup needed.
 rm -rf "${RUST_ROOT}/target/criterion"
 
 # ---- criterion runs (wall-clock, Tier-2) -----------------------------------
@@ -113,10 +113,36 @@ for row in "${BENCHES[@]}"; do
   )
 done
 
-# ---- iai-callgrind runs (instruction counts, Tier-1) -----------------------
+# ---- gungraun runs (instruction counts, Tier-1) -----------------------
 
 IAI_STDOUT_TMP="$(mktemp)"
-trap 'rm -f "${IAI_STDOUT_TMP}"' EXIT
+PER_BENCH_TMP="$(mktemp)"
+trap 'rm -f "${IAI_STDOUT_TMP}" "${PER_BENCH_TMP}"' EXIT
+
+# Per-bench retry budget for the transient `instructions=0` capture anomaly
+# (`docs/investigation/2026-05-09-bench-baseline-flake.md`): a zero is a
+# measurement-layer flake a re-run almost always clears (the doc's own "rerun
+# the workflow typically succeeds"). Retry is *per bench* so a flake on one
+# entry re-runs only that entry, not the whole sweep. Bounded so a
+# *persistent* zero — a genuine regression to an empty measured region — still
+# surfaces via the producer guard below instead of looping forever. Override
+# with the env var (CI may raise it).
+GUNGRAUN_CAPTURE_ATTEMPTS="${GUNGRAUN_CAPTURE_ATTEMPTS:-3}"
+# Fail fast on misconfiguration: a non-integer or 0 would either break the
+# `(( attempt >= … ))` arithmetic or silently disable the retry that exists to
+# absorb the capture flake. Require a positive integer (>= 1).
+if ! [[ "${GUNGRAUN_CAPTURE_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[capture_rust_baseline] ERROR: GUNGRAUN_CAPTURE_ATTEMPTS must be a positive integer (>= 1), got '${GUNGRAUN_CAPTURE_ATTEMPTS}'" >&2
+  exit 1
+fi
+
+# A leading `Instructions:  0|` metric line is the anomaly signal: a real
+# bench never measures exactly zero (even the field-access `synced_height`
+# bench is ~10 instructions), so a 0 means collection never fired around the
+# function on that run.
+capture_reported_zero() {
+  grep -Eq '^[[:space:]]+Instructions:[[:space:]]+0\|' "$1"
+}
 
 for row in "${BENCHES[@]}"; do
   IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
@@ -125,17 +151,39 @@ for row in "${BENCHES[@]}"; do
     FEATURE_ARGS=(--features "${FEATURES}")
   fi
   echo
-  echo "[capture_rust_baseline] iai       : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
-  {
-    printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
-    (
-      cd "${RUST_ROOT}"
-      # iai-callgrind colors its output. Disabling via env keeps the
-      # snapshot and the parser input plain-text.
-      IAI_CALLGRIND_COLOR=never \
-        cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
-    )
-  } | tee -a "${IAI_STDOUT_TMP}"
+  echo "[capture_rust_baseline] gungraun  : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
+  attempt=1
+  while :; do
+    # `tee` (overwrite) streams the run's stdout live to the console and
+    # captures it to the per-bench scratch file for the zero-check; only the
+    # final accepted attempt is appended to the snapshot below. stdout-only
+    # (matching the historical capture) keeps cargo's stderr build chatter out
+    # of the snapshot — gungraun writes its metric lines to stdout.
+    {
+      printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
+      (
+        cd "${RUST_ROOT}"
+        # gungraun colors its output. Disabling via env keeps the
+        # snapshot and the parser input plain-text. `GUNGRAUN_COLOR` is
+        # the current knob; `IAI_CALLGRIND_COLOR` is set too so a stale
+        # iai-callgrind-era runner on PATH is also kept plain-text.
+        GUNGRAUN_COLOR=never \
+        IAI_CALLGRIND_COLOR=never \
+          cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
+      )
+    } | tee "${PER_BENCH_TMP}"
+
+    if ! capture_reported_zero "${PER_BENCH_TMP}"; then
+      break
+    fi
+    if (( attempt >= GUNGRAUN_CAPTURE_ATTEMPTS )); then
+      echo "[capture_rust_baseline] WARNING: ${CRATE}::${IAI_BENCH} reported instructions=0 on all ${attempt} attempt(s); leaving it for the producer guard to reject" >&2
+      break
+    fi
+    echo "[capture_rust_baseline] NOTE: ${CRATE}::${IAI_BENCH} reported instructions=0 (attempt ${attempt}/${GUNGRAUN_CAPTURE_ATTEMPTS}); re-running — transient capture anomaly" >&2
+    attempt=$(( attempt + 1 ))
+  done
+  cat "${PER_BENCH_TMP}" >>"${IAI_STDOUT_TMP}"
 done
 
 # ---- host manifest ---------------------------------------------------------
@@ -147,19 +195,19 @@ CPU_MODEL="$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/nu
 RUSTC_VER="$(rustc --version 2>/dev/null || echo 'unknown')"
 CARGO_VER="$(cargo --version 2>/dev/null || echo 'unknown')"
 VALGRIND_VER="$(valgrind --version 2>/dev/null || echo 'unknown')"
-# `iai-callgrind-runner --version` exits 1 when the lib-side version is
-# not embedded as a protocol handshake (see iai-callgrind CLI entry), so
+# `gungraun-runner --version` exits 1 when the lib-side version is
+# not embedded as a protocol handshake (see gungraun CLI entry), so
 # we use `cargo install --list` as the authoritative source for the
 # installed runner version. Fall back to the runner's own error line
 # (which does spell out its version) and finally to "unknown".
-IAI_RUNNER_VER="$(cargo install --list 2>/dev/null \
-    | awk '/^iai-callgrind-runner / {sub(/:$/, "", $2); print $2; exit}')"
-if [[ -z "${IAI_RUNNER_VER}" ]]; then
-    IAI_RUNNER_VER="$(iai-callgrind-runner --version 2>&1 \
-        | sed -n 's/.*iai-callgrind-runner (\([^)]*\)).*/\1/p' \
+GUNGRAUN_RUNNER_VER="$(cargo install --list 2>/dev/null \
+    | awk '/^gungraun-runner / {sub(/:$/, "", $2); print $2; exit}')"
+if [[ -z "${GUNGRAUN_RUNNER_VER}" ]]; then
+    GUNGRAUN_RUNNER_VER="$(gungraun-runner --version 2>&1 \
+        | sed -n 's/.*gungraun-runner (\([^)]*\)).*/\1/p' \
         | head -n1)"
 fi
-IAI_RUNNER_VER="${IAI_RUNNER_VER:-unknown}"
+GUNGRAUN_RUNNER_VER="${GUNGRAUN_RUNNER_VER:-unknown}"
 
 # Commit the raw iai snapshot before JSON assembly so a downstream
 # failure still leaves a useful text artifact on disk.
@@ -172,7 +220,7 @@ echo "[capture_rust_baseline] wrote ${OUT_IAI_SNAP}"
 
 export RUST_ROOT IAI_STDOUT_TMP OUT_JSON \
   GIT_REV GIT_DIRTY KERNEL CPU_MODEL \
-  RUSTC_VER CARGO_VER VALGRIND_VER IAI_RUNNER_VER
+  RUSTC_VER CARGO_VER VALGRIND_VER GUNGRAUN_RUNNER_VER
 
 python3 - <<'PY'
 import json
@@ -221,7 +269,7 @@ if criterion_root.exists():
         }
         criterion_entries.append(entry)
 
-# ── 2. Parse iai-callgrind stdout ─────────────────────────────────────────
+# ── 2. Parse gungraun stdout ─────────────────────────────────────────
 #
 # Sections are separated by our own `==== <crate>::<bench> ====` markers
 # so we know which crate owns each iai entry. Within a section:
@@ -298,7 +346,7 @@ for i in range(len(section_starts) - 1):
 # been observed (2026-05-09; see
 # `docs/investigation/2026-05-09-bench-baseline-flake.md`) on
 # GitHub-hosted ubuntu-latest runners with no causal code change and
-# iai-callgrind's own run summary reporting "N without regressions".
+# gungraun's own run summary reporting "N without regressions".
 # Root cause is unknown; what is known is that committing the
 # resulting envelope to the `bench-baseline` branch persists the
 # corruption across every subsequent PR's compare run, and that
@@ -340,7 +388,7 @@ if zero_entries and not allow_zero:
             "rustc_version": os.environ["RUSTC_VER"],
             "cargo_version": os.environ["CARGO_VER"],
             "valgrind_version": os.environ["VALGRIND_VER"],
-            "iai_callgrind_runner_version": os.environ["IAI_RUNNER_VER"],
+            "gungraun_runner_version": os.environ["GUNGRAUN_RUNNER_VER"],
         },
         "criterion": criterion_entries,
         "iai_callgrind": iai_entries,
@@ -408,7 +456,7 @@ envelope = {
         "rustc_version": os.environ["RUSTC_VER"],
         "cargo_version": os.environ["CARGO_VER"],
         "valgrind_version": os.environ["VALGRIND_VER"],
-        "iai_callgrind_runner_version": os.environ["IAI_RUNNER_VER"],
+        "gungraun_runner_version": os.environ["GUNGRAUN_RUNNER_VER"],
     },
     "criterion": criterion_entries,
     "iai_callgrind": iai_entries,

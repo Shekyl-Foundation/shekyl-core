@@ -205,7 +205,7 @@ pub(crate) mod fee_snapshot;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
-/// for the external Criterion / iai-callgrind targets.
+/// for the external Criterion / gungraun targets.
 #[cfg(feature = "bench-internals")]
 pub(crate) mod key_dispatch_bench;
 pub mod lifecycle;
@@ -1156,7 +1156,7 @@ pub fn engine_balance_for_bench(
 /// `std::hint::black_box(...)` around the address reference; the
 /// returned length sum is a small additional load (two `Vec::len()`
 /// metadata reads — the field bytes themselves are not touched) that
-/// gives the criterion / iai-callgrind bench loops something
+/// gives the criterion / gungraun bench loops something
 /// observable to consume so the bench function's overall result is
 /// not elided. The measurement surface is unchanged from the natural
 /// shape; only the API-widening footprint differs (zero added types

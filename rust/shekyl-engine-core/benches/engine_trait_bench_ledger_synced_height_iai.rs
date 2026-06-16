@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_ledger_synced_height.rs`.
 //!
 //! Same workload (a single call to
@@ -13,7 +13,7 @@
 //! for the pass/fail signal under the `engine_trait_bench_*` threshold
 //! class (bidirectional ±10% slowdown / ±25% speedup).
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working Valgrind
+//! Requires `cargo install gungraun-runner` and a working Valgrind
 //! install. See `docs/design/STAGE_0_HARNESS.md` §3 for the existing
 //! harness substrate this bench plugs into.
 //!
@@ -27,7 +27,7 @@
 //! `black_box` (4–6 instructions for the call body), plus the
 //! unified-fixture-shape boundary memcpy (5–10 instructions for an
 //! 8-byte `Box<Engine<S>>` pointer + `TempDir` ≈ 32 bytes total),
-//! plus a small wiring overhead iai-callgrind doesn't fully exclude.
+//! plus a small wiring overhead gungraun doesn't fully exclude.
 //!
 //! The fixture's `(Box<Engine<SoloSigner>>, TempDir)` shape is
 //! required by the boundary rule (§4.2): `Engine<SoloSigner>` is
@@ -69,7 +69,7 @@
 //!    `teardown =` parameter is missing), `Drop` runs inside the
 //!    measurement and dominates the count. The criterion sibling
 //!    reports nanoseconds-per-iter consistent with a few cycles when
-//!    the workload itself is measured cleanly; an iai-callgrind /
+//!    the workload itself is measured cleanly; a gungraun /
 //!    criterion divergence of orders of magnitude on the same
 //!    workload is the textbook diagnostic.
 //! 2. **Setup leakage** — the `#[bench::fresh_engine(setup =
@@ -88,11 +88,11 @@
 //! convention; the function name is the load-bearing identifier. All
 //! three names share the `engine_trait_bench_ledger_synced_height`
 //! stem so PR reviewers grepping for the workload find consistent
-//! surface across the criterion / iai pair and the manifest row.
+//! surface across the criterion / gungraun pair and the manifest row.
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use tempfile::TempDir;
 
 use shekyl_engine_core::{Engine, SoloSigner};
