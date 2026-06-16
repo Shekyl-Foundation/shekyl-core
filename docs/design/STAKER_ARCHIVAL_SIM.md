@@ -3639,3 +3639,260 @@ but four things bound the result; the first two change the meaning, not just the
   *nearest-spend* proximity heuristic when any background exists (modest, adversary-model-dependent),
   and (b) **leaning on the inversion** (the proven thin-regime lever, finding 3). Neither widens the
   window; both stay off the economic axis.
+
+## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16)
+
+**Why.** `HoldingsUpdate` (voluntary partial-unbond / rebond) is promoted to genesis
+(V3.0). The prior layers modeled mobility as *frictionless* re-allocation: an actor
+could shed a deep shard and re-deploy that capital the same epoch. The FSM
+([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md), pins P2B-7) does not permit that —
+collateral released by a voluntary drop inherits the **Unbond release cooldown** and is
+frozen for `RELEASE_COOLDOWN` before it can re-bond. This layer reconciles the sim's
+mobility model with that friction and **re-derives whether the genesis redundancy floor
+`r_target_deep` must rise to absorb it.** This is the R-3 reconciliation: its value is
+faithfulness to the FSM, so the friction is taken from consensus source, not modeled in
+the abstract.
+
+**Faithfulness pins (taken from [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) at
+source).** Two source-divergences in the first-draft model were corrected before the
+sweep was trusted:
+
+1. **The frozen amount is flat `ARCHIVAL_BOND_FLOOR`, not age-scaled.** §8.1:
+   `bond_floor(ShardSetCompact(set)) = ARCHIVAL_BOND_FLOOR × |set|` — per-shard capital is
+   flat regardless of depth; §4.4 confirms the drop side reduces `bond_floor(holdings)` by
+   a flat `ARCHIVAL_BOND_FLOOR`. The escrow therefore freezes a flat amount per dropped
+   shard (`World.cooling` pushes `(bond_rate, RELEASE_COOLDOWN)`), **not** `bond_age(s)`.
+   The age-scaled-amount draft would have over-stated the deep-shard freeze *exactly where
+   the redundancy margin lives* — sealing a higher `r_target_deep` than the real friction
+   requires (a permanent entry-barrier / decentralization cost) on an artifact. The
+   **"age-stratified by composition, not a re-tuned flat scalar"** conclusion survives, but
+   on legs 1+3 only: a *flat* freeze, age-stratified in **incidence** because
+   (1) `bond_duration(age)` makes deep capital least mobile to begin with (you can't shed it
+   to free budget) and (3) the deep tail is where coverage is thinnest, so a freeze-induced
+   delay there does the most harm. Flat freeze, age-stratified harm.
+2. **The cooldown anchors at per-shard last-served, not at drop** (§4.4). The sim is
+   serve-until-drop (an actor that holds a shard serves it until the epoch it sheds it), so
+   `last_served ≈ drop` and the drop-anchor is faithful. Recorded because a hold-but-don't-serve
+   model would over-state the freeze on top of any amount error, and the two pessimisms
+   compound.
+
+Escrow scope (the three forks, resolved against source): **voluntary drops only** — §4.5
+slash moves `bonded → burned` (forfeited, never cooled), and a clean `Unbond` requires the
+cooldown to have *already elapsed* (§3.2/§4.3), so the exit→re-entry path is not
+re-frozen (`deactivate` clears `cooling`, no double-count). The drop-and-re-add **2× capital
+bite** (P2B-7 Pin 3 anti-dodge) is faithful: the per-shard cooldown is keyed on released
+collateral, so re-adding the same shard needs fresh capital while the old freezes out.
+
+**Instrument.** `SimConfig.release_cooldown_epochs` (gated: `0` ⇒ inert, every prior
+scenario byte-identical — the `c0` arms reproduce the pre-L18 lean/buffered baselines to the
+digit). `World.cooling: Vec<Vec<(f64, u32)>>` holds per-actor `(frozen_amount,
+epochs_remaining)`; `frozen_capital(a)` is subtracted from spendable budget in
+`best_response`, and `advance_epoch` decrements/retires entries. New metrics:
+`frozen_capital_frac` (system escrow fraction), the freeze-harm **bracket**
+(`freeze_harm_causal` lower bound / `freeze_harm_co` upper bound, see below), and the
+lag-immune `oldest_min_committed_r` (worst-epoch committed replication over the oldest
+band).
+
+**Sweep.** `--axis=holdingsupdate_cooldown`. Three crossed axes: backfill latency
+(`lag0` lag-free = the **primary seal channel** that isolates the freeze; `lag2` =
+compounding-stress diagnostic), cooldown (`c0/c1/c2/c4`; **`c2` is genesis
+`RELEASE_COOLDOWN`**, `c4` is the cliff probe), and bond-duration composition (`s0` flat
+contrast; `s4` age-scaled = the realistic composition). Plus buffered arms
+(`hu_buf_b{140,160,180}`) that raise the budget, and lever arms (`hu_lever_aw{3,7,12}`) that
+raise the deep-tail reward premium, to test whether any market setting makes the redundancy
+margin emergent (findings 4, 6: none does).
+
+**Seal gates (absolute, named in advance per rule 21).** At genesis `c2`, on the primary
+`lag0` committed channel: (i) `committed_deep_under < 0.10`; (ii) `sole_source_shard_epochs
+= 0`; (iii) **hold-the-floor** `oldest_margin ≥ 0` (the committed oldest-band worst-epoch
+min is not eroded below `r_target_deep`). The freeze-harm seal is gated on the
+**co-occurrence upper bound** (`freeze_harm_co`) — a seal wants the pessimistic reading.
+The cooldown-2-vs-0 delta is the diagnostic for *how load-bearing the prior optimism was*,
+not a gate; `sole_source` is gated lag-free because backfill lag alone makes it non-zero
+(confounded under `lag2`).
+
+### Results
+
+| arm | frozFrac | freeze_harm_co | committed_deep_under | oldest_min_committed | sole_source |
+|---|---|---|---|---|---|
+| `lag0_c0_s4` (baseline) | 0.000 | 0.000 | 0.0027 | 6 | 0 |
+| `lag0_c1_s4` | 0.024 | 0.028 | 0.0027 | 6 | 0 |
+| **`lag0_c2_s0`** (genesis, flat) | 0.077 | 0.063 | 0.0064 | **6** | **0** |
+| **`lag0_c2_s4`** (genesis, age-scaled) | 0.054 | 0.099 | 0.0138 | **6** | **0** |
+| `lag0_c4_s0` (cliff, flat) | 0.201 | 0.321 | 0.139 | 5 | 0 |
+| `lag0_c4_s4` (cliff, age-scaled) | 0.118 | 0.212 | 0.068 | 6 | 0 |
+
+**1. Genesis `c2` passes all three absolute gates on both duration arms; the binding seal
+number is the age-scaled `0.0138`.** Both arms clear (`committed_deep_under` an order under
+the `0.10` ceiling, `sole_source = 0`, committed oldest-band min at `r_target_deep = 6`,
+`oldest_margin = 0`), so the seal is covered either way — but the **faithful figure to seal
+against is the age-scaled `0.0138`, not the rosier flat `0.0064`** (see finding 2: gate-4
+§3.4 makes `bond_duration(age)` genuinely age-scaled, so `s4` is the shipping composition
+and `s0` is the optimistic contrast). The flat-`ARCHIVAL_BOND_FLOOR` freeze is absorbed at
+genesis with no floor erosion. **The +1 margin held at the flat floor, exactly as
+predicted** — the `bond_age` over-statement was concentrated on the deep band, and removing
+it is what lets `c2` pass where the artifact would have tripped it.
+
+**2. Age-scaled is the faithful arm (gate-4 §3.4); the cliff lives in the flat *contrast*
+arm.** Gate-4 §3.4 fixes `bond_duration(age) = BOND_DURATION_BASE_EPOCHS · (1 +
+BOND_DURATION_AGE_SCALE · age)` — the consensus *form* is genuinely age-scaled, so `s4` is
+the shipping composition and `s0` is the optimistic contrast. (The "L9 resolved to flat
+default" note elsewhere refers to the *sim's legacy knob default* `bond_dur_age_scale = 0`,
+kept so pre-L18 rows stay byte-identical — not a claim that flat duration ships.) The `2→4`
+gradient is the bifurcation tell. Flat (`s0`): `committed_deep_under 0.0064 → 0.139`
+(**21.6×**, breaches `0.10`) and `oldest_min_committed 6 → 5` — super-linear, fragile.
+Age-scaled (`s4`, faithful): `0.0138 → 0.068` (**4.9×**, stays under `0.10`) and the floor
+**holds at 6**. Because the faithful arm is the bounded one, **genesis `c2` is not on a
+bifurcation edge and "keep cooldown at 2" is reassurance, not a load-bearing operating
+constraint.** The servo-400 lesson (gate the realistic arm, confirm it isn't on an edge) is
+satisfied.
+
+*The crossover is positive evidence the model captures real dynamics, not a monotone knob-
+scaling.* Age-scaled is **worse** at `c2` (`0.0138` vs flat `0.0064` — deep shards are held
+longer, so there is *less* mobility to re-cover a thinning shard) and **better** at `c4`
+(`0.068` vs flat `0.139` — flat churns more, so it accrues more cooldown exposure under a
+long freeze). That duration-shape × cooldown interaction *reversing sign* across the sweep is
+the operating-envelope coupling: **the dangerous corner is flat-duration × high-cooldown, and
+the genesis config sits in the opposite corner** (age-scaled × cooldown-2).
+
+*Reopen criteria (rule 21):* (a) if `RELEASE_COOLDOWN` rises above `~3` epochs the faithful
+arm itself approaches the `0.10` ceiling (`c4_s4 = 0.068`), so the cooldown value is the
+load-bearing knob; (b) **if `BOND_DURATION_AGE_SCALE` is sealed at or near `0`** in the
+joint cluster pass (gate-4 §3.4 numeric values land there, not here), flat *becomes* the
+faithful arm — the cliff moves into the realistic composition and "keep cooldown ≤ 2 **and
+do not flatten duration**" becomes a load-bearing operating-envelope constraint, not
+reassurance.
+
+**3. "Harmless at `c2`" is a *conjunction* — co-occurrence bounded AND `oldest_min` holds —
+not `causal = 0`.** The freeze's harm mode is **structural, not transient**, and the two
+detectors are complementary, not redundant:
+
+- *`freeze_harm_causal` (the transient/recovery-lag detector) reads `0` in every epoch of
+  every arm* — verified by a global-max probe across the whole sweep, **including
+  `lag0_c4_s0` where the floor demonstrably eroded `6 → 5` and co-occurrence hit `0.936`.**
+  A causal `0` therefore cannot be read as "the freeze is harmless"; it means the detector's
+  firing state (a willing-and-able archiver with frozen-but-recoverable capital, blocked from
+  re-covering) is **precluded under cooldown-aware optimization — not a structural
+  impossibility.** The `best_response` budgets on `effective_capital = capital − Σ frozen`
+  (it *sees* the cooldown), so it never makes the one move that strands an actor — the futile
+  *drop-to-reallocate* (drop A to fund B while A's freed collateral is frozen this window). It
+  instead points scarce budget at the *thinnest* shards and *holds* them; the shards that stay
+  under target are in absolute shortage (nobody can afford them), never frozen-but-idle. **The
+  scope of the preclusion is the rational-cooldown-aware regime, not all behavior:** a naive
+  operator who drops A intending to immediately rebond into B, not modeling the cooldown,
+  discovers A's capital frozen and leaves B under-covered for the 2-epoch window — exactly the
+  transient the sim precludes. So the transient is *reachable, just not by an optimizing
+  agent*; that residual is routed to operator-education and a wallet-conformance guard (see
+  Disposition), and is the mechanism by which the reopen clause's named rebond/unbond churn
+  would erode the band — which is why "precluded under optimization" (consistent with a reopen
+  path) is the correct framing and "by construction" (which would contradict it) is not.
+- *Detector validation owed and delivered (the triangular-trap discipline).* To distinguish
+  "`0` because the precluded state never arises" from "`0` because the metric is dead", the
+  firing predicate is extracted to `World::freeze_blocks_recoverage` with a positive control
+  (`freeze_predicate_fires_when_blocked`) that constructs the willing-and-able-but-frozen
+  state and confirms it fires, and negative controls
+  (`freeze_predicate_silent_when_any_conjunct_fails`) that falsify each of the four conjuncts.
+  The computation is live and selective; the sweep `0` is the precluded state.
+- *Consequence for the bracket.* `freeze_harm_co − freeze_harm_causal` is therefore
+  **maximally wide in this sweep** (`co − 0`), i.e. maximal entanglement — the causal
+  attribution carries **no marginal information** in this model and is *not* a load-bearing
+  seal input. The trustworthy reads are the two it brackets: the **co-occurrence upper
+  bound** (`freeze_harm_co ≤ 0.099` at genesis — the transient/co-occurring ceiling) and the
+  **structural `oldest_min_committed` floor** (holds at `6` at `c2`; the `6 → 5` erosion at
+  `c4_s0` that `recovery_lag` is structurally blind to). The freeze's real harm — when it
+  appears, at `c4` — is a *floor settling to a lower level*, which only `oldest_min` sees.
+
+So the supported "harmless at `c2`" result is the **conjunction**: `freeze_harm_co` bounded
+*and* `oldest_min_committed` holds at `r_target_deep`. Recorded that way — not as `causal = 0`
+alone, which carries no information here.
+
+**4. The `+1` redundancy is provisioned, not emergent (the floor re-derivation).** The
+buffered arms settle the redundancy-floor question directly: at `c0` the worst-epoch
+committed oldest-min is `6 = r_target_deep` at **every** budget (b120/b140/b160/b180) — the
+equilibrium never discovers a 7th replica regardless of surplus capital. The literal `+1`
+redundancy is therefore a property of **how `r_target_deep` is set** (`= availability_floor
++ 1`), not a buffer the lean equilibrium emergently holds. Combined with finding 1 (the
+flat freeze costs `~0` floor erosion at `c2`), the re-derivation conclusion is:
+**`r_target_deep` requires no freeze-driven increase. The genesis redundancy floor is
+unchanged by `HoldingsUpdate` promotion.** (The noisy `b160_c2`/`b180_c2` rows show the
+worst-single-epoch oldest-min flickering to `5` — a fragile tail statistic, *not* a freeze
+effect: their robust `committed_deep_under` stays `0.012`–`0.016`. The committed-deep-under
+read is the load-bearing durability confirmation; the worst-epoch min is reported with its
+noise.)
+
+**Posture (conscious, per rule 21): the `+1` is fully consumed by modeled frictions, with no
+emergent slack underneath.** "Buffered arms settle to exactly `r_target_deep`" means the
+`+1` seat is entirely absorbed by the known frictions (integer flooring + freeze) — there is
+**no self-correcting cushion** below the provisioned floor. The reopen clause is widened
+accordingly (see Disposition): it fires on *any* newly-discovered friction that erodes the
+deep band, not only on "the freeze pushes under `+1`", because there is nothing beneath to
+absorb a new bite. The rebond/unbond recurring surface and the cooldown-anchor edge case are
+both live candidates.
+
+**5. Under compounding stress (`lag2`), the committed floor survives; only serving
+sole-source rises.** Backfill lag alone makes `sole_source` non-zero at `c0` (`7`–`15`),
+confirming the metric is lag-confounded (hence gated lag-free). The freeze compounds the
+*serving* read under lag (`c2`: `sole_source 135`–`154`, `serving_deep_under ~0.49`–`0.72`),
+but the **committed** reads hold (`oldest_min_committed = 6`, `committed_deep_under ≤
+0.014`). The freeze+lag interaction is a transient backfill effect on serving exposure, not
+a committed-durability breach — the durable floor is intact even off the primary channel.
+
+**6. No market lever buys emergent slack — a wider band is provisioning-only (`hu_lever_*`).**
+Asked whether *any* setting yields emergent margin above `r_target_deep` or lets the system
+run mid-band: no. The buffered arms show **budget** alone buys none (idle capital stays idle —
+a `(target+1)`-th replica of an at-target deep shard is individually unprofitable). The
+`hu_lever_*` arms hold budget at the lean point and raise only the **deep-tail reward
+premium** (`age_weight` 3→12): `oldest_min_committed` stays pinned at `6` across the whole
+range, and `committed_deep_under` *worsens* slightly at the top (`0.0138 → 0.037` at
+`age_weight = 9`, a concentration effect). The `1/R` reward makes the `(target+1)`-th replica
+unprofitable **by construction** — anti-over-replication is the intended property (no wasteful
+redundancy), so there is no emergent free cushion from any market knob. Running mid-band is a
+**priced provisioning decision**, two options: (a) set `r_target_deep = availability_floor +
+2` (the market provisions the cushion, paid in entry barrier / launch decentralization); or
+(b) lean on the **foundation complete-tree (B+C) backstop**, which sits structurally *below*
+the market floor (the foundation is not a `1/R` market actor, so it can hold the deep tail
+unconditionally — paid in trust concentration, and self-undercutting against a sophisticated
+adversary per the standoff carry 3). The trilemma trade is explicit and neither option is
+free; the genesis disposition takes the minimal one (`availability_floor + 1`, no foundation
+band-widening) and accepts the no-cushion posture above.
+
+### Disposition
+
+`HoldingsUpdate` is sealable at genesis with `RELEASE_COOLDOWN` at its current value and
+**no change to `r_target_deep`**. The flat-`ARCHIVAL_BOND_FLOOR` freeze is the faithful
+friction; the redundancy margin is a provisioning property the floor already delivers; the
+faithful (age-scaled) composition is not on a cliff edge at `c2` (binding seal number:
+`committed_deep_under = 0.0138`). The reconciliation closes the "mobility is frictionless"
+optimism in L1–L17: the friction is real, modeled, and absorbed without re-provisioning.
+
+*Standing reopen criteria (rule 21).* Because the `+1` is fully consumed with **no emergent
+cushion beneath it** (findings 4, 6), the reopen trigger is **any newly-discovered friction
+that erodes the deep band** — not only "the freeze pushes under `+1`". Named live candidates:
+(a) a `RELEASE_COOLDOWN` increase past `~3` epochs (the faithful arm approaches the `0.10`
+ceiling); (b) `BOND_DURATION_AGE_SCALE` sealed at/near `0` in the joint cluster pass (flat
+becomes faithful → the cliff moves into the realistic arm); (c) the rebond/unbond
+recurring-surface friction (R-2/R-3) consuming margin; (d) the cooldown last-served-anchor
+edge case if actors hold-but-don't-serve before dropping. Any of these re-opens the floor
+question via a fresh `--axis=holdingsupdate_cooldown` sweep at the new parameters; on a
+failing arm, `r_target_deep + |oldest_margin|` is the actionable reopen floor (no re-run).
+
+*Routed residuals (the honest scope of the causal-`0` preclusion).* The transient gap the
+sim shows as `0` is precluded only under cooldown-aware optimization; a naive operator can
+still reach it via drop-to-reallocate. This residual lives in **operator behavior and wallet
+conformance, not the consensus floor** — the network-floor harm is structural (caught by
+`oldest_min`) and bounded, and the naive transient is individual, self-correcting within the
+2-epoch cooldown, and not a structural breach. It does *not* move the seal, but given the
+no-cushion posture (finding 4) there is no emergent slack to absorb a *wave* of naive
+operators stranding capital in a thin-tail epoch, so the two items below earn their place
+rather than being optional:
+
+- **Operator-education item (transparency theme).** Document, in operator-facing guidance:
+  *do not drop a shard to fund another within the release cooldown.* The freed collateral is
+  frozen for the cooldown window, so the new shard is stranded for ~2 epochs — a self-inflicted
+  coverage gap, and in the lean regime other actors are too capital-pinned to backfill it
+  quickly.
+- **Candidate wallet-conformance guard.** The wallet should warn or refuse a `HoldingsUpdate`
+  drop whose freed capital the operator is visibly trying to redeploy within the cooldown —
+  the same conformance posture as the standoff draw. A drop-to-reallocate the cooldown will
+  strand is a UX footgun the wallet can catch at construction time. (Tracked as a wallet-side
+  follow-up; not a consensus rule.)

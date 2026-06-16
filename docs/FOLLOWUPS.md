@@ -490,23 +490,65 @@ sustainability is unaffected by the recalibration.
   contract-restrict the function to current-membership questions and reroute historical
   callers) in the `shekyl-archival-retention` connect paths; land the per-shard `E_add+1`
   verify/connect rule.
-  (2) **Age-stratified sim reconciliation (pre-seal dependency).** The staker sim today
-  abstracts cooldown + partial-slash + capital-lockup into a single **flat seating cost**
-  (`STAKER_ARCHIVAL_SIM.md` §*steady-state frame* item 6) and models bond churn as
-  frictionless myopic per-epoch acquire/drop — **optimistic exactly on the deep tail**,
-  where the `+1` replica margin lives and mobility is the binding constraint. The
-  reconciliation must make the friction a **function of shard age** (a re-tuned flat scalar
-  stays optimistic on the constraint that binds): released collateral frozen for the release
-  cooldown (freed capital cannot recycle into a new shard immediately — fresh capital
-  required), partial-slash vs. whole-bond, per-shard last-served-epoch cooldown on drop. The
-  `bond_duration(age)` retention-commitment horizon (gate-4 §3.4) is an existing
-  age-stratified friction the model already has a hook for.
-  (3) **What it gates:** the genesis-seal redundancy-floor re-derivation, against (a) the
-  integer backend, (b) the `+1` deep-tail replica margin, and (c) this reconciled mobility
-  model — the three compounding corrections the sim verdict named as pre-seal. **Target:
-  V3.0.** Cross-refs: `ARCHIVAL_BOND_GATE4.md` §4.4, `PHASE_2B_FSM_RETOOL.md`,
-  `STAKER_ARCHIVAL_SIM.md` §*steady-state frame*, `ARCHIVAL_FIREWALL_GATE6.md` R2 (R-2/R-3
-  recurring-surface re-scope).
+  (2) **~~Age-stratified sim reconciliation (pre-seal dependency).~~ DONE 2026-06-16 —
+  `STAKER_ARCHIVAL_SIM.md` §L18.** The reconciliation landed as the
+  `--axis=holdingsupdate_cooldown` sweep: released collateral frozen for the release
+  cooldown (fresh capital required to re-bond) is modeled in `World.cooling`, subtracted
+  from spendable budget in `best_response`. Two source-faithfulness corrections were made
+  against `ARCHIVAL_BOND_GATE4.md` before the sweep was trusted: **the frozen amount is flat
+  `ARCHIVAL_BOND_FLOOR`** (§8.1 — per-shard capital is flat, not age-scaled; the first-draft
+  `bond_age(s)` escrow would have over-stated the deep-band freeze exactly where the margin
+  lives, sealing a higher floor on an artifact), and **the cooldown anchors at per-shard
+  last-served** (§4.4 — faithful under the sim's serve-until-drop behavior). The friction is
+  **flat in amount, age-stratified in incidence** (legs 1+3: `bond_duration(age)` immobility
+  + thin deep-tail coverage), not a re-tuned flat scalar. Escrow is voluntary-drops-only
+  (slash burns, never cools; clean `Unbond` pre-elapses the cooldown so exit→re-entry is not
+  re-frozen); the drop-and-re-add 2× capital bite (P2B-7 Pin 3 anti-dodge) is preserved.
+  (3) **~~What it gates: the genesis-seal redundancy-floor re-derivation.~~ RE-DERIVED
+  2026-06-16 — `r_target_deep` unchanged.** The L18 sweep settles the mobility-reconciliation
+  leg of the three-corrections pre-seal (the integer-backend + `+1`-margin legs are the
+  sibling tail-margin item above). Findings: (a) genesis `RELEASE_COOLDOWN` (`c2`) passes all
+  three absolute gates — `committed_deep_under < 0.10`, `sole_source = 0` (lag-free),
+  `oldest_margin ≥ 0` (committed oldest-band floor held at `r_target_deep`) — on **both**
+  duration arms; the **binding seal number is the faithful age-scaled arm**
+  (`committed_deep_under = 0.0138`, gate-4 §3.4 makes `bond_duration(age)` genuinely
+  age-scaled; the rosier flat `0.0064` is the optimistic contrast, not the headline); (b) the
+  flat-floor freeze costs `~0` floor erosion at `c2`, so **no freeze-driven `r_target_deep`
+  increase is required**; (c) the `+1` redundancy is a **provisioning** property, not emergent
+  — and **no market lever buys slack**: neither budget (`hu_buf_*`) nor deep-tail reward
+  premium (`hu_lever_*`, `age_weight` 3→12) lifts `oldest_min_committed` above `r_target_deep`,
+  because the `1/R` reward is anti-over-replication by construction. A wider band is
+  provisioning-only (`r_target_deep += 1`, or the foundation complete-tree backstop), both
+  priced (entry-barrier vs. trust-concentration); (d) cliff check — the `2→4` gradient is
+  super-linear under *flat* duration (21.6×, floor `6→5`) but bounded under the faithful
+  *age-scaled* composition (4.9×, floor holds), so genesis `c2` is not on a bifurcation edge;
+  the duration-shape × cooldown sign reversal is positive evidence the model captures real
+  dynamics. **Inference correction:** "harmless at `c2`" is the **conjunction**
+  (`freeze_harm_co` bounded AND `oldest_min` holds), **not** `causal = 0` — the causal/transient
+  detector reads `0` in every epoch of every arm (incl. `c4` where the floor eroded). The `0`
+  is **precluded under cooldown-aware optimization, not by construction**: `best_response`
+  budgets on `capital − Σfrozen`, so it never makes the stranding drop-to-reallocate move
+  (validated by positive/negative control tests `freeze_predicate_*`); the state stays
+  **reachable by a naive operator** who drops A to immediately rebond B without modeling the
+  cooldown — which is also the mechanism by which the named rebond/unbond churn would erode the
+  band, so "precluded under optimization" (consistent with a reopen path) is the correct
+  framing. The freeze's real harm mode is **structural**, caught by `oldest_min`, invisible to
+  the transient detector. *Standing reopen (rule 21), widened to **any newly-discovered
+  friction that erodes the deep band** (no emergent cushion beneath the provisioned `+1`):*
+  `RELEASE_COOLDOWN` past `~3` epochs; `BOND_DURATION_AGE_SCALE` sealed at/near `0` (flat
+  becomes faithful → cliff moves into the realistic arm); the rebond/unbond recurring surface
+  (R-2/R-3); the cooldown last-served-anchor edge case. *Routed residuals (naive-operator
+  scope):* the precluded transient is reachable by a naive drop-to-reallocate, routed to
+  operator behavior + wallet conformance, **not the consensus floor** (network harm is
+  structural/bounded; the naive transient is individual and self-correcting within the
+  cooldown) — (i) **operator-education:** don't drop a shard to fund another within the release
+  cooldown (freed collateral is frozen ~2 epochs, stranding the new shard; the lean regime
+  can't backfill fast); (ii) **wallet-conformance guard (candidate, wallet-side, V3.1):** warn
+  or refuse a `HoldingsUpdate` drop whose freed capital is visibly being redeployed within the
+  cooldown — same conformance posture as the standoff draw above. **Target: V3.0 — closed for
+  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur). Cross-refs:
+  `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
+  `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

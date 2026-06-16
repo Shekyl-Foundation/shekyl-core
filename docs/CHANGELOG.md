@@ -69,13 +69,46 @@
   logic is Rust-native (`shekyl-archival-retention`); C++ daemon retains only thin glue +
   FFI delegation; wallet-side construction is Rust. Two follow-on dependencies tracked,
   in order: (1) FSM-friction pin in `PHASE_2B_FSM_RETOOL.md` (partial-unbond action,
-  per-shard release-cooldown on drop, slashable-when boundary); (2) **age-stratified** sim
-  bond-mobility reconciliation (the staker sim abstracts cooldown + partial-slash +
-  capital-lockup to a flat seating cost and models frictionless myopic acquire/drop —
-  optimistic exactly on the deep tail where the `+1` replica margin lives), which gates
-  the genesis-seal redundancy-floor re-derivation. Docs: `ARCHIVAL_BOND_GATE4.md` §4.4,
-  `ARCHIVAL_FIREWALL_GATE6.md` (R2 / revision 2026-06-15), `FOLLOWUPS.md` (V3.0 lifecycle
-  item).
+  per-shard release-cooldown on drop, slashable-when boundary) — **landed**; (2)
+  **age-stratified** sim bond-mobility reconciliation — **landed (`STAKER_ARCHIVAL_SIM.md`
+  §L18)**. Docs: `ARCHIVAL_BOND_GATE4.md` §4.4, `ARCHIVAL_FIREWALL_GATE6.md` (R2 / revision
+  2026-06-15), `FOLLOWUPS.md` (V3.0 lifecycle item).
+- **archival/sim: L18 — `HoldingsUpdate` release-cooldown freeze reconciliation; genesis
+  redundancy floor re-derived unchanged (2026-06-16).** The staker sim's frictionless-mobility
+  optimism is closed: a new `--axis=holdingsupdate_cooldown` sweep freezes released collateral
+  for the release cooldown (`World.cooling`; spendable budget reduced by frozen capital in
+  `best_response`). Two source-faithfulness corrections vs. `ARCHIVAL_BOND_GATE4.md` — the
+  frozen amount is **flat `ARCHIVAL_BOND_FLOOR`** (§8.1, not the first-draft age-scaled
+  `bond_age(s)`, which over-stated the deep-band freeze exactly where the redundancy margin
+  lives) and the cooldown **anchors at per-shard last-served** (§4.4, faithful under
+  serve-until-drop). The friction is flat in amount, age-stratified in **incidence**
+  (`bond_duration(age)` immobility + thin deep-tail coverage). Result: genesis
+  `RELEASE_COOLDOWN` passes all three absolute seal gates (`committed_deep_under < 0.10`,
+  `sole_source = 0` lag-free, hold-the-floor `oldest_margin ≥ 0`) on both duration arms.
+  The binding seal number is the **faithful age-scaled arm** (`committed_deep_under = 0.0138`;
+  gate-4 §3.4 makes `bond_duration(age)` genuinely age-scaled, so the rosier flat `0.0064` is
+  the optimistic contrast, not the headline). The flat-floor freeze costs `~0` floor erosion
+  at genesis, so **`r_target_deep` requires no freeze-driven increase**. The `+1` redundancy
+  is a **provisioning** property of `r_target_deep` (= `availability_floor + 1`), not an
+  emergent buffer: **no market lever buys slack** — neither budget (`hu_buf_*`) nor deep-tail
+  reward premium (`hu_lever_*`, `age_weight` 3→12) lifts `oldest_min_committed` above
+  `r_target_deep`, because the `1/R` reward is anti-over-replication by construction; a wider
+  band is provisioning-only (raise `r_target_deep`, or lean on the foundation backstop), both
+  priced. The "harmless at `c2`" result is the **conjunction** (`freeze_harm_co` bounded AND
+  `oldest_min` holds), **not** `causal = 0`: the causal/transient detector reads `0` in every
+  epoch of every arm including `c4` where the floor eroded `6→5`. The `0` is **precluded under
+  cooldown-aware optimization, not by construction** (`best_response` budgets on
+  `capital−Σfrozen`, so it never makes the stranding drop-to-reallocate; validated by
+  positive/negative control tests `freeze_predicate_*` in `model.rs`) — the state stays
+  **reachable by a naive operator**, routed to operator-education + a candidate wallet-side
+  conformance guard (V3.1), not the consensus floor. The freeze's real harm mode is
+  **structural** (caught by `oldest_min`, invisible to the transient detector). A cliff check
+  confirms genesis cooldown is not on a bifurcation edge in the faithful age-scaled composition
+  (the super-linear `2→4` degradation is a flat-duration-contrast artifact); the
+  duration-shape × cooldown sign reversal across the sweep is positive evidence the model
+  captures real dynamics. The rule-21 reopen clause is widened to **any newly-discovered
+  friction that erodes the deep band** (no emergent cushion beneath the provisioned `+1`).
+  Docs: `STAKER_ARCHIVAL_SIM.md` §L18, `FOLLOWUPS.md` (V3.0 lifecycle item, sub-items 2–3).
 - **wallet/crypto-pq: retire the `enc_label` real-label gate; prove the
   indistinguishability invariant (2026-06-15, `feat/enc-label-ungate`).** The
   cooperative-payment-request gate (`operational.cooperative_payment_requests`,
