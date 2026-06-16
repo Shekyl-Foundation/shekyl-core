@@ -330,20 +330,26 @@ impl World {
     /// shortage — to be what keeps `s` under target: an actor who would re-cover `s` but
     /// for collateral locked in release cooldown.
     ///
-    /// **It never fires in the L18 general-equilibrium sweep, by construction, not by
-    /// accident** (`STAKER_ARCHIVAL_SIM.md` §L18 detector validation): `best_response`
-    /// points scarce budget at the *thinnest* (most scarcity-profitable) shards, so a
-    /// budget-constrained actor with a spare slot always spends its remaining budget on
-    /// the under-target deep tail and therefore *holds* it (condition i fails) — the
-    /// shards that stay under target are in absolute shortage (nobody can afford them),
-    /// never frozen-but-idle. A sweep reading of `0` therefore means "the willing-and-able-
-    /// but-frozen state never arises", **not** "the computation is dead": the unit tests
-    /// `freeze_predicate_fires_when_blocked` / `..._silent_when_*` are the positive/negative
-    /// control proving the predicate fires when the state *is* constructed. Consequently
-    /// the freeze-harm bracket (`freeze_harm_co − freeze_harm_causal`) is maximally wide
-    /// by construction ⇒ maximal entanglement ⇒ causal attribution carries no marginal
-    /// information; the trustworthy reads are the co-occurrence upper bound and the
-    /// structural `oldest_min_committed` floor, which *are* complementary detectors.
+    /// **It never fires in the L18 sweep — but the preclusion is a rationality property of
+    /// the cooldown-aware `best_response`, not a structural impossibility**
+    /// (`STAKER_ARCHIVAL_SIM.md` §L18 detector validation). `best_response` budgets on
+    /// `effective_capital = capital − Σ frozen` (it *sees* the cooldown), so it never makes
+    /// the one move that strands an actor — the futile drop-to-reallocate (drop A to fund B
+    /// while A's freed collateral is frozen and useless this window). It instead points
+    /// scarce budget at the *thinnest* (most scarcity-profitable) shards and *holds* them
+    /// (condition i fails); the shards that stay under target are in absolute shortage
+    /// (nobody can afford them), never frozen-but-idle. So a sweep reading of `0` means the
+    /// willing-and-able-but-frozen state is **precluded under cooldown-aware optimization**,
+    /// **not** "the computation is dead": the unit tests `freeze_predicate_fires_when_blocked`
+    /// / `..._silent_when_*` are the positive/negative control proving the predicate fires
+    /// when the state *is* constructed. The state stays **reachable by a naive operator** who
+    /// drops A intending to immediately rebond into B without modeling the cooldown — that
+    /// residual is routed to operator-education + a wallet-conformance guard (§L18), not the
+    /// consensus floor. Consequently the freeze-harm bracket
+    /// (`freeze_harm_co − freeze_harm_causal`) is maximally wide in this sweep ⇒ maximal
+    /// entanglement ⇒ causal attribution carries no marginal information; the trustworthy
+    /// reads are the co-occurrence upper bound and the structural `oldest_min_committed`
+    /// floor, which *are* complementary detectors.
     pub fn freeze_blocks_recoverage(&self, s: usize, bond_rate: f64) -> bool {
         (0..self.actors.len()).any(|a| {
             self.active[a]
@@ -437,8 +443,9 @@ mod tests {
     /// **Positive control for the L18 causal freeze-harm detector.** Constructs exactly
     /// the willing-and-able-but-frozen state — active, not holding `s = 0`, one floor
     /// (`bond_rate = 10`) frozen, a spare slot — and confirms the predicate fires. This is
-    /// the analogue of the `double_jitter_trap_fails_the_same_check` discipline: it proves
-    /// a sweep reading of `0` means "the state never arises", not "the metric is dead".
+    /// the analogue of the `double_jitter_trap_fails_the_same_check` discipline: it proves a
+    /// sweep reading of `0` means the state is "precluded under cooldown-aware optimization"
+    /// (reachable by a naive drop-to-reallocate operator), not "the metric is dead".
     #[test]
     fn freeze_predicate_fires_when_blocked() {
         let mut w = one_actor_world(2);

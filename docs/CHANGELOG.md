@@ -43,17 +43,19 @@
   band is provisioning-only (raise `r_target_deep`, or lean on the foundation backstop), both
   priced. The "harmless at `c2`" result is the **conjunction** (`freeze_harm_co` bounded AND
   `oldest_min` holds), **not** `causal = 0`: the causal/transient detector reads `0` in every
-  epoch of every arm including `c4` where the floor eroded `6→5`, because `best_response`
-  rationality precludes its firing state — validated by positive/negative control tests
-  (`freeze_predicate_*` in `model.rs`), so the `0` is a precluded state, not dead code, and
-  the freeze's real harm mode is **structural** (caught by `oldest_min`, invisible to the
-  transient detector). A cliff check confirms genesis cooldown is not on a bifurcation edge in
-  the faithful age-scaled composition (the super-linear `2→4` degradation is a
-  flat-duration-contrast artifact); the duration-shape × cooldown sign reversal across the
-  sweep is positive evidence the model captures real dynamics. The rule-21 reopen clause is
-  widened to **any newly-discovered friction that erodes the deep band** (no emergent cushion
-  beneath the provisioned `+1`). Docs: `STAKER_ARCHIVAL_SIM.md` §L18, `FOLLOWUPS.md` (V3.0
-  lifecycle item, sub-items 2–3).
+  epoch of every arm including `c4` where the floor eroded `6→5`. The `0` is **precluded under
+  cooldown-aware optimization, not by construction** (`best_response` budgets on
+  `capital−Σfrozen`, so it never makes the stranding drop-to-reallocate; validated by
+  positive/negative control tests `freeze_predicate_*` in `model.rs`) — the state stays
+  **reachable by a naive operator**, routed to operator-education + a candidate wallet-side
+  conformance guard (V3.1), not the consensus floor. The freeze's real harm mode is
+  **structural** (caught by `oldest_min`, invisible to the transient detector). A cliff check
+  confirms genesis cooldown is not on a bifurcation edge in the faithful age-scaled composition
+  (the super-linear `2→4` degradation is a flat-duration-contrast artifact); the
+  duration-shape × cooldown sign reversal across the sweep is positive evidence the model
+  captures real dynamics. The rule-21 reopen clause is widened to **any newly-discovered
+  friction that erodes the deep band** (no emergent cushion beneath the provisioned `+1`).
+  Docs: `STAKER_ARCHIVAL_SIM.md` §L18, `FOLLOWUPS.md` (V3.0 lifecycle item, sub-items 2–3).
 - **wallet/crypto-pq: retire the `enc_label` real-label gate; prove the
   indistinguishability invariant (2026-06-15, `feat/enc-label-ungate`).** The
   cooperative-payment-request gate (`operational.cooperative_payment_requests`,

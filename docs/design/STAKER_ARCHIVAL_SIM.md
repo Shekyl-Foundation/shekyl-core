@@ -3772,11 +3772,20 @@ detectors are complementary, not redundant:
   `lag0_c4_s0` where the floor demonstrably eroded `6 → 5` and co-occurrence hit `0.936`.**
   A causal `0` therefore cannot be read as "the freeze is harmless"; it means the detector's
   firing state (a willing-and-able archiver with frozen-but-recoverable capital, blocked from
-  re-covering) **never arises in this model — by construction, not accident.**
-  `best_response` points scarce budget at the *thinnest* (most scarcity-profitable) shards,
-  so a budget-constrained actor with a spare slot always spends its remaining budget on the
-  under-target deep tail and therefore *holds* it; the shards that stay under target are in
-  absolute shortage (nobody can afford them), never frozen-but-idle.
+  re-covering) is **precluded under cooldown-aware optimization — not a structural
+  impossibility.** The `best_response` budgets on `effective_capital = capital − Σ frozen`
+  (it *sees* the cooldown), so it never makes the one move that strands an actor — the futile
+  *drop-to-reallocate* (drop A to fund B while A's freed collateral is frozen this window). It
+  instead points scarce budget at the *thinnest* shards and *holds* them; the shards that stay
+  under target are in absolute shortage (nobody can afford them), never frozen-but-idle. **The
+  scope of the preclusion is the rational-cooldown-aware regime, not all behavior:** a naive
+  operator who drops A intending to immediately rebond into B, not modeling the cooldown,
+  discovers A's capital frozen and leaves B under-covered for the 2-epoch window — exactly the
+  transient the sim precludes. So the transient is *reachable, just not by an optimizing
+  agent*; that residual is routed to operator-education and a wallet-conformance guard (see
+  Disposition), and is the mechanism by which the reopen clause's named rebond/unbond churn
+  would erode the band — which is why "precluded under optimization" (consistent with a reopen
+  path) is the correct framing and "by construction" (which would contradict it) is not.
 - *Detector validation owed and delivered (the triangular-trap discipline).* To distinguish
   "`0` because the precluded state never arises" from "`0` because the metric is dead", the
   firing predicate is extracted to `World::freeze_blocks_recoverage` with a positive control
@@ -3785,7 +3794,7 @@ detectors are complementary, not redundant:
   (`freeze_predicate_silent_when_any_conjunct_fails`) that falsify each of the four conjuncts.
   The computation is live and selective; the sweep `0` is the precluded state.
 - *Consequence for the bracket.* `freeze_harm_co − freeze_harm_causal` is therefore
-  **maximally wide by construction** (`co − 0`), i.e. maximal entanglement — the causal
+  **maximally wide in this sweep** (`co − 0`), i.e. maximal entanglement — the causal
   attribution carries **no marginal information** in this model and is *not* a load-bearing
   seal input. The trustworthy reads are the two it brackets: the **co-occurrence upper
   bound** (`freeze_harm_co ≤ 0.099` at genesis — the transient/co-occurring ceiling) and the
@@ -3866,3 +3875,24 @@ recurring-surface friction (R-2/R-3) consuming margin; (d) the cooldown last-ser
 edge case if actors hold-but-don't-serve before dropping. Any of these re-opens the floor
 question via a fresh `--axis=holdingsupdate_cooldown` sweep at the new parameters; on a
 failing arm, `r_target_deep + |oldest_margin|` is the actionable reopen floor (no re-run).
+
+*Routed residuals (the honest scope of the causal-`0` preclusion).* The transient gap the
+sim shows as `0` is precluded only under cooldown-aware optimization; a naive operator can
+still reach it via drop-to-reallocate. This residual lives in **operator behavior and wallet
+conformance, not the consensus floor** — the network-floor harm is structural (caught by
+`oldest_min`) and bounded, and the naive transient is individual, self-correcting within the
+2-epoch cooldown, and not a structural breach. It does *not* move the seal, but given the
+no-cushion posture (finding 4) there is no emergent slack to absorb a *wave* of naive
+operators stranding capital in a thin-tail epoch, so the two items below earn their place
+rather than being optional:
+
+- **Operator-education item (transparency theme).** Document, in operator-facing guidance:
+  *do not drop a shard to fund another within the release cooldown.* The freed collateral is
+  frozen for the cooldown window, so the new shard is stranded for ~2 epochs — a self-inflicted
+  coverage gap, and in the lean regime other actors are too capital-pinned to backfill it
+  quickly.
+- **Candidate wallet-conformance guard.** The wallet should warn or refuse a `HoldingsUpdate`
+  drop whose freed capital the operator is visibly trying to redeploy within the cooldown —
+  the same conformance posture as the standoff draw. A drop-to-reallocate the cooldown will
+  strand is a UX footgun the wallet can catch at construction time. (Tracked as a wallet-side
+  follow-up; not a consensus rule.)

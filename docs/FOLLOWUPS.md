@@ -525,17 +525,30 @@ sustainability is unaffected by the recalibration.
   the duration-shape × cooldown sign reversal is positive evidence the model captures real
   dynamics. **Inference correction:** "harmless at `c2`" is the **conjunction**
   (`freeze_harm_co` bounded AND `oldest_min` holds), **not** `causal = 0` — the causal/transient
-  detector reads `0` in every epoch of every arm (incl. `c4` where the floor eroded), because
-  `best_response` rationality precludes its firing state (validated by positive/negative
-  control tests `freeze_predicate_*`); the freeze's real harm mode is **structural**, caught by
-  `oldest_min`, invisible to the transient detector. *Standing reopen (rule 21), widened to
-  **any newly-discovered friction that erodes the deep band** (no emergent cushion beneath the
-  provisioned `+1`):* `RELEASE_COOLDOWN` past `~3` epochs; `BOND_DURATION_AGE_SCALE` sealed
-  at/near `0` (flat becomes faithful → cliff moves into the realistic arm); the rebond/unbond
-  recurring surface (R-2/R-3); the cooldown last-served-anchor edge case. **Target: V3.0 —
-  closed for the mobility leg.** Cross-refs: `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1,
-  `PHASE_2B_FSM_RETOOL.md` §P2B-7, `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md`
-  R2.
+  detector reads `0` in every epoch of every arm (incl. `c4` where the floor eroded). The `0`
+  is **precluded under cooldown-aware optimization, not by construction**: `best_response`
+  budgets on `capital − Σfrozen`, so it never makes the stranding drop-to-reallocate move
+  (validated by positive/negative control tests `freeze_predicate_*`); the state stays
+  **reachable by a naive operator** who drops A to immediately rebond B without modeling the
+  cooldown — which is also the mechanism by which the named rebond/unbond churn would erode the
+  band, so "precluded under optimization" (consistent with a reopen path) is the correct
+  framing. The freeze's real harm mode is **structural**, caught by `oldest_min`, invisible to
+  the transient detector. *Standing reopen (rule 21), widened to **any newly-discovered
+  friction that erodes the deep band** (no emergent cushion beneath the provisioned `+1`):*
+  `RELEASE_COOLDOWN` past `~3` epochs; `BOND_DURATION_AGE_SCALE` sealed at/near `0` (flat
+  becomes faithful → cliff moves into the realistic arm); the rebond/unbond recurring surface
+  (R-2/R-3); the cooldown last-served-anchor edge case. *Routed residuals (naive-operator
+  scope):* the precluded transient is reachable by a naive drop-to-reallocate, routed to
+  operator behavior + wallet conformance, **not the consensus floor** (network harm is
+  structural/bounded; the naive transient is individual and self-correcting within the
+  cooldown) — (i) **operator-education:** don't drop a shard to fund another within the release
+  cooldown (freed collateral is frozen ~2 epochs, stranding the new shard; the lean regime
+  can't backfill fast); (ii) **wallet-conformance guard (candidate, wallet-side, V3.1):** warn
+  or refuse a `HoldingsUpdate` drop whose freed capital is visibly being redeployed within the
+  cooldown — same conformance posture as the standoff draw above. **Target: V3.0 — closed for
+  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur). Cross-refs:
+  `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
+  `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

@@ -1273,7 +1273,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 // active, holds ≥ one floor of frozen capital, has spare storage, and is
                 // not already holding `s`. A structural necessary condition for the freeze
                 // (not absolute shortage) to be what is keeping `s` under target. Reads 0
-                // across the whole sweep by construction (`best_response` rationality) — see
+                // across the whole sweep — precluded under cooldown-aware optimization (the
+                // `best_response` budgets on capital−Σfrozen, so it never makes the stranding
+                // drop-to-reallocate), reachable only by a naive operator. See
                 // `World::freeze_blocks_recoverage` and the §L18 detector-validation note.
                 if world.freeze_blocks_recoverage(s, cfg.bond_rate) {
                     harm_causal += 1;
