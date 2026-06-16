@@ -1225,7 +1225,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
             )
         };
-        let mut producer_leaves =
+        let producer_leaves =
             match super::merge::index_block_leaves(std::mem::take(&mut result.block_leaves)) {
                 Ok(map) => map,
                 Err(e) => {
@@ -1238,7 +1238,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             &daemon,
             &store_path,
             &result,
-            &mut producer_leaves,
+            &producer_leaves,
         )
         .await
         {

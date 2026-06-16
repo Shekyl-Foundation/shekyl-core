@@ -141,8 +141,13 @@ impl Actor for CurveTreeActor {
 pub(crate) struct IngestBlock {
     /// The block's height (must equal the client's ingested-tip + 1).
     pub height: BlockHeight,
-    /// The block's transactions in block order (coinbase first).
-    pub txs: Vec<OwnedTxLeaves>,
+    /// The block's transactions in block order (coinbase first). Carried
+    /// behind an `Arc` so the cursor-driven ingest driver can hand the actor
+    /// a height's leaves while *retaining* its own reference: a
+    /// respawn-recoverable `ask` failure (actor fail-stop / poison) consumes
+    /// this message, but the driver's `Arc` survives for the
+    /// respawn-and-retry resend (R1-Q4) — no deep clone, no lost leaf set.
+    pub txs: Arc<Vec<OwnedTxLeaves>>,
 }
 
 /// Actor message for [`CurveTreeClient::rollback_to_fork`]: drop all leaves
@@ -456,7 +461,7 @@ impl CurveTreeHandle {
     pub(crate) async fn ingest(
         &self,
         height: BlockHeight,
-        txs: Vec<OwnedTxLeaves>,
+        txs: Arc<Vec<OwnedTxLeaves>>,
     ) -> Result<(), CurveTreeHandleError> {
         self.actor_ref()
             .ask(IngestBlock { height, txs })
@@ -616,7 +621,7 @@ mod tests {
         // Ingest empty blocks 0..=2 → persisted cursor at height 2.
         for h in 0..=2 {
             handle
-                .ingest(BlockHeight(h), Vec::new())
+                .ingest(BlockHeight(h), Arc::new(Vec::new()))
                 .await
                 .expect("ingest empty block");
         }
@@ -668,7 +673,7 @@ mod tests {
         );
         // And ingest resumes at cursor+1 through the clone.
         clone
-            .ingest(BlockHeight(3), Vec::new())
+            .ingest(BlockHeight(3), Arc::new(Vec::new()))
             .await
             .expect("ingest resumes at cursor+1 after respawn");
         assert_eq!(

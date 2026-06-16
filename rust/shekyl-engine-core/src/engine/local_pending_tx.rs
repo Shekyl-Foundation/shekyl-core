@@ -1715,7 +1715,7 @@ mod tests {
         let (dir, handle) = fresh_tree_handle();
         for h in 0..=cap {
             handle
-                .ingest(BlockHeight(h), Vec::new())
+                .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
                 .await
                 .expect("empty-leaf ingest advances the cursor");
         }

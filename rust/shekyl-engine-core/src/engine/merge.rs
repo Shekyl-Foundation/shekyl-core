@@ -75,6 +75,7 @@
 //! against the guarded `(LedgerBlock, LedgerIndexes)` pair.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 use shekyl_curve_tree::{BlockHeight, ClientError};
@@ -297,8 +298,8 @@ impl<
         &self,
         result: &mut ScanResult,
     ) -> Result<(), RefreshError> {
-        let mut producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
-        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &mut producer_leaves)
+        let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
+        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &producer_leaves)
             .await
     }
 
@@ -330,13 +331,13 @@ impl<
     ) -> Result<(), RefreshError> {
         let store_path =
             shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
-        let mut producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
+        let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
         curve_tree_ingest_scan_result_with_respawn(
             &self.curve_tree,
             &self.daemon,
             &store_path,
             result,
-            &mut producer_leaves,
+            &producer_leaves,
         )
         .await
     }
@@ -381,7 +382,7 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     daemon: &D,
     store_path: &std::path::Path,
     result: &ScanResult,
-    producer_leaves: &mut BTreeMap<u64, Vec<OwnedTxLeaves>>,
+    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
     match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
         Ok(()) => Ok(()),
@@ -413,10 +414,10 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
 /// `block_hashes` duplicate-height check closes in [`apply_scan_result_to_state`].
 pub(super) fn index_block_leaves(
     block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
-) -> Result<BTreeMap<u64, Vec<OwnedTxLeaves>>, RefreshError> {
+) -> Result<BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>, RefreshError> {
     let mut map = BTreeMap::new();
     for (height, leaves) in block_leaves {
-        if map.insert(height, leaves).is_some() {
+        if map.insert(height, Arc::new(leaves)).is_some() {
             return Err(RefreshError::MalformedScanResult {
                 reason: "block_leaves contains duplicate height",
             });
@@ -447,7 +448,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
     result: &ScanResult,
-    producer_leaves: &mut BTreeMap<u64, Vec<OwnedTxLeaves>>,
+    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
     // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
     // the new fork. `fork_height` is the first divergent height (validated
@@ -497,22 +498,27 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
                         detail: e.to_string(),
                     })
                 })?;
-            curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
+            Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
                 RefreshError::CurveTreeIngest {
                     context: "backfill block decode failed",
                     recoverable_by_respawn: false,
                 }
-            })?
+            })?)
         } else {
-            // Producer range: move the materialized leaves (no re-fetch).
-            // Heights already on disk after a respawn retry are skipped by
-            // the cursor loop, so their entries were removed on the first
-            // pass and are not consulted again.
+            // Producer range: reuse the materialized leaves (no re-fetch).
+            // `Arc::clone` is a refcount bump, not a deep copy, and crucially
+            // RETAINS the map entry: if this height's `ingest` `ask` fails
+            // with a respawn-recoverable error, `*_with_respawn` re-runs this
+            // loop after the respawn and must find the same leaves again
+            // (R1-Q4). Heights already persisted are skipped by the cursor, so
+            // a retained entry is never re-ingested — it just drops with the
+            // map at end of the (batch-bounded) producer range.
             producer_leaves
-                .remove(&next)
+                .get(&next)
                 .ok_or(RefreshError::MalformedScanResult {
                     reason: "block_leaves missing a height in processed_height_range",
                 })?
+                .clone()
         };
 
         curve_tree
