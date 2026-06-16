@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_key_merge_projection.rs`.
 //!
 //! Same workload (the §5.3 / §8.1 6-i construction-time view-secret
@@ -47,7 +47,7 @@
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{
     build_merge_projection_fixture, drop_merge_projection_fixture, MergeProjectionBenchFixture,
 };

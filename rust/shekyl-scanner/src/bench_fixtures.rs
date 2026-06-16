@@ -9,7 +9,7 @@
 //! ## Why this module lives in `src/` (not `benches/`)
 //!
 //! Two bench binaries (`scan_transaction` criterion harness and
-//! `scan_transaction_iai` iai-callgrind companion) share the same
+//! `scan_transaction_iai` gungraun companion) share the same
 //! transaction-shape fixtures. Cargo compiles each `benches/*.rs` file
 //! as an independent binary, so a shared fixture has to live somewhere
 //! both binaries can `use`. The crate's `[[bench]]` entries depend on

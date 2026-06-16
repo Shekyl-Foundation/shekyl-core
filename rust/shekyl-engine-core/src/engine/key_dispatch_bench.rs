@@ -42,7 +42,7 @@
 //!   to hold; §5.3 records the dispatch cost against the *cheapest*
 //!   real op as evidence for (not a gate on) the §8.3 view-scan split.
 //!
-//! There is **no** `actor_*` iai-callgrind sibling: the `ask` is a
+//! There is **no** `actor_*` gungraun sibling: the `ask` is a
 //! cross-thread async round-trip, and iai-callgrind runs under Callgrind
 //! (Valgrind serializes all threads onto a simulated single core), so an
 //! `ask`'s instruction count folds in nondeterministic runtime-scheduling

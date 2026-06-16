@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to the §5.3 **B9** composition baseline
+//! gungraun companion to the §5.3 **B9** composition baseline
 //! (`engine_trait_bench_key_dispatch.rs`'s
 //! `engine_trait_bench_key_dispatch_baseline_claim_mine`).
 //!
@@ -64,7 +64,7 @@ use std::hint::black_box;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{
     build_key_baseline_fixture, drop_key_baseline_fixture, KeyBaselineBenchFixture,
 };

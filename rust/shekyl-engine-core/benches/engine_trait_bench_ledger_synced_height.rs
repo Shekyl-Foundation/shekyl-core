@@ -44,7 +44,7 @@
 //!
 //! [`build_engine_fixture`] returns `(Box<Engine<SoloSigner>>,
 //! TempDir)` per §4.2's boundary rule (the boxed shape keeps the
-//! iai-callgrind sibling's bench-function boundary memcpy negligible
+//! gungraun sibling's bench-function boundary memcpy negligible
 //! by passing only a pointer rather than the 6,296-byte engine
 //! struct). Criterion is not directly affected by the boundary rule
 //! — closure capture by reference makes value-pass-at-boundary moot

@@ -26,7 +26,7 @@
 //! a cached `AccountPublicAddress` field on `LocalKeys` without
 //! any per-call derivation work. The criterion `median_ns` is
 //! expected to reflect optimizer amortization across `b.iter`'s
-//! iteration loop; the iai-callgrind sibling is the load-bearing
+//! iteration loop; the gungraun sibling is the load-bearing
 //! signal for this pair (§4.4 amortization caveat for trivial
 //! reads applies here, not to LedgerEngine::balance).
 //!

@@ -368,12 +368,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 
 [[package]]
-name = "bincode"
-version = "1.3.3"
+name = "bincode-next"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+checksum = "dbe9e7e6d14aeb39557f226bff158a30e367fac279d0e69b8b42fb41999f9a86"
 dependencies = [
  "serde",
+ "unty-next",
 ]
 
 [[package]]
@@ -1691,6 +1692,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "gungraun"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd6043b1ff8096c10cdd5c59930139b52ba63cbd1a3452bc3ff95d996f9334"
+dependencies = [
+ "bincode-next",
+ "derive_more",
+ "gungraun-macros",
+ "gungraun-runner",
+]
+
+[[package]]
+name = "gungraun-macros"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7f3214bae6cfd6739f4f29edb262bae439c6393a7b7b12c4eeb96417c2e50df"
+dependencies = [
+ "derive_more",
+ "proc-macro-error3",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "syn",
+]
+
+[[package]]
+name = "gungraun-runner"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6965c4e60026245b5600b05ab4c4af5ae1eaf72b8ec5da86c9cc6af01258d8cc"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1934,42 +1972,6 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "iai-callgrind"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b1e4910d3a9137442723dfb772c32dc10674c4181ca078d2fd227cd5dce9db0"
-dependencies = [
- "bincode",
- "derive_more",
- "iai-callgrind-macros",
- "iai-callgrind-runner",
-]
-
-[[package]]
-name = "iai-callgrind-macros"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d03775318d3f9f01b39ac6612b01464006dc397a654a89dd57df2fd34fb68c3"
-dependencies = [
- "derive_more",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn",
-]
-
-[[package]]
-name = "iai-callgrind-runner"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b74c9743c00c3bca4aaffc69c87cae56837796cd362438daf354a3f785788c68"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -2883,22 +2885,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
+name = "proc-macro-error-attr3"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
+checksum = "34e4dd828515431dd6c4a030d26f7eaed7dd4778226e9d2bb968d65ca4ec3d4d"
 dependencies = [
  "proc-macro2",
  "quote",
 ]
 
 [[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
+name = "proc-macro-error3"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
+checksum = "5ee475e440453418ff1335189eddf7101ba502cd818ab7ae04209bc83aa925aa"
 dependencies = [
- "proc-macro-error-attr2",
+ "proc-macro-error-attr3",
  "proc-macro2",
  "quote",
  "syn",
@@ -3847,10 +3849,10 @@ dependencies = [
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
  "ec-divisors",
+ "gungraun",
  "helioselene",
  "hex",
  "hkdf",
- "iai-callgrind",
  "kameo",
  "modular-frost",
  "multiexp",
@@ -3895,7 +3897,7 @@ version = "3.1.0"
 dependencies = [
  "criterion",
  "fd-lock",
- "iai-callgrind",
+ "gungraun",
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-engine-prefs",
@@ -3952,8 +3954,8 @@ dependencies = [
  "criterion",
  "curve25519-dalek",
  "getrandom 0.2.17",
+ "gungraun",
  "hex",
- "iai-callgrind",
  "postcard",
  "postcard-schema",
  "proptest",
@@ -4201,8 +4203,8 @@ version = "3.1.0"
 dependencies = [
  "criterion",
  "curve25519-dalek",
+ "gungraun",
  "hex",
- "iai-callgrind",
  "proptest",
  "serde",
  "serde_json",
@@ -4278,8 +4280,8 @@ dependencies = [
  "curve25519-dalek",
  "ed25519-dalek",
  "fips204",
+ "gungraun",
  "hex",
- "iai-callgrind",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
@@ -4998,6 +5000,12 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "unty-next"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fa66022bbd1ab992fad72bdedcfd07a0023b6f5ecc83d50121e39e3a3caed41"
 
 [[package]]
 name = "ureq"

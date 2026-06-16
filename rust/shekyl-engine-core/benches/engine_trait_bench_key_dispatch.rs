@@ -31,7 +31,7 @@
 //!   §5.3 records the dispatch cost against the cheapest real op as
 //!   evidence for (not a gate on) the §8.3 view-scan split.
 //!
-//! # No iai-callgrind sibling for the actor paths
+//! # No gungraun sibling for the actor paths
 //!
 //! The `ask` is a cross-thread async round-trip; iai-callgrind runs
 //! under Callgrind (Valgrind serializes threads onto a simulated single

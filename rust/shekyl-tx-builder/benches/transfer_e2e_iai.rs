@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/transfer_e2e.rs`.
+//! gungraun companion to `benches/transfer_e2e.rs`.
 //!
 //! Measures the same two components (BP+ 2-output range proof and one
 //! hybrid Ed25519 + ML-DSA-65 signature) under Valgrind's Callgrind
@@ -35,7 +35,7 @@
 //! (no rejection sampling), but also uses a seeded RNG here as
 //! defense in depth — so both iai sub-benches are hermetic.
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use curve25519_dalek::scalar::Scalar;

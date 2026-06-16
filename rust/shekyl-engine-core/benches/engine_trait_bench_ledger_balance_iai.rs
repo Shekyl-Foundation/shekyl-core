@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_ledger_balance.rs`.
 //!
 //! `LedgerEngine` is `pub(crate)` in `shekyl-engine-core`, so the
@@ -19,7 +19,7 @@
 //! `engine_trait_bench_*` threshold class (bidirectional ±10%
 //! slowdown / ±25% speedup).
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working
+//! Requires `cargo install gungraun-runner` and a working
 //! Valgrind install. See `docs/design/STAGE_0_HARNESS.md` §3 for the
 //! existing harness substrate this bench plugs into.
 //!
@@ -97,7 +97,7 @@
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{engine_balance_for_bench, LocalLedger};
 use shekyl_engine_core::{DaemonClient, Engine, SoloSigner};
 use tempfile::TempDir;

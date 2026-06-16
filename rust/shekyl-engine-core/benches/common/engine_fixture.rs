@@ -43,7 +43,7 @@
 //!
 //! **Setup and teardown are both excluded from the measured region;
 //! measurement is the call only.** Both halves are mechanized
-//! explicitly; the criterion and iai-callgrind harnesses use
+//! explicitly; the criterion and gungraun harnesses use
 //! different mechanisms because they handle drop cost differently
 //! (criterion amortizes; iai-callgrind does not — see §4.2 for the
 //! asymmetry's structural cause).
@@ -107,7 +107,7 @@
 //! boundary memcpy + small wiring overhead). Two diagnostic signals:
 //!
 //! - **Order-of-magnitude divergence between the criterion and
-//!   iai-callgrind harnesses on the same workload** — criterion
+//!   gungraun harnesses on the same workload** — criterion
 //!   reporting nanoseconds-per-iter consistent with a few cycles
 //!   while iai-callgrind reports tens-of-thousands of instructions
 //!   is the textbook sign that fixture `Drop` has leaked into iai's

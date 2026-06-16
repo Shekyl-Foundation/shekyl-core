@@ -23,7 +23,7 @@
 //!
 //! The `create`-phase cost is unavoidably captured by the fixture
 //! builder but excluded from the measured region (the criterion
-//! harness only times `::open`). The iai-callgrind sibling
+//! harness only times `::open`). The gungraun sibling
 //! (`open_iai.rs`) runs under a KAT Argon2 profile because Valgrind
 //! would otherwise balloon per-iteration cost to tens of minutes; see
 //! the manifest for the un-skip criteria if the default profile
