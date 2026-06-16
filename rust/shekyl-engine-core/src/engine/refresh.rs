@@ -51,7 +51,7 @@ use super::pending::SnapshotId;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::Engine;
-use crate::scan::{OwnedTxLeaves, ScanResult};
+use crate::scan::ScanResult;
 
 /// Read-only snapshot of the wallet ledger taken at the start of a
 /// refresh.
@@ -1225,10 +1225,14 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
             )
         };
-        let mut producer_leaves: std::collections::BTreeMap<u64, Vec<OwnedTxLeaves>> =
-            std::mem::take(&mut result.block_leaves)
-                .into_iter()
-                .collect();
+        let mut producer_leaves =
+            match super::merge::index_block_leaves(std::mem::take(&mut result.block_leaves)) {
+                Ok(map) => map,
+                Err(e) => {
+                    _ = completion.send(Err(e));
+                    return;
+                }
+            };
         if let Err(e) = super::merge::curve_tree_ingest_scan_result_with_respawn(
             &curve_tree,
             &daemon,

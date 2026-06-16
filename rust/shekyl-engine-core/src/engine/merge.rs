@@ -297,9 +297,7 @@ impl<
         &self,
         result: &mut ScanResult,
     ) -> Result<(), RefreshError> {
-        let mut producer_leaves = std::mem::take(&mut result.block_leaves)
-            .into_iter()
-            .collect();
+        let mut producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
         curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &mut producer_leaves)
             .await
     }
@@ -332,9 +330,7 @@ impl<
     ) -> Result<(), RefreshError> {
         let store_path =
             shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
-        let mut producer_leaves = std::mem::take(&mut result.block_leaves)
-            .into_iter()
-            .collect();
+        let mut producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
         curve_tree_ingest_scan_result_with_respawn(
             &self.curve_tree,
             &self.daemon,
@@ -406,6 +402,27 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
         }
         Err(other) => Err(other),
     }
+}
+
+/// Index the producer's per-block leaf sets by height, rejecting a repeated
+/// height as a producer-contract violation.
+///
+/// `block_leaves` is a transit-only field on an untrusted [`ScanResult`] (O5).
+/// A plain `BTreeMap`-via-`collect()` would silently overwrite a duplicate
+/// height and feed the curve tree an unintended leaf set — the same hazard the
+/// `block_hashes` duplicate-height check closes in [`apply_scan_result_to_state`].
+pub(super) fn index_block_leaves(
+    block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
+) -> Result<BTreeMap<u64, Vec<OwnedTxLeaves>>, RefreshError> {
+    let mut map = BTreeMap::new();
+    for (height, leaves) in block_leaves {
+        if map.insert(height, leaves).is_some() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_leaves contains duplicate height",
+            });
+        }
+    }
+    Ok(map)
 }
 
 /// Reject a reorg `fork_height` of 0 as a producer-contract violation.
@@ -939,7 +956,7 @@ mod tests {
     use crate::engine::RefreshError;
     use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
-    use super::apply_scan_result_to_state;
+    use super::{apply_scan_result_to_state, index_block_leaves};
 
     fn make_recovered_output(seed: u8, global_index: u64) -> RecoveredWalletOutput {
         let mut bytes = [0u8; 32];
@@ -1365,6 +1382,32 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn index_block_leaves_rejects_duplicate_height() {
+        // Two entries at the same height: a `collect()` into `BTreeMap` would
+        // silently keep the last and feed the curve tree an unintended leaf
+        // set; the explicit check surfaces it as `MalformedScanResult` (O5
+        // untrusted-`ScanResult` defense, mirroring the `block_hashes` check).
+        let dup = vec![(4u64, Vec::new()), (4u64, Vec::new())];
+        let err = index_block_leaves(dup).unwrap_err();
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(
+                    reason.contains("block_leaves") && reason.contains("duplicate"),
+                    "expected block_leaves duplicate reason, got {reason}",
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn index_block_leaves_accepts_distinct_heights() {
+        let ok = vec![(1u64, Vec::new()), (2u64, Vec::new()), (3u64, Vec::new())];
+        let map = index_block_leaves(ok).expect("distinct heights index cleanly");
+        assert_eq!(map.len(), 3);
     }
 
     #[test]

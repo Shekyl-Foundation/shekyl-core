@@ -219,7 +219,7 @@ mod tests {
         }
     }
 
-    /// Build a pruned V2 transaction carrying `outputs`, a `0x07` leaf-hash
+    /// Build a pruned V3 transaction carrying `outputs`, a `0x07` leaf-hash
     /// blob, and one commitment per supplied `commitments` entry.
     fn pruned_tx(
         outputs: Vec<Output>,

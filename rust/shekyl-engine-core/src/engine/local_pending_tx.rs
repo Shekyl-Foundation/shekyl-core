@@ -371,11 +371,12 @@ impl TreeSpendGate {
 /// behind" lag is the cursor-read-**succeeds**-with-a-low-value path and
 /// surfaces as [`SendError::SpendUnavailableRebuilding`] instead.
 fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -> SendError {
+    // `detail` is documented as the stringified `CurveTreeHandleError`
+    // (`error.rs`); render the actual variant — including the inner
+    // `ClientError` the previous hand-strings dropped — so the diagnostic is
+    // actionable. The error carries no secret material.
     SendError::CurveTreeUnavailable {
-        detail: match err {
-            CurveTreeHandleError::Unavailable => "curve-tree actor unavailable".to_string(),
-            CurveTreeHandleError::Client(_) => "curve-tree cursor read rejected".to_string(),
-        },
+        detail: format!("{err:?}"),
     }
 }
 
