@@ -69,7 +69,7 @@
 //!    `teardown =` parameter is missing), `Drop` runs inside the
 //!    measurement and dominates the count. The criterion sibling
 //!    reports nanoseconds-per-iter consistent with a few cycles when
-//!    the workload itself is measured cleanly; an gungraun /
+//!    the workload itself is measured cleanly; a gungraun /
 //!    criterion divergence of orders of magnitude on the same
 //!    workload is the textbook diagnostic.
 //! 2. **Setup leakage** — the `#[bench::fresh_engine(setup =

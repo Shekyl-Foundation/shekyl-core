@@ -51,7 +51,7 @@
 //! deviation from the criterion+gungraun pairing discipline
 //! (`docs/design/STAGE_0_HARNESS.md`), reversion-claused: reopen the gungraun
 //! sibling if a deterministic async-dispatch measurement method lands.
-//! Only the deterministic-crypto baseline gets an gungraun sibling.
+//! Only the deterministic-crypto baseline gets a gungraun sibling.
 
 use std::collections::HashMap;
 

@@ -41,7 +41,7 @@
 //! a reasoned, reversion-claused deviation from the criterion+gungraun
 //! pairing discipline (`docs/design/STAGE_0_HARNESS.md`): reopen the gungraun
 //! sibling if a deterministic async-dispatch measurement method lands.
-//! Only the deterministic-crypto baseline gets an gungraun sibling
+//! Only the deterministic-crypto baseline gets a gungraun sibling
 //! (`engine_trait_bench_key_dispatch_baseline_iai.rs`).
 //!
 //! # Threshold class / frozen baseline
