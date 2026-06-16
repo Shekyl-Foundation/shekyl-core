@@ -7,7 +7,7 @@
 //!
 //! The whole module is gated behind the `bench-internals` feature and
 //! re-exported through [`crate::__bench_internals`]. It exists so the
-//! external Criterion / iai-callgrind bench targets can measure the
+//! external Criterion / gungraun bench targets can measure the
 //! actor-dispatch overhead without the `KeyEngine` trait (which is
 //! `pub(crate)`) or [`KeyEngineHandle`] (likewise `pub(crate)`) leaking
 //! into the public API: the harness is the single `pub` surface, it
@@ -43,12 +43,12 @@
 //!   real op as evidence for (not a gate on) the §8.3 view-scan split.
 //!
 //! There is **no** `actor_*` gungraun sibling: the `ask` is a
-//! cross-thread async round-trip, and iai-callgrind runs under Callgrind
+//! cross-thread async round-trip, and gungraun runs under Callgrind
 //! (Valgrind serializes all threads onto a simulated single core), so an
 //! `ask`'s instruction count folds in nondeterministic runtime-scheduling
 //! machinery rather than the clean deterministic signal iai exists for.
 //! The actor path is criterion-(wall-clock)-only by design — a reasoned
-//! deviation from the criterion+iai pairing discipline
+//! deviation from the criterion+gungraun pairing discipline
 //! (`docs/design/STAGE_0_HARNESS.md`), reversion-claused: reopen the iai
 //! sibling if a deterministic async-dispatch measurement method lands.
 //! Only the deterministic-crypto baseline gets an iai sibling.
@@ -241,7 +241,7 @@ impl KeyDispatchBenchHarness {
 /// sibling.
 ///
 /// [`KeyDispatchBenchHarness`] spawns a `KeyActor` in `new` (which needs
-/// an ambient multi-thread runtime). The iai-callgrind baseline must
+/// an ambient multi-thread runtime). The gungraun baseline must
 /// avoid that: it measures only the composition baseline
 /// (`LocalKeys::try_claim_output`), and running a multi-thread runtime
 /// under Callgrind is both unnecessary and noisy. This fixture holds
@@ -295,7 +295,7 @@ pub fn build_key_baseline_fixture() -> Box<KeyBaselineBenchFixture> {
     Box::new(KeyBaselineBenchFixture::new())
 }
 
-/// Teardown for iai-callgrind's `teardown = …` (lifts the `LocalKeys`
+/// Teardown for gungraun's `teardown = …` (lifts the `LocalKeys`
 /// zeroize-on-drop out of the measured region, per the §4.2 symmetry
 /// rule).
 pub fn drop_key_baseline_fixture(_fixture: Box<KeyBaselineBenchFixture>) {}
@@ -314,7 +314,7 @@ const MERGE_BENCH_VIEW_SECRET: [u8; 32] = [0x6Du8; 32];
 ///
 /// `256` is a meaningful single-refresh wallet-output batch (large
 /// enough that the per-output projection work dominates fixture
-/// addressing overhead, small enough that the iai-callgrind Valgrind run
+/// addressing overhead, small enough that the gungraun Valgrind run
 /// completes within the §4.4 dynamic-check budget). The frozen baseline
 /// pins to this workload at the merge SHA; a future
 /// workload-characterization PR that needs a different N adds a sibling
@@ -333,7 +333,7 @@ pub const MERGE_BENCH_OUTPUT_COUNT: usize = 256;
 /// lookup + `derive_output_handle` cSHAKE256 + ciphertext clone) is the
 /// 6-i marginal cost the §8.1 6-ii-deferral decision is evidence-based
 /// against. The post-pass is synchronous and runtime-free, so this bench
-/// is iai-callgrind-friendly (deterministic instruction count), unlike
+/// is gungraun-friendly (deterministic instruction count), unlike
 /// the actor dispatch path.
 pub struct MergeProjectionBenchFixture {
     ledger: LedgerBlock,
@@ -441,12 +441,12 @@ impl MergeProjectionBenchFixture {
 
 /// No-arg, boxed builder for the merge-path fixture.
 ///
-/// Boxed per the iai-callgrind boundary rule
+/// Boxed per the gungraun boundary rule
 /// (`docs/design/STAGE_0_HARNESS.md` §4.2): the fixture carries a
 /// `LedgerBlock` of [`MERGE_BENCH_OUTPUT_COUNT`] transfers (far above the
 /// 64-byte cutoff), so passing it across the bench-function boundary by
 /// value would dominate the measurement with memcpy. The `Box` moves
-/// only an 8-byte pointer. The no-arg shape suits iai-callgrind's
+/// only an 8-byte pointer. The no-arg shape suits gungraun's
 /// `#[bench::name(setup = …)]` attribute (resolved at macro-expansion
 /// time, prefers a fully-applied function path) and criterion's
 /// `iter_batched` setup closure (fresh fixture per measured invocation,
@@ -455,7 +455,7 @@ pub fn build_merge_projection_fixture() -> Box<MergeProjectionBenchFixture> {
     Box::new(MergeProjectionBenchFixture::new(MERGE_BENCH_OUTPUT_COUNT))
 }
 
-/// Teardown for iai-callgrind's `teardown = …`: taking ownership
+/// Teardown for gungraun's `teardown = …`: taking ownership
 /// schedules `Drop` outside the measured region (the symmetry rule,
 /// §4.2). The criterion sibling does not need it (`iter_batched`
 /// amortizes / excludes drop).

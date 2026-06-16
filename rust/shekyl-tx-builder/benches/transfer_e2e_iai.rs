@@ -21,7 +21,7 @@
 //! internally draws from `OsRng` for the ML-DSA-65 rejection-sampling
 //! loop. The number of rejection iterations is variance-heavy across
 //! runs (observed ~16% instruction-count drift on a clean machine),
-//! which violates the iai-callgrind exit criterion from
+//! which violates the gungraun exit criterion from
 //! `docs/MID_REWIRE_HARDENING.md` §3.2 ("two runs back-to-back agree
 //! to the instruction"). FIPS 204 permits a deterministic-seed
 //! variant (`try_sign_with_seed`) that exercises the same code path

@@ -27,7 +27,7 @@
 //! `black_box` (4–6 instructions for the call body), plus the
 //! unified-fixture-shape boundary memcpy (5–10 instructions for an
 //! 8-byte `Box<Engine<S>>` pointer + `TempDir` ≈ 32 bytes total),
-//! plus a small wiring overhead iai-callgrind doesn't fully exclude.
+//! plus a small wiring overhead gungraun doesn't fully exclude.
 //!
 //! The fixture's `(Box<Engine<SoloSigner>>, TempDir)` shape is
 //! required by the boundary rule (§4.2): `Engine<SoloSigner>` is
@@ -69,7 +69,7 @@
 //!    `teardown =` parameter is missing), `Drop` runs inside the
 //!    measurement and dominates the count. The criterion sibling
 //!    reports nanoseconds-per-iter consistent with a few cycles when
-//!    the workload itself is measured cleanly; an iai-callgrind /
+//!    the workload itself is measured cleanly; an gungraun /
 //!    criterion divergence of orders of magnitude on the same
 //!    workload is the textbook diagnostic.
 //! 2. **Setup leakage** — the `#[bench::fresh_engine(setup =

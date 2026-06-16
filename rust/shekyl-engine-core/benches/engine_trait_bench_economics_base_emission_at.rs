@@ -40,8 +40,8 @@
 //!
 //! - Pair: this file (criterion / wall-clock) and
 //!   `engine_trait_bench_economics_base_emission_at_iai.rs`
-//!   (iai-callgrind / instructions). The CI gate (`ci/benchmarks`
-//!   workflow) routes through iai-callgrind for the pass/fail signal;
+//!   (gungraun / instructions). The CI gate (`ci/benchmarks`
+//!   workflow) routes through gungraun for the pass/fail signal;
 //!   this file is the Tier-2 informational column.
 //! - Threshold class: `engine_trait_bench_*` — bidirectional ±10%
 //!   slowdown / ±25% speedup per `docs/MID_REWIRE_HARDENING.md` §3.3

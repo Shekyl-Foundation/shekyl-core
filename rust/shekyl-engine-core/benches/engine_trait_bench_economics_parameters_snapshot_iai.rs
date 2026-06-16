@@ -31,7 +31,7 @@
 //! the digest dominates, so the count is well above the
 //! trivial-pure-read range but is a fixed, height-independent value
 //! (the parameter set is build-time-resolved). The method reads
-//! nothing from `ChainEconomicsSource`. iai-callgrind's deterministic
+//! nothing from `ChainEconomicsSource`. gungraun's deterministic
 //! instruction count is the load-bearing signal; the criterion sibling
 //! is the Tier-2 informational column.
 //!

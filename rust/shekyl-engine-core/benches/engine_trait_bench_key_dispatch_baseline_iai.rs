@@ -38,7 +38,7 @@
 //! `account_public_address` bench, this path runs a full hybrid KEM
 //! decapsulation and HKDF expansion plus a key-image scalar-mult, so the
 //! expected `instructions` count is **large** (millions, dominated by
-//! ML-KEM-768). iai-callgrind's determinism makes it the stable
+//! ML-KEM-768). gungraun's determinism makes it the stable
 //! regression signal for the crypto cost; the criterion sibling carries
 //! the wall-clock ratio that B9's "within 5%" envelope is checked
 //! against.

@@ -13,7 +13,7 @@
 //! `[library_benchmark]` here measures one `Scanner::scan` call
 //! against a freshly-constructed `ScannableBlock`; the setup
 //! (constructing the block + scanner) runs outside the measured
-//! region per iai-callgrind's `with_setup` semantics, so the
+//! region per gungraun's `with_setup` semantics, so the
 //! reported counts isolate scan-time cost.
 //!
 //! ## Group classification

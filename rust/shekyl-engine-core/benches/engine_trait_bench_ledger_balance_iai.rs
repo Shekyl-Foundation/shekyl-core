@@ -33,7 +33,7 @@
 //! [`shekyl_scanner::BalanceSummary::compute`] iterates `transfers`
 //! summing per-output amounts subject to spend / maturity filters.
 //! Optimizer amortization does not apply meaningfully because each
-//! iteration measures meaningful work; both criterion and iai-callgrind
+//! iteration measures meaningful work; both criterion and gungraun
 //! report numbers consistent with the per-call cost.
 //!
 //! # Expected post-fixture instructions
@@ -77,7 +77,7 @@
 //! `engine_trait_bench_*` shape per
 //! `docs/design/STAGE_0_HARNESS.md` §4.2: any fixture field exceeding
 //! 64 bytes goes behind `Box<T>` so the bench-function boundary moves
-//! only pointer-sized data, keeping iai-callgrind's residual boundary
+//! only pointer-sized data, keeping gungraun's residual boundary
 //! cost at ~5–10 instructions instead of ~600 (the
 //! `Engine<SoloSigner, ...>` is 6,296 bytes; passing it by value
 //! would dominate the measurement). The `LedgerBlock` populated with

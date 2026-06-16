@@ -39,13 +39,13 @@
 //! are operationalized through this fixture's shape and the
 //! companion bench files' function signatures.
 //!
-//! ## Symmetry rule (criterion-vs-iai-callgrind asymmetry)
+//! ## Symmetry rule (criterion-vs-gungraun asymmetry)
 //!
 //! **Setup and teardown are both excluded from the measured region;
 //! measurement is the call only.** Both halves are mechanized
 //! explicitly; the criterion and gungraun harnesses use
 //! different mechanisms because they handle drop cost differently
-//! (criterion amortizes; iai-callgrind does not — see §4.2 for the
+//! (criterion amortizes; gungraun does not — see §4.2 for the
 //! asymmetry's structural cause).
 //!
 //! [`build_engine_fixture`] performs the full production lifecycle:
@@ -58,14 +58,14 @@
 //! - criterion's `b.iter` closure boundary (the fixture is built once
 //!   outside `b.iter`; the closure body borrows the engine by
 //!   reference, dereferencing through `Box` transparently);
-//! - iai-callgrind's `#[bench::*(setup = build_engine_fixture)]`
+//! - gungraun's `#[bench::*(setup = build_engine_fixture)]`
 //!   attribute (the macro emits the setup call outside the measured
 //!   region).
 //!
 //! Symmetrically, [`drop_fixture`] is the teardown helper that
-//! iai-callgrind's `teardown = drop_fixture` parameter invokes
+//! gungraun's `teardown = drop_fixture` parameter invokes
 //! **outside** the measured region. Without this explicit teardown,
-//! the fixture's `Drop` would run inside iai-callgrind's measured
+//! the fixture's `Drop` would run inside gungraun's measured
 //! region (it measures the full bench function body in a single shot),
 //! and the cost of unwinding the engine, dropping its Arc-wrapped
 //! components, and removing the `TempDir`'s files would inflate the
@@ -76,9 +76,9 @@
 //! same property — drop cost outside the measurement — through
 //! different mechanisms.**
 //!
-//! ## Boundary rule (iai-callgrind measures function-boundary value movement)
+//! ## Boundary rule (gungraun measures function-boundary value movement)
 //!
-//! Per §4.2's boundary rule subsection, iai-callgrind measures the
+//! Per §4.2's boundary rule subsection, gungraun measures the
 //! *entire* bench function body, including memcpy at function entry
 //! (when arguments are passed by value) and at function exit (when
 //! return values are returned by value). **`Engine<SoloSigner>` is
@@ -92,7 +92,7 @@
 //! The fix is pointer-sized indirection at the boundary: the fixture
 //! returns `(Box<Engine<SoloSigner>>, TempDir)`. Total boundary
 //! memcpy is `8 + sizeof::<TempDir>()` ≈ 32 bytes — well below the
-//! 64-byte cutoff §4.2 names — and the iai-callgrind measurement's
+//! 64-byte cutoff §4.2 names — and the gungraun measurement's
 //! residual boundary cost is ~5–10 instructions instead of ~600.
 //! The criterion sibling is not directly affected (closure capture
 //! by reference makes value-pass-at-boundary moot for criterion),
@@ -101,7 +101,7 @@
 //!
 //! ## Diagnostic signals
 //!
-//! Per §4.4's static check, post-fixture iai-callgrind instructions
+//! Per §4.4's static check, post-fixture gungraun instructions
 //! for the `synced_height` workload should be in the **20–40 range**
 //! (4–6 for the call body + 5–10 for the unified-fixture-shape
 //! boundary memcpy + small wiring overhead). Two diagnostic signals:
@@ -109,10 +109,10 @@
 //! - **Order-of-magnitude divergence between the criterion and
 //!   gungraun harnesses on the same workload** — criterion
 //!   reporting nanoseconds-per-iter consistent with a few cycles
-//!   while iai-callgrind reports tens-of-thousands of instructions
+//!   while gungraun reports tens-of-thousands of instructions
 //!   is the textbook sign that fixture `Drop` has leaked into iai's
 //!   measured region (symmetry-rule violation).
-//! - **An iai-callgrind number in §4.4's warning territory (50–300
+//! - **An gungraun number in §4.4's warning territory (50–300
 //!   instructions) without the workload itself justifying that
 //!   range** — most likely indicates a boundary-rule violation
 //!   (some fixture component crossing the boundary by value with
@@ -158,9 +158,9 @@
 //! [`bench_runtime`] (it must outlive the actor). Neither runtime is
 //! part of the guard tuple.
 //!
-//! Per the symmetry rule (§4.2), the iai-callgrind bench function
+//! Per the symmetry rule (§4.2), the gungraun bench function
 //! takes the tuple by value, performs its measured workload, and
-//! **returns the tuple** so iai-callgrind's `teardown = drop_fixture`
+//! **returns the tuple** so gungraun's `teardown = drop_fixture`
 //! parameter can invoke `Drop` outside the measured region. The
 //! criterion sibling does not return the tuple because the engine and
 //! tempdir live in the outer function scope across `b.iter`'s
@@ -248,7 +248,7 @@ pub const ECONOMICS_BENCH_HEIGHT: u64 = 262_800;
 ///
 /// The engine is heap-allocated through `Box::new` per the boundary
 /// rule (`docs/design/STAGE_0_HARNESS.md` §4.2): `Engine<SoloSigner>`
-/// is 6,296 bytes and would dominate the iai-callgrind measurement's
+/// is 6,296 bytes and would dominate the gungraun measurement's
 /// boundary memcpy if passed by value. The boxed shape moves only an
 /// 8-byte pointer across the bench function boundary.
 ///
@@ -331,11 +331,11 @@ fn bench_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Teardown helper for iai-callgrind's `teardown = drop_fixture`
+/// Teardown helper for gungraun's `teardown = drop_fixture`
 /// parameter.
 ///
 /// The function body is empty — taking ownership of the tuple is
-/// sufficient to schedule `Drop` execution on its members. iai-callgrind
+/// sufficient to schedule `Drop` execution on its members. gungraun
 /// invokes this helper **outside** the measured region (per the
 /// symmetry rule in `docs/design/STAGE_0_HARNESS.md` §4.2), so the
 /// engine teardown (Arc decrements, ML-KEM key zeroization, lock
@@ -347,7 +347,7 @@ fn bench_runtime() -> &'static tokio::runtime::Runtime {
 /// Stage 0 PR-2 ships exactly one engine-trait bench fixture shape
 /// (`(Box<Engine<SoloSigner>>, TempDir)`, per the boundary rule in
 /// §4.2). A generic `drop_fixture<T>` would not save complexity here,
-/// and it would fight iai-callgrind's macro expansion (the `teardown =`
+/// and it would fight gungraun's macro expansion (the `teardown =`
 /// argument is resolved at macro-expansion time and prefers a
 /// fully-applied function path). Stage 1 per-trait PRs that introduce
 /// additional fixture shapes (e.g., a state-populated balance fixture
@@ -408,7 +408,7 @@ fn construct_dummy_daemon() -> DaemonClient {
 /// transfer slice dominates per-call cost (so the workload classifies
 /// as "state-dependent compute" per
 /// [`docs/PERFORMANCE_BASELINE.md`](../../docs/PERFORMANCE_BASELINE.md)
-/// §4.4) and small enough that the iai-callgrind Valgrind run
+/// §4.4) and small enough that the gungraun Valgrind run
 /// completes within the §4.4 dynamic-check budget on a CI runner.
 /// Power-of-two so the numerical relationship between fixture size
 /// and measured instruction count is reviewable on inspection.
@@ -488,7 +488,7 @@ pub fn build_engine_fixture_with_balance(
 }
 
 /// No-arg wrapper around [`build_engine_fixture_with_balance`] for
-/// iai-callgrind's `#[bench::name(setup = …)]` attribute, which
+/// gungraun's `#[bench::name(setup = …)]` attribute, which
 /// resolves at macro-expansion time and prefers a fully-applied
 /// function path over a closure or a parameterized call. Same
 /// constant-arg pattern documented for `drop_fixture`.
@@ -504,7 +504,7 @@ pub fn build_engine_fixture_with_default_balance() -> (
 /// Teardown for the balance fixture; mirrors [`drop_fixture`].
 ///
 /// `Engine<SoloSigner, DaemonClient, LocalLedger>` is the same shape
-/// `build_engine_fixture_with_balance` returns. iai-callgrind requires
+/// `build_engine_fixture_with_balance` returns. gungraun requires
 /// a concrete `teardown =` symbol per fixture shape.
 #[cfg(feature = "bench-internals")]
 #[allow(dead_code)]
@@ -560,7 +560,7 @@ const LOCAL_KEYS_BENCH_SEED: [u8; 32] = {
 /// shape). The divergence is documented in this fixture's
 /// docstring (here) and in the close-out PR's pre-flight §1.2.
 ///
-/// # Boundary rule (iai-callgrind)
+/// # Boundary rule (gungraun)
 ///
 /// `LocalKeys` is significantly larger than the §4.2 64-byte
 /// cutoff (the type carries an `AllKeysBlob` plus state-shaped
@@ -598,7 +598,7 @@ pub fn build_local_keys_fixture() -> Box<shekyl_engine_core::__bench_internals::
 ///
 /// `LocalKeys::Drop` zeroizes the contained `AllKeysBlob` secrets;
 /// taking ownership here is sufficient to schedule that work
-/// outside the iai-callgrind measured region (the symmetry rule
+/// outside the gungraun measured region (the symmetry rule
 /// per `STAGE_0_HARNESS.md` §4.2). The criterion sibling does not
 /// invoke this teardown because criterion's `b.iter` amortizes
 /// drop cost across iterations.

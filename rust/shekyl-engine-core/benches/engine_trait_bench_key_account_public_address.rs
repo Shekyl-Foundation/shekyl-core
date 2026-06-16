@@ -34,8 +34,8 @@
 //!
 //! - Pair: this file (criterion / wall-clock) and
 //!   `engine_trait_bench_key_account_public_address_iai.rs`
-//!   (iai-callgrind / instructions). The CI gate
-//!   (`ci/benchmarks` workflow) routes through iai-callgrind for
+//!   (gungraun / instructions). The CI gate
+//!   (`ci/benchmarks` workflow) routes through gungraun for
 //!   the pass/fail signal; this file is the Tier-2 informational
 //!   column.
 //! - Threshold class: `engine_trait_bench_*` — bidirectional ±10%

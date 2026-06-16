@@ -40,7 +40,7 @@
 //! # Single measured invocation (idempotent-once)
 //!
 //! The projection only populates `None` fields, so it is one-shot per
-//! fixture. iai-callgrind builds a fresh fixture via `setup` and measures
+//! fixture. gungraun builds a fresh fixture via `setup` and measures
 //! exactly one `run_projection`, so the full batch's work is measured
 //! once — matching the criterion sibling's `iter_batched` per-invocation
 //! fresh-fixture shape.

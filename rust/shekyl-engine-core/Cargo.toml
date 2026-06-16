@@ -169,10 +169,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # `instructions` for percentage-threshold checking; criterion stays
 # as the Tier-2 informational column. Engine-surface benches
 # (`engine_trait_bench_*`) ship as criterion + gungraun pairs
-# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.16" matching
+# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.19" matching
 # the workspace consensus (shekyl-engine-state, shekyl-engine-file,
 # shekyl-scanner, shekyl-tx-builder) and the runner version the
-# `ci/benchmarks` workflow installs (`^0.16`).
+# `ci/benchmarks` workflow installs (`^0.19`). Migrated from
+# `iai-callgrind = "0.16"` per
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
 gungraun = "0.19"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the

@@ -30,7 +30,7 @@
 //! so the dominant cost is `ECONOMICS_BENCH_HEIGHT` iterations of
 //! checked arithmetic — `instructions` is expected to be proportional
 //! to the bench height, not in the trivial-pure-read range. The method
-//! reads nothing from `ChainEconomicsSource`. iai-callgrind's
+//! reads nothing from `ChainEconomicsSource`. gungraun's
 //! deterministic instruction count is the load-bearing signal; the
 //! criterion sibling is the Tier-2 informational column.
 //!

@@ -30,7 +30,7 @@
 //! derivation, allocation, or arithmetic. The call chain is the
 //! trait-dispatch ceremony (~10 instructions per
 //! `engine_trait_bench_ledger_synced_height_iai.rs`'s expected
-//! range) plus a single struct-field reference load. iai-callgrind's
+//! range) plus a single struct-field reference load. gungraun's
 //! deterministic instruction count is the load-bearing signal for
 //! this workload class because criterion's `median_ns` reflects
 //! optimizer amortization across the iteration loop (the §4.4 hoisting
@@ -72,7 +72,7 @@
 //!
 //! Boundary-cost discipline is preserved: per §4.2, any fixture field
 //! exceeding 64 bytes goes behind `Box<T>` so the bench-function
-//! boundary moves only pointer-sized data, keeping iai-callgrind's
+//! boundary moves only pointer-sized data, keeping gungraun's
 //! residual boundary cost at ~5–10 instructions instead of dominating
 //! the measurement. `LocalKeys` is substantially larger than 64 bytes
 //! (carries an `AllKeysBlob` plus state-shaped fields); `Box<LocalKeys>` moves only the
