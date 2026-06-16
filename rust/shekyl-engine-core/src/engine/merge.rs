@@ -284,8 +284,9 @@ impl<
     ///
     /// # Errors
     ///
-    /// - Daemon transport failure during the backfill fetch →
-    ///   [`RefreshError::Io`] (the `fetch_block_hash_at` mapping).
+    /// - Daemon transport failure during the backfill fetch
+    ///   (`get_scannable_block_by_number`) → [`RefreshError::Io`]
+    ///   (`IoError::Daemon`).
     /// - A `block_leaves` height missing from the producer range →
     ///   [`RefreshError::MalformedScanResult`] (a producer-contract defect,
     ///   same class as the in-range checks in [`apply_scan_result_to_state`]).
@@ -407,6 +408,24 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     }
 }
 
+/// Reject a reorg `fork_height` of 0 as a producer-contract violation.
+///
+/// `fork_height` is the *first divergent* height; genesis (height 0) is the
+/// universal common ancestor and can never be orphaned, so the honest producer
+/// never emits 0 (`find_fork_point` bottoms out at `Ok(1)`). A 0 reaching here
+/// is a malformed/hostile [`ScanResult`] (O5): left unchecked it silently
+/// rewinds the *entire* tree (`keep = fork_height - 1` underflowing to genesis)
+/// or wipes the whole ledger ([`LedgerIndexes::handle_reorg`] drops state
+/// at-and-above 0). Surface it loudly instead of absorbing it.
+fn validate_reorg_fork_height(fork_height: u64) -> Result<(), RefreshError> {
+    if fork_height == 0 {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "reorg fork_height of 0 would orphan genesis",
+        });
+    }
+    Ok(())
+}
+
 async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
@@ -414,12 +433,13 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     producer_leaves: &mut BTreeMap<u64, Vec<OwnedTxLeaves>>,
 ) -> Result<(), RefreshError> {
     // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
-    // the new fork. `fork_height` is the first divergent height, so the
-    // last common height to keep is `fork_height - 1`. Only roll back when
-    // the tree holds blocks at or above the fork — a tree still climbing
-    // below it has nothing to drop (R3-Q6).
+    // the new fork. `fork_height` is the first divergent height (validated
+    // ≥ 1 below), so the last common height to keep is `fork_height - 1`.
+    // Only roll back when the tree holds blocks at or above the fork — a tree
+    // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
-        let keep = BlockHeight(rewind.fork_height.saturating_sub(1));
+        validate_reorg_fork_height(rewind.fork_height)?;
+        let keep = BlockHeight(rewind.fork_height - 1);
         if let Some(tip) = curve_tree
             .ingested_tip_height()
             .await
@@ -517,6 +537,14 @@ pub(crate) fn apply_scan_result_to_state(
     result: ScanResult,
 ) -> Result<Vec<usize>, RefreshError> {
     let synced = ledger.height();
+
+    // Fork-height well-formedness. A `fork_height` of 0 would have
+    // `handle_reorg` drop ledger/index state at-and-above genesis (a full
+    // wipe); reject it before it is used as `expected_start` or fed to the
+    // reorg below (O5 untrusted-`ScanResult` defense).
+    if let Some(rewind) = result.reorg_rewind.as_ref() {
+        validate_reorg_fork_height(rewind.fork_height)?;
+    }
 
     // Start-height invariant. When `reorg_rewind` is present the
     // result is replayed from the fork height, so the expected start
@@ -1333,6 +1361,37 @@ mod tests {
                 assert!(
                     reason.contains("duplicate"),
                     "expected duplicate-height reason, got {reason}",
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_rejects_reorg_fork_height_zero_as_malformed() {
+        // `fork_height` is the first divergent height; genesis can never be
+        // orphaned, so the honest producer never emits 0. A malformed/hostile
+        // `ScanResult` with `fork_height == 0` must surface as
+        // `MalformedScanResult` rather than silently wiping the ledger via
+        // `handle_reorg(.., 0)` (O5 untrusted-`ScanResult` defense).
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 0..1,
+            parent_hash: None,
+            block_hashes: vec![(0, [0x00; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: Some(ReorgRewind { fork_height: 0 }),
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(
+                    reason.contains("fork_height"),
+                    "expected fork_height reason, got {reason}",
                 );
             }
             other => panic!("unexpected error: {other:?}"),
