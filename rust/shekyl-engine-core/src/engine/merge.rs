@@ -456,6 +456,20 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     result: &ScanResult,
     producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
+    // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
+    // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
+    // the same property here: an inverted range would otherwise drive
+    // unintended daemon backfill and advance the tree on a malformed result
+    // before the merge ever rejects it. Same reason string as the ledger
+    // surface so the error taxonomy reads identically to an auditor.
+    let range_start = result.processed_height_range.start;
+    let range_end = result.processed_height_range.end;
+    if range_end < range_start {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "processed_height_range end precedes start",
+        });
+    }
+
     // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
     // the new fork. `fork_height` is the first divergent height (validated
     // ≥ 1 below), so the last common height to keep is `fork_height - 1`.
@@ -478,14 +492,21 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         }
     }
 
-    let range_start = result.processed_height_range.start;
-    let range_end = result.processed_height_range.end;
     loop {
         let tip = curve_tree
             .ingested_tip_height()
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
-        let next = tip.map_or(0, |t| t.0 + 1);
+        // `checked_add` defends the cursor advance: the `next >= range_end`
+        // break bounds `next` at `range_end`, so this never trips in practice,
+        // but block heights are consensus-adjacent — never silently wrap.
+        let next = match tip {
+            None => 0,
+            Some(t) => t.0.checked_add(1).ok_or(RefreshError::CurveTreeIngest {
+                context: "ingested tip height overflow",
+                recoverable_by_respawn: false,
+            })?,
+        };
         if next >= range_end {
             break;
         }

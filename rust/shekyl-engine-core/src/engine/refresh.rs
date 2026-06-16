@@ -3671,6 +3671,48 @@ mod start_refresh_integration_tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_rejects_inverted_processed_height_range() {
+        // O5/O2: an inverted `processed_height_range` (end < start) is a
+        // malformed `ScanResult`. The ingest pre-pass must reject it loudly
+        // *before* touching the curve tree — the ledger merge's own
+        // `end >= start` guard runs only after ingest, so without this the
+        // tree would advance (via daemon backfill of `next < range_start`)
+        // on a result the merge later rejects, leaving tree ahead of ledger.
+        let daemon_seed = derive_seed(&[0x5b; 32], ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let mut bad = ScanResult::empty_at(5, None);
+        // Built from bindings, not a `5..3` literal, to dodge
+        // `clippy::reversed_empty_ranges` — the inversion is the point.
+        let (start, end) = (5u64, 3u64);
+        bad.processed_height_range = start..end;
+
+        let g = arc.read().await;
+        let err = g
+            .ingest_scan_result_into_curve_tree(&mut bad)
+            .await
+            .expect_err("an inverted processed_height_range must be rejected");
+        assert!(
+            matches!(
+                err,
+                RefreshError::MalformedScanResult { reason }
+                    if reason.contains("end precedes start")
+            ),
+            "expected an end-precedes-start MalformedScanResult, got {err:?}",
+        );
+        // O2: the tree must not have advanced on the rejected malformed range.
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            None,
+            "the curve tree must not advance on a rejected malformed range",
+        );
+    }
+
     /// Exercise the §5.2 retry contract end-to-end. Composition: a
     /// 6-block [`TestDaemon`] chain (heights 0..=5) drives the producer
     /// from `synced_height = 0`. The producer slot is a

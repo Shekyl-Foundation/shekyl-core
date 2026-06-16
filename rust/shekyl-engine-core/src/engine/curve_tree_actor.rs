@@ -260,15 +260,22 @@ impl Message<RootAt> for CurveTreeActor {
 /// Mirrors the [`KeyEngineHandle`](super::key_actor::KeyEngineHandle) send-error
 /// collapse: a handler error carries the real [`ClientError`] the client
 /// returned (e.g. [`ClientError::NonConsecutiveBlockHeight`],
-/// [`ClientError::Poisoned`]); every transport failure against a stopped actor
-/// maps to [`Unavailable`](CurveTreeHandleError::Unavailable), which is
-/// terminal until the engine-side R1-Q4 respawn (clause 2).
+/// [`ClientError::Poisoned`]); every other `ask` transport failure maps to
+/// [`Unavailable`](CurveTreeHandleError::Unavailable), which is terminal until
+/// the engine-side R1-Q4 respawn (clause 2).
 #[derive(Debug)]
 pub(crate) enum CurveTreeHandleError {
     /// The client returned an error inside the handler.
     Client(ClientError),
-    /// The actor is not running (fail-stopped or stopped). Terminal until the
-    /// engine respawns the actor.
+    /// The `ask` could not be delivered to or answered by a live handler — the
+    /// actor is fail-stopped or stopped (`ActorNotRunning` / `ActorStopped`),
+    /// or the request timed out (`Timeout`). `MailboxFull` also collapses here
+    /// for match exhaustiveness but is unreachable on the awaiting `ask` path:
+    /// the `ask` future applies backpressure by blocking the sender until
+    /// capacity frees rather than returning `MailboxFull` (mirrors the
+    /// [`key_actor`](super::key_actor) §4.4 T4 note). Every case is
+    /// `recoverable_by_respawn` and terminal until the engine respawns the
+    /// actor.
     Unavailable,
 }
 
