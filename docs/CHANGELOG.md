@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **archival: `HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope
+  (2026-06-15).** The full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
+  Unbond`) ships at **V3.0**, promoted from deferred-V3.1. Bond balance is
+  consensus-state-machine state under the gate-4 conservation law, so adding mid-life
+  shard adjustment post-genesis would be a hard fork; and without it the only way to add
+  or shed a single shard is `Unbond` + re-`JoinMarket`, tearing down a working
+  multi-shard operation (all collateral into release cooldown, all serving interrupted,
+  all serve-credit continuity reset) to swap one slot. The add-shard credit path covers
+  the voluntary holdings-increase/top-up direction. All bond-lifecycle verify/connect
+  logic is Rust-native (`shekyl-archival-retention`); C++ daemon retains only thin glue +
+  FFI delegation; wallet-side construction is Rust. Two follow-on dependencies tracked,
+  in order: (1) FSM-friction pin in `PHASE_2B_FSM_RETOOL.md` (partial-unbond action,
+  per-shard release-cooldown on drop, slashable-when boundary); (2) **age-stratified** sim
+  bond-mobility reconciliation (the staker sim abstracts cooldown + partial-slash +
+  capital-lockup to a flat seating cost and models frictionless myopic acquire/drop —
+  optimistic exactly on the deep tail where the `+1` replica margin lives), which gates
+  the genesis-seal redundancy-floor re-derivation. Docs: `ARCHIVAL_BOND_GATE4.md` §4.4,
+  `ARCHIVAL_FIREWALL_GATE6.md` (R2 / revision 2026-06-15), `FOLLOWUPS.md` (V3.0 lifecycle
+  item).
 - **wallet/crypto-pq: retire the `enc_label` real-label gate; prove the
   indistinguishability invariant (2026-06-15, `feat/enc-label-ungate`).** The
   cooperative-payment-request gate (`operational.cooperative_payment_requests`,

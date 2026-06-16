@@ -320,8 +320,9 @@ balance under a gate-4 conservation law, not a UTXO; every balance change is a c
 transition, so completing the bond FSM post-genesis is a **hard fork**. Genesis already carries
 `JoinMarket` / `Rebond`-after-slash / full `Unbond` + a release cooldown
 (`RELEASE_COOLDOWN_EPOCHS = 2 < W`) and a `bond_duration(age)` retention horizon; **voluntary
-partial-unbond (`HoldingsUpdate`, gate-4 §4.4) is specified but deferred to "V3.1 wire,"** and a
-voluntary holdings-*increase* / top-up has no dedicated wire (§9.6 bond-post note). Pinning the
+partial-unbond (`HoldingsUpdate`, gate-4 §4.4) is promoted to genesis scope (V3.0, decided
+2026-06-15)** — add-shard covers the voluntary holdings-*increase* / top-up direction (the §9.6
+"no dedicated wire" gap is closed by the add-shard credit path). Pinning the
 **full** lifecycle at genesis (the gate-4 / FSM-retool call) turns three **one-time** firewall
 events into **recurring** ones — GF-7 funding-linkage, GF-4 decorrelated-drain, GF-10
 within-epoch timing each get *many* correlation shots instead of one (R4 re-scoped above).
@@ -334,8 +335,9 @@ and (b) a **+1 deep-tail replica margin** (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` t
 §L12). Because real bond mobility under cooldown + duration is **lower than the sim's myopic
 per-epoch acquire/drop** exactly on the **deep tail where the +1 margin lives**, R-3 adds (c): a
 **sim bond-mobility model reconciled to the rebond/unbond FSM's frictions.** (c) cannot be
-computed until the FSM (the V3.1→genesis promotion) is pinned — so the **rebond/unbond FSM is a
-pre-genesis-seal dependency for the sim reconciliation, not merely a consensus deliverable.**
+computed until the FSM (the now-genesis-scoped lifecycle, promoted 2026-06-15) is pinned — so the
+**rebond/unbond FSM is a pre-genesis-seal dependency for the sim reconciliation, not merely a
+consensus deliverable.**
 **The reconciliation must be age-stratified, not a re-tuned flat scalar.** The sim's "flat
 seating cost" is a uniform scalar standing in for a friction (cooldown, partial-slash, lockup,
 `bond_duration(age)`) that is itself **age-stratified — worst on the deep tail**. Merely
@@ -521,12 +523,12 @@ checks each against a different key.
 All four bond mutations are one `txin_archival_bond_post` discriminated by `post_kind`
 (`0=JoinMarket, 1=Rebond, 2=Unbond, 3=HoldingsUpdate` — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
 §3.2). Genesis already carries `JoinMarket`, `Rebond`-after-slash, and full `Unbond`;
-**voluntary partial-unbond (`HoldingsUpdate`) is specified but flagged "V3.1 wire"** (gate-4
-§3.2 / §4.4 G4-6), and a voluntary holdings-*increase* / top-up has no dedicated wire. Pinning
-the **full** lifecycle at genesis (create / rebond-topup / partial-unbond / full-unbond) — so
-completing the consensus FSM later is not a hard fork — promotes `HoldingsUpdate` (and any
-top-up wire) to genesis. **That promotion is a gate-4 / FSM-retool call** (recorded here, not
-executed in this doc); its Gate-6 consequence is that the previously **one-time** firewall
+**voluntary partial-unbond (`HoldingsUpdate`) is promoted to genesis scope (V3.0, decided
+2026-06-15)** (gate-4 §3.2 / §4.4 G4-6), with the add-shard credit path covering the voluntary
+holdings-*increase* / top-up direction. The **full** lifecycle ships at genesis (create /
+rebond-topup / partial-unbond / full-unbond) — so completing the consensus FSM later is not a
+hard fork. **That promotion is a gate-4 / FSM-retool call** (recorded here, not executed in this
+doc); its Gate-6 consequence is that the previously **one-time** firewall
 events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
 drain, GF-10 within-epoch timing).
 
@@ -979,7 +981,7 @@ with the principal-linkage gap still open under a different name.
       Operational residual named.
 - [ ] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
       and GF-7 (bond-funding separation) carried as **recurring** (partial-unbond / rebond-topup),
-      not one-time; the **rebond/unbond FSM (V3.1→genesis promotion)** named as the
+      not one-time; the **rebond/unbond FSM (promoted to genesis / V3.0, 2026-06-15)** named as the
       **pre-genesis-seal dependency** for the R-3 sim bond-mobility reconciliation.
 
 **Carried out of Round 2 (named, not silently deferred — per
@@ -1027,9 +1029,10 @@ with the principal-linkage gap still open under a different name.
   account key); recommended disposition is a **dedicated bond-spend key** (identity-only
   preserved). Concrete action: **re-word gate-4 §3.5 step 5 to name the key**, resolve at gate-4
   source **before the bond-post verifier lands** (consensus rule — wrong-once = fork-to-fix).
-- **Rebond/unbond FSM** — `HoldingsUpdate` V3.1→genesis promotion + top-up wire (gate-4 / FSM
-  retool call); **blocks the R-3 sim reconciliation and thus the genesis seal** (§6 scope note);
-  the reconciliation must be **age-stratified, not a re-tuned flat cost**.
+- **Rebond/unbond FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
+  add-shard credit path covers top-up (gate-4 §4.4 / FSM retool); **blocks the R-3 sim
+  reconciliation and thus the genesis seal** (§6 scope note); the reconciliation must be
+  **age-stratified, not a re-tuned flat cost**.
 
 **Critical path out of Round 2 (these two, not the transport tuning):** (1) the GF-1-carve
 resolves at gate-4 source — wording fix to §3.5 step 5 — before the bond-post verifier lands; and
@@ -1233,6 +1236,20 @@ work is.** S-2 and S-3 are the privacy axis of the R-3 reconciliation that alrea
 
 ## Revision history
 
+- **2026-06-15 (`HoldingsUpdate` promoted to genesis scope):** Resolved R-1's open
+  V3.1→genesis call: the full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
+  Unbond`) ships at **V3.0** (gate-4 §4.4 revision 2026-06-15). Rationale: bond balance is
+  consensus-state-machine state, so mid-life shard adjustment added post-genesis is a hard
+  fork; and without it the only way to add/shed one shard is `Unbond` + re-`JoinMarket`,
+  tearing down a working multi-shard operation to swap one slot — operationally untenable.
+  The add-shard credit path covers the top-up direction (closes the §9.6 "no dedicated wire"
+  gap). All bond-lifecycle verify/connect logic is **Rust-native** (`shekyl-archival-retention`),
+  C++ daemon thin-glue + FFI delegation moved where needed; wallet-side construction is Rust.
+  Consequences unchanged from the pass-1/2 scope notes: GF-4/GF-7/GF-10 are **recurring**
+  surfaces (§6 R4), and the **age-stratified sim bond-mobility reconciliation remains the
+  pre-genesis-seal dependency** (now unblocked to proceed once the FSM frictions are pinned in
+  `PHASE_2B_FSM_RETOOL.md`). Docs-only; FSM-friction pin and sim reconciliation tracked
+  separately (FOLLOWUPS V3.0 lifecycle item).
 - **2026-06-13 (Round 2 adversarial pass 4 — cadence/standoff dispositions):** Added the
   organizing principle behind the close: the firewall protects **P ↔ principal (a linkage)**, not
   **P ↔ its own rewards (a conceded-public function of contribution)**. Earning-function obfuscation

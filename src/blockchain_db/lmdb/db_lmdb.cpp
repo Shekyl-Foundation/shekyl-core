@@ -5049,7 +5049,12 @@ bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
     return false;
-  // Genesis: HoldingsUpdate deferred V3.1; tip holdings suffice for serve-credit window.
+  // NOTE: returns tip holdings (ignores at_height). This was sound while holdings were
+  // immutable, but HoldingsUpdate is now genesis-scoped (V3.0, 2026-06-15) — a P can add/drop
+  // shards mid-life, so "holds shard now" no longer implies "held shard at at_height". The
+  // serve-credit window check must be reconciled with mutable holdings when the
+  // Rebond/Unbond/HoldingsUpdate connect paths land (PHASE_2B_FSM_RETOOL.md; FOLLOWUPS V3.0
+  // bond-lifecycle item). Behavior unchanged here pending that work.
   return bond.holds_shard(shard_id);
 }
 

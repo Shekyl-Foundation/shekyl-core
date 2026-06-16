@@ -462,6 +462,46 @@ sustainability is unaffected by the recalibration.
   caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
   1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
 
+- **`HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope + pre-seal
+  sim reconciliation (decided 2026-06-15).** The full bond lifecycle
+  (`JoinMarket / Rebond / HoldingsUpdate / Unbond`) ships at **V3.0**, not deferred-V3.1
+  (gate-4 §4.4; `ARCHIVAL_BOND_GATE4.md` revision 2026-06-15). Rationale: bond balance is
+  consensus-state-machine state, so mid-life shard adjustment added post-genesis is a hard
+  fork; and without it the only way to add/shed one shard is `Unbond` + re-`JoinMarket`,
+  tearing down a working multi-shard operation to swap one slot. **All bond-lifecycle
+  verify/connect logic is Rust-native** (`shekyl-archival-retention`) — each kind gets its
+  own `verify_*_bond_post` surface + FFI error-code cluster mirroring JoinMarket; the C++
+  daemon retains only thin glue (LMDB `record_exists`, hybrid-pubkey bounds, `P_canonical_id`
+  recompute) and FFI delegation, moved where needed. There is **no C++→Rust port** — these
+  kinds are Rust from genesis, and wallet-side construction is Rust per the 100%-Rust wallet.
+  Three sub-items, in order:
+  (1) **FSM friction pin** — `PHASE_2B_FSM_RETOOL.md` gains the partial-unbond action,
+  per-shard release-cooldown semantics on drop, and the slashable-when boundary (dropped
+  shard's collateral stays liable through cooldown — no drop-and-run to dodge a pending
+  slash). These are the *inputs* to (2). **Mutable-holdings consequence to resolve here:**
+  `BlockchainLMDB::has_archival_bond_shard` (`db_lmdb.cpp`) currently returns *tip* holdings
+  and ignores `at_height` — sound only while holdings were immutable. With mid-life add/drop,
+  "holds shard now" ≠ "held shard at `at_height`", so the serve-credit-window membership check
+  must be reconciled with mutable holdings (or backed by the per-`(P,s,E)` retention bits,
+  which gate-4 §4.4 already designates as the ground truth rather than the mutable descriptor).
+  (2) **Age-stratified sim reconciliation (pre-seal dependency).** The staker sim today
+  abstracts cooldown + partial-slash + capital-lockup into a single **flat seating cost**
+  (`STAKER_ARCHIVAL_SIM.md` §*steady-state frame* item 6) and models bond churn as
+  frictionless myopic per-epoch acquire/drop — **optimistic exactly on the deep tail**,
+  where the `+1` replica margin lives and mobility is the binding constraint. The
+  reconciliation must make the friction a **function of shard age** (a re-tuned flat scalar
+  stays optimistic on the constraint that binds): released collateral frozen for the release
+  cooldown (freed capital cannot recycle into a new shard immediately — fresh capital
+  required), partial-slash vs. whole-bond, per-shard last-served-epoch cooldown on drop. The
+  `bond_duration(age)` retention-commitment horizon (gate-4 §3.4) is an existing
+  age-stratified friction the model already has a hook for.
+  (3) **What it gates:** the genesis-seal redundancy-floor re-derivation, against (a) the
+  integer backend, (b) the `+1` deep-tail replica margin, and (c) this reconciled mobility
+  model — the three compounding corrections the sim verdict named as pre-seal. **Target:
+  V3.0.** Cross-refs: `ARCHIVAL_BOND_GATE4.md` §4.4, `PHASE_2B_FSM_RETOOL.md`,
+  `STAKER_ARCHIVAL_SIM.md` §*steady-state frame*, `ARCHIVAL_FIREWALL_GATE6.md` R2 (R-2/R-3
+  recurring-surface re-scope).
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published
@@ -4750,12 +4790,6 @@ sustainability is unaffected by the recalibration.
 ---
 
 ## V3.1+ — Legacy C++ → Rust rewrite scope
-
-- **archival: port remaining bond-post kinds to Rust delegation (gate-4).**
-  JoinMarket verify and `E_first` eligibility delegate to `shekyl-archival-retention`
-  (gate-4 §8 phase-1). **Target:** V3.1 — land with Rebond/Unbond/HoldingsUpdate connect
-  work; each kind gets its own `verify_*_bond_post` surface and FFI error-code cluster,
-  mirroring the JoinMarket audit table. Out of scope for §8 phase-1 by design.
 
 Items captured from the
 [shekyl-v3-wallet-rust-rewrite plan](./design/WALLET_REWRITE_PLAN.md)

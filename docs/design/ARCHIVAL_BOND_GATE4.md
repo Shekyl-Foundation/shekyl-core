@@ -209,8 +209,8 @@ Emission already ships a loud cleartext **source** term (mint) inflation-checked
 | `JoinMarket` | yes (`== bond_floor`) | no | Creates record |
 | `Rebond` | yes | no | Restores floor after slash |
 | `Unbond` | no | yes (`== bonded_total`) | After release cooldown |
-| `HoldingsUpdate` add shard | yes (`+FLOOR`) | no | Wire V3.1 |
-| `HoldingsUpdate` drop shard | no | yes (`FLOOR`) | Wire V3.1; per-shard cooldown (§4.4) |
+| `HoldingsUpdate` add shard | yes (`+FLOOR`) | no | V3.0 |
+| `HoldingsUpdate` drop shard | no | yes (`FLOOR`) | V3.0; per-shard cooldown (§4.4) |
 
 **Forbidden:** `bond_credit` or `bond_debit` on `txin_archival_reward_emission`; both
 directions in one bond-post tx; either term on a paying emission tx.
@@ -244,7 +244,7 @@ enum BondPostKind {
   JoinMarket,
   Rebond,
   Unbond,
-  HoldingsUpdate,        // V3.1 wire; credit/debit directions §3.2
+  HoldingsUpdate,        // V3.0 wire; credit/debit directions §3.2
 }
 ```
 
@@ -324,7 +324,7 @@ minimum commitment of `bond_duration(age) = BOND_DURATION_BASE_EPOCHS · (1 +
 BOND_DURATION_AGE_SCALE · age)` settlement epochs from acquisition (normalized shard age
 `age ∈ [0,1]`; constants in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1,
 shape pinned / numerics provisional). Before the horizon elapses, the shard is ineligible for
-voluntary drop via `HoldingsUpdate` (V3.1 wire) or `Unbond`-with-remaining-holdings; slash and
+voluntary drop via `HoldingsUpdate` (V3.0 wire) or `Unbond`-with-remaining-holdings; slash and
 full exit (`Unbond` of the entire record after release cooldown) are unaffected — duration
 deters *shard-drop while staying*, not capital flight
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L10 hardening* disposition and
@@ -415,9 +415,17 @@ retirement = **bond released** ∧ backlog exhausted or lapsed (`W`). `p_slot` b
 
 ### 4.4 HoldingsUpdate — partial unbond principle (G4-6)
 
-**Wire:** deferred **V3.1** with `HoldingsUpdate` vin.
+**Wire:** **V3.0** (`HoldingsUpdate` vin). Promoted from deferred-V3.1 (decided
+2026-06-15): the bond lifecycle is consensus-state-machine balance, so adding mid-life
+shard adjustment post-genesis would be a hard fork; and without it the only way to add or
+shed a single shard is `Unbond` + re-`JoinMarket` — tearing down a working multi-shard
+operation (all collateral into release cooldown, all serving interrupted, all serve-credit
+continuity reset) to swap one slot. The full lifecycle
+(`JoinMarket / Rebond / HoldingsUpdate / Unbond`) ships at genesis. Sim reconciliation of
+the resulting age-stratified mobility friction is a pre-seal dependency
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame* item 6).
 
-**Principle pinned now:** dropping shard *s* from `ShardSetCompact` reduces
+**Principle:** dropping shard *s* from `ShardSetCompact` reduces
 `bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`; released collateral for *s* inherits
 **Unbond release cooldown** (per-shard last-served epoch) — cannot withdraw immediately.
 
@@ -517,7 +525,7 @@ Pin joint disposition in gate-6 Round 2+ with this doc's join event as the named
 | Bond recovery via drain only | Rejected — §4.3 G4-1 |
 | Slash wire bytes | Deferred — gate-4 round 1+ |
 | `total_bonded_atomic` LMDB placement | Deferred — with archival state schema (§4.5) |
-| `HoldingsUpdate` wire | Deferred V3.1 — principle §4.4 |
+| `HoldingsUpdate` wire | **V3.0** — promoted from deferred-V3.1 (2026-06-15); principle §4.4 |
 
 ---
 
@@ -534,7 +542,9 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
 - [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verRctSemanticsBondPost`; NIC path).
-- [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic` (Rebond/Unbond/HoldingsUpdate deferred).
+- [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic`.
+- [ ] Rebond / Unbond / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
+      FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)).
 - [x] **KAT phase-1 (bonded-aggregation sub-invariant only):** `gate4_lifecycle_kat_v1.json` +
       `gate4_lifecycle_kat.rs` — join wire, serve at `E_first`, `verify_conservation_snapshot`
       on `total_bonded == Σ_P bonded_total`. **Three qualifiers on closure:**
@@ -603,3 +613,7 @@ backlog are independent value flows (§3.5).
   `bond_floor` CompleteTree exception.
 - **2026-06-07:** Round 0 — join-Market seam; `txin_archival_bond_post` sketch; reorg;
   emission/FSM cross-amendments.
+- **2026-06-15:** `HoldingsUpdate` promoted deferred-V3.1 → **V3.0** (§3.2, §3.4 enum, §4.4,
+  §6 table, §8 checklist). Full bond lifecycle ships at genesis; FSM actions tracked in
+  `PHASE_2B_FSM_RETOOL.md`; age-stratified mobility-friction sim reconciliation is a pre-seal
+  dependency.
