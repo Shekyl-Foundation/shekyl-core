@@ -18,3 +18,11 @@ description = "Agent-based staker-archival coverage simulation (docs/design/STAK
 serde = { workspace = true }
 serde_json = "1"
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+
+# The funding-seam standoff draw + its conformance instruments are
+# single-sourced in `shekyl-standoff`; the sim's `run()` does not call the draw
+# in production logic, so this is a dev-only dependency (the `conformance`
+# feature pulls the float grading + self-cert harness for the smoke test that
+# the sim's `SplitMix64` conforms through the shared `certify_draw`).
+[dev-dependencies]
+shekyl-standoff = { path = "../shekyl-standoff", features = ["conformance"] }

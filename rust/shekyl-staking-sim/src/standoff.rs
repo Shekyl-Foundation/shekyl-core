@@ -444,215 +444,31 @@ pub fn run_full_report() -> StandoffReport {
 }
 
 // ---------------------------------------------------------------------------
-// Reference draw + sample summary for the wallet conformance test vector.
-//
-// The harness's cover numbers assume the seam gap is drawn *directly* and
-// uniformly with a fair order-coin. The wallet draw is unenforceable, so the
-// published test vector must verify the realized sample's *distribution* — the
-// actual spread between the two events and the order — not merely the ±window
-// bound (which the triangular double-jitter trap also satisfies). The functions
-// below are the executable reference for that vector.
+// The conformance-correct entry-seam draw and its goodness-of-fit instruments
+// were single-sourced out of this `#[cfg(test)]`-local code into the
+// `shekyl-standoff` crate (draw, build-float-free) and `shekyl-stats` (generic
+// GoF). The sim now exercises the *same* draw the wallet and the published KAT
+// import — "what we validated is what ships" by construction. The
+// distributional / instrument-validity tests moved to
+// `shekyl-standoff/tests/conformance_grading.rs`; the sim keeps only a smoke
+// test that its `SplitMix64` conforms through the shared self-cert harness, and
+// the `run()` Monte-Carlo economics below (which are sim-only, not single-
+// sourced). See `docs/design/STAKER_ARCHIVAL_SIM.md` and
+// `docs/design/ARCHIVAL_FIREWALL_GATE6.md` §10.12.
 // ---------------------------------------------------------------------------
-
-/// Conformance-correct entry-seam draw. At the private intent `t0`, draw the gap
-/// directly `s ~ U[0, window]` and flip a fair order-coin; returns
-/// `(spread_blocks, bond_first)`. Uniform separation, fair inversion, max
-/// latency `window`, per-`P` independence (caller supplies an independent rng).
-#[cfg(test)]
-fn draw_entry_gap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
-    let s = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
-    let bond_first = rng.unit() < 0.5;
-    (s.min(window), bond_first)
-}
-
-/// The conformance TRAP, kept here so the test vector is *validated to reject it*
-/// rather than merely to pass the correct shape: independently jitter both
-/// event-times in `[0, window]` around the common anchor; the realized
-/// separation is `|a - b|` — triangular, peaked at zero.
-#[cfg(test)]
-fn draw_entry_gap_double_jitter_trap(window: u64, rng: &mut SplitMix64) -> (u64, bool) {
-    let a = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
-    let b = (rng.unit() * (window as f64 + 1.0)).floor() as u64;
-    (a.abs_diff(b).min(window), a >= b)
-}
-
-/// Distribution summary of a `(spread, bond_first)` sample — the quantities the
-/// conformance vector asserts on. A correct (uniform) draw gives
-/// `mean_spread ≈ window/2`, `bond_first_frac ≈ 0.5`, `first_decile_frac ≈ 0.10`,
-/// `max_decile_dev` small; the triangular trap collapses `mean_spread` toward
-/// `window/3` and spikes `first_decile_frac` / `max_decile_dev`.
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize)]
-struct GapSampleStats {
-    pub n: usize,
-    pub mean_spread: f64,
-    pub max_spread: u64,
-    pub bond_first_frac: f64,
-    /// Mass in the first decile `[0, window/10)`; uniform ⇒ ~0.10.
-    pub first_decile_frac: f64,
-    /// Largest |decile bucket share − 0.10| over the 10 deciles (coarse
-    /// uniformity probe, a stand-in for the KS statistic the vector spec names).
-    pub max_decile_dev: f64,
-}
-
-/// Summarize a realized sample. `window` defines the decile bucketing.
-#[cfg(test)]
-fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
-    let n = samples.len();
-    let mut deciles = [0usize; 10];
-    let mut spread_sum = 0u128;
-    let mut bond_first = 0usize;
-    let mut max_spread = 0u64;
-    for &(s, bf) in samples {
-        spread_sum += s as u128;
-        max_spread = max_spread.max(s);
-        if bf {
-            bond_first += 1;
-        }
-        let idx = ((s as f64 / (window as f64 + 1.0)) * 10.0).floor() as usize;
-        deciles[idx.min(9)] += 1;
-    }
-    let max_decile_dev = deciles
-        .iter()
-        .map(|&c| (c as f64 / n as f64 - 0.10).abs())
-        .fold(0.0_f64, f64::max);
-    GapSampleStats {
-        n,
-        mean_spread: spread_sum as f64 / n as f64,
-        max_spread,
-        bond_first_frac: bond_first as f64 / n as f64,
-        first_decile_frac: deciles[0] as f64 / n as f64,
-        max_decile_dev,
-    }
-}
-
-// --- Independence probes -------------------------------------------------
-//
-// "uniform-independent draw" has two independence dimensions a marginal
-// goodness-of-fit on the gap *cannot* see, because the gap is the wrong input
-// for both:
-//
-//   * Anchor independence (the catastrophic shared-trigger mode, finding 4):
-//     `draw_entry_gap` produces the same gap distribution regardless of *when*
-//     the wallet acts, so a wallet bonding at "next epoch boundary + uniform
-//     gap" passes every gap test while every wallet's absolute bond time snaps
-//     to the same boundary and the candidate set collapses. The bug is in the
-//     anchor `t0`, not the gap — it needs a *population* test on absolute times.
-//   * Serial independence (recurring bond ops): a weak PRNG can yield a perfect
-//     uniform marginal with correlated successive draws; with rebond /
-//     partial-unbond / re-entry a P draws several gaps over its life, and
-//     correlated gaps make those recurring ops linkable. A marginal GoF is
-//     blind to autocorrelation; it needs a lag-1 / runs probe on a sequence.
-//
-// The grade is a *discrete* GoF (the gap is integer blocks; continuous KS is
-// mis-calibrated) at a strict grading alpha (~1e-6 — a correct wallet must not
-// false-fail, and the gross deviations here fail by orders of magnitude so the
-// margin is free). The fixed seed gives the *reference* determinism; it is not
-// a PRNG mandate — other wallets are graded statistically on the property
-// (uniform-independent), not on emitting this exact sequence.
-
-/// Upper-tail standard-normal quantile for alpha = 1e-6 (z ≈ 4.7534), used to
-/// derive the chi-square grading threshold.
-#[cfg(test)]
-const Z_ALPHA_1E6: f64 = 4.753_424;
-
-/// Chi-square goodness-of-fit against the **discrete** uniform on `[0, window]`,
-/// `n_bins` equal-width bins; returns the statistic (df = `n_bins - 1`). Reject
-/// uniformity when it exceeds `chi_square_upper_crit(n_bins - 1, Z_ALPHA_1E6)`.
-#[cfg(test)]
-fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -> f64 {
-    let n = samples.len() as f64;
-    let mut obs = vec![0usize; n_bins];
-    for &(s, _) in samples {
-        let idx = ((s as f64 / (window as f64 + 1.0)) * n_bins as f64).floor() as usize;
-        obs[idx.min(n_bins - 1)] += 1;
-    }
-    let expected = n / n_bins as f64;
-    obs.iter()
-        .map(|&o| {
-            let d = o as f64 - expected;
-            d * d / expected
-        })
-        .sum()
-}
-
-/// Wilson-Hilferty chi-square upper quantile (critical value) for `df` degrees
-/// of freedom at upper-tail normal quantile `z`. Dependency-free; accurate well
-/// past the margin the strict alpha needs.
-#[cfg(test)]
-fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
-    let a = 2.0 / (9.0 * df);
-    let t = 1.0 - a + z * a.sqrt();
-    df * t * t * t
-}
-
-/// Lag-1 autocorrelation of one wallet's gap sequence — the serial-independence
-/// probe. `≈ 0` (~`1/sqrt(M)`) for independent draws; large for a correlated
-/// (weak-PRNG) sequence with the same marginal.
-#[cfg(test)]
-fn lag1_autocorr(gaps: &[u64]) -> f64 {
-    let m = gaps.len();
-    if m < 2 {
-        return 0.0;
-    }
-    let mean = gaps.iter().map(|&g| g as f64).sum::<f64>() / m as f64;
-    let (mut num, mut den) = (0.0_f64, 0.0_f64);
-    for i in 0..m {
-        let d = gaps[i] as f64 - mean;
-        den += d * d;
-        if i + 1 < m {
-            num += d * (gaps[i + 1] as f64 - mean);
-        }
-    }
-    if den == 0.0 {
-        return 0.0;
-    }
-    num / den
-}
-
-/// One wallet's realized absolute bond-post time under the population anchor
-/// model. `shared` snaps the private intent `t0` to the common `boundary` (the
-/// catastrophic shared-trigger mode); otherwise `t0` is independent over
-/// `[0, span)`. The gap is drawn *correctly* in both arms — the isolated bug is
-/// in the anchor, not the gap.
-#[cfg(test)]
-fn population_bond_time(
-    window: u64,
-    span: u64,
-    boundary: u64,
-    shared: bool,
-    rng: &mut SplitMix64,
-) -> u64 {
-    let t0 = if shared {
-        boundary
-    } else {
-        (rng.unit() * span as f64) as u64
-    };
-    let (s, bond_first) = draw_entry_gap(window, rng);
-    if bond_first {
-        t0
-    } else {
-        t0 + s
-    }
-}
-
-/// Concentration of a population's bond times: the share in the most-occupied
-/// `bin_width`-wide bin. Dispersed (independent anchors) ⇒ small; clustered
-/// (shared trigger) ⇒ → 1.
-#[cfg(test)]
-fn max_bin_share(times: &[u64], bin_width: u64) -> f64 {
-    use std::collections::HashMap;
-    let mut bins: HashMap<u64, usize> = HashMap::new();
-    for &t in times {
-        *bins.entry(t / bin_width).or_insert(0) += 1;
-    }
-    let max = bins.values().copied().max().unwrap_or(0);
-    max as f64 / times.len() as f64
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sim's reproducible PRNG satisfies the standoff draw conformance trait,
+    /// so `run()`'s reference stream is the same one the wallet self-certifies
+    /// against. Reference determinism, not a PRNG mandate.
+    impl shekyl_standoff::GapRng for SplitMix64 {
+        fn next_u64(&mut self) -> u64 {
+            SplitMix64::next_u64(self)
+        }
+    }
 
     #[test]
     fn zero_window_is_no_cover() {
@@ -758,160 +574,17 @@ mod tests {
     }
 
     #[test]
-    fn correct_draw_is_well_distributed() {
-        // The conformance check the wallet test vector encodes: a large sample of
-        // the realized (spread, order) must be uniform in spread and balanced in
-        // order — well-distributed, not merely within ±window.
-        let window = 600u64;
+    fn sim_rng_conforms_via_shared_self_cert() {
+        // Single-sourcing smoke test: the sim's `SplitMix64` reference stream
+        // passes the *same* self-certification harness a wallet runs against its
+        // CSPRNG (uniform spread, fair order, serial independence). The full
+        // distributional + instrument-validity vector lives in
+        // `shekyl-standoff/tests/conformance_grading.rs`.
         let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-        let sample: Vec<(u64, bool)> = (0..200_000)
-            .map(|_| draw_entry_gap(window, &mut rng))
-            .collect();
-        let st = summarize_gaps(&sample, window);
-        // Uniform ⇒ mean ≈ window/2, first decile ≈ 0.10, all deciles flat.
+        let report = shekyl_standoff::conformance::certify_draw(&mut rng, 600, 200_000);
         assert!(
-            (st.mean_spread - 300.0).abs() < 6.0,
-            "mean_spread = {}",
-            st.mean_spread
-        );
-        assert!(
-            (st.bond_first_frac - 0.5).abs() < 0.01,
-            "order = {}",
-            st.bond_first_frac
-        );
-        assert!(
-            (st.first_decile_frac - 0.10).abs() < 0.01,
-            "first decile = {}",
-            st.first_decile_frac
-        );
-        assert!(
-            st.max_decile_dev < 0.02,
-            "max decile dev = {}",
-            st.max_decile_dev
-        );
-        assert_eq!(st.max_spread, window);
-    }
-
-    #[test]
-    fn double_jitter_trap_fails_the_same_check() {
-        // Validates that the conformance summary *rejects* the triangular trap —
-        // the trap satisfies the ±window bound but its separation is zero-peaked.
-        let window = 600u64;
-        let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-        let sample: Vec<(u64, bool)> = (0..200_000)
-            .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
-            .collect();
-        let st = summarize_gaps(&sample, window);
-        // Triangular ⇒ mean collapses toward window/3, mass piles into the first
-        // decile, and the uniformity probe blows past the correct-draw tolerance.
-        assert!(
-            st.mean_spread < 250.0,
-            "trap mean_spread = {} (should be << 300)",
-            st.mean_spread
-        );
-        assert!(
-            st.first_decile_frac > 0.15,
-            "trap first decile = {} (should spike)",
-            st.first_decile_frac
-        );
-        assert!(
-            st.max_decile_dev > 0.05,
-            "trap max decile dev = {}",
-            st.max_decile_dev
-        );
-        // The order coin can still look fair — proving order-balance alone is not
-        // sufficient; the spread distribution is the load-bearing check.
-        assert!(
-            (st.bond_first_frac - 0.5).abs() < 0.02,
-            "trap order = {}",
-            st.bond_first_frac
-        );
-    }
-
-    #[test]
-    fn chi_square_grades_uniform_at_strict_alpha() {
-        // The grading form: discrete chi-square at a strict alpha. A correct draw
-        // sits well under the gate; the triangular trap fails by orders of
-        // magnitude — the margin the strict alpha exists to exploit.
-        let window = 600u64;
-        let n_bins = 60;
-        let crit = chi_square_upper_crit((n_bins - 1) as f64, Z_ALPHA_1E6);
-        let mut rng = SplitMix64(0x5EED_1234_ABCD_0001);
-        let good: Vec<(u64, bool)> = (0..200_000)
-            .map(|_| draw_entry_gap(window, &mut rng))
-            .collect();
-        let bad: Vec<(u64, bool)> = (0..200_000)
-            .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
-            .collect();
-        let chi_good = chi_square_uniform(&good, window, n_bins);
-        let chi_bad = chi_square_uniform(&bad, window, n_bins);
-        assert!(
-            chi_good < crit,
-            "correct chi2 {chi_good} should be < crit {crit}"
-        );
-        assert!(
-            chi_bad > 10.0 * crit,
-            "trap chi2 {chi_bad} should blow past crit {crit}"
-        );
-    }
-
-    #[test]
-    fn population_anchor_independence_disperses_shared_trigger_clusters() {
-        // The catastrophic mode the marginal cannot see: the gap is drawn
-        // correctly in both arms; only the anchor differs. Independent intents
-        // disperse the absolute bond times; an epoch-snapped population piles them
-        // into one search-window bin.
-        let window = 600u64;
-        let span = 1_000_000u64;
-        let bin = 4 * window; // ≥ the inversion search width, so a cluster sits in one bin
-        let boundary = 120_000u64; // a multiple of bin ⇒ the cluster sits cleanly inside it
-        let n = 5_000usize;
-        let mut rng = SplitMix64(0xA11C_E5B0_1234_5678);
-        let indep: Vec<u64> = (0..n)
-            .map(|_| population_bond_time(window, span, boundary, false, &mut rng))
-            .collect();
-        let shared: Vec<u64> = (0..n)
-            .map(|_| population_bond_time(window, span, boundary, true, &mut rng))
-            .collect();
-        let share_indep = max_bin_share(&indep, bin);
-        let share_shared = max_bin_share(&shared, bin);
-        assert!(
-            share_indep < 0.05,
-            "independent anchors should disperse, got {share_indep}"
-        );
-        assert!(
-            share_shared > 0.9,
-            "shared trigger should cluster, got {share_shared}"
-        );
-    }
-
-    #[test]
-    fn serial_independence_reference_passes_correlated_fails() {
-        // A weak PRNG can yield a uniform marginal with correlated successive
-        // draws — invisible to a marginal GoF, linkable across a P's recurring
-        // bond ops. The lag-1 probe sees it; the reference draw passes.
-        let window = 600u64;
-        let m = 20_000usize;
-        let mut rng = SplitMix64(0x5E11_A1B2_C3D4_E5F6);
-        let reference: Vec<u64> = (0..m).map(|_| draw_entry_gap(window, &mut rng).0).collect();
-        // Correlated negative: a small-step wrapped walk — uniform-ish marginal,
-        // strong lag-1 autocorrelation (consecutive draws differ by ≤ 20).
-        let mut correlated = Vec::with_capacity(m);
-        let mut prev = draw_entry_gap(window, &mut rng).0;
-        for _ in 0..m {
-            let step = (rng.unit() * 40.0) as i64 - 20;
-            prev = ((prev as i64 + step).rem_euclid(window as i64 + 1)) as u64;
-            correlated.push(prev);
-        }
-        let r_ref = lag1_autocorr(&reference).abs();
-        let r_corr = lag1_autocorr(&correlated).abs();
-        assert!(
-            r_ref < 0.05,
-            "reference lag-1 autocorr {r_ref} should be ~0"
-        );
-        assert!(
-            r_corr > 0.5,
-            "correlated lag-1 autocorr {r_corr} should be large"
+            report.passed(),
+            "sim RNG failed standoff self-cert: {report:?}"
         );
     }
 }

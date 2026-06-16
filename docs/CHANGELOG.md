@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+
+- **archival: single-source the funding-seam entry-standoff draw into
+  `shekyl-standoff` + generic goodness-of-fit primitives into `shekyl-stats`
+  (2026-06-16, `feat/standoff-shared-crate`).** First slice of the
+  implementation-drift-guard substrate: the load-bearing standoff draw moves out
+  of `#[cfg(test)]`-local sim code into a library crate the wallet, sim, and
+  (future) verifier all import, so "what we validated is what ships" holds by
+  construction. **`shekyl-standoff`** ships a float-free `draw::draw_entry_gap`
+  (`s ~ U[0, window]` via unbiased integer rejection sampling over a minimal
+  `GapRng` trait) in its **default** build — zero `#[allow(clippy::cast_*)]`, so
+  float-freeness of the wallet's production path is machine-enforced, not a
+  module-boundary claim — and gates the float grading + RNG-generic
+  `certify_draw` self-cert harness behind a `conformance` feature. The published
+  KAT is split along the determinism boundary: `tests/golden_vector.rs` (default
+  features, the **integer** `(spread, order)` sequence, bit-identical and now
+  run on the aarch64 qemu-user lane) and `tests/conformance_grading.rs`
+  (`conformance` feature, float grading, x86-only because float is not
+  bit-identical across arches). **`shekyl-stats`** is the new dependency-free
+  home for the generic primitives (`chi_square_upper_crit`, `Z_ALPHA_1E6`,
+  discrete-uniform chi-square, `lag1_autocorr`); `shekyl-staking-sim` and
+  `shekyl-crypto-pq` (its `enc_label` test, previously carrying duplicated
+  literals) both dedup onto it. No wallet call site yet — the crate is made
+  importable ahead of the unbuilt V3.0 funding flow. Docs:
+  `ARCHIVAL_FIREWALL_GATE6.md` §10.12, `STAKER_ARCHIVAL_SIM.md`,
+  `FOLLOWUPS.md` (funding-seam carry 2 + wallet-wiring + alpha-provenance items).
+
 ### Changed
 
 - **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`

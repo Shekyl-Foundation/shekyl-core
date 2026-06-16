@@ -416,9 +416,25 @@ sustainability is unaffected by the recalibration.
   `(spread, order)` *distribution* over a sample (uniform spread via
   **discrete chi-square GoF** + excess-mass-near-zero; balanced independent order — and
   order-balance alone is insufficient, since the trap's coin still looks fair).
-  Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
-  `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`
-  in `rust/shekyl-staking-sim/src/standoff.rs`. **"Uniform-*independent*" has two
+  Executable reference single-sourced into `rust/shekyl-standoff` (2026-06-16):
+  the float-free `draw::draw_entry_gap` (default features, wallet-importable) +
+  the feature-gated `conformance` instruments (`summarize_gaps`,
+  `population_bond_time`, `max_bin_share`, the double-jitter trap) and the
+  RNG-generic `conformance::certify_draw<R: GapRng>` self-cert harness; the
+  generic goodness-of-fit primitives (`chi_square_upper_crit`, `Z_ALPHA_1E6`,
+  discrete-uniform chi-square, `lag1_autocorr`) live in the dependency-free
+  `rust/shekyl-stats`. The published test vector is split along the determinism
+  boundary: `tests/golden_vector.rs` (default features, the **integer**
+  `(spread, order)` sequence — bit-identical and verified on the aarch64
+  qemu-user lane), and `tests/conformance_grading.rs` (`conformance` feature,
+  the float grading — **x86-only**, because float is not bit-identical across
+  arches; the lane's cross-arch guarantee is the integer sequence, the float
+  stats are graded by margin). **Framing: conformance is wallet self-test, not
+  consensus enforcement** — the anchor is consumer-side and FCMP++-hidden, so
+  nothing on-chain can police the draw; the population/anchor instrument
+  demonstrates "here is what a shared anchor does to you" (paired with the
+  operator-education item), and `certify_draw` is the tool a wallet runs against
+  *its own* CSPRNG. **"Uniform-*independent*" has two
   independence dimensions a marginal gap test cannot see, both now in the suite:**
   (i) **population anchor-independence** — the catastrophic shared-trigger mode
   (epoch-snapped anchors pass the gap test but cluster absolute bond times → set
@@ -461,6 +477,35 @@ sustainability is unaffected by the recalibration.
   `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
   caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
   1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+
+- **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
+  importable surface; 2026-06-16).** The `shekyl-standoff` crate is now
+  wallet-importable (default-feature `draw_entry_gap`, CSPRNG-ready via the
+  `GapRng` trait, self-cert harness under `conformance`), but the V3.0 funding
+  flow is unbuilt, so there is **no wallet call site yet** — this is the
+  tracking item so the wiring is not lost. **Feature split, spelled so the
+  wiring is unambiguous:** the wallet's **production build depends on
+  `shekyl-standoff` with default features** (draw only — float-free, zero
+  cast-allows, the lean production surface); **self-certification runs in the
+  wallet's test build with `features = ["conformance"]` as a dev-feature**,
+  which is where `certify_draw` and the negative-control harnesses
+  (`reference_correlated_sequence`, `shared_anchor_population`) are available.
+  Lands with the funding flow. **Target: V3.0** (with the funding flow).
+
+- **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
+  sensitivity need (separate question; 2026-06-16).** The dedup that moved
+  `chi_square_upper_crit` + `Z_ALPHA_1E6` out of `crypto-pq/label.rs` into
+  `shekyl-stats` is **byte-identical** — `label.rs`'s indistinguishability test
+  keeps the exact `1e-6` it had. But `1e-6` is the **conformance-gate** alpha
+  (chosen strict so a *correct wallet* essentially never false-fails a gross
+  antipattern). Whether `1e-6` is the right alpha for `label.rs`'s
+  uniformity-of-ciphertext test is a **different** question: a guard against
+  *subtle* derivation bias wants a **more powerful (less strict)** alpha, since
+  `1e-6` only rejects gross non-uniformity. If the label test's `1e-6` was
+  inherited by copying the standoff helper rather than chosen for its own
+  sensitivity need, that should be examined — flagged here so canonicalizing the
+  constant in `shekyl-stats` does not silently launder an unexamined alpha
+  choice. **Not the dedup PR's scope. Target: V3.x.**
 
 - **`HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope + pre-seal
   sim reconciliation (decided 2026-06-15).** The full bond lifecycle

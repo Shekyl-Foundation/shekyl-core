@@ -1235,6 +1235,14 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   symmetric entry/exit = two independent 600-block draws, each free on its own seam — state the exit
   one explicitly. **Width is the expensive axis** (proven rate-driven); the cheap thin-regime levers
   are biasing the gap toward the max (600 is already free) and the inversion, not a wider window.
+  **Executable conformance reference (2026-06-16):** single-sourced into the `shekyl-standoff` crate
+  (float-free `draw::draw_entry_gap` in the default build + feature-gated `conformance` instruments
+  and the RNG-generic `certify_draw` self-cert harness a wallet runs against its own CSPRNG), with
+  the generic goodness-of-fit primitives in `shekyl-stats`. The published vector is split along the
+  determinism boundary — the **integer** `(spread, order)` golden vector is bit-identical and verified
+  on the aarch64 CI lane; the float grading is x86-only (float is not cross-arch bit-identical).
+  Conformance is **wallet self-test, not consensus enforcement** (the anchor is consumer-side and
+  FCMP++-hidden). See `FOLLOWUPS.md` §funding-seam carry 2.
 - **CLOSE — pay-every-block / implicit accumulator emission (corrects the pass-3 over-claim).** The
   pass-3 entry claimed accumulator credit "deletes GF-6/GF-10." **That was wrong.** The borrowed
   intuition (a quiet validator lost in the crowd) needs an *anonymous* crowd; Shekyl staker payments

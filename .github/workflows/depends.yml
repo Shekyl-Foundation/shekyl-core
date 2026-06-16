@@ -134,6 +134,16 @@ jobs:
         export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu
         cargo test --locked -p shekyl-archival-retention \
           --target aarch64-unknown-linux-gnu
+        # `shekyl-standoff` default features only: the integer funding-seam
+        # standoff golden vector (`tests/golden_vector.rs`) is the cross-arch
+        # bit-identical guarantee (ARCHIVAL_FIREWALL_GATE6.md §10.12). The
+        # `conformance` float goodness-of-fit probes are deliberately NOT built
+        # here — float is not bit-identical across arches (the same reason
+        # reward-arithmetic is pure-integer), so they stay x86-only and the
+        # lane's guarantee is scoped to the integer (spread, bond_first)
+        # sequence.
+        cargo test --locked -p shekyl-standoff \
+          --target aarch64-unknown-linux-gnu
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}

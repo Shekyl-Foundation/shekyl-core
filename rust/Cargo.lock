@@ -3764,6 +3764,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-generators",
  "shekyl-primitives",
+ "shekyl-stats",
  "thiserror",
  "x25519-dalek",
  "zeroize",
@@ -4271,7 +4272,19 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-standoff",
 ]
+
+[[package]]
+name = "shekyl-standoff"
+version = "3.1.0"
+dependencies = [
+ "shekyl-stats",
+]
+
+[[package]]
+name = "shekyl-stats"
+version = "3.1.0"
 
 [[package]]
 name = "shekyl-tx-builder"

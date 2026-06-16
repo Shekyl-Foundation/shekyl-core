@@ -148,6 +148,11 @@ hex = "0.4"
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
+# Wilson-Hilferty chi-square critical value + strict-alpha normal quantile for
+# the `enc_label` indistinguishability test. Single-sourced from the generic,
+# lint-clean statistics utility (not duplicated as literals, and not a dep on a
+# sim/domain crate); see `rust/shekyl-stats`.
+shekyl-stats = { path = "../shekyl-stats" }
 
 [[bench]]
 name = "pqc_rederivation"

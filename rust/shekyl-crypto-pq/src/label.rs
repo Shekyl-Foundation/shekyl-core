@@ -136,6 +136,11 @@ pub fn encode_request_plaintext(rid: u64) -> Option<[u8; 8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Generic goodness-of-fit primitives are single-sourced in `shekyl-stats`
+    // (a dependency-free statistics utility), not duplicated per-consumer. We
+    // borrow only the Wilson-Hilferty critical value and the strict-alpha
+    // normal quantile — neither carries any label or standoff semantics.
+    use shekyl_stats::{chi_square_upper_crit, Z_ALPHA_1E6};
 
     #[test]
     fn sentinel_round_trip() {
@@ -291,21 +296,5 @@ mod tests {
             chi2_broken > reject,
             "uniformity instrument failed to reject plaintext-on-wire: chi2={chi2_broken:.1} (reject>={reject:.1})"
         );
-    }
-
-    /// Upper-tail standard-normal quantile for α = 1e-6 (z ≈ 4.7534). Same
-    /// constant the staking-sim conformance suite uses
-    /// (`shekyl-staking-sim::standoff`); duplicated here as a literal rather
-    /// than taking a dev-dependency on a sim crate that opts out of the
-    /// workspace cast lints.
-    const Z_ALPHA_1E6: f64 = 4.753_424;
-
-    /// Wilson–Hilferty chi-square upper-tail critical value for `df` degrees of
-    /// freedom at normal upper quantile `z`. Dependency-free; mirrors
-    /// `standoff::chi_square_upper_crit`.
-    fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
-        let a = 2.0 / (9.0 * df);
-        let t = 1.0 - a + z * a.sqrt();
-        df * t * t * t
     }
 }

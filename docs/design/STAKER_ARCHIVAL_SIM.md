@@ -3582,6 +3582,15 @@ but four things bound the result; the first two change the meaning, not just the
   `draw_entry_gap` / `summarize_gaps` in `standoff.rs`, with `correct_draw_is_well_distributed`
   (the correct draw is flat) and `double_jitter_trap_fails_the_same_check` (the same summary rejects
   the trap) as the validating tests.
+  **Single-sourced (2026-06-16):** the executable reference has since moved out of the sim into the
+  `shekyl-standoff` crate (float-free `draw::draw_entry_gap` in the default build; the instruments
+  named here and below — `summarize_gaps`, `population_bond_time` / `max_bin_share`, `lag1_autocorr`,
+  the double-jitter trap — plus the RNG-generic `certify_draw` self-cert harness under the
+  `conformance` feature), with the generic goodness-of-fit primitives (`chi_square_uniform`,
+  `chi_square_upper_crit`, `Z_ALPHA_1E6`) in `shekyl-stats`. The sim now `impl GapRng for SplitMix64`
+  and imports the shared draw + harness; the integer `(spread, order)` golden vector is verified
+  bit-identical on the aarch64 CI lane, the float grading x86-only. See `FOLLOWUPS.md` §funding-seam
+  carry 2 and `ARCHIVAL_FIREWALL_GATE6.md` §10.12.
 - **"Uniform-*independent*" has two independence dimensions a marginal gap test cannot see — both
   must be in the conformance vector.** The uniform/trap checks above nail the *marginal*; they are
   structurally blind to *independence*, and the gap is the wrong input for both failures:

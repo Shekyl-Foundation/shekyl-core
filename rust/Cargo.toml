@@ -15,6 +15,14 @@ members = [
     # year-granular macro `shekyl-economics-sim`. See
     # docs/design/STAKER_ARCHIVAL_SIM.md.
     "shekyl-staking-sim",
+
+    # Funding-seam entry-standoff draw, single-sourced and build-float-free
+    # (docs/design/ARCHIVAL_FIREWALL_GATE6.md §10.12), plus its generic
+    # goodness-of-fit home. `shekyl-standoff` carries the wallet-importable
+    # draw + feature-gated conformance; `shekyl-stats` is the dependency-free
+    # statistics utility both it and `shekyl-crypto-pq` reuse (rule 18).
+    "shekyl-standoff",
+    "shekyl-stats",
     "shekyl-archival-retention",
     "shekyl-engine-rpc",
     "shekyl-tx-builder",
