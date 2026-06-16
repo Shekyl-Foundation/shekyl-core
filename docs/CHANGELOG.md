@@ -24,6 +24,30 @@
   flake (the producer guard from PR #35 that was hard-failing per-PR
   `capture-pr` jobs) is **speculative** — the cause remains unknown (§3.3); the
   upgrade is justified on supported-upstream / debt-reduction grounds.
+- **wallet: CT-5b — curve-tree reference selection + §3.3 ingest verify + C2
+  spendability gate (2026-06-16, `feat/ct-5b-reference-verify`).** Builds on
+  CT-5a's actor/ingest wiring (`docs/design/CT5_ENGINE_WIRING.md` §6):
+  - **§3.3 ingest-time root verify (O5).** After each block is ingested into the
+    curve tree, the reconstructed root must byte-equal the consensus
+    header-committed root (producer range from `block_curve_tree_roots`,
+    backfill from the daemon-fetched block's `header.curve_tree_root`). A
+    mismatch is the inconsistent-liar daemon: a terminal
+    `RefreshError::CurveTreeIngest { recoverable_by_respawn: false }`, before the
+    ledger advances (O2). New production `VerifyRoot` actor message.
+  - **C2 reference-block spendability gate.** Selection now rejects outputs too
+    fresh for the reference block (`eligible_height > tip − REF_ANCHOR_AGE`) with
+    a clean `SendError::OutputNotYetSpendable { eligible_height,
+    reference_block_height, wait_blocks }`, and the pre-maturity window with
+    `SendError::WalletTooYoungToSpend` — distinct from the self-healing
+    `SpendUnavailableRebuilding` (tree lag) and from `InsufficientFunds`.
+  - **Real reference binding.** At send time the reference root is re-derived
+    from the tree (`reference_height = tip − REF_ANCHOR_AGE`; never persisted —
+    derive>hold) and bound into a `ReferenceBlock`, threaded into assembly. The
+    signer still builds synthetic membership paths (the assembler cutover and
+    `assemble_path` are CT-5c); only the reference *selection* is real.
+  KATs pin the §3.3 mismatch rejection, the C2 `OutputNotYetSpendable` wait
+  signal, the too-young window, and the reference-root threading.
+
 - **archival: long-lived `P` is the committed staking-identity architecture — S-5 fork
   consciously closed (2026-06-16).** The last genuinely-structural firewall fork (long-lived vs.
   short-lived/rotating archival pseudonym `P`) is closed in favor of **long-lived `P`**, ratifying
