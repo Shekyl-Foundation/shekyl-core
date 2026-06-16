@@ -598,7 +598,13 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         timestamp: height,
         previous: parent_hash,
         nonce: 0,
-        curve_tree_root: [0u8; 32],
+        // This synthetic block carries no outputs (miner tx, `outputs: vec![]`),
+        // so it contributes zero curve-tree leaves and the tree's reconstructed
+        // root stays the empty-tree sentinel at every height. CT-5b's §3.3
+        // ingest verify compares the reconstructed root against this header
+        // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
+        // pass on the synthetic-block test paths.
+        curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
     };
 
     let miner_prefix = TransactionPrefix {

@@ -373,6 +373,17 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
             context: "curve-tree client poisoned",
             recoverable_by_respawn: true,
         },
+        // §3.3 (CT-5b, O5): the reconstructed root diverged from the consensus
+        // header-committed root. Terminal — a respawn re-derives the same root
+        // from the same store, so it reproduces the mismatch rather than
+        // healing it. Distinct context so an auditor reads the lying-daemon DoS
+        // apart from a generic client rejection.
+        CurveTreeHandleError::Client(ClientError::RootMismatch { .. }) => {
+            RefreshError::CurveTreeIngest {
+                context: "curve-tree root mismatch vs header",
+                recoverable_by_respawn: false,
+            }
+        }
         CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
             context: "curve-tree client rejected ingest",
             recoverable_by_respawn: false,
@@ -470,6 +481,21 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         });
     }
 
+    // §3.3 (CT-5b): index the producer's per-height consensus header roots for
+    // the verify-after-ingest in the loop below. A duplicate height is a
+    // producer-contract violation (same discipline as `block_leaves` and
+    // `block_hashes`). Backfill heights below `range_start` are not in this map
+    // (the producer only emits roots for its scanned range); their header root
+    // comes from the daemon-fetched block instead.
+    let mut producer_roots: BTreeMap<u64, [u8; 32]> = BTreeMap::new();
+    for (height, root) in &result.block_curve_tree_roots {
+        if producer_roots.insert(*height, *root).is_some() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_curve_tree_roots contains duplicate height",
+            });
+        }
+    }
+
     // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
     // the new fork. `fork_height` is the first divergent height (validated
     // ≥ 1 below), so the last common height to keep is `fork_height - 1`.
@@ -511,7 +537,9 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             break;
         }
 
-        let leaves = if next < range_start {
+        // Acquire the block's leaves and the header root the §3.3 verify must
+        // match. Both branches yield the pair so the verify below is uniform.
+        let (leaves, expected_root) = if next < range_start {
             // Genesis/birthday backfill: tree-only daemon fetch + decode.
             let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
                 context: "backfill height exceeds usize",
@@ -525,12 +553,19 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
                         detail: e.to_string(),
                     })
                 })?;
-            Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
-                RefreshError::CurveTreeIngest {
-                    context: "backfill block decode failed",
-                    recoverable_by_respawn: false,
-                }
-            })?)
+            let leaves =
+                Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
+                    RefreshError::CurveTreeIngest {
+                        context: "backfill block decode failed",
+                        recoverable_by_respawn: false,
+                    }
+                })?);
+            // Backfill heights are below the producer's scanned range, so their
+            // header root is not in `producer_roots`; take it from the
+            // daemon-fetched block. The §3.3 verify still gates it: a daemon
+            // serving leaves that don't reconstruct to its own header root
+            // fails loudly below.
+            (leaves, block.block.header.curve_tree_root)
         } else {
             // Producer range: reuse the materialized leaves (no re-fetch).
             // `Arc::clone` is a refcount bump, not a deep copy, and crucially
@@ -540,16 +575,37 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             // (R1-Q4). Heights already persisted are skipped by the cursor, so
             // a retained entry is never re-ingested — it just drops with the
             // map at end of the (batch-bounded) producer range.
-            producer_leaves
+            let leaves = producer_leaves
                 .get(&next)
                 .ok_or(RefreshError::MalformedScanResult {
                     reason: "block_leaves missing a height in processed_height_range",
                 })?
-                .clone()
+                .clone();
+            let expected_root =
+                *producer_roots
+                    .get(&next)
+                    .ok_or(RefreshError::MalformedScanResult {
+                        reason: "block_curve_tree_roots missing a height in processed_height_range",
+                    })?;
+            (leaves, expected_root)
         };
 
         curve_tree
             .ingest(BlockHeight(next), leaves)
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+
+        // §3.3 ingest-time integrity verify (CT-5b, O5 lying-daemon defense).
+        // The root the tree reconstructs for `next` must byte-equal the
+        // consensus header-committed root. A mismatch is the inconsistent liar
+        // (bad leaves, honest header): fail loudly and terminally — a respawn
+        // re-derives the same root, so it is not recoverable — never advancing
+        // the ledger past tree state we cannot reproduce (O2/ack-before-commit;
+        // the merge runs only after this pre-pass returns `Ok`). The consistent
+        // liar (bad leaves + matching bad header) passes here and is caught at
+        // consensus submit — still DoS, never a witness leak.
+        curve_tree
+            .verify_root(BlockHeight(next), expected_root)
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }

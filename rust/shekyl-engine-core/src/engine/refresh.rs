@@ -3542,6 +3542,11 @@ mod start_refresh_integration_tests {
         let mut forward = ScanResult::empty_at(1, None);
         forward.processed_height_range = 1..6;
         forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
+        // at every height, so the producer's header roots are the sentinel.
+        forward.block_curve_tree_roots = (1..6)
+            .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+            .collect();
         {
             let g = arc.read().await;
             g.ingest_scan_result_into_curve_tree(&mut forward)
@@ -3562,6 +3567,9 @@ mod start_refresh_integration_tests {
         reorg.processed_height_range = 3..5;
         reorg.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 3 });
         reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
+        reorg.block_curve_tree_roots = (3..5)
+            .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+            .collect();
         {
             let g = arc.read().await;
             g.ingest_scan_result_into_curve_tree(&mut reorg)
@@ -3611,6 +3619,11 @@ mod start_refresh_integration_tests {
         let mut forward = ScanResult::empty_at(1, None);
         forward.processed_height_range = 1..6;
         forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
+        // at every height, so the producer's header roots are the sentinel.
+        forward.block_curve_tree_roots = (1..6)
+            .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+            .collect();
         {
             let g = arc.read().await;
             g.ingest_scan_result_with_respawn(&mut forward)
@@ -3654,6 +3667,9 @@ mod start_refresh_integration_tests {
         let mut forward2 = ScanResult::empty_at(6, None);
         forward2.processed_height_range = 6..8;
         forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
+        forward2.block_curve_tree_roots = (6..8)
+            .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+            .collect();
         {
             let g = arc.read().await;
             g.ingest_scan_result_with_respawn(&mut forward2)
@@ -3710,6 +3726,44 @@ mod start_refresh_integration_tests {
                 .expect("cursor read"),
             None,
             "the curve tree must not advance on a rejected malformed range",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_rejects_header_root_mismatch() {
+        // §3.3 / O5 (the lying-daemon defense, CT-5b's load-bearing KAT). A
+        // daemon serving leaves that do not reconstruct to the consensus
+        // header-committed root it claims is the inconsistent liar. The
+        // ingest-time verify must reject it *terminally* — a respawn re-derives
+        // the same root, so it is not recoverable — and the refresh pre-pass
+        // returning `Err` means the ledger merge never runs (O2: the ledger
+        // never advances past tree state the wallet cannot reproduce).
+        let daemon_seed = derive_seed(&[0x3c; 32], ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Genesis (height 0) backfills from the TestDaemon (honest sentinel
+        // root, passes); height 1 carries empty leaves — which reconstruct to
+        // the sentinel — but the producer claims a *different* header root.
+        let mut bad = ScanResult::empty_at(1, None);
+        bad.processed_height_range = 1..2;
+        bad.block_leaves = vec![(1, Vec::new())];
+        bad.block_curve_tree_roots = vec![(1, [0xAB; 32])];
+
+        let g = arc.read().await;
+        let err = g
+            .ingest_scan_result_into_curve_tree(&mut bad)
+            .await
+            .expect_err("a header-root mismatch must fail ingest");
+        assert!(
+            matches!(
+                err,
+                RefreshError::CurveTreeIngest {
+                    context,
+                    recoverable_by_respawn: false,
+                } if context.contains("root mismatch")
+            ),
+            "expected a terminal root-mismatch CurveTreeIngest, got {err:?}",
         );
     }
 
@@ -4146,6 +4200,10 @@ mod start_refresh_integration_tests {
             .iter()
             .map(|b| (b.height, b.leaves.clone()))
             .collect();
+        // CT-5b §3.3: carry the Tier-A oracle's consensus header root per
+        // height so the ingest-time verify passes the honest path (the same
+        // roots the `root_at` assertions below check against).
+        r.block_curve_tree_roots = blocks.iter().map(|b| (b.height, b.root)).collect();
         r
     }
 
@@ -4277,6 +4335,11 @@ mod start_refresh_integration_tests {
             .iter()
             .filter(|b| b.height > fork)
             .map(|b| (b.height, b.leaves.clone()))
+            .collect();
+        reorg.block_curve_tree_roots = deep
+            .iter()
+            .filter(|b| b.height > fork)
+            .map(|b| (b.height, b.root))
             .collect();
         g.ingest_scan_result_into_curve_tree(&mut reorg)
             .await
