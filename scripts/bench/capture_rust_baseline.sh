@@ -449,7 +449,7 @@ envelope = {
         "rustc_version": os.environ["RUSTC_VER"],
         "cargo_version": os.environ["CARGO_VER"],
         "valgrind_version": os.environ["VALGRIND_VER"],
-        "iai_callgrind_runner_version": os.environ["IAI_RUNNER_VER"],
+        "gungraun_runner_version": os.environ["GUNGRAUN_RUNNER_VER"],
     },
     "criterion": criterion_entries,
     "iai_callgrind": iai_entries,
