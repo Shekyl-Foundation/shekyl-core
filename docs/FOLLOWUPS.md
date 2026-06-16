@@ -475,15 +475,21 @@ sustainability is unaffected by the recalibration.
   recompute) and FFI delegation, moved where needed. There is **no C++→Rust port** — these
   kinds are Rust from genesis, and wallet-side construction is Rust per the 100%-Rust wallet.
   Three sub-items, in order:
-  (1) **FSM friction pin** — `PHASE_2B_FSM_RETOOL.md` gains the partial-unbond action,
-  per-shard release-cooldown semantics on drop, and the slashable-when boundary (dropped
-  shard's collateral stays liable through cooldown — no drop-and-run to dodge a pending
-  slash). These are the *inputs* to (2). **Mutable-holdings consequence to resolve here:**
+  (1) **FSM friction pin — spec landed (2026-06-15) as `PHASE_2B_FSM_RETOOL.md` §P2B-7.**
+  The doc now carries the voluntary add/drop transition edges + actions, per-shard
+  release-cooldown semantics on drop (`collateral-in-cooldown` sub-condition held *inside*
+  `Bonded`), the slashable-when boundary (Pin 3: dropped collateral stays liable through
+  cooldown — no drop-and-run; forecloses T-A15b), drop-last-shard-rejected (use `Unbond`),
+  and per-shard `E_add+1` counting. These are the *inputs* to (2). **Mutable-holdings
+  consequence — read rule pinned (P2B-7 Pin 4), implementation open:**
   `BlockchainLMDB::has_archival_bond_shard` (`db_lmdb.cpp`) currently returns *tip* holdings
   and ignores `at_height` — sound only while holdings were immutable. With mid-life add/drop,
   "holds shard now" ≠ "held shard at `at_height`", so the serve-credit-window membership check
-  must be reconciled with mutable holdings (or backed by the per-`(P,s,E)` retention bits,
-  which gate-4 §4.4 already designates as the ground truth rather than the mutable descriptor).
+  must read the per-`(P,s,E)` retention bits / `bond_event_log` intervals (gate-4 §4.4 ground
+  truth) rather than the mutable descriptor. **Open:** land the `at_height`-honoring read (or
+  contract-restrict the function to current-membership questions and reroute historical
+  callers) in the `shekyl-archival-retention` connect paths; land the per-shard `E_add+1`
+  verify/connect rule.
   (2) **Age-stratified sim reconciliation (pre-seal dependency).** The staker sim today
   abstracts cooldown + partial-slash + capital-lockup into a single **flat seating cost**
   (`STAKER_ARCHIVAL_SIM.md` §*steady-state frame* item 6) and models bond churn as

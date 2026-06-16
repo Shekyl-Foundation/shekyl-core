@@ -1,8 +1,9 @@
 # Phase 2b — `StakeState` FSM retool (rebased substrate)
 
-**Status:** **P2B-1 confirmed; P2B-4 expanded; R1 + R1b + G4-1–G4-7 closed (2026-06-07).**
+**Status:** **P2B-1 confirmed; P2B-4 expanded; R1 + R1b + G4-1–G4-7 closed (2026-06-07);
+P2B-7 `HoldingsUpdate` friction pinned (genesis, 2026-06-15).**
 join-Market seam (lag-forced); gate-4 wire lean **(b)** `txin_archival_bond_post` incl.
-`Unbond` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)).
+`Unbond` + `HoldingsUpdate` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)).
 Supersedes [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) **§3–§5.2** (claim-era
 FSM) until those sections are rewritten against this doc.
 
@@ -190,6 +191,15 @@ Only last-shard slash (or CompleteTree whole) → `bonded_total == 0` → **`Sla
 must surface slash cause (which shard) for re-bond hygiene; must not conflate partial slash
 with `Slashed` transition.
 
+**Voluntary holdings adjustment (`HoldingsUpdate`, genesis — P2B-7):** add/drop one shard
+shares the partial-slash *shape* — `bonded_total` and `holdings` mutate in-place, `P` **stays
+`Bonded`** — but differs on three load-bearing points: (1) it is **voluntary** (a self-posted
+`txin_archival_bond_post` `post_kind = HoldingsUpdate`), not consensus-imposed; (2) the dropped
+shard's released `FLOOR` enters a **per-shard release cooldown** rather than returning at once;
+(3) the dropped collateral **stays slashable** through that cooldown so a voluntary drop cannot
+dodge an in-flight challenge. Friction semantics, the slashable-when boundary, and the
+mutable-holdings serve-credit reconciliation are pinned in **P2B-7**.
+
 **`Exited` refinements:**
 
 1. **Not claim-terminal.** E-3: pre-exit good epochs claimable within `W`. Emit-backlog
@@ -288,6 +298,8 @@ on the wire matches the function decomposition. Re-bond needs (b) regardless.
 |------|-------|-----|
 | — | HKDF derive `P` (§9.4) | `AdmissionPending` |
 | `AdmissionPending` | **join-Market** confirm (bond-post vin; record + `E_join`) | `Bonded` |
+| `Bonded` | **HoldingsUpdate add shard** (credit `+FLOOR`; holdings grows) | `Bonded` |
+| `Bonded` | **HoldingsUpdate drop shard** (debit `FLOOR`; **≥1 shard remains**; dropped collateral → per-shard release cooldown, stays slashable) | `Bonded` |
 | `Bonded` | Partial slash (shard dropped; bond > 0) | `Bonded` |
 | `Bonded` | Terminal slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Standalone re-bond (gate-4) | `Bonded` |
@@ -310,6 +322,8 @@ emission is the first emit action within `Bonded`:
 | Fund admission | `AdmissionPending` | Ordinary transfer to `P` |
 | Emit | `Bonded` / `Slashed` / `Exited` | `txin_archival_reward_emission`, batch ≤ 15. **Emit-new:** `Bonded` + `good_standing`. **Emit-backlog:** any of three + `good_through(E)` + `W` + dedup |
 | Rotate backing | `Bonded` | Membership-only; updates `backing_outputs`; no state change |
+| HoldingsUpdate add shard | `Bonded` | `txin_archival_bond_post` `post_kind = HoldingsUpdate`; `bond_credit = +FLOOR`; new shard's serve begins, counted/claimable for that shard from `E_add + 1` (per-shard R1b) |
+| HoldingsUpdate drop shard | `Bonded` (**≥1 shard remains**) | `post_kind = HoldingsUpdate`; `bond_debit = FLOOR`; dropped collateral enters **per-shard release cooldown** (P2B-7) and **stays slashable** through it — no drop-to-dodge. Dropping the last shard is rejected; use `Unbond` (→ `Exited`) |
 | Exit / drain | `Bonded` / `Slashed` | Decorrelated `P`→principal — **non-escrowed** outputs only |
 | Unbond | `Exited` (post-cooldown) | Gate-4 collateral return; independent of backlog emit (`W`) |
 
@@ -334,6 +348,7 @@ never authoritative locally.
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
 | **R4** | Grace-window GUI surfacing (**G1a — priority-1 UX**) | §7 G1 + gate-6 §5 |
+| **P2B-7** | `HoldingsUpdate` FSM/read pins (genesis); open: per-shard `E_add+1` connect rule, age-stratified sim reconciliation (seal-gating) | gate-4 §4.4; `shekyl-archival-retention`; Step 3 sim |
 | **Substrate verify** | **Closed (2026-06-07)** — LMDB pattern on `dev` verified; bond wire greenfield | PHASE_2B §7.11 |
 
 ---
@@ -374,7 +389,9 @@ claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](PH
 **Closed in review:**
 
 - [x] F1 — conditionally finally accepted (T-A1 v2); SEB **not** F1 lever; timing cluster pinned.
-- [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion) + T-A17 (join censorship, low).
+- [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion — now structurally foreclosed by
+  P2B-7 Pin 3: dropped collateral stays slashable through cooldown) + T-A17 (join
+  censorship, low).
 - [x] G11 — positive KAT invariants G11-E1/E2/E3; full-node vs light-client split.
 - [x] G1 — three-tier surfacing; partial slash stays `Bonded` (FSM amended).
 - [x] LMDB substrate verify on `dev` — pattern clean (§7.11).
@@ -383,10 +400,115 @@ PHASE_2B §3.1–§3.4 + §7 landed. §4–§6 still claim-era. **T-A1** blocks 
 
 ---
 
+## P2B-7 — `HoldingsUpdate` friction pin (genesis; FSM + consensus-read consequences)
+
+### Why now
+
+`HoldingsUpdate` (voluntary add/drop of one held shard) was deferred-V3.1; **promoted to
+V3.0 (2026-06-15)** — the bond lifecycle is consensus-state-machine balance, so adding
+mid-life shard adjustment post-genesis is a hard fork (gate-4 §4.4). The bond *wire* and the
+*principle* land in gate-4; this section pins the pieces that are **FSM-state and
+consensus-read** consequences PHASE_2B owns, so the retool and the
+`shekyl-archival-retention` connect paths implement them rather than inherit a tip-holdings
+assumption that no longer holds.
+
+All bond-lifecycle verify/connect logic is **Rust-native** (`shekyl-archival-retention`);
+the C++ daemon delegates via FFI (gate-4 §6, FOLLOWUPS V3.0). The pins below are
+specification, not C++ behavior.
+
+### Pin 1 — both adjustments stay `Bonded`; floor mutates in-place
+
+Add and drop both keep `P` in `Bonded` (transition graph above). `bonded_total_atomic` and
+`holdings` move together under the `== bond_floor(holdings)` pin (gate-4 §3.2, §3.5 step 4).
+Dropping the **last** shard is rejected at verify (post-state holdings must be non-empty);
+full exit is `Unbond` (→ `Exited`). This keeps `HoldingsUpdate` total-preserving on the FSM:
+it never lands in `Slashed` or `Exited`.
+
+### Pin 2 — per-shard release cooldown (the friction)
+
+A dropped shard's released `FLOOR` does **not** return at the drop confirm. It enters the
+**per-shard release cooldown** measured from that shard's `last_served_epoch` (gate-4 §4.4,
+§4.3 asymmetry table). While `P` continues serving its remaining shards in `Bonded`, the
+dropped shard's collateral sits in a **`collateral-in-cooldown` sub-condition** — the same
+sub-condition `Exited` carries for whole-record `Unbond`, but scoped to one shard and held
+**inside `Bonded`**. It is a predicate on the bond record (`bond_event_log` drop interval +
+per-shard cooldown), **not** a new FSM state. The freed capital cannot recycle into a fresh
+shard until cooldown elapses; this is the deep-tail mobility friction the sim must model
+age-stratified (Pin 5).
+
+Add (top-up) carries no cooldown: `bond_credit = +FLOOR` is immediate; the new shard's
+serve obligations begin at the add confirm.
+
+### Pin 3 — slashable-when boundary (no drop-to-dodge)
+
+The dropped shard's collateral **stays slashable through its cooldown**. A voluntary drop
+must not let `P` escape a challenge that was in-flight or within the challenge window for
+shard *s* at the drop height. Concretely: a `slash(P,s)` triggered by a
+`challenge_failed(P,s,E)` whose deadline falls on or before the cooldown expiry **still
+applies** to the cooling collateral (gate-4 §4.2 atomic write set), even though `s` is no
+longer in current `holdings`. This is the exact rationale §4.3 gives for the `Unbond`
+cooldown ("no pending challenge can still slash for epochs after `P` stopped serving"),
+applied per-shard. Without it, `HoldingsUpdate` drop is a slash-evasion lever (T-A15b).
+
+The **retention-commitment horizon** (`bond_duration(age)`, gate-4 §3.4/§4.3) is the
+*earlier* gate: a shard younger than its horizon is **ineligible for voluntary drop at all**.
+Pin 3 governs the window *after* an eligible drop is posted; the horizon governs whether the
+drop may be posted.
+
+### Pin 4 — mutable-holdings serve-credit reconciliation (the consensus-read fix)
+
+With immutable holdings, "does `P` hold shard *s* now?" was a sound proxy for "did `P` hold
+*s* at `at_height`?" — so reads keyed on tip holdings (e.g.
+`BlockchainLMDB::has_archival_bond_shard(p_id, s, at_height)`) ignored `at_height`. **Under
+mutable holdings this proxy is invalid:** `P` may have served *s*, dropped it, or added it
+between `at_height` and tip.
+
+**Reconciliation principle (gate-4 §4.4 safety, promoted to a read rule):** serve-credit,
+challenge-eligibility, and `work_P(E)` accounting read the **immutable per-`(P,s,E)`
+retention bits** (gate-2 ground truth) and the `bond_event_log` membership intervals — **not**
+the current `holdings` descriptor. The descriptor answers "current membership / current floor /
+current serve obligation"; the bits answer "did `P` serve *s* in epoch `E`." Any read that
+needs the historical answer must consult bits/intervals, not tip holdings.
+
+**Action item:** `has_archival_bond_shard` (and any sibling tip-holdings read used for a
+historical question) must either (a) take and honor `at_height` against the
+`bond_event_log`/retention bits, or (b) be restricted by name/contract to current-membership
+questions only, with historical callers rerouted to the bits. Resolved as part of the
+`shekyl-archival-retention` connect-path work (FOLLOWUPS V3.0); flagged in
+`src/blockchain_db/lmdb/db_lmdb.cpp`.
+
+### Pin 5 — added-shard counting + sim dependency
+
+- **Per-shard `E_add + 1`.** A shard added mid-life is counted/claimable for that shard from
+  `E_add + 1` (the per-shard analogue of R1b's `E_join + 1`); the partial add epoch is
+  forfeited for *s*. The record-level `E_join` is unchanged. This keeps "counted ⟺ claimable
+  ⟺ shard present at E-close + good_standing" deterministic per shard.
+- **Sim is a pre-seal dependency.** The sim modeled bond churn as frictionless per-epoch
+  acquire/drop. Pins 2–3 make real mobility **age-stratified** (cooldown + `bond_duration`
+  worst on the deep tail, where the +1 deep-tail replica margin lives). The reconciliation
+  must model friction age-stratified — not re-tune a flat seating cost to a network average,
+  which stays structurally optimistic on the binding deep-tail constraint. Gates the
+  genesis-seal redundancy-floor re-derivation (Step 3; `STAKER_ARCHIVAL_SIM.md` §*steady-state
+  frame* item 6).
+
+### P2B-7 exit
+
+- [x] FSM transition edges + actions for add/drop (above).
+- [x] Friction semantics pinned: per-shard cooldown (Pin 2), slashable-when (Pin 3),
+  drop-last-shard rejected (Pin 1).
+- [x] Mutable-holdings serve-credit read rule pinned (Pin 4); `has_archival_bond_shard`
+  flagged for the connect-path work.
+- [ ] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
+  (gate-4 connect paths, FOLLOWUPS V3.0).
+- [ ] **Age-stratified sim reconciliation** (Step 3) — gates the seal.
+
+---
+
 ## Forward order
 
 ```text
 T-A1 sim (F1 gate) → numeric cluster values → §4–§5 retool
+HoldingsUpdate (P2B-7) → age-stratified sim reconciliation → genesis-seal redundancy floor
 ```
 
 P2B-1, R1, R1b, custody, G4-3, **§3 FSM graph** closed. P2B-5 largely closed (gate-4 §5).
@@ -396,6 +518,12 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-06-15:** P2B-7 — `HoldingsUpdate` promoted deferred-V3.1 → **V3.0 (genesis)**. FSM
+  transition edges + actions for voluntary add/drop; friction pins (per-shard release
+  cooldown, slashable-through-cooldown anti-dodge, drop-last-shard rejected); mutable-holdings
+  serve-credit read rule (retention bits / `bond_event_log` are ground truth, not tip
+  holdings — `has_archival_bond_shard`/`at_height` flagged); per-shard `E_add+1` and
+  age-stratified sim reconciliation carried as seal-gating opens. T-A15b foreclosed by Pin 3.
 - **2026-06-07 (h):** P2B-6 review r1; partial-slash FSM; R4/G1a elevation; substrate verify item.
 - **2026-06-07 (g):** PHASE_2B §3.1–§3.4 archival FSM landed; P2B-1 §3.3.3 closed;
   `ARCHIVAL_TIMING_CONSTANTS.md` stub; forward order → §7 then numeric values.
