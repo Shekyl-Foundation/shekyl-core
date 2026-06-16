@@ -4,6 +4,19 @@
 
 ### Changed
 
+- **archival: long-lived `P` is the committed staking-identity architecture — S-5 fork
+  consciously closed (2026-06-16).** The last genuinely-structural firewall fork (long-lived vs.
+  short-lived/rotating archival pseudonym `P`) is closed in favor of **long-lived `P`**, ratifying
+  what serve-credit accrual, lock tiers, `bond_duration`, the L18 freeze-friction seal, and
+  bond-as-consensus-balance already assume — making the decision-by-accumulation explicit rather
+  than latent. Short-lived/rotating `P` is out of scope for V3.0 (it would require a
+  bond-migration-between-identities consensus op, reopening the bond FSM and the gate-4 §3.2
+  custody seal). The surviving privacy question is *characterization* of the long-lived handle's
+  fusion surface (S-2 exposure ledger + S-3 adversary sim + operator-behavior levers), not a
+  protocol re-fork. Reopen criterion (per `21-reversion-clause-discipline.mdc`): a measured S-2/S-3
+  per-`P` attribution breach severe enough to reconsider the confidential-staking rejection, via a
+  fresh `PHASE_2B` model-level round. Docs: `ARCHIVAL_FIREWALL_GATE6.md` (§10 S-5 + revision
+  2026-06-16).
 - **archival: GF-1-carve resolved — dedicated bond-spend key authorizes bond debits
   (2026-06-16, `feat/gf1-dedicated-bond-spend-key`).** Releasing bonded collateral
   (`bond_debit`: `Unbond`, `HoldingsUpdate` drop-shard) is now authorized by a **dedicated

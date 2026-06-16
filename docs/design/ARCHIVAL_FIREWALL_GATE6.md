@@ -1121,16 +1121,37 @@ cross-referenced to their home docs.
   **cannot be closed at the network layer** — it must be labeled traceable-to-that-decision so no
   further R3/R4 cycles are spent trying to fix it where it cannot be fixed. Home: the staking-model
   decision record (confidential-staking rejection).
-- **S-5 — longevity-vs-privacy is a model-level question to answer before the seal (not an R3/R4
-  mitigation).** The economics reward a **long-lived `P`** (serve-credit accrual to a stable id,
+- **S-5 — RESOLVED 2026-06-16 (long-lived `P` is the committed architecture).** *Was:*
+  longevity-vs-privacy is a model-level question to answer before the seal (not an R3/R4
+  mitigation). The economics reward a **long-lived `P`** (serve-credit accrual to a stable id,
   lock tiers, `bond_duration`) — the worst possible structure for the bridge: a permanent handle
   with a monotonically growing fusion surface. We inherited long-lived `P` from the staking model
-  without asking. **But the answer is open, and one branch reopens the FSM just pinned:** a
+  without asking. **One branch reopens the FSM just pinned:** a
   short-lived `P` *relocates* the seam (value-out fusion → repeated value-in funding, a fresh GF-7
   per rotation) and collides with bond-as-consensus-balance — rotating `P` means *migrating bond
   between identities*, a new consensus operation, not a wallet choice (reopens §6 / R-1). The answer
-  space also includes "long-lived but with uniform per-epoch behavior and a large set." Confront at
-  the model level pre-seal; do not mitigate downstream. Home: staking model / `PHASE_2B`.
+  space also includes "long-lived but with uniform per-epoch behavior and a large set."
+
+  **Disposition (consciously closed, per `21-reversion-clause-discipline.mdc`).** The
+  long-lived-vs-short-lived *architectural* fork is **closed in favor of long-lived `P`**. This
+  ratifies what every downstream commitment already assumes — serve-credit accrual to a stable id,
+  lock tiers, `bond_duration` (gate-4 §4.4), the L18 freeze-friction seal
+  ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)), and bond-as-consensus-balance (gate-4 §3.2)
+  — so it is now a **decided** architecture, not an inherited-unexamined one. The decision-by-
+  accumulation is hereby made explicit rather than left latent. **Short-lived / rotating `P` is
+  out of scope for V3.0:** it would relocate the seam and require bond-migration-between-identities
+  as a new consensus op (reopening the §6/R-1 FSM and the gate-4 §3.2 custody seal), and the unwind
+  cost grows with every commitment built on the long-lived assumption. **What remains is not a
+  re-fork but the privacy *characterization* of the long-lived handle's fusion surface**, which
+  folds into **S-2** (fused exposure ledger) + **S-3** (funding/exit adversary sim) and the
+  operator-behavior levers (uniform per-epoch activity, large serving set) routed to the S-2
+  exposure ledger + opsec guide — documentation and ops, not a protocol change. **Reopen
+  criterion:** reopen the architectural fork *only* if the S-2/S-3 characterization **measures**
+  public per-`P` attribution exposure severe enough to reconsider the confidential-staking
+  rejection (the §10 pass-4 framing) — a measured-breach finding, not a design preference.
+  **Reopen shape:** a fresh model-level round in the staking model / `PHASE_2B` that owns the
+  bond-migration consensus-op design short-lived `P` requires, before any V-next seal. Home:
+  staking model / `PHASE_2B`.
 - **S-6 — key locality: the always-on serving box must hold only the `P`-subtree, never the master
   seed.** Everything-from-one-seed, run-from-one-wallet puts the **most-exposed machine** (always-on
   `.onion` server) on the **most-sensitive root**. This is fixable **without surrendering
@@ -1251,9 +1272,11 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
 
 **Prioritization (pre-seal):** (1) build the fused exposure ledger (S-2 — cheap, tells you whether
 the seams compose); (2) put a minimal adversary sim on the funding/exit timing seams (S-3 — the
-actual linkage); (3) answer the longevity-vs-privacy question at the model level (S-5). The walls
-(crypto + network) are in good shape; the **doors (GF-7/GF-4) and the floor plan (S-5) are where the
-work is.** S-2 and S-3 are the privacy axis of the R-3 reconciliation that already gates the seal.
+actual linkage). The **S-5 longevity fork is consciously closed** (long-lived `P` committed,
+2026-06-16); its surviving privacy *residual* is exactly (1)+(2) — characterize the long-lived
+handle's fusion surface, do not re-fork the architecture. The walls (crypto + network) are in good
+shape; the **doors (GF-7/GF-4)** are where the remaining privacy work is. S-2 and S-3 are the
+privacy axis of the R-3 reconciliation that already gates the seal.
 
 ---
 
@@ -1272,6 +1295,16 @@ work is.** S-2 and S-3 are the privacy axis of the R-3 reconciliation that alrea
 
 ## Revision history
 
+- **2026-06-16 (S-5 consciously closed — long-lived `P` committed):** The last genuinely-structural
+  fork (long-lived vs. short-lived `P`) is closed in favor of **long-lived `P`** per
+  `21-reversion-clause-discipline.mdc` — ratifying what serve-credit accrual, lock tiers,
+  `bond_duration`, the L18 freeze seal, and bond-as-consensus-balance already assume, so the
+  decision-by-accumulation is now explicit rather than latent. Short-lived/rotating `P` is out of
+  scope for V3.0 (would require a bond-migration consensus op, reopening §6/R-1 + gate-4 §3.2). The
+  surviving privacy residual is *characterization*, not a re-fork: folds into S-2 (exposure ledger)
+  + S-3 (adversary sim) + operator-behavior levers. Named reopen criterion: a **measured** S-2/S-3
+  per-`P` attribution breach severe enough to reconsider the confidential-staking rejection, via a
+  fresh `PHASE_2B` model-level round. §10 S-5 bullet + Prioritization prose updated. Docs-only.
 - **2026-06-16 (GF-1-carve resolved — dedicated bond-spend key):** Bond-debit authorization is a
   dedicated **`bond_spend_pk`** (hybrid `scheme_id = 1`), committed into `ArchivalBondRecord` at
   `JoinMarket` and immutable, **never** the account identity key — so authorizing a value-out no
