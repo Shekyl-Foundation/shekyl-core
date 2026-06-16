@@ -75,8 +75,10 @@
 //! against the guarded `(LedgerBlock, LedgerIndexes)` pair.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
+use shekyl_curve_tree::{BlockHeight, ClientError};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
@@ -86,11 +88,14 @@ use crate::{
         rewind_matched_payment_requests_after_reorg,
     },
     engine::{
+        curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
+        curve_tree_decode,
+        error::IoError,
         local_ledger::LocalLedger,
         traits::{DaemonEngine, LedgerEngine},
         Engine, EngineSignerKind, RefreshError,
     },
-    scan::{ScanResult, StakeEvent},
+    scan::{OwnedTxLeaves, ScanResult, StakeEvent},
 };
 
 // `D: DaemonEngine` private-bound: see the rationale on the
@@ -241,6 +246,314 @@ impl<
         );
         Ok(())
     }
+
+    /// Feed the curve tree the heights carried by `result` **before** the
+    /// ledger merge commits them — the ack-before-commit half of CT-5 §3.2
+    /// (R1-Q2) under the fork-three genesis-anchored feed (§3.2.1). The tree
+    /// is updated and acknowledged here so [`Self::apply_scan_result`] can
+    /// advance the ledger knowing the tree already covers the range; the
+    /// ledger tip never outruns the tree (O2).
+    ///
+    /// # Cursor-driven (D2)
+    ///
+    /// Every iteration reads the tree's own
+    /// [`super::curve_tree_actor::CurveTreeHandle::ingested_tip_height`] and
+    /// ingests `tip + 1` (`BlockHeight(0)` when the tree is fresh). The
+    /// driver holds **no** local fetch frontier, which makes counter/cursor
+    /// drift unrepresentable: it is idempotent under the refresh retry loop
+    /// (a merge that failed [`RefreshError::ConcurrentMutation`] left the tree
+    /// ahead of the ledger; the re-produced result is skipped up to the tip)
+    /// and resumes correctly after a reorg rollback.
+    ///
+    /// # Two leaf sources, one consecutive feed (§3.2.1 R3-Q1)
+    ///
+    /// - Heights below the producer's floored range — the genesis/birthday
+    ///   backfill, `[tip + 1, range.start)` — are daemon-fetched and decoded
+    ///   here (tree-only fetch; the owned-output scanner never descends here).
+    /// - Heights in `[range.start, range.end)` reuse the producer's
+    ///   already-materialized `result.block_leaves` (fetch-once).
+    ///
+    /// # Reorg
+    ///
+    /// When `result.reorg_rewind` is present its `fork_height` is the first
+    /// *divergent* height (`find_fork_point` returns `h + 1`); the tree is
+    /// rolled back to keep `fork_height - 1` (the last common height) so the
+    /// cursor-driven loop re-ingests the new fork's blocks. The rollback fires
+    /// only when the tree actually holds an orphaned suffix
+    /// (`tip >= fork_height`); a tree still backfilling below the fork has
+    /// nothing to drop (R3-Q6).
+    ///
+    /// # Errors
+    ///
+    /// - Daemon transport failure during the backfill fetch
+    ///   (`get_scannable_block_by_number`) → [`RefreshError::Io`]
+    ///   (`IoError::Daemon`).
+    /// - A `block_leaves` height missing from the producer range →
+    ///   [`RefreshError::MalformedScanResult`] (a producer-contract defect,
+    ///   same class as the in-range checks in [`apply_scan_result_to_state`]).
+    /// - Backfill block decode, or the actor ingest/rollback handshake →
+    ///   [`RefreshError::CurveTreeIngest`].
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn ingest_scan_result_into_curve_tree(
+        &self,
+        result: &mut ScanResult,
+    ) -> Result<(), RefreshError> {
+        let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
+        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &producer_leaves)
+            .await
+    }
+
+    /// Ingest a scan result into the curve tree, healing a single fail-stop /
+    /// poison with a drop-and-reopen respawn-and-retry (R1-Q4, §3.3 happy path).
+    ///
+    /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
+    /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
+    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
+    /// `recoverable_by_respawn`) that helper reopens the actor via
+    /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
+    /// and re-runs the cursor-driven ingest **once** against the *same* drained
+    /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
+    /// correct because the reopened client resumes from the persisted store
+    /// cursor (D2): the loop skips already-ingested heights and continues from
+    /// the tree's own tip, so a re-run never double-ingests. Re-invoking
+    /// [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
+    /// itself would *not* heal — it would `take` the now-empty `block_leaves`;
+    /// the drained map is the retry's source of truth.
+    ///
+    /// **One retry only.** The bounded retry budget that distinguishes a
+    /// transient persistence hiccup from a deterministically-corrupt store —
+    /// which would otherwise livelock reopen → poison → reopen (O3-sub) — is
+    /// CT-5d, coupled to the existing refresh retry/cancel budget (O6). Here a
+    /// respawn whose retry also fails surfaces terminally, and a non-recoverable
+    /// failure passes straight through without a respawn.
+    ///
+    /// This is the curve-tree ingest entry point the refresh path calls; the
+    /// inner [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
+    /// stays `pub(crate)` for the tests that drive the bare ingest/rollback
+    /// pre-pass.
+    pub(crate) async fn ingest_scan_result_with_respawn(
+        &self,
+        result: &mut ScanResult,
+    ) -> Result<(), RefreshError> {
+        let store_path =
+            shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
+        let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
+        curve_tree_ingest_scan_result_with_respawn(
+            &self.curve_tree,
+            &self.daemon,
+            &store_path,
+            result,
+            &producer_leaves,
+        )
+        .await
+    }
+}
+
+/// Collapse a [`CurveTreeHandleError`] into a
+/// [`RefreshError::CurveTreeIngest`], classifying whether a drop-and-reopen
+/// respawn (R1-Q4) can heal it:
+///
+/// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
+///   poisoned client ([`ClientError::Poisoned`] — whose own documented
+///   recovery is "drop this object and re-open") are
+///   `recoverable_by_respawn = true`: [`Engine::ingest_scan_result_with_respawn`]
+///   respawns the actor and retries the cursor-driven ingest once, which
+///   resumes from the reopened store's persisted tip (D2).
+/// - Every other client error (e.g.
+///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
+///   store-state fault) is `false`: a reopen resumes the same cursor and
+///   reproduces it, so it surfaces terminally rather than livelocking a retry.
+fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
+    match err {
+        CurveTreeHandleError::Unavailable => RefreshError::CurveTreeIngest {
+            context: "curve-tree actor unavailable",
+            recoverable_by_respawn: true,
+        },
+        CurveTreeHandleError::Client(ClientError::Poisoned) => RefreshError::CurveTreeIngest {
+            context: "curve-tree client poisoned",
+            recoverable_by_respawn: true,
+        },
+        CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
+            context: "curve-tree client rejected ingest",
+            recoverable_by_respawn: false,
+        },
+    }
+}
+
+/// Ingest a scan result into the curve tree from cloned deps — lets the async
+/// refresh task drop the engine `RwLock` read guard before the long-running
+/// backfill fetches and per-height actor round-trips.
+pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits::DaemonEngine>(
+    curve_tree: &CurveTreeHandle,
+    daemon: &D,
+    store_path: &std::path::Path,
+    result: &ScanResult,
+    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
+) -> Result<(), RefreshError> {
+    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
+        Ok(()) => Ok(()),
+        Err(RefreshError::CurveTreeIngest {
+            recoverable_by_respawn: true,
+            ..
+        }) => {
+            // Engine-side respawn (clause 2): runs after the failed `ask`
+            // returned, never inside a handler under the engine guard.
+            curve_tree
+                .respawn(store_path)
+                .await
+                .map_err(|_| RefreshError::CurveTreeIngest {
+                    context: "curve-tree respawn reopen failed",
+                    recoverable_by_respawn: false,
+                })?;
+            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Index the producer's per-block leaf sets by height, rejecting a repeated
+/// height as a producer-contract violation.
+///
+/// `block_leaves` is a transit-only field on an untrusted [`ScanResult`] (O5).
+/// A plain `BTreeMap`-via-`collect()` would silently overwrite a duplicate
+/// height and feed the curve tree an unintended leaf set — the same hazard the
+/// `block_hashes` duplicate-height check closes in [`apply_scan_result_to_state`].
+pub(super) fn index_block_leaves(
+    block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
+) -> Result<BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>, RefreshError> {
+    let mut map = BTreeMap::new();
+    for (height, leaves) in block_leaves {
+        if map.insert(height, Arc::new(leaves)).is_some() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_leaves contains duplicate height",
+            });
+        }
+    }
+    Ok(map)
+}
+
+/// Reject a reorg `fork_height` of 0 as a producer-contract violation.
+///
+/// `fork_height` is the *first divergent* height; genesis (height 0) is the
+/// universal common ancestor and can never be orphaned, so the honest producer
+/// never emits 0 (`find_fork_point` bottoms out at `Ok(1)`). A 0 reaching here
+/// is a malformed/hostile [`ScanResult`] (O5): left unchecked it silently
+/// rewinds the *entire* tree (`keep = fork_height - 1` underflowing to genesis)
+/// or wipes the whole ledger ([`LedgerIndexes::handle_reorg`] drops state
+/// at-and-above 0). Surface it loudly instead of absorbing it.
+fn validate_reorg_fork_height(fork_height: u64) -> Result<(), RefreshError> {
+    if fork_height == 0 {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "reorg fork_height of 0 would orphan genesis",
+        });
+    }
+    Ok(())
+}
+
+async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
+    curve_tree: &CurveTreeHandle,
+    daemon: &D,
+    result: &ScanResult,
+    producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
+) -> Result<(), RefreshError> {
+    // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
+    // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
+    // the same property here: an inverted range would otherwise drive
+    // unintended daemon backfill and advance the tree on a malformed result
+    // before the merge ever rejects it. Same reason string as the ledger
+    // surface so the error taxonomy reads identically to an auditor.
+    let range_start = result.processed_height_range.start;
+    let range_end = result.processed_height_range.end;
+    if range_end < range_start {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "processed_height_range end precedes start",
+        });
+    }
+
+    // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
+    // the new fork. `fork_height` is the first divergent height (validated
+    // ≥ 1 below), so the last common height to keep is `fork_height - 1`.
+    // Only roll back when the tree holds blocks at or above the fork — a tree
+    // still climbing below it has nothing to drop (R3-Q6).
+    if let Some(rewind) = result.reorg_rewind.as_ref() {
+        validate_reorg_fork_height(rewind.fork_height)?;
+        let keep = BlockHeight(rewind.fork_height - 1);
+        if let Some(tip) = curve_tree
+            .ingested_tip_height()
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?
+        {
+            if tip.0 > keep.0 {
+                curve_tree
+                    .rollback_to_fork(keep)
+                    .await
+                    .map_err(|e| map_curve_tree_handle_error(&e))?;
+            }
+        }
+    }
+
+    loop {
+        let tip = curve_tree
+            .ingested_tip_height()
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+        // `checked_add` defends the cursor advance: the `next >= range_end`
+        // break bounds `next` at `range_end`, so this never trips in practice,
+        // but block heights are consensus-adjacent — never silently wrap.
+        let next = match tip {
+            None => 0,
+            Some(t) => t.0.checked_add(1).ok_or(RefreshError::CurveTreeIngest {
+                context: "ingested tip height overflow",
+                recoverable_by_respawn: false,
+            })?,
+        };
+        if next >= range_end {
+            break;
+        }
+
+        let leaves = if next < range_start {
+            // Genesis/birthday backfill: tree-only daemon fetch + decode.
+            let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
+                context: "backfill height exceeds usize",
+                recoverable_by_respawn: false,
+            })?;
+            let block = daemon
+                .get_scannable_block_by_number(number)
+                .await
+                .map_err(|e| {
+                    RefreshError::Io(IoError::Daemon {
+                        detail: e.to_string(),
+                    })
+                })?;
+            Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
+                RefreshError::CurveTreeIngest {
+                    context: "backfill block decode failed",
+                    recoverable_by_respawn: false,
+                }
+            })?)
+        } else {
+            // Producer range: reuse the materialized leaves (no re-fetch).
+            // `Arc::clone` is a refcount bump, not a deep copy, and crucially
+            // RETAINS the map entry: if this height's `ingest` `ask` fails
+            // with a respawn-recoverable error, `*_with_respawn` re-runs this
+            // loop after the respawn and must find the same leaves again
+            // (R1-Q4). Heights already persisted are skipped by the cursor, so
+            // a retained entry is never re-ingested — it just drops with the
+            // map at end of the (batch-bounded) producer range.
+            producer_leaves
+                .get(&next)
+                .ok_or(RefreshError::MalformedScanResult {
+                    reason: "block_leaves missing a height in processed_height_range",
+                })?
+                .clone()
+        };
+
+        curve_tree
+            .ingest(BlockHeight(next), leaves)
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+    }
+    Ok(())
 }
 
 /// Merge body shared between [`Engine::apply_scan_result`] and the
@@ -274,6 +587,14 @@ pub(crate) fn apply_scan_result_to_state(
     result: ScanResult,
 ) -> Result<Vec<usize>, RefreshError> {
     let synced = ledger.height();
+
+    // Fork-height well-formedness. A `fork_height` of 0 would have
+    // `handle_reorg` drop ledger/index state at-and-above genesis (a full
+    // wipe); reject it before it is used as `expected_start` or fed to the
+    // reorg below (O5 untrusted-`ScanResult` defense).
+    if let Some(rewind) = result.reorg_rewind.as_ref() {
+        validate_reorg_fork_height(rewind.fork_height)?;
+    }
 
     // Start-height invariant. When `reorg_rewind` is present the
     // result is replayed from the fork height, so the expected start
@@ -329,6 +650,15 @@ pub(crate) fn apply_scan_result_to_state(
         spent_key_images,
         stake_events,
         reorg_rewind,
+        // CT-5 §3.2 transit fields. `block_leaves` is consumed by the
+        // curve-tree ingest pre-pass (`ingest_scan_result_into_curve_tree`,
+        // CT-5a commit 4) that runs *before* this merge; it is ignored here
+        // because `apply_scan_result_to_state` only advances ledger/index
+        // state. `block_curve_tree_roots` is the write-but-not-read transit
+        // field (E6b): the producer populates it; the §3.3 ingest-time verify
+        // that consumes it lands in CT-5b, so nothing reads it yet.
+        block_leaves: _,
+        block_curve_tree_roots: _,
     } = result;
 
     if let Some(rewind) = reorg_rewind {
@@ -377,10 +707,16 @@ pub(crate) fn apply_scan_result_to_state(
     // with len-equality these three rules pigeonhole into "exactly one
     // entry per height in range," which is what the per-height apply
     // loop relies on.
+    // `start == end` returned early above, but an inverted range
+    // (`start > end`) is a producer-contract violation, not a panic — a
+    // hostile daemon must not be able to crash the merge with `start > end`
+    // (X7). Treat it as `MalformedScanResult`, like the shape checks below.
     let range_len_u64 = processed_height_range
         .end
         .checked_sub(processed_height_range.start)
-        .expect("start <= end checked above");
+        .ok_or(RefreshError::MalformedScanResult {
+            reason: "processed_height_range end precedes start",
+        })?;
     let expected_len =
         usize::try_from(range_len_u64).map_err(|_| RefreshError::MalformedScanResult {
             reason: "processed_height_range length exceeds usize",
@@ -654,7 +990,7 @@ mod tests {
     use crate::engine::RefreshError;
     use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
-    use super::apply_scan_result_to_state;
+    use super::{apply_scan_result_to_state, index_block_leaves};
 
     fn make_recovered_output(seed: u8, global_index: u64) -> RecoveredWalletOutput {
         let mut bytes = [0u8; 32];
@@ -696,6 +1032,8 @@ mod tests {
             spent_key_images: vec![],
             stake_events: vec![],
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("birthday merge");
         assert_eq!(ledger.height(), 1000);
@@ -742,6 +1080,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.height(), 3);
@@ -761,6 +1101,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
 
@@ -773,6 +1115,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, second).unwrap_err();
         assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
@@ -790,6 +1134,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
 
@@ -801,6 +1147,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
         assert_eq!(ledger.height(), 2);
@@ -821,6 +1169,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.transfers().len(), 1);
@@ -847,6 +1197,8 @@ mod tests {
             }],
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("spend merge ok");
         assert!(ledger.transfers()[0].spent);
@@ -889,6 +1241,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
@@ -909,6 +1263,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
@@ -925,6 +1281,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, third).expect("third merge ok");
@@ -950,6 +1308,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first ok");
         assert_eq!(ledger.height(), 5);
@@ -969,6 +1329,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: Some(ReorgRewind { fork_height: 3 }),
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("reorg ok");
         assert_eq!(ledger.height(), 5);
@@ -996,6 +1358,8 @@ mod tests {
                 },
             }],
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
         assert_eq!(ledger.height(), 1);
@@ -1019,6 +1383,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1037,6 +1403,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         match err {
@@ -1044,6 +1412,63 @@ mod tests {
                 assert!(
                     reason.contains("duplicate"),
                     "expected duplicate-height reason, got {reason}",
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn index_block_leaves_rejects_duplicate_height() {
+        // Two entries at the same height: a `collect()` into `BTreeMap` would
+        // silently keep the last and feed the curve tree an unintended leaf
+        // set; the explicit check surfaces it as `MalformedScanResult` (O5
+        // untrusted-`ScanResult` defense, mirroring the `block_hashes` check).
+        let dup = vec![(4u64, Vec::new()), (4u64, Vec::new())];
+        let err = index_block_leaves(dup).unwrap_err();
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(
+                    reason.contains("block_leaves") && reason.contains("duplicate"),
+                    "expected block_leaves duplicate reason, got {reason}",
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn index_block_leaves_accepts_distinct_heights() {
+        let ok = vec![(1u64, Vec::new()), (2u64, Vec::new()), (3u64, Vec::new())];
+        let map = index_block_leaves(ok).expect("distinct heights index cleanly");
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn apply_rejects_reorg_fork_height_zero_as_malformed() {
+        // `fork_height` is the first divergent height; genesis can never be
+        // orphaned, so the honest producer never emits 0. A malformed/hostile
+        // `ScanResult` with `fork_height == 0` must surface as
+        // `MalformedScanResult` rather than silently wiping the ledger via
+        // `handle_reorg(.., 0)` (O5 untrusted-`ScanResult` defense).
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 0..1,
+            parent_hash: None,
+            block_hashes: vec![(0, [0x00; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: Some(ReorgRewind { fork_height: 0 }),
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(
+                    reason.contains("fork_height"),
+                    "expected fork_height reason, got {reason}",
                 );
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1062,6 +1487,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1083,6 +1510,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1103,6 +1532,8 @@ mod tests {
             }],
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1121,6 +1552,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
@@ -1168,6 +1601,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1235,6 +1670,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1282,6 +1719,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1350,6 +1789,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
@@ -1479,6 +1920,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let _ =
             apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
@@ -1509,6 +1952,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
@@ -1593,6 +2038,8 @@ mod tests {
             spent_key_images: Vec::new(),
             stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         };
         let inserted =
             apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");

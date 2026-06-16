@@ -48,6 +48,7 @@ use std::time::Instant;
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
+use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
     PendingTxDiagnostic,
@@ -287,6 +288,14 @@ where
     /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::Engine)'s
     /// `ledger` field at C6 assembly).
     pub(crate) ledger: Arc<L>,
+    /// Clone of [`Engine`](super::Engine)'s FCMP++ curve-tree actor handle, used
+    /// to read the tree's `ingested_tip_height` at build time and gate the
+    /// spendable set on `min(synced_height, tree_cursor)` (CT-5 §3.2.1 D1/D3,
+    /// commit 4b). `None` only in direct-construction unit tests that exercise
+    /// selection/fee logic without a tree; the production assembly site
+    /// (`engine/lifecycle.rs`) always supplies `Some`. When `None` the spend
+    /// gate is inert (every matured output is selectable, the pre-4b behavior).
+    pub(crate) curve_tree: Option<CurveTreeHandle>,
     /// Diagnostic sink (segment-2f §5.0.2.1 sink-binding closure).
     pub(crate) sink: Arc<dyn DiagnosticSink>,
     /// Per-collection reservation TTL config (Phase 0l). Consumed by
@@ -323,15 +332,68 @@ fn with_pending_tx_state_mut<R>(
     f(&mut state)
 }
 
+/// Spend-time gate on curve-tree membership coverage (CT-5 §3.2.1 D1/D3).
+///
+/// The spendable set is capped at `min(synced_height, tree_cursor)` so a wallet
+/// whose ledger tip has outrun the curve tree — an adopting wallet, or any
+/// wallet whose `.curvetree` store was rebuilt — does not select outputs for
+/// which the local tree cannot yet assemble a membership path. Coverage is
+/// keyed on the output's `eligible_height` (the height at which it enters the
+/// tree and `is_spendable` already admits it), so this gate is exactly the
+/// curve-tree projection of `min(synced_height, tree_cursor)`.
+#[derive(Clone, Copy)]
+enum TreeSpendGate {
+    /// No curve tree wired into this builder (direct-construction unit tests).
+    /// The gate is inert; every matured output is selectable (pre-4b behavior).
+    Unenforced,
+    /// Curve tree present, with the last-ingested height it reported. An output
+    /// is tree-covered iff its `eligible_height <= covered_through`;
+    /// `covered_through == None` means the tree is fresh/empty and covers
+    /// nothing (the adopting-wallet pre-backfill state).
+    Enforced { covered_through: Option<u64> },
+}
+
+impl TreeSpendGate {
+    /// Whether an output maturing at `eligible_height` is covered by the tree.
+    fn covers(self, eligible_height: u64) -> bool {
+        match self {
+            TreeSpendGate::Unenforced => true,
+            TreeSpendGate::Enforced { covered_through } => {
+                covered_through.is_some_and(|cap| eligible_height <= cap)
+            }
+        }
+    }
+}
+
+/// Map a build-time [`CurveTreeHandleError`] (a failed `ingested_tip_height`
+/// cursor read) into the terminal [`SendError::CurveTreeUnavailable`]. This is
+/// the *hard-failure* path (the actor is fail-stopped); the benign "tree is
+/// behind" lag is the cursor-read-**succeeds**-with-a-low-value path and
+/// surfaces as [`SendError::SpendUnavailableRebuilding`] instead.
+fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -> SendError {
+    // `detail` is documented as the stringified `CurveTreeHandleError`
+    // (`error.rs`); render the actual variant — including the inner
+    // `ClientError` the previous hand-strings dropped — so the diagnostic is
+    // actionable. The error carries no secret material.
+    SendError::CurveTreeUnavailable {
+        detail: format!("{err:?}"),
+    }
+}
+
 fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
+        SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::CannotSign { reason } if *reason == "wallet has not ingested any block yet" => {
             BuildErrorKind::LedgerNotReady
         }
         SendError::CannotSign { .. } => BuildErrorKind::SignerUnavailable,
-        SendError::Io(_) => BuildErrorKind::DaemonUnavailable,
+        // A curve-tree actor that cannot be queried is an infrastructure
+        // outage indistinguishable, to the caller, from the daemon being down.
+        SendError::CurveTreeUnavailable { .. } | SendError::Io(_) => {
+            BuildErrorKind::DaemonUnavailable
+        }
     }
 }
 
@@ -568,6 +630,7 @@ where
         &self,
         request: &TxRequest,
         fee_snapshot: super::traits::FeeEstimates,
+        tree_gate: TreeSpendGate,
     ) -> Result<BuildAssembled, SendError> {
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
@@ -610,21 +673,42 @@ where
         })?;
         self.refresh_current_snapshot(&mut state);
 
-        let (synced, tip_hash, candidates) = self.ledger.with_ledger_block(|ledger| {
-            let synced = ledger.height();
-            let tip_hash = ledger.block_hash_at(synced).copied();
-            let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
-            let candidates: Vec<OutputCandidate> = ledger
-                .spendable_outputs(synced, None)
-                .into_iter()
-                .filter(|(idx, _)| !locked.contains(idx))
-                .map(|(idx, td)| OutputCandidate {
-                    index: idx,
-                    amount: td.amount(),
-                })
-                .collect();
-            (synced, tip_hash, candidates)
-        });
+        let (synced, tip_hash, candidates, spendable_now_total, pending_rebuild_total) =
+            self.ledger.with_ledger_block(|ledger| {
+                let synced = ledger.height();
+                let tip_hash = ledger.block_hash_at(synced).copied();
+                let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
+                // Partition the matured, non-reserved set on the curve-tree gate
+                // (CT-5 §3.2.1 D1/D3): tree-covered outputs become selection
+                // candidates ("spendable now"); outputs blocked *only* by the
+                // in-progress tree backfill are tallied as `pending_rebuild` so
+                // an insufficiency caused by the lag surfaces as
+                // `SpendUnavailableRebuilding` rather than a misleading
+                // `InsufficientFunds`.
+                let mut candidates: Vec<OutputCandidate> = Vec::new();
+                let mut spendable_now_total: u64 = 0;
+                let mut pending_rebuild_total: u64 = 0;
+                for (idx, td) in ledger.spendable_outputs(synced, None) {
+                    if locked.contains(&idx) {
+                        continue;
+                    }
+                    let amount = td.amount();
+                    if tree_gate.covers(td.eligible_height) {
+                        spendable_now_total = spendable_now_total.saturating_add(amount.to_raw());
+                        candidates.push(OutputCandidate { index: idx, amount });
+                    } else {
+                        pending_rebuild_total =
+                            pending_rebuild_total.saturating_add(amount.to_raw());
+                    }
+                }
+                (
+                    synced,
+                    tip_hash,
+                    candidates,
+                    spendable_now_total,
+                    pending_rebuild_total,
+                )
+            });
 
         let Some(tip_hash) = tip_hash else {
             let err = SendError::CannotSign {
@@ -637,6 +721,47 @@ where
                 },
             );
             return Err(err);
+        };
+
+        // CT-5 §3.2.1 D3: classify an insufficiency. If the tree-covered
+        // ("spendable now") balance alone cannot cover `needed` but the matured
+        // balance *including* the tree-pending outputs could, the shortfall is
+        // caused by the in-progress backfill and surfaces as the distinct,
+        // self-healing `SpendUnavailableRebuilding`. Otherwise the wallet is
+        // genuinely short and `InsufficientFunds` is honest — reporting the full
+        // matured balance (`spendable_now + pending_rebuild`) as `available` so
+        // the gate never makes the wallet look poorer than it is.
+        let resolve_insufficiency = |needed_raw: u64| -> SendError {
+            let total_matured = spendable_now_total.saturating_add(pending_rebuild_total);
+            if pending_rebuild_total > 0
+                && spendable_now_total < needed_raw
+                && total_matured >= needed_raw
+            {
+                SendError::SpendUnavailableRebuilding {
+                    needed: needed_raw,
+                    spendable_now: spendable_now_total,
+                    pending_rebuild: pending_rebuild_total,
+                }
+            } else {
+                SendError::InsufficientFunds {
+                    needed: needed_raw,
+                    available: total_matured,
+                }
+            }
+        };
+        // Selector-error projection: an insufficiency (empty/short candidate
+        // set) routes through `resolve_insufficiency`; a returned-subset
+        // violation stays an `InvalidRecipient` contract failure.
+        let map_select_err = |err: OutputSelectorError, needed_raw: u64| -> SendError {
+            match err {
+                OutputSelectorError::ReturnedIndicesNotSubset { .. } => {
+                    SendError::InvalidRecipient {
+                        reason: "output selector returned indices outside candidate set",
+                    }
+                }
+                OutputSelectorError::InsufficientFunds { .. }
+                | OutputSelectorError::NoEligibleOutputs => resolve_insufficiency(needed_raw),
+            }
         };
 
         let mut total_amount = AtomicUnits::ZERO;
@@ -692,7 +817,7 @@ where
             .output_selector
             .select_outputs(&candidates, needed)
             .map_err(|err| {
-                let mapped = map_output_selector_error(&err.into());
+                let mapped = map_select_err(err.into(), needed.to_raw());
                 emit_pending_tx_diagnostic(
                     self.sink.as_ref(),
                     PendingTxDiagnostic::BuildFailed {
@@ -717,7 +842,7 @@ where
                 .output_selector
                 .select_outputs(&candidates, needed_b)
                 .map_err(|err| {
-                    let mapped = map_output_selector_error(&err.into());
+                    let mapped = map_select_err(err.into(), needed_b.to_raw());
                     emit_pending_tx_diagnostic(
                         self.sink.as_ref(),
                         PendingTxDiagnostic::BuildFailed {
@@ -739,14 +864,11 @@ where
             )
         })?;
         if selected.total_covered < required {
-            let err = SendError::InsufficientFunds {
-                needed: required.to_raw(),
-                available: selected.total_covered.to_raw(),
-            };
+            let err = resolve_insufficiency(required.to_raw());
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
-                    kind: BuildErrorKind::InsufficientFunds,
+                    kind: build_error_kind(&err),
                 },
             );
             return Err(err);
@@ -1089,13 +1211,14 @@ where
     /// `Engine::create` / `Engine::open_*` (`engine/lifecycle.rs`),
     /// which is the production assembly site.
     #[allow(clippy::too_many_arguments)] // mirrors `Engine::open_*` assembly arity.
-    pub fn new(
+    pub(crate) fn new(
         signer: Arc<S>,
         output_selector: O,
         fee_estimator: F,
         fee_snapshot_source: FS,
         submitter: Arc<TS>,
         ledger: Arc<L>,
+        curve_tree: Option<CurveTreeHandle>,
         sink: Arc<dyn DiagnosticSink>,
         ttl: ReservationTTLConfig,
         network: Network,
@@ -1115,6 +1238,7 @@ where
             fee_snapshot_source,
             submitter,
             ledger,
+            curve_tree,
             sink,
             ttl,
             network,
@@ -1167,8 +1291,29 @@ where
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
         })?;
+        // CT-5 §3.2.1 D1/D3 (commit 4b): read the curve-tree resume cursor
+        // *before* the synchronous selection so the spendable set is gated on
+        // `min(synced_height, tree_cursor)`. This is the only `.await` the gate
+        // needs — `build_assemble_sync` then runs entirely under the state lock
+        // with the cursor snapshot in hand. A failed read is the hard-failure
+        // path (`CurveTreeUnavailable`), distinct from the benign "tree behind"
+        // lag the gate itself surfaces (`SpendUnavailableRebuilding`).
+        let tree_gate = match &self.curve_tree {
+            None => TreeSpendGate::Unenforced,
+            Some(handle) => {
+                let covered_through = handle.ingested_tip_height().await.map_err(|err| {
+                    fail_build_after_attempted(
+                        self.sink.as_ref(),
+                        map_curve_tree_handle_error_for_send(&err),
+                    )
+                })?;
+                TreeSpendGate::Enforced {
+                    covered_through: covered_through.map(|bh| bh.0),
+                }
+            }
+        };
         let BuildAssembled { tx_to_sign, meta } =
-            self.build_assemble_sync(&request, fee_snapshot)?;
+            self.build_assemble_sync(&request, fee_snapshot, tree_gate)?;
         let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
         let signed = self
             .signer
@@ -1234,8 +1379,10 @@ mod tests {
     use shekyl_address::ShekylAddress;
     use shekyl_crypto_pq::account::AllKeysBlob;
     use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_curve_tree::{BlockHeight, CurveTreeClient};
     use shekyl_rpc::FeeRate;
     use shekyl_scanner::RecoveredWalletOutput;
+    use tempfile::TempDir;
 
     /// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
     /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
@@ -1342,6 +1489,7 @@ mod tests {
             test_fee_snapshot_source(),
             test_submitter(),
             Arc::new(test_ledger()),
+            None,
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
             Network::Mainnet,
@@ -1506,6 +1654,7 @@ mod tests {
             test_fee_snapshot_source(),
             test_submitter(),
             ledger,
+            None,
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
             Network::Mainnet,
@@ -1523,6 +1672,7 @@ mod tests {
             test_fee_snapshot_source(),
             test_submitter(),
             ledger,
+            None,
             sink,
             ReservationTTLConfig::default(),
             Network::Mainnet,
@@ -1541,6 +1691,182 @@ mod tests {
             20,
         );
         ledger
+    }
+
+    // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
+
+    /// A fresh, empty curve-tree handle over a tempdir store. Its
+    /// `ingested_tip_height` is `None`, so the spend gate (`Enforced { None }`)
+    /// treats every matured output as `pending_rebuild` — the adopting /
+    /// first-run wallet whose tree has not begun backfilling.
+    fn fresh_tree_handle() -> (TempDir, CurveTreeHandle) {
+        let dir = TempDir::new().expect("tempdir");
+        let client = CurveTreeClient::open(dir.path().join("curve_tree.redb"))
+            .expect("open fresh curve-tree client");
+        let handle = CurveTreeHandle::spawn(client);
+        (dir, handle)
+    }
+
+    /// A curve-tree handle whose resume cursor has been advanced to `cap` by
+    /// ingesting empty leaves for every block `0..=cap`. Empty-leaf ingest
+    /// advances `ingested_tip_height` without contributing leaves (the
+    /// merge-driven ingest KATs rely on the same property), which is all the
+    /// spend gate reads — it compares `eligible_height <= covered_through`.
+    async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
+        let (dir, handle) = fresh_tree_handle();
+        for h in 0..=cap {
+            handle
+                .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+                .await
+                .expect("empty-leaf ingest advances the cursor");
+        }
+        (dir, handle)
+    }
+
+    fn test_pending_tx_with_tree(ledger: Arc<LocalLedger>, tree: CurveTreeHandle) -> TestPendingTx {
+        LocalPendingTx::new(
+            Arc::new(LocalSigner::new(test_signer_handle())),
+            WalletGreedyOutputSelector,
+            DaemonFeeEstimator,
+            test_fee_snapshot_source(),
+            test_submitter(),
+            ledger,
+            Some(tree),
+            Arc::new(TracingDiagnosticSink),
+            ReservationTTLConfig::default(),
+            Network::Mainnet,
+        )
+    }
+
+    /// `TreeSpendGate::covers` boundary: the inert (no-tree) gate covers
+    /// everything; a fresh tree covers nothing; a cursor at `H` covers
+    /// eligibility `<= H` and excludes `H + 1`.
+    #[test]
+    fn tree_spend_gate_covers_boundary() {
+        assert!(TreeSpendGate::Unenforced.covers(0));
+        assert!(TreeSpendGate::Unenforced.covers(u64::MAX));
+        assert!(!TreeSpendGate::Enforced {
+            covered_through: None,
+        }
+        .covers(0));
+        let gate = TreeSpendGate::Enforced {
+            covered_through: Some(11),
+        };
+        assert!(gate.covers(0));
+        assert!(gate.covers(11));
+        assert!(!gate.covers(12));
+    }
+
+    /// D1/D3 core KAT — the adopting / first-run wallet. Matured balance is in
+    /// the ledger but the curve tree is fresh (empty), so no output can yet
+    /// have a membership proof. The gate must surface the self-healing
+    /// [`SendError::SpendUnavailableRebuilding`] (not a misleading
+    /// `InsufficientFunds`), reporting nothing spendable and the full matured
+    /// balance as `pending_rebuild`.
+    #[tokio::test]
+    async fn adopting_wallet_spend_unavailable_during_rebuild() {
+        let ledger = funded_ledger(); // 50_000 + 30_000 matured at synced=20
+        let (_dir, tree) = fresh_tree_handle();
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("a fresh tree gates every matured output");
+        match err {
+            SendError::SpendUnavailableRebuilding {
+                needed,
+                spendable_now,
+                pending_rebuild,
+            } => {
+                assert!(needed >= 7_000, "needed covers the request plus fee");
+                assert_eq!(spendable_now, 0, "no output is tree-covered yet");
+                assert_eq!(
+                    pending_rebuild, 80_000,
+                    "the whole matured balance awaits the rebuild"
+                );
+            }
+            other => panic!("expected SpendUnavailableRebuilding, got {other:?}"),
+        }
+    }
+
+    /// Once the tree has ingested up to the outputs' eligibility height the gate
+    /// is inert — and note the cursor (11) sits *below* `synced` (20), so this
+    /// also exercises the `min(synced, tree_cursor)` floor: the tree is the
+    /// binding cursor yet still covers the eligible-at-11 outputs, so the same
+    /// request that failed mid-rebuild now builds.
+    #[tokio::test]
+    async fn rebuilt_tree_spends_normally() {
+        let ledger = funded_ledger(); // eligible_height == 1 + SPENDABLE_AGE == 11
+        let (_dir, tree) = tree_handle_ingested_through(11).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("a caught-up tree imposes no gate");
+        assert!(
+            !built.tx_bytes.is_empty(),
+            "the gate-inert build produces a tx"
+        );
+    }
+
+    /// D1/D3 partial-rebuild KAT: a low output (eligible 11) is already
+    /// tree-covered while a higher one (eligible 51) is still pending the
+    /// backfill (cursor at 11). A spend the low output alone can cover succeeds
+    /// — already-rebuilt low outputs stay spendable — while a spend whose
+    /// shortfall is covered *only* by the still-pending output surfaces
+    /// [`SendError::SpendUnavailableRebuilding`] with the precise split.
+    #[tokio::test]
+    async fn partial_rebuild_low_spendable_high_pending() {
+        let ledger = Arc::new(test_ledger());
+        // A: block 1 → eligible 11, 50_000. Fill through 40 so A is matured.
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            40,
+        );
+        // B: block 41 → eligible 51, 30_000. Fill through 70 (final synced).
+        populate_ledger(
+            ledger.as_ref(),
+            41,
+            vec![make_recovered_output(2, 101, 30_000)],
+            70,
+        );
+        // Cursor at 11 covers A (11 <= 11) but not B (51 > 11).
+        let (_dir, tree) = tree_handle_ingested_through(11).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        // A spend whose shortfall needs the still-pending output: distinct error.
+        // Run first — a failed build reserves nothing, leaving A free for the
+        // success assertion below (a successful build would lock A).
+        let err = pending
+            .build(standard_request(60_000))
+            .await
+            .expect_err("the shortfall is covered only by the pending output");
+        match err {
+            SendError::SpendUnavailableRebuilding {
+                needed,
+                spendable_now,
+                pending_rebuild,
+            } => {
+                assert!(needed >= 60_000, "needed covers the request plus fee");
+                assert_eq!(spendable_now, 50_000, "only the low output is tree-covered");
+                assert_eq!(
+                    pending_rebuild, 30_000,
+                    "the high output awaits the rebuild"
+                );
+            }
+            other => panic!("expected SpendUnavailableRebuilding, got {other:?}"),
+        }
+
+        // A spend the rebuilt low output covers: builds despite B being pending.
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("the tree-covered low output stays spendable");
+        assert!(!built.tx_bytes.is_empty());
     }
 
     #[tokio::test]
@@ -2197,6 +2523,7 @@ mod tests {
             crate::engine::fee_snapshot::DaemonFeeSnapshotSource::from_arc(Arc::clone(&daemon)),
             Arc::new(crate::engine::transaction_submitter::DaemonTransactionSubmitter::new(daemon)),
             ledger,
+            None,
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
             Network::Mainnet,

@@ -31,6 +31,26 @@ with the flat `+10`; align via the ignored `additional_timelock`). The §3.4 bug
 are confirmed against live code — all pre-implementation checklist items are
 closed. CT-5 pre-0 may begin.**
 
+**Post-closure pin (Round 3, 2026-06-15) — R1-Q2 ingest-feed amendment (§3.2.1).**
+A CT-5a-implementation substrate finding falsifies the §3.2 / CT-3 R1-Q1
+premise that *"the refresh loop already delivers every block; CT-5 connects
+it."* It does not: the refresh producer is **birthday-floored and
+`synced_height + 1`-based** (`local_refresh.rs:589`), so its block range is
+governed by owned-output economics, while the curve tree's range is governed by
+anonymity-set completeness (a global tree **from genesis**, `client.rs:476`,
+CT3_SYNC.md:112). These are different ranges and always will be. Per
+`21-reversion-clause-discipline.mdc` this is a post-closure pin, **not** a
+reopening of Round 1: the merge-driven per-block ingest *mechanism* (R1-Q2)
+stands; what is amended is the *feed* that drives it — it must be a
+genesis-anchored tree-leaf feed independent of the floor. §3.2.1 records the
+finding, the cost-asymmetry measurement that selects the resolution, the CT-3
+R1-Q1 reopening it triggers, and the Round-3 design questions for the feed
+shape. **Round 3 closed (2026-06-15): R3-Q1–R3-Q6 resolved — fork three, a
+genesis-anchored tree feed, and a two-cursor merge that splits display
+(detection, tree-independent) from spend (tree-verified). CT-5a commit 4 may
+land against the §3.2.1 contract; the only remaining gate is the Tier-B
+non-coinbase fixture for the floored-sibling DoD KAT.**
+
 **Decisions frozen (irreversible once implemented — the load-bearing choices, so
 the closure reviewer and CT-5c implementer find them at the top, not derived from
 the finding logs §9):**
@@ -342,6 +362,13 @@ Its input is `BlockLeaves { height, txs: &[TxLeafInputs] }` where
 `TxLeafInputs { is_miner, leaf_hash_blob, outputs: &[RawOutput] }` and
 `RawOutput { output_key, commitment, target }` (`client.rs:66–97`).
 
+> **Amended by §3.2.1 (Round-3 post-closure pin, 2026-06-15).** The mechanism
+> below (merge drives `handle.ingest`, commit-on-ack) stands. The clause "the
+> producer decodes what it already parses and carries it forward" is the part
+> amended: the *owned-output* producer is birthday-floored, so it cannot be the
+> tree's leaf source for `0..birthday`. The tree gets a separate
+> genesis-anchored feed; see §3.2.1.
+
 **Decision (R1-Q2, RESOLVED — merge drives the actor ingest; `ScanResult` grows
 a transit leaf set + header root).** The merge (`apply_scan_result_to_state`,
 `merge.rs:440–464`) sends `handle.ingest(...)` and commits the ledger on ack
@@ -387,6 +414,329 @@ order), so it gets a dedicated KAT (A2 audit-against-actual-code) asserting the
 engine-path decode reproduces the `ct2_tier_a.json` oracle leaf stream. Lands in
 CT-5a (§6).
 
+### 3.2.1 Post-closure pin (Round 3) — the tree feed is genesis-anchored, not producer-driven
+
+**Status: RESOLVED (Round-3 design round closed 2026-06-15).** Recorded
+2026-06-15 from a CT-5a-implementation substrate finding. Per
+`21-reversion-clause-discipline.mdc` this is a post-closure pin on a
+substrate falsification, not a reopening of the closed Round-1 disposition:
+the R1-Q2 *mechanism* (merge drives `handle.ingest`, commit-on-ack, §3.2)
+stands unchanged; what is amended is the *feed* that drives it.
+
+**The finding.** §3.2 and CT-3 R1-Q1 both rest on the premise that the
+wallet's refresh loop delivers every block from genesis, so wiring the tree to
+the merge is "free." The premise is false. Two facts about the producer:
+
+- **`synced_height + 1` start.** `produce_scan_result` begins at
+  `original_start = synced_height + 1` (`local_refresh.rs:589`), not at
+  `BlockHeight(0)`. The genesis-off-by-one case.
+- **Birthday floor.** A floored wallet deliberately does **not** scan
+  `0..birthday` — by design, there is nothing of its own there. The larger
+  case, and load-bearing: removing/lowering the floor re-introduces the exact
+  full-genesis owned-output scan cost the floor exists to avoid.
+
+The tree client requires the opposite: strictly consecutive heights **from
+genesis** (`expected = 0` when fresh, `client.rs:476`; CT3_SYNC.md:112 S3).
+The producer's range is governed by **owned-output economics**; the tree's
+range is governed by **anonymity-set completeness**. These are different
+ranges and always will be — there is no birthday shortcut to a *global*
+anonymity set, by construction. Genesis-off-by-one and the birthday gap are
+two instances of one mismatch; a genesis-seed step fixes only the first and
+leaves floored wallets with a tree missing `0..birthday`, i.e. **silent
+corrupt membership for every output below the floor**. This is the
+`16-architectural-inheritance.mdc` shape: the merge-drives-ingest trait
+surface is right, but "the producer's blocks are the tree's blocks" is the
+inherited-from-Monero falsehood (Monero's wallet has no genesis-anchored
+global structure to maintain).
+
+**The resolution: fork three — separate the feeds.** The owned-output scanner
+keeps its birthday floor. The tree gets its own genesis-to-tip leaf feed that
+ignores both `synced_height + 1` and the floor. They share block fetches where
+ranges overlap (`birthday..tip` fetched once, feeding both consumers); the
+tree additionally pulls `0..birthday`. There is no special "genesis seed"
+step — there is a genesis-anchored tree feed of which height 0 is simply the
+first block.
+
+**Why fork three and not "un-defer the bulk-leaf RPC" — the cost-asymmetry
+measurement.** The hinge is the per-output cost of feeding the tree
+(leaf-extract) vs. feeding the owned-output scanner (trial-decrypt), measured
+against live code:
+
+- **Leaf extraction** (`curve_tree_decode.rs`): per output, a byte-copy of
+  `output_key`/`commitment`, a commitment-index lookup, and a `target`
+  classification. **Zero elliptic-curve ops, zero KEM, zero per-output
+  hashing.**
+- **Owned-output trial-decrypt** (`scan.rs` `scan_transaction`): per output,
+  an Ed25519 point decompression (`output.key.decompress()`) **plus a hybrid
+  KEM decapsulation** — X25519 ECDH **and** ML-KEM-768 lattice decapsulation
+  (`scan_output_recover_with_ml_kem_dk`, `shared_key.rs`), then further hashing
+  on a match. **Two-to-three orders of magnitude more per output.**
+
+So leaf extraction is cheap relative to trial-decrypt. Genesis-to-tip
+leaf-extraction for the tree is therefore *not* equivalent to an unfloored
+scan: the floor's saving is the expensive trial-decrypt below birthday, which
+fork three preserves. The bulk-leaf RPC (deferred in CT-3 R1-Q1) would make
+even the *block fetch* cheap, but it is not required for correctness — fork
+three is correct today with block-derived extraction. The bulk RPC becomes a
+fetch-cost optimization, not a correctness prerequisite.
+
+**Rejected (recorded so it is not re-proposed): segment-root partial tree.**
+Holding only the `R_k` segment-root commitments for `0..birthday` and full
+leaves only above it. The cost measurement kills it: its sole justification was
+avoiding sub-birthday work, but that work is now measured as *cheap*
+(extraction, not scan), so the shortcut saves the cheap axis while adding the
+genuinely hard thing — a store-backed path-assembly that serves scattered
+sub-birthday siblings on demand, which is unbuilt (F5) and carries the
+targeted-fetch ownership-oracle risk. It trades cheap, correct, simple
+genesis-to-tip extraction for an expensive, unbuilt, privacy-fraught partial
+structure: a worse design dressed as an optimization.
+
+**CT-3 R1-Q1 reopening (narrowed).** CT-3 R1-Q1 deferred the bulk-leaf RPC on
+the reasoning that "forward sync is block-derived and the wallet gets every
+block from the refresh loop anyway." That reasoning assumed genesis-anchored
+block delivery, which the birthday floor falsifies for any wallet flooring
+above genesis: such a wallet must run a **separate genesis-to-tip block fetch
+for the tree**, which the deferral's cost model did not account for. The
+reversion clause's spirit ("forward-sync data-source decision rested on a
+producer behavior that doesn't hold") is triggered. **Disposition:** the
+reopening resolves to *"the tree gets its own full-range block feed"* (fork
+three), **not** *"un-defer the bulk RPC"* — the cost asymmetry above shows
+block-derived extraction is cheap enough that the bulk RPC stays deferred as a
+fetch-cost optimization with its original reversion clause intact. Recorded
+against CT-3 R1-Q1 so the deferral's premise correction is auditable from
+both docs.
+
+The falsified premise was false in a *bounded* way — false on the **fetch**
+axis (a floored wallet does not get `0..birthday` blocks from the refresh
+loop), true on the **extraction** axis (extraction stays cheap). The narrowed
+reopening trigger names the axis it fires on so it is measurable, not vague:
+**the fetch cost becomes load-bearing when genesis-to-tip block download for
+the tree dominates fresh-wallet sync wall-time to the point where bulk-leaf
+fetch would materially cut it** — leaves are a fraction of block bytes (no
+`tx_extra` beyond the `0x07` tag, no signatures, no range proofs). That is a
+bandwidth/wall-time measurement against a real chain length, so it is a
+**post-genesis observation** (cannot be decided pre-genesis) — the trigger is
+"measured on fresh-wallet sync wall-time, post-genesis."
+
+**F5 coupling (one scaling axis, two deferred items).** Path assembly reads
+the **in-memory leaf vec**: `assemble_path` runs
+`build_layers(assemble_leaf_stream(&self.entries, …))` (`assemble.rs:84–85`)
+— the store-backed `root_at` is only the integrity gate (`assemble.rs:71–75`),
+the branches come from `entries`. So the genesis-anchored feed makes the
+in-memory `entries` vec **genesis-to-tip-sized** (it is what the feed fills).
+F5's deferral (store-backed assembly; R1-Q6 V3.0 whole-tree-in-memory
+disposition) is therefore *coupled* to this feed: F5's firing condition is
+"in-memory tree exceeds budget," which is the **same post-genesis-measurement
+class** as the bulk-RPC trigger above — both are functions of **chain length**,
+both correctly wait for the same field data. Recording the coupling here so the
+two deferrals are seen as one scaling axis, not two independent "revisit if
+slow"s.
+
+**Round-3 design questions — RESOLVED (2026-06-15).** The four open questions
+collapse around one reframe: **R3-Q2 is not "where does the feed start" (we know:
+0); it is "display-completeness and spend-completeness are different
+requirements."** Detection (owned-output trial-decapsulation) does not need the
+tree; the tree is only for the membership proof at spend time. So the backfill
+blocks *spendability*, not *display* — "received, pending sync" is an honest,
+correct wallet state, and conflating display with spend is the same error shape
+as conflating the producer's range with the tree's range. The two source
+confirmations that gate the reframe both came back affirming it (below). Each
+question's disposition:
+
+- **R3-Q1 — feed driver shape (RESOLVED).** Single block fetch, two consumers:
+  the tree-leaf extractor and the owned-output scanner. Where ranges overlap
+  (`birthday..tip`) a block is fetched once and read by both. The tree
+  consumer *additionally* pulls `0..birthday` alone — a tree-only fetch, and
+  the fetch cost the CT-3 R1-Q1 reversion trigger watches. No second source
+  for genesis (the genesis-feed-source confirmation below). Whether the
+  driver is a second output on `produce_scan_result` or a second coordinated
+  loop is an implementation choice bounded by the fetch-once constraint; it
+  does not change the contract.
+- **R3-Q2 — display/spend decoupling (RESOLVED, the load-bearing reframe).**
+  Ack-before-commit (R1-Q1, O2) binds the **synced/spendable** height — the
+  ledger tip must not advance past the tree-verified height — **not** the
+  detection surface. The merge therefore tracks **two cursors**: a
+  *detection* cursor (how far the scanner has looked; surfaces detected
+  transfers as pending-incoming, tree-independent) and a *tree-verified /
+  spendable* cursor (gated by ingest-ack, governs `synced_height` and
+  spendability). For a fresh floored wallet there are **no ledger commits in
+  `0..birthday`** (no owned outputs there), so ack-before-commit does not bind
+  in that range — the `0..birthday` backfill runs with no commit to gate.
+  From `birthday+1` the tree and ledger move in lockstep under ack-before-commit;
+  because tree ingest is strictly consecutive from 0, the first lockstep
+  commit at `birthday+1` cannot land until the `0..birthday` backfill
+  completes — so the backfill is a blocking prefix on the **first
+  spendable/synced advance**, but **not** on detection display.
+  **Requirement for commit 4:** the merge must surface `new_transfers` as
+  pending-incoming **independent of** the tree-gated synced-height advance.
+  Today a transfer becomes user-visible only at merge-commit; gating that
+  commit on tree-ingest without the split would wire the first-run *display*
+  cliff back in by accident. The invariant is preserved — the spendable tip
+  still never outruns the tree — only the honest "pending, scanning" surface
+  moves ahead. This is a real merge-shape decision (two cursors), not a free
+  property.
+- **R3-Q3 — `synced_height` for the tree (RESOLVED, confirmed in code).** The
+  tree has its own last-ingested cursor `ingested_tip_height: Option<BlockHeight>`
+  (`client.rs:205`), `None` when fresh; `ingest_block` computes
+  `expected = ingested_tip_height + 1` (or `BlockHeight(0)` when `None`,
+  `client.rs:476–478`). It is structurally decoupled from the wallet's
+  `synced_height`. The merge computes the tree's next expected height from
+  this cursor, not `synced_height`.
+- **R3-Q4 — already-synced wallet adopting the tree (RESOLVED).** A wallet
+  that synced owned outputs *before* the tree existed (or after a tree-store
+  wipe) has `synced_height ≫ 0` but a fresh tree; the tree feed backfills
+  `0..synced_height` independent of the owned-output cursor. This is the
+  **cleanest instance of the R3-Q2 reframe**: detection is *entirely* done
+  (balances already shown), so nothing is gated on display — only spendability
+  waits on the backfill. Same display/spend split, with display fully on the
+  "done" side.
+- **R3-Q5 — DoD (RESOLVED, KATs pinned).** The load-bearing KAT nothing else
+  exercises: a **floored wallet** (tree genesis-to-tip, owned birthday-to-tip)
+  spending a `birthday+1` output whose membership path includes a
+  **sub-birthday sibling** — fails if the tree was not truly backfilled to
+  genesis (sibling missing → wrong path → invalid proof). This is exactly the
+  shape no existing fixture covers (the CT-2 oracle is coinbase-only and
+  unfloored), so it **inherits the Tier-B non-coinbase fixture gate** (same as
+  the CT-5a reorg KAT; part of what Tier-B-ungated-by-CT-5c buys). Plus a
+  reorg-into-backfill KAT (R3-Q6): backfill frontier above a fork, reorg,
+  assert **resume-from-cursor not resume-from-counter**.
+- **R3-Q6 — reorg during backfill (NEW, RESOLVED).** A wallet mid-backfill
+  (tree ingested `0..k`) when a reorg fires: the reorg is within the shallow
+  near-tip reorg window, so while the backfill frontier `k` is below the
+  window the reorg is below nothing the backfill touches and `0..k` is stable.
+  The one edge: `k` has climbed into the window (`k > fork_height`), so
+  `rollback_to_fork` truncates part of what the backfill just ingested and the
+  backfill must resume from `fork_height + 1`. That is ordinary
+  rollback-then-resume **iff the backfill driver reads its resume point from
+  `ingested_tip_height` after the rollback, never from a driver-local
+  counter** — `rollback_to_fork` rebuilds and writes that cursor
+  (`client.rs:443`), so cursor-driven resume is correct by construction and a
+  counter-driven driver is the silent-gap hazard. **Constraint pinned: the
+  backfill driver is cursor-driven, not counter-driven.**
+
+**Source confirmations gating the reframe (both came back affirming):**
+
+1. **Detection is tree-independent.** `shekyl-scanner` has **no
+   `shekyl-curve-tree` dependency** (`Cargo.toml`); the only `curve_tree` token
+   in `scan.rs` is `curve_tree_root: [0u8; 32]` in a *test* `BlockHeader`
+   (`scan.rs:1313`). The production detection path is pure trial-decapsulation
+   against wallet keys — zero tree consultation. So display can decouple from
+   spend, and the decoupling is correct.
+2. **Cursor-driven resume substrate.** `rollback_to_fork` rebuilds from the
+   store and writes `self.ingested_tip_height = rebuilt.ingested_tip_height`
+   (`client.rs:443`); `ingest_block` derives `expected` from it
+   (`client.rs:476`). The cursor is the authoritative resume point and rollback
+   updates it. (No backfill driver exists yet — this makes cursor-driven the
+   *only correct* shape for R3-Q1/Q6, a design constraint, not an existing-code
+   confirmation.)
+
+**Genesis-feed source (RESOLVED, confirmed in code) — no genesis special
+case.** The genesis block's leaves flow through the *same* decode path as every
+other block: `curve_tree_decode.rs` has no `genesis` / `height == 0` /
+chain-params branch (grep-clean), and the client's `ingest_block` expects
+`BlockHeight(0)` when fresh by construction (`client.rs:476`). So the genesis
+feed is "fetch block 0, run the same decode, ingest at `BlockHeight(0)`,"
+identical to every height — there is no hand-built genesis leaf set and no
+second source of truth. The "genesis seed step" from earlier rounds fully
+dissolves: there is no special genesis step, only a feed that *starts* at 0
+(ignoring the floor and `synced_height + 1`). The answer keeps genesis as
+`chain[0]` fetched the same way as any block — if it ever routes around the
+daemon for genesis, that reintroduces the two-sources-of-truth hazard and is
+rejected.
+
+**Round 3 closed (2026-06-15).** R3-Q1–R3-Q6 resolved above; the §3.2 mechanism
+is now **fed** (genesis-anchored, two-cursor display/spend split). CT-5a commit
+4 may land against this contract. The only external gate remaining is the
+Tier-B non-coinbase fixture for the floored-sibling DoD KAT (R3-Q5), shared
+with the CT-5a reorg KAT.
+
+#### 3.2.1.1 Commit-4 envelope and constraints (Decisions 1–4, 2026-06-15)
+
+With the design resolved, four implementation decisions fix what commit 4
+carries and what it explicitly does not.
+
+**D1 — the two-cursor split is its own commit, *not* commit 4 (envelope
+decision).** Today `apply_scan_result_to_state` **fuses** detection and commit:
+`new_transfers` are appended and `synced_height` (`ledger.height()`) advances in
+one call (`merge.rs:215`, `:271–337`). The split (detection-height advances on
+trial-decap success, independent of the tree; spendable/synced-height advances
+only under ack-before-commit) is **real merge surgery** plus a new
+pending-incoming surface — a *presentation/spendability-semantics* validation
+surface distinct from commit 4's *correctness* surface (O2: the spendable tip
+never outruns the tree). Per `19-validation-surface-discipline.mdc` and
+`90-commits.mdc` scope discipline they separate:
+
+- **Commit 4 (correctness):** wire the genesis-anchored feed + the
+  merge-driven `handle.ingest` so the **spendable/synced cursor** advances only
+  on ingest-ack (O2 preserved). Single-surfaced — `new_transfers` still appear
+  only when the gated `synced_height` advances, i.e. the first-run **cliff is
+  present** in interim builds.
+- **Commit 4b (display decoupling):** surface `new_transfers` as
+  pending-incoming **independent of** the tree-gated synced-height advance
+  (received-shows-immediately, spend-lags-backfill). UX-shaped, independently
+  testable.
+
+The interim cliff is acceptable **pre-genesis** (no users; per the
+`16-architectural-inheritance.mdc` user-protection-defaults-in-user-absent-contexts
+framing) and 4b lands before any release. Splitting keeps commit 4 the
+auditable correctness unit — a reviewer checking "does the spendable tip stay
+gated on the tree" does not wade through presentation changes. (The prior
+turn's closing sentence read as pre-deciding "build the split in commit 4"; the
+preceding analysis argued split-out and handed the envelope call here — this is
+that call: **split out**.)
+
+**D2 — counter-driven resume forbidden by construction, not by discipline.**
+The backfill driver MUST read its resume point from `ingested_tip_height` every
+iteration; it MUST NOT hold a driver-local fetch-frontier field. Enforcement is
+the T1–T3 unrepresentable-not-forbidden move: the driver type has **no
+frontier field**, so the resume point is a cursor read (a `CurveTreeHandle`
+cursor-query message → the actor's `ingested_tip_height`), not stored state.
+Counter-drift after a reorg into the backfilled range is then *unrepresentable*
+rather than merely prohibited. Implied handle surface: a cursor-read `ask` on
+`CurveTreeHandle` (none exists yet; commit 4 adds it).
+
+**D3 — adopting-wallet spendability during backfill: acceptable, and must be
+surfaced.** A wallet that synced owned outputs before the tree existed (or after
+a tree-store wipe) backfills `0..synced_height`; during that backfill, outputs
+that were spendable yesterday are **temporarily unspendable** (the tree cannot
+build a membership path until rebuilt). This is correctness-correct and honest,
+but a UX-surprising regression, so it is **not silent**: the wallet surfaces
+"rebuilding membership data — spending temporarily unavailable" (a
+`82-failure-mode-ux.mdc` first-class failure surface), it does not silently
+reject spends. The surfacing rides with the display-decoupling commit (4b), not
+the correctness commit (4).
+
+**D3 — landed (4b-1 + 4b-2).** The spend-side gate landed in commit 4b-1:
+`LocalPendingTx::build` caps the spendable set at `min(synced_height,
+tree_cursor)` and surfaces the lag as `SendError::SpendUnavailableRebuilding`
+(→ `BuildErrorKind::RebuildingMembershipData`) rather than a misleading
+`InsufficientFunds`. The display side landed in commit 4b-2: `RefreshProgress`
+gains `pending_incoming_count` / `pending_incoming_atomic_units` (the
+per-attempt detected-output summary, decoupled from spendability) and
+`rebuilding_membership` (the ledger-ahead-of-tree predicate,
+`refresh::membership_rebuilding`). The orchestrator emits the summary on the
+pre-merge `Merging` frame — reading the tree cursor *before* the ingest
+pre-pass, so a long adopting backfill surfaces "rebuilding membership data" for
+its whole duration — and on the terminal success frame with
+`rebuilding_membership: false` (the pre-pass acked the range under
+ack-before-commit, so the tree is caught up). The `rebuilding == true` and
+non-zero pending-incoming-amount KATs are Tier-B-gated to CT-5c (divergent
+adopting state / non-coinbase fixture); 4b-2 lands the pure-predicate KAT and
+the forward-from-genesis wiring smoke test.
+
+**D4 — R3-Q5 KATs inherit the Tier-B gate; name the green-positive hazard in
+commit 4's DoD.** Commit 4 lands with the **reorg-into-backfill KAT** (R3-Q6:
+resume-from-cursor) which *is* coinbase-fixture-expressible (it tests cursor
+resume, not non-coinbase siblings). The **floored-wallet sub-birthday-sibling
+completeness KAT** (R3-Q5) needs the Tier-B non-coinbase fixture and is
+**proven at CT-5c, not here**. Commit 4's DoD says this explicitly — *"backfill
+correctness for non-coinbase sub-birthday siblings is Tier-B-gated, proven at
+CT-5c, not at commit 4"* — so a green commit 4 (coinbase fixtures) is **not**
+mistaken for a proven backfill. This is the CT-3c
+green-positive-for-broken-thing lesson one level up: the merge wiring's green
+status must not imply membership-completeness is tested; it is not until the
+fixture exists.
+
 ### 3.3 Reorg rollback + poison recovery
 
 Refresh detects a fork by parent-hash mismatch (`local_refresh.rs:634–673`),
@@ -412,6 +762,25 @@ in a fresh task) and re-runs the same forward sync the ledger does: a poison is 
 transient persistence hiccup, not a user-actionable fault, and refresh already
 retries. Respawn is the actor-shape form of drop-and-reopen (R1-Q1); the path is
 exercised by a KAT (O3, §5).
+
+> **Landed — CT-5a commit 5 (2026-06-15).** The respawn *happy path* is wired:
+> `CurveTreeHandle` holds its `ActorRef` in an `Arc<Mutex<…>>` shared, swappable
+> cell so `CurveTreeHandle::respawn` (kill → `wait_for_shutdown` → reopen →
+> spawn → atomic swap) propagates the fresh actor to **every** clone at once
+> (including the `LocalPendingTx` spend-gate clone — without the shared cell a
+> respawn heals refresh but leaves spends on a dead actor, a partial heal). The
+> reopen retries on a 2 s-bounded poll because kameo drops the actor value (and
+> its redb lock) *after* `wait_for_shutdown` returns. `RefreshError::CurveTreeIngest`
+> carries `recoverable_by_respawn: bool` (`true` = fail-stopped actor /
+> `ClientError::Poisoned`; `false` = non-consecutive-height / root-mismatch /
+> store / decode, which a reopen would reproduce);
+> `Engine::ingest_scan_result_with_respawn` does one respawn-and-retry on a
+> recoverable error and is wired into both refresh ingest call sites. KATs:
+> `respawn_resumes_from_store_and_propagates_to_clones` (handle) and
+> `ingest_pre_pass_respawns_after_actor_fail_stop` (engine path). The
+> **bounded-retry-then-surface escalation** (O3-sub — a deterministically corrupt
+> store must not livelock respawn→reopen) is **not** in commit 5; it couples with
+> the refresh retry/cancel budget and is staged for CT-5d.
 
 ### 3.4 Real path assembly (replacing the synthetic vectors)
 
@@ -649,7 +1018,7 @@ initial pull (struck through).
 | ID | Question | Resolution |
 |----|----------|------------|
 | **R1-Q1** | Where the `CurveTreeClient` lives + single-writer cell (§3.1) | ~~refresh-owned~~ → ~~`Engine` field under the RwLock~~ → **`CurveTreeActor` + `Clone` `CurveTreeHandle`** (Round 2, mirror `KeyActor`); merge is sole ingest-sender; consistency via ingest-ack-before-ledger-commit |
-| **R1-Q2** | Ingest site + what `ScanResult` carries (§3.2) | **merge drives `handle.ingest`**, commits ledger on ack; `ScanResult` grows **two transit fields** — full per-block leaf set + per-block header root (both dropped after merge) — A1 frozen |
+| **R1-Q2** | Ingest site + what `ScanResult` carries (§3.2) | **merge drives `handle.ingest`**, commits ledger on ack; `ScanResult` grows **two transit fields** — full per-block leaf set + per-block header root (both dropped after merge) — A1 frozen. **Feed amended by §3.2.1 (Round 3): genesis-anchored, not the floored producer** |
 | **R1-Q3** | `ScannableBlock → BlockLeaves` decode = consensus drain order (§3.2) | **dedicated KAT vs the `ct2_tier_a.json` oracle** (A2); lands CT-5a |
 | **R1-Q4** | Reorg ordering + poison handling (§3.3) | **rollback in `handle_reorg`** under the same guard, atomic with the ledger rewind; **automatic** drop-and-reopen |
 | **R1-Q5** | `synthetic_tree` disposition (§3.4) | **delete** (no users); migrate tests to the real client + CT-2 fixture; lands CT-5c |
@@ -1122,6 +1491,20 @@ boundary).
   (R1-Q1, mirror `KeyActor`), spawn on engine open with the `Engine` holding the
   handle, the `ScannableBlock → BlockLeaves` decode (R1-Q3 KAT), and the
   merge-driven `handle.ingest` with ingest-ack-before-ledger-commit (R1-Q2).
+  **§3.2.1 (Round 3, closed 2026-06-15) governs the feed: genesis-anchored, not
+  the birthday-floored producer. Per §3.2.1.1 (Decisions 1–4) the work splits:
+  commit 4 wires the genesis-anchored feed + merge-driven ingest so the
+  spendable/synced cursor advances only on ingest-ack (O2 correctness;
+  single-surfaced — interim cliff present, acceptable pre-genesis); the
+  detection/display two-cursor decoupling (received-shows-immediately) is
+  commit 4b, before any release. The backfill driver is cursor-driven by
+  construction — no frontier field, resume read from `ingested_tip_height` each
+  iteration (D2). Adopting-wallet temporary-unspendability during a
+  `0..synced_height` rebuild is surfaced, not silent (D3, with 4b). Commit 4's
+  DoD lands the reorg-into-backfill resume-from-cursor KAT (coinbase-expressible)
+  and explicitly names that non-coinbase sub-birthday-sibling backfill
+  correctness is Tier-B-gated, proven at CT-5c, not at commit 4 (D4) — a green
+  commit 4 is not a proven backfill.**
   **The per-block leaf-set materialization (E4) bounds its buffer by the consensus
   block-size limit *before* allocation, not by the daemon's received blob length
   (X7); DoD asserts the bound.**
@@ -1138,6 +1521,16 @@ boundary).
   green-positive-for-broken-migration lesson; a coinbase-only fixture cannot
   exercise class-(b) pending migration, so this DoD **inherits the Tier-B
   non-coinbase fixture dependency** — E6a); respawn KAT (O3).
+  **Commit 6 status (2026-06-15): the engine-path root-match DoD has landed.**
+  Two KATs drive `ingest_scan_result_into_curve_tree` with the `ct2_tier_a`
+  oracle and assert the engine-reconstructed root byte-matches the oracle at
+  every height — forward ingest of the `main` chain, and a `reorg_rewind` onto
+  `reorg_deep` (engine-path rollback + re-ingest). Read-back is a `#[cfg(test)]`
+  `RootAt` actor message + `CurveTreeHandle::root_at` (the production root-read
+  is CT-5b's §3.3 verify, not this slice). **Pending-table-equality post-reorg
+  (E6a) remains Tier-B-gated** — the coinbase-only `ct2_tier_a` fixture cannot
+  express a class-(b) pending migration, so that assertion lands at CT-5c when
+  the non-coinbase fixture exists.
 - **CT-5b — reference selection + §3.3 verify (R1-Q6, derive>hold).** Wire
   `select_reference_height`, the C2 gate, the **§3.3 ingest-time verify**
   (reconstructed root == pre-0 header root → loud DoS on mismatch), and the
@@ -1256,6 +1649,8 @@ boundary).
   `CurveTreeHandle`; merge sole ingest-sender; ingest-ack-before-commit (§3.1).
 - [x] R1-Q2 ingest site + `ScanResult` growth — **resolved:** merge-driven actor
   ingest, two transit fields (leaf set + header root), A1 frozen (§3.2).
+  **Mechanism stands; feed amended by §3.2.1 (Round-3 post-closure pin) — the
+  tree feed is genesis-anchored, not the birthday-floored producer.**
 - [x] R1-Q3 `BlockLeaves` decode = CT-2 drain order — **resolved:** dedicated
   KAT vs the oracle (§3.2).
 - [x] R1-Q4 reorg ordering + poison handling — **resolved:** rollback in

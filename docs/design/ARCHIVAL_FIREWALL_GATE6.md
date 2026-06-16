@@ -8,7 +8,8 @@ carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (
 **C-1 confirm-at-source dependency** — the emission vin-layer ML-DSA equality check (a hard merge
 blocker, §9.8) must land before the `archival_p` impl is wired into emission. Round 2 may add an
 **HS-identity HKDF label** to that KAT (GF-9, §10.7). Timing/output rounds still open. Not
-soundness-closed.
+soundness-closed. **GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated
+`bond_spend_pk` (gate-4 §3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key.
 Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
@@ -354,7 +355,9 @@ shipping an optimistic sealed floor on top of the very +1 margin it is meant to 
 - [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9).
 - [x] Pin per-tx-type verifier contract — account `hybrid_sign_pk` is bond-record identity only;
       per-input auth is per-output (GF-1, §9.6).
-- [ ] Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module.
+- [ ] Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module —
+      **including the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`**
+      (GF-1; §9.3 / §9.4).
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration).
 - [ ] Pin network rendezvous requirement for production archival serving.
@@ -424,6 +427,15 @@ Ed25519 wide-reduce and ML-KEM `d_z` paths, `32` for the ML-DSA-65 seed — matc
 | `view_wide` | `shekyl-archival-p-ed25519-view-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 view |
 | `kem_d_z` | `shekyl-archival-p-ml-kem-768-v1` | 64 | `ml_kem_chacha_seed_from_d_z` → ML-KEM-768 KG (same SHA3-ChaCha intermediary as principal; **separate `d_z`** from label) |
 | `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 keypair (ChaCha20Rng seeded) |
+| `bond_spend_wide` | `shekyl-archival-p-bond-spend-ed25519-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 half of `bond_spend_pk` (GF-1; gate-4 §4.1) |
+| `bond_spend_ml_dsa_seed` | `shekyl-archival-p-bond-spend-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 half of `bond_spend_pk` (GF-1) |
+
+**`bond_spend_pk` is the dedicated bond-debit authorizer (GF-1, §9.6), not the identity key.**
+Its two rows above derive a full hybrid keypair (`scheme_id = 1`) under labels domain-separated
+from both the identity-spend (`spend_wide` / `ml_dsa_seed`) and the per-output tree, so a
+bond-spend-key compromise is isolated from `P`'s identity and from individual-output spend. It
+is committed into the bond record at `JoinMarket` (gate-4 §3.4.1 / §4.1) and authorizes every
+later `bond_debit`.
 
 **Forbidden info labels on the `P` path:** `shekyl-ed25519-spend`, `shekyl-ed25519-view`,
 `shekyl-ml-kem-768`, and the entire `shekyl-output-derive-v1` / `shekyl-pqc-output` tree.
@@ -462,6 +474,7 @@ ArchivalPKeys {
   x25519_pk:                  montgomery(view_pk),   // same map as principal
   hybrid_sign_pk, hybrid_sign_sk: Hybrid{ed25519=spend, ml_dsa=account ML-DSA},
   hybrid_bond_id:             HybridPublicKey,       // == hybrid_sign_pk; bond-record IDENTITY only
+  bond_spend_pk, bond_spend_sk: Hybrid{ed25519=bond_spend_wide, ml_dsa=bond_spend ML-DSA},  // GF-1 debit authorizer
   p_canonical_id:             [u8; 32],              // §9.5
 }
 ```
@@ -471,6 +484,14 @@ and `p_canonical_id`; it is **never** used as a per-input `PqcAuthentication.hyb
 Per-input spend authority — including emission backing inputs and the terminal drain — is the
 **per-output** `shekyl-pqc-output` derivation (the §9.6 GF-1 contract). The account ML-DSA key
 inside `hybrid_sign_sk` signs bond-record / emission-identity material, not individual inputs.
+
+**`bond_spend_pk` is the GF-1 bond-debit authorizer (distinct from identity).** Derived under
+the §9.3 `shekyl-archival-p-bond-spend-*` labels, it is committed into the `ArchivalBondRecord`
+at `JoinMarket` (gate-4 §4.1) and signs the bond vin on **debit** paths (`Unbond`,
+`HoldingsUpdate` drop). It exists so that authorizing a *value-out* never requires the identity
+key, keeping `hybrid_bond_id`'s compromise surface "reveals nothing spendable." Same
+not-persisted-at-rest discipline as the other secrets: `bond_spend_sk` re-derives from
+`master_seed_64` + `p_slot` on wallet open.
 
 **Not persisted at rest:** secret fields are re-derived from `master_seed_64` + `p_slot` on
 wallet open (same discipline as `AllKeysBlob` ML-KEM decap key). Persist only `p_slot` and
@@ -515,7 +536,7 @@ checks each against a different key.
 | `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
 |-------------|-------------------------------|------------------------------------------|----------|
 | **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Rebond` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
-| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying | **single bond vin** authorizes the `bond_debit`: gate-4 §3.5 step 5 ("`P` hybrid signatures on vin"; `pqc_auths[]` aligned with `vin[]`). **GF-1-carve (asymmetric — the carve is the default-by-inertia, below):** §3.5 step 5's existing wording already presumes the **account `hybrid_sign_pk`**, which would carve GF-1; **recommended disposition is a dedicated bond-spend key committed in the record** (own HKDF label + KAT, domain-separated from identity) — preserves GF-1 identity-only, compromise-isolates bond-debit authority. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; **bond-debit auth must be resolved at gate-4 source — and §3.5 step 5 re-worded to name the key explicitly — before the verifier lands** |
+| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
 | **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
@@ -532,6 +553,13 @@ doc); its Gate-6 consequence is that the previously **one-time** firewall
 events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
 drain, GF-10 within-epoch timing).
 
+**GF-1-carve — RESOLVED 2026-06-16 (dedicated bond-spend key; gate-4 §3.5 step 5 / §4.1 / §3.4.1).**
+The analysis below stands as the *why*; the disposition is no longer open. Gate-4 now commits a
+dedicated `bond_spend_pk` at `JoinMarket` and verifies `bond_debit` paths against it, so the
+account identity key never authorizes a value-out. The custody model (gate-4 §3.2) was **not**
+reopened — the receipt-UTXO direction floated below was declined as a Round-1-seal reopen, not the
+minimal fix.
+
 **GF-1-carve — not a symmetric fork; the carve is the default trajectory by omission.** The
 collateral-out direction authorizes a *reduction of consensus-tracked bonded balance*, and it is
 the **only `P` path with neither a key image (ordinary spend) nor a leaf to bind (emission's
@@ -547,18 +575,24 @@ compromise surface from what Round 1 fought to keep minimal — *identifier; com
 nothing spendable* — to *compromise drains the bond*. That spends the cleanest invariant in the
 crypto layer to save one derived key.
 
-**Recommended resolution (a gate-4 custody-model call, recorded not prescribed):** a **dedicated
-bond-spend key committed in the bond record at post time** — its own HKDF label and KAT entry,
-domain-separated from the identity — authorizes debits. Identity-only is preserved; bond-spend
-authority is compromise-isolated. No key image is needed: non-replay comes from balance-accounting
-(`bond_debit ≤ bonded_total`) plus standard tx-height / input binding, which is sufficient.
-**A direction worth gate-4's consideration:** a *receipt-UTXO* custody model — mint a
-non-transferable receipt at bond-post, unbond by spending it on the standard per-output +
-key-image path (replay protection for free, partial-unbond = receipt split), which would reuse the
-most existing machinery and could make the value-movement leg **byte-indistinguishable** while only
-the `tx_extra` bond-record mutation stays self-identifying. **Concrete action:** re-word gate-4
-§3.5 step 5 to name the authorizing key explicitly, and **resolve at gate-4 source before the
-bond-post verifier lands** — it is a consensus rule, so wrong-once = fork-to-fix. Do not infer.
+**Resolution (landed at gate-4 source, 2026-06-16):** a **dedicated bond-spend key
+(`bond_spend_pk`) committed in the bond record at post time** — its own HKDF labels (§9.3
+`shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`) + KAT entry, domain-separated from the
+identity — authorizes debits. Identity-only is preserved; bond-spend authority is
+compromise-isolated. No key image is needed: non-replay comes from balance-accounting
+(`bond_debit ≤ bonded_total`) plus standard tx-height / input binding (the post sig-preimage
+binds `tx_prefix_hash`), which is sufficient. Gate-4 §3.5 step 5 was re-worded to verify debit
+paths against `bond_spend_pk` and credit paths against `P_pubkey`; the key is committed at
+`JoinMarket` and bound into the sig-preimage (gate-4 §3.4.1 / §4.1).
+**Declined (recorded, per `21-reversion-clause-discipline.mdc`):** a *receipt-UTXO* custody model
+— mint a non-transferable receipt at bond-post, unbond by spending it on the standard per-output +
+key-image path (replay protection for free, partial-unbond = receipt split, value-movement leg
+**byte-indistinguishable**). It is attractive but **reopens the Round-1-sealed §3.2 consensus-balance
+custody model** and unwinds the implemented `bond_credit`/`bond_debit` RCT verifier — a
+custody-architecture reversal, not the minimal GF-1 fix. **Reopen criterion:** revisit only if a
+later requirement makes the bond value-leg's byte-distinguishability a measured privacy breach
+(an S-2/S-3 exposure-ledger finding), at which point the receipt-UTXO model is the named
+candidate — via a fresh gate-4 custody-model round, not by inference.
 
 **Why ordinary `P` transfers carry no identity field:** they are byte-shaped identically to
 principal transfers, so a verifier cannot (and must not) tell a `P` drain from any other
@@ -657,7 +691,8 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - [x] Dual-scan and signing-surface separation stated (GF-1 per-tx-type contract; GF-2 architectural enforcement).
 - [x] V4 reversion clauses named.
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
-- [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`).
+- [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
+      **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1).
 - [ ] `shekyl-crypto-pq::archival_p` implementation + unit tests.
 
 **Carried dependencies (confirm-at-source before the impl + emission verifier land):**
@@ -1024,18 +1059,19 @@ with the principal-linkage gap still open under a different name.
   (sim-consistency, R-3 family).
 - **§10.6** — dummy/fragmentation tuned ratio (measure-then-tune → testnet replay).
 - **§10.9** — guard-isolation enforcement mechanism (Arti config vs. policy) → transport PR.
-- **GF-1-carve** — bond-debit vin authorization key (§9.6 bond-post note). **Not symmetric:** the
-  carve is the default-by-inertia (§3.5 step 5's "`P` hybrid signatures on vin" presumes the
-  account key); recommended disposition is a **dedicated bond-spend key** (identity-only
-  preserved). Concrete action: **re-word gate-4 §3.5 step 5 to name the key**, resolve at gate-4
-  source **before the bond-post verifier lands** (consensus rule — wrong-once = fork-to-fix).
+- **GF-1-carve — RESOLVED (2026-06-16).** Bond-debit authorization is a **dedicated
+  `bond_spend_pk`** committed at `JoinMarket`, domain-separated from the identity key (§9.3 labels;
+  gate-4 §3.5 step 5 / §4.1 / §3.4.1). The account `P_pubkey` never authorizes a value-out;
+  identity-only invariant preserved. Custody model (§3.2) not reopened; the receipt-UTXO
+  alternative was declined and given a reopen criterion (§9.6).
 - **Rebond/unbond FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
   add-shard credit path covers top-up (gate-4 §4.4 / FSM retool); **blocks the R-3 sim
   reconciliation and thus the genesis seal** (§6 scope note); the reconciliation must be
   **age-stratified, not a re-tuned flat cost**.
 
 **Critical path out of Round 2 (these two, not the transport tuning):** (1) the GF-1-carve
-resolves at gate-4 source — wording fix to §3.5 step 5 — before the bond-post verifier lands; and
+resolves at gate-4 source — **done 2026-06-16** (dedicated `bond_spend_pk`; gate-4 §3.5 step 5 /
+§4.1 / §3.4.1), so the bond-post verifier can now be built against a named debit key; and
 (2) the rebond/unbond FSM promotion gates the R-3 age-stratified sim reconciliation, which gates
 the genesis seal. The transport-tuning carries (§10.4(b), §10.6, §10.9) correctly defer to testnet
 replay.
@@ -1085,20 +1121,41 @@ cross-referenced to their home docs.
   **cannot be closed at the network layer** — it must be labeled traceable-to-that-decision so no
   further R3/R4 cycles are spent trying to fix it where it cannot be fixed. Home: the staking-model
   decision record (confidential-staking rejection).
-- **S-5 — longevity-vs-privacy is a model-level question to answer before the seal (not an R3/R4
-  mitigation).** The economics reward a **long-lived `P`** (serve-credit accrual to a stable id,
+- **S-5 — RESOLVED 2026-06-16 (long-lived `P` is the committed architecture).** *Was:*
+  longevity-vs-privacy is a model-level question to answer before the seal (not an R3/R4
+  mitigation). The economics reward a **long-lived `P`** (serve-credit accrual to a stable id,
   lock tiers, `bond_duration`) — the worst possible structure for the bridge: a permanent handle
   with a monotonically growing fusion surface. We inherited long-lived `P` from the staking model
-  without asking. **But the answer is open, and one branch reopens the FSM just pinned:** a
+  without asking. **One branch reopens the FSM just pinned:** a
   short-lived `P` *relocates* the seam (value-out fusion → repeated value-in funding, a fresh GF-7
   per rotation) and collides with bond-as-consensus-balance — rotating `P` means *migrating bond
   between identities*, a new consensus operation, not a wallet choice (reopens §6 / R-1). The answer
-  space also includes "long-lived but with uniform per-epoch behavior and a large set." Confront at
-  the model level pre-seal; do not mitigate downstream. Home: staking model / `PHASE_2B`.
+  space also includes "long-lived but with uniform per-epoch behavior and a large set."
+
+  **Disposition (consciously closed, per `21-reversion-clause-discipline.mdc`).** The
+  long-lived-vs-short-lived *architectural* fork is **closed in favor of long-lived `P`**. This
+  ratifies what every downstream commitment already assumes — serve-credit accrual to a stable id,
+  lock tiers, `bond_duration` (gate-4 §4.4), the L18 freeze-friction seal
+  ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)), and bond-as-consensus-balance (gate-4 §3.2)
+  — so it is now a **decided** architecture, not an inherited-unexamined one. The decision-by-
+  accumulation is hereby made explicit rather than left latent. **Short-lived / rotating `P` is
+  out of scope for V3.0:** it would relocate the seam and require bond-migration-between-identities
+  as a new consensus op (reopening the §6/R-1 FSM and the gate-4 §3.2 custody seal), and the unwind
+  cost grows with every commitment built on the long-lived assumption. **What remains is not a
+  re-fork but the privacy *characterization* of the long-lived handle's fusion surface**, which
+  folds into **S-2** (fused exposure ledger) + **S-3** (funding/exit adversary sim) and the
+  operator-behavior levers (uniform per-epoch activity, large serving set) routed to the S-2
+  exposure ledger + opsec guide — documentation and ops, not a protocol change. **Reopen
+  criterion:** reopen the architectural fork *only* if the S-2/S-3 characterization **measures**
+  public per-`P` attribution exposure severe enough to reconsider the confidential-staking
+  rejection (the §10 pass-4 framing) — a measured-breach finding, not a design preference.
+  **Reopen shape:** a fresh model-level round in the staking model / `PHASE_2B` that owns the
+  bond-migration consensus-op design short-lived `P` requires, before any V-next seal. Home:
+  staking model / `PHASE_2B`.
 - **S-6 — key locality: the always-on serving box must hold only the `P`-subtree, never the master
   seed.** Everything-from-one-seed, run-from-one-wallet puts the **most-exposed machine** (always-on
   `.onion` server) on the **most-sensitive root**. This is fixable **without surrendering
-  recoverability**: derive the `P`-subtree (`P` spend/view, the proposed bond-spend key, the HS
+  recoverability**: derive the `P`-subtree (`P` spend/view, the `bond_spend_pk` keypair, the HS
   onion key) on a **cold device** and provision *only* the `P`-subtree secrets to the serving box.
   HKDF one-wayness means `P`-subtree compromise never reaches the master seed or principal keys;
   recoverability is preserved by re-deriving on the cold device. This **extends the §10.9 isolation
@@ -1215,9 +1272,11 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
 
 **Prioritization (pre-seal):** (1) build the fused exposure ledger (S-2 — cheap, tells you whether
 the seams compose); (2) put a minimal adversary sim on the funding/exit timing seams (S-3 — the
-actual linkage); (3) answer the longevity-vs-privacy question at the model level (S-5). The walls
-(crypto + network) are in good shape; the **doors (GF-7/GF-4) and the floor plan (S-5) are where the
-work is.** S-2 and S-3 are the privacy axis of the R-3 reconciliation that already gates the seal.
+actual linkage). The **S-5 longevity fork is consciously closed** (long-lived `P` committed,
+2026-06-16); its surviving privacy *residual* is exactly (1)+(2) — characterize the long-lived
+handle's fusion surface, do not re-fork the architecture. The walls (crypto + network) are in good
+shape; the **doors (GF-7/GF-4)** are where the remaining privacy work is. S-2 and S-3 are the
+privacy axis of the R-3 reconciliation that already gates the seal.
 
 ---
 
@@ -1236,6 +1295,26 @@ work is.** S-2 and S-3 are the privacy axis of the R-3 reconciliation that alrea
 
 ## Revision history
 
+- **2026-06-16 (S-5 consciously closed — long-lived `P` committed):** The last genuinely-structural
+  fork (long-lived vs. short-lived `P`) is closed in favor of **long-lived `P`** per
+  `21-reversion-clause-discipline.mdc` — ratifying what serve-credit accrual, lock tiers,
+  `bond_duration`, the L18 freeze seal, and bond-as-consensus-balance already assume, so the
+  decision-by-accumulation is now explicit rather than latent. Short-lived/rotating `P` is out of
+  scope for V3.0 (would require a bond-migration consensus op, reopening §6/R-1 + gate-4 §3.2). The
+  surviving privacy residual is *characterization*, not a re-fork: folds into S-2 (exposure ledger)
+  + S-3 (adversary sim) + operator-behavior levers. Named reopen criterion: a **measured** S-2/S-3
+  per-`P` attribution breach severe enough to reconsider the confidential-staking rejection, via a
+  fresh `PHASE_2B` model-level round. §10 S-5 bullet + Prioritization prose updated. Docs-only.
+- **2026-06-16 (GF-1-carve resolved — dedicated bond-spend key):** Bond-debit authorization is a
+  dedicated **`bond_spend_pk`** (hybrid `scheme_id = 1`), committed into `ArchivalBondRecord` at
+  `JoinMarket` and immutable, **never** the account identity key — so authorizing a value-out no
+  longer touches `hybrid_bond_id` (Round-1 identity-only invariant preserved). §9.3 gains the
+  `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` HKDF labels (+ KAT obligation, §7); §9.4
+  gains the `bond_spend_pk`/`bond_spend_sk` bundle field; §9.6 carve note + table row + §10.11
+  open item flipped to resolved. Custody model (gate-4 §3.2) **not reopened** — still
+  consensus-balance; the receipt-UTXO direction was declined with a named reopen criterion (§9.6).
+  Source change lands in gate-4 (§3.4 vin, §3.4.1 wire + sig-preimage, §3.5 step 5 verify order,
+  §4.1 record, §8 checklist). Docs-only here. Closes the §10.11 critical-path item (1).
 - **2026-06-15 (`HoldingsUpdate` promoted to genesis scope):** Resolved R-1's open
   V3.1→genesis call: the full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
   Unbond`) ships at **V3.0** (gate-4 §4.4 revision 2026-06-15). Rationale: bond balance is

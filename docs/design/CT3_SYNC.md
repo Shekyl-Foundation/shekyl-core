@@ -177,7 +177,13 @@ Audit pin: `chore/ct3-sync-design` branch point off `dev`, 2026-06-11.
   Store-backed assembly is **not** CT-3 (it belongs with the prune-policy
   work, parent §8 #9) — recorded in `FOLLOWUPS.md` with a V3.0 target so it
   is not silently lost. CT-3 must not foreclose it (the store already holds
-  `owned_identities`, S10).
+  `owned_identities`, S10). **Firing condition pinned (CT-5a, 2026-06-15):**
+  the genesis-anchored tree feed (`CT5_ENGINE_WIRING.md` §3.2.1) is what fills
+  this vec, so it is genesis-to-tip-sized; F5 fires when the in-memory tree
+  exceeds budget — a **post-genesis chain-length measurement**, the same
+  scaling axis as the bulk-leaf-RPC fetch-cost trigger (R1-Q1 premise
+  correction above). Two deferrals, one axis, both waiting for the same field
+  data.
 - **F6 (Round 1 review).** The pending table introduces `identity` into
   persisted state. The parent checklist's structural no-secrets test
   (§4.1/§4.2 disjointness) extends explicitly over the new table — one
@@ -240,6 +246,41 @@ record now, not only under the reversion path — a `FOLLOWUPS.md` row binds
 the `get_curve_tree_leaves` endpoint + its §6 KAT to the prune-policy work,
 so the owed endpoint is not recorded solely as prose inside a closed design
 round.
+
+**Premise correction (2026-06-15, surfaced by CT-5a; cross-ref
+`CT5_ENGINE_WIRING.md` §3.2.1).** The proposed-disposition sentence "the
+wallet's refresh loop already delivers every block" is false for any wallet
+that floors its birthday above genesis: the refresh producer is
+birthday-floored and `synced_height + 1`-based (`local_refresh.rs:589`), so it
+delivers `birthday..tip`, not `0..tip`. The tree requires a global anonymity
+set from genesis, so a floored wallet must run a **separate genesis-to-tip
+block feed for the tree** — a cost the deferral's model did not account for.
+This is the spirit of reversion-clause (a), not the letter: the data-source
+decision rested on a producer behavior that does not hold. **Disposition: the
+reopening resolves to "the tree gets its own full-range block feed" (fork
+three, `CT5_ENGINE_WIRING.md` §3.2.1), NOT "un-defer the bulk RPC."** The
+CT-5a cost-asymmetry measurement (leaf-extract is 2–3 orders of magnitude
+cheaper per output than owned-output trial-decrypt) shows block-derived
+genesis-to-tip extraction is cheap enough that block-derived stays the
+forward-sync default; the bulk-leaf RPC remains deferred as a *fetch-cost*
+optimization with its original reversion clause (a)/(b) intact. The genesis
+backfill is block-derived, not RPC-driven. No new round opens in this doc; the
+feed shape is designed in `CT5_ENGINE_WIRING.md` §3.2.1 (Round 3, closed
+2026-06-15, R3-Q1–R3-Q6) — fork three, a genesis-anchored feed, and a
+two-cursor merge splitting display (detection, tree-independent) from spend
+(tree-verified).
+
+**Reversion-clause (a) axis pinned.** The falsified premise was false only on
+the **fetch** axis (a floored wallet does not get `0..birthday` blocks from the
+refresh loop), true on the **extraction** axis. So clause (a) fires when
+genesis-to-tip block download for the tree dominates **fresh-wallet sync
+wall-time** to the point where bulk-leaf fetch would materially cut it (leaves
+are a fraction of block bytes — no `tx_extra` beyond `0x07`, no signatures, no
+range proofs). That is a bandwidth/wall-time measurement against a real chain
+length: a **post-genesis observation**, not a pre-genesis decision. It shares
+the chain-length scaling axis with the F5 in-memory-tree budget
+(`CT5_ENGINE_WIRING.md` §3.2.1, F5 coupling) — both deferrals wait for the same
+field data.
 
 ### R1-Q2 — Resume semantics: persist pending candidates
 

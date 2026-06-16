@@ -56,6 +56,16 @@ shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+# CT-5 (`docs/design/CT5_ENGINE_WIRING.md`): the wallet-side FCMP++
+# curve-tree client (`CurveTreeClient`, redb-backed, public-material-only).
+# The `CurveTreeActor` (`engine/curve_tree_actor.rs`) owns it inside its
+# task; `Engine` holds a `Clone` `CurveTreeHandle`. Dependency-discipline
+# (`17-dependency-discipline.mdc`, X6): first-party Shekyl path-crate — no
+# new third-party crate enters the graph. Its only third-party edge is
+# `redb` (already the workspace `4.1.0` pin, verified at source); the actor
+# wrapper uses `kameo` (already a direct dep here, line below, exact-pinned
+# `=0.20.0`). No new `kameo`/`redb` edge versions are introduced.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
 # placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
 # `sign_bridge` on the production send path.

@@ -3866,6 +3866,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-engine-file",
  "shekyl-engine-prefs",

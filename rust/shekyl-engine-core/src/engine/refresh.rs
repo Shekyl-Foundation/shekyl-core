@@ -377,6 +377,22 @@ pub enum RefreshPhase {
 ///   retry boundaries because each attempt re-fetches the tip;
 ///   static within an attempt.
 /// - `phase`: see [`RefreshPhase`].
+/// - `pending_incoming_count` / `pending_incoming_atomic_units`: the
+///   per-attempt "you have incoming" summary (CT-5 §3.2.1 D3 display
+///   surface) — the count and summed amount of [`DetectedTransfer`]
+///   entries the producer recovered this attempt. Transient: it
+///   reflects the in-flight attempt, resets to `0` on
+///   `RefreshPhase::Retrying`, and is `0` on attempts that detect
+///   nothing. It is the detection ("received") signal, decoupled from
+///   spendability — a detected output can be displayed before its
+///   curve-tree membership is provable.
+/// - `rebuilding_membership`: `true` while the curve tree is behind the
+///   ledger (the ledger has confirmed blocks the tree has not yet
+///   ingested), i.e. the adopting / tree-wiped wallet whose backfill is
+///   in progress. Spending may be temporarily gated
+///   ([`SendError::SpendUnavailableRebuilding`](super::error::SendError::SpendUnavailableRebuilding))
+///   while this holds. The forward-from-genesis common case never sets
+///   it (tree and ledger advance in lockstep).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RefreshProgress {
@@ -392,9 +408,44 @@ pub struct RefreshProgress {
 
     /// Current phase of the refresh.
     pub phase: RefreshPhase,
+
+    /// Count of outputs detected ("received") this attempt. See the
+    /// type docstring's pending-incoming field semantics.
+    pub pending_incoming_count: u64,
+
+    /// Summed amount (atomic units) of the outputs detected this
+    /// attempt. See the type docstring's pending-incoming semantics.
+    pub pending_incoming_atomic_units: u64,
+
+    /// `true` while the curve tree lags the ledger (rebuild in
+    /// progress); spending may be temporarily gated. See the type
+    /// docstring.
+    pub rebuilding_membership: bool,
 }
 
 impl RefreshProgress {
+    /// Construct a phase-transition snapshot with the curve-tree
+    /// display fields zeroed (no per-attempt detection, not rebuilding)
+    /// — the common shape for the seed, retry, and cancel pings that do
+    /// not carry a pending-incoming summary. The merge / success
+    /// emissions that *do* carry the summary build the literal directly.
+    pub(crate) const fn phase_only(
+        height: u64,
+        blocks_processed: u64,
+        blocks_total: u64,
+        phase: RefreshPhase,
+    ) -> Self {
+        Self {
+            height,
+            blocks_processed,
+            blocks_total,
+            phase,
+            pending_incoming_count: 0,
+            pending_incoming_atomic_units: 0,
+            rebuilding_membership: false,
+        }
+    }
+
     /// Synthetic zero-height baseline. **Test helpers only** —
     /// production seeders (today: [`Engine::start_refresh`])
     /// override `height` with the wallet's current `synced_height`
@@ -405,13 +456,26 @@ impl RefreshProgress {
     /// blank starting value.
     #[cfg(test)]
     pub(crate) const fn initial() -> Self {
-        Self {
-            height: 0,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        }
+        Self::phase_only(0, 0, 0, RefreshPhase::Scanning)
     }
+}
+
+/// Whether the curve tree lags the ledger and is therefore rebuilding
+/// membership data. `tree_cursor` is the tree's last-ingested height
+/// ([`super::curve_tree_actor::CurveTreeHandle::ingested_tip_height`]),
+/// `None` when the tree is fresh; `ledger_synced` is the ledger's
+/// confirmed tip. The tree is behind iff its covered height (treating a
+/// fresh tree as `0`) is strictly below the ledger tip — i.e. there are
+/// confirmed blocks whose leaves the tree has not yet ingested. A fresh
+/// wallet syncing from genesis (`ledger_synced == 0`) is not rebuilding;
+/// only an adopting / tree-wiped wallet (ledger ahead of a lagging tree)
+/// is.
+fn membership_rebuilding(
+    tree_cursor: Option<shekyl_curve_tree::BlockHeight>,
+    ledger_synced: u64,
+) -> bool {
+    let covered = tree_cursor.map_or(0, |h| h.0);
+    covered < ledger_synced
 }
 
 /// RAII handle to a refresh task spawned by
@@ -1022,7 +1086,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             )
             .await;
 
-        let result = match produced.map_err(Into::into) {
+        let mut result = match produced.map_err(Into::into) {
             Ok(r) => r,
             Err(RefreshError::Cancelled) => {
                 // Mid-scan cancel: the producer observed the cancel
@@ -1046,6 +1110,23 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
 
         let summary = summarize(&result, attempt);
 
+        // Pending-incoming ("you have received") display summary for this
+        // attempt (CT-5 §3.2.1 D3). Detection is decoupled from
+        // spendability: these outputs surface on the progress channel as
+        // soon as the scan finds them, independent of whether the curve
+        // tree can yet prove their membership. `u64`-summed with
+        // saturation so a pathological amount set can never panic the
+        // refresh task.
+        let pending_incoming_count = summary.transfers_detected as u64;
+        let pending_incoming_atomic_units = result.new_transfers.iter().fold(0u64, |acc, dt| {
+            acc.saturating_add(dt.output.amount().to_raw())
+        });
+        let merge_height = summary
+            .processed_height_range
+            .end
+            .saturating_sub(1)
+            .max(current_synced);
+
         // Pre-merge cancel checkpoint. The producer returned a valid
         // `ScanResult`, but the user fired `cancel` between the last
         // per-block check inside `RefreshEngine::produce_scan_result` and now. The
@@ -1067,15 +1148,37 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // observe success or a retry. `blocks_total` mirrors
         // `blocks_processed`: the producer is done, so total equals
         // processed at this phase transition.
+        //
+        // `rebuilding_membership` is read from the tree cursor *before*
+        // the ingest pre-pass below runs: it is the adopting / tree-wiped
+        // wallet's state (ledger ahead of a lagging tree) and is the
+        // window during which the backfill is in flight. On a long
+        // adopting backfill this is the phase a subscriber observes for
+        // the entire catch-up, so the "rebuilding membership data" status
+        // surfaces here, not after the pre-pass has already healed it.
+        let rebuilding_membership = {
+            let curve_tree = {
+                let g = engine_arc.read().await;
+                g.curve_tree.clone()
+            };
+            let cursor = curve_tree.ingested_tip_height().await;
+            // A cursor read failure is not fatal to the display ping
+            // (the ingest pre-pass below surfaces a real fault
+            // terminally); treat an unreadable cursor as not-rebuilding
+            // so a transient actor hiccup cannot flip the UI to a
+            // spurious "rebuilding" state.
+            cursor
+                .ok()
+                .is_some_and(|c| membership_rebuilding(c, current_synced))
+        };
         _ = progress.send(RefreshProgress {
-            height: summary
-                .processed_height_range
-                .end
-                .saturating_sub(1)
-                .max(current_synced),
+            height: merge_height,
             blocks_processed: summary.blocks_processed,
             blocks_total: summary.blocks_processed,
             phase: RefreshPhase::Merging,
+            pending_incoming_count,
+            pending_incoming_atomic_units,
+            rebuilding_membership,
         });
 
         // Merge under the **read** lock on the outer engine: per the
@@ -1104,6 +1207,45 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // primitive at M3b), so the outer engine read-guard `g` is
         // held only for the bounded, compute-only merge — no `.await`
         // runs while it is held.
+        // CT-5a §3.2 (R1-Q2): feed the curve tree this result's height
+        // range (genesis/birthday catch-up + per-range ingest, cursor-
+        // driven) BEFORE the ledger merge, so the ledger tip never
+        // advances past the tree (ack-before-commit, O2). The ingest is
+        // idempotent under the retry loop — a re-produced result is
+        // skipped up to the tree's own cursor — and terminal on failure
+        // (the loop retries only `ConcurrentMutation`). Clone the
+        // curve-tree handle and daemon under a brief read guard, then
+        // drop the guard before the long-running ingest `.await`s so
+        // close / mutation paths are not blocked during backfill.
+        let (curve_tree, daemon, store_path) = {
+            let g = engine_arc.read().await;
+            (
+                g.curve_tree.clone(),
+                g.daemon.clone(),
+                shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
+            )
+        };
+        let producer_leaves =
+            match super::merge::index_block_leaves(std::mem::take(&mut result.block_leaves)) {
+                Ok(map) => map,
+                Err(e) => {
+                    _ = completion.send(Err(e));
+                    return;
+                }
+            };
+        if let Err(e) = super::merge::curve_tree_ingest_scan_result_with_respawn(
+            &curve_tree,
+            &daemon,
+            &store_path,
+            &result,
+            &producer_leaves,
+        )
+        .await
+        {
+            _ = completion.send(Err(e));
+            return;
+        }
+
         let merge = {
             let g = engine_arc.read().await;
             g.apply_scan_result(result)
@@ -1111,11 +1253,26 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
 
         match merge {
             Ok(()) => {
-                // No terminal `Done` progress phase: the completion
-                // oneshot is the authoritative success signal. Once
-                // we drop `progress` on return, the receiver's next
-                // `changed().await` returns `RecvError`, which is
-                // the watch-channel idiom for "no further updates."
+                // Final `Merging`-phase frame carrying the per-attempt
+                // pending-incoming summary with `rebuilding_membership:
+                // false` — the ingest pre-pass above acked the full range
+                // before this merge (ack-before-commit), so the tree is
+                // now caught up to the ledger and any rebuild window has
+                // closed. This lets a subscriber that samples only the
+                // terminal frame still observe "you received X" without a
+                // stale rebuilding flag. The completion oneshot remains
+                // the authoritative success signal; there is no terminal
+                // `Done` phase (dropping `progress` on return yields
+                // `RecvError`, the watch idiom for "no further updates").
+                _ = progress.send(RefreshProgress {
+                    height: merge_height,
+                    blocks_processed: summary.blocks_processed,
+                    blocks_total: summary.blocks_processed,
+                    phase: RefreshPhase::Merging,
+                    pending_incoming_count,
+                    pending_incoming_atomic_units,
+                    rebuilding_membership: false,
+                });
                 _ = completion.send(Ok(summary));
                 return;
             }
@@ -1132,12 +1289,12 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 // re-derives `blocks_total` from a fresh snapshot +
                 // daemon-tip read; the orchestrator no longer owns
                 // that value after the C5 trait-dispatch migration.
-                _ = progress.send(RefreshProgress {
-                    height: current_synced,
-                    blocks_processed: 0,
-                    blocks_total: 0,
-                    phase: RefreshPhase::Retrying,
-                });
+                _ = progress.send(RefreshProgress::phase_only(
+                    current_synced,
+                    0,
+                    0,
+                    RefreshPhase::Retrying,
+                ));
                 last_concurrent_mutation =
                     Some(RefreshError::ConcurrentMutation { wallet, result });
                 continue;
@@ -1294,12 +1451,12 @@ impl<
         // - `completion`: oneshot for the terminal
         //   `RefreshSummary` / `RefreshError`. `RefreshHandle::join`
         //   awaits this.
-        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress {
-            height: synced_height,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        });
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
+            synced_height,
+            0,
+            0,
+            RefreshPhase::Scanning,
+        ));
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let cancel_token = CancellationToken::new();
 
@@ -1476,15 +1633,15 @@ impl<
         // so the producer's `progress.send(...)` calls are no-ops
         // (best-effort sends to a no-subscriber watch channel
         // silently succeed by replacing the buffered latest value).
-        let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress {
-            height: 0,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        });
+        let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
+            0,
+            0,
+            0,
+            RefreshPhase::Scanning,
+        ));
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            runtime
+            let mut result = runtime
                 .block_on(self.refresh.produce_scan_result(
                     snapshot.clone(),
                     &self.daemon,
@@ -1493,7 +1650,14 @@ impl<
                     progress_tx.clone(),
                     &sink,
                 ))
-                .map_err(Into::into)
+                .map_err(Into::<RefreshError>::into)?;
+            // CT-5a §3.2 (R1-Q2): feed the curve tree this result's range
+            // before `refresh_with` merges it (ack-before-commit, O2).
+            // Cursor-driven + idempotent, so re-running it on a retried
+            // attempt is safe. Mirrors the async `run_refresh_task` path,
+            // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
+            runtime.block_on(self.ingest_scan_result_with_respawn(&mut result))?;
+            Ok(result)
         })
     }
 
@@ -2347,12 +2511,12 @@ mod refresh_handle_tests {
 
         let mut rx = handle.progress();
         progress_tx
-            .send(RefreshProgress {
-                height: 42,
-                blocks_processed: 7,
-                blocks_total: 100,
-                phase: RefreshPhase::Scanning,
-            })
+            .send(RefreshProgress::phase_only(
+                42,
+                7,
+                100,
+                RefreshPhase::Scanning,
+            ))
             .expect("subscriber alive");
         rx.changed().await.expect("update delivered");
         let snap = *rx.borrow();
@@ -2535,12 +2699,12 @@ mod refresh_handle_tests {
         let mut rx = handle.progress();
 
         progress_tx
-            .send(RefreshProgress {
-                height: 100,
-                blocks_processed: 50,
-                blocks_total: 200,
-                phase: RefreshPhase::Scanning,
-            })
+            .send(RefreshProgress::phase_only(
+                100,
+                50,
+                200,
+                RefreshPhase::Scanning,
+            ))
             .expect("subscriber alive");
         rx.changed().await.expect("scanning update delivered");
         let mid = *rx.borrow();
@@ -3141,6 +3305,414 @@ mod start_refresh_integration_tests {
         }
     }
 
+    /// CT-5a §3.2 (R1-Q2) forward-path KAT: a hybrid refresh feeds the
+    /// curve tree the full genesis-anchored range ahead of the ledger
+    /// merge (ack-before-commit, O2). Where
+    /// [`hybrid_linear_scan_5_blocks_advances_synced_height`] asserts the
+    /// *ledger* tip, this asserts the *tree* cursor: a fresh wallet whose
+    /// producer range is `1..6` must leave the tree's
+    /// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight(5))`
+    /// — height `0` came from the genesis/birthday backfill (daemon-
+    /// fetched + decoded by the ingest pre-pass, since the producer's
+    /// floored range never includes it), heights `1..6` from the
+    /// producer's `block_leaves`. The two-source feed is the §3.2.1 R3-Q1
+    /// shape; this proves it runs through the live `run_refresh_task`
+    /// wiring, not just the unit helper.
+    ///
+    /// The reorg resume-from-cursor KAT (D4) and the non-coinbase
+    /// sub-birthday-sibling completeness KAT (Tier-B-gated, CT-5c) are
+    /// the named follow-ons; this fixture is coinbase-only/empty-leaf, so
+    /// it proves the cursor advances over the full range but not the
+    /// membership-path correctness of non-coinbase siblings.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
+        const MASTER_SEED: [u8; 32] = [
+            0xc7, 0x5e, 0xed, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+            0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1a, 0x1b, 0x1c,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // 6 blocks at heights 0..=5: chain[0] = genesis; the producer
+        // scans 1..=5 from synced_height 0, and the ingest pre-pass
+        // backfills height 0 from the daemon.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Pre-refresh: a fresh tree has no ingested tip.
+        {
+            let g = arc.read().await;
+            let tip = g
+                .curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read on the live actor");
+            assert_eq!(tip, None, "a fresh wallet's curve tree has no ingested tip");
+        }
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+        let summary = handle
+            .join()
+            .await
+            .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
+        assert_eq!(summary.processed_height_range, 1..6);
+
+        // Post-refresh: the tree cursor covers genesis-through-tip. The
+        // merge advanced the ledger only after this ingest acked
+        // (ack-before-commit), so the tree tip is never behind the ledger.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.synced_height(),
+                5,
+                "post-refresh ledger tip matches the producer range upper bound"
+            );
+            let tip = g
+                .curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read on the live actor");
+            assert_eq!(
+                tip,
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "tree cursor covers genesis (backfilled) through the producer range tip"
+            );
+        }
+
+        // Bounded poll for slot release so a regression cannot hang the
+        // suite (mirrors the sibling hybrid tests).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
+    }
+
+    /// CT-5 §3.2.1 D3 pure-logic KAT for the `rebuilding_membership`
+    /// predicate that drives the [`RefreshProgress`] display flag. The
+    /// flag is "ledger ahead of a lagging tree," which is exactly the
+    /// adopting / tree-wiped wallet; the forward-from-genesis common case
+    /// (`ledger_synced == 0`, fresh tree) must never read as rebuilding.
+    #[test]
+    fn membership_rebuilding_predicate() {
+        use super::membership_rebuilding;
+        use shekyl_curve_tree::BlockHeight;
+
+        // Fresh wallet from genesis: tree fresh, ledger at 0 — both at
+        // the floor, nothing to rebuild.
+        assert!(
+            !membership_rebuilding(None, 0),
+            "a fresh-from-genesis wallet is not rebuilding"
+        );
+        // Adopting wallet: ledger loaded at 5, tree freshly wiped — the
+        // backfill is the rebuild window.
+        assert!(
+            membership_rebuilding(None, 5),
+            "an adopting wallet with a fresh tree and a non-zero ledger is rebuilding"
+        );
+        // Partially-rebuilt tree still behind the ledger.
+        assert!(
+            membership_rebuilding(Some(BlockHeight(3)), 5),
+            "a tree cursor below the ledger tip is rebuilding"
+        );
+        // Caught up: tree cursor equals the ledger tip.
+        assert!(
+            !membership_rebuilding(Some(BlockHeight(5)), 5),
+            "a tree caught up to the ledger is not rebuilding"
+        );
+        // Tree ahead of the ledger (does not occur under ack-before-
+        // commit, but the predicate must not flag it).
+        assert!(
+            !membership_rebuilding(Some(BlockHeight(7)), 5),
+            "a tree ahead of the ledger is not rebuilding"
+        );
+    }
+
+    /// CT-5 §3.2.1 D3 wiring KAT: a forward-from-genesis hybrid refresh
+    /// surfaces the pending-incoming display fields on the progress
+    /// channel, and the common case is *not* flagged as rebuilding. The
+    /// fixture is coinbase-only/empty-leaf (no wallet-addressed outputs),
+    /// so the detected count is `0`; the load-bearing assertion is that
+    /// the terminal frame carries `rebuilding_membership == false`
+    /// (tree and ledger advanced in lockstep, no backfill gap). The
+    /// `rebuilding == true` path and a non-zero pending-incoming amount
+    /// require a divergent adopting state and a wallet-addressed
+    /// (non-coinbase) fixture respectively — both Tier-B-gated to CT-5c,
+    /// same as the sibling completeness KATs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_refresh_from_genesis_surfaces_not_rebuilding() {
+        const MASTER_SEED: [u8; 32] = [
+            0x4b, 0x2d, 0x9a, 0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xa9, 0xba,
+            0xcb, 0xdc, 0xed, 0xfe, 0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96,
+            0xa5, 0xb4, 0xc3, 0xd2,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+        // Hold a progress receiver across the join so the watch channel
+        // retains its terminal frame for inspection afterwards.
+        let progress = handle.progress();
+        handle
+            .join()
+            .await
+            .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
+
+        let terminal = *progress.borrow();
+        assert!(
+            !terminal.rebuilding_membership,
+            "a forward-from-genesis refresh advances tree and ledger in lockstep, \
+             so the terminal frame is not flagged as rebuilding"
+        );
+        assert_eq!(
+            terminal.pending_incoming_count, 0,
+            "a coinbase-only fixture has no wallet-addressed outputs to detect"
+        );
+        assert_eq!(
+            terminal.pending_incoming_atomic_units, 0,
+            "no detected outputs means a zero pending-incoming amount"
+        );
+
+        // Bounded poll for slot release so a regression cannot hang the
+        // suite (mirrors the sibling hybrid tests).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
+    }
+
+    /// CT-5a §3.2 (R3-Q6 / D4) reorg KAT for the ingest pre-pass's
+    /// rollback path: a reorg result must roll the tree back to keep
+    /// `fork_height - 1` (the last common height) and then resume from the
+    /// tree's own cursor onto the new fork — never from a driver-local
+    /// frontier (counter drift is unrepresentable because the driver holds
+    /// no frontier).
+    ///
+    /// The witness is a deliberately **shorter** fork. A forward feed
+    /// takes the tree to tip `5`. A reorg at `fork_height = 3` carries a
+    /// new range `3..5` (heights `3, 4` only). The pre-pass must drop the
+    /// orphaned suffix (old heights `3, 4, 5`), re-ingest `3, 4`, and land
+    /// at tip `4`. Tip `4 != 5` is unambiguous: without the rollback the
+    /// tree would still report `5`; reaching `4` proves the suffix was
+    /// dropped and the cursor (not a stale counter) drove the resume.
+    ///
+    /// Drives [`Engine::ingest_scan_result_into_curve_tree`] directly with
+    /// hand-built [`ScanResult`]s — the pre-pass reads only
+    /// `reorg_rewind` / `processed_height_range` / `block_leaves` (and the
+    /// daemon for the genesis backfill), so the merge-invariant fields stay
+    /// at their `empty_at` defaults. Leaves are empty (synthetic blocks are
+    /// empty-leaf); the non-coinbase sub-birthday-sibling completeness KAT
+    /// remains Tier-B-gated to CT-5c.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
+        const MASTER_SEED: [u8; 32] = [
+            0x3e, 0x07, 0x6b, 0xac, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+            0xf0, 0xe1, 0xd2, 0xc3,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // chain[0] = genesis, backfilled by the pre-pass; chain[1..=5] are
+        // the producer-range heights of the forward feed.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Forward feed: range 1..6, empty leaves; genesis backfilled from
+        // the daemon. Tree tip -> 5.
+        let mut forward = ScanResult::empty_at(1, None);
+        forward.processed_height_range = 1..6;
+        forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_into_curve_tree(&mut forward)
+                .await
+                .expect("forward feed ingests genesis-through-tip");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "forward feed leaves the tree at tip 5",
+            );
+        }
+
+        // Reorg at fork_height = 3 onto a shorter fork (range 3..5).
+        let mut reorg = ScanResult::empty_at(3, None);
+        reorg.processed_height_range = 3..5;
+        reorg.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 3 });
+        reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_into_curve_tree(&mut reorg)
+                .await
+                .expect("reorg feed rolls back and resumes");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(4)),
+                "tree rolled back to keep fork_height-1 (=2) then resumed on \
+                 the shorter fork to tip 4, dropping the orphaned height 5",
+            );
+        }
+    }
+
+    /// CT-5a §3.3 (R1-Q4 / O3) respawn happy-path KAT through the engine ingest
+    /// entry point. A fail-stopped curve-tree actor is healed by
+    /// [`Engine::ingest_scan_result_with_respawn`]: the first attempt sees the
+    /// dead actor (classified `recoverable_by_respawn`), the engine respawns it
+    /// (drop + reopen — cursor resumes from the persisted store tip, no genesis
+    /// replay), and the retry ingests the new range. The witness that the
+    /// respawn-and-retry actually progressed — rather than merely reopening — is
+    /// the post-heal tip advancing past the pre-kill tip.
+    ///
+    /// The bounded-retry-then-surface escalation for a deterministically-corrupt
+    /// store (O3-sub) is CT-5d, not exercised here (this fixture's store is
+    /// clean, so one respawn heals it). Leaves are empty (the merge-path empty-
+    /// leaf shape); behavioral leaf/root correctness is the CT-2-oracle KAT
+    /// (commit 6) / Tier-B completeness (CT-5c).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
+        const MASTER_SEED: [u8; 32] = [
+            0x9d, 0x42, 0x1f, 0x88, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+            0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c,
+            0x9d, 0xae, 0xbf, 0xc0,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // chain[0] = genesis (backfilled by the pre-pass); chain[1..=5] are the
+        // first forward feed's producer-range heights.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // First forward feed: range 1..6, empty leaves; genesis backfilled.
+        // Tree tip -> 5.
+        let mut forward = ScanResult::empty_at(1, None);
+        forward.processed_height_range = 1..6;
+        forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_with_respawn(&mut forward)
+                .await
+                .expect("forward feed ingests genesis-through-tip");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "forward feed leaves the tree at tip 5",
+            );
+        }
+
+        // Simulate a fail-stop of the curve-tree actor (panic-free): the bare
+        // ingest path now classifies the dead actor as respawn-recoverable.
+        {
+            let g = arc.read().await;
+            g.curve_tree.kill_and_wait_for_test().await;
+            let err = g
+                .ingest_scan_result_into_curve_tree(&mut forward)
+                .await
+                .expect_err("a fail-stopped actor fails the bare (no-respawn) ingest");
+            assert!(
+                matches!(
+                    err,
+                    RefreshError::CurveTreeIngest {
+                        recoverable_by_respawn: true,
+                        ..
+                    }
+                ),
+                "a fail-stopped actor is classified respawn-recoverable, got {err:?}",
+            );
+        }
+
+        // Second forward feed: range 6..8 (heights 6, 7), supplied as leaves so
+        // no daemon backfill is needed. Through the respawn-aware wrapper, the
+        // first attempt hits the dead actor, the engine respawns (cursor resumes
+        // from the persisted tip 5), and the retry ingests 6, 7 to tip 7.
+        let mut forward2 = ScanResult::empty_at(6, None);
+        forward2.processed_height_range = 6..8;
+        forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_with_respawn(&mut forward2)
+                .await
+                .expect("respawn-and-retry heals the fail-stop and ingests the new range");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(7)),
+                "post-respawn the tree resumed from persisted tip 5 and ingested \
+                 6, 7 to tip 7 — the heal progressed, it did not merely reopen",
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_rejects_inverted_processed_height_range() {
+        // O5/O2: an inverted `processed_height_range` (end < start) is a
+        // malformed `ScanResult`. The ingest pre-pass must reject it loudly
+        // *before* touching the curve tree — the ledger merge's own
+        // `end >= start` guard runs only after ingest, so without this the
+        // tree would advance (via daemon backfill of `next < range_start`)
+        // on a result the merge later rejects, leaving tree ahead of ledger.
+        let daemon_seed = derive_seed(&[0x5b; 32], ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let mut bad = ScanResult::empty_at(5, None);
+        // Built from bindings, not a `5..3` literal, to dodge
+        // `clippy::reversed_empty_ranges` — the inversion is the point.
+        let (start, end) = (5u64, 3u64);
+        bad.processed_height_range = start..end;
+
+        let g = arc.read().await;
+        let err = g
+            .ingest_scan_result_into_curve_tree(&mut bad)
+            .await
+            .expect_err("an inverted processed_height_range must be rejected");
+        assert!(
+            matches!(
+                err,
+                RefreshError::MalformedScanResult { reason }
+                    if reason.contains("end precedes start")
+            ),
+            "expected an end-precedes-start MalformedScanResult, got {err:?}",
+        );
+        // O2: the tree must not have advanced on the rejected malformed range.
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            None,
+            "the curve tree must not advance on a rejected malformed range",
+        );
+    }
+
     /// Exercise the §5.2 retry contract end-to-end. Composition: a
     /// 6-block [`TestDaemon`] chain (heights 0..=5) drives the producer
     /// from `synced_height = 0`. The producer slot is a
@@ -3439,5 +4011,304 @@ mod start_refresh_integration_tests {
                 panic!("slot still claimed 5s after four-slot hybrid retry refresh joined");
             }
         }
+    }
+
+    // ── CT-5a commit 6: CT-2 Tier-A oracle match through the engine ─────
+    //
+    // The DoD's core obligation (CT5_ENGINE_WIRING.md §, "CT-5a"): the engine
+    // refresh's curve-tree ingest reproduces the consensus header root through
+    // the full engine → handle → actor → client wiring, forward and across a
+    // reorg, byte-equal to the CT-2 oracle at every height.
+    //
+    // This closes the last link in a three-KAT chain that cannot drift (all
+    // three consume the *same* `ct2_tier_a.json`, sourced cross-crate):
+    //   1. `curve_tree_decode::decode_reproduces_ct2_tier_a_leaf_inputs` —
+    //      `ScannableBlock` → `OwnedTxLeaves` matches the oracle rows.
+    //   2. `shekyl-curve-tree`'s `recon_kat::client_reconstructs_consensus_
+    //      root_at_every_height` — those rows reconstruct the oracle root
+    //      through the `CurveTreeClient`.
+    //   3. *here* — the engine's `ingest_scan_result_into_curve_tree` carries
+    //      those rows to the oracle root at every height through the actor.
+    //
+    // The leaves are built directly from the oracle rows (the proven output of
+    // #1), so no full-block/proofs/scanner machinery is needed: the producer
+    // range covers genesis-to-tip (`processed_height_range.start == 0`), so the
+    // cursor-driven merge takes every height from `block_leaves` with no daemon
+    // backfill. Reading the reconstructed root back uses the test-only
+    // `CurveTreeHandle::root_at` (the production §3.3 verify / send-time
+    // re-derivation is CT-5b).
+
+    /// The cross-crate Tier-A reconstruct-root oracle — the *same* fixture
+    /// `shekyl-curve-tree`'s `recon_kat` and the engine-path decode KAT
+    /// (`curve_tree_decode`) consume, sourced here so the three KATs cannot
+    /// drift.
+    const CT2_TIER_A_FIXTURE: &str =
+        include_str!("../../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
+
+    fn ct2_hex_vec(s: &str) -> Vec<u8> {
+        assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
+            .collect()
+    }
+
+    fn ct2_hex32(s: &str) -> [u8; 32] {
+        let v = ct2_hex_vec(s);
+        assert_eq!(v.len(), 32, "expected 32 bytes, got {}", v.len());
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&v);
+        a
+    }
+
+    /// One decoded fixture block for the engine ingest path: its height, the
+    /// recorded consensus header root, and the coinbase [`OwnedTxLeaves`]
+    /// exactly as [`curve_tree_decode::decode_block_leaves`] would produce them
+    /// — `output_key` / `commitment` / `target` verbatim, `h_pqc` left for the
+    /// client to resolve from the `0x07` blob at ingest.
+    struct Ct2FixtureBlock {
+        height: u64,
+        root: [u8; 32],
+        leaves: Vec<crate::scan::OwnedTxLeaves>,
+    }
+
+    /// Decode one named chain from the Tier-A fixture into per-height blocks
+    /// carrying the coinbase leaf set in `OwnedTxLeaves` form.
+    fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
+        use shekyl_curve_tree::{RawOutput, TargetKind};
+
+        let f: serde_json::Value =
+            serde_json::from_str(CT2_TIER_A_FIXTURE).expect("Tier-A fixture parses");
+        let chain = f["chains"]
+            .as_array()
+            .expect("chains array")
+            .iter()
+            .find(|c| c["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("chain {name} not in fixture"));
+
+        chain["blocks"]
+            .as_array()
+            .expect("blocks array")
+            .iter()
+            .map(|b| {
+                let mt = &b["miner_tx"];
+                let blob = ct2_hex_vec(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
+                let outputs = mt["outputs"]
+                    .as_array()
+                    .expect("outputs array")
+                    .iter()
+                    .map(|o| RawOutput {
+                        output_key: ct2_hex32(o["output_key"].as_str().expect("O hex")),
+                        commitment: o["commitment"].as_str().map(ct2_hex32),
+                        target: match o["target"].as_str().expect("target") {
+                            "tagged_key" => TargetKind::TaggedKey,
+                            "key" => TargetKind::Key,
+                            other => panic!("unexpected Tier-A target kind: {other}"),
+                        },
+                    })
+                    .collect();
+                Ct2FixtureBlock {
+                    height: b["height"].as_u64().expect("height"),
+                    root: ct2_hex32(b["curve_tree_root"].as_str().expect("root hex")),
+                    // The coinbase is the only leaf-bearing tx in a Tier-A block
+                    // (coinbase-only regtest fixture). `is_miner` drives the +60
+                    // maturity offset in the client's drain order.
+                    leaves: vec![crate::scan::OwnedTxLeaves {
+                        is_miner: true,
+                        leaf_hash_blob: Some(blob),
+                        outputs,
+                    }],
+                }
+            })
+            .collect()
+    }
+
+    /// Read a top-level `u64` field (e.g. `main_tip`) from the Tier-A fixture.
+    fn ct2_tier_a_u64(key: &str) -> u64 {
+        let f: serde_json::Value =
+            serde_json::from_str(CT2_TIER_A_FIXTURE).expect("Tier-A fixture parses");
+        f[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("fixture key {key} missing or non-u64"))
+    }
+
+    /// Build a `ScanResult` that drives a genesis-anchored forward ingest of
+    /// `blocks`: producer range `0..tip+1`, every height's leaves materialized
+    /// so the cursor-driven merge never falls to the daemon backfill. Only the
+    /// fields `ingest_scan_result_into_curve_tree` reads
+    /// (`processed_height_range` / `block_leaves` / `reorg_rewind`) are set; the
+    /// merge-invariant fields stay at their `empty_at` defaults.
+    fn ct2_forward_scan_result(blocks: &[Ct2FixtureBlock]) -> ScanResult {
+        let end = blocks.last().expect("non-empty chain").height + 1;
+        let mut r = ScanResult::empty_at(0, None);
+        r.processed_height_range = 0..end;
+        r.block_leaves = blocks
+            .iter()
+            .map(|b| (b.height, b.leaves.clone()))
+            .collect();
+        r
+    }
+
+    /// CT-5a commit-6 DoD (forward): the engine ingest path reconstructs the
+    /// CT-2 Tier-A consensus header root at **every** height of the `main`
+    /// chain, driven through the real `Engine → CurveTreeHandle → CurveTreeActor
+    /// → CurveTreeClient` wiring (not the bare `recon` / client APIs the
+    /// cross-crate KATs cover). The `main` chain spans heights 0..=210, so this
+    /// crosses the empty-window → first-drain boundary at height 61 (the S2 pin)
+    /// through the engine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
+        use shekyl_curve_tree::BlockHeight;
+
+        const MASTER_SEED: [u8; 32] = [
+            0x6c, 0x21, 0x9a, 0x3f, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+            0x01, 0x12, 0x23, 0x34,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // No backfill: the producer range starts at genesis and every height's
+        // leaves are materialized, so the daemon is never queried — a 1-block
+        // stub satisfies `make_hybrid_engine_arc`.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(1));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let blocks = ct2_tier_a_chain("main");
+        let mut forward = ct2_forward_scan_result(&blocks);
+
+        let g = arc.read().await;
+        g.ingest_scan_result_into_curve_tree(&mut forward)
+            .await
+            .expect("genesis-anchored ingest of the full Tier-A main chain");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(blocks.last().unwrap().height)),
+            "the cursor advanced to the chain tip",
+        );
+
+        let mut mismatches = Vec::new();
+        for b in &blocks {
+            let got = g
+                .curve_tree
+                .root_at(BlockHeight(b.height))
+                .await
+                .expect("root read");
+            if got != b.root {
+                mismatches.push(b.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "engine ingest root != CT-2 oracle at heights {:?} (first {} shown)",
+            &mismatches[..mismatches.len().min(10)],
+            mismatches.len().min(10),
+        );
+    }
+
+    /// CT-5a commit-6 DoD (reorg): after ingesting `main`, a reorg feed with
+    /// `reorg_rewind` set drives the engine through `CurveTreeHandle::
+    /// rollback_to_fork` and a cursor-driven re-ingest of the `reorg_deep`
+    /// suffix. The reconstructed root then matches the `reorg_deep` oracle at
+    /// **every** height — the kept shared prefix (proving the rollback kept
+    /// exactly `fork_height - 1`) and the re-mined suffix alike.
+    ///
+    /// **Tier-B scope boundary (E6a).** The full DoD also asserts *pending-table
+    /// equality* post-reorg, not only root equality — class-(b) pending
+    /// migration (the CT-3c green-positive-for-broken-migration lesson). A
+    /// coinbase-only fixture cannot create the non-coinbase pending rows that
+    /// migration touches, so that half inherits the Tier-B non-coinbase fixture
+    /// dependency and is proven at CT-5c, not here. This KAT proves the
+    /// engine-path rollback + re-ingest *root* correctness, which the coinbase
+    /// fixture can express.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
+        use shekyl_curve_tree::BlockHeight;
+
+        const MASTER_SEED: [u8; 32] = [
+            0xa7, 0x5e, 0x14, 0x82, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+            0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c,
+            0x9d, 0xae, 0xbf, 0xd1,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(1));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let main = ct2_tier_a_chain("main");
+        let deep = ct2_tier_a_chain("reorg_deep");
+        // `fork` is the last height shared by the two chains (the fork point);
+        // heights above it diverge. The merge's `reorg_rewind.fork_height` is
+        // the first *divergent* height (`fork + 1`), and it keeps
+        // `fork_height - 1 == fork`.
+        let fork = ct2_tier_a_u64("main_tip") - ct2_tier_a_u64("deep_pop");
+        assert_eq!(
+            main[usize::try_from(fork).unwrap()].height,
+            fork,
+            "fixture indexing: chain[h] is height h",
+        );
+
+        let g = arc.read().await;
+
+        // 1. Forward-ingest the full main chain.
+        let mut forward_scan = ct2_forward_scan_result(&main);
+        g.ingest_scan_result_into_curve_tree(&mut forward_scan)
+            .await
+            .expect("forward ingest of the main chain");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(main.last().unwrap().height)),
+            "main forward feed leaves the tree at the main tip",
+        );
+
+        // 2. Reorg onto reorg_deep: roll back to keep `fork`, re-ingest the
+        //    divergent suffix `fork+1 ..= deep_tip` from the reorg leaves. No
+        //    backfill (range start == fork+1 == cursor+1 after rollback).
+        let deep_end = deep.last().unwrap().height + 1;
+        let mut reorg = ScanResult::empty_at(fork + 1, None);
+        reorg.processed_height_range = (fork + 1)..deep_end;
+        reorg.reorg_rewind = Some(crate::scan::ReorgRewind {
+            fork_height: fork + 1,
+        });
+        reorg.block_leaves = deep
+            .iter()
+            .filter(|b| b.height > fork)
+            .map(|b| (b.height, b.leaves.clone()))
+            .collect();
+        g.ingest_scan_result_into_curve_tree(&mut reorg)
+            .await
+            .expect("reorg feed rolls back to the fork and re-ingests the deep suffix");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(deep.last().unwrap().height)),
+            "post-reorg the cursor advanced to the reorg_deep tip",
+        );
+
+        // 3. Every height now matches the reorg_deep oracle: the kept prefix
+        //    (0..=fork, byte-identical to main's leaves and so to the deep
+        //    oracle on the shared prefix) and the re-mined suffix alike.
+        let mut mismatches = Vec::new();
+        for b in &deep {
+            let got = g
+                .curve_tree
+                .root_at(BlockHeight(b.height))
+                .await
+                .expect("root read");
+            if got != b.root {
+                mismatches.push(b.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "post-reorg engine root != reorg_deep oracle at heights {:?} (first {} shown)",
+            &mismatches[..mismatches.len().min(10)],
+            mismatches.len().min(10),
+        );
     }
 }
