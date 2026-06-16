@@ -306,13 +306,19 @@ impl<
     /// Ingest a scan result into the curve tree, healing a single fail-stop /
     /// poison with a drop-and-reopen respawn-and-retry (R1-Q4, §3.3 happy path).
     ///
-    /// On a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
-    /// `recoverable_by_respawn`), reopen the actor via
+    /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
+    /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
+    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
+    /// `recoverable_by_respawn`) that helper reopens the actor via
     /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
-    /// and re-run [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
-    /// **once**. The retry is correct because the reopened client resumes from
-    /// the persisted store cursor (D2): the loop skips already-ingested heights
-    /// and continues from the tree's own tip, so a re-run never double-ingests.
+    /// and re-runs the cursor-driven ingest **once** against the *same* drained
+    /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
+    /// correct because the reopened client resumes from the persisted store
+    /// cursor (D2): the loop skips already-ingested heights and continues from
+    /// the tree's own tip, so a re-run never double-ingests. Re-invoking
+    /// [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
+    /// itself would *not* heal — it would `take` the now-empty `block_leaves`;
+    /// the drained map is the retry's source of truth.
     ///
     /// **One retry only.** The bounded retry budget that distinguishes a
     /// transient persistence hiccup from a deterministically-corrupt store —

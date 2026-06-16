@@ -99,7 +99,7 @@ pub const CURVE_TREE_STORE_SUFFIX: &str = ".curvetree";
 
 /// Derive the curve-tree store path from a user-provided base, per the
 /// CT-5 engine-wiring design (`docs/design/CT5_ENGINE_WIRING.md` §3.1):
-/// the `redb`-backed [`shekyl_curve_tree::LeafStore`] lives **beside the
+/// the `redb`-backed `shekyl_curve_tree::LeafStore` lives **beside the
 /// wallet files**, sharing their base name. The base is the `.wallet`
 /// path; we append [`CURVE_TREE_STORE_SUFFIX`] to the full path including
 /// any extensions, exactly as [`keys_path_from`] does.
