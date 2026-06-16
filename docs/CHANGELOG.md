@@ -48,6 +48,82 @@
 
 ### Added
 
+- **wallet: engine-path curve-tree root-match against the CT-2 oracle (CT-5a
+  commit 6, 2026-06-15, `feat/ct-5a-curve-tree-actor`).** Closes the CT-5a
+  root-match DoD through the engine ingest path. Two KATs drive
+  `ingest_scan_result_into_curve_tree` with `OwnedTxLeaves` parsed from the
+  `ct2_tier_a` oracle and assert the engine-reconstructed root byte-matches the
+  oracle at **every** height: a forward ingest of the `main` chain, and a
+  `reorg_rewind` onto `reorg_deep` exercising engine-path rollback + re-ingest.
+  Root read-back is a `#[cfg(test)]`-only `RootAt` actor message +
+  `CurveTreeHandle::root_at` (the production root-read is CT-5b's §3.3 verify,
+  not this slice). **Pending-table-equality post-reorg (E6a) is not asserted
+  here — it remains Tier-B-gated** (a coinbase-only fixture cannot express a
+  class-(b) pending migration; that assertion lands at CT-5c when the
+  non-coinbase fixture exists). A green commit 6 proves the engine ingest
+  *wiring* transports leaves to the actor/client correctly; it does not prove
+  non-coinbase backfill. Docs: `CT5_ENGINE_WIRING.md` (CT-5a DoD commit-6
+  status).
+- **wallet: engine-side respawn-on-poison for the curve-tree actor (CT-5a
+  commit 5, 2026-06-15, `feat/ct-5a-curve-tree-actor`).** Implements the R1-Q4
+  recovery body: a curve-tree actor that fail-stops (kameo `on_panic` does not
+  restart it, by design) or whose client is `ClientError::Poisoned` is now
+  healed engine-side by a drop-and-reopen respawn rather than failing the
+  refresh permanently. `CurveTreeHandle`'s inner `ActorRef` is wrapped in an
+  `Arc<Mutex<…>>` shared, swappable cell so a respawn propagates the fresh
+  actor to **every** handle clone at once (including the `LocalPendingTx`
+  spend-gate clone) — without the shared cell a respawn would heal refresh but
+  leave spends pointing at the dead actor forever (a partial heal). The new
+  `CurveTreeHandle::respawn` does kill → `wait_for_shutdown` → reopen → spawn →
+  atomic swap; because kameo drops the actor value (and its redb single-writer
+  lock) *after* `wait_for_shutdown` returns, the reopen is retried on a short
+  poll bounded by a 2 s deadline so the lock-release lag is absorbed but a
+  genuinely corrupt/held store still surfaces its error.
+  `RefreshError::CurveTreeIngest` gains a `recoverable_by_respawn: bool`
+  classification (`true` for a fail-stopped actor or `ClientError::Poisoned`;
+  `false` for non-consecutive-height / root-mismatch / store / decode failures a
+  reopen would only reproduce). `Engine::ingest_scan_result_with_respawn` wraps
+  the bare ingest with a single respawn-and-retry on a recoverable error and is
+  wired into both refresh ingest call sites (async `run_refresh_task` and the
+  synchronous scan pass). KATs:
+  `respawn_resumes_from_store_and_propagates_to_clones` (handle-level: respawn
+  resumes from the persisted cursor and a pre-respawn clone sees the live actor)
+  and `ingest_pre_pass_respawns_after_actor_fail_stop` (engine-path happy path:
+  a fail-stopped actor is classified recoverable, then heals via
+  respawn-and-retry with the cursor resuming from the persisted tip). The
+  bounded-retry-budget-then-escalation arm that distinguishes a transient
+  hiccup from a permanently corrupt store at the refresh-budget level (O3-sub)
+  is staged for CT-5d. Implements CT-5 §3.3 R1-Q4. Docs: `CT5_ENGINE_WIRING.md`.
+
+- **wallet: surface the pending-incoming summary and rebuild status on the
+  refresh progress channel (CT-5a commit 4b-2, 2026-06-15,
+  `feat/ct-5a-curve-tree-actor`).** `RefreshProgress` (the `watch`-channel
+  refresh signal) gains three fields, no new persisted state:
+  `pending_incoming_count` / `pending_incoming_atomic_units` (the per-attempt
+  "you received" summary — the count and summed amount of outputs the scan
+  detected this attempt) and `rebuilding_membership` (`true` while the curve
+  tree lags the ledger, i.e. the adopting / tree-wiped wallet whose backfill is
+  in flight and whose spends may be temporarily gated by 4b-1's
+  `SendError::SpendUnavailableRebuilding`). Detection is decoupled from
+  spendability: a received output is displayed as soon as the scan finds it,
+  independent of whether its curve-tree membership is yet provable. The
+  orchestrator (`run_refresh_task`) assembles the summary once from the full
+  `ScanResult` and emits it on the pre-merge `Merging` frame (with
+  `rebuilding_membership` read from the tree cursor *before* the ingest
+  pre-pass, so a long adopting backfill surfaces the rebuild status for its
+  whole duration) and on the terminal success frame (`rebuilding_membership:
+  false` — the pre-pass acked the full range under ack-before-commit, so the
+  tree is caught up). The forward-from-genesis common case never flags
+  rebuilding (tree and ledger advance in lockstep). Per-block scanning frames
+  and the seed/retry/cancel pings carry the zeroed display fields via the new
+  `RefreshProgress::phase_only` constructor. KATs: `membership_rebuilding_predicate`
+  (the pure ledger-ahead-of-tree predicate across fresh/adopting/caught-up/
+  ahead) and `hybrid_refresh_from_genesis_surfaces_not_rebuilding` (the wiring
+  smoke test). A non-zero pending-incoming amount and the `rebuilding == true`
+  path need a wallet-addressed (non-coinbase) fixture and a divergent adopting
+  state respectively — both Tier-B-gated to CT-5c. Implements CT-5 §3.2.1 D3
+  display surface. Docs: `CT5_ENGINE_WIRING.md`.
+
 - **archival: standoff conformance suite gains the two independence probes +
   discrete-GoF grade (2026-06-13).** The marginal uniform/trap tests are
   structurally blind to the *independent* half of "uniform-independent draw";

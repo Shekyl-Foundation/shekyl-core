@@ -90,6 +90,36 @@ pub fn state_path_from(base: &Path) -> PathBuf {
     base.to_path_buf()
 }
 
+/// Extension suffix appended to the user-provided base path to derive
+/// the FCMP++ curve-tree store path (CT-5). Appended as raw bytes (same
+/// rule as [`KEYS_FILE_SUFFIX`]) so a base like `primary.wallet` becomes
+/// `primary.wallet.curvetree`, keeping the store a visible sibling of the
+/// `.wallet` / `.wallet.keys` pair rather than a hidden cache elsewhere.
+pub const CURVE_TREE_STORE_SUFFIX: &str = ".curvetree";
+
+/// Derive the curve-tree store path from a user-provided base, per the
+/// CT-5 engine-wiring design (`docs/design/CT5_ENGINE_WIRING.md` §3.1):
+/// the `redb`-backed `shekyl_curve_tree::LeafStore` lives **beside the
+/// wallet files**, sharing their base name. The base is the `.wallet`
+/// path; we append [`CURVE_TREE_STORE_SUFFIX`] to the full path including
+/// any extensions, exactly as [`keys_path_from`] does.
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::curve_tree_store_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     curve_tree_store_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.curvetree"),
+/// );
+/// ```
+pub fn curve_tree_store_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(CURVE_TREE_STORE_SUFFIX);
+    PathBuf::from(os)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +160,31 @@ mod tests {
         let k = keys_path_from(base);
         let s = state_path_from(base);
         assert_eq!(k.parent(), s.parent());
+    }
+
+    #[test]
+    fn curve_tree_path_appends_suffix() {
+        assert_eq!(
+            curve_tree_store_path_from(Path::new("/tmp/a.wallet")),
+            Path::new("/tmp/a.wallet.curvetree"),
+        );
+    }
+
+    #[test]
+    fn curve_tree_path_is_not_set_extension() {
+        // set_extension would drop ".wallet" and give "/tmp/a.curvetree";
+        // we preserve the full base, as for the keys file.
+        let got = curve_tree_store_path_from(Path::new("/tmp/a.wallet"));
+        assert_ne!(got, Path::new("/tmp/a.curvetree"));
+    }
+
+    #[test]
+    fn curve_tree_store_is_sibling_of_wallet_files() {
+        let base = Path::new("/home/alice/wallets/x.wallet");
+        let k = keys_path_from(base);
+        let s = state_path_from(base);
+        let c = curve_tree_store_path_from(base);
+        assert_eq!(c.parent(), s.parent());
+        assert_eq!(c.parent(), k.parent());
     }
 }

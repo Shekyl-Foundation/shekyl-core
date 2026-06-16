@@ -321,6 +321,52 @@ pub enum RefreshError {
         /// message.
         context: &'static str,
     },
+
+    /// Curve-tree ingest failed while feeding the tree the result's
+    /// height range **ahead of** the ledger merge — the
+    /// ack-before-commit half of CT-5 §3.2 (R1-Q2) under the fork-three
+    /// genesis-anchored feed (§3.2.1). The tree is updated and
+    /// acknowledged before [`super::Engine::apply_scan_result`] advances
+    /// the ledger, so the ledger tip never outruns the tree (O2).
+    ///
+    /// **Terminal, not retried.** The refresh retry loop retries only
+    /// [`Self::ConcurrentMutation`]; a retry would re-run the same
+    /// cursor-driven ingest and hit the same failure. Surfacing here
+    /// keeps the ledger from advancing past an un-updated tree rather
+    /// than silently diverging the two tips.
+    ///
+    /// `context` is a compile-time-fixed classification named at the
+    /// call site — no daemon/scanner bytes flow in, matching the
+    /// `&'static str`-only discipline of
+    /// [`Self::InternalInvariantViolation`]. Daemon transport failures
+    /// during the genesis/birthday backfill fetch surface through
+    /// [`Self::Io`] (the established `fetch_block_hash_at` mapping), not
+    /// here; this variant covers the tree-feed-specific steps (backfill
+    /// block decode, the actor ingest/rollback handshake).
+    ///
+    /// A fail-stopped actor ([`super::curve_tree_actor::CurveTreeHandleError::Unavailable`])
+    /// or a [`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned)
+    /// client maps here with `recoverable_by_respawn = true`: the CT-5a commit-5
+    /// engine-side respawn (R1-Q4) drops and reopens the actor and retries the
+    /// cursor-driven ingest once
+    /// ([`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)).
+    /// Every other ingest failure (producer-contract, decode, a tree-state
+    /// client error a reopen would reproduce) is `false` and surfaces
+    /// terminally.
+    #[error("curve-tree ingest failed: {context}")]
+    CurveTreeIngest {
+        /// Compile-time-fixed name of the ingest failure class, named
+        /// at the call site so audit can read every distinguishable
+        /// case from source.
+        context: &'static str,
+        /// `true` when a drop-and-reopen respawn (R1-Q4) can heal the
+        /// failure (fail-stopped actor or `ClientError::Poisoned`); `false`
+        /// for failures a reopen would reproduce. Read by
+        /// [`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)
+        /// to decide whether to respawn-and-retry. The bounded retry budget +
+        /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
+        recoverable_by_respawn: bool,
+    },
 }
 
 // --- Ledger ----------------------------------------------------------------
@@ -406,6 +452,52 @@ pub enum SendError {
     CannotSign {
         /// Human-readable reason as named at the call site.
         reason: &'static str,
+    },
+
+    /// The wallet holds enough matured, non-reserved balance to cover the
+    /// spend, but the funds are **not yet spendable** because the FCMP++
+    /// curve tree is still rebuilding the membership data behind the
+    /// already-synced ledger tip (CT-5 §3.2.1, D3). This is the
+    /// adopting-wallet / tree-store-rebuild case: `synced_height` is ahead
+    /// of the tree's `ingested_tip_height`, so a membership proof cannot be
+    /// built for outputs the tree has not yet covered.
+    ///
+    /// Distinct from [`Self::InsufficientFunds`] precisely so the wallet does
+    /// **not** show a misleading "insufficient funds" when the real, honest
+    /// state is "spending temporarily unavailable while membership data
+    /// rebuilds" (`82-failure-mode-ux.mdc`). The shortfall resolves on its
+    /// own as the background backfill catches the tree up to `synced_height`;
+    /// no user action is required beyond waiting for the rebuild to finish.
+    #[error(
+        "spending temporarily unavailable: rebuilding membership data \
+         (need {needed} atomic units, {spendable_now} spendable now, \
+         {pending_rebuild} pending rebuild)"
+    )]
+    SpendUnavailableRebuilding {
+        /// Total amount-plus-fee the build attempted to cover.
+        needed: u64,
+        /// Balance spendable right now — matured, non-reserved, **and**
+        /// already covered by the curve tree.
+        spendable_now: u64,
+        /// Matured, non-reserved balance that is blocked only by the
+        /// in-progress tree rebuild and becomes spendable as the backfill
+        /// advances the tree to `synced_height`.
+        pending_rebuild: u64,
+    },
+
+    /// The FCMP++ curve-tree actor could not be queried for its
+    /// `ingested_tip_height` at build time, so the spendable set cannot be
+    /// computed (CT-5 §3.2.1). Distinct from
+    /// [`Self::SpendUnavailableRebuilding`]: that is the *benign, self-healing*
+    /// "tree is behind" state (the cursor read **succeeded** and returned a
+    /// height below `synced_height`); this is a *hard* infrastructure failure
+    /// (the cursor read **failed** — the actor is fail-stopped). It is terminal
+    /// until the engine-side actor respawn (R1-Q4) lands; a retry against a
+    /// dead actor reproduces it.
+    #[error("curve-tree unavailable: {detail}")]
+    CurveTreeUnavailable {
+        /// Stringified [`CurveTreeHandleError`](super::curve_tree_actor::CurveTreeHandleError).
+        detail: String,
     },
 }
 

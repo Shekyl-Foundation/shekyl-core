@@ -454,6 +454,14 @@ pub enum BuildErrorKind {
     /// in the projection taxonomy. Segment-2h C2β addition per
     /// §5.6.5 F4. `OutputSelector` trait lands in C4β.
     SelectorContractViolation,
+
+    /// The wallet has the balance but the FCMP++ curve tree is still
+    /// rebuilding membership data behind the synced ledger tip, so a
+    /// membership proof cannot yet be built for the shortfall outputs.
+    /// Mirrors
+    /// [`SendError::SpendUnavailableRebuilding`](super::error::SendError::SpendUnavailableRebuilding).
+    /// CT-5 §3.2.1 D3 (adopting-wallet / tree-rebuild surfacing).
+    RebuildingMembershipData,
 }
 
 /// Coarse-grained projection of a

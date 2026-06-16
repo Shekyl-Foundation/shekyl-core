@@ -367,12 +367,8 @@ mod tests {
         // constructor rather than bypass it).
         let snapshot = LedgerSnapshot::from_ledger(&LedgerBlock::empty());
         let cancel = CancellationToken::new();
-        let (progress, _rx) = watch::channel(RefreshProgress {
-            height: 0,
-            blocks_processed: 0,
-            blocks_total: 0,
-            phase: RefreshPhase::Scanning,
-        });
+        let (progress, _rx) =
+            watch::channel(RefreshProgress::phase_only(0, 0, 0, RefreshPhase::Scanning));
         (snapshot, cancel, progress)
     }
 

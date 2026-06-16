@@ -653,6 +653,32 @@ impl CurveTreeClient {
         BlockHeight(reference_height.0.saturating_sub(1))
     }
 
+    /// The last block height passed to [`Self::ingest_block`] — or rebuilt by
+    /// [`Self::rollback_to_fork`] / [`Self::resume`] — or `None` when the client
+    /// is fresh (no blocks ingested).
+    ///
+    /// This is the **authoritative resume cursor** for a forward / backfill
+    /// ingest driver: the next block to ingest is `tip + 1` (`BlockHeight(0)`
+    /// when `None`), matching [`Self::ingest_block`]'s own consecutive-height
+    /// expectation. The driver reads this cursor every iteration and holds **no**
+    /// driver-local fetch-frontier of its own, so a reorg that rewinds the cursor
+    /// (`rollback_to_fork` rebuilds it from the authoritative store) is observed
+    /// on the next read and the driver resumes from the rebuilt tip. That is the
+    /// cursor-driven resume the CT-5 design pins as forbidden-by-construction for
+    /// counter-drift (`CT5_ENGINE_WIRING.md` §3.2.1 R3-Q6 / §3.2.1.1 D2); a
+    /// driver that cached its own frontier would silently desync from the tree on
+    /// a reorg into the backfilled range.
+    ///
+    /// Pure read of the in-memory cursor; it does **not** gate on the poison flag
+    /// (contrast [`Self::root_at`]). A poisoned client's recovery is
+    /// drop-and-reopen, which reloads this from the store, so the cursor a caller
+    /// reads is always either the live tip or — post-recovery — the store's
+    /// last-committed tip.
+    #[must_use]
+    pub fn ingested_tip_height(&self) -> Option<BlockHeight> {
+        self.ingested_tip_height
+    }
+
     /// Reconstruct the curve-tree root via the persisted [`LeafStore`] hot path.
     ///
     /// `reference_height` must be within the ingested chain
@@ -1313,6 +1339,24 @@ mod tests {
             client.ingest_block(block),
             Err(ClientError::Poisoned)
         ));
+    }
+
+    #[test]
+    fn ingested_tip_height_getter_tracks_cursor() {
+        // The public getter is the forward/backfill driver's resume substrate
+        // (CT-5 §3.2.1.1 D2): None when fresh, the last ingested height after
+        // ingest, and the *rebuilt* tip after a rollback — so a driver reading
+        // it each iteration resumes from the tree, never from a stale local
+        // counter.
+        let mut client = CurveTreeClient::new();
+        assert_eq!(client.ingested_tip_height(), None);
+
+        // `ingest_coinbase_blocks(from, to)` is inclusive: heights 0..=5.
+        ingest_coinbase_blocks(&mut client, 0, 5);
+        assert_eq!(client.ingested_tip_height(), Some(BlockHeight(5)));
+
+        client.rollback_to_fork(BlockHeight(2)).unwrap();
+        assert_eq!(client.ingested_tip_height(), Some(BlockHeight(2)));
     }
 
     #[test]
