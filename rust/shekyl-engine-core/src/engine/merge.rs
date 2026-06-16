@@ -294,9 +294,13 @@ impl<
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn ingest_scan_result_into_curve_tree(
         &self,
-        result: &ScanResult,
+        result: &mut ScanResult,
     ) -> Result<(), RefreshError> {
-        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result).await
+        let mut producer_leaves = std::mem::take(&mut result.block_leaves)
+            .into_iter()
+            .collect();
+        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &mut producer_leaves)
+            .await
     }
 
     /// Ingest a scan result into the curve tree, healing a single fail-stop /
@@ -323,15 +327,19 @@ impl<
     /// pre-pass.
     pub(crate) async fn ingest_scan_result_with_respawn(
         &self,
-        result: &ScanResult,
+        result: &mut ScanResult,
     ) -> Result<(), RefreshError> {
         let store_path =
             shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
+        let mut producer_leaves = std::mem::take(&mut result.block_leaves)
+            .into_iter()
+            .collect();
         curve_tree_ingest_scan_result_with_respawn(
             &self.curve_tree,
             &self.daemon,
             &store_path,
             result,
+            &mut producer_leaves,
         )
         .await
     }
@@ -376,8 +384,9 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     daemon: &D,
     store_path: &std::path::Path,
     result: &ScanResult,
+    producer_leaves: &mut BTreeMap<u64, Vec<OwnedTxLeaves>>,
 ) -> Result<(), RefreshError> {
-    match curve_tree_ingest_scan_result(curve_tree, daemon, result).await {
+    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
         Ok(()) => Ok(()),
         Err(RefreshError::CurveTreeIngest {
             recoverable_by_respawn: true,
@@ -392,7 +401,7 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
                     context: "curve-tree respawn reopen failed",
                     recoverable_by_respawn: false,
                 })?;
-            curve_tree_ingest_scan_result(curve_tree, daemon, result).await
+            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
         }
         Err(other) => Err(other),
     }
@@ -402,6 +411,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
     result: &ScanResult,
+    producer_leaves: &mut BTreeMap<u64, Vec<OwnedTxLeaves>>,
 ) -> Result<(), RefreshError> {
     // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
     // the new fork. `fork_height` is the first divergent height, so the
@@ -426,15 +436,6 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
 
     let range_start = result.processed_height_range.start;
     let range_end = result.processed_height_range.end;
-    // Index producer material once: heights are scanned in ascending order
-    // but the ingest loop may skip a prefix already on disk after a
-    // respawn retry, so lookup must be O(log n) rather than a linear
-    // `find` per height.
-    let producer_leaves: BTreeMap<u64, &Vec<OwnedTxLeaves>> = result
-        .block_leaves
-        .iter()
-        .map(|(height, leaves)| (*height, leaves))
-        .collect();
     loop {
         let tip = curve_tree
             .ingested_tip_height()
@@ -466,10 +467,12 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
                 }
             })?
         } else {
-            // Producer range: reuse the materialized leaves (no re-fetch).
+            // Producer range: move the materialized leaves (no re-fetch).
+            // Heights already on disk after a respawn retry are skipped by
+            // the cursor loop, so their entries were removed on the first
+            // pass and are not consulted again.
             producer_leaves
-                .get(&next)
-                .map(|leaves| (*leaves).clone())
+                .remove(&next)
                 .ok_or(RefreshError::MalformedScanResult {
                     reason: "block_leaves missing a height in processed_height_range",
                 })?

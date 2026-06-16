@@ -51,7 +51,7 @@ use super::pending::SnapshotId;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::Engine;
-use crate::scan::ScanResult;
+use crate::scan::{OwnedTxLeaves, ScanResult};
 
 /// Read-only snapshot of the wallet ledger taken at the start of a
 /// refresh.
@@ -1086,7 +1086,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             )
             .await;
 
-        let result = match produced.map_err(Into::into) {
+        let mut result = match produced.map_err(Into::into) {
             Ok(r) => r,
             Err(RefreshError::Cancelled) => {
                 // Mid-scan cancel: the producer observed the cancel
@@ -1157,10 +1157,11 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // the entire catch-up, so the "rebuilding membership data" status
         // surfaces here, not after the pre-pass has already healed it.
         let rebuilding_membership = {
-            let cursor = {
+            let curve_tree = {
                 let g = engine_arc.read().await;
-                g.curve_tree.ingested_tip_height().await
+                g.curve_tree.clone()
             };
+            let cursor = curve_tree.ingested_tip_height().await;
             // A cursor read failure is not fatal to the display ping
             // (the ingest pre-pass below surfaces a real fault
             // terminally); treat an unreadable cursor as not-rebuilding
@@ -1224,11 +1225,16 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
             )
         };
+        let mut producer_leaves: std::collections::BTreeMap<u64, Vec<OwnedTxLeaves>> =
+            std::mem::take(&mut result.block_leaves)
+                .into_iter()
+                .collect();
         if let Err(e) = super::merge::curve_tree_ingest_scan_result_with_respawn(
             &curve_tree,
             &daemon,
             &store_path,
             &result,
+            &mut producer_leaves,
         )
         .await
         {
@@ -1631,7 +1637,7 @@ impl<
         ));
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            let result = runtime
+            let mut result = runtime
                 .block_on(self.refresh.produce_scan_result(
                     snapshot.clone(),
                     &self.daemon,
@@ -1646,7 +1652,7 @@ impl<
             // Cursor-driven + idempotent, so re-running it on a retried
             // attempt is safe. Mirrors the async `run_refresh_task` path,
             // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
-            runtime.block_on(self.ingest_scan_result_with_respawn(&result))?;
+            runtime.block_on(self.ingest_scan_result_with_respawn(&mut result))?;
             Ok(result)
         })
     }
@@ -3534,7 +3540,7 @@ mod start_refresh_integration_tests {
         forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
         {
             let g = arc.read().await;
-            g.ingest_scan_result_into_curve_tree(&forward)
+            g.ingest_scan_result_into_curve_tree(&mut forward)
                 .await
                 .expect("forward feed ingests genesis-through-tip");
             assert_eq!(
@@ -3554,7 +3560,7 @@ mod start_refresh_integration_tests {
         reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
         {
             let g = arc.read().await;
-            g.ingest_scan_result_into_curve_tree(&reorg)
+            g.ingest_scan_result_into_curve_tree(&mut reorg)
                 .await
                 .expect("reorg feed rolls back and resumes");
             assert_eq!(
@@ -3603,7 +3609,7 @@ mod start_refresh_integration_tests {
         forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
         {
             let g = arc.read().await;
-            g.ingest_scan_result_with_respawn(&forward)
+            g.ingest_scan_result_with_respawn(&mut forward)
                 .await
                 .expect("forward feed ingests genesis-through-tip");
             assert_eq!(
@@ -3622,7 +3628,7 @@ mod start_refresh_integration_tests {
             let g = arc.read().await;
             g.curve_tree.kill_and_wait_for_test().await;
             let err = g
-                .ingest_scan_result_into_curve_tree(&forward)
+                .ingest_scan_result_into_curve_tree(&mut forward)
                 .await
                 .expect_err("a fail-stopped actor fails the bare (no-respawn) ingest");
             assert!(
@@ -3646,7 +3652,7 @@ mod start_refresh_integration_tests {
         forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
         {
             let g = arc.read().await;
-            g.ingest_scan_result_with_respawn(&forward2)
+            g.ingest_scan_result_with_respawn(&mut forward2)
                 .await
                 .expect("respawn-and-retry heals the fail-stop and ingests the new range");
             assert_eq!(
@@ -4121,10 +4127,10 @@ mod start_refresh_integration_tests {
         let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
 
         let blocks = ct2_tier_a_chain("main");
-        let forward = ct2_forward_scan_result(&blocks);
+        let mut forward = ct2_forward_scan_result(&blocks);
 
         let g = arc.read().await;
-        g.ingest_scan_result_into_curve_tree(&forward)
+        g.ingest_scan_result_into_curve_tree(&mut forward)
             .await
             .expect("genesis-anchored ingest of the full Tier-A main chain");
         assert_eq!(
@@ -4199,7 +4205,8 @@ mod start_refresh_integration_tests {
         let g = arc.read().await;
 
         // 1. Forward-ingest the full main chain.
-        g.ingest_scan_result_into_curve_tree(&ct2_forward_scan_result(&main))
+        let mut forward_scan = ct2_forward_scan_result(&main);
+        g.ingest_scan_result_into_curve_tree(&mut forward_scan)
             .await
             .expect("forward ingest of the main chain");
         assert_eq!(
@@ -4225,7 +4232,7 @@ mod start_refresh_integration_tests {
             .filter(|b| b.height > fork)
             .map(|b| (b.height, b.leaves.clone()))
             .collect();
-        g.ingest_scan_result_into_curve_tree(&reorg)
+        g.ingest_scan_result_into_curve_tree(&mut reorg)
             .await
             .expect("reorg feed rolls back to the fork and re-ingests the deep suffix");
         assert_eq!(
