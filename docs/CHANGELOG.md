@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`
+  to `gungraun 0.19` (2026-06-16, `chore/bench-gungraun-migration`).**
+  `iai-callgrind` was renamed to `gungraun` upstream from 0.17.0 and the 0.16.x
+  line no longer receives backports; depending on it is compounding debt. All
+  five bench crates (`shekyl-engine-core`, `-engine-file`, `-engine-state`,
+  `-scanner`, `-tx-builder`) move `iai-callgrind = "0.16"` → `gungraun = "0.19"`
+  (latest stable, 0.19.2), the 13 `_iai` bench files swap `use iai_callgrind::*`
+  → `use gungraun::*` (macro API is source-compatible — no structural changes),
+  and `benchmarks.yml` + `capture_rust_baseline.sh` install/invoke
+  `gungraun-runner` (the `_iai` filename suffix and the `iai_callgrind` JSON
+  envelope section key are retained as stable identifiers consumed by
+  `compare.py`). gungraun is a dev-dependency only, so its 0.19 MSRV bump (Rust
+  1.85.1 / edition 2024) does not raise any production crate's MSRV (our
+  toolchain is 1.94). This re-lands the disposition from
+  `docs/investigation/2026-05-09-bench-baseline-flake.md` §4.1 (Option A), whose
+  original 0.18 attempt was archived unmerged; targeting current-stable 0.19
+  rather than the stale 0.18 pin. Whether it fixes the `instructions=0` capture
+  flake (the producer guard from PR #35 that was hard-failing per-PR
+  `capture-pr` jobs) is **speculative** — the cause remains unknown (§3.3); the
+  upgrade is justified on supported-upstream / debt-reduction grounds.
 - **archival: `HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope
   (2026-06-15).** The full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
   Unbond`) ships at **V3.0**, promoted from deferred-V3.1. Bond balance is
