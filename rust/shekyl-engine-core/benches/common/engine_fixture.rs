@@ -110,7 +110,7 @@
 //!   gungraun harnesses on the same workload** — criterion
 //!   reporting nanoseconds-per-iter consistent with a few cycles
 //!   while gungraun reports tens-of-thousands of instructions
-//!   is the textbook sign that fixture `Drop` has leaked into iai's
+//!   is the textbook sign that fixture `Drop` has leaked into gungraun's
 //!   measured region (symmetry-rule violation).
 //! - **An gungraun number in §4.4's warning territory (50–300
 //!   instructions) without the workload itself justifying that

@@ -37,11 +37,11 @@
 //! under Callgrind (Valgrind serializes threads onto a simulated single
 //! core), so an `ask`'s instruction count folds in nondeterministic
 //! runtime-scheduling machinery rather than the clean deterministic
-//! signal iai exists for. The actor paths are criterion-only by design —
+//! signal gungraun exists for. The actor paths are criterion-only by design —
 //! a reasoned, reversion-claused deviation from the criterion+gungraun
-//! pairing discipline (`docs/design/STAGE_0_HARNESS.md`): reopen the iai
+//! pairing discipline (`docs/design/STAGE_0_HARNESS.md`): reopen the gungraun
 //! sibling if a deterministic async-dispatch measurement method lands.
-//! Only the deterministic-crypto baseline gets an iai sibling
+//! Only the deterministic-crypto baseline gets an gungraun sibling
 //! (`engine_trait_bench_key_dispatch_baseline_iai.rs`).
 //!
 //! # Threshold class / frozen baseline

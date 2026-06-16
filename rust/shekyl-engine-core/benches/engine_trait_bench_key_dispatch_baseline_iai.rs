@@ -10,7 +10,7 @@
 //! measures **only** the deterministic crypto baseline
 //! (`LocalKeys::try_claim_output` over a `Mine` output): X25519 view-tag
 //! match + hybrid ML-KEM-768 decap + HKDF + key-image + handle insert.
-//! There is deliberately **no** iai sibling for the actor `ask` paths —
+//! There is deliberately **no** gungraun sibling for the actor `ask` paths —
 //! they are cross-thread async round-trips whose Callgrind
 //! instruction counts fold in nondeterministic runtime-scheduling
 //! machinery (Valgrind serializes all threads onto one simulated core).
@@ -97,7 +97,7 @@ fn poll_ready<F: Future>(fut: F) -> F::Output {
         Poll::Ready(v) => v,
         Poll::Pending => {
             panic!(
-                "baseline iai bench future did not complete in one poll; \
+                "baseline gungraun bench future did not complete in one poll; \
                     LocalKeys::try_claim_output is expected to be synchronous"
             )
         }

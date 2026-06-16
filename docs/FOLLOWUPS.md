@@ -4455,7 +4455,7 @@ sustainability is unaffected by the recalibration.
     deliberately-`iai-callgrind 0.16`-pinned runner-bisection harness for the
     *original* flake. Post-migration it pins a dependency the tree no longer
     uses; it gates nothing and pushes nowhere.
-  - The per-bench capture retry (`IAI_CAPTURE_ATTEMPTS`, default 3) in
+  - The per-bench capture retry (`GUNGRAUN_CAPTURE_ATTEMPTS`, default 3) in
     `scripts/bench/capture_rust_baseline.sh` — a belt-and-suspenders absorber
     for the transient zero; harmless to keep but redundant if the flake is
     genuinely gone.

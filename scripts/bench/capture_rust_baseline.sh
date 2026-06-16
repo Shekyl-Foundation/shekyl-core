@@ -126,8 +126,15 @@ trap 'rm -f "${IAI_STDOUT_TMP}" "${PER_BENCH_TMP}"' EXIT
 # entry re-runs only that entry, not the whole sweep. Bounded so a
 # *persistent* zero — a genuine regression to an empty measured region — still
 # surfaces via the producer guard below instead of looping forever. Override
-# with the env var (CI may raise it; it must not be set to 0).
-IAI_CAPTURE_ATTEMPTS="${IAI_CAPTURE_ATTEMPTS:-3}"
+# with the env var (CI may raise it).
+GUNGRAUN_CAPTURE_ATTEMPTS="${GUNGRAUN_CAPTURE_ATTEMPTS:-3}"
+# Fail fast on misconfiguration: a non-integer or 0 would either break the
+# `(( attempt >= … ))` arithmetic or silently disable the retry that exists to
+# absorb the capture flake. Require a positive integer (>= 1).
+if ! [[ "${GUNGRAUN_CAPTURE_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[capture_rust_baseline] ERROR: GUNGRAUN_CAPTURE_ATTEMPTS must be a positive integer (>= 1), got '${GUNGRAUN_CAPTURE_ATTEMPTS}'" >&2
+  exit 1
+fi
 
 # A leading `Instructions:  0|` metric line is the anomaly signal: a real
 # bench never measures exactly zero (even the field-access `synced_height`
@@ -169,11 +176,11 @@ for row in "${BENCHES[@]}"; do
     if ! capture_reported_zero "${PER_BENCH_TMP}"; then
       break
     fi
-    if (( attempt >= IAI_CAPTURE_ATTEMPTS )); then
+    if (( attempt >= GUNGRAUN_CAPTURE_ATTEMPTS )); then
       echo "[capture_rust_baseline] WARNING: ${CRATE}::${IAI_BENCH} reported instructions=0 on all ${attempt} attempt(s); leaving it for the producer guard to reject" >&2
       break
     fi
-    echo "[capture_rust_baseline] NOTE: ${CRATE}::${IAI_BENCH} reported instructions=0 (attempt ${attempt}/${IAI_CAPTURE_ATTEMPTS}); re-running — transient capture anomaly" >&2
+    echo "[capture_rust_baseline] NOTE: ${CRATE}::${IAI_BENCH} reported instructions=0 (attempt ${attempt}/${GUNGRAUN_CAPTURE_ATTEMPTS}); re-running — transient capture anomaly" >&2
     attempt=$(( attempt + 1 ))
   done
   cat "${PER_BENCH_TMP}" >>"${IAI_STDOUT_TMP}"

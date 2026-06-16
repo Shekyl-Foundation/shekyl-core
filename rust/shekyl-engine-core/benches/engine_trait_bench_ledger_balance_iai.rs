@@ -93,7 +93,7 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_ledger_balance` stem so PR reviewers grepping
 //! for the workload find consistent surface across the criterion /
-//! iai pair and the manifest row.
+//! gungraun pair and the manifest row.
 
 use std::hint::black_box;
 

@@ -67,7 +67,7 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_economics_base_emission_at` stem so PR
 //! reviewers grepping for the workload find consistent surface across
-//! the criterion / iai pair and the manifest row.
+//! the criterion / gungraun pair and the manifest row.
 
 use std::hint::black_box;
 

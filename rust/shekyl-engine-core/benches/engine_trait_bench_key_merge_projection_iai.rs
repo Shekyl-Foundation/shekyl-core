@@ -14,7 +14,7 @@
 //! class (bidirectional ±10% slowdown / ±25% speedup).
 //!
 //! Unlike the actor dispatch paths, the merge post-pass is synchronous
-//! and runtime-free, so it is iai-friendly: no async scheduling, no
+//! and runtime-free, so it is gungraun-friendly: no async scheduling, no
 //! threads for Valgrind to serialize, a clean deterministic count.
 //!
 //! # Workload class

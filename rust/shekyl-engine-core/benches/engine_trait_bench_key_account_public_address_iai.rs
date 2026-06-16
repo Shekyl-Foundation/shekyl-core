@@ -87,7 +87,7 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_key_account_public_address` stem so PR
 //! reviewers grepping for the workload find consistent surface
-//! across the criterion / iai pair and the manifest row.
+//! across the criterion / gungraun pair and the manifest row.
 
 use std::hint::black_box;
 

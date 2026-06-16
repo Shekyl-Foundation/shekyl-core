@@ -33,7 +33,7 @@
 //! absorbs the variance; only the instruction-count metric needs
 //! this treatment. The BP+ side is deterministic by construction
 //! (no rejection sampling), but also uses a seeded RNG here as
-//! defense in depth — so both iai sub-benches are hermetic.
+//! defense in depth — so both gungraun sub-benches are hermetic.
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;

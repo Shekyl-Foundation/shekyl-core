@@ -46,12 +46,12 @@
 //! cross-thread async round-trip, and gungraun runs under Callgrind
 //! (Valgrind serializes all threads onto a simulated single core), so an
 //! `ask`'s instruction count folds in nondeterministic runtime-scheduling
-//! machinery rather than the clean deterministic signal iai exists for.
+//! machinery rather than the clean deterministic signal gungraun exists for.
 //! The actor path is criterion-(wall-clock)-only by design — a reasoned
 //! deviation from the criterion+gungraun pairing discipline
-//! (`docs/design/STAGE_0_HARNESS.md`), reversion-claused: reopen the iai
+//! (`docs/design/STAGE_0_HARNESS.md`), reversion-claused: reopen the gungraun
 //! sibling if a deterministic async-dispatch measurement method lands.
-//! Only the deterministic-crypto baseline gets an iai sibling.
+//! Only the deterministic-crypto baseline gets an gungraun sibling.
 
 use std::collections::HashMap;
 
@@ -143,7 +143,7 @@ fn build_output_paid_to(
 /// (`KeyEngineHandle`), and the two prebuilt detection inputs (a
 /// `Mine` output paid to the wallet under measurement, and a `NotMine`
 /// output paid to a stranger). All construction is **setup** — held
-/// outside the measured region by the bench's `b.iter` / iai `setup =`
+/// outside the measured region by the bench's `b.iter` / gungraun `setup =`
 /// boundary; only the `try_claim_output` calls are measured.
 ///
 /// # Runtime requirement
@@ -237,7 +237,7 @@ impl KeyDispatchBenchHarness {
     }
 }
 
-/// Actor-free fixture for the deterministic-crypto **baseline** iai
+/// Actor-free fixture for the deterministic-crypto **baseline** gungraun
 /// sibling.
 ///
 /// [`KeyDispatchBenchHarness`] spawns a `KeyActor` in `new` (which needs
@@ -247,7 +247,7 @@ impl KeyDispatchBenchHarness {
 /// under Callgrind is both unnecessary and noisy. This fixture holds
 /// just the `LocalKeys` and a `Mine` input — no actor, no spawn, so it
 /// constructs without an ambient runtime. The single async call is
-/// driven by the iai bench's no-op-waker poll (no Tokio runtime in the
+/// driven by the gungraun bench's no-op-waker poll (no Tokio runtime in the
 /// measured region): `LocalKeys::try_claim_output` completes inside the
 /// first poll, so one `poll` returns `Ready` and the measured
 /// instruction count is exactly the hybrid ML-KEM-768 decap + HKDF +
@@ -288,7 +288,7 @@ impl KeyBaselineBenchFixture {
     }
 }
 
-/// Boxed, no-arg builder for the baseline iai fixture (boundary rule:
+/// Boxed, no-arg builder for the baseline gungraun fixture (boundary rule:
 /// `LocalKeys` is well above the 64-byte cutoff; the `Box` moves only a
 /// pointer across the bench boundary).
 pub fn build_key_baseline_fixture() -> Box<KeyBaselineBenchFixture> {

@@ -437,10 +437,13 @@ commits:
   `benchmarks.yml` switched to `cargo install gungraun-runner
   --version '^0.18' --locked`; `scripts/bench/capture_rust_baseline.sh`
   preflight + version-detection + python-heredoc updated; the
-  JSON envelope's `captured_on` block emits both the legacy
+  JSON envelope's `captured_on` block emitted both the legacy
   `iai_callgrind_runner_version` field and the new
   `gungraun_runner_version` field for one release cycle of
-  consumer-side compatibility.
+  consumer-side compatibility. (The 2026-06-16 re-land — the PR that
+  actually merges, per the banner above — drops the dual-field for a
+  single `gungraun_runner_version` key: nothing consumes the
+  runner-version field, so no alias period was warranted. See §6.3.)
 
 The macro API surface (`library_benchmark`, `library_benchmark_group`,
 `main`, `benches::with_setup`, `black_box`) was source-compatible —
@@ -515,19 +518,18 @@ user prefers Disposition 2 explicitly.
   will catch it informationally; PR #35's machinery is the long-
   term safety net even if the flake persists post-upgrade.
 
-### 6.3 Field-rename cleanup (one release cycle out)
+### 6.3 Runner-version field rename (no alias — resolved)
 
-The capture script's JSON envelope currently emits both the legacy
-key (`iai_callgrind_runner_version`) and the new key
-(`gungraun_runner_version`) for one release cycle to keep any
-external consumer of `bench-baseline/baseline.json` from breaking
-silently if it was keyed on the legacy field. Same rationale for
-the top-level `iai_callgrind` section name (left unchanged).
-
-Trigger: once `bench-baseline` has been regenerated under
-gungraun and one release cycle (or roughly 4–6 weeks of CI
-operation, whichever is longer) has elapsed without consumer
-breakage, drop the legacy alias. Tracked in `docs/FOLLOWUPS.md`.
+The 0.18 attempt planned a one-release-cycle dual-field alias
+(`iai_callgrind_runner_version` + `gungraun_runner_version`) to spare
+any external consumer of `bench-baseline/baseline.json` keyed on the
+legacy field. The 2026-06-16 re-land dropped that: the capture script's
+JSON envelope emits **only** `gungraun_runner_version`. The
+`captured_on.*_runner_version` field is provenance metadata that nothing
+reads — `compare.py` keys on the top-level `iai_callgrind` *section*
+(retained as a stable schema key, the only legacy name kept), not on the
+runner-version field — so a clean rename was preferable to carrying alias
+debt. No cleanup follow-up remains.
 
 ## 7. Citations
 
