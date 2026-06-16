@@ -195,17 +195,16 @@ pub(crate) struct VerifyRoot {
     pub expected_root: [u8; 32],
 }
 
-/// Test-only actor message reading [`CurveTreeClient::root_at`]: the
-/// reconstructed curve-tree root as of `height`.
+/// Actor message reading [`CurveTreeClient::root_at`]: the reconstructed
+/// curve-tree root as of `height`.
 ///
-/// This is the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
+/// The **send-time re-derivation** of the reference-height root (CT-5b §3.2):
+/// the reference root is never persisted (derive>hold, R1-Q6) — it is
+/// reconstructed here at send time and bound into the
+/// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) the proof anchors to.
+/// Also the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
 /// `start_refresh_integration_tests`) uses to assert the engine ingest path
 /// reproduces the consensus header root at every height.
-/// It is **test-only on purpose**: the *production* root read — send-time
-/// re-derivation of the reference-height root and the §3.3 ingest-time verify —
-/// is CT-5b, not CT-5a. Promoting this to a production handle method is that
-/// commit's work, not this one's.
-#[cfg(test)]
 pub(crate) struct RootAt {
     /// The reference height whose reconstructed root to read.
     pub height: BlockHeight,
@@ -287,7 +286,6 @@ impl Message<VerifyRoot> for CurveTreeActor {
     }
 }
 
-#[cfg(test)]
 impl Message<RootAt> for CurveTreeActor {
     type Reply = Result<[u8; 32], ClientError>;
 
@@ -582,12 +580,16 @@ impl CurveTreeHandle {
         actor.wait_for_shutdown().await;
     }
 
-    /// Test-only: read the reconstructed curve-tree root as of `height`
-    /// ([`CurveTreeClient::root_at`]) through the actor. The CT-5a commit-6
-    /// oracle KAT uses this to assert the engine ingest path reproduces the
-    /// consensus header root at every height. The production root read (CT-5b
-    /// send-time re-derivation / §3.3 verify) is deliberately not built here.
-    #[cfg(test)]
+    /// Read the reconstructed curve-tree root as of `height`
+    /// ([`CurveTreeClient::root_at`]) through the actor — the CT-5b §3.2
+    /// send-time re-derivation of the reference-height root (the root is never
+    /// persisted; reconstructed here and bound into the
+    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)). Also the read the
+    /// CT-5a commit-6 oracle KAT uses to assert the ingest path reproduces the
+    /// consensus header root at every height. On a stopped actor returns
+    /// [`CurveTreeHandleError::Unavailable`]; a height beyond the ingested tip
+    /// surfaces the client's `ReferenceBeyondIngestedTip` via
+    /// [`CurveTreeHandleError::Client`].
     pub(crate) async fn root_at(
         &self,
         height: BlockHeight,

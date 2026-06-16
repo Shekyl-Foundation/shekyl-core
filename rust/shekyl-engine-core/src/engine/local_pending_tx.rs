@@ -45,7 +45,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use shekyl_curve_tree::{select_reference_height, REF_ANCHOR_AGE};
+use shekyl_curve_tree::{select_reference_height, BlockHeight, ReferenceBlock, REF_ANCHOR_AGE};
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
@@ -636,6 +636,7 @@ where
         request: &TxRequest,
         fee_snapshot: super::traits::FeeEstimates,
         tree_gate: TreeSpendGate,
+        reference: Option<ReferenceBlock>,
     ) -> Result<BuildAssembled, SendError> {
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
@@ -973,13 +974,20 @@ where
             }
         }
 
+        // CT-5b §3.2: anchor assembly to the *real* re-derived reference root
+        // when one was bound (tree enforced, chain old enough, tree covers the
+        // reference); otherwise fall back to the tip-hash placeholder (no tree
+        // / not-yet-anchorable — the synthetic membership path, replaced by the
+        // real `assemble_path` in CT-5c, does not yet consume the full
+        // `ReferenceBlock`). The `[u8; 32]` parameter stays until CT-5c's T1.
+        let reference_root = reference.map_or(tip_hash, |r| r.curve_tree_root);
         let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
             assemble_tx_to_sign(
                 self.network,
                 request,
                 &selected.indices,
                 ledger.transfers(),
-                tip_hash,
+                reference_root,
                 tree_depth,
                 fee_directive,
             )
@@ -1391,8 +1399,57 @@ where
                 }
             }
         };
+        // CT-5b §3.2: bind the reference block the proof anchors to. The
+        // reference root is never persisted (derive>hold, R1-Q6) — re-derive it
+        // from the actor at `reference_height = tip − REF_ANCHOR_AGE`. Only when
+        // a tree is enforced, the chain is old enough, and the tree has reached
+        // the reference height (so the root is reconstructable); otherwise leave
+        // it unresolved and the synchronous build classifies the condition
+        // (`WalletTooYoungToSpend` / `SpendUnavailableRebuilding`) or, with no
+        // tree, falls back to the placeholder reference (synthetic path, CT-5c
+        // replaces it). The signer still builds synthetic membership paths; only
+        // the reference *selection* is real here.
+        let reference = match &self.curve_tree {
+            Some(handle) => {
+                let synced = self.ledger.with_ledger_block(LedgerBlock::height);
+                match select_reference_height(synced) {
+                    Some(rh)
+                        if matches!(
+                            tree_gate,
+                            TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
+                        ) =>
+                    {
+                        let curve_tree_root =
+                            handle.root_at(BlockHeight(rh)).await.map_err(|err| {
+                                fail_build_after_attempted(
+                                    self.sink.as_ref(),
+                                    map_curve_tree_handle_error_for_send(&err),
+                                )
+                            })?;
+                        let block_hash = self
+                            .ledger
+                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+                            .ok_or_else(|| {
+                                fail_build_after_attempted(
+                                    self.sink.as_ref(),
+                                    SendError::CannotSign {
+                                        reason: "reference-height block hash missing from ledger",
+                                    },
+                                )
+                            })?;
+                        Some(ReferenceBlock {
+                            height: BlockHeight(rh),
+                            curve_tree_root,
+                            block_hash,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            None => None,
+        };
         let BuildAssembled { tx_to_sign, meta } =
-            self.build_assemble_sync(&request, fee_snapshot, tree_gate)?;
+            self.build_assemble_sync(&request, fee_snapshot, tree_gate, reference)?;
         let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
         let signed = self
             .signer
@@ -2021,6 +2078,51 @@ mod tests {
             }
             other => panic!("expected WalletTooYoungToSpend, got {other:?}"),
         }
+    }
+
+    /// CT-5b §3.2 commit 3: with a tree caught up past the reference height, the
+    /// build binds the re-derived reference root into the assembly's
+    /// `TreeContext.reference_block` (replacing the tip-hash placeholder).
+    /// Drives `build_assemble_sync` directly so the assembled `TxToSign` is
+    /// inspectable before signing.
+    #[tokio::test]
+    async fn reference_root_threaded_into_assembly() {
+        let ledger = Arc::new(test_ledger());
+        // synced 20 → reference_height 14; the eligible-11 output is spendable.
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            20,
+        );
+        let (_dir, tree) = tree_handle_ingested_through(20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        const REF_ROOT: [u8; 32] = [0x42; 32];
+        let reference = Some(ReferenceBlock {
+            height: BlockHeight(14),
+            curve_tree_root: REF_ROOT,
+            block_hash: [0xAB; 32],
+        });
+        let assembled = pending
+            .build_assemble_sync(
+                &standard_request(7_000),
+                test_fee_estimates(),
+                TreeSpendGate::Enforced {
+                    covered_through: Some(20),
+                },
+                reference,
+            )
+            .expect("a caught-up tree assembles a tx");
+        assert_eq!(
+            assembled
+                .tx_to_sign
+                .fcmp_plus_plus_context
+                .tree
+                .reference_block,
+            REF_ROOT,
+            "the re-derived reference root is bound into the assembly, not the placeholder",
+        );
     }
 
     #[tokio::test]
