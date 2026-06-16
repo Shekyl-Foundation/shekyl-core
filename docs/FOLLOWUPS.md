@@ -4443,6 +4443,38 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1.x — dependency migrations
 
+- **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
+  proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
+  migration from `iai-callgrind 0.16` to `gungraun 0.19`
+  (`docs/investigation/2026-05-09-bench-baseline-flake.md`) was justified on
+  supported-upstream / debt grounds; whether it *also* fixes the
+  `instructions=0` capture flake is **speculative** (root cause unknown,
+  §3.3). Two artifacts exist only to bridge that uncertainty and should be
+  removed once it resolves:
+  - `.github/workflows/bench-runner-bisect.yml` — a `workflow_dispatch`-only,
+    deliberately-`iai-callgrind 0.16`-pinned runner-bisection harness for the
+    *original* flake. Post-migration it pins a dependency the tree no longer
+    uses; it gates nothing and pushes nowhere.
+  - The per-bench capture retry (`IAI_CAPTURE_ATTEMPTS`, default 3) in
+    `scripts/bench/capture_rust_baseline.sh` — a belt-and-suspenders absorber
+    for the transient zero; harmless to keep but redundant if the flake is
+    genuinely gone.
+  **Trigger:** retire the bisect workflow (and reconsider the retry) once
+  gungraun has run **~100 capture/CI cycles** (per-PR `capture-pr` + post-merge
+  `update-baseline` runs) with **zero `instructions=0` recurrences** — at which
+  point the upgrade is empirically the fix, not a speculative one. *Reopen /
+  escalate sooner if:* a zero recurs under gungraun, which would reopen §3.3's
+  candidate list (cause is runner-host- or Callgrind-side, not the crate) with
+  fresh evidence and argue for *keeping* both artifacts.
+  **Watch item — baseline drift on first regeneration:** the post-merge
+  `update-baseline` job reseeds `bench-baseline` wholesale under gungraun, so
+  steady-state comparison is gungraun-vs-gungraun (no cross-tool diff). Local
+  spot-check shows gungraun 0.19.2 instruction counts within <1% of the
+  iai-callgrind 0.16 numbers (e.g. ledger serialize 4,416,897 vs ~4.45M), far
+  inside the ±10% slowdown gate — but the bench set has grown since the
+  original cross-check, so confirm the first full gungraun baseline lands
+  clean across *all* current entries before trusting the gate.
+
 - **rand 0.9 migration and curve25519-dalek 5 cascade.**
   Seven Dependabot alerts on `shekyl-core` cite
   [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)

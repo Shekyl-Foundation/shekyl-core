@@ -116,7 +116,26 @@ done
 # ---- gungraun runs (instruction counts, Tier-1) -----------------------
 
 IAI_STDOUT_TMP="$(mktemp)"
-trap 'rm -f "${IAI_STDOUT_TMP}"' EXIT
+PER_BENCH_TMP="$(mktemp)"
+trap 'rm -f "${IAI_STDOUT_TMP}" "${PER_BENCH_TMP}"' EXIT
+
+# Per-bench retry budget for the transient `instructions=0` capture anomaly
+# (`docs/investigation/2026-05-09-bench-baseline-flake.md`): a zero is a
+# measurement-layer flake a re-run almost always clears (the doc's own "rerun
+# the workflow typically succeeds"). Retry is *per bench* so a flake on one
+# entry re-runs only that entry, not the whole sweep. Bounded so a
+# *persistent* zero — a genuine regression to an empty measured region — still
+# surfaces via the producer guard below instead of looping forever. Override
+# with the env var (CI may raise it; it must not be set to 0).
+IAI_CAPTURE_ATTEMPTS="${IAI_CAPTURE_ATTEMPTS:-3}"
+
+# A leading `Instructions:  0|` metric line is the anomaly signal: a real
+# bench never measures exactly zero (even the field-access `synced_height`
+# bench is ~10 instructions), so a 0 means collection never fired around the
+# function on that run.
+capture_reported_zero() {
+  grep -Eq '^[[:space:]]+Instructions:[[:space:]]+0\|' "$1"
+}
 
 for row in "${BENCHES[@]}"; do
   IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
@@ -126,19 +145,38 @@ for row in "${BENCHES[@]}"; do
   fi
   echo
   echo "[capture_rust_baseline] gungraun  : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
-  {
-    printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
-    (
-      cd "${RUST_ROOT}"
-      # gungraun colors its output. Disabling via env keeps the
-      # snapshot and the parser input plain-text. `GUNGRAUN_COLOR` is
-      # the current knob; `IAI_CALLGRIND_COLOR` is set too so a stale
-      # iai-callgrind-era runner on PATH is also kept plain-text.
-      GUNGRAUN_COLOR=never \
-      IAI_CALLGRIND_COLOR=never \
-        cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
-    )
-  } | tee -a "${IAI_STDOUT_TMP}"
+  attempt=1
+  while :; do
+    # `tee` (overwrite) streams the run's stdout live to the console and
+    # captures it to the per-bench scratch file for the zero-check; only the
+    # final accepted attempt is appended to the snapshot below. stdout-only
+    # (matching the historical capture) keeps cargo's stderr build chatter out
+    # of the snapshot — gungraun writes its metric lines to stdout.
+    {
+      printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
+      (
+        cd "${RUST_ROOT}"
+        # gungraun colors its output. Disabling via env keeps the
+        # snapshot and the parser input plain-text. `GUNGRAUN_COLOR` is
+        # the current knob; `IAI_CALLGRIND_COLOR` is set too so a stale
+        # iai-callgrind-era runner on PATH is also kept plain-text.
+        GUNGRAUN_COLOR=never \
+        IAI_CALLGRIND_COLOR=never \
+          cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
+      )
+    } | tee "${PER_BENCH_TMP}"
+
+    if ! capture_reported_zero "${PER_BENCH_TMP}"; then
+      break
+    fi
+    if (( attempt >= IAI_CAPTURE_ATTEMPTS )); then
+      echo "[capture_rust_baseline] WARNING: ${CRATE}::${IAI_BENCH} reported instructions=0 on all ${attempt} attempt(s); leaving it for the producer guard to reject" >&2
+      break
+    fi
+    echo "[capture_rust_baseline] NOTE: ${CRATE}::${IAI_BENCH} reported instructions=0 (attempt ${attempt}/${IAI_CAPTURE_ATTEMPTS}); re-running — transient capture anomaly" >&2
+    attempt=$(( attempt + 1 ))
+  done
+  cat "${PER_BENCH_TMP}" >>"${IAI_STDOUT_TMP}"
 done
 
 # ---- host manifest ---------------------------------------------------------
