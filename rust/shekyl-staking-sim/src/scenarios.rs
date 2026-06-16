@@ -89,6 +89,15 @@ pub struct SimConfig {
     /// seeding). `0` = unlimited (legacy sourceless-instant, byte-identical).
     pub reseed_rate: usize,
 
+    // L18 release-cooldown axis (genesis HoldingsUpdate friction; inert when 0).
+    /// Epochs a **voluntarily** dropped deep shard's bond collateral stays frozen
+    /// before it can re-bond (gate-4 §4.4 per-shard release cooldown;
+    /// `RELEASE_COOLDOWN_EPOCHS = 2`). The released **flat** `ARCHIVAL_BOND_FLOOR`
+    /// (modeled as `bond_rate`, gate-4 §8.1) is removed from the actor's spendable
+    /// budget for the window, so deep-tail capital cannot instantly recycle a dropped
+    /// seat into a replacement. `0` ⇒ pre-L18 instant-redeploy (byte-identical).
+    pub release_cooldown_epochs: u32,
+
     // L11 endogenous-participation axis (iteration 3; inert when `!endogenous`).
     /// Free entry/exit on. When off, the population is fixed at `n_actors` all-active —
     /// every pre-L11 scenario, byte-identical.
@@ -353,6 +362,18 @@ pub struct SubClaims {
     pub deep_history: bool,
     pub churn_stable: bool,
     pub all_pass: bool,
+    /// **L18 absolute seal gate — sole-source clean.** `sole_source_shard_epochs == 0`
+    /// over the run: the deep tail never fell to foundation-as-sole-source. Absolute, not
+    /// a delta vs cooldown-0 (a seal-gate reads the absolute durability level, not the
+    /// optimism delta — that is the diagnostic). Not folded into `all_pass`; it is the
+    /// L18-specific durability gate read alongside `deep_history` and `deep_margin`.
+    pub sole_source_clean: bool,
+    /// **L18 absolute seal gate — hold-the-floor.** `oldest_margin >= 0`: the freeze does
+    /// not erode the committed oldest-band min below `r_target_deep`. The literal `+1`
+    /// redundancy is provisioned (set `r_target_deep = availability_floor + 1`), not
+    /// emergent — the `hu_buf_*` arms show the worst oldest shard sits at `r_target_deep`
+    /// at every budget. Absolute. Not folded into `all_pass`.
+    pub deep_margin: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -504,6 +525,42 @@ pub struct ScenarioResult {
     /// market never re-seated them — the permanent-foundation-dependence read on
     /// fatal-channel rows (vs transient windows on recovering rows).
     pub sole_source_open_end: f64,
+    /// **Frozen-capital fraction** (L18): windowed-mean share of active actors' total
+    /// capital sitting in release-cooldown escrow — the size of the `HoldingsUpdate`
+    /// freeze bite. `0` when `release_cooldown_epochs == 0` (pre-L18 instant redeploy).
+    pub frozen_capital_frac: f64,
+    /// **Freeze-harm, co-occurrence (UPPER bound)** (L18): windowed *peak* fraction of
+    /// deep shards under serving `R_target` during any epoch with system-wide frozen
+    /// capital present. Over-counts (freeze and absolute shortage co-occur), so it is the
+    /// pessimistic read the seal gates on — you only seal if even the over-count is
+    /// bounded. `0` in pre-L18 rows.
+    pub freeze_harm_co: f64,
+    /// **Freeze-harm, causal (LOWER bound)** (L18): windowed-mean fraction of deep shards
+    /// under target for which a willing-and-able archiver exists (active, ≥ one floor of
+    /// frozen capital, spare storage, not already holding the shard) — the freeze is a
+    /// structural-necessary cause. Diagnostic only. The bracket WIDTH (`freeze_harm_co −
+    /// freeze_harm_causal`) is the entanglement tell: wide ⇒ freeze and shortage are
+    /// entangled and the causal number is not trustworthy. `0` in pre-L18 rows.
+    pub freeze_harm_causal: f64,
+    /// **Oldest-band worst COMMITTED replication** (L18 +1-margin gate): windowed *min*
+    /// (worst epoch) of the minimum committed (bond-standing) replica count over the
+    /// oldest age band — the thinnest, least-mobile, irreplaceable tail. Lag-immune (the
+    /// freeze's clean channel: a smaller capital budget stands fewer bonds). `0` when the
+    /// band is empty.
+    pub oldest_min_committed_r: f64,
+    /// **Oldest-band worst SERVING replication** (L18, diagnostic): the same windowed-min
+    /// on seated replicas. Timing-depressed under backfill lag (reads the lag regime, not
+    /// the freeze), so reported but not the gate.
+    pub oldest_min_serving_r: f64,
+    /// **Oldest-band redundancy margin** (L18 seal gate): `oldest_min_committed_r −
+    /// r_target_deepest`. The seal requires `≥ 1` (one redundancy seat above target on
+    /// the deepest tail). On a failing arm, `r_target_deep + |deficit|` is the actionable
+    /// reopen floor (raise `r_target_deep` / foundation floor by the deficit, no re-run).
+    pub oldest_margin: f64,
+    /// **Oldest-band margin on the serving view** (L18, diagnostic): `oldest_min_serving_r
+    /// − r_target_deepest`. Lag-depressed; reported as the freeze×lag-compounded read, not
+    /// gated.
+    pub oldest_margin_serving: f64,
     /// **Retrieval under-SLA deep fraction** (L15): windowed-mean fraction of deep shards
     /// whose realized retrieval availability `1 − (1−u)^d` falls below `retr_avail_target`.
     /// Nonzero with a covered deep set (`deep_und ≈ 0`) is the coverage≠retrieval gap —
@@ -809,6 +866,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         fetch_latency_per_unit: cfg.fetch_latency_per_unit,
         acq_rate: cfg.acq_rate,
         reseed_rate: cfg.reseed_rate,
+        release_cooldown_epochs: cfg.release_cooldown_epochs,
     };
     let pp = ParticipationParams {
         entry_per_epoch: cfg.entry_per_epoch,
@@ -848,6 +906,29 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // the committed series when `fetch_latency == 0`.
     let mut series_serving_deep_under = Vec::with_capacity(cfg.epochs);
     let mut series_serving_old_under = Vec::with_capacity(cfg.epochs);
+    // L18 release-cooldown freeze diagnostics (all 0 when `release_cooldown_epochs == 0`).
+    // `frozen_frac`: system-wide frozen / total capital — the size of the freeze bite.
+    // `freeze_harm_co` (UPPER bound, seal gate): per-epoch fraction of deep shards
+    // under serving R_target while *any* capital is frozen system-wide — robust but
+    // over-counts (freeze and shortage co-occur). `freeze_harm_causal` (LOWER bound,
+    // diagnostic): the subset of those gaps for which some active actor holds enough
+    // frozen capital to fund a seat AND has spare storage AND is not already holding the
+    // shard — i.e. a willing-and-able archiver the freeze is plausibly blocking. The
+    // bracket WIDTH (co − causal) is the entanglement tell: a wide bracket means freeze
+    // and absolute shortage are entangled and the causal attribution is not trustworthy.
+    let mut series_frozen_frac = Vec::with_capacity(cfg.epochs);
+    let mut series_freeze_harm_co = Vec::with_capacity(cfg.epochs);
+    let mut series_freeze_harm_causal = Vec::with_capacity(cfg.epochs);
+    // L18 +1-margin gate: per-epoch *minimum* replication over the oldest band (the
+    // deepest, thinnest, least-mobile tail). The seal requires its windowed worst (min
+    // over the steady window) to sit at `r_target_deepest + 1` — redundancy headroom on
+    // the irreplaceable tail. Tracked on BOTH views: the COMMITTED read (bond commitments
+    // standing, lag-immune) is the freeze's clean channel — the freeze cuts the capital
+    // budget so fewer bonds stand — and is the seal gate; the SERVING read (seated
+    // replicas) is reported but is timing-depressed under backfill lag, so it reads the
+    // lag regime, not the freeze, and is diagnostic only.
+    let mut series_oldest_min_committed_r = Vec::with_capacity(cfg.epochs);
+    let mut series_oldest_min_serving_r = Vec::with_capacity(cfg.epochs);
     // L15 retrieval availability: per-epoch fraction of *deep* shards whose realized
     // retrieval availability `1 − (1−u)^d` falls below the SLA `retr_avail_target`, and
     // the deep-set mean availability. Inert (empty/zero) when `!retrieval_model`.
@@ -1140,6 +1221,79 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 .unwrap_or(0.0),
         );
 
+        // L18 release-cooldown freeze diagnostics + oldest-band +1-margin read. Computed
+        // over the mid-epoch serving view (`serving_r`); the freeze metrics are exactly 0
+        // when no escrow is live (`release_cooldown_epochs == 0`), keeping pre-L18 rows
+        // byte-identical. Cost is one O(actors) capital sum + one O(deep × actors) willing-
+        // able scan, negligible at sim sizes.
+        {
+            let frozen_total: f64 = (0..world.actors.len())
+                .filter(|&a| world.active[a])
+                .map(|a| world.frozen_capital(a))
+                .sum();
+            let capital_total: f64 = (0..world.actors.len())
+                .filter(|&a| world.active[a])
+                .map(|a| world.actors[a].capital)
+                .sum();
+            series_frozen_frac.push(if capital_total > 0.0 {
+                frozen_total / capital_total
+            } else {
+                0.0
+            });
+
+            let any_frozen = frozen_total > 1e-9;
+            let oldest_lo_now = (N_BANDS - 1) as f64 / N_BANDS as f64;
+            let committed_r = world.replication();
+            let mut deep_n = 0usize;
+            let mut harm_co = 0usize;
+            let mut harm_causal = 0usize;
+            let mut oldest_min_serving = i64::MAX;
+            let mut oldest_min_committed = i64::MAX;
+            #[allow(clippy::needless_range_loop)]
+            for s in 0..world.shards.len() {
+                let age = world.shards[s].age;
+                if age < cfg.deep_threshold {
+                    continue;
+                }
+                deep_n += 1;
+                let tgt = r_target(age, cfg.r_target_hot, cfg.r_target_deep);
+                let under = (serving_r[s] as i64) < tgt as i64;
+                if age >= oldest_lo_now {
+                    oldest_min_serving = oldest_min_serving.min(serving_r[s] as i64);
+                    oldest_min_committed = oldest_min_committed.min(committed_r[s] as i64);
+                }
+                if !under {
+                    continue;
+                }
+                // Co-occurrence (upper bound): any system-wide freeze present.
+                if any_frozen {
+                    harm_co += 1;
+                }
+                // Causal (lower bound): a willing-and-able archiver the freeze blocks —
+                // active, holds ≥ one floor of frozen capital, has spare storage, and is
+                // not already holding `s`. A structural necessary condition for the freeze
+                // (not absolute shortage) to be what is keeping `s` under target. Reads 0
+                // across the whole sweep by construction (`best_response` rationality) — see
+                // `World::freeze_blocks_recoverage` and the §L18 detector-validation note.
+                if world.freeze_blocks_recoverage(s, cfg.bond_rate) {
+                    harm_causal += 1;
+                }
+            }
+            let dn = deep_n.max(1) as f64;
+            series_freeze_harm_co.push(harm_co as f64 / dn);
+            series_freeze_harm_causal.push(harm_causal as f64 / dn);
+            series_oldest_min_serving_r.push(if oldest_min_serving == i64::MAX {
+                0
+            } else {
+                oldest_min_serving
+            });
+            series_oldest_min_committed_r.push(if oldest_min_committed == i64::MAX {
+                0
+            } else {
+                oldest_min_committed
+            });
+        }
+
         // swan-2 / W1: per-epoch wipe-out scan — a deep shard whose serving market
         // holder set empties after having been seated transitions to
         // foundation-as-sole-source (swan-4; sticky per slot until recycle). Counted
@@ -1398,6 +1552,49 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     } else {
         0.0
     };
+    // L18 freeze diagnostics over the same steady-state window. `frozen_capital_frac`
+    // and the causal harm are windowed *means*; the co-occurrence harm is the windowed
+    // *peak* (the seal's pessimistic upper bound — gate on the worst the over-count
+    // sees). `oldest_min_serving_r_worst` is the windowed *min* (the worst the +1-margin
+    // tail reaches). All 0 in pre-L18 rows.
+    let frozen_capital_frac = if w > 0 {
+        series_frozen_frac[series_frozen_frac.len() - w..]
+            .iter()
+            .sum::<f64>()
+            / w as f64
+    } else {
+        0.0
+    };
+    let freeze_harm_co = series_freeze_harm_co[series_freeze_harm_co.len() - w..]
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max);
+    let freeze_harm_causal = if w > 0 {
+        series_freeze_harm_causal[series_freeze_harm_causal.len() - w..]
+            .iter()
+            .sum::<f64>()
+            / w as f64
+    } else {
+        0.0
+    };
+    let oldest_min_serving_r_worst = series_oldest_min_serving_r
+        [series_oldest_min_serving_r.len() - w..]
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(0) as f64;
+    let oldest_min_committed_r_worst = series_oldest_min_committed_r
+        [series_oldest_min_committed_r.len() - w..]
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(0) as f64;
+    // +1-margin gate: deepest-shard R_target (oldest age = 1.0) plus one redundancy seat.
+    // Read on the COMMITTED min (lag-immune — the freeze's clean channel); the serving
+    // margin is reported but lag-depressed (diagnostic, not gated).
+    let r_target_deepest = r_target(1.0, cfg.r_target_hot, cfg.r_target_deep) as f64;
+    let oldest_margin = oldest_min_committed_r_worst - r_target_deepest;
+    let oldest_margin_serving = oldest_min_serving_r_worst - r_target_deepest;
     // L11 emergent participation, windowed means over the same steady-state window:
     // the active fraction (of the full pool) and the bonded-active count (the emergent
     // archiver-set size). For non-endogenous scenarios these are the fixed population.
@@ -1600,6 +1797,19 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let coverage_oscillation = oldest_under_max.max(serving_oldest_under_max);
     let churn_stable = coverage_oscillation < 0.05;
     let all_pass = covered && spread_windowed && deep_history && churn_stable;
+    // L18 absolute durability gates (reported alongside `all_pass`, not folded into it —
+    // they are the HoldingsUpdate-freeze-specific seal reads). `deep_history` already
+    // carries the absolute `deep_frac_under_target < 0.10` gate; these add the absolute
+    // sole-source-clean and +1-margin gates the seal re-derivation names.
+    let sole_source_clean = sole_source_shard_epochs == 0;
+    // Hold-the-floor gate (L18 re-derivation): the freeze must not erode the committed
+    // oldest-band min BELOW `r_target_deep` (`oldest_margin >= 0`). The literal `+1`
+    // redundancy is NOT an emergent buffer — the buffered arms (`hu_buf_*`) show the worst
+    // oldest shard provisions to exactly `r_target_deep` at every budget (120/140/160/180),
+    // so `+1` is a property of how `r_target_deep` is SET (provision `= availability_floor
+    // + 1`), not one the equilibrium discovers. The freeze costs ~0 floor erosion at
+    // cooldown=2 (oUmx 0, margin 0), so no freeze-driven `r_target_deep` increase is needed.
+    let deep_margin = oldest_margin >= 0.0;
 
     ScenarioResult {
         name: cfg.name.clone(),
@@ -1634,6 +1844,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         sole_source_shard_epochs: sole_source_shard_epochs as f64,
         sole_source_max_window: sole_source_max_window as f64,
         sole_source_open_end: ext_scan.sole_source_open() as f64,
+        frozen_capital_frac,
+        freeze_harm_co,
+        freeze_harm_causal,
+        oldest_min_committed_r: oldest_min_committed_r_worst,
+        oldest_min_serving_r: oldest_min_serving_r_worst,
+        oldest_margin,
+        oldest_margin_serving,
         shock_recovery_epochs,
         shock_bonded_trough,
         retr_under_deep,
@@ -1656,6 +1873,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             deep_history,
             churn_stable,
             all_pass,
+            sole_source_clean,
+            deep_margin,
         },
         series_frac_under,
         series_deep_frac_under,
@@ -1723,6 +1942,9 @@ fn baseline() -> SimConfig {
         // swan-4: unlimited foundation re-seed bandwidth by default (sourceless-
         // instant, every prior scenario byte-identical). The re-seed arms opt in.
         reseed_rate: 0,
+        // L18: instant bond redeploy by default (every pre-L18 scenario byte-identical).
+        // The HoldingsUpdate cooldown arms opt in.
+        release_cooldown_epochs: 0,
         // L11: fixed all-active population by default (every pre-L11 scenario). The
         // participation scenarios opt in.
         endogenous: false,
@@ -3515,6 +3737,110 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         swan_servo(&mut c);
         c.budget_ceiling = 400.0;
         c.reseed_rate = 3;
+        out.push(c);
+    }
+
+    // --- L18: HoldingsUpdate release-cooldown reconciliation (genesis friction; R-3).
+    // The pre-L18 model abstracted bond mobility into a flat seating cost and let a
+    // voluntarily-dropped deep bond's capital redeploy INSTANTLY — optimistic exactly on
+    // the deep tail, where gate-4 §4.4 freezes the released collateral for
+    // `RELEASE_COOLDOWN_EPOCHS = 2` before it can re-bond. This block adds that freeze and
+    // sweeps the cooldown at the capital-poor lean bind with backfill lag L2 (the regime
+    // where a frozen actor cannot fund a replacement seat in time, so the optimism is
+    // load-bearing).
+    //
+    // FLAT amount, age-stratified INCIDENCE: each dropped deep shard freezes a flat
+    // `ARCHIVAL_BOND_FLOOR` (modeled as `bond_rate`) per gate-4 §8.1
+    // (`bond_floor = ARCHIVAL_BOND_FLOOR × |set|` — per-shard capital is depth-flat). The
+    // coverage harm concentrates on the deep tail not because the frozen amount scales
+    // with depth (it does not — the earlier `bond_age` model over-stated this exactly on
+    // the +1-margin band) but because (1) `bond_duration(age)` makes deep capital least
+    // mobile to begin with and (3) the deep tail is thinnest, so a freeze-induced delay
+    // there has the most impact. Seal arms run flat bond MAGNITUDE (`bond_age_scale = 0`,
+    // the resolved L4 default), so posted = released = frozen.
+    //
+    // Seal read — ABSOLUTE gates at cooldown=2 on the age-scaled-DURATION arm (`s4`, the
+    // realistic composition; `s0` flat is the contrast): `deep_history`
+    // (`deep_frac_under_target < 0.10`, COMMITTED), `sole_source_clean` (`ssSE == 0`), and
+    // the +1 margin (`deep_margin`, `oldest_margin >= 1`, on the COMMITTED oldest-band
+    // min). The freeze's clean channel is the capital budget (a frozen floor stands one
+    // fewer bond), which is lag-immune — so the committed reads isolate the freeze, while
+    // the SERVING reads (`serving_deep_under`, `oldest_margin_serving`) are
+    // backfill-lag-depressed and read the lag regime, not the freeze. Two latency arms:
+    // `lag0` (clean — the freeze is the only perturbation, so the absolute `ssSE == 0` and
+    // committed gates isolate it) is the PRIMARY seal; `lag2` (backfill lag L2) is the
+    // freeze×lag compounding STRESS (sole-source and serving margins are lag-confounded
+    // there, reported as the entanglement read, not gated). cooldown {1,4} are the CLIFF
+    // CHECK — the 2→4 harm gradient must be sub-linear (the servo-400 fragility lesson);
+    // a sharp 2→4 degradation means cooldown=2 sits on a bifurcation edge. On a failing
+    // margin, `r_target_deep + |oldest_margin|` is the actionable reopen floor (no re-run).
+    // cooldown=0 is the pre-L18 optimism baseline: the delta to it is the DIAGNOSTIC for
+    // how load-bearing the optimism was, NOT a gate (a seal reads the absolute level, not
+    // the optimism delta). Freeze attribution is the `freeze_harm_co` (upper bound) /
+    // `freeze_harm_causal` (lower bound) bracket; gate/read on the upper bound, treat a
+    // wide bracket as freeze↔shortage entanglement. ---
+    for (llabel, lpu) in [("lag0", 0.0_f64), ("lag2", 2.0)] {
+        for (clabel, cooldown) in [("c0", 0u32), ("c1", 1), ("c2", 2), ("c4", 4)] {
+            for (dlabel, dscale) in [("s0", 0.0), ("s4", 4.0)] {
+                let mut c = lean_base();
+                c.name = format!("hu_{llabel}_{clabel}_{dlabel}");
+                c.axis = "holdingsupdate_cooldown".into();
+                c.epochs = 120;
+                c.churn_window = 40;
+                c.epoch_aging = 0.05; // the covered lean point (capacity-bound)
+                c.fetch_latency_per_unit = lpu;
+                c.release_cooldown_epochs = cooldown;
+                c.bond_dur_age_scale = dscale;
+                out.push(c);
+            }
+        }
+    }
+    // +1-margin BUFFERED arm: the lean point above sits at the zero-buffer equilibrium
+    // (oldest band at R ≈ R_target), so the redundancy-floor `+1` gate cannot be read
+    // there (margin 0 at the c0 baseline, before any freeze). The seal's redundancy-floor
+    // question — "is the genesis provisioning high enough that the oldest tail keeps a
+    // +1 seat above target under the freeze?" — is a PROVISIONED-point question. Re-run
+    // the clean (lag0) freeze sweep at progressively buffered budgets; the seal floor is
+    // the smallest budget at which the realistic (age-scaled-duration) cooldown=2 arm
+    // delivers `oldest_margin >= 1`. Realistic duration (s4) only; cooldown {0,2,4} brackets
+    // the genesis value and the cliff. ---
+    for (blabel, budget) in [("b140", 140.0_f64), ("b160", 160.0), ("b180", 180.0)] {
+        for (clabel, cooldown) in [("c0", 0u32), ("c2", 2), ("c4", 4)] {
+            let mut c = lean_base();
+            c.name = format!("hu_buf_{blabel}_{clabel}");
+            c.axis = "holdingsupdate_cooldown".into();
+            c.epochs = 120;
+            c.churn_window = 40;
+            c.epoch_aging = 0.05;
+            c.fetch_latency_per_unit = 0.0; // clean: isolate the freeze on the margin
+            c.budget = budget; // buffer above the lean zero-buffer point (120)
+            c.release_cooldown_epochs = cooldown;
+            c.bond_dur_age_scale = 4.0; // realistic age-scaled duration
+            out.push(c);
+        }
+    }
+    // EMERGENT-SLACK LEVER PROBE. The buffered arms show budget alone buys no margin
+    // above `r_target_deep`. This arm asks whether the *reward gradient* does: hold budget
+    // at the lean zero-buffer point (120) and realistic age-scaled duration, raise only the
+    // deep-tail premium (`age_weight`) at genesis cooldown=2. Result (§L18): it does not —
+    // `oldest_min_committed` stays pinned at `r_target_deep` across `age_weight` 3→12, and
+    // `committed_deep_under` worsens slightly at the top (concentration). The `1/R` reward
+    // makes the `(target+1)`-th replica individually unprofitable by construction (the
+    // anti-over-replication property), so NO market lever (budget or premium) produces
+    // emergent slack. A wider protective band is a *provisioning* decision only — raise
+    // `r_target_deep`, or lean on the foundation complete-tree backstop — both priced
+    // (entry-barrier vs. trust-concentration), neither emergent.
+    for aw in [3.0_f64, 7.0, 12.0] {
+        let mut c = lean_base();
+        c.name = format!("hu_lever_aw{}_c2", aw as u32);
+        c.axis = "holdingsupdate_cooldown".into();
+        c.epochs = 120;
+        c.churn_window = 40;
+        c.epoch_aging = 0.05;
+        c.fetch_latency_per_unit = 0.0;
+        c.release_cooldown_epochs = 2;
+        c.bond_dur_age_scale = 4.0;
+        c.age_weight = aw;
         out.push(c);
     }
 

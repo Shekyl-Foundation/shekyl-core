@@ -64,6 +64,15 @@ pub struct AgentParams {
     /// seeding). `0` = unlimited (legacy sourceless-instant behavior, byte-identical).
     /// Market-sourced fetches (≥1 serving holder) are never throttled by this knob.
     pub reseed_rate: usize,
+    // --- L18 release-cooldown axis (genesis HoldingsUpdate friction; inert when 0) ---
+    /// Epochs a **voluntarily dropped** deep shard's bond collateral stays frozen
+    /// before it can fund a new bond (gate-4 §4.4 per-shard release cooldown;
+    /// `RELEASE_COOLDOWN_EPOCHS = 2`). While frozen, the released **flat**
+    /// `ARCHIVAL_BOND_FLOOR` (modeled as `bond_rate`) is subtracted from the actor's
+    /// spendable capital budget, so freed deep-tail capital cannot instantly recycle
+    /// into a replacement seat — the optimism the pre-L18 model carried. `0` ⇒ instant
+    /// redeploy (every pre-L18 scenario, byte-identical).
+    pub release_cooldown_epochs: u32,
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -84,7 +93,10 @@ fn best_response(
     let n_shard = world.shards.len();
     let r = world.replication();
     let cap_storage = world.actors[actor].storage_capacity;
-    let capital = world.actors[actor].capital;
+    // L18: spendable bond budget = endowment minus capital still frozen in release
+    // cooldown from earlier voluntary drops. `frozen_capital` is 0 when no drop is
+    // cooling (every pre-L18 scenario), so `capital` is unchanged there.
+    let capital = (world.actors[actor].capital - world.frozen_capital(actor)).max(0.0);
     let bonded = ap.bond_rate > 0.0;
     let was_held = world.holdings[actor].clone();
 
@@ -219,6 +231,25 @@ fn best_response(
         // held-through (new_held && was_held): leave inflight as-is (decremented by
         // advance_epoch each epoch until seated).
     }
+
+    // L18 release-cooldown escrow: a *voluntary* drop of a bonded (deep) shard frees a
+    // **flat** `ARCHIVAL_BOND_FLOOR` (modeled as `bond_rate`, per gate-4 §8.1 — per-shard
+    // capital is depth-flat) that does not return to spendable capital for
+    // `release_cooldown_epochs`. Pushed per dropped shard, so re-adding the same shard
+    // inside the window needs *fresh* capital (the 2× anti-dodge bite — P2B-7 Pin 3).
+    // Anchor = drop epoch ≡ last-served epoch (the sim is serve-until-drop: a held
+    // seated shard always serves, and a locked shard serves until its lock clears, so a
+    // voluntary drop's last-served epoch is the drop epoch). Slash-style losses (L11
+    // exit, age-1 recycle) clear holdings outside `best_response` and never reach here,
+    // so only voluntary drops cool. Inert when `release_cooldown_epochs == 0`.
+    if ap.release_cooldown_epochs > 0 && bonded {
+        for s in 0..n_shard {
+            if was_held[s] && !new_held[s] && world.shards[s].is_deep(ap.deep_threshold) {
+                world.cooling[actor].push((ap.bond_rate, ap.release_cooldown_epochs));
+            }
+        }
+    }
+
     world.holdings[actor] = new_held;
 }
 

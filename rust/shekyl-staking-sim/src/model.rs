@@ -138,6 +138,23 @@ pub struct World {
     /// scenario's patience window — hysteresis that damps entry/exit thrashing, the
     /// same async-update discipline the shard game uses. Inert unless `endogenous`.
     pub below_streak: Vec<u32>,
+    /// `cooling[a]` = per-actor list of `(frozen_amount, epochs_remaining)` release-
+    /// cooldown escrow entries (L18 — `HoldingsUpdate` mobility friction). When actor
+    /// `a` **voluntarily** drops a deep shard, the released bond collateral does not
+    /// return to its spendable `capital` at once: it is frozen for
+    /// `RELEASE_COOLDOWN_EPOCHS` (gate-4 §4.4 per-shard release cooldown) before it can
+    /// fund a new bond. `frozen_capital(a)` (the sum of live entries) is subtracted from
+    /// the agent's capital budget each epoch, so in the capital-poor deep tail a dropped
+    /// shard's collateral cannot instantly recycle into a replacement — the optimism the
+    /// pre-L18 model carried (instant redeploy). **Flat amount:** each entry is the flat
+    /// `ARCHIVAL_BOND_FLOOR` (modeled as `bond_rate`), per gate-4 §8.1
+    /// (`bond_floor = ARCHIVAL_BOND_FLOOR × |set|` — per-shard capital is depth-flat); the
+    /// freeze's *coverage incidence* is age-stratified (deep capital is least mobile via
+    /// the L9 lock, and the deep tail is thinnest), not its *amount*. Always empty when
+    /// `release_cooldown_epochs == 0` (every pre-L18 scenario), so legacy behavior is
+    /// byte-identical. Slash (L11 exit / age-1 recycle) forfeits collateral to burn
+    /// (gate-4 §4.5) and never escrows — only voluntary drops cool.
+    pub cooling: Vec<Vec<(f64, u32)>>,
 }
 
 impl World {
@@ -149,6 +166,7 @@ impl World {
         let inflight = vec![vec![0u32; n_shard]; n_actor];
         let active = vec![true; n_actor];
         let below_streak = vec![0u32; n_actor];
+        let cooling = vec![Vec::new(); n_actor];
         Self {
             shards,
             actors,
@@ -157,7 +175,16 @@ impl World {
             inflight,
             active,
             below_streak,
+            cooling,
         }
+    }
+
+    /// Capital currently frozen in actor `a`'s release-cooldown escrow (L18). The sum
+    /// of live entry amounts; subtracted from the actor's spendable bond budget in
+    /// `best_response`. `0.0` whenever no voluntary drop is cooling (every pre-L18
+    /// scenario, since entries are pushed only when `release_cooldown_epochs > 0`).
+    pub fn frozen_capital(&self, a: usize) -> f64 {
+        self.cooling[a].iter().map(|&(amt, _)| amt).sum()
     }
 
     /// Deactivate actor `a` (L11 exit): clears its holdings, locks, and in-flight
@@ -176,6 +203,13 @@ impl World {
         for f in self.inflight[a].iter_mut() {
             *f = 0;
         }
+        // L18: clear release-cooldown escrow. Exit is a full slash/clean-unbond event,
+        // not a voluntary mid-life drop; the actor's capital state resets, and a
+        // re-entrant starts fresh (no carried freeze). Clearing here prevents a stale
+        // escrow from double-freezing capital on the exit→re-entry path (the clean
+        // `Unbond` already requires the cooldown to have elapsed as a precondition —
+        // gate-4 §3.2/§4.3 — so re-entering capital is not still cooling).
+        self.cooling[a].clear();
     }
 
     /// Append a fresh `age` shard to the frontier — the L12 **growing-window**
@@ -235,6 +269,15 @@ impl World {
                     *f = 0;
                 }
             }
+            // L18 release-cooldown escrow: tick each frozen entry one epoch closer to
+            // release; drop entries that reach 0 (capital returns to spendable). A
+            // drop posted this epoch is frozen through the next `RELEASE_COOLDOWN_EPOCHS`
+            // best-responses (the entry is pushed after `advance_epoch` runs, so it is
+            // not decremented in its own drop epoch). No-op when no escrow is live.
+            for e in self.cooling[a].iter_mut() {
+                e.1 = e.1.saturating_sub(1);
+            }
+            self.cooling[a].retain(|&(_, rem)| rem > 0);
         }
     }
 
@@ -277,6 +320,37 @@ impl World {
 
     pub fn actor_shard_count(&self, a: usize) -> usize {
         self.holdings[a].iter().filter(|&&h| h).count()
+    }
+
+    /// **L18 causal freeze-harm predicate** — is some active actor a
+    /// *willing-and-able-but-frozen* archiver for shard `s`? True iff an active actor
+    /// (i) is not already holding `s`, (ii) holds at least one floor (`bond_rate`) of
+    /// **frozen** capital, and (iii) has a spare storage slot. This is the
+    /// structural-necessary condition for the *freeze* — rather than absolute capital
+    /// shortage — to be what keeps `s` under target: an actor who would re-cover `s` but
+    /// for collateral locked in release cooldown.
+    ///
+    /// **It never fires in the L18 general-equilibrium sweep, by construction, not by
+    /// accident** (`STAKER_ARCHIVAL_SIM.md` §L18 detector validation): `best_response`
+    /// points scarce budget at the *thinnest* (most scarcity-profitable) shards, so a
+    /// budget-constrained actor with a spare slot always spends its remaining budget on
+    /// the under-target deep tail and therefore *holds* it (condition i fails) — the
+    /// shards that stay under target are in absolute shortage (nobody can afford them),
+    /// never frozen-but-idle. A sweep reading of `0` therefore means "the willing-and-able-
+    /// but-frozen state never arises", **not** "the computation is dead": the unit tests
+    /// `freeze_predicate_fires_when_blocked` / `..._silent_when_*` are the positive/negative
+    /// control proving the predicate fires when the state *is* constructed. Consequently
+    /// the freeze-harm bracket (`freeze_harm_co − freeze_harm_causal`) is maximally wide
+    /// by construction ⇒ maximal entanglement ⇒ causal attribution carries no marginal
+    /// information; the trustworthy reads are the co-occurrence upper bound and the
+    /// structural `oldest_min_committed` floor, which *are* complementary detectors.
+    pub fn freeze_blocks_recoverage(&self, s: usize, bond_rate: f64) -> bool {
+        (0..self.actors.len()).any(|a| {
+            self.active[a]
+                && !self.holdings[a][s]
+                && self.frozen_capital(a) + 1e-9 >= bond_rate
+                && self.actor_shard_count(a) < self.actors[a].storage_capacity
+        })
     }
 }
 
@@ -341,4 +415,70 @@ pub fn r_target(age: f64, r_target_hot: f64, r_target_deep: f64) -> usize {
     let t = r_target_hot + (r_target_deep - r_target_hot) * age;
     // Round to nearest; floor at 1 (every shard needs at least one copy).
     (t.round() as usize).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two deep shards, one actor with capacity 2. `s = 0` is the under-target shard
+    /// the predicate is asked about.
+    fn one_actor_world(capacity: usize) -> World {
+        let shards = vec![Shard { age: 1.0 }, Shard { age: 1.0 }];
+        let actors = vec![Actor {
+            storage_capacity: capacity,
+            capital: 100.0,
+            is_whale: false,
+            reservation: 0.0,
+        }];
+        World::new(shards, actors)
+    }
+
+    /// **Positive control for the L18 causal freeze-harm detector.** Constructs exactly
+    /// the willing-and-able-but-frozen state — active, not holding `s = 0`, one floor
+    /// (`bond_rate = 10`) frozen, a spare slot — and confirms the predicate fires. This is
+    /// the analogue of the `double_jitter_trap_fails_the_same_check` discipline: it proves
+    /// a sweep reading of `0` means "the state never arises", not "the metric is dead".
+    #[test]
+    fn freeze_predicate_fires_when_blocked() {
+        let mut w = one_actor_world(2);
+        w.cooling[0].push((10.0, 2)); // one floor frozen
+        assert!(
+            w.freeze_blocks_recoverage(0, 10.0),
+            "predicate must fire: active, not holding s, ≥1 floor frozen, spare storage"
+        );
+    }
+
+    /// **Negative controls** — each of the four conjuncts, individually falsified, must
+    /// silence the predicate. Confirms the detector is selective (not always-true), the
+    /// other half of the validation.
+    #[test]
+    fn freeze_predicate_silent_when_any_conjunct_fails() {
+        // (i) already holding s → not a re-coverage candidate.
+        let mut holding = one_actor_world(2);
+        holding.cooling[0].push((10.0, 2));
+        holding.holdings[0][0] = true;
+        assert!(!holding.freeze_blocks_recoverage(0, 10.0));
+
+        // (ii) no frozen capital → freeze is not the binding constraint.
+        let unfrozen = one_actor_world(2);
+        assert!(!unfrozen.freeze_blocks_recoverage(0, 10.0));
+
+        // (iii) frozen below one floor → cannot fund even one seat.
+        let mut thin = one_actor_world(2);
+        thin.cooling[0].push((9.0, 2));
+        assert!(!thin.freeze_blocks_recoverage(0, 10.0));
+
+        // (iv) storage full → no spare slot to seat the re-cover.
+        let mut full = one_actor_world(1);
+        full.cooling[0].push((10.0, 2));
+        full.holdings[0][1] = true; // occupies the single slot (a different shard)
+        assert!(!full.freeze_blocks_recoverage(0, 10.0));
+
+        // (v) inactive → not a participant.
+        let mut inactive = one_actor_world(2);
+        inactive.cooling[0].push((10.0, 2));
+        inactive.active[0] = false;
+        assert!(!inactive.freeze_blocks_recoverage(0, 10.0));
+    }
 }
