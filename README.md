@@ -10,7 +10,7 @@ updated by the `ci/benchmarks` workflow on every push to
 **Tip file:**
 - `baseline.json` — `shekyl_rust_v0`-schema envelope
   captured on a GitHub-hosted `ubuntu-latest` runner.
-- `baseline.iai.snapshot` — raw iai-callgrind stdout
+- `baseline.iai.snapshot` — raw gungraun stdout
   corresponding to the same capture.
 
-Current source commit: `0bc6a3f929d12c6a341cd7769e3d1d4149448546`.
+Current source commit: `65b555589f8c885f9a9de7290a9f571d9b0adba8`.
