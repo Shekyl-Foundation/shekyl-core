@@ -109,9 +109,12 @@ fn decode_tx(tx: &Transaction<Pruned>, is_miner: bool) -> Result<OwnedTxLeaves, 
     // yields `None` — the client resolves that to the zero `h_pqc` fallback
     // (the daemon's `extract_leaf_hashes` `{}` path), so we mirror the
     // fallback rather than erroring.
-    let leaf_hash_blob = Extra::read(&mut prefix.extra.as_slice())
-        .ok()
-        .and_then(|extra| extra.pqc_leaf_hashes().map(<[u8]>::to_vec));
+    let leaf_hash_blob = {
+        let mut extra_bytes = prefix.extra.as_slice();
+        Extra::read(&mut extra_bytes)
+            .ok()
+            .and_then(|extra| extra.pqc_leaf_hashes().map(<[u8]>::to_vec))
+    };
 
     // On-chain commitments live in `proofs.base` (uniform across pruned/full —
     // the same access the scanner uses). `None` per output (slot absent) makes

@@ -358,10 +358,14 @@ impl CurveTreeHandle {
     /// enough to clone the (cheap, `Arc`-backed) [`ActorRef`], so the guard is
     /// never held across the subsequent `.await` — the lock-ordering discipline
     /// that keeps the curve-tree path deadlock-free (§3.1).
+    ///
+    /// A poisoned mutex means a prior panic while the lock was held; recover the
+    /// inner [`ActorRef`] so respawn can still swap in a fresh actor rather than
+    /// taking down the wallet process on the next ingest.
     fn actor_ref(&self) -> ActorRef<CurveTreeActor> {
         self.actor
             .lock()
-            .expect("curve-tree handle mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -439,7 +443,10 @@ impl CurveTreeHandle {
         };
 
         let fresh = Self::spawn_actor(client);
-        *self.actor.lock().expect("curve-tree handle mutex poisoned") = fresh;
+        *self
+            .actor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = fresh;
         Ok(())
     }
 

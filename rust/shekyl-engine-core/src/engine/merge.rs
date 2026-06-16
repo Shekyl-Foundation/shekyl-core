@@ -87,14 +87,14 @@ use crate::{
         rewind_matched_payment_requests_after_reorg,
     },
     engine::{
-        curve_tree_actor::CurveTreeHandleError,
+        curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
         error::IoError,
         local_ledger::LocalLedger,
         traits::{DaemonEngine, LedgerEngine},
         Engine, EngineSignerKind, RefreshError,
     },
-    scan::{ScanResult, StakeEvent},
+    scan::{OwnedTxLeaves, ScanResult, StakeEvent},
 };
 
 // `D: DaemonEngine` private-bound: see the rationale on the
@@ -291,91 +291,20 @@ impl<
     ///   same class as the in-range checks in [`apply_scan_result_to_state`]).
     /// - Backfill block decode, or the actor ingest/rollback handshake →
     ///   [`RefreshError::CurveTreeIngest`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn ingest_scan_result_into_curve_tree(
         &self,
         result: &ScanResult,
     ) -> Result<(), RefreshError> {
-        // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
-        // the new fork. `fork_height` is the first divergent height, so the
-        // last common height to keep is `fork_height - 1`. Only roll back when
-        // the tree holds blocks at or above the fork — a tree still climbing
-        // below it has nothing to drop (R3-Q6).
-        if let Some(rewind) = result.reorg_rewind.as_ref() {
-            let keep = BlockHeight(rewind.fork_height.saturating_sub(1));
-            if let Some(tip) = self
-                .curve_tree
-                .ingested_tip_height()
-                .await
-                .map_err(|e| map_curve_tree_handle_error(&e))?
-            {
-                if tip.0 > keep.0 {
-                    self.curve_tree
-                        .rollback_to_fork(keep)
-                        .await
-                        .map_err(|e| map_curve_tree_handle_error(&e))?;
-                }
-            }
-        }
-
-        let range_start = result.processed_height_range.start;
-        let range_end = result.processed_height_range.end;
-        loop {
-            let tip = self
-                .curve_tree
-                .ingested_tip_height()
-                .await
-                .map_err(|e| map_curve_tree_handle_error(&e))?;
-            let next = tip.map_or(0, |t| t.0 + 1);
-            if next >= range_end {
-                break;
-            }
-
-            let leaves = if next < range_start {
-                // Genesis/birthday backfill: tree-only daemon fetch + decode.
-                let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "backfill height exceeds usize",
-                    recoverable_by_respawn: false,
-                })?;
-                let block = self
-                    .daemon
-                    .get_scannable_block_by_number(number)
-                    .await
-                    .map_err(|e| {
-                        RefreshError::Io(IoError::Daemon {
-                            detail: e.to_string(),
-                        })
-                    })?;
-                curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
-                    RefreshError::CurveTreeIngest {
-                        context: "backfill block decode failed",
-                        recoverable_by_respawn: false,
-                    }
-                })?
-            } else {
-                // Producer range: reuse the materialized leaves (no re-fetch).
-                result
-                    .block_leaves
-                    .iter()
-                    .find(|(h, _)| *h == next)
-                    .map(|(_, leaves)| leaves.clone())
-                    .ok_or(RefreshError::MalformedScanResult {
-                        reason: "block_leaves missing a height in processed_height_range",
-                    })?
-            };
-
-            self.curve_tree
-                .ingest(BlockHeight(next), leaves)
-                .await
-                .map_err(|e| map_curve_tree_handle_error(&e))?;
-        }
-        Ok(())
+        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result).await
     }
 
     /// Ingest a scan result into the curve tree, healing a single fail-stop /
     /// poison with a drop-and-reopen respawn-and-retry (R1-Q4, §3.3 happy path).
     ///
     /// On a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
-    /// `recoverable_by_respawn`), [`respawn the actor`](Self::respawn_curve_tree)
+    /// `recoverable_by_respawn`), reopen the actor via
+    /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
     /// and re-run [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
     /// **once**. The retry is correct because the reopened client resumes from
     /// the persisted store cursor (D2): the loop skips already-ingested heights
@@ -396,47 +325,15 @@ impl<
         &self,
         result: &ScanResult,
     ) -> Result<(), RefreshError> {
-        match self.ingest_scan_result_into_curve_tree(result).await {
-            Ok(()) => Ok(()),
-            Err(RefreshError::CurveTreeIngest {
-                recoverable_by_respawn: true,
-                ..
-            }) => {
-                // Engine-side respawn (clause 2): runs after the failed `ask`
-                // returned, never inside a handler under the engine guard.
-                self.respawn_curve_tree().await?;
-                self.ingest_scan_result_into_curve_tree(result).await
-            }
-            Err(other) => Err(other),
-        }
-    }
-
-    /// Drop-and-reopen the curve-tree actor (the R1-Q4 respawn, §3.3), reopening
-    /// the persistent store at its wallet-sibling path and swapping the fresh
-    /// actor into the shared [`CurveTreeHandle`] cell — so every holder (this
-    /// engine field and the [`LocalPendingTx`](super::local_pending_tx)
-    /// spend-gate clone) observes the new actor, not only the field this method
-    /// is called through.
-    ///
-    /// Takes `&self`: the swap is interior to the handle's shared cell, so no
-    /// engine write guard is needed (and the refresh path already holds only a
-    /// read guard).
-    ///
-    /// # Errors
-    ///
-    /// [`RefreshError::CurveTreeIngest`] (`recoverable_by_respawn = false`) if
-    /// the store reopen fails — e.g. a genuinely corrupt redb file. The
-    /// bounded-retry-then-surface escalation (O3-sub) is CT-5d.
-    pub(crate) async fn respawn_curve_tree(&self) -> Result<(), RefreshError> {
         let store_path =
             shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
-        self.curve_tree
-            .respawn(&store_path)
-            .await
-            .map_err(|_| RefreshError::CurveTreeIngest {
-                context: "curve-tree respawn reopen failed",
-                recoverable_by_respawn: false,
-            })
+        curve_tree_ingest_scan_result_with_respawn(
+            &self.curve_tree,
+            &self.daemon,
+            &store_path,
+            result,
+        )
+        .await
     }
 }
 
@@ -469,6 +366,121 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
             recoverable_by_respawn: false,
         },
     }
+}
+
+/// Ingest a scan result into the curve tree from cloned deps — lets the async
+/// refresh task drop the engine `RwLock` read guard before the long-running
+/// backfill fetches and per-height actor round-trips.
+pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits::DaemonEngine>(
+    curve_tree: &CurveTreeHandle,
+    daemon: &D,
+    store_path: &std::path::Path,
+    result: &ScanResult,
+) -> Result<(), RefreshError> {
+    match curve_tree_ingest_scan_result(curve_tree, daemon, result).await {
+        Ok(()) => Ok(()),
+        Err(RefreshError::CurveTreeIngest {
+            recoverable_by_respawn: true,
+            ..
+        }) => {
+            // Engine-side respawn (clause 2): runs after the failed `ask`
+            // returned, never inside a handler under the engine guard.
+            curve_tree
+                .respawn(store_path)
+                .await
+                .map_err(|_| RefreshError::CurveTreeIngest {
+                    context: "curve-tree respawn reopen failed",
+                    recoverable_by_respawn: false,
+                })?;
+            curve_tree_ingest_scan_result(curve_tree, daemon, result).await
+        }
+        Err(other) => Err(other),
+    }
+}
+
+async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
+    curve_tree: &CurveTreeHandle,
+    daemon: &D,
+    result: &ScanResult,
+) -> Result<(), RefreshError> {
+    // Reorg: drop the orphaned suffix so the cursor-driven loop re-ingests
+    // the new fork. `fork_height` is the first divergent height, so the
+    // last common height to keep is `fork_height - 1`. Only roll back when
+    // the tree holds blocks at or above the fork — a tree still climbing
+    // below it has nothing to drop (R3-Q6).
+    if let Some(rewind) = result.reorg_rewind.as_ref() {
+        let keep = BlockHeight(rewind.fork_height.saturating_sub(1));
+        if let Some(tip) = curve_tree
+            .ingested_tip_height()
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?
+        {
+            if tip.0 > keep.0 {
+                curve_tree
+                    .rollback_to_fork(keep)
+                    .await
+                    .map_err(|e| map_curve_tree_handle_error(&e))?;
+            }
+        }
+    }
+
+    let range_start = result.processed_height_range.start;
+    let range_end = result.processed_height_range.end;
+    // Index producer material once: heights are scanned in ascending order
+    // but the ingest loop may skip a prefix already on disk after a
+    // respawn retry, so lookup must be O(log n) rather than a linear
+    // `find` per height.
+    let producer_leaves: BTreeMap<u64, &Vec<OwnedTxLeaves>> = result
+        .block_leaves
+        .iter()
+        .map(|(height, leaves)| (*height, leaves))
+        .collect();
+    loop {
+        let tip = curve_tree
+            .ingested_tip_height()
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+        let next = tip.map_or(0, |t| t.0 + 1);
+        if next >= range_end {
+            break;
+        }
+
+        let leaves = if next < range_start {
+            // Genesis/birthday backfill: tree-only daemon fetch + decode.
+            let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
+                context: "backfill height exceeds usize",
+                recoverable_by_respawn: false,
+            })?;
+            let block = daemon
+                .get_scannable_block_by_number(number)
+                .await
+                .map_err(|e| {
+                    RefreshError::Io(IoError::Daemon {
+                        detail: e.to_string(),
+                    })
+                })?;
+            curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
+                RefreshError::CurveTreeIngest {
+                    context: "backfill block decode failed",
+                    recoverable_by_respawn: false,
+                }
+            })?
+        } else {
+            // Producer range: reuse the materialized leaves (no re-fetch).
+            producer_leaves
+                .get(&next)
+                .map(|leaves| (*leaves).clone())
+                .ok_or(RefreshError::MalformedScanResult {
+                    reason: "block_leaves missing a height in processed_height_range",
+                })?
+        };
+
+        curve_tree
+            .ingest(BlockHeight(next), leaves)
+            .await
+            .map_err(|e| map_curve_tree_handle_error(&e))?;
+    }
+    Ok(())
 }
 
 /// Merge body shared between [`Engine::apply_scan_result`] and the

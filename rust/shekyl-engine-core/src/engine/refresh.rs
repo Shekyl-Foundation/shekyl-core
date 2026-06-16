@@ -1212,14 +1212,26 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // advances past the tree (ack-before-commit, O2). The ingest is
         // idempotent under the retry loop — a re-produced result is
         // skipped up to the tree's own cursor — and terminal on failure
-        // (the loop retries only `ConcurrentMutation`). The outer engine
-        // read-guard is held across the ingest's `.await`s, which is
-        // sound: the curve-tree actor never acquires the engine lock, and
-        // the merge below takes a fresh guard for its synchronous body.
-        if let Err(e) = {
+        // (the loop retries only `ConcurrentMutation`). Clone the
+        // curve-tree handle and daemon under a brief read guard, then
+        // drop the guard before the long-running ingest `.await`s so
+        // close / mutation paths are not blocked during backfill.
+        let (curve_tree, daemon, store_path) = {
             let g = engine_arc.read().await;
-            g.ingest_scan_result_with_respawn(&result).await
-        } {
+            (
+                g.curve_tree.clone(),
+                g.daemon.clone(),
+                shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
+            )
+        };
+        if let Err(e) = super::merge::curve_tree_ingest_scan_result_with_respawn(
+            &curve_tree,
+            &daemon,
+            &store_path,
+            &result,
+        )
+        .await
+        {
             _ = completion.send(Err(e));
             return;
         }
