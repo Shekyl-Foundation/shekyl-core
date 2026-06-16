@@ -462,6 +462,16 @@ pub enum BuildErrorKind {
     /// [`SendError::SpendUnavailableRebuilding`](super::error::SendError::SpendUnavailableRebuilding).
     /// CT-5 §3.2.1 D3 (adopting-wallet / tree-rebuild surfacing).
     RebuildingMembershipData,
+
+    /// The wallet has the balance and the curve tree covers it, but one or more
+    /// outputs needed for the spend are **too fresh for the reference block** —
+    /// `eligible_height > tip − REF_ANCHOR_AGE`, so they are not in the tree as
+    /// of the reference block the proof anchors to (C2; 2A §3.7.5, CT-5 §3.2).
+    /// Mirrors
+    /// [`SendError::OutputNotYetSpendable`](super::error::SendError::OutputNotYetSpendable);
+    /// distinct from [`Self::RebuildingMembershipData`] (tree backfill lag) — a
+    /// clean wait-N-blocks signal, self-resolving as the tip advances.
+    OutputNotYetSpendable,
 }
 
 /// Coarse-grained projection of a

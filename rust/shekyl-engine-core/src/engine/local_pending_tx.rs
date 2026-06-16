@@ -45,6 +45,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
+use shekyl_curve_tree::{select_reference_height, REF_ANCHOR_AGE};
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
@@ -385,6 +386,10 @@ fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
+        SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
+        // The chain is too short to anchor a reference block — a ledger-maturity
+        // readiness condition, projected like the other "ledger not ready" case.
+        SendError::WalletTooYoungToSpend { .. } => BuildErrorKind::LedgerNotReady,
         SendError::CannotSign { reason } if *reason == "wallet has not ingested any block yet" => {
             BuildErrorKind::LedgerNotReady
         }
@@ -673,42 +678,79 @@ where
         })?;
         self.refresh_current_snapshot(&mut state);
 
-        let (synced, tip_hash, candidates, spendable_now_total, pending_rebuild_total) =
-            self.ledger.with_ledger_block(|ledger| {
-                let synced = ledger.height();
-                let tip_hash = ledger.block_hash_at(synced).copied();
-                let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
-                // Partition the matured, non-reserved set on the curve-tree gate
-                // (CT-5 §3.2.1 D1/D3): tree-covered outputs become selection
-                // candidates ("spendable now"); outputs blocked *only* by the
-                // in-progress tree backfill are tallied as `pending_rebuild` so
-                // an insufficiency caused by the lag surfaces as
-                // `SpendUnavailableRebuilding` rather than a misleading
-                // `InsufficientFunds`.
-                let mut candidates: Vec<OutputCandidate> = Vec::new();
-                let mut spendable_now_total: u64 = 0;
-                let mut pending_rebuild_total: u64 = 0;
-                for (idx, td) in ledger.spendable_outputs(synced, None) {
-                    if locked.contains(&idx) {
+        // C2 (2A §3.7.5): when a curve tree is enforced, the reference block
+        // anchors `REF_ANCHOR_AGE` behind the tip; an output is in the tree as
+        // of that reference block only if `eligible_height <= reference_height`.
+        // Without a tree there is no FCMP reference, so C2 does not apply.
+        let c2_active = matches!(tree_gate, TreeSpendGate::Enforced { .. });
+        let (
+            synced,
+            reference_height,
+            tip_hash,
+            candidates,
+            spendable_now_total,
+            pending_rebuild_total,
+            not_yet_spendable_total,
+            soonest_not_yet_eligible,
+        ) = self.ledger.with_ledger_block(|ledger| {
+            let synced = ledger.height();
+            let reference_height = if c2_active {
+                select_reference_height(synced)
+            } else {
+                None
+            };
+            let tip_hash = ledger.block_hash_at(synced).copied();
+            let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
+            // Partition the matured, non-reserved set across three buckets so an
+            // insufficiency surfaces as the precise, self-resolving error rather
+            // than a misleading `InsufficientFunds`:
+            //   - too fresh for the reference block (C2)   → not_yet_spendable
+            //   - in the tree at the reference block       → candidate (now)
+            //   - blocked only by the in-progress backfill → pending_rebuild
+            let mut candidates: Vec<OutputCandidate> = Vec::new();
+            let mut spendable_now_total: u64 = 0;
+            let mut pending_rebuild_total: u64 = 0;
+            let mut not_yet_spendable_total: u64 = 0;
+            let mut soonest_not_yet_eligible: Option<u64> = None;
+            for (idx, td) in ledger.spendable_outputs(synced, None) {
+                if locked.contains(&idx) {
+                    continue;
+                }
+                let amount = td.amount();
+                // C2 first: an output too fresh for the reference block is not
+                // spendable even if its leaf is already in the tree — the proof
+                // anchors to the reference block, where the leaf is absent.
+                if let Some(rh) = reference_height {
+                    if td.eligible_height > rh {
+                        not_yet_spendable_total =
+                            not_yet_spendable_total.saturating_add(amount.to_raw());
+                        soonest_not_yet_eligible = Some(
+                            soonest_not_yet_eligible
+                                .map_or(td.eligible_height, |s| s.min(td.eligible_height)),
+                        );
                         continue;
                     }
-                    let amount = td.amount();
-                    if tree_gate.covers(td.eligible_height) {
-                        spendable_now_total = spendable_now_total.saturating_add(amount.to_raw());
-                        candidates.push(OutputCandidate { index: idx, amount });
-                    } else {
-                        pending_rebuild_total =
-                            pending_rebuild_total.saturating_add(amount.to_raw());
-                    }
                 }
-                (
-                    synced,
-                    tip_hash,
-                    candidates,
-                    spendable_now_total,
-                    pending_rebuild_total,
-                )
-            });
+                // Tree coverage (CT-5 §3.2.1 D1/D3): in-tree ⇒ candidate; blocked
+                // only by the in-progress backfill ⇒ pending_rebuild.
+                if tree_gate.covers(td.eligible_height) {
+                    spendable_now_total = spendable_now_total.saturating_add(amount.to_raw());
+                    candidates.push(OutputCandidate { index: idx, amount });
+                } else {
+                    pending_rebuild_total = pending_rebuild_total.saturating_add(amount.to_raw());
+                }
+            }
+            (
+                synced,
+                reference_height,
+                tip_hash,
+                candidates,
+                spendable_now_total,
+                pending_rebuild_total,
+                not_yet_spendable_total,
+                soonest_not_yet_eligible,
+            )
+        });
 
         let Some(tip_hash) = tip_hash else {
             let err = SendError::CannotSign {
@@ -723,24 +765,61 @@ where
             return Err(err);
         };
 
-        // CT-5 §3.2.1 D3: classify an insufficiency. If the tree-covered
-        // ("spendable now") balance alone cannot cover `needed` but the matured
-        // balance *including* the tree-pending outputs could, the shortfall is
-        // caused by the in-progress backfill and surfaces as the distinct,
-        // self-healing `SpendUnavailableRebuilding`. Otherwise the wallet is
-        // genuinely short and `InsufficientFunds` is honest — reporting the full
-        // matured balance (`spendable_now + pending_rebuild`) as `available` so
-        // the gate never makes the wallet look poorer than it is.
+        // Pre-maturity (C2): a curve tree is enforced but the chain is too short
+        // to anchor a reference block (`synced < REF_ANCHOR_AGE`) — nothing is
+        // spendable yet. Clean, self-resolving as the tip advances; checked
+        // after the tip-hash guard so a truly empty wallet still reports the
+        // "no block yet" condition.
+        if c2_active && reference_height.is_none() {
+            let err = SendError::WalletTooYoungToSpend {
+                synced_height: synced,
+                ref_anchor_age: REF_ANCHOR_AGE,
+            };
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::BuildFailed {
+                    kind: build_error_kind(&err),
+                },
+            );
+            return Err(err);
+        }
+
+        // CT-5 §3.2.1 D3 + C2 (2A §3.7.5): classify an insufficiency by what is
+        // blocking the shortfall, preferring the soonest-healing explanation.
+        // Tree backfill advances continuously, so `SpendUnavailableRebuilding`
+        // is preferred when the tree-pending outputs alone close the gap; the C2
+        // reference depth advances only with the tip, so `OutputNotYetSpendable`
+        // is next when the too-fresh outputs are also required; otherwise the
+        // wallet is genuinely short and `InsufficientFunds` is honest — its
+        // `available` reports the full matured balance (including not-yet- and
+        // pending-rebuild buckets) so the gate never makes the wallet look
+        // poorer than it is.
         let resolve_insufficiency = |needed_raw: u64| -> SendError {
-            let total_matured = spendable_now_total.saturating_add(pending_rebuild_total);
+            let with_rebuild = spendable_now_total.saturating_add(pending_rebuild_total);
+            let total_matured = with_rebuild.saturating_add(not_yet_spendable_total);
             if pending_rebuild_total > 0
                 && spendable_now_total < needed_raw
-                && total_matured >= needed_raw
+                && with_rebuild >= needed_raw
             {
                 SendError::SpendUnavailableRebuilding {
                     needed: needed_raw,
                     spendable_now: spendable_now_total,
                     pending_rebuild: pending_rebuild_total,
+                }
+            } else if not_yet_spendable_total > 0
+                && with_rebuild < needed_raw
+                && total_matured >= needed_raw
+            {
+                // The too-fresh outputs are required to cover the spend; point
+                // at the soonest-to-mature one with a wait-N-blocks signal.
+                let eligible_height = soonest_not_yet_eligible
+                    .expect("not_yet_spendable_total > 0 ⇒ a tracked eligible height");
+                let reference_block_height = reference_height
+                    .expect("not_yet_spendable_total > 0 ⇒ C2 active ⇒ reference height set");
+                SendError::OutputNotYetSpendable {
+                    eligible_height,
+                    reference_block_height,
+                    wait_blocks: eligible_height.saturating_sub(reference_block_height),
                 }
             } else {
                 SendError::InsufficientFunds {
@@ -1867,6 +1946,81 @@ mod tests {
             .await
             .expect("the tree-covered low output stays spendable");
         assert!(!built.tx_bytes.is_empty());
+    }
+
+    /// C2 KAT (2A §3.7.5, CT-5b DoD). `synced = 15` ⇒ `reference_height =
+    /// 15 − REF_ANCHOR_AGE(6) = 9`. An output at block 1 matures at
+    /// `eligible = 1 + SPENDABLE_AGE(10) = 11`: matured at the tip (11 ≤ 15)
+    /// **and** in the tree (cursor 15 ≥ 11), but too fresh for the reference
+    /// block (11 > 9). The C2 gate must surface a clean
+    /// [`SendError::OutputNotYetSpendable`] with a wait-N-blocks signal — not a
+    /// spendable candidate, a `SpendUnavailableRebuilding`, or an
+    /// `InsufficientFunds`.
+    #[tokio::test]
+    async fn output_not_yet_spendable_at_reference_block() {
+        let ledger = Arc::new(test_ledger());
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            15,
+        );
+        // Cursor at 15 covers the eligible-11 output, isolating C2 (reference
+        // depth) from the tree-lag `SpendUnavailableRebuilding` path.
+        let (_dir, tree) = tree_handle_ingested_through(15).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("the only output is too fresh for the reference block");
+        match err {
+            SendError::OutputNotYetSpendable {
+                eligible_height,
+                reference_block_height,
+                wait_blocks,
+            } => {
+                assert_eq!(eligible_height, 11, "block 1 + SPENDABLE_AGE");
+                assert_eq!(reference_block_height, 9, "synced 15 − REF_ANCHOR_AGE");
+                assert_eq!(
+                    wait_blocks, 2,
+                    "spendable once the reference reaches 11 (tip 17)"
+                );
+            }
+            other => panic!("expected OutputNotYetSpendable, got {other:?}"),
+        }
+    }
+
+    /// C2 pre-maturity KAT: a curve tree is enforced but `synced = 5 <
+    /// REF_ANCHOR_AGE(6)`, so `select_reference_height` returns `None` — there is
+    /// no reference block to anchor a proof. The build must surface the clean
+    /// [`SendError::WalletTooYoungToSpend`], not a misleading insufficiency.
+    #[tokio::test]
+    async fn wallet_too_young_to_spend_before_reference_anchor() {
+        let ledger = Arc::new(test_ledger());
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 50_000)],
+            5,
+        );
+        let (_dir, tree) = tree_handle_ingested_through(5).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("the chain is too short to anchor a reference block");
+        match err {
+            SendError::WalletTooYoungToSpend {
+                synced_height,
+                ref_anchor_age,
+            } => {
+                assert_eq!(synced_height, 5);
+                assert_eq!(ref_anchor_age, REF_ANCHOR_AGE);
+            }
+            other => panic!("expected WalletTooYoungToSpend, got {other:?}"),
+        }
     }
 
     #[tokio::test]
