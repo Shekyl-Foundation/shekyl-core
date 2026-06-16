@@ -77,7 +77,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::BlockHeight;
+use shekyl_curve_tree::{BlockHeight, ClientError};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
@@ -334,6 +334,7 @@ impl<
                 // Genesis/birthday backfill: tree-only daemon fetch + decode.
                 let number = usize::try_from(next).map_err(|_| RefreshError::CurveTreeIngest {
                     context: "backfill height exceeds usize",
+                    recoverable_by_respawn: false,
                 })?;
                 let block = self
                     .daemon
@@ -347,6 +348,7 @@ impl<
                 curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
                     RefreshError::CurveTreeIngest {
                         context: "backfill block decode failed",
+                        recoverable_by_respawn: false,
                     }
                 })?
             } else {
@@ -368,22 +370,103 @@ impl<
         }
         Ok(())
     }
+
+    /// Ingest a scan result into the curve tree, healing a single fail-stop /
+    /// poison with a drop-and-reopen respawn-and-retry (R1-Q4, §3.3 happy path).
+    ///
+    /// On a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] with
+    /// `recoverable_by_respawn`), [`respawn the actor`](Self::respawn_curve_tree)
+    /// and re-run [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
+    /// **once**. The retry is correct because the reopened client resumes from
+    /// the persisted store cursor (D2): the loop skips already-ingested heights
+    /// and continues from the tree's own tip, so a re-run never double-ingests.
+    ///
+    /// **One retry only.** The bounded retry budget that distinguishes a
+    /// transient persistence hiccup from a deterministically-corrupt store —
+    /// which would otherwise livelock reopen → poison → reopen (O3-sub) — is
+    /// CT-5d, coupled to the existing refresh retry/cancel budget (O6). Here a
+    /// respawn whose retry also fails surfaces terminally, and a non-recoverable
+    /// failure passes straight through without a respawn.
+    ///
+    /// This is the curve-tree ingest entry point the refresh path calls; the
+    /// inner [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
+    /// stays `pub(crate)` for the tests that drive the bare ingest/rollback
+    /// pre-pass.
+    pub(crate) async fn ingest_scan_result_with_respawn(
+        &self,
+        result: &ScanResult,
+    ) -> Result<(), RefreshError> {
+        match self.ingest_scan_result_into_curve_tree(result).await {
+            Ok(()) => Ok(()),
+            Err(RefreshError::CurveTreeIngest {
+                recoverable_by_respawn: true,
+                ..
+            }) => {
+                // Engine-side respawn (clause 2): runs after the failed `ask`
+                // returned, never inside a handler under the engine guard.
+                self.respawn_curve_tree().await?;
+                self.ingest_scan_result_into_curve_tree(result).await
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Drop-and-reopen the curve-tree actor (the R1-Q4 respawn, §3.3), reopening
+    /// the persistent store at its wallet-sibling path and swapping the fresh
+    /// actor into the shared [`CurveTreeHandle`] cell — so every holder (this
+    /// engine field and the [`LocalPendingTx`](super::local_pending_tx)
+    /// spend-gate clone) observes the new actor, not only the field this method
+    /// is called through.
+    ///
+    /// Takes `&self`: the swap is interior to the handle's shared cell, so no
+    /// engine write guard is needed (and the refresh path already holds only a
+    /// read guard).
+    ///
+    /// # Errors
+    ///
+    /// [`RefreshError::CurveTreeIngest`] (`recoverable_by_respawn = false`) if
+    /// the store reopen fails — e.g. a genuinely corrupt redb file. The
+    /// bounded-retry-then-surface escalation (O3-sub) is CT-5d.
+    pub(crate) async fn respawn_curve_tree(&self) -> Result<(), RefreshError> {
+        let store_path =
+            shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
+        self.curve_tree
+            .respawn(&store_path)
+            .await
+            .map_err(|_| RefreshError::CurveTreeIngest {
+                context: "curve-tree respawn reopen failed",
+                recoverable_by_respawn: false,
+            })
+    }
 }
 
-/// Collapse a [`CurveTreeHandleError`] into the terminal
-/// [`RefreshError::CurveTreeIngest`] classification. Both arms are
-/// terminal for the current refresh: a fail-stopped actor
-/// ([`CurveTreeHandleError::Unavailable`]) needs the commit-5 respawn
-/// (R1-Q4) before it can be transient, and a client-rejected ingest
-/// ([`CurveTreeHandleError::Client`]) is a tree-state error a retry would
-/// reproduce.
+/// Collapse a [`CurveTreeHandleError`] into a
+/// [`RefreshError::CurveTreeIngest`], classifying whether a drop-and-reopen
+/// respawn (R1-Q4) can heal it:
+///
+/// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
+///   poisoned client ([`ClientError::Poisoned`] — whose own documented
+///   recovery is "drop this object and re-open") are
+///   `recoverable_by_respawn = true`: [`Engine::ingest_scan_result_with_respawn`]
+///   respawns the actor and retries the cursor-driven ingest once, which
+///   resumes from the reopened store's persisted tip (D2).
+/// - Every other client error (e.g.
+///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
+///   store-state fault) is `false`: a reopen resumes the same cursor and
+///   reproduces it, so it surfaces terminally rather than livelocking a retry.
 fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
     match err {
         CurveTreeHandleError::Unavailable => RefreshError::CurveTreeIngest {
             context: "curve-tree actor unavailable",
+            recoverable_by_respawn: true,
+        },
+        CurveTreeHandleError::Client(ClientError::Poisoned) => RefreshError::CurveTreeIngest {
+            context: "curve-tree client poisoned",
+            recoverable_by_respawn: true,
         },
         CurveTreeHandleError::Client(_) => RefreshError::CurveTreeIngest {
             context: "curve-tree client rejected ingest",
+            recoverable_by_respawn: false,
         },
     }
 }

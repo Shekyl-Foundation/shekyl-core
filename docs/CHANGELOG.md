@@ -29,6 +29,37 @@
 
 ### Added
 
+- **wallet: engine-side respawn-on-poison for the curve-tree actor (CT-5a
+  commit 5, 2026-06-15, `feat/ct-5a-curve-tree-actor`).** Implements the R1-Q4
+  recovery body: a curve-tree actor that fail-stops (kameo `on_panic` does not
+  restart it, by design) or whose client is `ClientError::Poisoned` is now
+  healed engine-side by a drop-and-reopen respawn rather than failing the
+  refresh permanently. `CurveTreeHandle`'s inner `ActorRef` is wrapped in an
+  `Arc<Mutex<…>>` shared, swappable cell so a respawn propagates the fresh
+  actor to **every** handle clone at once (including the `LocalPendingTx`
+  spend-gate clone) — without the shared cell a respawn would heal refresh but
+  leave spends pointing at the dead actor forever (a partial heal). The new
+  `CurveTreeHandle::respawn` does kill → `wait_for_shutdown` → reopen → spawn →
+  atomic swap; because kameo drops the actor value (and its redb single-writer
+  lock) *after* `wait_for_shutdown` returns, the reopen is retried on a short
+  poll bounded by a 2 s deadline so the lock-release lag is absorbed but a
+  genuinely corrupt/held store still surfaces its error.
+  `RefreshError::CurveTreeIngest` gains a `recoverable_by_respawn: bool`
+  classification (`true` for a fail-stopped actor or `ClientError::Poisoned`;
+  `false` for non-consecutive-height / root-mismatch / store / decode failures a
+  reopen would only reproduce). `Engine::ingest_scan_result_with_respawn` wraps
+  the bare ingest with a single respawn-and-retry on a recoverable error and is
+  wired into both refresh ingest call sites (async `run_refresh_task` and the
+  synchronous scan pass). KATs:
+  `respawn_resumes_from_store_and_propagates_to_clones` (handle-level: respawn
+  resumes from the persisted cursor and a pre-respawn clone sees the live actor)
+  and `ingest_pre_pass_respawns_after_actor_fail_stop` (engine-path happy path:
+  a fail-stopped actor is classified recoverable, then heals via
+  respawn-and-retry with the cursor resuming from the persisted tip). The
+  bounded-retry-budget-then-escalation arm that distinguishes a transient
+  hiccup from a permanently corrupt store at the refresh-budget level (O3-sub)
+  is staged for CT-5d. Implements CT-5 §3.3 R1-Q4. Docs: `CT5_ENGINE_WIRING.md`.
+
 - **wallet: surface the pending-incoming summary and rebuild status on the
   refresh progress channel (CT-5a commit 4b-2, 2026-06-15,
   `feat/ct-5a-curve-tree-actor`).** `RefreshProgress` (the `watch`-channel

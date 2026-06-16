@@ -345,14 +345,27 @@ pub enum RefreshError {
     /// block decode, the actor ingest/rollback handshake).
     ///
     /// A fail-stopped actor ([`super::curve_tree_actor::CurveTreeHandleError::Unavailable`])
-    /// maps here today; the engine-side respawn that would make it
-    /// transient lands in CT-5a commit 5 (R1-Q4).
+    /// or a [`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned)
+    /// client maps here with `recoverable_by_respawn = true`: the CT-5a commit-5
+    /// engine-side respawn (R1-Q4) drops and reopens the actor and retries the
+    /// cursor-driven ingest once
+    /// ([`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)).
+    /// Every other ingest failure (producer-contract, decode, a tree-state
+    /// client error a reopen would reproduce) is `false` and surfaces
+    /// terminally.
     #[error("curve-tree ingest failed: {context}")]
     CurveTreeIngest {
         /// Compile-time-fixed name of the ingest failure class, named
         /// at the call site so audit can read every distinguishable
         /// case from source.
         context: &'static str,
+        /// `true` when a drop-and-reopen respawn (R1-Q4) can heal the
+        /// failure (fail-stopped actor or `ClientError::Poisoned`); `false`
+        /// for failures a reopen would reproduce. Read by
+        /// [`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)
+        /// to decide whether to respawn-and-retry. The bounded retry budget +
+        /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
+        recoverable_by_respawn: bool,
     },
 }
 

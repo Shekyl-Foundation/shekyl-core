@@ -763,6 +763,25 @@ transient persistence hiccup, not a user-actionable fault, and refresh already
 retries. Respawn is the actor-shape form of drop-and-reopen (R1-Q1); the path is
 exercised by a KAT (O3, §5).
 
+> **Landed — CT-5a commit 5 (2026-06-15).** The respawn *happy path* is wired:
+> `CurveTreeHandle` holds its `ActorRef` in an `Arc<Mutex<…>>` shared, swappable
+> cell so `CurveTreeHandle::respawn` (kill → `wait_for_shutdown` → reopen →
+> spawn → atomic swap) propagates the fresh actor to **every** clone at once
+> (including the `LocalPendingTx` spend-gate clone — without the shared cell a
+> respawn heals refresh but leaves spends on a dead actor, a partial heal). The
+> reopen retries on a 2 s-bounded poll because kameo drops the actor value (and
+> its redb lock) *after* `wait_for_shutdown` returns. `RefreshError::CurveTreeIngest`
+> carries `recoverable_by_respawn: bool` (`true` = fail-stopped actor /
+> `ClientError::Poisoned`; `false` = non-consecutive-height / root-mismatch /
+> store / decode, which a reopen would reproduce);
+> `Engine::ingest_scan_result_with_respawn` does one respawn-and-retry on a
+> recoverable error and is wired into both refresh ingest call sites. KATs:
+> `respawn_resumes_from_store_and_propagates_to_clones` (handle) and
+> `ingest_pre_pass_respawns_after_actor_fail_stop` (engine path). The
+> **bounded-retry-then-surface escalation** (O3-sub — a deterministically corrupt
+> store must not livelock respawn→reopen) is **not** in commit 5; it couples with
+> the refresh retry/cancel budget and is staged for CT-5d.
+
 ### 3.4 Real path assembly (replacing the synthetic vectors)
 
 The synthetic surface, all to be replaced:

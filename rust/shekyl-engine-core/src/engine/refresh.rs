@@ -1218,7 +1218,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // the merge below takes a fresh guard for its synchronous body.
         if let Err(e) = {
             let g = engine_arc.read().await;
-            g.ingest_scan_result_into_curve_tree(&result).await
+            g.ingest_scan_result_with_respawn(&result).await
         } {
             _ = completion.send(Err(e));
             return;
@@ -1632,8 +1632,9 @@ impl<
             // CT-5a §3.2 (R1-Q2): feed the curve tree this result's range
             // before `refresh_with` merges it (ack-before-commit, O2).
             // Cursor-driven + idempotent, so re-running it on a retried
-            // attempt is safe. Mirrors the async `run_refresh_task` path.
-            runtime.block_on(self.ingest_scan_result_into_curve_tree(&result))?;
+            // attempt is safe. Mirrors the async `run_refresh_task` path,
+            // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
+            runtime.block_on(self.ingest_scan_result_with_respawn(&result))?;
             Ok(result)
         })
     }
@@ -3552,6 +3553,98 @@ mod start_refresh_integration_tests {
                 Some(shekyl_curve_tree::BlockHeight(4)),
                 "tree rolled back to keep fork_height-1 (=2) then resumed on \
                  the shorter fork to tip 4, dropping the orphaned height 5",
+            );
+        }
+    }
+
+    /// CT-5a §3.3 (R1-Q4 / O3) respawn happy-path KAT through the engine ingest
+    /// entry point. A fail-stopped curve-tree actor is healed by
+    /// [`Engine::ingest_scan_result_with_respawn`]: the first attempt sees the
+    /// dead actor (classified `recoverable_by_respawn`), the engine respawns it
+    /// (drop + reopen — cursor resumes from the persisted store tip, no genesis
+    /// replay), and the retry ingests the new range. The witness that the
+    /// respawn-and-retry actually progressed — rather than merely reopening — is
+    /// the post-heal tip advancing past the pre-kill tip.
+    ///
+    /// The bounded-retry-then-surface escalation for a deterministically-corrupt
+    /// store (O3-sub) is CT-5d, not exercised here (this fixture's store is
+    /// clean, so one respawn heals it). Leaves are empty (the merge-path empty-
+    /// leaf shape); behavioral leaf/root correctness is the CT-2-oracle KAT
+    /// (commit 6) / Tier-B completeness (CT-5c).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
+        const MASTER_SEED: [u8; 32] = [
+            0x9d, 0x42, 0x1f, 0x88, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+            0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c,
+            0x9d, 0xae, 0xbf, 0xc0,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // chain[0] = genesis (backfilled by the pre-pass); chain[1..=5] are the
+        // first forward feed's producer-range heights.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // First forward feed: range 1..6, empty leaves; genesis backfilled.
+        // Tree tip -> 5.
+        let mut forward = ScanResult::empty_at(1, None);
+        forward.processed_height_range = 1..6;
+        forward.block_leaves = (1..6).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_with_respawn(&forward)
+                .await
+                .expect("forward feed ingests genesis-through-tip");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(5)),
+                "forward feed leaves the tree at tip 5",
+            );
+        }
+
+        // Simulate a fail-stop of the curve-tree actor (panic-free): the bare
+        // ingest path now classifies the dead actor as respawn-recoverable.
+        {
+            let g = arc.read().await;
+            g.curve_tree.kill_and_wait_for_test().await;
+            let err = g
+                .ingest_scan_result_into_curve_tree(&forward)
+                .await
+                .expect_err("a fail-stopped actor fails the bare (no-respawn) ingest");
+            assert!(
+                matches!(
+                    err,
+                    RefreshError::CurveTreeIngest {
+                        recoverable_by_respawn: true,
+                        ..
+                    }
+                ),
+                "a fail-stopped actor is classified respawn-recoverable, got {err:?}",
+            );
+        }
+
+        // Second forward feed: range 6..8 (heights 6, 7), supplied as leaves so
+        // no daemon backfill is needed. Through the respawn-aware wrapper, the
+        // first attempt hits the dead actor, the engine respawns (cursor resumes
+        // from the persisted tip 5), and the retry ingests 6, 7 to tip 7.
+        let mut forward2 = ScanResult::empty_at(6, None);
+        forward2.processed_height_range = 6..8;
+        forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
+        {
+            let g = arc.read().await;
+            g.ingest_scan_result_with_respawn(&forward2)
+                .await
+                .expect("respawn-and-retry heals the fail-stop and ingests the new range");
+            assert_eq!(
+                g.curve_tree
+                    .ingested_tip_height()
+                    .await
+                    .expect("cursor read"),
+                Some(shekyl_curve_tree::BlockHeight(7)),
+                "post-respawn the tree resumed from persisted tip 5 and ingested \
+                 6, 7 to tip 7 — the heal progressed, it did not merely reopen",
             );
         }
     }
