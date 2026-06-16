@@ -14,7 +14,7 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 tracing = "0.1"
-zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+zeroize = { workspace = true }
 tempfile = "3"
 # `fd-lock` wraps POSIX `flock(2)` and Windows `LockFileEx` behind a safe
 # API, letting `shekyl-engine-file` stay `#![deny(unsafe_code)]`-clean on
