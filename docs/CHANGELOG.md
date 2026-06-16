@@ -29,6 +29,22 @@
 
 ### Added
 
+- **wallet: engine-path curve-tree root-match against the CT-2 oracle (CT-5a
+  commit 6, 2026-06-15, `feat/ct-5a-curve-tree-actor`).** Closes the CT-5a
+  root-match DoD through the engine ingest path. Two KATs drive
+  `ingest_scan_result_into_curve_tree` with `OwnedTxLeaves` parsed from the
+  `ct2_tier_a` oracle and assert the engine-reconstructed root byte-matches the
+  oracle at **every** height: a forward ingest of the `main` chain, and a
+  `reorg_rewind` onto `reorg_deep` exercising engine-path rollback + re-ingest.
+  Root read-back is a `#[cfg(test)]`-only `RootAt` actor message +
+  `CurveTreeHandle::root_at` (the production root-read is CT-5b's §3.3 verify,
+  not this slice). **Pending-table-equality post-reorg (E6a) is not asserted
+  here — it remains Tier-B-gated** (a coinbase-only fixture cannot express a
+  class-(b) pending migration; that assertion lands at CT-5c when the
+  non-coinbase fixture exists). A green commit 6 proves the engine ingest
+  *wiring* transports leaves to the actor/client correctly; it does not prove
+  non-coinbase backfill. Docs: `CT5_ENGINE_WIRING.md` (CT-5a DoD commit-6
+  status).
 - **wallet: engine-side respawn-on-poison for the curve-tree actor (CT-5a
   commit 5, 2026-06-15, `feat/ct-5a-curve-tree-actor`).** Implements the R1-Q4
   recovery body: a curve-tree actor that fail-stops (kameo `on_panic` does not

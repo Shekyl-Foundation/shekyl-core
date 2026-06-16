@@ -3948,4 +3948,302 @@ mod start_refresh_integration_tests {
             }
         }
     }
+
+    // ── CT-5a commit 6: CT-2 Tier-A oracle match through the engine ─────
+    //
+    // The DoD's core obligation (CT5_ENGINE_WIRING.md §, "CT-5a"): the engine
+    // refresh's curve-tree ingest reproduces the consensus header root through
+    // the full engine → handle → actor → client wiring, forward and across a
+    // reorg, byte-equal to the CT-2 oracle at every height.
+    //
+    // This closes the last link in a three-KAT chain that cannot drift (all
+    // three consume the *same* `ct2_tier_a.json`, sourced cross-crate):
+    //   1. `curve_tree_decode::decode_reproduces_ct2_tier_a_leaf_inputs` —
+    //      `ScannableBlock` → `OwnedTxLeaves` matches the oracle rows.
+    //   2. `shekyl-curve-tree`'s `recon_kat::client_reconstructs_consensus_
+    //      root_at_every_height` — those rows reconstruct the oracle root
+    //      through the `CurveTreeClient`.
+    //   3. *here* — the engine's `ingest_scan_result_into_curve_tree` carries
+    //      those rows to the oracle root at every height through the actor.
+    //
+    // The leaves are built directly from the oracle rows (the proven output of
+    // #1), so no full-block/proofs/scanner machinery is needed: the producer
+    // range covers genesis-to-tip (`processed_height_range.start == 0`), so the
+    // cursor-driven merge takes every height from `block_leaves` with no daemon
+    // backfill. Reading the reconstructed root back uses the test-only
+    // `CurveTreeHandle::root_at` (the production §3.3 verify / send-time
+    // re-derivation is CT-5b).
+
+    /// The cross-crate Tier-A reconstruct-root oracle — the *same* fixture
+    /// `shekyl-curve-tree`'s `recon_kat` and the engine-path decode KAT
+    /// (`curve_tree_decode`) consume, sourced here so the three KATs cannot
+    /// drift.
+    const CT2_TIER_A_FIXTURE: &str =
+        include_str!("../../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
+
+    fn ct2_hex_vec(s: &str) -> Vec<u8> {
+        assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
+            .collect()
+    }
+
+    fn ct2_hex32(s: &str) -> [u8; 32] {
+        let v = ct2_hex_vec(s);
+        assert_eq!(v.len(), 32, "expected 32 bytes, got {}", v.len());
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&v);
+        a
+    }
+
+    /// One decoded fixture block for the engine ingest path: its height, the
+    /// recorded consensus header root, and the coinbase [`OwnedTxLeaves`]
+    /// exactly as [`curve_tree_decode::decode_block_leaves`] would produce them
+    /// — `output_key` / `commitment` / `target` verbatim, `h_pqc` left for the
+    /// client to resolve from the `0x07` blob at ingest.
+    struct Ct2FixtureBlock {
+        height: u64,
+        root: [u8; 32],
+        leaves: Vec<crate::scan::OwnedTxLeaves>,
+    }
+
+    /// Decode one named chain from the Tier-A fixture into per-height blocks
+    /// carrying the coinbase leaf set in `OwnedTxLeaves` form.
+    fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
+        use shekyl_curve_tree::{RawOutput, TargetKind};
+
+        let f: serde_json::Value =
+            serde_json::from_str(CT2_TIER_A_FIXTURE).expect("Tier-A fixture parses");
+        let chain = f["chains"]
+            .as_array()
+            .expect("chains array")
+            .iter()
+            .find(|c| c["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("chain {name} not in fixture"));
+
+        chain["blocks"]
+            .as_array()
+            .expect("blocks array")
+            .iter()
+            .map(|b| {
+                let mt = &b["miner_tx"];
+                let blob = ct2_hex_vec(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
+                let outputs = mt["outputs"]
+                    .as_array()
+                    .expect("outputs array")
+                    .iter()
+                    .map(|o| RawOutput {
+                        output_key: ct2_hex32(o["output_key"].as_str().expect("O hex")),
+                        commitment: o["commitment"].as_str().map(ct2_hex32),
+                        target: match o["target"].as_str().expect("target") {
+                            "tagged_key" => TargetKind::TaggedKey,
+                            "key" => TargetKind::Key,
+                            other => panic!("unexpected Tier-A target kind: {other}"),
+                        },
+                    })
+                    .collect();
+                Ct2FixtureBlock {
+                    height: b["height"].as_u64().expect("height"),
+                    root: ct2_hex32(b["curve_tree_root"].as_str().expect("root hex")),
+                    // The coinbase is the only leaf-bearing tx in a Tier-A block
+                    // (coinbase-only regtest fixture). `is_miner` drives the +60
+                    // maturity offset in the client's drain order.
+                    leaves: vec![crate::scan::OwnedTxLeaves {
+                        is_miner: true,
+                        leaf_hash_blob: Some(blob),
+                        outputs,
+                    }],
+                }
+            })
+            .collect()
+    }
+
+    /// Read a top-level `u64` field (e.g. `main_tip`) from the Tier-A fixture.
+    fn ct2_tier_a_u64(key: &str) -> u64 {
+        let f: serde_json::Value =
+            serde_json::from_str(CT2_TIER_A_FIXTURE).expect("Tier-A fixture parses");
+        f[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("fixture key {key} missing or non-u64"))
+    }
+
+    /// Build a `ScanResult` that drives a genesis-anchored forward ingest of
+    /// `blocks`: producer range `0..tip+1`, every height's leaves materialized
+    /// so the cursor-driven merge never falls to the daemon backfill. Only the
+    /// fields `ingest_scan_result_into_curve_tree` reads
+    /// (`processed_height_range` / `block_leaves` / `reorg_rewind`) are set; the
+    /// merge-invariant fields stay at their `empty_at` defaults.
+    fn ct2_forward_scan_result(blocks: &[Ct2FixtureBlock]) -> ScanResult {
+        let end = blocks.last().expect("non-empty chain").height + 1;
+        let mut r = ScanResult::empty_at(0, None);
+        r.processed_height_range = 0..end;
+        r.block_leaves = blocks
+            .iter()
+            .map(|b| (b.height, b.leaves.clone()))
+            .collect();
+        r
+    }
+
+    /// CT-5a commit-6 DoD (forward): the engine ingest path reconstructs the
+    /// CT-2 Tier-A consensus header root at **every** height of the `main`
+    /// chain, driven through the real `Engine → CurveTreeHandle → CurveTreeActor
+    /// → CurveTreeClient` wiring (not the bare `recon` / client APIs the
+    /// cross-crate KATs cover). The `main` chain spans heights 0..=210, so this
+    /// crosses the empty-window → first-drain boundary at height 61 (the S2 pin)
+    /// through the engine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
+        use shekyl_curve_tree::BlockHeight;
+
+        const MASTER_SEED: [u8; 32] = [
+            0x6c, 0x21, 0x9a, 0x3f, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+            0x01, 0x12, 0x23, 0x34,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // No backfill: the producer range starts at genesis and every height's
+        // leaves are materialized, so the daemon is never queried — a 1-block
+        // stub satisfies `make_hybrid_engine_arc`.
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(1));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let blocks = ct2_tier_a_chain("main");
+        let forward = ct2_forward_scan_result(&blocks);
+
+        let g = arc.read().await;
+        g.ingest_scan_result_into_curve_tree(&forward)
+            .await
+            .expect("genesis-anchored ingest of the full Tier-A main chain");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(blocks.last().unwrap().height)),
+            "the cursor advanced to the chain tip",
+        );
+
+        let mut mismatches = Vec::new();
+        for b in &blocks {
+            let got = g
+                .curve_tree
+                .root_at(BlockHeight(b.height))
+                .await
+                .expect("root read");
+            if got != b.root {
+                mismatches.push(b.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "engine ingest root != CT-2 oracle at heights {:?} (first {} shown)",
+            &mismatches[..mismatches.len().min(10)],
+            mismatches.len().min(10),
+        );
+    }
+
+    /// CT-5a commit-6 DoD (reorg): after ingesting `main`, a reorg feed with
+    /// `reorg_rewind` set drives the engine through `CurveTreeHandle::
+    /// rollback_to_fork` and a cursor-driven re-ingest of the `reorg_deep`
+    /// suffix. The reconstructed root then matches the `reorg_deep` oracle at
+    /// **every** height — the kept shared prefix (proving the rollback kept
+    /// exactly `fork_height - 1`) and the re-mined suffix alike.
+    ///
+    /// **Tier-B scope boundary (E6a).** The full DoD also asserts *pending-table
+    /// equality* post-reorg, not only root equality — class-(b) pending
+    /// migration (the CT-3c green-positive-for-broken-migration lesson). A
+    /// coinbase-only fixture cannot create the non-coinbase pending rows that
+    /// migration touches, so that half inherits the Tier-B non-coinbase fixture
+    /// dependency and is proven at CT-5c, not here. This KAT proves the
+    /// engine-path rollback + re-ingest *root* correctness, which the coinbase
+    /// fixture can express.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
+        use shekyl_curve_tree::BlockHeight;
+
+        const MASTER_SEED: [u8; 32] = [
+            0xa7, 0x5e, 0x14, 0x82, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+            0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c,
+            0x9d, 0xae, 0xbf, 0xd1,
+        ];
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(1));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        let main = ct2_tier_a_chain("main");
+        let deep = ct2_tier_a_chain("reorg_deep");
+        // `fork` is the last height shared by the two chains (the fork point);
+        // heights above it diverge. The merge's `reorg_rewind.fork_height` is
+        // the first *divergent* height (`fork + 1`), and it keeps
+        // `fork_height - 1 == fork`.
+        let fork = ct2_tier_a_u64("main_tip") - ct2_tier_a_u64("deep_pop");
+        assert_eq!(
+            main[usize::try_from(fork).unwrap()].height,
+            fork,
+            "fixture indexing: chain[h] is height h",
+        );
+
+        let g = arc.read().await;
+
+        // 1. Forward-ingest the full main chain.
+        g.ingest_scan_result_into_curve_tree(&ct2_forward_scan_result(&main))
+            .await
+            .expect("forward ingest of the main chain");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(main.last().unwrap().height)),
+            "main forward feed leaves the tree at the main tip",
+        );
+
+        // 2. Reorg onto reorg_deep: roll back to keep `fork`, re-ingest the
+        //    divergent suffix `fork+1 ..= deep_tip` from the reorg leaves. No
+        //    backfill (range start == fork+1 == cursor+1 after rollback).
+        let deep_end = deep.last().unwrap().height + 1;
+        let mut reorg = ScanResult::empty_at(fork + 1, None);
+        reorg.processed_height_range = (fork + 1)..deep_end;
+        reorg.reorg_rewind = Some(crate::scan::ReorgRewind {
+            fork_height: fork + 1,
+        });
+        reorg.block_leaves = deep
+            .iter()
+            .filter(|b| b.height > fork)
+            .map(|b| (b.height, b.leaves.clone()))
+            .collect();
+        g.ingest_scan_result_into_curve_tree(&reorg)
+            .await
+            .expect("reorg feed rolls back to the fork and re-ingests the deep suffix");
+        assert_eq!(
+            g.curve_tree
+                .ingested_tip_height()
+                .await
+                .expect("cursor read"),
+            Some(BlockHeight(deep.last().unwrap().height)),
+            "post-reorg the cursor advanced to the reorg_deep tip",
+        );
+
+        // 3. Every height now matches the reorg_deep oracle: the kept prefix
+        //    (0..=fork, byte-identical to main's leaves and so to the deep
+        //    oracle on the shared prefix) and the re-mined suffix alike.
+        let mut mismatches = Vec::new();
+        for b in &deep {
+            let got = g
+                .curve_tree
+                .root_at(BlockHeight(b.height))
+                .await
+                .expect("root read");
+            if got != b.root {
+                mismatches.push(b.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "post-reorg engine root != reorg_deep oracle at heights {:?} (first {} shown)",
+            &mismatches[..mismatches.len().min(10)],
+            mismatches.len().min(10),
+        );
+    }
 }

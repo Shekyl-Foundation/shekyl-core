@@ -174,6 +174,22 @@ pub(crate) struct RollbackToFork {
 #[allow(dead_code)] // queried by the merge/backfill driver in a later commit-4 slice; today: tests only.
 pub(crate) struct IngestedTipHeight;
 
+/// Test-only actor message reading [`CurveTreeClient::root_at`]: the
+/// reconstructed curve-tree root as of `height`.
+///
+/// This is the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
+/// `start_refresh_integration_tests`) uses to assert the engine ingest path
+/// reproduces the consensus header root at every height.
+/// It is **test-only on purpose**: the *production* root read — send-time
+/// re-derivation of the reference-height root and the §3.3 ingest-time verify —
+/// is CT-5b, not CT-5a. Promoting this to a production handle method is that
+/// commit's work, not this one's.
+#[cfg(test)]
+pub(crate) struct RootAt {
+    /// The reference height whose reconstructed root to read.
+    pub height: BlockHeight,
+}
+
 impl Message<IngestBlock> for CurveTreeActor {
     type Reply = Result<(), ClientError>;
 
@@ -222,6 +238,15 @@ impl Message<IngestedTipHeight> for CurveTreeActor {
     ) -> Self::Reply {
         // Infallible cursor read; wrapped in `Ok` only for collapse uniformity.
         Ok(self.client.ingested_tip_height())
+    }
+}
+
+#[cfg(test)]
+impl Message<RootAt> for CurveTreeActor {
+    type Reply = Result<[u8; 32], ClientError>;
+
+    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.client.root_at(msg.height)
     }
 }
 
@@ -482,6 +507,22 @@ impl CurveTreeHandle {
         actor.kill();
         actor.wait_for_shutdown().await;
     }
+
+    /// Test-only: read the reconstructed curve-tree root as of `height`
+    /// ([`CurveTreeClient::root_at`]) through the actor. The CT-5a commit-6
+    /// oracle KAT uses this to assert the engine ingest path reproduces the
+    /// consensus header root at every height. The production root read (CT-5b
+    /// send-time re-derivation / §3.3 verify) is deliberately not built here.
+    #[cfg(test)]
+    pub(crate) async fn root_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<[u8; 32], CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(RootAt { height })
+            .await
+            .map_err(collapse_send_error)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +573,7 @@ mod tests {
         assert_send::<IngestBlock>();
         assert_send::<RollbackToFork>();
         assert_send::<IngestedTipHeight>();
+        assert_send::<RootAt>();
         assert_send::<OwnedTxLeaves>();
     }
 

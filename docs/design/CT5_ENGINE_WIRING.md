@@ -1521,6 +1521,16 @@ boundary).
   green-positive-for-broken-migration lesson; a coinbase-only fixture cannot
   exercise class-(b) pending migration, so this DoD **inherits the Tier-B
   non-coinbase fixture dependency** — E6a); respawn KAT (O3).
+  **Commit 6 status (2026-06-15): the engine-path root-match DoD has landed.**
+  Two KATs drive `ingest_scan_result_into_curve_tree` with the `ct2_tier_a`
+  oracle and assert the engine-reconstructed root byte-matches the oracle at
+  every height — forward ingest of the `main` chain, and a `reorg_rewind` onto
+  `reorg_deep` (engine-path rollback + re-ingest). Read-back is a `#[cfg(test)]`
+  `RootAt` actor message + `CurveTreeHandle::root_at` (the production root-read
+  is CT-5b's §3.3 verify, not this slice). **Pending-table-equality post-reorg
+  (E6a) remains Tier-B-gated** — the coinbase-only `ct2_tier_a` fixture cannot
+  express a class-(b) pending migration, so that assertion lands at CT-5c when
+  the non-coinbase fixture exists.
 - **CT-5b — reference selection + §3.3 verify (R1-Q6, derive>hold).** Wire
   `select_reference_height`, the C2 gate, the **§3.3 ingest-time verify**
   (reconstructed root == pre-0 header root → loud DoS on mismatch), and the
