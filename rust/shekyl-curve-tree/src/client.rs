@@ -115,6 +115,23 @@ pub enum ClientError {
         /// Compressed output key that was not found among drained leaves.
         output_key: [u8; 32],
     },
+    /// `gindex` resolved to a drained leaf whose `(output_key, commitment)`
+    /// does not match the caller-supplied [`crate::AssembleInput`] (X3,
+    /// CT-5c). The curve tree's `next_output_seq` numbering and the wallet's
+    /// `TransferDetails.global_output_index` must be identical for `gindex`
+    /// resolution to be sound; a mismatch means those numberings diverged
+    /// (the classic cause: a new output class entering the tree shifted the
+    /// count) or the store/scanner desynced. Refuse rather than assemble a
+    /// wrong-leaf proof — DoS-never-theft, the only runtime guard of an
+    /// inter-component invariant no single component owns.
+    IdentityMismatch {
+        /// Global output index whose resolved leaf failed the identity check.
+        gindex: Gindex,
+        /// Output key the caller expected at `gindex`.
+        expected_output_key: [u8; 32],
+        /// Output key actually found at `gindex` among the drained leaves.
+        got_output_key: [u8; 32],
+    },
     /// Persistent leaf store failure (I/O or corruption).
     Store(StoreError),
     /// [`CurveTreeClient::ingest_block`] was called with a block height that
