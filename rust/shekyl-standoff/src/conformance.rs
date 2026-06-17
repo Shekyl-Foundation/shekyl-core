@@ -64,6 +64,22 @@ pub struct GapSampleStats {
 #[must_use]
 pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
     let n = samples.len();
+    // An empty sample has no distribution to summarize. Returning explicit zeros is the
+    // honest answer; the `denom = 1.0` fallback below would otherwise manufacture a
+    // `max_decile_dev` of 0.10 (|0/1 − 0.10|) and a `first_decile_frac` of 0 that read as
+    // a real (failing) shape rather than "no data" — misleading to a caller inspecting the
+    // stats directly. `grade_sample` already fails an empty sample via `n`, but the struct
+    // it carries should not lie about the deciles.
+    if n == 0 {
+        return GapSampleStats {
+            n: 0,
+            mean_spread: 0.0,
+            max_spread: 0,
+            bond_first_frac: 0.0,
+            first_decile_frac: 0.0,
+            max_decile_dev: 0.0,
+        };
+    }
     let mut deciles = [0usize; 10];
     let mut spread_sum = 0u128;
     let mut bond_first = 0usize;
@@ -77,7 +93,7 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
         let idx = ((s as f64 / (window as f64 + 1.0)) * 10.0) as usize;
         deciles[idx.min(9)] += 1;
     }
-    let denom = if n == 0 { 1.0 } else { n as f64 };
+    let denom = n as f64; // n > 0: the empty case returned above
     let max_decile_dev = deciles
         .iter()
         .map(|&c| (c as f64 / denom - 0.10).abs())
@@ -279,7 +295,14 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
 
     let chi_square = chi_square_uniform_counts(&counts);
     let chi_square_crit = chi_square_upper_crit((n_bins as f64 - 1.0).max(1.0), Z_ALPHA_1E6);
-    let uniform_ok = n_bins >= 2 && chi_square < chi_square_crit;
+    // A uniformity claim needs observations to stand on: an empty sample gives a
+    // chi-square of 0 (every bin empty), which would otherwise clear the critical value
+    // and report `uniform_ok = true` for *no data* — a false positive the caller would
+    // read as "this source is uniform." Require at least two draws (matching the
+    // serial-independence minimum below; a single draw cannot evidence a distribution
+    // shape either). `passed()` already fails an empty sample, but `uniform_ok` must not
+    // claim a property the sample cannot support.
+    let uniform_ok = n >= 2 && n_bins >= 2 && chi_square < chi_square_crit;
 
     let bond_first_frac = if n == 0 {
         0.0

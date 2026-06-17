@@ -55,6 +55,23 @@
   guards `freeze_blocks_recoverage` against `bond_rate <= 0` (#1) and aligns the
   `oldest_margin` doc comments to the implemented `>= 0` hold-the-floor gate (#2/#3).
   Docs: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation".
+- **standoff: the conformance grader must not certify an empty sample, and the
+  conformance suite now runs in CI (Copilot PR#150, 2026-06-16,
+  `feat/standoff-shared-crate`).** `grade_sample` reported `uniform_ok = true`
+  for an empty (or single-point) sample — a zero chi-square clears the critical
+  value, so "no data" read as "passed uniformity," a false positive a wallet
+  self-cert must never accept; it now requires `n >= 2` before a uniformity
+  claim. `summarize_gaps` on an empty sample took the `denom = 1.0` fallback and
+  manufactured a `max_decile_dev` of `0.10` (a real-looking *failing* shape) for
+  no data; it now returns explicit zeros. Both are locked by new
+  `empty_sample_summary_does_not_manufacture_a_shape` /
+  `no_observations_cannot_claim_uniformity` tests. The `conformance`-gated suite
+  (chi-square / order-balance / serial-independence grader + triangular-trap
+  negative control) was never exercised in CI because the default-feature
+  workspace test does not compile it; `build.yml` now runs
+  `cargo test -p shekyl-standoff --features conformance` on the x86_64 lane
+  (x86-only by design — float GoF probes are not bit-identical across arches; the
+  cross-arch guarantee remains the integer golden vector under qemu).
 - **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`
   to `gungraun 0.19` (2026-06-16, `chore/bench-gungraun-migration`).**
   `iai-callgrind` was renamed to `gungraun` upstream from 0.17.0 and the 0.16.x

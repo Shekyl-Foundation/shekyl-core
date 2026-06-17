@@ -210,3 +210,47 @@ fn self_cert_rejects_trap_and_correlated_samples() {
         "correlated should not pass self-cert: {corr_report:?}"
     );
 }
+
+#[test]
+fn empty_sample_summary_does_not_manufacture_a_shape() {
+    // An empty sample has no distribution; the summary must report explicit zeros
+    // rather than the `denom = 1.0` fallback artifact (which read `max_decile_dev`
+    // as 0.10 — a real-looking failing shape — for no data). Copilot PR#150.
+    let st = summarize_gaps(&[], 600);
+    assert_eq!(st.n, 0);
+    assert_eq!(st.mean_spread, 0.0);
+    assert_eq!(st.max_spread, 0);
+    assert_eq!(st.bond_first_frac, 0.0);
+    assert_eq!(st.first_decile_frac, 0.0);
+    assert_eq!(
+        st.max_decile_dev, 0.0,
+        "empty sample must not report a non-zero decile deviation"
+    );
+}
+
+#[test]
+fn no_observations_cannot_claim_uniformity() {
+    // A chi-square uniformity claim needs observations: an empty (or single-point)
+    // sample gives chi-square 0, which clears the critical value and would otherwise
+    // report `uniform_ok = true` for no data — a false positive. Copilot PR#150.
+    let window = 600u64;
+    let empty = grade_sample(&[], window);
+    assert!(
+        !empty.uniform_ok,
+        "empty sample must not claim uniformity: {empty:?}"
+    );
+    assert!(
+        !empty.passed(),
+        "empty sample must not self-certify: {empty:?}"
+    );
+
+    let single = grade_sample(&[(123u64, true)], window);
+    assert!(
+        !single.uniform_ok,
+        "a single draw cannot evidence a distribution shape: {single:?}"
+    );
+    assert!(
+        !single.passed(),
+        "single-sample must not self-certify: {single:?}"
+    );
+}
