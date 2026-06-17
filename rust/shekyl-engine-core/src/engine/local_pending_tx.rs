@@ -695,8 +695,20 @@ where
             not_yet_spendable,
         ) = self.ledger.with_ledger_block(|ledger| {
             let synced = ledger.height();
+            // Gate against the height the *bound* reference anchors to (computed
+            // in `build` before the cursor-read `.await`), so the C2 spendability
+            // decision and the tx's anchored reference are the same height even
+            // if the ledger advanced during that await — otherwise the gate
+            // could admit an output not in the tree at the anchored reference,
+            // and the proof would not include it. Recompute only when no
+            // reference was resolved (no tree / too young / tree behind the
+            // reference — none of which build a tx, so there is no anchor to
+            // stay consistent with).
             let reference_height = if c2_active {
-                select_reference_height(synced)
+                reference
+                    .as_ref()
+                    .map(|r| r.height.0)
+                    .or_else(|| select_reference_height(synced))
             } else {
                 None
             };

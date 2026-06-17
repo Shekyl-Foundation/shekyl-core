@@ -182,8 +182,10 @@ pub(crate) struct IngestedTipHeight;
 /// past a tree state it ingested but cannot reproduce against the header the
 /// producer claimed.
 ///
-/// This is the **production** sibling of the `#[cfg(test)]` [`RootAt`]
-/// read-back. It is keyed by `(height, expected_root)` rather than a full
+/// This is the compare sibling of the [`RootAt`] read-back — both are
+/// production root operations (`RootAt` returns the reconstructed root,
+/// `VerifyRoot` compares it against an expected value). It is keyed by
+/// `(height, expected_root)` rather than a full
 /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) because ingest has no
 /// `block_hash` to anchor — the header root is the only field
 /// [`CurveTreeClient::verify_root`] consults, so this mirrors its compare
