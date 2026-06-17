@@ -31,6 +31,24 @@
 
 ### Changed
 
+- **archival-sim: mid-band `age_weight` lever characterized and CLOSED — keep the
+  minimal floor+no-cushion posture (decision, 2026-06-16,
+  `feat/standoff-shared-crate`).** The faithful-freeze fix reopened economics
+  finding 6 with an apparent emergent 7th replica at `age_weight >= 7`, and the
+  pre-seal lean was to price it into genesis. A fine characterization sweep
+  (`hu_cushion_*`: `age_weight` 3→8 × three seeds) refuted the lean: the 7th
+  replica is **seed-dependent** (reached in only two of three worlds at any
+  `age_weight >= 5`; seed `0x5EED_2222` never reaches it even at 8), so it is not
+  a cushion the network can lean on; and the lever is **inert** on the metrics
+  that matter (`committed_deep_under` already `0.0000` at `age_weight = 3`;
+  `gini`/`max_actor_share` flat across 3→8, confirming `age_weight` redistributes
+  a fixed budget rather than scaling emission). Genesis keeps `age_weight = 3`,
+  `r_target_deep = floor + 1`, no cushion — the lever buys no reliable redundancy
+  and costs nothing to leave alone. Replaces the prior `hu_lever_*` sweep with the
+  finer `hu_cushion_*` characterization that produced the disposition. Reopen only
+  if a new friction erodes the deep band *and* a sweep shows the 7th replica robust
+  across seeds at tolerable concentration cost. Cross-ref: `FOLLOWUPS.md` mid-band
+  lever item, `STAKER_ARCHIVAL_SIM.md` §L18 finding 6.
 - **archival-sim: faithful `HoldingsUpdate` release-cooldown freeze — pre-charge
   held deep collateral; close the same-epoch drop-to-reallocate recycle (Copilot
   PR#148 #4/#5, 2026-06-16, `feat/standoff-shared-crate`).** The L18 freeze model

@@ -625,23 +625,29 @@ sustainability is unaffected by the recalibration.
   effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
   shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
 
-- **Mid-band `age_weight` lever — emergent cushion above `r_target_deep` (surfaced by the
-  faithful-freeze fix, 2026-06-16).** Under the corrected L18 model (no spurious same-epoch
-  churn) the deep-tail reward premium *does* buy emergent redundancy where the pre-fix model
-  showed none: at `age_weight ≥ 7` the committed oldest band settles at a **7th** replica
-  (`oldest_min_committed = 7`, `oldest_margin = 1`) versus the provisioned floor of `6` at
-  genesis `age_weight = 3`. This reopens economics finding 6 (which concluded the `1/R` reward
-  is anti-over-replication "by construction" and no lever buys slack) — the conclusion was
-  correct under the artifact churn but not under the faithful model. It moves **no shipped
-  genesis number** (genesis stays `age_weight = 3`, `oMrg = 0`); it is a *new optimization
-  option* for running mid-band (a self-correcting cushion the current no-cushion posture
-  lacks), answering the earlier "is there a lever to run closer to the middle of a protective
-  band?" question in the affirmative. Needs its own pass: confirm robustness across seeds/budget,
-  characterize the `age_weight`→cushion curve and its cost (higher deep-tail premium = more
-  emission to archival), and decide whether genesis should price in a mid-band `age_weight` or
-  keep the minimal floor+no-cushion posture. **Target: V3.0 pre-seal (decision), or V3.1
-  (if the minimal posture is kept and the cushion is deferred).** Cross-refs:
-  `STAKER_ARCHIVAL_SIM.md` §L18 finding 6 + "Faithful-freeze reconciliation".
+- **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
+  floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened
+  economics finding 6 with an apparent emergent 7th replica at `age_weight ≥ 7`, and the
+  pre-seal lean was to price it into genesis. A fine characterization sweep (`hu_cushion_*`
+  in `scenarios.rs`: `age_weight` 3→8 × three seeds) refuted that lean and was ratified:
+  - **The 7th replica is seed-dependent, not a cushion.** Across seeds `{0x5EED_1234,
+    0x5EED_2222, 0x5EED_9999}`, `oldest_min_committed` reaches 7 in only **two of three**
+    worlds at any `age_weight ≥ 5`; seed `0x5EED_2222` never reaches 7 even at `age_weight = 8`.
+    A replica that one realization in three does not have is not slack the network can lean on.
+  - **The lever is inert on the metrics that matter.** `committed_deep_under` is already
+    `0.0000` at `age_weight = 3` (the deep band is fully covered without the lever), and
+    `gini_actor_window` (0.1942) and `max_actor_share_window` (0.0190) are flat across the
+    entire 3→8 range — confirming `age_weight` is a redistribution knob, not an emission
+    scaler, with no concentration cost *and* no dependable benefit here.
+  So the lever moves no genesis number, costs nothing to leave alone, and buys no reliable
+  redundancy. **Disposition: genesis keeps `age_weight = 3`, `r_target_deep = floor + 1`, no
+  cushion** — the same minimal posture economics finding 6 reached "by construction" (correct
+  in practice even though the mechanism was reopened). **Reopen criterion (rule-21):** only if
+  (a) a newly-discovered friction erodes the deep band below `floor + 1`, *and* (b) a sweep
+  shows the 7th replica robust across seeds at a tolerable concentration cost — both required,
+  not either. Closed for V3.0; not deferred to V3.1 (there is nothing to defer — the lever
+  was characterized and declined, not postponed). Cross-refs: `STAKER_ARCHIVAL_SIM.md`
+  §L18 finding 6 + "Faithful-freeze reconciliation".
 
 - **Staker-archival settings are FROZEN; the remaining work is the operator experience, not
   the parameters (decision, 2026-06-16).** Five independent stress passes — the overstated

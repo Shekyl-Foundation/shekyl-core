@@ -3840,29 +3840,34 @@ pub fn build_scenarios() -> Vec<SimConfig> {
             out.push(c);
         }
     }
-    // EMERGENT-SLACK LEVER PROBE. The buffered arms show budget alone buys no margin
-    // above `r_target_deep`. This arm asks whether the *reward gradient* does: hold budget
-    // at the lean zero-buffer point (120) and realistic age-scaled duration, raise only the
-    // deep-tail premium (`age_weight`) at genesis cooldown=2. Result (§L18): it does not —
-    // `oldest_min_committed` stays pinned at `r_target_deep` across `age_weight` 3→12, and
-    // `committed_deep_under` worsens slightly at the top (concentration). The `1/R` reward
-    // makes the `(target+1)`-th replica individually unprofitable by construction (the
-    // anti-over-replication property), so NO market lever (budget or premium) produces
-    // emergent slack. A wider protective band is a *provisioning* decision only — raise
-    // `r_target_deep`, or lean on the foundation complete-tree backstop — both priced
-    // (entry-barrier vs. trust-concentration), neither emergent.
-    for aw in [3.0_f64, 7.0, 12.0] {
-        let mut c = lean_base();
-        c.name = format!("hu_lever_aw{}_c2", aw as u32);
-        c.axis = "holdingsupdate_cooldown".into();
-        c.epochs = 120;
-        c.churn_window = 40;
-        c.epoch_aging = 0.05;
-        c.fetch_latency_per_unit = 0.0;
-        c.release_cooldown_epochs = 2;
-        c.bond_dur_age_scale = 4.0;
-        c.age_weight = aw;
-        out.push(c);
+    // CUSHION CHARACTERIZATION (mid-band `age_weight` lever). Under the FAITHFUL freeze
+    // model (Copilot PR#148 #4/#5 fix) the deep-tail reward premium DOES buy emergent
+    // redundancy above `r_target_deep` — overturning the pre-fix "no market lever buys
+    // slack" conclusion this arm used to record (that conclusion was an artifact of the
+    // spurious same-epoch churn). `age_weight` is a pure REDISTRIBUTION knob (`reward.rs`:
+    // `reward_P = budget · Curve(work_P) / Σ Curve`, so `Σ reward = budget` regardless of
+    // `age_weight`): a higher premium concentrates the SAME budget onto the deep tail
+    // rather than emitting more, so the cost of the cushion is CONCENTRATION
+    // (`gini_actor_window` / mid-band `committed_deep_under`), never extra emission. This
+    // sweep prices the V3.0 cushion decision: it finds the knee (the minimum `age_weight`
+    // that reliably lifts the committed oldest band to a 7th replica, `oldest_margin = 1`)
+    // and confirms the cushion is robust across seeds, not a single-seed artifact. Lean
+    // zero-buffer budget (120), realistic age-scaled duration, genesis cooldown=2.
+    for seed in [0x5EED_1234_u64, 0x5EED_2222, 0x5EED_9999] {
+        for aw in [3.0_f64, 4.0, 5.0, 6.0, 7.0, 8.0] {
+            let mut c = lean_base();
+            c.name = format!("hu_cushion_aw{}_s{:04x}", aw as u32, seed & 0xffff);
+            c.axis = "holdingsupdate_cooldown".into();
+            c.epochs = 120;
+            c.churn_window = 40;
+            c.epoch_aging = 0.05;
+            c.fetch_latency_per_unit = 0.0;
+            c.release_cooldown_epochs = 2;
+            c.bond_dur_age_scale = 4.0;
+            c.age_weight = aw;
+            c.seed = seed;
+            out.push(c);
+        }
     }
 
     // --- L18 ADVERSARIAL-DODGE arm (the cooldown's BAD-ACTOR / upper-bound seal leg).
