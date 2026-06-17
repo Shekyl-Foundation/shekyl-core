@@ -97,6 +97,15 @@ pub struct SimConfig {
     /// budget for the window, so deep-tail capital cannot instantly recycle a dropped
     /// seat into a replacement. `0` ⇒ pre-L18 instant-redeploy (byte-identical).
     pub release_cooldown_epochs: u32,
+    /// **L18 adversarial-dodge preference** — the cooldown's *bad-actor* / upper-bound seal
+    /// leg (`AgentParams::dodge_pref`). `0.0` ⇒ the faithful cooldown-aware rational agent
+    /// (good-actor / lower-bound leg, every prior scenario byte-identical). `> 0.0` ⇒ a
+    /// non-cooldown-aware operator that *wants* the drop-and-refund dodge: it over-values a
+    /// fresh deep acquisition by this additive net-value bonus and tries to rotate held deep
+    /// bonds into fresh ones every epoch. The faithful pre-charge decides the outcome — the
+    /// dodge succeeds at `release_cooldown_epochs == 0` and is defeated at `> 0`. Used only
+    /// by the `holdingsupdate_cooldown` adversarial arm.
+    pub dodge_pref: f64,
 
     // L11 endogenous-participation axis (iteration 3; inert when `!endogenous`).
     /// Free entry/exit on. When off, the population is fixed at `n_actors` all-active —
@@ -552,10 +561,14 @@ pub struct ScenarioResult {
     /// on seated replicas. Timing-depressed under backfill lag (reads the lag regime, not
     /// the freeze), so reported but not the gate.
     pub oldest_min_serving_r: f64,
-    /// **Oldest-band redundancy margin** (L18 seal gate): `oldest_min_committed_r −
-    /// r_target_deepest`. The seal requires `≥ 1` (one redundancy seat above target on
-    /// the deepest tail). On a failing arm, `r_target_deep + |deficit|` is the actionable
-    /// reopen floor (raise `r_target_deep` / foundation floor by the deficit, no re-run).
+    /// **Oldest-band redundancy margin** (L18 seal gate `deep_margin`):
+    /// `oldest_min_committed_r − r_target_deepest`. The seal is **hold-the-floor**:
+    /// `deep_margin` requires `>= 0` (the freeze must not erode the committed oldest-band
+    /// min below `r_target_deep`). The `+1` redundancy seat is *provisioned* into
+    /// `r_target_deep` (`= availability_floor + 1`), not an extra `>= 1` requirement layered
+    /// on top — the buffered `hu_buf_*` arms confirm no budget buys an emergent seat above
+    /// the floor. On a failing arm, `r_target_deep + |deficit|` is the actionable reopen
+    /// floor (raise `r_target_deep` / foundation floor by the deficit, no re-run).
     pub oldest_margin: f64,
     /// **Oldest-band margin on the serving view** (L18, diagnostic): `oldest_min_serving_r
     /// − r_target_deepest`. Lag-depressed; reported as the freeze×lag-compounded read, not
@@ -867,6 +880,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         acq_rate: cfg.acq_rate,
         reseed_rate: cfg.reseed_rate,
         release_cooldown_epochs: cfg.release_cooldown_epochs,
+        dodge_pref: cfg.dodge_pref,
     };
     let pp = ParticipationParams {
         entry_per_epoch: cfg.entry_per_epoch,
@@ -1947,6 +1961,9 @@ fn baseline() -> SimConfig {
         // L18: instant bond redeploy by default (every pre-L18 scenario byte-identical).
         // The HoldingsUpdate cooldown arms opt in.
         release_cooldown_epochs: 0,
+        // L18: rational cooldown-aware agent by default (good-actor seal leg). The
+        // adversarial-dodge arm opts in with `dodge_pref > 0`.
+        dodge_pref: 0.0,
         // L11: fixed all-active population by default (every pre-L11 scenario). The
         // participation scenarios opt in.
         endogenous: false,
@@ -3764,8 +3781,10 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // Seal read — ABSOLUTE gates at cooldown=2 on the age-scaled-DURATION arm (`s4`, the
     // realistic composition; `s0` flat is the contrast): `deep_history`
     // (`deep_frac_under_target < 0.10`, COMMITTED), `sole_source_clean` (`ssSE == 0`), and
-    // the +1 margin (`deep_margin`, `oldest_margin >= 1`, on the COMMITTED oldest-band
-    // min). The freeze's clean channel is the capital budget (a frozen floor stands one
+    // the hold-the-floor margin (`deep_margin`, `oldest_margin >= 0` on the COMMITTED
+    // oldest-band min — the freeze must not erode it below `r_target_deep`, into which the
+    // +1 seat is provisioned). The freeze's clean channel is the capital budget (a frozen
+    // floor stands one
     // fewer bond), which is lag-immune — so the committed reads isolate the freeze, while
     // the SERVING reads (`serving_deep_under`, `oldest_margin_serving`) are
     // backfill-lag-depressed and read the lag regime, not the freeze. Two latency arms:
@@ -3821,29 +3840,91 @@ pub fn build_scenarios() -> Vec<SimConfig> {
             out.push(c);
         }
     }
-    // EMERGENT-SLACK LEVER PROBE. The buffered arms show budget alone buys no margin
-    // above `r_target_deep`. This arm asks whether the *reward gradient* does: hold budget
-    // at the lean zero-buffer point (120) and realistic age-scaled duration, raise only the
-    // deep-tail premium (`age_weight`) at genesis cooldown=2. Result (§L18): it does not —
-    // `oldest_min_committed` stays pinned at `r_target_deep` across `age_weight` 3→12, and
-    // `committed_deep_under` worsens slightly at the top (concentration). The `1/R` reward
-    // makes the `(target+1)`-th replica individually unprofitable by construction (the
-    // anti-over-replication property), so NO market lever (budget or premium) produces
-    // emergent slack. A wider protective band is a *provisioning* decision only — raise
-    // `r_target_deep`, or lean on the foundation complete-tree backstop — both priced
-    // (entry-barrier vs. trust-concentration), neither emergent.
-    for aw in [3.0_f64, 7.0, 12.0] {
-        let mut c = lean_base();
-        c.name = format!("hu_lever_aw{}_c2", aw as u32);
-        c.axis = "holdingsupdate_cooldown".into();
-        c.epochs = 120;
-        c.churn_window = 40;
-        c.epoch_aging = 0.05;
-        c.fetch_latency_per_unit = 0.0;
-        c.release_cooldown_epochs = 2;
-        c.bond_dur_age_scale = 4.0;
-        c.age_weight = aw;
-        out.push(c);
+    // CUSHION CHARACTERIZATION (mid-band `age_weight` lever). Under the FAITHFUL freeze
+    // model (Copilot PR#148 #4/#5 fix) the deep-tail reward premium DOES buy emergent
+    // redundancy above `r_target_deep` — overturning the pre-fix "no market lever buys
+    // slack" conclusion this arm used to record (that conclusion was an artifact of the
+    // spurious same-epoch churn). `age_weight` is a pure REDISTRIBUTION knob (`reward.rs`:
+    // `reward_P = budget · Curve(work_P) / Σ Curve`, so `Σ reward = budget` regardless of
+    // `age_weight`): a higher premium concentrates the SAME budget onto the deep tail
+    // rather than emitting more, so the cost of the cushion is CONCENTRATION
+    // (`gini_actor_window` / mid-band `committed_deep_under`), never extra emission. This
+    // sweep prices the V3.0 cushion decision: it finds the knee (the minimum `age_weight`
+    // that reliably lifts the committed oldest band to a 7th replica, `oldest_margin = 1`)
+    // and confirms the cushion is robust across seeds, not a single-seed artifact. Lean
+    // zero-buffer budget (120), realistic age-scaled duration, genesis cooldown=2.
+    for seed in [0x5EED_1234_u64, 0x5EED_2222, 0x5EED_9999] {
+        for aw in [3.0_f64, 4.0, 5.0, 6.0, 7.0, 8.0] {
+            let mut c = lean_base();
+            c.name = format!("hu_cushion_aw{}_s{:04x}", aw as u32, seed & 0xffff);
+            c.axis = "holdingsupdate_cooldown".into();
+            c.epochs = 120;
+            c.churn_window = 40;
+            c.epoch_aging = 0.05;
+            c.fetch_latency_per_unit = 0.0;
+            c.release_cooldown_epochs = 2;
+            c.bond_dur_age_scale = 4.0;
+            c.age_weight = aw;
+            c.seed = seed;
+            out.push(c);
+        }
+    }
+
+    // --- L18 ADVERSARIAL-DODGE arm (the cooldown's BAD-ACTOR / upper-bound seal leg).
+    // The faithful-rational arms above are the GOOD-ACTOR / lower-bound leg: under a
+    // cooldown-aware optimizer the release cooldown is correctly *inert* (a rational actor
+    // never makes the futile drop-to-reallocate move), so those arms — though they clear
+    // every gate — provide no evidence for the cooldown PARAMETER itself. A reader could
+    // look at "c2 ≡ c0 for rational agents" and wrongly conclude the cooldown is dead
+    // weight. It is not: its entire purpose is the anti-dodge property (P2B-7 Pin 3) —
+    // stopping a non-cooldown-aware operator that *wants* to drop a deep bond to shed its
+    // retention obligation and immediately refund the freed collateral into a fresh seat
+    // (chasing the next reward). That agent is the *conservative* (upper-bound) seal basis;
+    // the rational agent is the optimistic (lower-bound) one. A seal is only as strong as
+    // its conservative leg, so the gate must hold against the dodger, not only the rational.
+    //
+    // The dodger (`dodge_pref > 0`) over-values a fresh deep acquisition and tries to rotate
+    // held deep bonds into fresh ones every epoch, never planning around the freeze. The
+    // FAITHFUL budget (frozen-capital subtraction + epoch-start pre-charge) decides the
+    // outcome — and the pre-charge is exactly the mechanism the Copilot #4/#5 fix added:
+    //   * cooldown=0: the freed bond refunds the rotation in the SAME epoch ⇒ the dodge
+    //     SUCCEEDS ⇒ the deep tail churns and goes under target (the residual a
+    //     non-cooldown-aware operator inflicts — the empirical ground for the operator-
+    //     education item and the wallet-conformance guard).
+    //   * cooldown=2: the dropped bond is pre-charged/frozen ⇒ the refund is REFUSED ⇒ the
+    //     dodge is DEFEATED ⇒ the tail is held ⇒ the gate holds.
+    // Two regimes. NOLOCK (`bond_dur_base = 0`) ISOLATES the cooldown as the SOLE anti-dodge
+    // defense — the cleanest "what does the cooldown buy?" read, since the L9 retention lock
+    // is off and only the cooldown can deter the rotation; it is a MECHANISM diagnostic, not
+    // a shipping point (its budget is not the tuned lean equilibrium). SHIP (lean_base, the
+    // exact s4 shipping config) is defense-in-depth (lock + cooldown) and is the conservative
+    // SEAL point: the gate must hold here against an all-dodger population. `dp0` (rational)
+    // references pin that the dodge — not the regime — is what moves the metrics, and that
+    // the cooldown stays inert for the rational agent (`c0 ≡ c2` at `dp0`). All-dodger
+    // (every actor adversarial) is the deliberate worst case (maximal dodge pressure). ---
+    for (rlabel, nolock) in [("nolock", true), ("ship", false)] {
+        for (llabel, lat) in [("lag0", 0.0_f64), ("lag2", 2.0)] {
+            for (dlabel, dodge) in [("dp0", 0.0_f64), ("dp1", 1.0)] {
+                for (clabel, cooldown) in [("c0", 0u32), ("c2", 2)] {
+                    let mut c = lean_base();
+                    c.name = format!("hu_dodge_{rlabel}_{llabel}_{dlabel}_{clabel}");
+                    c.axis = "holdingsupdate_cooldown".into();
+                    c.epochs = 120;
+                    c.churn_window = 40;
+                    c.epoch_aging = 0.05;
+                    c.fetch_latency_per_unit = lat;
+                    c.release_cooldown_epochs = cooldown;
+                    c.dodge_pref = dodge;
+                    if nolock {
+                        c.bond_dur_base = 0.0; // cooldown is the sole anti-dodge defense
+                        c.bond_dur_age_scale = 0.0;
+                    } else {
+                        c.bond_dur_age_scale = 4.0; // realistic shipping composition (s4)
+                    }
+                    out.push(c);
+                }
+            }
+        }
     }
 
     out

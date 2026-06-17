@@ -2,8 +2,155 @@
 
 ## [Unreleased]
 
+### Added
+
+- **archival: single-source the funding-seam entry-standoff draw into
+  `shekyl-standoff` + generic goodness-of-fit primitives into `shekyl-stats`
+  (2026-06-16, `feat/standoff-shared-crate`).** First slice of the
+  implementation-drift-guard substrate: the load-bearing standoff draw moves out
+  of `#[cfg(test)]`-local sim code into a library crate the wallet, sim, and
+  (future) verifier all import, so "what we validated is what ships" holds by
+  construction. **`shekyl-standoff`** ships a float-free `draw::draw_entry_gap`
+  (`s ~ U[0, window]` via unbiased integer rejection sampling over a minimal
+  `GapRng` trait) in its **default** build — zero `#[allow(clippy::cast_*)]`, so
+  float-freeness of the wallet's production path is machine-enforced, not a
+  module-boundary claim — and gates the float grading + RNG-generic
+  `certify_draw` self-cert harness behind a `conformance` feature. The published
+  KAT is split along the determinism boundary: `tests/golden_vector.rs` (default
+  features, the **integer** `(spread, order)` sequence, bit-identical and now
+  run on the aarch64 qemu-user lane) and `tests/conformance_grading.rs`
+  (`conformance` feature, float grading, x86-only because float is not
+  bit-identical across arches). **`shekyl-stats`** is the new dependency-free
+  home for the generic primitives (`chi_square_upper_crit`, `Z_ALPHA_1E6`,
+  discrete-uniform chi-square, `lag1_autocorr`); `shekyl-staking-sim` and
+  `shekyl-crypto-pq` (its `enc_label` test, previously carrying duplicated
+  literals) both dedup onto it. No wallet call site yet — the crate is made
+  importable ahead of the unbuilt V3.0 funding flow. Docs:
+  `ARCHIVAL_FIREWALL_GATE6.md` §10.12, `STAKER_ARCHIVAL_SIM.md`,
+  `FOLLOWUPS.md` (funding-seam carry 2 + wallet-wiring + alpha-provenance items).
+
 ### Changed
 
+- **archival: verifier-set spec-level model recorded in firewall §10.4; cold-start
+  weak-cover residual ratified (pre-seal decisions, 2026-06-16,
+  `feat/standoff-shared-crate`).** Two doc-only pre-seal dispositions, no code or
+  parameter change. **Verifier set (§10.4):** the bonded-verifier disposition is
+  given a concrete structural model — membership = the bonded archival staker set
+  itself (mutual oversight, no separate privileged registry), rotation =
+  consensus-seeded, per-epoch, firewall-aware (discharges the §10.4 condition-(a)
+  chokepoint structurally: no verifier accumulates a standing
+  `{.onion ↔ P ↔ shard}` view, assignments excluded where they would leak the map),
+  and the `m`-of-`n` availability margin (L14b condition (b), provisional `11/13`)
+  routed to the **Round-2 stressnet availability CDF gate** for gate-2/gate-4 to
+  ratify from measurement rather than assertion. **Cold-start residual:** ratified
+  to **accept documented weak early-`P` cover for V3.0** — decoy injection is
+  self-undercutting (foundation decoys are attributable, so a sophisticated adversary
+  discounts them) and no non-attributable source exists short of reopening confidential
+  staking (S-5, closed); the residual is a bounded, self-resolving cold-start transient
+  (cover strengthens as organic funding accrues), so V3.0 ships it documented rather
+  than adding permanent decoy-injection machinery for a finite problem. Reopen criteria
+  (rule-21) recorded on both. Cross-refs: `ARCHIVAL_FIREWALL_GATE6.md` §10.4,
+  `FOLLOWUPS.md` funding-seam entry-standoff carry (3).
+- **archival-sim: mid-band `age_weight` lever characterized and CLOSED — keep the
+  minimal floor+no-cushion posture (decision, 2026-06-16,
+  `feat/standoff-shared-crate`).** The faithful-freeze fix reopened economics
+  finding 6 with an apparent emergent 7th replica at `age_weight >= 7`, and the
+  pre-seal lean was to price it into genesis. A fine characterization sweep
+  (`hu_cushion_*`: `age_weight` 3→8 × three seeds) refuted the lean: the 7th
+  replica is **seed-dependent** (reached in only two of three worlds at any
+  `age_weight >= 5`; seed `0x5EED_2222` never reaches it even at 8), so it is not
+  a cushion the network can lean on; and the lever is **inert** on the metrics
+  that matter (`committed_deep_under` already `0.0000` at `age_weight = 3`;
+  `gini`/`max_actor_share` flat across 3→8, confirming `age_weight` redistributes
+  a fixed budget rather than scaling emission). Genesis keeps `age_weight = 3`,
+  `r_target_deep = floor + 1`, no cushion — the lever buys no reliable redundancy
+  and costs nothing to leave alone. Replaces the prior `hu_lever_*` sweep with the
+  finer `hu_cushion_*` characterization that produced the disposition. Reopen only
+  if a new friction erodes the deep band *and* a sweep shows the 7th replica robust
+  across seeds at tolerable concentration cost. Cross-ref: `FOLLOWUPS.md` mid-band
+  lever item, `STAKER_ARCHIVAL_SIM.md` §L18 finding 6.
+- **archival-sim: faithful `HoldingsUpdate` release-cooldown freeze — pre-charge
+  held deep collateral; close the same-epoch drop-to-reallocate recycle (Copilot
+  PR#148 #4/#5, 2026-06-16, `feat/standoff-shared-crate`).** The L18 freeze model
+  was one epoch too lenient (escrow pushed `epochs_remaining = C` but
+  `advance_epoch` decrements before the next best-response, so capital froze for
+  `C − 1`) and, more materially, let `best_response` recycle a voluntarily-dropped
+  bond *within the same epoch* — the futile drop-to-reallocate move the cooldown
+  exists to prevent and that finding 3's prose already claimed was precluded.
+  `best_response` now **pre-charges** the collateral of every deep shard held at
+  epoch start (it seeds `used_bond`, so a same-epoch drop cannot refund a fresh
+  acquisition); pre-charge (drop epoch) + escrow (next `C − 1`) span the full
+  `RELEASE_COOLDOWN_EPOCHS`. `release_cooldown_epochs == 0` pre-charges only locked
+  shards, so every `c0` arm is byte-identical to the pre-cooldown baselines. **The
+  seal verdict and every shipped genesis parameter are unchanged** (`RELEASE_COOLDOWN
+  = 2`, `r_target_deep = floor + 1`, `age_weight = 3`, no foundation widening): both
+  the old and faithful models clear all `c2` gates, so this strengthens the seal
+  (binding `committed_deep_under` moves `0.0138 → 0.0000`) rather than altering
+  calibration. The model correction reveals the `c4` "cliff" was an artifact of the
+  spurious churn (gone; floor holds at `6`), confirms the rationality-preclusion
+  thesis in the budget arithmetic, and surfaces a mid-band `age_weight` lever
+  (`aw ≥ 7` reaches a 7th oldest-band replica) now tracked in `FOLLOWUPS.md`. Also
+  guards `freeze_blocks_recoverage` against `bond_rate <= 0` (#1) and aligns the
+  `oldest_margin` doc comments to the implemented `>= 0` hold-the-floor gate (#2/#3).
+  Docs: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation".
+- **archival-sim: adversarial-dodge arm completes the cooldown's two-leg seal —
+  and inverts the premise on the committed channel (2026-06-16,
+  `feat/standoff-shared-crate`).** The faithful-freeze fix left the seal on one
+  leg: under the rational cooldown-aware agent the cooldown is *inert*, so the
+  sim gave no evidence for `RELEASE_COOLDOWN_EPOCHS` at all. Added
+  `AgentParams.dodge_pref` / `SimConfig.dodge_pref` and a
+  `hu_dodge_{nolock,ship}_{lag0,lag2}_{dp0,dp1}_{c0,c2}` sweep modeling a
+  **non-cooldown-aware** operator that *wants* the drop-and-refund dodge P2B-7
+  Pin 3 defends against. Result inverts the expectation on the committed channel:
+  at `c0` the dodge is pure churn (`1.364` vs rational `0.268`) with **no**
+  committed-coverage harm (`oMinCmtR` holds at `6`, instant re-seat); at `c2`
+  the cooldown *causes* the sweep's only committed breach (`oMinCmtR 6 → 4`,
+  37 % capital stranded) by freezing the refunded bond in the lock-off regime.
+  **The coverage defense is the L9 retention lock, not the cooldown** — every
+  `ship` arm (locks on) holds `oMinCmtR` at `7` at both `c0` and `c2`. Corrected
+  mechanism: the cooldown is a **cost/deterrent** (Pin 3 anti-dodge property,
+  demonstrated), *complementary* to the retention lock, not a coverage protector;
+  alone (`nolock`) it backfires. **Two-leg seal** (sealed against the `ship`
+  config): good-actor leg costless, bad-actor leg bounded-safe (`oMinCmtR 7`,
+  `frzCo 0.107`, no breach). New load-bearing operating-envelope constraint:
+  never ship the cooldown without the L9 retention lock (rule-21 reopen keyed on
+  `BOND_DURATION_AGE_SCALE`/`BASE → 0`). **No shipped parameter moved.** Docs:
+  `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
+- **standoff: the conformance grader must not certify an empty sample, and the
+  conformance suite now runs in CI (Copilot PR#150, 2026-06-16,
+  `feat/standoff-shared-crate`).** `grade_sample` reported `uniform_ok = true`
+  for an empty (or single-point) sample — a zero chi-square clears the critical
+  value, so "no data" read as "passed uniformity," a false positive a wallet
+  self-cert must never accept; it now requires `n >= 2` before a uniformity
+  claim. `summarize_gaps` on an empty sample took the `denom = 1.0` fallback and
+  manufactured a `max_decile_dev` of `0.10` (a real-looking *failing* shape) for
+  no data; it now returns explicit zeros. Both are locked by new
+  `empty_sample_summary_does_not_manufacture_a_shape` /
+  `no_observations_cannot_claim_uniformity` tests. The `conformance`-gated suite
+  (chi-square / order-balance / serial-independence grader + triangular-trap
+  negative control) was never exercised in CI because the default-feature
+  workspace test does not compile it; `build.yml` now runs
+  `cargo test -p shekyl-standoff --features conformance` on the x86_64 lane
+  (x86-only by design — float GoF probes are not bit-identical across arches; the
+  cross-arch guarantee remains the integer golden vector under qemu).
+- **standoff/stats: public conformance helpers are now well-defined for every
+  `u64` window and the chi-square critical value fails closed on invalid `df`
+  (Copilot PR#150 review 2, 2026-06-16, `feat/standoff-shared-crate`).** Three
+  latent edge-case panics/NaNs on the feature-gated helpers — none reachable from
+  the sim (window is 600, `df >= 1`), but the helpers are public and must honor
+  the production draw's `u64` contract. `correlated_walk` computed its modulus as
+  `window as i64 + 1`, which wraps to a non-positive modulus (panic in
+  `rem_euclid`) for `window > i64::MAX`; it now walks with overflow-safe `u64`
+  modular add/sub. `grade_sample` sized its bin count with `window as usize + 1`,
+  which overflows at `usize::MAX` and truncates a large window on a 32-bit target;
+  it now computes the count in `u64`. `chi_square_upper_crit` divided by `df`
+  without guarding, yielding NaN/inf for `df <= 0`; it now returns NaN explicitly,
+  which makes any downstream `statistic < crit` comparison false — the cert fails
+  closed rather than passing on a bogus critical value. Locked by
+  `helpers_are_well_defined_at_extreme_windows` (`u64::MAX` window, no panic) and
+  `critical_value_fails_closed_for_invalid_df`. The sim model is untouched: the
+  review surfaced no soundness finding, only input-validation hardening on the
+  shared crate's public surface.
 - **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`
   to `gungraun 0.19` (2026-06-16, `chore/bench-gungraun-migration`).**
   `iai-callgrind` was renamed to `gungraun` upstream from 0.17.0 and the 0.16.x

@@ -829,6 +829,42 @@ be re-checked against L14b is **challenger availability/liveness** — does a *b
 the `m`-of-`n` recheck cadence on the cold tail it must cover — plus condition (a)'s chokepoint.
 Same sim-consistency family as R-3, not the volume axis.
 
+**Spec-level model (proposed, 2026-06-16).** The bonded-verifier disposition is recorded as a
+concrete model so the structural shape is settled pre-seal; the *quantitative* piece (the
+availability margin) is routed to the Round-2 stressnet gate, where gate-2/gate-4 ratify it.
+
+- **Membership = the bonded archival staker set itself (mutual oversight).** The verifier
+  population *is* the set of bonded `P`s, each a potential challenger of the others — not a
+  separate privileged registry. This is the minimal-surface choice: it ties challenge authority
+  to on-chain bonded skin-in-the-game (a misbehaving verifier has collateral at risk under the
+  same FSM), avoids inventing a second trust tier with its own Sybil/capture surface, and makes
+  the verifier set's size and liveness a function of the staker set the sim already models.
+  No new membership credential exists — bond-record membership *is* the credential.
+- **Rotation = consensus-seeded, per-epoch, firewall-aware.** The per-epoch verifier→target
+  assignment is derived deterministically from a **consensus beacon** (the epoch seed), so it is
+  auditable after the fact but **unpredictable in advance** (a verifier cannot pre-position
+  against a known future target), and it **rotates every epoch** so no verifier accumulates a
+  standing view of any target's `{.onion ↔ P_canonical_id ↔ shard}` map — directly discharging
+  condition (a)'s "must rotate, not a static registry." **Firewall-aware** means the assignment
+  function **excludes** any verifier↔target pair that would itself leak the map (e.g. a verifier
+  whose principal correlation with the target is known, or an assignment that violates the §10.9
+  `P`↔principal isolation): the rotation is constrained by the firewall, not blind to it. The
+  beacon-seeded draw reuses the determinism discipline of the standoff draw (consensus-seeded,
+  reproducible, no wallet-side discretion).
+- **`m`-of-`n` availability = routed to the Round-2 CDF gate.** Whether a *bonded* set sustains
+  the L14b sliding-window recheck cadence (`m`-of-`n`, `11/13` provisional —
+  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)) on the cold
+  tail it must cover is a **quantitative availability question**, not a structural one. It is
+  **not answered here** — it is handed to the Round-2 stressnet **availability CDF gate**, which
+  measures the bonded verifier population's liveness against the recheck cadence under modeled
+  churn and sets `m`/`n` from the measured CDF rather than the provisional `11/13`. The seal
+  rests on the structural model above; the gate ratifies the parameter.
+
+This is a **disposition, not a ratification**: it records membership/rotation/firewall-awareness
+as the committed structural model (reopen only on a Round-2 finding that the bonded set cannot
+sustain the cadence, or that the firewall-aware rotation cannot be made deterministic without
+leaking the assignment), and defers the `m`/`n` value to the gate that can measure it.
+
 ### 10.5 GF-5 — pre-join backing presentation is `P`'s first network appearance
 
 Before `P` anchors its bond on-chain (join-Market), it **presents backing** (announce-before-
@@ -1056,7 +1092,11 @@ with the principal-linkage gap still open under a different name.
 **Still genuinely open (carried):**
 
 - **§10.4 condition (b)** — L14b challenger availability/liveness under a *bonded* set
-  (sim-consistency, R-3 family).
+  (sim-consistency, R-3 family). **Routed (2026-06-16):** the §10.4 spec-level model commits
+  the structural shape (membership = bonded staker set, consensus-seeded firewall-aware per-epoch
+  rotation) and hands the `m`-of-`n` availability margin to the **Round-2 stressnet availability
+  CDF gate** (gate-2/gate-4 ratify the value; provisional `11/13` until measured). Condition (a)'s
+  chokepoint is discharged structurally by the per-epoch rotation.
 - **§10.6** — dummy/fragmentation tuned ratio (measure-then-tune → testnet replay).
 - **§10.9** — guard-isolation enforcement mechanism (Arti config vs. policy) → transport PR.
 - **GF-1-carve — RESOLVED (2026-06-16).** Bond-debit authorization is a **dedicated
@@ -1235,6 +1275,14 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   symmetric entry/exit = two independent 600-block draws, each free on its own seam — state the exit
   one explicitly. **Width is the expensive axis** (proven rate-driven); the cheap thin-regime levers
   are biasing the gap toward the max (600 is already free) and the inversion, not a wider window.
+  **Executable conformance reference (2026-06-16):** single-sourced into the `shekyl-standoff` crate
+  (float-free `draw::draw_entry_gap` in the default build + feature-gated `conformance` instruments
+  and the RNG-generic `certify_draw` self-cert harness a wallet runs against its own CSPRNG), with
+  the generic goodness-of-fit primitives in `shekyl-stats`. The published vector is split along the
+  determinism boundary — the **integer** `(spread, order)` golden vector is bit-identical and verified
+  on the aarch64 CI lane; the float grading is x86-only (float is not cross-arch bit-identical).
+  Conformance is **wallet self-test, not consensus enforcement** (the anchor is consumer-side and
+  FCMP++-hidden). See `FOLLOWUPS.md` §funding-seam carry 2.
 - **CLOSE — pay-every-block / implicit accumulator emission (corrects the pass-3 over-claim).** The
   pass-3 entry claimed accumulator credit "deletes GF-6/GF-10." **That was wrong.** The borrowed
   intuition (a quiet validator lost in the crowd) needs an *anonymous* crowd; Shekyl staker payments

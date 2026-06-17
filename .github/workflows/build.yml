@@ -659,6 +659,21 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: shekyl-standoff conformance suite (x86_64 only)
+        working-directory: rust
+        # `shekyl-standoff`'s conformance grading + negative controls
+        # (`tests/conformance_grading.rs`) are gated behind the `conformance`
+        # feature, so the default-feature workspace-wide test above does NOT
+        # compile or run them. Run them explicitly here so the chi-square /
+        # order-balance / serial-independence grader and its triangular-trap
+        # negative control are exercised in CI (ARCHIVAL_FIREWALL_GATE6.md
+        # §10.12). x86_64 only by design: these are float goodness-of-fit
+        # probes, and float is not bit-identical across arches — the
+        # cross-arch guarantee is the integer golden vector run under qemu in
+        # depends.yml, not these probes (which pass by margin, not by
+        # determinism). The aarch64 lane deliberately builds default features
+        # only for the same reason.
+        run: cargo test --locked -p shekyl-standoff --features conformance
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip

@@ -1,0 +1,18 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-stats"
+description = "Generic goodness-of-fit instruments (Wilson-Hilferty chi-square critical value, discrete-uniform chi-square, lag-1 autocorrelation) over plain sample slices. No domain semantics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -416,9 +416,25 @@ sustainability is unaffected by the recalibration.
   `(spread, order)` *distribution* over a sample (uniform spread via
   **discrete chi-square GoF** + excess-mass-near-zero; balanced independent order — and
   order-balance alone is insufficient, since the trap's coin still looks fair).
-  Executable reference already landed: `draw_entry_gap` / `summarize_gaps` +
-  `correct_draw_is_well_distributed` / `double_jitter_trap_fails_the_same_check`
-  in `rust/shekyl-staking-sim/src/standoff.rs`. **"Uniform-*independent*" has two
+  Executable reference single-sourced into `rust/shekyl-standoff` (2026-06-16):
+  the float-free `draw::draw_entry_gap` (default features, wallet-importable) +
+  the feature-gated `conformance` instruments (`summarize_gaps`,
+  `population_bond_time`, `max_bin_share`, the double-jitter trap) and the
+  RNG-generic `conformance::certify_draw<R: GapRng>` self-cert harness; the
+  generic goodness-of-fit primitives (`chi_square_upper_crit`, `Z_ALPHA_1E6`,
+  discrete-uniform chi-square, `lag1_autocorr`) live in the dependency-free
+  `rust/shekyl-stats`. The published test vector is split along the determinism
+  boundary: `tests/golden_vector.rs` (default features, the **integer**
+  `(spread, order)` sequence — bit-identical and verified on the aarch64
+  qemu-user lane), and `tests/conformance_grading.rs` (`conformance` feature,
+  the float grading — **x86-only**, because float is not bit-identical across
+  arches; the lane's cross-arch guarantee is the integer sequence, the float
+  stats are graded by margin). **Framing: conformance is wallet self-test, not
+  consensus enforcement** — the anchor is consumer-side and FCMP++-hidden, so
+  nothing on-chain can police the draw; the population/anchor instrument
+  demonstrates "here is what a shared anchor does to you" (paired with the
+  operator-education item), and `certify_draw` is the tool a wallet runs against
+  *its own* CSPRNG. **"Uniform-*independent*" has two
   independence dimensions a marginal gap test cannot see, both now in the suite:**
   (i) **population anchor-independence** — the catastrophic shared-trigger mode
   (epoch-snapped anchors pass the gap test but cluster absolute bond times → set
@@ -445,13 +461,27 @@ sustainability is unaffected by the recalibration.
   of cooldown = 0.06 epoch additional availability latency. Weaker cover per unit
   latency than the entry seam (600-block search width, not 1200) — so the
   thin-regime gap-toward-max bias matters more here.
-  (3) **Cold-start weak-cover residual (pre-seal, tied to L12).** Thinnest genesis
-  traffic + longest-lived foundational `P`s coincide. **Decision to record before
-  seal:** accept documented weak early-`P` cover, *or* foundation-inject decoy
-  funding (a foundation-trust/centralization cost that is *self-undercutting* —
-  foundation decoys are attributable and thus discounted by a sophisticated
-  adversary, per carry 4). Lean: document the residual; no non-attributable decoy
-  source exists short of reopening confidential staking (S-5).
+  (3) **Cold-start weak-cover residual (pre-seal, tied to L12). RATIFIED 2026-06-16:
+  accept documented weak early-`P` cover for V3.0.** Thinnest genesis traffic +
+  longest-lived foundational `P`s coincide, so the entry-seam cover is at its
+  structural worst case at cold start. The alternative — foundation-inject decoy
+  funding — was rejected because it is **self-undercutting**: foundation decoys are
+  attributable and thus discounted by a sophisticated adversary (carry 4), so the
+  injection buys a foundation-trust/centralization cost for cover that the very
+  adversary it targets can subtract back out. No **non-attributable** decoy source
+  exists short of reopening confidential staking (S-5), which is closed. The residual
+  is **bounded and self-resolving**: it is a transient of the cold-start window —
+  cover strengthens monotonically as organic funding traffic accrues, so the weak
+  period is finite, not a standing property. **Disposition:** ship V3.0 with the
+  documented residual; do **not** add decoy-injection machinery (a permanent attack
+  surface and trust cost for a finite problem, per
+  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
+  criterion (rule-21):** only if carry-4's testnet **effective**-cover measurement shows
+  the cold-start residual is *not* self-resolving (cover does not strengthen with
+  organic traffic as modeled) **and** a non-attributable cover source becomes available
+  (which today requires reopening S-5). Operator-facing consequence: the earliest
+  foundational `P`s carry the thinnest cover and should be the most opsec-conservative —
+  routed to the operator-opsec guide, not a protocol change.
   (4) **Effective-vs-nominal cover (testnet, S-3 modeled observer).** The sim
   measures *nominal* cover under honest Poisson traffic — an upper bound. Testnet
   must probe **effective** cover against an observe-and-inject adversary, and must
@@ -461,6 +491,35 @@ sustainability is unaffected by the recalibration.
   `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
   caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
   1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+
+- **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
+  importable surface; 2026-06-16).** The `shekyl-standoff` crate is now
+  wallet-importable (default-feature `draw_entry_gap`, CSPRNG-ready via the
+  `GapRng` trait, self-cert harness under `conformance`), but the V3.0 funding
+  flow is unbuilt, so there is **no wallet call site yet** — this is the
+  tracking item so the wiring is not lost. **Feature split, spelled so the
+  wiring is unambiguous:** the wallet's **production build depends on
+  `shekyl-standoff` with default features** (draw only — float-free, zero
+  cast-allows, the lean production surface); **self-certification runs in the
+  wallet's test build with `features = ["conformance"]` as a dev-feature**,
+  which is where `certify_draw` and the negative-control harnesses
+  (`reference_correlated_sequence`, `shared_anchor_population`) are available.
+  Lands with the funding flow. **Target: V3.0** (with the funding flow).
+
+- **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
+  sensitivity need (separate question; 2026-06-16).** The dedup that moved
+  `chi_square_upper_crit` + `Z_ALPHA_1E6` out of `crypto-pq/label.rs` into
+  `shekyl-stats` is **byte-identical** — `label.rs`'s indistinguishability test
+  keeps the exact `1e-6` it had. But `1e-6` is the **conformance-gate** alpha
+  (chosen strict so a *correct wallet* essentially never false-fails a gross
+  antipattern). Whether `1e-6` is the right alpha for `label.rs`'s
+  uniformity-of-ciphertext test is a **different** question: a guard against
+  *subtle* derivation bias wants a **more powerful (less strict)** alpha, since
+  `1e-6` only rejects gross non-uniformity. If the label test's `1e-6` was
+  inherited by copying the standoff helper rather than chosen for its own
+  sensitivity need, that should be examined — flagged here so canonicalizing the
+  constant in `shekyl-stats` does not silently launder an unexamined alpha
+  choice. **Not the dedup PR's scope. Target: V3.x.**
 
 - **`HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope + pre-seal
   sim reconciliation (decided 2026-06-15).** The full bond lifecycle
@@ -546,9 +605,88 @@ sustainability is unaffected by the recalibration.
   can't backfill fast); (ii) **wallet-conformance guard (candidate, wallet-side, V3.1):** warn
   or refuse a `HoldingsUpdate` drop whose freed capital is visibly being redeployed within the
   cooldown — same conformance posture as the standoff draw above. **Target: V3.0 — closed for
-  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur). Cross-refs:
+  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur).
+  **Correction (faithful-freeze, Copilot PR#148 #4/#5, 2026-06-16):** the freeze model above
+  was one epoch too lenient *and* let `best_response` recycle a dropped bond in the same epoch
+  (the drop-to-reallocate move finding (d) claimed was precluded). The fix pre-charges held
+  deep collateral so a same-epoch drop cannot refund a fresh acquisition (pre-charge + escrow
+  span the full `RELEASE_COOLDOWN_EPOCHS`; `c0` arms stay byte-identical). **Calibration is
+  unchanged** — both models clear every `c2` gate, so `RELEASE_COOLDOWN = 2`, `r_target_deep =
+  floor + 1`, `age_weight = 3`, and the no-foundation-widening disposition all stand; the
+  binding `committed_deep_under` only *improves* (`0.0138 → 0.0000`), strengthening the seal.
+  Two findings above are superseded: the finding-(d) `c4` "cliff" was an **artifact** of the
+  spurious churn (gone; floor holds at `6` at `c4`, churn flat across all cooldown durations),
+  confirming the finding-(c)/rationality-preclusion thesis in the budget arithmetic; and
+  finding (c)'s "no market lever buys slack" no longer holds — see the new mid-band-lever item
+  below. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation". Cross-refs:
   `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
   `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+  **Closure (adversarial-dodge two-leg seal, 2026-06-16):** the faithful fix left the seal on
+  the rational (good-actor / lower-bound) leg only, under which the cooldown is *inert* — so a
+  bad-actor / upper-bound leg was built (`dodge_pref`: a non-cooldown-aware operator that
+  *wants* the drop-and-refund dodge). On the committed channel the dodge premise **inverts**:
+  at `c0` the dodge is pure churn with **no** committed-coverage harm (`oMinCmtR` holds at `6`,
+  instant re-seat); at `c2` the cooldown *causes* the only committed breach in the sweep
+  (`oMinCmtR 6 → 4`, 37 % capital stranded) — defeating the dodge by stranding capital costs
+  more coverage than the dodge. **The coverage defense is the L9 retention lock, not the
+  cooldown** (every `ship`/locks-on arm holds `oMinCmtR = 7` at both `c0` and `c2`). Corrected
+  mechanism: the cooldown is a **cost/deterrent** (Pin 3 anti-dodge property, *demonstrated*
+  not asserted), **complementary** to the retention lock, not a coverage protector; **alone
+  (`nolock`) it backfires.** Two-leg seal holds against the `ship` config: good-actor costless,
+  bad-actor bounded-safe (`oMinCmtR 7`, `frzCo 0.107`, no breach). **New load-bearing
+  operating-envelope constraint + rule-21 reopen:** never ship the cooldown without the L9
+  retention lock; if `BOND_DURATION_AGE_SCALE`/`BOND_DURATION_BASE → 0` the cooldown's coverage
+  effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
+  shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
+
+- **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
+  floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened
+  economics finding 6 with an apparent emergent 7th replica at `age_weight ≥ 7`, and the
+  pre-seal lean was to price it into genesis. A fine characterization sweep (`hu_cushion_*`
+  in `scenarios.rs`: `age_weight` 3→8 × three seeds) refuted that lean and was ratified:
+  - **The 7th replica is seed-dependent, not a cushion.** Across seeds `{0x5EED_1234,
+    0x5EED_2222, 0x5EED_9999}`, `oldest_min_committed` reaches 7 in only **two of three**
+    worlds at any `age_weight ≥ 5`; seed `0x5EED_2222` never reaches 7 even at `age_weight = 8`.
+    A replica that one realization in three does not have is not slack the network can lean on.
+  - **The lever is inert on the metrics that matter.** `committed_deep_under` is already
+    `0.0000` at `age_weight = 3` (the deep band is fully covered without the lever), and
+    `gini_actor_window` (0.1942) and `max_actor_share_window` (0.0190) are flat across the
+    entire 3→8 range — confirming `age_weight` is a redistribution knob, not an emission
+    scaler, with no concentration cost *and* no dependable benefit here.
+  So the lever moves no genesis number, costs nothing to leave alone, and buys no reliable
+  redundancy. **Disposition: genesis keeps `age_weight = 3`, `r_target_deep = floor + 1`, no
+  cushion** — the same minimal posture economics finding 6 reached "by construction" (correct
+  in practice even though the mechanism was reopened). **Reopen criterion (rule-21):** only if
+  (a) a newly-discovered friction erodes the deep band below `floor + 1`, *and* (b) a sweep
+  shows the 7th replica robust across seeds at a tolerable concentration cost — both required,
+  not either. Closed for V3.0; not deferred to V3.1 (there is nothing to defer — the lever
+  was characterized and declined, not postponed). Cross-refs: `STAKER_ARCHIVAL_SIM.md`
+  §L18 finding 6 + "Faithful-freeze reconciliation".
+
+- **Staker-archival settings are FROZEN; the remaining work is the operator experience, not
+  the parameters (decision, 2026-06-16).** Five independent stress passes — the overstated
+  model, the faithful-freeze model, the dodge sweep, the lever sweep, and the cooldown sweep —
+  all converge on the same result: **the system holds at the existing genesis settings**
+  (`RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_deep = availability_floor + 1`, `age_weight = 3`,
+  foundation floor unchanged), usually with more margin than the math first suggested. Not one
+  parameter moved across the entire L18/dodge/lever investigation. This is a **dependability**
+  result, not a tuning one — and dependability across a wide input range, not performance
+  across a narrow band, is the design goal. Critically, **every agent in the sim is a
+  financial wizard** (`best_response` re-optimizes every epoch, churns to chase basis points,
+  actively dodges); every harm characterized *requires* that hyperactivity (the freeze only
+  bites under churn, the dodge only exists under active rotation, the stranding only under
+  drop-to-reallocate). The real target user is the opposite — set-up-and-walk-away, i.e. **low
+  churn, the safest corner of every envelope drawn** — so the system is *more* dependable for
+  real operators than the adversarial sim suggests. **Disposition:** stop tuning the protocol
+  parameters; the seal is done. The genuine residuals all live in **operator behavior and the
+  wallet/ops surface**, where the sim is silent: (i) sane, hard-to-mis-set defaults; (ii) a
+  wallet that catches the naive footguns *before* the user inflicts them (the drop-to-reallocate
+  capital strand; the shared-anchor entry-standoff clustering — both already tracked above as
+  wallet-conformance candidates); (iii) graceful recovery from crash / restart / reorg;
+  (iv) the operator opsec + setup guide a non-wizard can complete without stranding capital.
+  **Target: V3.0 (the operator-experience work is the critical path out of Gate 6 R2, not more
+  sweeps).** Cross-refs: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm" (the honest
+  scope note), the entry-standoff wallet-conformance item above, `ARCHIVAL_FIREWALL_GATE6.md` R2.
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

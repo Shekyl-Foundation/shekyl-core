@@ -3582,6 +3582,15 @@ but four things bound the result; the first two change the meaning, not just the
   `draw_entry_gap` / `summarize_gaps` in `standoff.rs`, with `correct_draw_is_well_distributed`
   (the correct draw is flat) and `double_jitter_trap_fails_the_same_check` (the same summary rejects
   the trap) as the validating tests.
+  **Single-sourced (2026-06-16):** the executable reference has since moved out of the sim into the
+  `shekyl-standoff` crate (float-free `draw::draw_entry_gap` in the default build; the instruments
+  named here and below — `summarize_gaps`, `population_bond_time` / `max_bin_share`, `lag1_autocorr`,
+  the double-jitter trap — plus the RNG-generic `certify_draw` self-cert harness under the
+  `conformance` feature), with the generic goodness-of-fit primitives (`chi_square_uniform`,
+  `chi_square_upper_crit`, `Z_ALPHA_1E6`) in `shekyl-stats`. The sim now `impl GapRng for SplitMix64`
+  and imports the shared draw + harness; the integer `(spread, order)` golden vector is verified
+  bit-identical on the aarch64 CI lane, the float grading x86-only. See `FOLLOWUPS.md` §funding-seam
+  carry 2 and `ARCHIVAL_FIREWALL_GATE6.md` §10.12.
 - **"Uniform-*independent*" has two independence dimensions a marginal gap test cannot see — both
   must be in the conformance vector.** The uniform/trap checks above nail the *marginal*; they are
   structurally blind to *independence*, and the gap is the wrong input for both failures:
@@ -3896,3 +3905,171 @@ rather than being optional:
   the same conformance posture as the standoff draw. A drop-to-reallocate the cooldown will
   strand is a UX footgun the wallet can catch at construction time. (Tracked as a wallet-side
   follow-up; not a consensus rule.)
+
+### Faithful-freeze reconciliation (Copilot PR#148 findings #4/#5, 2026-06-16)
+
+The R-3 results above (the `0.0138` binding number, the `c4` cliff, the bracket width) were
+produced by a freeze model that was **one epoch too lenient and, worse, let a voluntary drop
+recycle its bond *within the same epoch*.** Copilot review of PR #148 surfaced both:
+
+- **The off-by-one (#5).** The release-cooldown escrow was pushed with
+  `epochs_remaining = release_cooldown_epochs` *after* `advance_epoch` ran, and
+  `advance_epoch` decrements before the next best-response — so an entry intended to freeze
+  for `C` epochs was observed frozen for only `C − 1`. The drop epoch itself was never frozen.
+- **The same-epoch recycle (#4).** Because the dropped shard's collateral was not charged in
+  the drop epoch's budget, `best_response` could **drop A and immediately fund B with A's
+  freed bond in the same epoch** — the futile *drop-to-reallocate* move that finding 3's prose
+  explicitly claimed a cooldown-aware actor "never makes." The sim's *prose* described the
+  intended FSM; the sim's *budget arithmetic* contradicted it. The freeze harm the sweep
+  measured was, in large part, the sim charging the network for an irrational move the
+  cooldown exists to prevent.
+
+**The fix (faithful freeze).** `best_response` now **pre-charges** the collateral of every
+deep shard held at epoch start: that bond seeds `used_bond`, so a same-epoch drop cannot
+refund a fresh acquisition. Pre-charge covers the drop epoch; the escrow covers the next
+`C − 1`; together they span the full `RELEASE_COOLDOWN_EPOCHS`. With
+`release_cooldown_epochs == 0` only locked shards pre-charge, so every `c0` arm stays
+byte-identical to the pre-cooldown baselines (verified: 0 numeric diffs).
+
+**The numbers move — and the move *confirms* the section's thesis rather than overturning
+it.** Re-running `--axis=holdingsupdate_cooldown` under the faithful model:
+
+| arm | before `cDeepU` | after `cDeepU` | before `harm_co` | after `harm_co` | before `oMin` | after `oMin` | before `churn` | after `churn` |
+|---|---|---|---|---|---|---|---|---|
+| `lag0_c2_s4` (genesis) | 0.0138 | **0.0000** | 0.099 | **0.000** | 6 | **6** | — | 0.157 |
+| `lag0_c2_s0` | 0.0064 | **0.0000** | 0.063 | **0.000** | 6 | **6** | — | 0.160 |
+| `lag0_c4_s0` (old "cliff") | 0.139 | **0.0000** | 0.321 | **0.000** | **5** | **6** | 0.37 | 0.157 |
+| `lag0_c4_s4` | 0.068 | **0.0000** | 0.212 | **0.000** | 6 | **6** | — | 0.157 |
+
+Three consequences, in order of importance:
+
+1. **The `c4` "cliff" was an artifact of the budget bug, not a real bifurcation.** It was the
+   sim accruing cooldown exposure on the spurious same-epoch churn; under a long cooldown the
+   bug bit hardest, which *looked* like a super-linear harm gradient. With the recycle closed,
+   churn flattens to `~0.157` at *every* cooldown duration (`c1 = c2 = c4`), and the only arm
+   with elevated churn is `c0` (`0.239`) — i.e. **the cooldown is coverage-neutral-to-mildly-
+   *protective* for rational agents, and its duration is irrelevant in this regime.** This is
+   exactly finding 3's rationality-preclusion thesis, now true in the budget arithmetic and not
+   only in the prose. `freeze_harm_causal` was already `0` (the transient detector, with its
+   positive/negative controls); now `freeze_harm_co` collapses to `0` too, because the
+   co-occurring shortage it was counting was the artifact.
+
+2. **Production calibration is unchanged; the seal is strengthened, not weakened.** Both the
+   old (artifact) model and the faithful model pass every absolute `c2` gate
+   (`committed_deep_under < 0.10`, `sole_source = 0`, `oldest_margin ≥ 0`). No gate flips
+   pass→fail; every arm is strictly safer. Therefore **every shipped genesis parameter is
+   identical under both models** — `RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_deep =
+   availability_floor + 1`, no foundation band-widening, `age_weight = 3`. The faithful model
+   passes with larger margin (binding seal number `0.0000`, not `0.0138`) and *widens* the
+   known-safe operating envelope (`c4` is now also clean), so reopen criterion (a) — "cooldown
+   past `~3` approaches `0.10`" — weakens to reassurance but is **retained conservatively**
+   pending the joint cluster pass. The disposition's headline stands: **`HoldingsUpdate` is
+   sealable at genesis with no change to `r_target_deep`.** The correction does not
+   substantially alter the calibration of the production system; it removes a pessimism that
+   was an artifact, not a margin.
+
+3. **Finding 6 is partially superseded — a mid-band lever now exists.** With the spurious
+   churn removed, the `age_weight` lever *does* buy emergent slack: at `aw7`/`aw12` the
+   committed oldest band reaches a **7th** replica (`oldest_min_committed = 7`, `oldest_margin
+   = 1`), where the artifact model kept it pinned at `6`. Genesis (`aw3`) is unchanged
+   (`oMin = 6`, `oMrg = 0`), so this moves no shipped number — but it answers the earlier "is
+   there a lever to run mid-band?" question in the affirmative under the faithful model:
+   raising the deep-tail reward premium to `~7` funds a cushion above `r_target_deep`. This is
+   a *new optimization option*, not a calibration change; it is routed to a follow-up
+   (`FOLLOWUPS.md`) rather than re-derived here, because it reopens the economics finding 6
+   closed and deserves its own pass.
+
+**Why the faithful model is kept, not the conservative artifact.** Overstatement that comes
+from a *modeling bug* (the agent making a move the modeled cooldown precludes) is not
+legitimate conservatism — it is the sim measuring the wrong thing and gating the seal on
+noise. A seal rests on a faithful model. The artifact is documented here (not hidden) so the
+audit trail shows the binding number *moved* and *why*, and so the superseded prose above
+(the `0.0138` binding figure in finding 1, the `c4` cliff in finding 2, the no-lever claim in
+finding 6) is read through this correction.
+
+### Adversarial-dodge arm — the cooldown's bad-actor seal leg (2026-06-16)
+
+The faithful fix above closed a real bug, but it left the seal resting on one leg. Under the
+faithful **cooldown-aware rational** agent the cooldown is *inert* — a rational actor never
+makes the futile drop-to-reallocate move, so it never populates the escrow, so the sim
+provides no evidence for `RELEASE_COOLDOWN_EPOCHS` at all. A reader optimizing parameters
+against the faithful-only sim would read `c2 ≡ c0` and conclude the cooldown is dead weight.
+That conclusion is wrong, because the cooldown's entire justification (P2B-7 Pin 3) was never
+about rational agents — it is the anti-dodge defense against an operator that *wants* to
+drop-and-refund to shed an aged retention obligation. The faithful model removes that agent
+from the sim, removing the only thing the parameter defends against.
+
+**Instrument.** `AgentParams.dodge_pref` / `SimConfig.dodge_pref` (`agent.rs`, `scenarios.rs`).
+`0.0` ⇒ the faithful rational agent (every prior scenario byte-identical — the **good-actor /
+lower-bound** leg). `> 0.0` ⇒ a **non-cooldown-aware** operator that over-values acquiring a
+*fresh* deep bond by an additive net-value bonus and tries to rotate held deep bonds into
+fresh ones every epoch — the **bad-actor / upper-bound** leg. The faithful pre-charge decides
+whether the attempt *succeeds*; the dodger does not plan around the cooldown. New scenarios:
+`hu_dodge_{nolock,ship}_{lag0,lag2}_{dp0,dp1}_{c0,c2}` — `nolock` disables the L9 retention
+locks (cooldown is the *sole* anti-dodge defense), `ship` is the realistic shipping
+composition (`bond_dur_age_scale = 4`).
+
+**The premise inverted on the committed channel.** The expectation was: `c0` lets the dodge
+succeed (harm rises), `c2` defeats it (harm → 0). The committed channel (the lag-immune one
+the gate reads) shows the reverse:
+
+| arm | churn | `cDeepU` | `oMinCmtR` | `frzCo` | `frzCap` |
+|---|---|---|---|---|---|
+| `nolock_lag0_dp0_c0` (rational) | 0.268 | 0.0009 | 6.0 | 0.000 | −0.000 |
+| `nolock_lag0_dp1_c0` (dodge, no cooldown) | **1.364** | 0.0005 | **6.0** | 0.000 | −0.000 |
+| `nolock_lag0_dp1_c2` (dodge, cooldown 2) | 0.962 | 0.0103 | **4.0** | 0.0625 | **0.375** |
+| `ship_lag0_dp1_c0` (dodge, locks on) | 0.214 | 0.0125 | **7.0** | 0.000 | −0.000 |
+| `ship_lag0_dp1_c2` (dodge, locks + cooldown) | 0.256 | 0.0172 | **7.0** | 0.107 | 0.047 |
+
+1. **At `c0` the dodge does not cause committed-coverage harm** — it churns 5× harder
+   (`1.364` vs the rational `0.268`) but `oMinCmtR` holds at `6.0`. With instant re-seating
+   the drop-and-refund is *churn*, not a coverage gap: the freed bond refunds the rotation the
+   same epoch, the seat is never empty on the committed channel.
+2. **At `c2` the cooldown is what *causes* the only committed breach in the sweep** —
+   `oMinCmtR 6.0 → 4.0` (gate fail) with `frzCap = 0.375` (37 % of capital stranded). The
+   pre-charge does exactly what Pin 3 says (it refuses the rotation by freezing the refunded
+   bond), but in the lock-off regime the *consequence* of stranding that capital is fewer
+   funded deep seats — the breach. **Defeating the dodge by stranding capital costs more
+   coverage than the dodge it prevents.**
+3. **The coverage defense is the L9 retention lock, not the cooldown.** In every `ship` arm
+   the lock forbids the voluntary drop, so `oMinCmtR` holds at `7.0` at *both* `c0` and `c2`;
+   the cooldown adds only a bounded `frzCo` (`0.107`) and no breach.
+
+**Corrected mechanism.** Pin 3's anti-dodge property is real — the cooldown makes
+drop-and-refund non-free — but its mechanism is a **cost / deterrent**, not a coverage
+protector. As a *sole* defense (`nolock`) it backfires; as a *complement* to the retention
+lock (`ship`) it is bounded-safe. `freeze_harm_causal` is `0.0` everywhere (even where
+`oMinCmtR` erodes), reconfirming the L18 detector split: causal/recovery_lag is the
+*transient* detector, `oldest_min_committed` is the *structural* one, and `freeze_harm_co` is
+the co-occurrence upper bound that catches the `nolock` breach the causal lower bound cannot.
+
+**The two-leg seal (the seal rests on both).** Sealed against the **`ship` config** — what
+actually ships:
+
+- **Good-actor leg** (faithful rational, `dp0`): cooldown inert-to-beneficial (churn
+  `0.268 → 0.159`), no harm. **Costless.**
+- **Bad-actor leg** (dodger, `dp1`, `ship`): gate holds (`oMinCmtR 7.0 ≥ availability_floor +
+  1`), `frzCo` bounded (`0.107`), dodge defeated. **Bounded-safe** — not costless (the
+  cooldown does freeze some capital), but no breach.
+
+**Operating-envelope constraint (load-bearing, new).** The cooldown is **not a substitute for
+the L9 retention lock** — relied on alone (`nolock`) it produces the sweep's only gate
+failure. *Reopen (rule 21):* if `BOND_DURATION_AGE_SCALE`/`BOND_DURATION_BASE` are driven to
+zero (retention locks disabled), the cooldown's coverage effect inverts and
+`RELEASE_COOLDOWN_EPOCHS` must be re-evaluated — the two parameters are coupled, not
+independent.
+
+**The honest scope — every agent in this sim is a financial wizard.** `best_response`
+re-optimizes every epoch and chases basis points; every harm characterized across five
+independent stress passes (overstated model, faithful model, dodge sweep, lever sweep,
+cooldown sweep) *requires* that hyperactivity — the freeze only bites under churn, the dodge
+only exists under active rotation, the stranding only under drop-to-reallocate. The real
+target user is the opposite: set-up-and-walk-away, i.e. **low churn, the safest corner of
+every envelope drawn here** (no freeze population, no dodge, no stranding). The convergent
+result of all five passes is a *dependability* finding, not a tuning one: **the system holds
+at the existing genesis settings, usually with more margin than the math first suggested,
+across a wide range of operator behavior up to and including an aggressive adversarial
+optimizer.** Not one parameter moved (`RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_deep =
+availability_floor + 1`, `age_weight = 3`, foundation floor unchanged). The settings are
+**frozen**; the residual risk lives in operator behavior and the wallet/ops surface, not in
+the protocol parameters — and that, not more sweeps, is where the next work belongs.

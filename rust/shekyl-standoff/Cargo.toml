@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-standoff"
+description = "Funding-seam entry-standoff draw, single-sourced and build-float-free, with feature-gated conformance instruments (docs/design/ARCHIVAL_FIREWALL_GATE6.md §10.12)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Default build is the draw only: float-free, dependency-free, the path a
+# wallet ships. `conformance` pulls the statistics utility and compiles the
+# grading + self-certification machinery (test/diagnostic only).
+default = []
+conformance = ["dep:shekyl-stats"]
+
+[dependencies]
+shekyl-stats = { path = "../shekyl-stats", optional = true }
+
+[lints]
+workspace = true
