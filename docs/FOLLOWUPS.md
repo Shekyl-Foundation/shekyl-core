@@ -687,6 +687,17 @@ sustainability is unaffected by the recalibration.
   **Target: V3.0 (the operator-experience work is the critical path out of Gate 6 R2, not more
   sweeps).** Cross-refs: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm" (the honest
   scope note), the entry-standoff wallet-conformance item above, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+  **Slice 1 landed (2026-06-17, `chore/staker-operator-guide`):** sub-item (iv), the
+  operator opsec + setup guide, is published as
+  [`docs/STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md) -- it consolidates the
+  routed residuals (the drop-to-reallocate strand, the shared-anchor funding tell, the
+  anonymity-transport/`P`-isolation opsec, and the cold-start thin-cover consequence) into
+  one authoritative, audience-scoped doc. The guide is also the **spec the V3.1 wallet
+  guards implement against** (sub-items (i) sane defaults and (ii) footgun warnings, both
+  marked `[operator-enforced until V3.1]` in the guide). Sequencing: slices (i)/(ii) attach
+  to the wallet funding/bond-construction flow (not yet built -- no wallet call site for the
+  standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
+  guide is the only currently-unblocked slice and was taken first.
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
