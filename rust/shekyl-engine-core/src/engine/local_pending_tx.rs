@@ -692,7 +692,7 @@ where
             spendable_now_total,
             pending_rebuild_total,
             not_yet_spendable_total,
-            soonest_not_yet_eligible,
+            not_yet_spendable,
         ) = self.ledger.with_ledger_block(|ledger| {
             let synced = ledger.height();
             let reference_height = if c2_active {
@@ -712,7 +712,11 @@ where
             let mut spendable_now_total: u64 = 0;
             let mut pending_rebuild_total: u64 = 0;
             let mut not_yet_spendable_total: u64 = 0;
-            let mut soonest_not_yet_eligible: Option<u64> = None;
+            // `(eligible_height, amount)` per too-fresh output, so the
+            // wait-blocks signal can account for the *subset needed to cover the
+            // shortfall* rather than just the soonest output (which alone may
+            // not suffice — that would underestimate the wait).
+            let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
             for (idx, td) in ledger.spendable_outputs(synced, None) {
                 if locked.contains(&idx) {
                     continue;
@@ -723,12 +727,9 @@ where
                 // anchors to the reference block, where the leaf is absent.
                 if let Some(rh) = reference_height {
                     if td.eligible_height > rh {
-                        not_yet_spendable_total =
-                            not_yet_spendable_total.saturating_add(amount.to_raw());
-                        soonest_not_yet_eligible = Some(
-                            soonest_not_yet_eligible
-                                .map_or(td.eligible_height, |s| s.min(td.eligible_height)),
-                        );
+                        let raw = amount.to_raw();
+                        not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
+                        not_yet_spendable.push((td.eligible_height, raw));
                         continue;
                     }
                 }
@@ -749,7 +750,7 @@ where
                 spendable_now_total,
                 pending_rebuild_total,
                 not_yet_spendable_total,
-                soonest_not_yet_eligible,
+                not_yet_spendable,
             )
         });
 
@@ -811,12 +812,27 @@ where
                 && with_rebuild < needed_raw
                 && total_matured >= needed_raw
             {
-                // The too-fresh outputs are required to cover the spend; point
-                // at the soonest-to-mature one with a wait-N-blocks signal.
-                let eligible_height = soonest_not_yet_eligible
-                    .expect("not_yet_spendable_total > 0 ⇒ a tracked eligible height");
+                // The too-fresh outputs are required to cover the spend. Report
+                // the height by which *enough* of them mature relative to the
+                // reference — accumulate (cheapest-to-mature first) until the
+                // shortfall is covered, not just the soonest output (which alone
+                // may not suffice, underestimating the wait). The
+                // `total_matured >= needed_raw` guard guarantees the loop
+                // reaches the shortfall.
                 let reference_block_height = reference_height
                     .expect("not_yet_spendable_total > 0 ⇒ C2 active ⇒ reference height set");
+                let shortfall = needed_raw.saturating_sub(with_rebuild);
+                let mut by_eligible = not_yet_spendable.clone();
+                by_eligible.sort_unstable_by_key(|&(eligible, _)| eligible);
+                let mut covered: u64 = 0;
+                let mut eligible_height = reference_block_height;
+                for (eligible, amount) in by_eligible {
+                    eligible_height = eligible;
+                    covered = covered.saturating_add(amount);
+                    if covered >= shortfall {
+                        break;
+                    }
+                }
                 SendError::OutputNotYetSpendable {
                     eligible_height,
                     reference_block_height,
@@ -974,20 +990,24 @@ where
             }
         }
 
-        // CT-5b §3.2: anchor assembly to the *real* re-derived reference root
-        // when one was bound (tree enforced, chain old enough, tree covers the
-        // reference); otherwise fall back to the tip-hash placeholder (no tree
-        // / not-yet-anchorable — the synthetic membership path, replaced by the
-        // real `assemble_path` in CT-5c, does not yet consume the full
-        // `ReferenceBlock`). The `[u8; 32]` parameter stays until CT-5c's T1.
-        let reference_root = reference.map_or(tip_hash, |r| r.curve_tree_root);
+        // CT-5b §3.2: this is `TreeContext.reference_block` — the reference
+        // block *hash* (rctSig.referenceBlock), NOT the curve-tree root (which
+        // is `TreeContext.tree_root`; conflating the two is the prover bug
+        // `shekyl-tx-builder` was created to fix). Bind the *real* reference-
+        // height block hash when a `ReferenceBlock` was resolved (tree enforced,
+        // chain old enough, tree covers the reference); else fall back to the
+        // tip-hash placeholder (no tree / not-yet-anchorable). The re-derived
+        // `curve_tree_root` is bound in the `ReferenceBlock` and feeds the
+        // synthetic `tree_root`'s replacement in CT-5c, where the real
+        // `assemble_path` lands; the `[u8; 32]` param stays until CT-5c's T1.
+        let reference_block_hash = reference.map_or(tip_hash, |r| r.block_hash);
         let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
             assemble_tx_to_sign(
                 self.network,
                 request,
                 &selected.indices,
                 ledger.transfers(),
-                reference_root,
+                reference_block_hash,
                 tree_depth,
                 fee_directive,
             )
@@ -2048,6 +2068,54 @@ mod tests {
         }
     }
 
+    /// C2 wait-blocks KAT: when *multiple* too-fresh outputs are needed to cover
+    /// the spend, `wait_blocks` must reflect the height by which **enough** of
+    /// them mature — not the soonest single output (which alone is insufficient
+    /// and would underestimate the wait). synced 15 → reference 9; output A
+    /// (eligible 11, 10_000) is too small alone for the 30_000 spend (+fee), so
+    /// B (eligible 13, 50_000) is also required → the wait is `13 − 9 = 4`, not
+    /// `11 − 9 = 2`.
+    #[tokio::test]
+    async fn output_not_yet_spendable_wait_covers_required_subset() {
+        let ledger = Arc::new(test_ledger());
+        // A: block 1 → eligible 11, 10_000. B: block 3 → eligible 13, 50_000.
+        // Fill synced to 15 so both are matured but too fresh (reference 9).
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            2,
+        );
+        populate_ledger(
+            ledger.as_ref(),
+            3,
+            vec![make_recovered_output(3, 101, 50_000)],
+            15,
+        );
+        let (_dir, tree) = tree_handle_ingested_through(15).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+        let err = pending
+            .build(standard_request(30_000))
+            .await
+            .expect_err("both too-fresh outputs are needed to cover 30_000 + fee");
+        match err {
+            SendError::OutputNotYetSpendable {
+                eligible_height,
+                reference_block_height,
+                wait_blocks,
+            } => {
+                assert_eq!(reference_block_height, 9);
+                assert_eq!(
+                    eligible_height, 13,
+                    "the binding output is B (eligible 13), not the soonest A (11)"
+                );
+                assert_eq!(wait_blocks, 4, "wait until enough matures, not the soonest");
+            }
+            other => panic!("expected OutputNotYetSpendable, got {other:?}"),
+        }
+    }
+
     /// C2 pre-maturity KAT: a curve tree is enforced but `synced = 5 <
     /// REF_ANCHOR_AGE(6)`, so `select_reference_height` returns `None` — there is
     /// no reference block to anchor a proof. The build must surface the clean
@@ -2098,11 +2166,16 @@ mod tests {
         let (_dir, tree) = tree_handle_ingested_through(20).await;
         let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
 
+        // Distinct values: `TreeContext.reference_block` is the reference block
+        // *hash*, not the curve-tree root (`tree_root`). Conflating them is the
+        // prover bug `shekyl-tx-builder` exists to prevent, so assert the hash
+        // lands in `reference_block` and the root does *not*.
         const REF_ROOT: [u8; 32] = [0x42; 32];
+        const REF_BLOCK_HASH: [u8; 32] = [0xAB; 32];
         let reference = Some(ReferenceBlock {
             height: BlockHeight(14),
             curve_tree_root: REF_ROOT,
-            block_hash: [0xAB; 32],
+            block_hash: REF_BLOCK_HASH,
         });
         let assembled = pending
             .build_assemble_sync(
@@ -2114,14 +2187,14 @@ mod tests {
                 reference,
             )
             .expect("a caught-up tree assembles a tx");
+        let tree = &assembled.tx_to_sign.fcmp_plus_plus_context.tree;
         assert_eq!(
-            assembled
-                .tx_to_sign
-                .fcmp_plus_plus_context
-                .tree
-                .reference_block,
-            REF_ROOT,
-            "the re-derived reference root is bound into the assembly, not the placeholder",
+            tree.reference_block, REF_BLOCK_HASH,
+            "the real reference block *hash* is bound into TreeContext.reference_block",
+        );
+        assert_ne!(
+            tree.reference_block, REF_ROOT,
+            "the curve-tree root must NOT land in the reference-block-hash slot",
         );
     }
 

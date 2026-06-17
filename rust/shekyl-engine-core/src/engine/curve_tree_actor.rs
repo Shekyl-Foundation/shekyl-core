@@ -584,9 +584,9 @@ impl CurveTreeHandle {
     /// ([`CurveTreeClient::root_at`]) through the actor — the CT-5b §3.2
     /// send-time re-derivation of the reference-height root (the root is never
     /// persisted; reconstructed here and bound into the
-    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)). Also the read the
-    /// CT-5a commit-6 oracle KAT uses to assert the ingest path reproduces the
-    /// consensus header root at every height. On a stopped actor returns
+    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)). Also the read-back
+    /// the CT-5a commit-6 oracle KAT uses to assert the ingest path reproduces
+    /// the consensus header root at every height. On a stopped actor returns
     /// [`CurveTreeHandleError::Unavailable`]; a height beyond the ingested tip
     /// surfaces the client's `ReferenceBeyondIngestedTip` via
     /// [`CurveTreeHandleError::Client`].
