@@ -31,6 +31,21 @@
 
 ### Changed
 
+- **wallet/scanner: `eligible_height` now floors on the output's additional
+  timelock and stake lock, not just `+SPENDABLE_AGE` (CT-5c X5, 2026-06-17,
+  `feat/ct-5c-x5-eligible-height`).** `TransferDetails::from_wallet_output`
+  previously set `eligible_height = block_height + SPENDABLE_AGE` unconditionally.
+  That undercounts for a coinbase (whose leaf is inserted into the curve tree at
+  its block-based maturity lock, not at `+SPENDABLE_AGE`) and for a staked output
+  (locked until its tier's `lock_blocks` elapse), so reference-block selection
+  could treat such an output as spendable while its leaf is still absent from the
+  tree, attempting an unprovable spend. `eligible_height` is now
+  `max(block_height + SPENDABLE_AGE, additional_timelock_block, stake_lock_until)`,
+  agreeing with the tree's insertion height. A wall-clock `Timelock::Time` is
+  enforced at consensus rather than via the tree-insertion height, so it
+  contributes no block floor. Pure derive-time change, no persisted-schema bump.
+  KATs cover the baseline, the block-timelock floor, the ignored time-timelock,
+  and the stake-lock floor.
 - **archival: verifier-set spec-level model recorded in firewall §10.4; cold-start
   weak-cover residual ratified (pre-seal decisions, 2026-06-16,
   `feat/standoff-shared-crate`).** Two doc-only pre-seal dispositions, no code or
