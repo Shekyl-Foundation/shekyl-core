@@ -461,13 +461,27 @@ sustainability is unaffected by the recalibration.
   of cooldown = 0.06 epoch additional availability latency. Weaker cover per unit
   latency than the entry seam (600-block search width, not 1200) — so the
   thin-regime gap-toward-max bias matters more here.
-  (3) **Cold-start weak-cover residual (pre-seal, tied to L12).** Thinnest genesis
-  traffic + longest-lived foundational `P`s coincide. **Decision to record before
-  seal:** accept documented weak early-`P` cover, *or* foundation-inject decoy
-  funding (a foundation-trust/centralization cost that is *self-undercutting* —
-  foundation decoys are attributable and thus discounted by a sophisticated
-  adversary, per carry 4). Lean: document the residual; no non-attributable decoy
-  source exists short of reopening confidential staking (S-5).
+  (3) **Cold-start weak-cover residual (pre-seal, tied to L12). RATIFIED 2026-06-16:
+  accept documented weak early-`P` cover for V3.0.** Thinnest genesis traffic +
+  longest-lived foundational `P`s coincide, so the entry-seam cover is at its
+  structural worst case at cold start. The alternative — foundation-inject decoy
+  funding — was rejected because it is **self-undercutting**: foundation decoys are
+  attributable and thus discounted by a sophisticated adversary (carry 4), so the
+  injection buys a foundation-trust/centralization cost for cover that the very
+  adversary it targets can subtract back out. No **non-attributable** decoy source
+  exists short of reopening confidential staking (S-5), which is closed. The residual
+  is **bounded and self-resolving**: it is a transient of the cold-start window —
+  cover strengthens monotonically as organic funding traffic accrues, so the weak
+  period is finite, not a standing property. **Disposition:** ship V3.0 with the
+  documented residual; do **not** add decoy-injection machinery (a permanent attack
+  surface and trust cost for a finite problem, per
+  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
+  criterion (rule-21):** only if carry-4's testnet **effective**-cover measurement shows
+  the cold-start residual is *not* self-resolving (cover does not strengthen with
+  organic traffic as modeled) **and** a non-attributable cover source becomes available
+  (which today requires reopening S-5). Operator-facing consequence: the earliest
+  foundational `P`s carry the thinnest cover and should be the most opsec-conservative —
+  routed to the operator-opsec guide, not a protocol change.
   (4) **Effective-vs-nominal cover (testnet, S-3 modeled observer).** The sim
   measures *nominal* cover under honest Poisson traffic — an upper bound. Testnet
   must probe **effective** cover against an observe-and-inject adversary, and must

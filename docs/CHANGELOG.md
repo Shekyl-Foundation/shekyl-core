@@ -31,6 +31,26 @@
 
 ### Changed
 
+- **archival: verifier-set spec-level model recorded in firewall §10.4; cold-start
+  weak-cover residual ratified (pre-seal decisions, 2026-06-16,
+  `feat/standoff-shared-crate`).** Two doc-only pre-seal dispositions, no code or
+  parameter change. **Verifier set (§10.4):** the bonded-verifier disposition is
+  given a concrete structural model — membership = the bonded archival staker set
+  itself (mutual oversight, no separate privileged registry), rotation =
+  consensus-seeded, per-epoch, firewall-aware (discharges the §10.4 condition-(a)
+  chokepoint structurally: no verifier accumulates a standing
+  `{.onion ↔ P ↔ shard}` view, assignments excluded where they would leak the map),
+  and the `m`-of-`n` availability margin (L14b condition (b), provisional `11/13`)
+  routed to the **Round-2 stressnet availability CDF gate** for gate-2/gate-4 to
+  ratify from measurement rather than assertion. **Cold-start residual:** ratified
+  to **accept documented weak early-`P` cover for V3.0** — decoy injection is
+  self-undercutting (foundation decoys are attributable, so a sophisticated adversary
+  discounts them) and no non-attributable source exists short of reopening confidential
+  staking (S-5, closed); the residual is a bounded, self-resolving cold-start transient
+  (cover strengthens as organic funding accrues), so V3.0 ships it documented rather
+  than adding permanent decoy-injection machinery for a finite problem. Reopen criteria
+  (rule-21) recorded on both. Cross-refs: `ARCHIVAL_FIREWALL_GATE6.md` §10.4,
+  `FOLLOWUPS.md` funding-seam entry-standoff carry (3).
 - **archival-sim: mid-band `age_weight` lever characterized and CLOSED — keep the
   minimal floor+no-cushion posture (decision, 2026-06-16,
   `feat/standoff-shared-crate`).** The faithful-freeze fix reopened economics
