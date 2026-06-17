@@ -499,6 +499,49 @@ pub enum SendError {
         /// Stringified [`CurveTreeHandleError`](super::curve_tree_actor::CurveTreeHandleError).
         detail: String,
     },
+
+    /// An output the wallet would otherwise spend is **not yet spendable at the
+    /// reference block** (C2; 2A §3.7.5, CT-5 §3.2): its `eligible_height` lands
+    /// *after* the reference height (`tip − REF_ANCHOR_AGE`), so although the
+    /// output is matured at the tip its leaf is absent from the curve tree as of
+    /// the reference block the proof anchors to. A clean wait-N-blocks signal —
+    /// **not** an opaque assembly miss. Distinct from
+    /// [`Self::SpendUnavailableRebuilding`] (tree lag, self-heals as the backfill
+    /// advances) and [`Self::InsufficientFunds`] (genuinely short): the funds
+    /// exist and the tree covers them; they are simply too fresh for the
+    /// reference anchor and become spendable as the tip advances.
+    #[error(
+        "output not yet spendable at the reference block: eligible at height \
+         {eligible_height}, reference block at {reference_block_height} \
+         (spendable in ~{wait_blocks} block(s))"
+    )]
+    OutputNotYetSpendable {
+        /// The height at which the output enters the tree (matures).
+        eligible_height: u64,
+        /// The reference-block height the proof anchors to (`tip − REF_ANCHOR_AGE`).
+        reference_block_height: u64,
+        /// Blocks the tip must still advance before the output's
+        /// `eligible_height` reaches the reference height and it becomes
+        /// spendable (`eligible_height − reference_block_height`).
+        wait_blocks: u64,
+    },
+
+    /// The chain is too short to anchor a reference block: `synced_height <
+    /// REF_ANCHOR_AGE`, so [`select_reference_height`](shekyl_curve_tree::select_reference_height)
+    /// returns `None` and no output can be proven yet (the pre-maturity window).
+    /// A clean "wait for the chain to mature" signal rather than a misleading
+    /// insufficiency; resolves on its own as the tip advances past
+    /// `REF_ANCHOR_AGE`.
+    #[error(
+        "wallet too young to spend: synced height {synced_height} is below the \
+         reference-anchor depth {ref_anchor_age} (no reference block yet)"
+    )]
+    WalletTooYoungToSpend {
+        /// The wallet's current synced height.
+        synced_height: u64,
+        /// `REF_ANCHOR_AGE` — the minimum synced height to anchor a reference.
+        ref_anchor_age: u64,
+    },
 }
 
 // --- PendingTx lifecycle ---------------------------------------------------

@@ -1540,6 +1540,15 @@ boundary).
   consume; the signer still builds synthetic paths but against the *real*
   reference selection. DoD: C2 `OutputNotYetSpendable` KAT + a §3.3
   mismatch-rejection KAT (O5).
+  **Status (2026-06-16): IMPLEMENTED** on `feat/ct-5b-reference-verify`.
+  §3.3 verify-after-ingest (production `VerifyRoot` actor message; `RootMismatch`
+  → terminal `CurveTreeIngest`), the C2 gate (`OutputNotYetSpendable` /
+  `WalletTooYoungToSpend`, three-bucket selection partition), and the send-time
+  `ReferenceBlock` binding (production `root_at` re-derivation threaded into
+  `assemble_tx_to_sign`) are landed, with both DoD KATs plus
+  `ingest_rejects_header_root_mismatch`, `output_not_yet_spendable_at_reference_block`,
+  and `reference_root_threaded_into_assembly`. The synthetic membership *paths*
+  and the raw `[u8; 32]` / free `tree_depth` params remain for CT-5c.
 - **CT-5c — assembler cutover + `synthetic_tree` deletion + type-enforced contracts
   (R1-Q5, §3.7).** Replace `signing_assembly`/`sign_bridge` synthetic vectors with
   the batch `AssembleTx` message (T3); delete `synthetic_tree`; **delete the raw

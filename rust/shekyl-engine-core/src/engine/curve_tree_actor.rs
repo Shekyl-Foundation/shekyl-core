@@ -175,17 +175,38 @@ pub(crate) struct RollbackToFork {
 /// this message.
 pub(crate) struct IngestedTipHeight;
 
-/// Test-only actor message reading [`CurveTreeClient::root_at`]: the
-/// reconstructed curve-tree root as of `height`.
+/// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
+/// the curve-tree root at `height` and require it to byte-equal the consensus
+/// header-committed `expected_root`. Replies [`ClientError::RootMismatch`] on
+/// divergence — the lying-daemon (O5) defense: the wallet refuses to advance
+/// past a tree state it ingested but cannot reproduce against the header the
+/// producer claimed.
 ///
-/// This is the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
+/// This is the compare sibling of the [`RootAt`] read-back — both are
+/// production root operations (`RootAt` returns the reconstructed root,
+/// `VerifyRoot` compares it against an expected value). It is keyed by
+/// `(height, expected_root)` rather than a full
+/// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) because ingest has no
+/// `block_hash` to anchor — the header root is the only field
+/// [`CurveTreeClient::verify_root`] consults, so this mirrors its compare
+/// without fabricating the unused field.
+pub(crate) struct VerifyRoot {
+    /// The height whose reconstructed root to check (must be `<=` ingested tip).
+    pub height: BlockHeight,
+    /// The consensus header-committed root the reconstruction must match.
+    pub expected_root: [u8; 32],
+}
+
+/// Actor message reading [`CurveTreeClient::root_at`]: the reconstructed
+/// curve-tree root as of `height`.
+///
+/// The **send-time re-derivation** of the reference-height root (CT-5b §3.2):
+/// the reference root is never persisted (derive>hold, R1-Q6) — it is
+/// reconstructed here at send time and bound into the
+/// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) the proof anchors to.
+/// Also the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
 /// `start_refresh_integration_tests`) uses to assert the engine ingest path
 /// reproduces the consensus header root at every height.
-/// It is **test-only on purpose**: the *production* root read — send-time
-/// re-derivation of the reference-height root and the §3.3 ingest-time verify —
-/// is CT-5b, not CT-5a. Promoting this to a production handle method is that
-/// commit's work, not this one's.
-#[cfg(test)]
 pub(crate) struct RootAt {
     /// The reference height whose reconstructed root to read.
     pub height: BlockHeight,
@@ -242,7 +263,31 @@ impl Message<IngestedTipHeight> for CurveTreeActor {
     }
 }
 
-#[cfg(test)]
+impl Message<VerifyRoot> for CurveTreeActor {
+    type Reply = Result<(), ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: VerifyRoot,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Mirror `CurveTreeClient::verify_root`'s compare, keyed by the header
+        // root the ingest path carries (no `block_hash` at ingest). A store
+        // error from `root_at` (e.g. `Poisoned`) propagates as-is; only a
+        // genuine divergence becomes `RootMismatch`.
+        let got = self.client.root_at(msg.height)?;
+        if got == msg.expected_root {
+            Ok(())
+        } else {
+            Err(ClientError::RootMismatch {
+                height: msg.height,
+                expected: msg.expected_root,
+                got,
+            })
+        }
+    }
+}
+
 impl Message<RootAt> for CurveTreeActor {
     type Reply = Result<[u8; 32], ClientError>;
 
@@ -503,6 +548,27 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
+    /// §3.3 ingest-time integrity verify (CT-5b): require the reconstructed
+    /// root at `height` to byte-equal the consensus header-committed
+    /// `expected_root`. A divergence collapses (via the handler) to
+    /// [`ClientError::RootMismatch`]; a stopped actor to
+    /// [`CurveTreeHandleError::Unavailable`]. This is the production root read —
+    /// the engine calls it after each ingest so the ledger never advances past
+    /// a tree state the wallet cannot reproduce against the header (O5).
+    pub(crate) async fn verify_root(
+        &self,
+        height: BlockHeight,
+        expected_root: [u8; 32],
+    ) -> Result<(), CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(VerifyRoot {
+                height,
+                expected_root,
+            })
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// Test-only: stop the underlying actor and wait for its task to end,
     /// simulating a fail-stop (the `on_panic → Break` path) without a real
     /// panic. After this returns the actor is gone and every handle call
@@ -516,12 +582,16 @@ impl CurveTreeHandle {
         actor.wait_for_shutdown().await;
     }
 
-    /// Test-only: read the reconstructed curve-tree root as of `height`
-    /// ([`CurveTreeClient::root_at`]) through the actor. The CT-5a commit-6
-    /// oracle KAT uses this to assert the engine ingest path reproduces the
-    /// consensus header root at every height. The production root read (CT-5b
-    /// send-time re-derivation / §3.3 verify) is deliberately not built here.
-    #[cfg(test)]
+    /// Read the reconstructed curve-tree root as of `height`
+    /// ([`CurveTreeClient::root_at`]) through the actor — the CT-5b §3.2
+    /// send-time re-derivation of the reference-height root (the root is never
+    /// persisted; reconstructed here and bound into the
+    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)). Also the read-back
+    /// the CT-5a commit-6 oracle KAT uses to assert the ingest path reproduces
+    /// the consensus header root at every height. On a stopped actor returns
+    /// [`CurveTreeHandleError::Unavailable`]; a height beyond the ingested tip
+    /// surfaces the client's `ReferenceBeyondIngestedTip` via
+    /// [`CurveTreeHandleError::Client`].
     pub(crate) async fn root_at(
         &self,
         height: BlockHeight,
@@ -581,6 +651,7 @@ mod tests {
         assert_send::<IngestBlock>();
         assert_send::<RollbackToFork>();
         assert_send::<IngestedTipHeight>();
+        assert_send::<VerifyRoot>();
         assert_send::<RootAt>();
         assert_send::<OwnedTxLeaves>();
     }
