@@ -734,24 +734,48 @@ where
                     continue;
                 }
                 let amount = td.amount();
-                // C2 first: an output too fresh for the reference block is not
-                // spendable even if its leaf is already in the tree — the proof
-                // anchors to the reference block, where the leaf is absent.
-                if let Some(rh) = reference_height {
-                    if td.eligible_height > rh {
-                        let raw = amount.to_raw();
-                        not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
-                        not_yet_spendable.push((td.eligible_height, raw));
-                        continue;
+                match reference_height {
+                    // C2 active: spendability is decided against the *reference*
+                    // height, not the per-output eligible height.
+                    Some(rh) => {
+                        if td.eligible_height > rh {
+                            // Too fresh for the reference block — not in the tree
+                            // there even if its leaf is already ingested.
+                            let raw = amount.to_raw();
+                            not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
+                            not_yet_spendable.push((td.eligible_height, raw));
+                        } else if tree_gate.covers(rh) {
+                            // The tree has reached the reference height, so its
+                            // root is reconstructable and every `eligible <= rh`
+                            // leaf is present at the reference block — spendable.
+                            spendable_now_total =
+                                spendable_now_total.saturating_add(amount.to_raw());
+                            candidates.push(OutputCandidate { index: idx, amount });
+                        } else {
+                            // The tree has not yet reached the reference height
+                            // (adopting / rebuilding): the reference root cannot
+                            // be reconstructed, so *no* output is provable yet —
+                            // even one whose own leaf is already ingested
+                            // (per-output coverage is necessary but not
+                            // sufficient). Self-healing as the backfill advances
+                            // to the reference height.
+                            pending_rebuild_total =
+                                pending_rebuild_total.saturating_add(amount.to_raw());
+                        }
                     }
-                }
-                // Tree coverage (CT-5 §3.2.1 D1/D3): in-tree ⇒ candidate; blocked
-                // only by the in-progress backfill ⇒ pending_rebuild.
-                if tree_gate.covers(td.eligible_height) {
-                    spendable_now_total = spendable_now_total.saturating_add(amount.to_raw());
-                    candidates.push(OutputCandidate { index: idx, amount });
-                } else {
-                    pending_rebuild_total = pending_rebuild_total.saturating_add(amount.to_raw());
+                    // No C2 reference (no curve tree): the tree gate alone
+                    // decides (`Unenforced` ⇒ covers all), preserving the
+                    // no-tree path.
+                    None => {
+                        if tree_gate.covers(td.eligible_height) {
+                            spendable_now_total =
+                                spendable_now_total.saturating_add(amount.to_raw());
+                            candidates.push(OutputCandidate { index: idx, amount });
+                        } else {
+                            pending_rebuild_total =
+                                pending_rebuild_total.saturating_add(amount.to_raw());
+                        }
+                    }
                 }
             }
             (
@@ -1958,15 +1982,17 @@ mod tests {
         }
     }
 
-    /// Once the tree has ingested up to the outputs' eligibility height the gate
-    /// is inert — and note the cursor (11) sits *below* `synced` (20), so this
-    /// also exercises the `min(synced, tree_cursor)` floor: the tree is the
-    /// binding cursor yet still covers the eligible-at-11 outputs, so the same
-    /// request that failed mid-rebuild now builds.
+    /// Once the tree has ingested up to the **reference** height the gate is
+    /// inert and the spend builds. synced 20 → reference 14; the cursor (20)
+    /// covers the reference, so its root is reconstructable and the eligible-11
+    /// outputs are present at the reference block — spendable.
     #[tokio::test]
     async fn rebuilt_tree_spends_normally() {
         let ledger = funded_ledger(); // eligible_height == 1 + SPENDABLE_AGE == 11
-        let (_dir, tree) = tree_handle_ingested_through(11).await;
+                                      // Cursor must reach the reference height (synced 20 − REF_ANCHOR_AGE 6
+                                      // = 14), not merely the outputs' eligible height — the proof anchors to
+                                      // the reference block, whose root needs the tree caught up to it.
+        let (_dir, tree) = tree_handle_ingested_through(20).await;
         let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
 
         let built = pending
@@ -1979,62 +2005,50 @@ mod tests {
         );
     }
 
-    /// D1/D3 partial-rebuild KAT: a low output (eligible 11) is already
-    /// tree-covered while a higher one (eligible 51) is still pending the
-    /// backfill (cursor at 11). A spend the low output alone can cover succeeds
-    /// — already-rebuilt low outputs stay spendable — while a spend whose
-    /// shortfall is covered *only* by the still-pending output surfaces
-    /// [`SendError::SpendUnavailableRebuilding`] with the precise split.
+    /// CT-5b gate KAT: per-output tree coverage is **necessary but not
+    /// sufficient**. An output's own leaf can be ingested (cursor ≥ eligible)
+    /// while the tree is still behind the *reference* height — and the FCMP
+    /// proof anchors to the reference block, whose root is unreconstructable
+    /// until the tree reaches it. So such an output is not spendable: the build
+    /// surfaces the self-healing `SpendUnavailableRebuilding` rather than
+    /// proceeding against the wrong (placeholder) reference. synced 20 →
+    /// reference 14; output A (eligible 11) is individually covered by cursor 11
+    /// but the tree has not reached reference 14.
     #[tokio::test]
-    async fn partial_rebuild_low_spendable_high_pending() {
+    async fn tree_behind_reference_blocks_individually_covered_output() {
         let ledger = Arc::new(test_ledger());
-        // A: block 1 → eligible 11, 50_000. Fill through 40 so A is matured.
+        // A: block 1 → eligible 11, 50_000; synced 20 → reference 14.
         populate_ledger(
             ledger.as_ref(),
             1,
             vec![make_recovered_output(1, 100, 50_000)],
-            40,
+            20,
         );
-        // B: block 41 → eligible 51, 30_000. Fill through 70 (final synced).
-        populate_ledger(
-            ledger.as_ref(),
-            41,
-            vec![make_recovered_output(2, 101, 30_000)],
-            70,
-        );
-        // Cursor at 11 covers A (11 <= 11) but not B (51 > 11).
+        // Cursor 11 covers A's own leaf (11 ≤ 11) but is below reference 14.
         let (_dir, tree) = tree_handle_ingested_through(11).await;
         let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
 
-        // A spend whose shortfall needs the still-pending output: distinct error.
-        // Run first — a failed build reserves nothing, leaving A free for the
-        // success assertion below (a successful build would lock A).
         let err = pending
-            .build(standard_request(60_000))
+            .build(standard_request(7_000))
             .await
-            .expect_err("the shortfall is covered only by the pending output");
+            .expect_err("the tree has not reached the reference height");
         match err {
             SendError::SpendUnavailableRebuilding {
-                needed,
                 spendable_now,
                 pending_rebuild,
+                ..
             } => {
-                assert!(needed >= 60_000, "needed covers the request plus fee");
-                assert_eq!(spendable_now, 50_000, "only the low output is tree-covered");
                 assert_eq!(
-                    pending_rebuild, 30_000,
-                    "the high output awaits the rebuild"
+                    spendable_now, 0,
+                    "no output is spendable until the tree reaches the reference"
+                );
+                assert_eq!(
+                    pending_rebuild, 50_000,
+                    "A awaits the tree reaching reference 14, despite its own leaf being ingested"
                 );
             }
             other => panic!("expected SpendUnavailableRebuilding, got {other:?}"),
         }
-
-        // A spend the rebuilt low output covers: builds despite B being pending.
-        let built = pending
-            .build(standard_request(7_000))
-            .await
-            .expect("the tree-covered low output stays spendable");
-        assert!(!built.tx_bytes.is_empty());
     }
 
     /// C2 KAT (2A §3.7.5, CT-5b DoD). `synced = 15` ⇒ `reference_height =
