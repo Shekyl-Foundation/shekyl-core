@@ -55,6 +55,29 @@
   guards `freeze_blocks_recoverage` against `bond_rate <= 0` (#1) and aligns the
   `oldest_margin` doc comments to the implemented `>= 0` hold-the-floor gate (#2/#3).
   Docs: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation".
+- **archival-sim: adversarial-dodge arm completes the cooldown's two-leg seal —
+  and inverts the premise on the committed channel (2026-06-16,
+  `feat/standoff-shared-crate`).** The faithful-freeze fix left the seal on one
+  leg: under the rational cooldown-aware agent the cooldown is *inert*, so the
+  sim gave no evidence for `RELEASE_COOLDOWN_EPOCHS` at all. Added
+  `AgentParams.dodge_pref` / `SimConfig.dodge_pref` and a
+  `hu_dodge_{nolock,ship}_{lag0,lag2}_{dp0,dp1}_{c0,c2}` sweep modeling a
+  **non-cooldown-aware** operator that *wants* the drop-and-refund dodge P2B-7
+  Pin 3 defends against. Result inverts the expectation on the committed channel:
+  at `c0` the dodge is pure churn (`1.364` vs rational `0.268`) with **no**
+  committed-coverage harm (`oMinCmtR` holds at `6`, instant re-seat); at `c2`
+  the cooldown *causes* the sweep's only committed breach (`oMinCmtR 6 → 4`,
+  37 % capital stranded) by freezing the refunded bond in the lock-off regime.
+  **The coverage defense is the L9 retention lock, not the cooldown** — every
+  `ship` arm (locks on) holds `oMinCmtR` at `7` at both `c0` and `c2`. Corrected
+  mechanism: the cooldown is a **cost/deterrent** (Pin 3 anti-dodge property,
+  demonstrated), *complementary* to the retention lock, not a coverage protector;
+  alone (`nolock`) it backfires. **Two-leg seal** (sealed against the `ship`
+  config): good-actor leg costless, bad-actor leg bounded-safe (`oMinCmtR 7`,
+  `frzCo 0.107`, no breach). New load-bearing operating-envelope constraint:
+  never ship the cooldown without the L9 retention lock (rule-21 reopen keyed on
+  `BOND_DURATION_AGE_SCALE`/`BASE → 0`). **No shipped parameter moved.** Docs:
+  `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
 - **standoff: the conformance grader must not certify an empty sample, and the
   conformance suite now runs in CI (Copilot PR#150, 2026-06-16,
   `feat/standoff-shared-crate`).** `grade_sample` reported `uniform_ok = true`

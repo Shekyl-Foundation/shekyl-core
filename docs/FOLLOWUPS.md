@@ -607,6 +607,23 @@ sustainability is unaffected by the recalibration.
   below. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation". Cross-refs:
   `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
   `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+  **Closure (adversarial-dodge two-leg seal, 2026-06-16):** the faithful fix left the seal on
+  the rational (good-actor / lower-bound) leg only, under which the cooldown is *inert* — so a
+  bad-actor / upper-bound leg was built (`dodge_pref`: a non-cooldown-aware operator that
+  *wants* the drop-and-refund dodge). On the committed channel the dodge premise **inverts**:
+  at `c0` the dodge is pure churn with **no** committed-coverage harm (`oMinCmtR` holds at `6`,
+  instant re-seat); at `c2` the cooldown *causes* the only committed breach in the sweep
+  (`oMinCmtR 6 → 4`, 37 % capital stranded) — defeating the dodge by stranding capital costs
+  more coverage than the dodge. **The coverage defense is the L9 retention lock, not the
+  cooldown** (every `ship`/locks-on arm holds `oMinCmtR = 7` at both `c0` and `c2`). Corrected
+  mechanism: the cooldown is a **cost/deterrent** (Pin 3 anti-dodge property, *demonstrated*
+  not asserted), **complementary** to the retention lock, not a coverage protector; **alone
+  (`nolock`) it backfires.** Two-leg seal holds against the `ship` config: good-actor costless,
+  bad-actor bounded-safe (`oMinCmtR 7`, `frzCo 0.107`, no breach). **New load-bearing
+  operating-envelope constraint + rule-21 reopen:** never ship the cooldown without the L9
+  retention lock; if `BOND_DURATION_AGE_SCALE`/`BOND_DURATION_BASE → 0` the cooldown's coverage
+  effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
+  shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
 
 - **Mid-band `age_weight` lever — emergent cushion above `r_target_deep` (surfaced by the
   faithful-freeze fix, 2026-06-16).** Under the corrected L18 model (no spurious same-epoch
@@ -625,6 +642,31 @@ sustainability is unaffected by the recalibration.
   keep the minimal floor+no-cushion posture. **Target: V3.0 pre-seal (decision), or V3.1
   (if the minimal posture is kept and the cushion is deferred).** Cross-refs:
   `STAKER_ARCHIVAL_SIM.md` §L18 finding 6 + "Faithful-freeze reconciliation".
+
+- **Staker-archival settings are FROZEN; the remaining work is the operator experience, not
+  the parameters (decision, 2026-06-16).** Five independent stress passes — the overstated
+  model, the faithful-freeze model, the dodge sweep, the lever sweep, and the cooldown sweep —
+  all converge on the same result: **the system holds at the existing genesis settings**
+  (`RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_deep = availability_floor + 1`, `age_weight = 3`,
+  foundation floor unchanged), usually with more margin than the math first suggested. Not one
+  parameter moved across the entire L18/dodge/lever investigation. This is a **dependability**
+  result, not a tuning one — and dependability across a wide input range, not performance
+  across a narrow band, is the design goal. Critically, **every agent in the sim is a
+  financial wizard** (`best_response` re-optimizes every epoch, churns to chase basis points,
+  actively dodges); every harm characterized *requires* that hyperactivity (the freeze only
+  bites under churn, the dodge only exists under active rotation, the stranding only under
+  drop-to-reallocate). The real target user is the opposite — set-up-and-walk-away, i.e. **low
+  churn, the safest corner of every envelope drawn** — so the system is *more* dependable for
+  real operators than the adversarial sim suggests. **Disposition:** stop tuning the protocol
+  parameters; the seal is done. The genuine residuals all live in **operator behavior and the
+  wallet/ops surface**, where the sim is silent: (i) sane, hard-to-mis-set defaults; (ii) a
+  wallet that catches the naive footguns *before* the user inflicts them (the drop-to-reallocate
+  capital strand; the shared-anchor entry-standoff clustering — both already tracked above as
+  wallet-conformance candidates); (iii) graceful recovery from crash / restart / reorg;
+  (iv) the operator opsec + setup guide a non-wizard can complete without stranding capital.
+  **Target: V3.0 (the operator-experience work is the critical path out of Gate 6 R2, not more
+  sweeps).** Cross-refs: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm" (the honest
+  scope note), the entry-standoff wallet-conformance item above, `ARCHIVAL_FIREWALL_GATE6.md` R2.
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

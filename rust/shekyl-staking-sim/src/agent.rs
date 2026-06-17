@@ -73,6 +73,23 @@ pub struct AgentParams {
     /// into a replacement seat — the optimism the pre-L18 model carried. `0` ⇒ instant
     /// redeploy (every pre-L18 scenario, byte-identical).
     pub release_cooldown_epochs: u32,
+    /// **L18 adversarial-dodge preference** (the cooldown's *bad-actor* / upper-bound seal
+    /// leg). `0` ⇒ the faithful cooldown-aware rational agent (the good-actor / lower-bound
+    /// leg — under it the cooldown is correctly inert because a rational actor never makes
+    /// the futile drop-to-reallocate move). `> 0` models a **non-cooldown-aware** operator
+    /// that *wants* the drop-and-refund dodge P2B-7 Pin 3's cooldown defends against: it
+    /// over-values acquiring a **fresh** deep bond (chasing the next reward / shedding an
+    /// aged retention obligation) by this additive net-value bonus, so under the capital-
+    /// and capacity-tight lean point it tries to drop a held deep shard and refund the bond
+    /// into a fresh one *every* epoch, never modeling that the freed collateral is frozen.
+    /// It does not plan around the cooldown — the faithful budget enforcement (frozen-
+    /// capital subtraction + epoch-start pre-charge in `best_response`) is what decides
+    /// whether the attempt *succeeds*: at `release_cooldown_epochs == 0` the freed bond
+    /// refunds the rotation in the same epoch (the dodge succeeds, the deep tail churns);
+    /// at `> 0` the pre-charge strands the freed bond and the rotation is refused (the
+    /// dodge is defeated, the tail is held). This is the agent the seal must hold against,
+    /// not only the rational one that never dodges.
+    pub dodge_pref: f64,
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -178,7 +195,21 @@ fn best_response(
             let dur = bond_duration(age, ap.bond_dur_base, ap.bond_dur_age_scale) as f64;
             cost += ap.lock_anticipation * dur * ap.storage_unit_cost;
         }
-        ranked.push((s, value - cost, deep, bond_cost(age)));
+        // L18 adversarial-dodge preference (bad-actor seal leg): a non-cooldown-aware
+        // dodger over-values acquiring a *fresh* deep bond (one it does not already hold)
+        // by `dodge_pref`, modeling the obligation-shedding / drop-and-refund incentive —
+        // it would rather rotate its capital into a new deep seat (fresh reward) than retain
+        // an aged one. Under the capital-tight lean point this ranks fresh deep above held
+        // deep, so the greedy fill below tries to drop a held deep shard and refund the bond
+        // into the fresh one. Whether that *succeeds* is decided downstream by the faithful
+        // budget (the pre-charge freezes the dropped collateral under a live cooldown), not
+        // here. `0` for the rational agent ⇒ this term vanishes ⇒ byte-identical ranking.
+        let dodge_bonus = if deep && !held && ap.dodge_pref > 0.0 {
+            ap.dodge_pref
+        } else {
+            0.0
+        };
+        ranked.push((s, value - cost + dodge_bonus, deep, bond_cost(age)));
     }
     // Highest net first.
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
