@@ -4,6 +4,22 @@
 
 ### Added
 
+- **docs: publish the staker-operator opsec + setup guide
+  (`docs/STAKER_OPERATOR_GUIDE.md`, 2026-06-17, `chore/staker-operator-guide`).**
+  First slice of the operator-experience work unit (the post-seal pivot: the
+  staker-archival parameters are frozen; the remaining risk lives in operator
+  behavior, where the sim is silent). The guide consolidates the residuals the
+  design rounds routed to operator education into one audience-scoped doc: the
+  drop-to-reallocate capital strand (freed collateral is frozen for the 2-epoch
+  release cooldown -- do not drop a shard to fund another within it), the
+  shared-anchor funding tell (let the wallet draw the uniform-independent entry
+  gap; do not batch/schedule/hand-roll it), the anonymity-transport and
+  `P`↔principal isolation opsec (loud refusal, never clearnet fallback), and the
+  cold-start thin-cover consequence (earliest operators carry the thinnest entry
+  cover and must be the most conservative). The guide is also the **spec the V3.1
+  wallet-conformance guards implement against**; items it can only ask the
+  operator to self-enforce today are marked `[operator-enforced until V3.1]`.
+  Cross-refs: `FOLLOWUPS.md` (operator-experience item, slice 1 landed).
 - **archival: single-source the funding-seam entry-standoff draw into
   `shekyl-standoff` + generic goodness-of-fit primitives into `shekyl-stats`
   (2026-06-16, `feat/standoff-shared-crate`).** First slice of the
