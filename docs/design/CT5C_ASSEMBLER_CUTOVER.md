@@ -63,7 +63,7 @@ The producer is [`CurveTreeClient::assemble_path`](../../rust/shekyl-curve-tree/
 The engine consumes it through a trivial field copy:
 
 | curve-tree (public, no secrets) | tx-builder (signer-facing) | shape |
-|---|---|---|
+| --- | --- | --- |
 | `ChunkLeaf { output_key, key_image_gen, commitment, h_pqc }` | `LeafEntry { output_key, key_image_gen, commitment, h_pqc }` | 4 × `[u8;32]` |
 | `TreeContext { reference_block, tree_root, tree_depth }` | `TreeContext { reference_block, tree_root, tree_depth }` | identical |
 | `AssembledPath.c1_layers / c2_layers` | `TxInputSigningContext.c1_layers / c2_layers` | `Vec<Vec<[u8;32]>>` |
@@ -132,16 +132,24 @@ real depth must be read **before** selection, not derived from the assembled
 path. T2 is satisfied at the signer boundary (the path carries depth), but the
 fee path needs its own pre-assembly read.
 
-**Why this is safe and consistent.** Depth at a *fixed historical*
-`reference_height` is invariant under forward ingest: a block at height `h >
-reference_height` only creates outputs whose maturity is `≥ h + 10 >
-reference_height`, so they never drain into the tree as-of `reference_height`.
-Depth at `reference_height` changes only on a rollback *below* `reference_height`
-— which invalidates the reference itself (the proof would be re-anchored,
-CT-5d). Therefore the pre-selection depth and `paths[0].tree.tree_depth` are
-**provably equal whenever the reference is valid**; the fold (step 6) asserts
-equality as a defense-in-depth tautology (DoS-never-theft: a mismatch means the
-tree moved under a reference it should not have, so refuse — never sign).
+**Why this is safe and consistent.** Two independent properties make the
+pre-selection depth and the assembled depth equal:
+
+1. *Same height, stable count.* Depth at a *fixed historical* `reference_height`
+   is invariant under forward ingest: a block at height `h > reference_height`
+   only creates outputs whose maturity is `≥ h + 10 > reference_height`, so they
+   never drain into the tree as-of `reference_height`. The count `n` changes only
+   on a rollback *below* `reference_height` — which invalidates the reference
+   itself (the proof would be re-anchored, CT-5d).
+2. *Same function of `n`.* The pre-selection depth is `layer_count_for_leaves(n)`
+   and the assembled depth is `build_layers(<the n leaves>).len()`; both are the
+   same deterministic function of `n` (Q1), pinned equal by the
+   `layer_count_for_leaves` drift KAT.
+
+Therefore the two depths are **provably equal whenever the reference is valid**;
+the fold (step 6) asserts equality as a defense-in-depth tautology
+(DoS-never-theft: a mismatch means the tree moved under a reference it should not
+have, so refuse — never sign).
 
 This finding is **new scope** beyond the umbrella doc's T1/T2/T3 and is the
 reason a combined root+depth read (Q1) is introduced rather than reusing the
@@ -156,17 +164,67 @@ bare `root_at`.
 Add a `RootAndDepthAt { height } -> (root: [u8;32], depth: u8)` actor message and
 a `CurveTreeHandle::reference_root_and_depth` method; `build`'s reference-binding
 uses it in place of the bare `root_at` await — one snapshot, one round-trip, both
-values pinned to the same `reference_height`. The client gains
-`root_and_depth_at(height)`; the existing `root_at` becomes a thin wrapper that
-discards depth, so the **CT-5a oracle KAT** (which asserts the ingest path
-reproduces the consensus header root and consumes `RootAt`) is left untouched.
-Depth is `build_layers(...).len()` — the exact same reconstruction
-`assemble_path` uses, so equality with the assembled depth is by construction,
-not by a parallel formula that could drift.
+values pinned to the same `reference_height`.
+
+**Why read exact depth at all (the privacy reason, not the performance one).**
+The un-enumerated alternative is *don't read depth*: over-estimate the fee with a
+max-depth assumption, assemble, take the real depth from the path, accept a small
+overpay. It is correctly avoidable — but the binding reason is **not** round-trips
+or waste. Fee is **on-chain-visible**, and a systematically conservative fee is a
+**non-canonical** fee: a wallet that pays above the canonical weight-derived
+amount is fingerprintable as *this* wallet implementation. Exact depth → canonical
+fee → privacy-aligned ([`00-mission`](../../.cursor/rules/00-mission.mdc) #2,
+privacy is the product, dominates the performance argument). This rationale is
+recorded so a future reader does not "optimize away" the read on a performance
+ledger that misses the privacy cost.
+
+**Source-verification result (Q1 pin — the framing in an earlier draft was
+wrong).** An earlier draft claimed `root_at` materializes the full layer vector,
+so `depth = layers.len()` is free and `root_at` could become a thin discard-wrapper
+of a cached root. **Verified false at source:**
+
+- `CurveTreeClient::root_at` ([`client.rs:709`](../../rust/shekyl-curve-tree/src/client.rs))
+  is the **store hot path** — `self.store.root_at_count(n)`, which composes frozen
+  per-segment roots `R_k` with a freshly-built tail
+  ([`mixed_composition_root`](../../rust/shekyl-curve-tree/src/store/redb_backend.rs#L636)).
+  It does **not** build the whole tree's layer vector.
+- `assemble_path` ([`assemble.rs:85,99`](../../rust/shekyl-curve-tree/src/assemble.rs))
+  *does* build layers (`build_layers(assemble_leaf_stream(..))`) for branch
+  extraction, and takes `depth = layers.len()` from that — but the root it gates
+  on still comes from the store `root_at` hot path, not from the rebuilt layers.
+
+So depth is free from **neither** path. The correct framing:
+
+- **Depth is a pure function of the leaf count `n`** (it depends only on how many
+  times `n` reduces through the fixed `chunk_width` ladder, never on leaf values).
+- The combined read computes **`n` exactly once** —
+  `n = drained_leaf_count_at(drained_through(height))`, already the input to
+  `root_at_count` — and derives **both** the root (`root_at_count(n)`) and the
+  depth from that same `n`. **The single source of truth is `n`, not a shared
+  layer build.** Two reads keyed on one `n` cannot disagree about which tree state
+  they describe.
+- Depth derivation gets a new pure function `layer_count_for_leaves(n) -> u8` in
+  `shekyl_fcmp::tree`, **next to `build_layers` and reusing the same `chunk_width`
+  primitive**, pinned by a KAT asserting
+  `layer_count_for_leaves(n) == build_layers(<n leaves>).len()` across a range of
+  `n`. That KAT is the drift guard — it is exactly the off-by-one risk that
+  rejected the ad-hoc `ceil(log_width(n))` formula, now closed by pinning the
+  derivation to `build_layers` in one place rather than re-deriving widths.
+
+**Single-reconstruction pin (Q1).** `RootAt` and `RootAndDepthAt` must both sit on
+the *one* `root_at_count(n)` reconstruction — `RootAndDepthAt` returns
+`root_at_count(n)` paired with `layer_count_for_leaves(n)`, while `RootAt` returns
+`root_at_count(n)` alone (depth dropped). The
+existing `root_at` is **unchanged** (the CT-5a oracle KAT that consumes `RootAt`
+is untouched), and neither message recomputes the root by an independent route. So
+the two messages share the root reconstruction (`root_at_count`) and the depth
+function is single-sourced in `shekyl_fcmp` — no parallel-formula drift on either
+value.
 
 *Rejected:* a separate `DepthAt` message (two round-trips, two reads at one
-height) and a cheap `ceil(log_width(leaf_count))` depth (risks off-by-one vs.
-`build_layers`, would need its own equality KAT).
+height); the max-depth over-estimate (non-canonical fee, above); a cheap
+`ceil(log_width(n))` depth re-derived inline (the drift risk the
+`layer_count_for_leaves` + KAT closes by construction).
 
 ### Q2 — where the batch lives: **actor-handler loop**
 
@@ -175,10 +233,33 @@ No client-side batch method. The actor message
 loops `assemble_path` per input **inside one handler invocation**. kameo
 processes messages serially, so no `IngestBlock` / `RollbackToFork` can interleave
 mid-assembly — the E1 read-atomicity hazard is structurally unrepresentable (the
-handler is the snapshot), with no new client API surface. The
+handler is the snapshot), with no new client API surface.
+
+**The tradeoff, named explicitly** (the thing a reviewer will ask about): the loop
+**blocks the actor for the whole assembly duration** — up to `MAX_INPUTS`
+iterations, each a `build_layers` over the in-memory entries vec — so no ingest
+makes progress while a tx assembles. That is acceptable here: wallet ingest is not
+latency-critical, and `MAX_INPUTS` bounds the stall to a small constant. Trading
+"ingest progress during assembly" for **free atomicity** is the right call under
+privacy/correctness > performance.
+
+*Un-enumerated alternative — per-input dispatch with a snapshot-epoch token.* Each
+`AssembleInput` would carry the tree generation it was selected against; the actor
+rejects the call on a generation change, letting `IngestBlock` interleave between
+inputs. This is the design to reach for *if* ingest-progress-during-assembly
+mattered. It does not (above), and it trades the structural atomicity for a
+runtime check — so the handler-loop dominates. Recorded so the reversion has its
+story if ingest latency ever becomes load-bearing.
+
+**Bound at the actor boundary, not only engine-side (Q2 refinement).** The
 `MAX_INPUTS` bound (from `shekyl-tx-builder` / `shekyl-fcmp` — note the umbrella
 doc's `FCMP_MAX_INPUTS_PER_TX` is an approximate name; the real constant is
-`MAX_INPUTS`) is checked engine-side before dispatch.
+`MAX_INPUTS`) is checked engine-side before dispatch **and re-checked in the
+`AssembleTx` handler**, rejecting `inputs.len() > MAX_INPUTS` before the loop. If
+the engine check were the only guard, a future caller or a bug could dispatch an
+over-length `AssembleTx` and spin the handler unbounded — a DoS-on-self that
+stalls the actor. The bad state is made unrepresentable at the actor boundary, not
+merely upstream of it.
 
 *Rejected:* a `CurveTreeClient::assemble_tx` batch method — it would add API
 surface for an atomicity guarantee the actor already provides via serial
@@ -202,10 +283,43 @@ pub struct AssembleInput {
 
 After resolving by `gindex`, the leaf's `(output_key, commitment)` is **hard-checked**
 against `identity`; a mismatch returns a new `ClientError::IdentityMismatch {
-gindex }` and refuses to build. A gindex that resolves to an unexpected output
-means store corruption or scanner/tree desync — fail loudly rather than assemble
-a wrong-leaf proof (DoS-never-theft, mirroring `OutputNotDrained`). The `(O, C)`
-content-match is deleted from the owned-output path.
+gindex }` and refuses to build (DoS-never-theft, mirroring `OutputNotDrained`).
+The `(O, C)` content-match is deleted as the *resolution* mechanism on the
+owned-output path, but retained as a *verification* of the gindex resolution.
+
+**What this check actually guards (the real finding under Q3).** Calling it
+"defense-in-depth against store corruption" undersells it. Gindex totality rests
+on an inter-component invariant: the curve tree's `next_output_seq` numbering is
+**identical** to the scanner's `global_output_index` numbering. **No single
+component owns that invariant** — the tree assigns gindex in consensus drain
+order, the scanner assigns `global_output_index` independently, and CT-5c makes
+them the resolution key. The `(O, C)` hard-check is its **only runtime guard**.
+The classic way the two numberings silently diverge is a **new output class
+entering the tree and shifting the count** — coinbase already forced exactly this
+alignment (X5); bond-post / archival outputs are the next candidates. So the check
+is load-bearing against a foreseeable future change, not just against disk rot.
+
+**Two records that follow from this:**
+
+- **Strengthen the X3 KAT beyond "resolves to the correct `gindex`."** Add a
+  *numbering-equivalence-across-output-classes* case: a block mixing coinbase,
+  regular, and (when it lands) bond-post outputs, asserting tree `gindex` ==
+  scanner `global_output_index` for **each**. The "no collision case to test"
+  framing (X3 §5.1) is true for *collisions* but skips the invariant that is
+  actually load-bearing — the cross-component numbering equivalence.
+- **Reopening trigger ([`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+  style).** *Any new output class that enters the curve tree must re-verify
+  `global_output_index ↔ tree gindex` equivalence before merge.* This is recorded
+  as a standing precondition (and added to `FOLLOWUPS.md` at slice close) precisely
+  because it is the "same until someone adds a class" gap that bites later.
+
+**Honesty boundary — do not over-credit the check.** Both the lookup key
+(`gindex`) and the check value (`identity`) come from the **same**
+`TransferDetails`. So the check catches a **tree ↔ scanner desync** (the two
+numberings disagree), but it does **not** catch a `TransferDetails` that is
+internally consistent yet wrong versus the actual chain (e.g. a scanner that
+mis-recorded both `gindex` and `(O, C)` together). That failure is out of this
+check's reach and belongs to scan-correctness, not assembly.
 
 *Rejected:* `debug_assert` only — a release-mode desync would silently assemble
 against the wrong leaf.
@@ -237,18 +351,24 @@ The PR branches off `dev`-with-X5 (not stacked on #151) per the agreed
    `assemble_path` to gindex resolution + post-resolution `(O,C)` hard-check; new
    `ClientError::IdentityMismatch`; migrate the one `assemble_kat.rs` call site.
    *Self-contained, curve-tree only.*
-2. **client + actor read API** — `CurveTreeClient::root_and_depth_at`
-   (`root_at` thin-wraps it); actor messages `RootAndDepthAt` and `AssembleTx` +
-   `CurveTreeHandle::reference_root_and_depth` / `assemble_tx`. *Adds the reads,
-   no consumer yet — `assert_send` structural test as in CT-5a/b.*
+2. **depth primitive + client + actor read API** — add
+   `shekyl_fcmp::tree::layer_count_for_leaves(n) -> u8` (reusing `chunk_width`)
+   with its drift KAT (`== build_layers(<n>).len()` over a range of `n`, Q1);
+   `CurveTreeClient::root_and_depth_at` (shares `root_at_count(n)`; `root_at`
+   unchanged); actor messages `RootAndDepthAt` and `AssembleTx` (handler-side
+   `MAX_INPUTS` bound, Q2) + `CurveTreeHandle::reference_root_and_depth` /
+   `assemble_tx`. *Adds the reads, no consumer yet — `assert_send` structural test
+   as in CT-5a/b.*
 3. **engine cutover** — split `build` (§3.1); thread real fee depth;
    `assemble_tx_to_sign` consumes `&[AssembledPath]` (T1/T2); delete the
    `sign_bridge` synthetic clobber (§1); **delete `synthetic_tree.rs`**.
 4. **test migration + DoD + doc closure** — migrate synthetic-dependent engine
    tests to the real client over the CT-2 fixture / `TestDaemon`; add the X3 KAT
-   and the real-root build+submit KAT; record this round's closure (the §3.2
-   fee-depth finding + the Q1–Q3 resolutions) into `CT5_ENGINE_WIRING.md` and mark
-   this doc closed.
+   **including the numbering-equivalence-across-output-classes case (Q3)** and the
+   real-root build+submit KAT; add the `global_output_index ↔ tree gindex`
+   reopening trigger to `FOLLOWUPS.md` (Q3); record this round's closure (the §3.2
+   fee-depth finding + the Q1–Q3 resolutions, including the corrected
+   depth-derivation framing) into `CT5_ENGINE_WIRING.md` and mark this doc closed.
 
 Commit slicing is provisional; commits 1–2 are cleanly separable and could each
 be confirmed green independently before commit 3 lands the consumer.
@@ -268,7 +388,12 @@ be confirmed green independently before commit 3 lands the consumer.
 - **Grep-clean:** no `reference_block: [u8;32]` assembly param and no free
   `tree_depth: u8` param remain; `synthetic_tree.rs` is gone.
 - **X3 KAT:** an owned output resolves to the correct `gindex` (total resolution
-  — there is no collision case to test, per X3 §5.1).
+  — there is no collision case to test, per X3 §5.1), **plus** the
+  numbering-equivalence-across-output-classes case (Q3): a block mixing output
+  classes asserts tree `gindex` == scanner `global_output_index` for each.
+- **`layer_count_for_leaves` drift KAT:** `layer_count_for_leaves(n) ==
+  build_layers(<n leaves>).len()` across a range of `n` (Q1) — the single-source
+  guard that lets the fee path read depth without building the tree.
 - **X5 KAT:** already landed in #151 (a coinbase whose reference height sits
   between `+SPENDABLE_AGE` and the coinbase lock is not selected as spendable, so
   no wrong-leaf assembly is attempted).
