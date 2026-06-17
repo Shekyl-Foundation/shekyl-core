@@ -208,13 +208,51 @@ pub fn shared_anchor_population<R: GapRng + ?Sized>(
 pub fn correlated_walk<R: GapRng + ?Sized>(rng: &mut R, window: u64, m: usize) -> Vec<u64> {
     let mut out = Vec::with_capacity(m);
     let mut prev = bounded_uniform(rng, window);
-    let modulus = window as i64 + 1;
+    // Outcome space is `[0, window]`, so the modulus is `window + 1`. All arithmetic
+    // stays in `u64` so the helper is well-defined for every `u64` window (the
+    // production draw's contract); a `window as i64 + 1` would wrap to a non-positive
+    // modulus for `window > i64::MAX` and panic in `rem_euclid`.
+    let modulus = window.saturating_add(1);
     for _ in 0..m {
-        let step = bounded_uniform(rng, 40) as i64 - 20; // [-20, 20]
-        prev = (prev as i64 + step).rem_euclid(modulus) as u64;
+        // Step in [-20, 20], applied via overflow-safe modular add/sub so the walk
+        // never leaves `[0, window]`, never relies on signed arithmetic, and never
+        // overflows even at `modulus == u64::MAX`.
+        let raw = bounded_uniform(rng, 40); // [0, 40]
+        prev = if raw >= 20 {
+            add_mod(prev, raw - 20, modulus)
+        } else {
+            sub_mod(prev, 20 - raw, modulus)
+        };
         out.push(prev);
     }
     out
+}
+
+/// `(a + d) mod m` for `a < m`, without overflowing at large `m`.
+fn add_mod(a: u64, d: u64, m: u64) -> u64 {
+    let d = d % m;
+    if d == 0 {
+        return a;
+    }
+    let room = m - d; // >= 1
+    if a >= room {
+        a - room
+    } else {
+        a + d
+    }
+}
+
+/// `(a - b) mod m` for `a < m`, without overflowing at large `m`.
+fn sub_mod(a: u64, b: u64, m: u64) -> u64 {
+    let b = b % m;
+    if b == 0 {
+        return a;
+    }
+    if a >= b {
+        a - b
+    } else {
+        m - (b - a)
+    }
 }
 
 /// Concentration of a population's bond times: the share in the most-occupied
@@ -279,7 +317,12 @@ fn tolerance(n: usize) -> f64 {
 #[must_use]
 pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
     let n = samples.len();
-    let n_bins = UNIFORM_BINS.min(window as usize + 1).max(1);
+    // Bin count is at most `UNIFORM_BINS`, capped at the number of outcomes
+    // (`window + 1`). Computed in `u64` so it is well-defined for every `u64`
+    // window (matching the production draw's `u64` contract): a `window as usize + 1`
+    // would overflow at `usize::MAX`, and a bare `window as usize` would truncate a
+    // large window on a 32-bit target.
+    let n_bins = (UNIFORM_BINS as u64).min(window.saturating_add(1)).max(1) as usize;
 
     let mut counts = vec![0u64; n_bins];
     let mut bond_first = 0usize;

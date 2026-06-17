@@ -14,6 +14,9 @@
 #![allow(clippy::cast_precision_loss)]
 // ^ test code: gap counts widen to f64 for the negative-control autocorrelation;
 //   the counts are far below 2^53 so the widening is exact.
+#![allow(clippy::float_cmp)]
+// ^ the degenerate-input summaries document *exact* `0.0` returns (empty sample),
+//   so the tests assert exact equality with 0.0.
 
 mod common;
 
@@ -209,6 +212,21 @@ fn self_cert_rejects_trap_and_correlated_samples() {
         !corr_report.passed(),
         "correlated should not pass self-cert: {corr_report:?}"
     );
+}
+
+#[test]
+fn helpers_are_well_defined_at_extreme_windows() {
+    // The conformance helpers are public behind the feature and must honor the
+    // production draw's `u64` window contract: a `u64::MAX` window must not panic
+    // (no `window as i64 + 1` modulus wrap, no `window as usize + 1` overflow).
+    // Copilot PR#150.
+    let mut rng = SplitMix64(0xDEAD_BEEF_0000_0001);
+    let walk = correlated_walk(&mut rng, u64::MAX, 256);
+    assert_eq!(walk.len(), 256);
+
+    let sample: Vec<(u64, bool)> = walk.iter().map(|&s| (s, s & 1 == 0)).collect();
+    let report = grade_sample(&sample, u64::MAX);
+    assert_eq!(report.n, 256);
 }
 
 #[test]

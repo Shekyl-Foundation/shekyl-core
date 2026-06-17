@@ -36,6 +36,13 @@ pub const Z_ALPHA_1E6: f64 = 4.753_424;
 /// uniformity) when an observed statistic exceeds this value.
 #[must_use]
 pub fn chi_square_upper_crit(df: f64, z: f64) -> f64 {
+    // `df` is degrees of freedom (>= 1 in all valid use: `k - 1` for `k >= 2` bins).
+    // A non-positive or NaN `df` is a caller bug; return NaN so a downstream
+    // `statistic < crit` comparison is `false` — the conformance cert fails closed
+    // rather than passing on a bogus (infinite/NaN) critical value.
+    if df <= 0.0 || df.is_nan() {
+        return f64::NAN;
+    }
     let a = 2.0 / (9.0 * df);
     let t = 1.0 - a + z * a.sqrt();
     df * t * t * t
@@ -109,6 +116,17 @@ mod tests {
         // df = 255, alpha = 1e-6 -> ~377.3 (the label-indistinguishability gate).
         let crit = chi_square_upper_crit(255.0, Z_ALPHA_1E6);
         assert!((crit - 377.3).abs() < 1.0, "crit = {crit}");
+    }
+
+    #[test]
+    fn critical_value_fails_closed_for_invalid_df() {
+        // A non-positive or NaN `df` is a caller bug; the critical value must be NaN
+        // so a downstream `statistic < crit` comparison is false (cert fails closed).
+        // NaN crit makes any `statistic < crit` false (a language guarantee), so a
+        // downstream uniformity check fails closed rather than passing on a bogus value.
+        assert!(chi_square_upper_crit(0.0, Z_ALPHA_1E6).is_nan());
+        assert!(chi_square_upper_crit(-1.0, Z_ALPHA_1E6).is_nan());
+        assert!(chi_square_upper_crit(f64::NAN, Z_ALPHA_1E6).is_nan());
     }
 
     #[test]

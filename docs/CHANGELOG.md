@@ -95,6 +95,24 @@
   `cargo test -p shekyl-standoff --features conformance` on the x86_64 lane
   (x86-only by design — float GoF probes are not bit-identical across arches; the
   cross-arch guarantee remains the integer golden vector under qemu).
+- **standoff/stats: public conformance helpers are now well-defined for every
+  `u64` window and the chi-square critical value fails closed on invalid `df`
+  (Copilot PR#150 review 2, 2026-06-16, `feat/standoff-shared-crate`).** Three
+  latent edge-case panics/NaNs on the feature-gated helpers — none reachable from
+  the sim (window is 600, `df >= 1`), but the helpers are public and must honor
+  the production draw's `u64` contract. `correlated_walk` computed its modulus as
+  `window as i64 + 1`, which wraps to a non-positive modulus (panic in
+  `rem_euclid`) for `window > i64::MAX`; it now walks with overflow-safe `u64`
+  modular add/sub. `grade_sample` sized its bin count with `window as usize + 1`,
+  which overflows at `usize::MAX` and truncates a large window on a 32-bit target;
+  it now computes the count in `u64`. `chi_square_upper_crit` divided by `df`
+  without guarding, yielding NaN/inf for `df <= 0`; it now returns NaN explicitly,
+  which makes any downstream `statistic < crit` comparison false — the cert fails
+  closed rather than passing on a bogus critical value. Locked by
+  `helpers_are_well_defined_at_extreme_windows` (`u64::MAX` window, no panic) and
+  `critical_value_fails_closed_for_invalid_df`. The sim model is untouched: the
+  review surfaced no soundness finding, only input-validation hardening on the
+  shared crate's public surface.
 - **bench: migrate the iai instruction-count harness from `iai-callgrind 0.16`
   to `gungraun 0.19` (2026-06-16, `chore/bench-gungraun-migration`).**
   `iai-callgrind` was renamed to `gungraun` upstream from 0.17.0 and the 0.16.x
