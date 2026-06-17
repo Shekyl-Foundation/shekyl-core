@@ -297,6 +297,19 @@ impl WalletOutput {
         }
     }
 
+    /// Set the additional timelock (test/programmatic builder). Lets a test
+    /// construct a coinbase-style block-locked output without widening
+    /// [`Self::new_for_test`]'s signature for every caller.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn with_additional_timelock(
+        mut self,
+        timelock: shekyl_oxide::transaction::Timelock,
+    ) -> Self {
+        self.metadata.additional_timelock = timelock;
+        self
+    }
+
     /// Write the WalletOutput.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         self.absolute_id.write(w)?;
