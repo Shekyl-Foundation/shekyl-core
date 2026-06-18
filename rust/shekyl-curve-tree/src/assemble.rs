@@ -102,6 +102,7 @@ impl CurveTreeClient {
             .iter()
             .position(|e| e.gindex == input.gindex)
             .ok_or(ClientError::OutputNotDrained {
+                gindex: input.gindex,
                 output_key: input.output_key,
             })?;
         // Post-resolution consistency check (X3): the leaf at `gindex` must be

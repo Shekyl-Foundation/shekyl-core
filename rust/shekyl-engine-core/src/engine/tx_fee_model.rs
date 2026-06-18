@@ -81,10 +81,29 @@ const FCMP_PROOF_SIZE_KAT: [[usize; 25]; 9] = [
     ],
 ];
 
-/// Largest measured proof size (`n_in=8, depth=24`); the conservative fallback
-/// for an out-of-range cell that should be unreachable (`validate_inputs`
-/// enforces `n_in ∈ 1..=MAX_INPUTS`, `tree_depth ∈ 1..=MAX_TREE_DEPTH`).
-const FCMP_PROOF_SIZE_MAX: usize = 26_784;
+/// Largest cell of [`FCMP_PROOF_SIZE_KAT`]; the conservative fallback for an
+/// out-of-range cell that should be unreachable (`validate_inputs` enforces
+/// `n_in ∈ 1..=MAX_INPUTS`, `tree_depth ∈ 1..=MAX_TREE_DEPTH`).
+///
+/// Derived from the table at compile time, not hardcoded, so regenerating the
+/// table can never leave the fallback stale — under-estimating fees (a
+/// non-conservative drift) or over-estimating them.
+const FCMP_PROOF_SIZE_MAX: usize = {
+    let mut max = 0;
+    let mut i = 0;
+    while i < FCMP_PROOF_SIZE_KAT.len() {
+        let row = &FCMP_PROOF_SIZE_KAT[i];
+        let mut j = 0;
+        while j < row.len() {
+            if row[j] > max {
+                max = row[j];
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    max
+};
 
 fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
     // Every reachable `(n_in, tree_depth)` has a measured cell. An out-of-range

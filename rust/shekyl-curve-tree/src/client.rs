@@ -112,7 +112,11 @@ pub enum ClientError {
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
-        /// Compressed output key that was not found among drained leaves.
+        /// Global output index (the resolution key, X3) that matched no drained
+        /// leaf at the reference height — the primary diagnostic for a numbering
+        /// desync or a caller passing a not-yet-drained output.
+        gindex: Gindex,
+        /// Compressed output key the caller supplied alongside `gindex`.
         output_key: [u8; 32],
     },
     /// `gindex` resolved to a drained leaf whose `(output_key, commitment)`

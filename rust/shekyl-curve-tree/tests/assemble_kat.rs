@@ -289,7 +289,8 @@ fn assemble_path_rejects_undrained_output() {
     // miss, not a bad path.
     let undrained = coinbase_input(&blocks, tip.height);
     match client.assemble_path(&undrained, &reference) {
-        Err(shekyl_curve_tree::ClientError::OutputNotDrained { output_key }) => {
+        Err(shekyl_curve_tree::ClientError::OutputNotDrained { gindex, output_key }) => {
+            assert_eq!(gindex, undrained.gindex);
             assert_eq!(output_key, undrained.output_key);
         }
         other => panic!("expected OutputNotDrained, got {other:?}"),
