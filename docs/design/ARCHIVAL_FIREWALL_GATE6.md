@@ -413,26 +413,67 @@ Reuse the principal salt and wide-reduce discipline:
 salt = salt_for(network, format)
        // e.g. b"shekyl-master-derive-v1-mainnet-bip39"
 
-HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || p_slot.to_le_bytes(), L = per-row)
+HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || 0x00 || p_slot.to_le_bytes(), L = per-row)
 ```
 
-`L` is **pinned per output** in the table below (it is not a free parameter): `64` for the
-Ed25519 wide-reduce and ML-KEM `d_z` paths, `32` for the ML-DSA-65 seed — matching
-[`account.rs`](../../rust/shekyl-crypto-pq/src/account.rs) (`L=64` wide-reduce) and
-[`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs) `keygen_from_seed(seed: &[u8; 32])`.
+The single-byte `0x00` separator in `info` is **genesis-frozen** (see the info-string note
+below); it is not optional and is part of every row's derivation.
+
+`L` is **pinned per output** in the table below (it is not a free parameter). Two
+representations are in play and the distinction is load-bearing (see the **scalar-vs-seed**
+note below): `64` for the **wide-reduce-to-scalar** paths (Ed25519 *address* spend/view and
+ML-KEM `d_z`) and `32` for the **deterministic-seed** paths (ML-DSA-65 keygen seed and the two
+Ed25519 hybrid-half RFC 8032 seeds). This matches
+[`account.rs`](../../rust/shekyl-crypto-pq/src/account.rs) (`L=64` wide-reduce → address
+scalars) and [`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs)
+(`L=32` → `keygen_from_seed(seed: &[u8; 32])` for ML-DSA, and `L=32` `ed25519_pqc_seed` →
+`SigningKey::from_bytes(seed)` for the Ed25519 half of a hybrid key).
 
 | Output | Info label (`LABEL`) | `L` | Consumer |
 |--------|----------------------|-----|----------|
-| `spend_wide` | `shekyl-archival-p-ed25519-spend-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 spend |
-| `view_wide` | `shekyl-archival-p-ed25519-view-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 view |
+| `spend_wide` | `shekyl-archival-p-ed25519-spend-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 **address** spend scalar (`P` receive address, §9.4 "Receive address") |
+| `view_wide` | `shekyl-archival-p-ed25519-view-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 **address** view scalar (+ `montgomery(view_pk)` → x25519 scan path, §9.6) |
 | `kem_d_z` | `shekyl-archival-p-ml-kem-768-v1` | 64 | `ml_kem_chacha_seed_from_d_z` → ML-KEM-768 KG (same SHA3-ChaCha intermediary as principal; **separate `d_z`** from label) |
-| `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 keypair (ChaCha20Rng seeded) |
-| `bond_spend_wide` | `shekyl-archival-p-bond-spend-ed25519-v1` | 64 | `wide_reduce_to_scalar` → Ed25519 half of `bond_spend_pk` (GF-1; gate-4 §4.1) |
+| `account_sign_seed` | `shekyl-archival-p-ed25519-account-sign-v1` | 32 | `SigningKey::from_bytes` (RFC 8032 seed) → Ed25519 half of `hybrid_sign_pk` / `hybrid_bond_id` (**identity**, dedicated seed — *not* the address spend scalar) |
+| `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 half of `hybrid_sign_pk` (ChaCha20Rng seeded) |
+| `bond_spend_ed_seed` | `shekyl-archival-p-bond-spend-ed25519-v1` | 32 | `SigningKey::from_bytes` (RFC 8032 seed) → Ed25519 half of `bond_spend_pk` (GF-1; gate-4 §4.1) |
 | `bond_spend_ml_dsa_seed` | `shekyl-archival-p-bond-spend-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 half of `bond_spend_pk` (GF-1) |
+
+**Scalar-vs-seed resolution (2026-06-17, genesis-frozen).** The hybrid signing scheme
+`HybridEd25519MlDsa` ([`signature.rs`](../../rust/shekyl-crypto-pq/src/signature.rs)) is
+**seed-keyed**: `SigningKey::from_bytes` treats its 32-byte input as an RFC 8032 seed and
+derives the signing scalar as `clamp(SHA512(seed))`. A `wide_reduce_to_scalar` output is a
+*scalar*, not a seed; feeding scalar bytes in as a seed would re-hash them into a different
+key and is a category error. Every other hybrid key in the codebase (per-output
+`derivation.rs`, multisig) derives its Ed25519 half as a **dedicated 32-byte seed** under its
+own label; the `P` identity and bond-spend halves follow that precedent. The earlier draft's
+`ed25519 = spend` (reusing the address spend scalar) was an artifact of that confusion and is
+removed. Consequences, all checked at source before freezing:
+
+- **`spend_wide` / `view_wide` stay `64`/`wide_reduce`** — they feed the `P` *receive address*
+  (`spend_pk`, `view_pk`; §9.4 "Receive address"), which is genuinely a scalar consumer
+  (`spend·B`, `montgomery(view)`). They are *not* reused for any hybrid half.
+- **The identity hybrid gets its own `account_sign_seed`** (new `L=32` label) — independent of
+  the address spend scalar. Nothing requires `hybrid_sign_pk.ed25519 == spend_pk`: §9.5
+  `p_canonical_id` only hashes the hybrid pubkey, and §9.6 puts the identity on the wire only
+  as `P_pubkey`. `hybrid_bond_id == hybrid_sign_pk` still holds.
+- **`bond_spend_ed_seed` converts to `32`/seed** — `bond_spend_pk` is *only* a hybrid debit
+  authorizer (§9.4, §9.6), with no address/scalar consumer, so the row is now a seed.
+
+**Privacy rationale (why independence, not just hygiene).** Under the old reuse,
+`hybrid_sign_pk.ed25519 == spend·B == the receive-address spend pubkey`, and `hybrid_sign_pk`
+rides the wire as the public `P_pubkey` (§9.6). The public identity therefore leaked the
+receive-address spend pubkey to every bond-table observer for free — not a critical leak (the
+spend pubkey alone doesn't enable scanning; that needs the view secret), but a gratuitous
+public-identity → reward-address coupling that expanded the blast radius of any view-key
+disclosure. The dedicated `account_sign_seed` removes that coupling: identity, receive
+address, and debit authority are now three independently-derived bundles under distinct
+labels — the same GF-1-carve separation principle that made `bond_spend_pk` dedicated, applied
+to the identity/address boundary §9.5 already calls "a separate presentation layer."
 
 **`bond_spend_pk` is the dedicated bond-debit authorizer (GF-1, §9.6), not the identity key.**
 Its two rows above derive a full hybrid keypair (`scheme_id = 1`) under labels domain-separated
-from both the identity-spend (`spend_wide` / `ml_dsa_seed`) and the per-output tree, so a
+from both the identity (`account_sign_seed` / `ml_dsa_seed`) and the per-output tree, so a
 bond-spend-key compromise is isolated from `P`'s identity and from individual-output spend. It
 is committed into the bond record at `JoinMarket` (gate-4 §3.4.1 / §4.1) and authorizes every
 later `bond_debit`.
@@ -444,11 +485,11 @@ later `bond_debit`.
 is **not length-prefixed**. It is unambiguous under the current label set — the labels are
 non-prefix-free with respect to each other and `p_slot` is fixed-width (4 B LE) — so no two
 `(LABEL, p_slot)` pairs collide. The only way to break this is **adding a new label** whose bytes
-are a prefix of an existing label's `LABEL || slot` concatenation. **Disposition:** lock a
-single-byte separator (`LABEL || 0x00 || p_slot.to_le_bytes()`) into the `ARCHIVAL_P_DERIVE_V1`
-KAT at manifest-authoring time, so the wire is fixed before any label is ever added. No wire
-change now (the current concatenation is safe and unimplemented); this is a note to the KAT
-author, not a Round-1 reopener.
+are a prefix of an existing label's `LABEL || slot` concatenation. **Disposition (now
+implemented, 2026-06-17):** the single-byte separator `info = LABEL || 0x00 ||
+p_slot.to_le_bytes()` is locked into the `ARCHIVAL_P_DERIVE_V1` derivation and KAT, so the
+wire is fixed before any label is ever added. This is the genesis-frozen `info` construction
+for every row in §9.3's table.
 
 **ML-KEM intermediary (unchanged function, archival-only input):**
 
@@ -472,9 +513,9 @@ ArchivalPKeys {
   view_pk, view_sk:           Ed25519 view   (typed ViewPublicKey / ViewSecret),
   ml_kem_ek, ml_kem_dk:       ML-KEM-768 account keys,
   x25519_pk:                  montgomery(view_pk),   // same map as principal
-  hybrid_sign_pk, hybrid_sign_sk: Hybrid{ed25519=spend, ml_dsa=account ML-DSA},
+  hybrid_sign_pk, hybrid_sign_sk: Hybrid{ed25519=account_sign_seed, ml_dsa=account ML-DSA},  // IDENTITY; dedicated seed (§9.3), NOT the address spend scalar
   hybrid_bond_id:             HybridPublicKey,       // == hybrid_sign_pk; bond-record IDENTITY only
-  bond_spend_pk, bond_spend_sk: Hybrid{ed25519=bond_spend_wide, ml_dsa=bond_spend ML-DSA},  // GF-1 debit authorizer
+  bond_spend_pk, bond_spend_sk: Hybrid{ed25519=bond_spend_ed_seed, ml_dsa=bond_spend ML-DSA},  // GF-1 debit authorizer; dedicated seed (§9.3)
   p_canonical_id:             [u8; 32],              // §9.5
 }
 ```

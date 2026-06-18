@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Tier-1/Tier-2 Known Answer Test fixtures for ARCHIVAL_P_DERIVE_V1.",
+    "Tier-1 pins the per-row HKDF intermediates and the label/slot",
+    "separation properties; Tier-2 pins end-to-end ArchivalPKeys public",
+    "and secret material plus p_canonical_id (inline cSHAKE256).",
+    "vectors_sha256_hex covers the exact on-disk bytes of vectors.json",
+    "(verify with `sha256sum vectors.json`).",
+    "Belongs on the aarch64 qemu lane: third cross-arch-deterministic",
+    "primitive; a divergent bit means an ARM user cannot recover a bond.",
+    "Regenerate only on a deliberate, documented derivation-version bump:",
+    "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture"
+  ],
+  "derivation_version": "v1",
+  "fips203_pin": "=0.4.3",
+  "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture",
+  "tier1_count": 9,
+  "tier2_count": 4,
+  "vectors_sha256_hex": "91dbd5725069b29cbcce0f0fc74fe713fd36e2ba030901e63734cbebcd584cdd"
+}
