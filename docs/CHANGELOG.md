@@ -4,6 +4,42 @@
 
 ### Added
 
+- **wallet: archival staking actor (StakeEngine) -- inert (PR 2b)
+  (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10/§10.1,
+  `feat/archival-stake-engine`).** The gate-6 staking firewall realized as
+  actor isolation: a new `kameo` actor (`shekyl-engine-core::engine::stake_engine`)
+  that owns the wallet's `master_seed_64` and the active archival persona `P`,
+  structurally disjoint from the `LedgerEngine` transfer pipeline. It mirrors the
+  `KeyActor`/`KeyEngineHandle` discipline:
+  - **Operation-shaped protocol, public-only replies.** Messages name operations
+    (`ActivatePersona`, `ActivePersona`); replies carry only public material --
+    `PersonaIdentity` holds the typed `HybridPublicKey` (`P_pubkey`), a type with
+    no secret field to leak. The secret `ArchivalPKeys` bundle (`!Clone` +
+    per-field `ZeroizeOnDrop`) cannot be requested or copied out of the actor.
+  - **Typed domain values** (Rust-first, rule 20): `PSlot(u32)` newtype so a
+    persona slot can't be confused with any other index; `StakeMasterSeed`
+    newtype (`Zeroize`/`ZeroizeOnDrop`, not `Clone`, redacted `Debug`) so the
+    wipe discipline lives on the type; typed `StakeEngineError`.
+  - **Lazy derivation off the hot path.** An idle actor holds no persona
+    (`active == None`); the first `ActivatePersona` derives via
+    `derive_archival_p_keys` on `tokio::task::spawn_blocking` (PQ keygen is
+    CPU-bound). The only copy of the seed leaves as a `Zeroizing` buffer wiped at
+    closure end.
+  - **Atomic rotation + re-derive-on-restart.** Slot rotation is a single
+    state transition (derive-into-local, then one assignment that drops/wipes the
+    old) -- never two live personas (§10.9), never a gap with none. The bundle is
+    not persisted; the actor re-derives deterministically from `master_seed_64`
+    on every (re-)spawn.
+  - **Fail-stop, not supervised.** A handler panic returns `ControlFlow::Break`;
+    afterward every handle call collapses to the terminal, user-facing
+    `StakeEngineError::StakeActorUnavailable` ("close and reopen the wallet to
+    recover"). Recovery re-derives every `P`.
+  Landed **inert**: registered and exercised by tests only (idle-has-no-persona,
+  lazy derive matches the `ARCHIVAL_P_DERIVE_V1` oracle, rotation, cross-respawn
+  determinism, impermissible-seed-format error, require-ambient-runtime,
+  fail-stop terminality). PR 2c wires it into the open/create lifecycle with its
+  first consumer (the JoinMarket bond request), so no seed-holding actor comes
+  into existence until something uses it.
 - **crypto/economics: archival bond-post construction PR 2a -- full-prover
   synthetic-tree round-trip KAT (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §3,
   `feat/archival-bond-roundtrip-kat`).** PR 1 closed the bond balance against a

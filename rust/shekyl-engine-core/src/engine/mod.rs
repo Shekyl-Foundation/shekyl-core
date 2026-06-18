@@ -226,6 +226,11 @@ pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;
+/// PR 2b (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10/§10.1): the archival
+/// staking actor that owns `master_seed_64` and the active persona `P`. Landed
+/// inert — exercised by tests only; PR 2c wires it into the open/create
+/// lifecycle with its first consumer (the JoinMarket bond request).
+pub(crate) mod stake_engine;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
 /// Retained `#[cfg(test)]` for the two non-daemon test surfaces that genuinely
