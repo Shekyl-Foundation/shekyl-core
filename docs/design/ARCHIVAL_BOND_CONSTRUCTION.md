@@ -93,10 +93,13 @@ discipline as `shekyl-standoff`):
 | `ArchivalBondPostVin`, `signature_preimage`, `serialize` | `shekyl-archival-retention::bond_wire` | the vin and its sig preimage |
 | `bond_floor` | `shekyl-archival-retention::bond_floor` | `bonded_total == bond_credit == floor` |
 | `p_canonical_id_from_hybrid_pubkey` | `shekyl-archival-retention::id` | record key |
-| `verify_join_market_bond_post`, `verify_bond_post_rct_balance` | same crate | KAT oracle |
+| typed-side cleartext terms + balance eq | `shekyl-rct-balance` (NEW, §7.2/§11.1 Q2) | the consensus balance, single-sourced for construct *and* verify |
+| `verify_join_market_bond_post`, `verify_bond_post_rct_balance` | `shekyl-archival-retention` (the latter now wrapping `shekyl-rct-balance`) | KAT oracle |
 
-The bond-builder crate **depends on** `shekyl-archival-retention`; it does not
-copy any wire or floor logic.
+The bond-builder crate **depends on** `shekyl-archival-retention` and
+`shekyl-rct-balance`; it copies no wire, floor, or balance logic. The balance
+equation is the strongest case: single-sourcing it means construct and verify
+*cannot* disagree on a genesis-frozen consensus rule (§11.1 Q2).
 
 ## 5. Crate / module layout
 
@@ -105,7 +108,9 @@ flowchart TD
   seed["wallet master_seed_64"] --> ap["shekyl-crypto-pq::archival_p (PR 0, NEW)"]
   ap -->|"ArchivalPKeys: P_pubkey, bond_spend_pk, p_canonical_id"| bld["shekyl-archival-bond-builder (PR 1, NEW)"]
   ret["shekyl-archival-retention (verify side, import)"] --> bld
-  bld -->|"ArchivalBondPostVin + RCT witness"| txb["shekyl-tx-builder (+ generic cleartext balance term)"]
+  rctb["shekyl-rct-balance (PR 1, NEW: typed-side terms + balance eq, single-sourced)"] --> txb
+  rctb --> ret
+  bld -->|"ArchivalBondPostVin + RCT witness"| txb["shekyl-tx-builder (consumes shekyl-rct-balance terms)"]
   std["shekyl-standoff::draw_entry_gap + certify_draw"] --> eng["shekyl-engine-core StakeEngine (PR 2)"]
   bld --> eng
   txb --> eng
@@ -120,14 +125,20 @@ flowchart TD
   async, no actor -- builds the vin + RCT witness. Testable and KAT-able in
   isolation. Depends on `shekyl-archival-retention` (types) and
   `shekyl-tx-builder` (RCT machinery).
-- **`shekyl-tx-builder`** (PR 1, extended): gains a **generic** extra cleartext
-  balance term (Section 7).
+- **`shekyl-rct-balance`** (PR 1, new crate): the **single-sourced** consensus
+  balance equation and its typed-side cleartext terms (Section 7.2). Depends on
+  `shekyl-units` (`AtomicUnits`) + `curve25519-dalek` + `shekyl-generators`;
+  imported by *both* `shekyl-tx-builder` (construct) and
+  `shekyl-archival-retention` (verify) so the two cannot diverge on a
+  genesis-frozen equation. The existing `bond_rct_balance.rs` migrates here.
+- **`shekyl-tx-builder`** (PR 1, extended): consumes the `shekyl-rct-balance`
+  typed-side terms (Section 7.2); stays bond-agnostic.
 - **`shekyl-engine-core` StakeEngine** (PR 2): orchestration -- funding
-  selection, standoff timing + self-cert, actor wiring, broadcast.
+  selection, standoff timing + self-cert, actor wiring, broadcast over `P`'s
+  own transport (§10.1).
 
-(Open question for review: builder as a new crate vs. a `construct` module
-inside an existing engine crate. The new-crate option is the current proposal
-for isolation + KAT-ability; Section 11.)
+(Resolved in §11.1 Q1: builder is a **new crate**, for dependency-graph
+isolation -- it cannot pull in `tokio`/`kameo` -- not merely a convention.)
 
 ## 6. PR 0 -- `archival_p` derivation (PR #152, built in parallel)
 
@@ -256,31 +267,48 @@ committed `bond_spend_pk` via the preimage. `bond_spend_pk` is committed on the
 record at JoinMarket and authorizes only later debit paths (Unbond,
 HoldingsUpdate drop) -- not exercised in PR 1.
 
-### 7.2 Generic cleartext balance term in `shekyl-tx-builder`
+### 7.2 Single-sourced, typed-side cleartext balance terms (`shekyl-rct-balance`)
 
 The RCT balance the verify side enforces is
 
 ```text
-sum(pseudoOuts) + bond_debit = sum(out_masks) + fee + bond_credit
+sum(pseudoOuts) + extra_inputs = sum(out_masks) + fee + extra_outputs
 ```
 
-([`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)
-already adds `amount_h(fee)` and `amount_h(bond_credit)` **symmetrically** --
-`bond_credit` is the same kind of cleartext H-term as `fee`). The split is:
-the bond-builder owns vin assembly; `shekyl-tx-builder` owns the RCT balance
-(reimplementing the pseudoOut/mask machinery in the new crate would violate
-single-sourcing).
+where the *extra* terms are cleartext `amount*H` contributions of the same kind
+as `fee` (today: `bond_credit -> extra_outputs`, `bond_debit -> extra_inputs`).
 
-**`shekyl-tx-builder` must not learn the word "bond."** PR 1 adds a **generic
-extra cleartext balance term** -- the way `fee` is one -- and the bond-builder
-supplies it as `bond_credit`. This keeps tx-builder bond-agnostic
-(`18-type-placement`: generic capability in the generic crate, bond semantics
-in the bond crate) and means the next cleartext term (emission, a future burn)
-reuses it rather than bolting on a second special case.
+**Single-source the equation (§11.1 Q2, resolved).** The lean shape -- a generic
+term added in `shekyl-tx-builder` (construct) while
+[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)
+holds the equation (verify) -- is rejected: it is *two* implementations of a
+genesis-frozen consensus equation, the R-3 divergence risk single-sourced
+everywhere else. Instead the term definitions, their fixed sides, and the
+balance relationship live **once** in a new low crate **`shekyl-rct-balance`**,
+imported by both `shekyl-tx-builder` and `shekyl-archival-retention`. Construct
+then builds exactly what verify checks *by construction*; they cannot disagree
+on which term is which side. (`shekyl-rct-balance`, not `shekyl-units` -- which
+stays `zeroize`+`serde`-only -- and not `tx-builder` -- which would put verify
+downstream of the wallet builder. It depends on `shekyl-units` +
+`curve25519-dalek` + `shekyl-generators`; the existing `bond_rct_balance.rs`
+verify equation migrates into it.)
+
+**Side as type, not runtime tag.** Each term-kind has a statically fixed side
+(fee->output, bond_credit->output, bond_debit->input, emission->input,
+burn->output), so the side belongs in the type, not a `{ amount, side }` tag
+that only catches a wrong-side term at verify. Two typed slices --
+`extra_inputs: &[InputTerm]` and `extra_outputs: &[OutputTerm]`, each a
+checked-`u64` newtype over `AtomicUnits` -- make a wrong-side term
+*unrepresentable* (one newtype vs. one enum, comparable machinery, strictly
+stronger). `fee` stays its own distinct field (consensus-load-bearing, already
+wired); the typed slices are the *extra* terms. `shekyl-tx-builder` still never
+learns the word "bond" (`18-type-placement`): it consumes generic typed-side
+terms; the bond-builder supplies `floor` as an `OutputTerm` for JoinMarket.
 
 Note: the economics "burn" (`shekyl-economics::burn::compute_n_split`) is a
-fee-split calculation, **not** an RCT cleartext balance term -- there is no
-pre-existing generic RCT term to reuse, so PR 1 introduces it (generically).
+fee-split calculation, **not** an RCT cleartext balance term -- so the typed-side
+term machinery is genuinely new in `shekyl-rct-balance`, not a refactor of an
+existing generic term.
 
 ### 7.3 Funding inputs
 
@@ -325,9 +353,13 @@ anything exercises it. Each carries its named verify-side gap:
 
 ## 10. PR 2 -- StakeEngine orchestration + standoff self-cert
 
-- A `TxRequest`/StakeEngine surface for JoinMarket; funding decorrelation
-  defaults from [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
-  §7 (>= 1 settlement-epoch spacing; fund-from-earnings ramp).
+- A **parallel StakeEngine request type** for JoinMarket (§11.1 Q3, resolved) --
+  *not* a variant on the shared `TxRequest`, which would route bond construction
+  through the `LedgerEngine` transfer pipeline and violate §9.6/§10.1. A
+  typed-separate request to a separate actor makes cross-assignment
+  unrepresentable. Funding decorrelation defaults from
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7 (>= 1
+  settlement-epoch spacing; fund-from-earnings ramp).
 - **Runs the standoff self-cert, not just `draw_entry_gap`.** PR 2 wires
   `draw_entry_gap` for prep-spend / announce / bond-post separation (600-block
   window, inversion on) **and** runs `shekyl-standoff`'s `certify_draw` against
@@ -390,22 +422,119 @@ restart re-touches it. Two PR-2 confirmations:
    is exactly the co-activation §10.9 forbids, so it must be a **single state
    transition**, not drop-then-derive with a gap.
 
+**Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
+parallel request type isolates *construction*; the residual gap is the network
+layer. The bond's broadcast and `get_fee_estimates` **reuse the
+`shekyl-tx-builder`/`DaemonEngine` code** but **traverse `P`'s own Arti
+client/circuit, never the principal's connection** -- a shared connection links
+`P` to the principal at the network layer regardless of the request enum, the
+precise §10.9 correlation the firewall exists to prevent. Reuse the logic,
+isolate the connection; do **not** duplicate the broadcast path for "more
+isolation" -- shared-code + isolated-transport beats duplicated-code by
+single-sourcing, and the isolation lives in *which transport*, not *how many
+copies of the broadcast function*. (The standoff `draw_entry_gap` timing
+separation and this transport separation are complementary: timing decorrelates
+*when* `P` acts, transport decorrelates *over what link*.)
+
 ## 11. Review plan and open questions
 
 Target **2-3 rounds, not 4-6.** The construct side is largely determined by the
 already-validated verify side -- the point of single-sourcing -- so there are
 fewer open choices than a greenfield design. Do not pad to 4-6 out of habit.
 
-Open questions for the rounds (PR 1/2; PR 0 is settled and built in parallel):
+Questions for the rounds (PR 1/2; PR 0 is settled and built in parallel) --
+**all four resolved in §11.1 (Round 1 closed 2026-06-17):**
 
 1. Builder as a new crate (`shekyl-archival-bond-builder`) vs. a module in an
-   existing engine crate.
-2. Exact API shape of the generic cleartext balance term in `shekyl-tx-builder`
-   (one term vs. a slice of terms; signed vs. credit/debit pair).
-3. `TxRequest` extension shape for bond operations (new variant vs. a parallel
-   StakeEngine request type).
-4. Whether the round-trip KAT lives in the builder crate or a cross-crate
-   integration test against `shekyl-archival-retention`.
+   existing engine crate. -> **new crate** (§11.1 Q1).
+2. Exact API shape of the cleartext balance term(s). -> **single-sourced,
+   typed-side terms in a new `shekyl-rct-balance` crate** (§11.1 Q2).
+3. `TxRequest` extension shape for bond operations. -> **parallel StakeEngine
+   request type, with isolated transport** (§11.1 Q3).
+4. Where the round-trip KAT lives. -> **builder crate's `tests/`, dev-dep on
+   verify** (§11.1 Q4).
+
+### 11.1 Round 1 -- dispositions (RESOLVED 2026-06-17)
+
+**Status: CLOSED.** Q1 and Q4 accepted as drafted; Q2 amended to the
+fully-robust single-sourced + typed-side form; Q3 kept (firewall-forced) and
+extended with a transport-isolation rule. The unifying read: the request enum
+(Q3) and the balance terms (Q2) are where construction is correctly *isolated*
+and the arithmetic *typed*; the two gaps were the places construction
+*reconnects to something shared* -- the verify equation (single-source it) and
+the broadcast transport (isolate it). Reopening per
+`21-reversion-clause-discipline` is per-disposition and substrate-anchored, not
+sequential-numbering; each entry names its reopening trigger.
+
+**Q1 -- new crate (`shekyl-archival-bond-builder`). CLOSED.** The decisive
+reason is *make-bad-states-unrepresentable at the dependency graph*: a separate
+crate literally cannot pull in `tokio`/`kameo`, so "deterministic, no-async,
+no-actor" is enforced by the build, not by a convention a maintainer must
+remember. Keeps the round-trip KAT cross-crate and matches the single-sourcing
+layering. **Reopen** only if the builder collapses to a trivial wrapper with no
+logic of its own (substrate change: nothing left to isolate).
+
+**Q2 -- single-sourced, typed-side cleartext balance terms. CLOSED (amended
+more robust).** The lean draft (generic term in `tx-builder`, verify equation in
+`archival-retention`) is **rejected**: it is *two* implementations of a
+genesis-frozen consensus equation -- the exact R-3 divergence risk single-sourced
+everywhere else. Two-part resolution:
+- *Single-source the equation.* The cleartext-term definitions, their fixed
+  sides, and the balance relationship
+  `sum(pseudoOuts) + extra_inputs = sum(out_masks) + fee + extra_outputs` live
+  **once** in a new low crate **`shekyl-rct-balance`**, imported by both
+  `shekyl-tx-builder` (construct) and `shekyl-archival-retention` (verify), so
+  construct builds exactly what verify checks *by construction* -- they cannot
+  disagree on which term is which side, which is the property that matters for a
+  consensus balance. **Crate-home grounded:** not `shekyl-units` (intentionally
+  dependency-light -- `zeroize`+`serde` only -- and the balance needs
+  `curve25519-dalek` + `shekyl-generators` for the `amount*H` term; folding
+  curve crypto into the units primitive bloats a widely-depended-on low crate);
+  not `tx-builder` (verify would then depend on the wallet builder, wrong
+  direction). `shekyl-rct-balance` depends on `shekyl-units` (`AtomicUnits`) +
+  `curve25519-dalek` + `shekyl-generators`; both consumers already carry those
+  deps. The existing `bond_rct_balance.rs` verify equation migrates into it.
+- *Side as type, not runtime tag.* Each term-kind has a statically fixed side
+  (fee->output, bond_credit->output, bond_debit->input, emission->input,
+  burn->output), so the side belongs in the type. Two typed slices
+  (`extra_inputs: &[InputTerm]`, `extra_outputs: &[OutputTerm]`, each a
+  checked-`u64` newtype over `AtomicUnits`) make a wrong-side term
+  *unrepresentable* -- one newtype instead of one enum, comparable machinery,
+  strictly stronger than a `{ amount, side }` tag that only caught the error at
+  verify. `fee` stays its own distinct field (consensus-load-bearing, already
+  wired); the typed slices are the *extra* terms. **Reopen** if a term-kind with
+  a *runtime-variable* side ever appears (substrate change: the static-side
+  premise breaks) -- none is known.
+
+**Q3 -- parallel StakeEngine request type (firewall-forced) + transport
+isolation. CLOSED.** The request type is **required**, not a lean choice: a bond
+variant on the shared `TxRequest` would thread bond construction through the
+`LedgerEngine` transfer pipeline, violating §9.6/§10.1 (`StakeEngine` sole
+owner, never cross-assigned); a typed-separate request to a separate actor makes
+cross-assignment unrepresentable. The gap the lean phrasing skipped is the
+**transport**: reuse the broadcast and `get_fee_estimates` *code*, but the
+bond's broadcast and fee query traverse **`P`'s own Arti client/circuit, never
+the principal's connection** -- a shared connection links `P` to the principal at
+the network layer regardless of the request enum, the precise §10.9 correlation
+the firewall exists to prevent. Reuse the logic, isolate the connection; do
+**not** over-correct into duplicating the broadcast path (shared-code +
+isolated-transport beats duplicated-code by single-sourcing -- isolation lives in
+*which transport*, not *how many copies*). Recorded as a PR-2 disposition in
+§10.1. **Reopen** only on a gate-6 isolation amendment.
+
+**Q4 -- round-trip KAT in the builder crate's `tests/`. CLOSED.** Spans both
+crates (construct -> `verify_join_market_bond_post` + the single-sourced
+`shekyl-rct-balance` check accept); the builder dev-depends on
+`shekyl-archival-retention`'s verify path, so the KAT is cross-crate without a
+third workspace member (the builder's isolation rationale from Q1 does not apply
+to a test-only crate). **§8 honesty held explicitly:** it validates the bond
+*logic against a synthetic tree, not real-chain* -- on-chain acceptance is gated
+on CT-5.
+
+> Round 1 closed. Round 2 is **not** auto-opened -- per the closure rule it
+> reopens only on a substrate finding, not sequential numbering. PR 1
+> implementation may begin against these dispositions once #152 and this doc
+> land (specification-first, `05-system-thinking`).
 
 ## 12. Timeframe analysis (`05-system-thinking.mdc`)
 
