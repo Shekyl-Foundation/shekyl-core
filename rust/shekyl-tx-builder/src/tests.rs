@@ -487,8 +487,8 @@ fn extra_output_term_raises_required_total() {
         matches!(
             result,
             Err(TxBuilderError::InsufficientFunds {
-                input_total: 100,
-                output_plus_fee: 101
+                available_total: 100,
+                required_total: 101
             })
         ),
         "an extra OutputTerm must raise the required total, got: {result:?}",

@@ -740,15 +740,16 @@ sustainability is unaffected by the recalibration.
   standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
   guide is the only currently-unblocked slice and was taken first.
 
-- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0 + PR
-  1 landed 2026-06-18; PR 2 pending).** The construction counterpart to the
+- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0
+  landed; PR 1 in review; PR 2 pending).** The construction counterpart to the
   genesis-frozen `shekyl-archival-retention` verify side. Design doc:
   [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
   (Round 1 closed on `dev`). Sequence: **PR 0 (landed, #152)**
   `shekyl-crypto-pq::archival_p` (the `P`-identity + `bond_spend_pk` derivation,
   gate-6 §9.3/§9.4) with an `ARCHIVAL_P_DERIVE_V1` KAT on the **aarch64 qemu
   lane** (third cross-arch-deterministic primitive) + a label-sensitivity
-  negative; **PR 1 (landed)** `shekyl-archival-bond-builder` (JoinMarket vin +
+  negative; **PR 1 (in review, #155, opened 2026-06-18)**
+  `shekyl-archival-bond-builder` (JoinMarket vin +
   hybrid signature + credit funding rule) **plus the single-sourced
   `shekyl-rct-balance` crate** -- the §11.1 Q2 upgrade: the cleartext balance
   equation and its typed-side terms (`InputTerm`/`OutputTerm`) live once and are

@@ -142,21 +142,25 @@ pub fn build_join_market_vin(
 ///   overflows `u64`.
 /// - [`BondBuildError::CreditImbalance`] if `funding_total` does not equal that
 ///   sum.
+///
+/// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end
+/// (rule 20); the raw `u64` is derived only at the error boundary.
 pub fn verify_credit_funding(
-    funding_total: u64,
-    output_total: u64,
-    fee: u64,
+    funding_total: AtomicUnits,
+    output_total: AtomicUnits,
+    fee: AtomicUnits,
     vin: &ArchivalBondPostVin,
 ) -> Result<(), BondBuildError> {
+    let bond_credit = AtomicUnits::from_raw(vin.bond_credit);
     let required = output_total
         .checked_add(fee)
-        .and_then(|s| s.checked_add(vin.bond_credit))
+        .and_then(|s| s.checked_add(bond_credit))
         .ok_or(BondBuildError::AmountOverflow)?;
     if funding_total != required {
         return Err(BondBuildError::CreditImbalance {
-            funding: funding_total,
-            outputs: output_total,
-            fee,
+            funding: funding_total.to_raw(),
+            outputs: output_total.to_raw(),
+            fee: fee.to_raw(),
             floor: vin.bond_credit,
         });
     }

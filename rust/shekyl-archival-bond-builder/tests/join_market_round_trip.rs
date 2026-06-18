@@ -80,7 +80,13 @@ fn join_market_construct_verifies_against_retention() {
     const CHANGE: u64 = 1_000_000;
     const FEE: u64 = 2_000;
     let funding = CHANGE + FEE + floor;
-    verify_credit_funding(funding, CHANGE, FEE, &built.vin).expect("credit funding rule holds");
+    verify_credit_funding(
+        AtomicUnits::from_raw(funding),
+        AtomicUnits::from_raw(CHANGE),
+        AtomicUnits::from_raw(FEE),
+        &built.vin,
+    )
+    .expect("credit funding rule holds");
 
     let mask = Scalar::from_bytes_mod_order([0x5Au8; 32]);
     let pseudo_outs = commit(funding, &mask);
@@ -99,7 +105,12 @@ fn imbalanced_funding_is_rejected_before_proving() {
         .expect("build JoinMarket vin");
 
     // Funding short by 1 atomic unit: caught at the amount level.
-    let result = verify_credit_funding(99, 50, 10, &built.vin);
+    let result = verify_credit_funding(
+        AtomicUnits::from_raw(99),
+        AtomicUnits::from_raw(50),
+        AtomicUnits::from_raw(10),
+        &built.vin,
+    );
     assert!(matches!(
         result,
         Err(BondBuildError::CreditImbalance { .. })

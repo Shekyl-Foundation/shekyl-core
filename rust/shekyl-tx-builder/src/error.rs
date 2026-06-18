@@ -50,11 +50,15 @@ pub enum TxBuilderError {
     #[error("total output amount + fee overflows u64")]
     OutputAmountOverflow,
 
-    /// The total input value is less than outputs + fee (cannot balance).
-    #[error("input total {input_total} less than output total + fee {output_plus_fee}")]
+    /// The value available (inputs + input-side cleartext terms) is less than
+    /// the value required (outputs + fee + output-side cleartext terms), so the
+    /// transaction cannot balance.
+    #[error("available total {available_total} less than required total {required_total}")]
     InsufficientFunds {
-        input_total: u64,
-        output_plus_fee: u64,
+        /// Inputs plus input-side cleartext terms (`extra_inputs`).
+        available_total: u64,
+        /// Outputs plus fee plus output-side cleartext terms (`extra_outputs`).
+        required_total: u64,
     },
 
     /// An input's leaf chunk is empty (must contain at least the input itself).

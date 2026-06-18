@@ -88,8 +88,8 @@ pub(crate) fn validate_inputs(
 
     if available < required {
         return Err(TxBuilderError::InsufficientFunds {
-            input_total: available.to_raw(),
-            output_plus_fee: required.to_raw(),
+            available_total: available.to_raw(),
+            required_total: required.to_raw(),
         });
     }
 
