@@ -4319,6 +4319,7 @@ dependencies = [
  "shekyl-io",
  "shekyl-oxide",
  "shekyl-primitives",
+ "shekyl-rct-balance",
  "shekyl-units",
  "thiserror",
  "zeroize",

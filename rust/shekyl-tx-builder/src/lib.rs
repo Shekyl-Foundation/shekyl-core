@@ -87,7 +87,7 @@ pub mod wire;
 mod tests;
 
 pub use error::TxBuilderError;
-pub use sign::{sign_pqc_auths, sign_transaction};
+pub use sign::{sign_pqc_auths, sign_transaction, sign_transaction_with_terms};
 pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
 pub use wire::{
     encode_final_tx, phase1_payload_hashes, tx_prefix_hash_for_signing, tx_prefix_hash_from_parts,
