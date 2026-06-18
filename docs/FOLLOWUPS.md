@@ -61,6 +61,32 @@ sustainability is unaffected by the recalibration.
   Target: V3.0 (genesis freeze gate; schedule with the broader FCMP++
   audit window so the reviewer has the full-composition context in hand).
 
+- **Emission leg: verify reward→identity binding is structural, not
+  key-equality (forward-dependency surfaced building PR 0 of the archival-bond
+  construction flow, 2026-06-17).** The `ARCHIVAL_P_DERIVE_V1` freeze
+  ([`design/ARCHIVAL_FIREWALL_GATE6.md`](./design/ARCHIVAL_FIREWALL_GATE6.md)
+  §9.3, [`rust/shekyl-crypto-pq/src/archival_p.rs`](../rust/shekyl-crypto-pq/src/archival_p.rs))
+  **removed** the latent equality `hybrid_sign_pk.ed25519 == spend_pk` (the
+  identity's Ed25519 half now derives from a dedicated `account_sign_seed`,
+  independent of the receive-address spend scalar — privacy-positive,
+  decoupling the public `P_pubkey` from the reward address). When the
+  emission/reward leg lands (PR #123 reward-emission path; rebased
+  reward-arithmetic surface), it must tie a shard's reward to `P`'s identity
+  **structurally** — via the record/leaf/in-circuit-ML-DSA signature chain
+  (`p_canonical_id` over the hybrid pubkey, §9.5; leaf-bound emission, C-1) —
+  and **must not** lean on the now-deleted cross-layer key equality between the
+  identity Ed25519 half and the receive-address spend key. The §9.5/§9.6
+  layering (identity vs. receive address as "a separate presentation layer")
+  and the membership-based emission model both indicate the binding is already
+  structural, so the expected outcome is a **confirmation**, not a fix — but a
+  silent dependency on the equality would surface much later as "emission can't
+  tie rewards to identity anymore," which is exactly the class of latent
+  assumption a forward-dep note exists to catch. **Reopening / discharge
+  criterion:** the emission-leg verify+construct PR explicitly checks (at
+  source) that no reward-binding path reads `hybrid_sign_pk.ed25519` as the
+  address spend pubkey; discharge by citing the structural binding it uses
+  instead. Target: V3.0 (must discharge before the emission leg freezes).
+
 - **Rename the `ringct` Monero-legacy residue in `shekyl-oxide` (rule-60
   dead-naming; surfaced in the CT-5 design closure, 2026-06-14).** The public
   field `ScannableBlock.output_index_for_first_ringct_output`

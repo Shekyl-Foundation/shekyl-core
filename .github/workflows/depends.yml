@@ -144,6 +144,17 @@ jobs:
         # sequence.
         cargo test --locked -p shekyl-standoff \
           --target aarch64-unknown-linux-gnu
+        # `archival_p` is the third cross-arch-deterministic primitive (after
+        # reward-arithmetic and the standoff draw). A divergent bit on aarch64
+        # means an ARM-phone user cannot recover their own bond, so the
+        # ARCHIVAL_P_DERIVE_V1 KAT (+ corpus freeze self-check) must run under
+        # qemu, not just compile. Scoped to the KAT binary so the slow
+        # ML-KEM/ML-DSA keygen path runs only for the pinned vectors; the
+        # p_canonical_id cross-check is exercised via the
+        # shekyl-archival-retention run above (it depends on archival_p).
+        cargo test --locked -p shekyl-crypto-pq \
+          --target aarch64-unknown-linux-gnu \
+          --test kat_archival_p_derive_v1
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}

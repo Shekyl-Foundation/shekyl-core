@@ -145,6 +145,12 @@ postcard-schema = { version = "0.2", default-features = false, features = ["deri
 
 [dev-dependencies]
 hex = "0.4"
+# Independent cSHAKE256 path for the ARCHIVAL_P_DERIVE_V1 KAT's p_canonical_id
+# pin. `sha3` is already a normal dependency (see [dependencies]); listing it
+# here adds zero supply-chain surface and lets the KAT compute the id directly
+# so the `shekyl-archival-retention` cross-check proves the two cSHAKE paths
+# (this inline KAT path and `archival-retention::id`) agree on the frozen value.
+sha3 = { version = "0.10", features = ["zeroize"] }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"

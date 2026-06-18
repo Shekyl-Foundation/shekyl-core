@@ -27,6 +27,11 @@ serde_json = { workspace = true }
 [dev-dependencies]
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde_json = { workspace = true }
+# ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via
+# `shekyl-crypto-pq::archival_p` and confirm `id::p_canonical_id_from_hybrid_pubkey`
+# reproduces the KAT-pinned value (the second of the two independent cSHAKE256
+# paths the crypto-pq KAT establishes).
+hex = "0.4"
 
 [lints]
 workspace = true
