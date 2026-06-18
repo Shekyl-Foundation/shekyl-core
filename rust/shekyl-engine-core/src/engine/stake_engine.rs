@@ -61,12 +61,14 @@
 //! the actor, its handle, and its lifecycle, exercised by tests only; the live
 //! spawn (plumbing `master_seed_64` into the open/create lifecycle) lands in
 //! PR 2c with the first consumer (the JoinMarket bond request), so no
-//! seed-holding actor comes into existence until something uses it. The
-//! `#[allow(dead_code)]` items below mark that inert surface.
+//! seed-holding actor comes into existence until something uses it. Each inert
+//! item carries its own `#[allow(dead_code)]` (rather than a module-level
+//! blanket) so the dead-code check stays effective: a *new* item added later
+//! without a use is still flagged, and the allows fall away as PR 2c wires each
+//! item in — making the wiring visible in that PR's diff.
 //!
 //! [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 //! [`ArchivalPKeys`]: shekyl_crypto_pq::archival_p::ArchivalPKeys
-#![allow(dead_code)] // PR 2b lands the actor inert; PR 2c wires it into Engine.
 
 use std::ops::ControlFlow;
 
@@ -92,8 +94,10 @@ use shekyl_crypto_pq::CryptoError;
 /// `derive_archival_p_keys` boundary takes a raw `u32`; the conversion is
 /// explicit via [`PSlot::index`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct PSlot(pub u32);
 
+#[allow(dead_code)] // inert until PR 2c wiring
 impl PSlot {
     /// The raw slot index, for the `derive_archival_p_keys` boundary.
     #[must_use]
@@ -112,10 +116,12 @@ impl PSlot {
 /// discipline — the only copy taken is the explicit, `Zeroizing`-wrapped one
 /// handed to the derivation task).
 #[derive(Zeroize, ZeroizeOnDrop)]
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct StakeMasterSeed {
     seed: [u8; MASTER_SEED_BYTES],
 }
 
+#[allow(dead_code)] // inert until PR 2c wiring
 impl StakeMasterSeed {
     /// Wrap a normalized 64-byte master seed.
     #[must_use]
@@ -146,6 +152,7 @@ impl std::fmt::Debug for StakeMasterSeed {
 /// `HybridPublicKey` has no secret field. `Clone + Debug` is sound for the same
 /// reason.
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct PersonaIdentity {
     /// The slot this persona was derived for.
     pub p_slot: PSlot,
@@ -153,6 +160,7 @@ pub(crate) struct PersonaIdentity {
     pub bond_id: HybridPublicKey,
 }
 
+#[allow(dead_code)] // inert until PR 2c wiring
 impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
     fn from_keys(keys: &ArchivalPKeys) -> Self {
@@ -169,6 +177,7 @@ impl PersonaIdentity {
 
 /// Errors surfaced by the StakeEngine handle.
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) enum StakeEngineError {
     /// The StakeEngine actor has stopped (fail-stop after a handler panic, or a
     /// clean stop). Terminal and non-retryable — the persona secrets went with
@@ -186,9 +195,12 @@ pub(crate) enum StakeEngineError {
     #[error("archival persona derivation failed: {0}")]
     Derivation(CryptoError),
 
-    /// The off-thread derivation task (`spawn_blocking`) panicked or was
-    /// cancelled before producing a result.
-    #[error("archival persona derivation task did not complete")]
+    /// The off-thread derivation task (`spawn_blocking`) was **cancelled**
+    /// before producing a result (e.g. runtime shutdown). A *panic* in the
+    /// derivation is deliberately not mapped here: it re-raises on the actor
+    /// task and fail-stops the engine (§10.1), so this variant is reserved for
+    /// the non-fatal cancellation case.
+    #[error("archival persona derivation task was cancelled")]
     DerivationTaskFailed,
 }
 
@@ -197,6 +209,7 @@ pub(crate) enum StakeEngineError {
 // ---------------------------------------------------------------------------
 
 /// Construction arguments moved into the actor task at spawn.
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct StakeEngineArgs {
     /// The wallet's master seed (the derivation root; outlives the actor).
     pub master_seed: StakeMasterSeed,
@@ -211,6 +224,7 @@ pub(crate) struct StakeEngineArgs {
 /// The single-threaded message loop serializes access to `active`, so the
 /// rotation swap (derive-into-local, then a single assignment) is atomic with
 /// respect to other messages.
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct StakeEngine {
     /// Derivation root. Held with wipe-on-drop; the only copy leaves via the
     /// explicit `Zeroizing` clone handed to `spawn_blocking`.
@@ -280,6 +294,7 @@ impl Actor for StakeEngine {
 /// bundle is derived first, then swapped in by a single assignment that drops
 /// (wipes) the old — never a window with two live personas, never a gap with
 /// none (§10.1 robustness #2 / §10.9).
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct ActivatePersona {
     pub p_slot: PSlot,
 }
@@ -310,12 +325,24 @@ impl Message<ActivatePersona> for StakeEngine {
         let seed_format = self.seed_format;
         let p_slot = msg.p_slot;
 
-        let derived = tokio::task::spawn_blocking(move || {
+        let derived = match tokio::task::spawn_blocking(move || {
             derive_archival_p_keys(&seed_copy, network, seed_format, p_slot.index())
         })
         .await
-        .map_err(|_| StakeEngineError::DerivationTaskFailed)?
-        .map_err(StakeEngineError::Derivation)?;
+        {
+            Ok(result) => result.map_err(StakeEngineError::Derivation)?,
+            Err(join_error) if join_error.is_panic() => {
+                // The derivation panicked — an unexpected invariant violation in
+                // a secret-owning path. Re-raise the panic on the actor task so
+                // kameo's `on_panic` fail-stops the engine, identical to an
+                // in-handler panic. A secret path that panicked is not a state
+                // we keep the actor alive through.
+                std::panic::resume_unwind(join_error.into_panic());
+            }
+            // Cancellation (the blocking task was aborted, e.g. runtime
+            // shutdown) — not a panic and not fatal to the actor; report it.
+            Err(_) => return Err(StakeEngineError::DerivationTaskFailed),
+        };
 
         // Single atomic transition. The new bundle was computed in `derived`
         // above and is not the *active* persona until this assignment, so there
@@ -330,6 +357,7 @@ impl Message<ActivatePersona> for StakeEngine {
 
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct ActivePersona;
 
 impl Message<ActivePersona> for StakeEngine {
@@ -355,11 +383,13 @@ impl Message<ActivePersona> for StakeEngine {
 /// tier; that confinement is the control, made a compile-time guarantee by the
 /// visibility bound (mirrors [`KeyEngineHandle`](super::key_actor::KeyEngineHandle)).
 #[derive(Clone)]
+#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
     actor: ActorRef<StakeEngine>,
 }
 
+#[allow(dead_code)] // inert until PR 2c wiring
 impl StakeEngineHandle {
     /// Spawn the StakeEngine over the moved-in seed + derivation context.
     ///
@@ -416,9 +446,21 @@ impl StakeEngineHandle {
 
 /// Collapse a kameo `ask` [`SendError`] into a [`StakeEngineError`].
 ///
-/// A `HandlerError` carries the real derivation error the handler returned.
-/// Every other variant is a transport failure against a stopped actor and maps
-/// to the terminal [`StakeEngineError::StakeActorUnavailable`].
+/// A `HandlerError` carries the real derivation error the handler returned and
+/// is surfaced as-is. `ActorNotRunning` / `ActorStopped` are exactly the
+/// fail-stop / closed-actor states the terminal
+/// [`StakeEngineError::StakeActorUnavailable`] names.
+///
+/// `MailboxFull` and `Timeout` are present only for match exhaustiveness and are
+/// **unreachable on this path**: the actor uses kameo's default *unbounded*
+/// mailbox (so the awaiting `ask` back-pressures the sender rather than
+/// returning `MailboxFull`, mirroring [`KeyEngine`](super::key_actor)) and the
+/// handle sets no `ask` timeout (so no `Timeout` is produced). Collapsing them
+/// to the terminal error is therefore a dead arm, not a misclassification of a
+/// live transient. **Reversion clause:** if PR 2c+ introduces a bounded mailbox
+/// or an ask-timeout, that arm becomes reachable and must split into its own
+/// *retryable* `StakeEngineError` variant rather than collapse here.
+#[allow(dead_code)] // inert until PR 2c wiring
 fn collapse_send_error<M>(err: SendError<M, StakeEngineError>) -> StakeEngineError {
     match err {
         SendError::HandlerError(e) => e,
