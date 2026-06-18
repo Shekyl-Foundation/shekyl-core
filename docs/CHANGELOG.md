@@ -4,6 +4,30 @@
 
 ### Added
 
+- **docs: design the wallet-side archival bond-post construction flow
+  (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`, 2026-06-17,
+  `docs/archival-bond-construction-design`).** The verify side
+  (`shekyl-archival-retention`) is the fixed, genesis-frozen contract;
+  construction genuinely does not exist yet (no builder, no `bond_credit` in the
+  RCT balance, no `P`-identity derivation). The doc specifies the full four-kind
+  architecture (so JoinMarket-first does not paint into a corner), implements
+  **JoinMarket only**, and single-sources by importing the validated verify-side
+  types. Key calibrations recorded: (a) the honest milestone is the **round-trip
+  KAT** (`construct -> verify accepts`) against a **synthetic** curve tree, *not*
+  a bond on a real chain -- on-chain is a sequenced dependency on the real
+  `CurveTreeClient` (CT-5); (b) `shekyl-tx-builder` gains a **generic** extra
+  cleartext balance term (the way `fee` is one; the verify side already treats
+  `fee` and `bond_credit` symmetrically as `amount_h(...)`), bond-named only in
+  the bond crate; (c) the other three kinds (Rebond/Unbond/HoldingsUpdate) are
+  **provisional** (paper-only, reopenable when their verify+construct PRs land);
+  (d) PR 2 runs the standoff **self-cert** (`certify_draw` against the wallet's
+  actual CSPRNG), not just `draw_entry_gap`. Review target 2-3 rounds (not 4-6:
+  the construct side is largely determined by the validated verify side). **PR 0
+  (`archival_p` derivation) is built in parallel, not gated on the doc's rounds**
+  -- its design is settled (gate-6 §9.3/§9.4) and it is the highest-stakes
+  primitive in the project. Cross-refs: `FOLLOWUPS.md` (construction-flow item),
+  `ARCHIVAL_FIREWALL_GATE6.md` §9, `STAKER_OPERATOR_GUIDE.md` (slices i/ii attach
+  here).
 - **docs: publish the staker-operator opsec + setup guide
   (`docs/STAKER_OPERATOR_GUIDE.md`, 2026-06-17, `chore/staker-operator-guide`).**
   First slice of the operator-experience work unit (the post-seal pivot: the

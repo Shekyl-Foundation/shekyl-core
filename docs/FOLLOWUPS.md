@@ -740,6 +740,25 @@ sustainability is unaffected by the recalibration.
   standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
   guide is the only currently-unblocked slice and was taken first.
 
+- **Wallet-side archival bond-post construction (design + JoinMarket, in
+  progress 2026-06-17, `docs/archival-bond-construction-design` +
+  `feat/archival-p-derivation`).** The construction counterpart to the
+  genesis-frozen `shekyl-archival-retention` verify side. Design doc:
+  [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
+  (under review, 2-3 rounds). Sequence: **PR 0** `shekyl-crypto-pq::archival_p`
+  (the `P`-identity + `bond_spend_pk` derivation, gate-6 §9.3/§9.4) -- built in
+  parallel, not gated on the doc's rounds, with an `ARCHIVAL_P_DERIVE_V1` KAT on
+  the **aarch64 qemu lane** (third cross-arch-deterministic primitive) + a
+  label-sensitivity negative; **PR 1** `shekyl-archival-bond-builder` (JoinMarket
+  vin + RCT witness) + a generic cleartext balance term in `shekyl-tx-builder`;
+  **PR 2** StakeEngine orchestration + standoff self-cert. Honest milestone for
+  the unit: the **round-trip KAT** against a synthetic tree -- **not** an on-chain
+  bond, which is gated on the real `CurveTreeClient` (CT-5). This unblocks
+  operator-experience slices (i)/(ii) (the funding/bond-construction call site
+  they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate construction is
+  **provisional** until their verify side lands (reopening trigger: the paired
+  verify+construct PR for each kind).
+
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
   `chore/address-derivation-v1-freeze`: published
