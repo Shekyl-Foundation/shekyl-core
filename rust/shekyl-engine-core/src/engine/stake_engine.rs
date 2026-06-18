@@ -42,9 +42,12 @@
 //! the old. There is never a window with two live personas (the §10.9
 //! co-activation hazard) and never a gap with none. The bundle is **not
 //! persisted**; the actor re-derives deterministically from `master_seed_64` on
-//! every (re-)spawn, which is why the seed must outlive the actor and carries
-//! the same wipe discipline — pinned cross-arch by the `ARCHIVAL_P_DERIVE_V1`
-//! KAT (`shekyl-crypto-pq`).
+//! every (re-)spawn. The actor *owns* its seed copy and wipes it on stop, so
+//! deterministic re-derivation across a respawn relies on the **orchestrator**
+//! supplying the same `master_seed_64` to the next spawn — the seed's
+//! authoritative home is the wallet file, not this actor (which only holds a
+//! wipe-disciplined working copy for the duration of its life). Re-derivation is
+//! pinned cross-arch by the `ARCHIVAL_P_DERIVE_V1` KAT (`shekyl-crypto-pq`).
 //!
 //! # Fail-stop, not supervised
 //!
@@ -211,7 +214,9 @@ pub(crate) enum StakeEngineError {
 /// Construction arguments moved into the actor task at spawn.
 #[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct StakeEngineArgs {
-    /// The wallet's master seed (the derivation root; outlives the actor).
+    /// The wallet's master seed: the derivation root, moved into and owned by
+    /// the actor (wiped on stop). Cross-respawn determinism relies on the
+    /// orchestrator re-supplying the same seed at the next spawn.
     pub master_seed: StakeMasterSeed,
     /// Derivation network (mainnet / testnet / …).
     pub network: DerivationNetwork,
@@ -537,6 +542,9 @@ mod tests {
     #[tokio::test]
     async fn activate_derives_lazily_and_returns_public_identity() {
         let handle = spawn_handle();
+        // Derive the oracle once; reused for both the activate and the
+        // subsequent active-query assertion (no need to re-run PQ keygen).
+        let oracle0 = oracle_bond_id(0);
 
         let identity = handle
             .activate_persona(PSlot(0))
@@ -545,7 +553,7 @@ mod tests {
         assert_eq!(identity.p_slot, PSlot(0));
         assert_eq!(
             bond_id_bytes(&identity),
-            oracle_bond_id(0),
+            oracle0,
             "actor returns the genesis-frozen bond identity"
         );
 
@@ -555,7 +563,7 @@ mod tests {
             .expect("active query succeeds");
         let active = active.expect("persona is active after activation");
         assert_eq!(active.p_slot, PSlot(0));
-        assert_eq!(bond_id_bytes(&active), oracle_bond_id(0));
+        assert_eq!(bond_id_bytes(&active), oracle0);
     }
 
     // §10.1 robustness #3 — re-derivation is deterministic across a respawn: a
