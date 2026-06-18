@@ -55,10 +55,24 @@ pub fn archival_p_derive_manifest_self_check() -> Result<(), CryptoError> {
     if got == ARCHIVAL_P_DERIVE_MANIFEST_HASH {
         Ok(())
     } else {
-        Err(CryptoError::InvalidInput(
-            "ARCHIVAL_P_DERIVE_V1 corpus hash mismatch (manifest/vectors drift)".into(),
-        ))
+        // Surface both digests in hex. This guard's primary failure mode is
+        // platform-drift on the aarch64 qemu lane, where the committed corpus
+        // bytes must read bit-identically; printing got/pinned makes that
+        // failure self-diagnosing in CI without rebuilding vectors by hand.
+        Err(CryptoError::InvalidInput(format!(
+            "ARCHIVAL_P_DERIVE_V1 corpus hash mismatch (manifest/vectors drift): \
+             got {}, pinned {}",
+            hex32(&got),
+            hex32(&ARCHIVAL_P_DERIVE_MANIFEST_HASH),
+        )))
     }
+}
+
+/// Lowercase-hex a 32-byte digest for diagnostics. Cold path (mismatch only),
+/// so the per-byte allocation is irrelevant; avoids a `hex` runtime dependency
+/// for what is otherwise a dev-only crate need.
+fn hex32(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
