@@ -137,6 +137,7 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
     fn submit(
         &self,
         id: ReservationId,
+        seen_gen: u64,
     ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
         let injected = self
             .queued_submit_failures
@@ -147,7 +148,7 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
             if let Some(err) = injected {
                 return Err(err);
             }
-            self.inner.submit(id).await
+            self.inner.submit(id, seen_gen).await
         }
     }
 
@@ -222,6 +223,7 @@ mod tests {
         fn submit(
             &self,
             _id: ReservationId,
+            _seen_gen: u64,
         ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
             async { Ok(TxHash::from_bytes([1u8; 32])) }
         }
@@ -261,7 +263,10 @@ mod tests {
 
         let pending = wrapper.build(standard_request()).await.expect("build ok");
         assert_eq!(wrapper.outstanding(), 1);
-        let hash = wrapper.submit(pending.id).await.expect("submit ok");
+        let hash = wrapper
+            .submit(pending.id, pending.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(hash.as_bytes(), &[1u8; 32]);
         assert_eq!(wrapper.queued_build_failures(), 0);
         assert_eq!(wrapper.queued_submit_failures(), 0);
@@ -319,10 +324,13 @@ mod tests {
             reservation_id: pending.id,
         });
         assert!(matches!(
-            wrapper.submit(pending.id).await,
+            wrapper.submit(pending.id, pending.content_gen).await,
             Err(SubmitError::ReservationNotFound { .. })
         ));
-        assert!(wrapper.submit(pending.id).await.is_ok());
+        assert!(wrapper
+            .submit(pending.id, pending.content_gen)
+            .await
+            .is_ok());
 
         wrapper.queue_discard_failure(PendingTxError::ReservationNotFound {
             reservation_id: pending.id,

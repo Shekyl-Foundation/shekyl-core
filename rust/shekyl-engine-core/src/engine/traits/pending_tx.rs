@@ -213,18 +213,23 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// drops from `in_flight` on accept (and the engine emits
     /// `SubmitSucceeded { rid, tx_hash }`).
     ///
-    /// **Staleness check (segment-2h F1 pin).** Before
-    /// dispatching to the daemon, the handler reads the current
-    /// snapshot id (Stage 1 reads exact ledger truth under the
-    /// `Mutex<PendingTxState>` guard) and compares against the
-    /// reservation's `snapshot_id`. On mismatch the engine emits
-    /// `SubmitSnapshotInvalidated { rid, reservation_snapshot,
-    /// current_snapshot }`, returns
-    /// `SubmitError::SnapshotInvalidated`, and **does NOT
-    /// auto-release** the reservation (segment-2h lazy R5
-    /// disposition); the consumer must call `discard(rid,
-    /// ConsumerExplicit)` to release `output_locks`. R8 TTL
-    /// safety-net handles consumer abandonment.
+    /// **Staleness + re-anchor (CT-5d, [`docs/design/CT5D_REANCHOR.md`]).** The
+    /// *reference block* the proof is anchored to is the staleness authority
+    /// (this replaces the older `SnapshotId` check, which invalidated on every
+    /// tip advance). Before dispatch the handler tests `should_reanchor(tip,
+    /// reference) || reference_orphaned(reference)`; a still-canonical, in-window
+    /// reference broadcasts as-is. When stale, the handler **re-anchors** in
+    /// place (the reprove path: fresh reference, re-assemble, re-sign) and
+    /// gates the broadcast on consent: `seen_gen` — the `content_gen` the
+    /// consumer last reviewed on the [`PendingTx`] handle — must match the
+    /// reservation's current `content_gen`. A re-anchor that changes the realized
+    /// `(fee, recipients, change)` advances `content_gen` and returns
+    /// [`SubmitError::ContentChanged`] **without broadcasting**; the reservation
+    /// stays `consumer_held` (no auto-release, lazy R5) with a fresh proof, and
+    /// the consumer re-reads and resubmits with the advanced `content_gen`. A
+    /// reference that cannot anchor yet returns [`SubmitError::ReanchorUnavailable`];
+    /// one needing reselection (deep reorg / fee escalation) returns
+    /// [`SubmitError::ReselectionRequired`]. R8 TTL handles abandonment.
     ///
     /// # Errors
     ///
@@ -259,8 +264,14 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// discipline above is violated. Contrast
     /// [`outstanding`](Self::outstanding), which panics on poisoning;
     /// the asymmetry is deliberate (see the module-level rustdoc).
-    fn submit(&self, id: ReservationId)
-        -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
+    /// `seen_gen` is the `content_gen` the consumer last reviewed on the
+    /// [`PendingTx`] handle (CT-5d §4); it gates broadcast so a re-anchor cannot
+    /// silently change the authorized content out from under the consumer.
+    fn submit(
+        &self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
 
     /// Discard the named reservation with an explicit reason.
     ///

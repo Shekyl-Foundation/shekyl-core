@@ -805,8 +805,16 @@ impl<
     }
 
     /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
-    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        poll_immediate_submit(id, self.pending.submit(id))
+    ///
+    /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
+    /// it gates broadcast against a submit-time re-anchor that changed the
+    /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
+    pub fn submit_pending_tx(
+        &mut self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
+        poll_immediate_submit(id, self.pending.submit(id, seen_gen))
     }
 
     /// Discard a reservation via [`PendingTxEngine::discard`].

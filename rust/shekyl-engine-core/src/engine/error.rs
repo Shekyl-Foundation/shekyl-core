@@ -1084,6 +1084,47 @@ pub enum SubmitError {
         /// The rid whose duplicate submit was refused.
         reservation_id: ReservationId,
     },
+
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): the submit-time re-anchor
+    /// changed the realized `(fee, recipients, change)`, so the content the
+    /// consumer last reviewed (`seen_gen`) is stale. Broadcast is **withheld**;
+    /// the reservation stays `consumer_held` with the advanced `content_gen` and
+    /// fresh `tx_bytes`. The consumer re-reads the handle, reviews the new
+    /// `(fee, change)`, and resubmits with the advanced `content_gen`. This makes
+    /// "broadcast content the user did not authorize" unrepresentable.
+    #[error(
+        "content changed on re-anchor for reservation {reservation_id:?}; re-confirm at content_gen {content_gen}"
+    )]
+    ContentChanged {
+        /// The reservation whose authorized content advanced.
+        reservation_id: ReservationId,
+        /// The advanced `content_gen` the consumer must resubmit with.
+        content_gen: u64,
+    },
+
+    /// CT-5d (§3b): the proof needs re-anchoring but the curve tree cannot yet
+    /// anchor a fresh reference — it is still resyncing (e.g. post-reorg) or lags
+    /// the chain tip too far to anchor a submittable reference. Transient; the
+    /// reservation is preserved. Retry once the tree catches up.
+    #[error("reservation {reservation_id:?} cannot re-anchor yet; tree resyncing, retry later")]
+    ReanchorUnavailable {
+        /// The reservation awaiting a fresh, anchorable reference.
+        reservation_id: ReservationId,
+    },
+
+    /// CT-5d (§3, F-I): the proof cannot be content-preservingly re-anchored —
+    /// a deep reorg orphaned a selected input, or the fresh-depth fee exceeds the
+    /// selected inputs' coverage. Reselection is the CT-5d-deferred path
+    /// (`docs/FOLLOWUPS.md` "CT-5d reselect"); the consumer discards and rebuilds.
+    /// The reservation is preserved so the consumer can review it before
+    /// discarding.
+    #[error(
+        "reservation {reservation_id:?} needs reselection (deep reorg / fee escalation); discard and rebuild"
+    )]
+    ReselectionRequired {
+        /// The reservation that must be discarded and rebuilt.
+        reservation_id: ReservationId,
+    },
 }
 
 // --- PendingTxEngine collaborator-error vocabulary (PR 5) -----------------

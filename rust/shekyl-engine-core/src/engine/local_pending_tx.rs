@@ -169,23 +169,19 @@ pub(crate) struct ConsumerHeldEntry {
     /// Serialized signed transaction for daemon broadcast.
     pub tx_bytes: Vec<u8>,
     /// CT-5d: the original build request (recipients + priority). Re-anchor
-    /// (reprove/reselect) re-runs the build pipeline from this, so the entry
-    /// carries enough to rebuild, not just to submit `tx_bytes` (§3).
-    #[allow(dead_code)] // consumed by the CT-5d re-anchor primitive (commit 2).
+    /// re-runs the build pipeline from this, so the entry carries enough to
+    /// rebuild, not just to submit `tx_bytes` (§3).
     pub request: TxRequest,
     /// CT-5d: the reference block this proof is anchored to. The submit
     /// pre-flight reads it for `should_reanchor` (age) and `reference_orphaned`
     /// (point query) (§5).
-    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
     pub reference: ReferenceBlock,
     /// CT-5d: consumer-visible content generation. Advances only when a
     /// re-anchor changes the realized content (`fingerprint`), never on a proof
     /// refresh; `submit(id, seen_gen)` compares against it (§4 F-G).
-    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
     pub content_gen: u64,
     /// CT-5d: the materialized content fingerprint `content_gen` advances
     /// against (§4 F-G/F-G′).
-    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
     pub fingerprint: ContentFingerprint,
 }
 
@@ -684,10 +680,10 @@ pub(crate) enum ReanchorOutcome {
 
 /// Why a re-anchor could not reprove in place (CT-5d §3).
 //
-// `dead_code` allow: the variant payloads are read by the CT-5d submit
-// pre-flight (commit 3) when it maps a re-anchor failure to a `SubmitError`.
-// Pattern matches the `ttl` / `Reservation` "type substrate before consumer"
-// allows in this crate.
+// `dead_code` allow: the submit pre-flight maps these by *variant* to a
+// `SubmitError`, so the `detail` / `SendError` payloads are carried for
+// diagnostics (the `Debug` render) but not read on the mapping path. Kept as
+// data so a future logging/telemetry hook surfaces the precise cause.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum ReanchorError {
@@ -718,6 +714,18 @@ where
 {
     fn refresh_current_snapshot(&self, state: &mut PendingTxState) {
         state.current_snapshot = derive_snapshot_id(&self.ledger.snapshot());
+    }
+
+    /// CT-5d (`docs/design/CT5D_REANCHOR.md` §5): is `reference` no longer
+    /// canonical? A stateless point query — the canonical block at the reference
+    /// height is no longer the one the proof was anchored against (a reorg
+    /// replaced it). One sync `with_ledger_block` read (F-J); handles arbitrarily
+    /// many intervening reorgs for free, since it compares against the *current*
+    /// canonical hash, not a retained fork history.
+    fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
+        self.ledger
+            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height.0).copied())
+            != Some(reference.block_hash)
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
@@ -1379,7 +1387,6 @@ where
     /// fee the fixed inputs cannot cover — F-I) is the CT-5d-deferred path: it
     /// surfaces as [`ReanchorError::ReselectionRequired`] so the consumer
     /// discards and rebuilds — never a bad proof, never a silent mutation.
-    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
     async fn reanchor_consumer_held(
         &self,
         id: ReservationId,
@@ -1674,8 +1681,13 @@ where
         }))
     }
 
-    async fn submit_async(&self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        let tx_bytes = {
+    async fn submit_async(&self, id: ReservationId, seen_gen: u64) -> Result<TxHash, SubmitError> {
+        // --- pre-flight (sync): membership + reference-staleness decision (CT-5d
+        // §5). The reference is the staleness authority — it *replaces* the
+        // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
+        // invalidates a still-canonical proof; only an aged-out or reorg-orphaned
+        // reference triggers a re-anchor. All sync ledger reads (F-J).
+        let stale = {
             let mut state = self
                 .state
                 .lock()
@@ -1688,6 +1700,8 @@ where
                 (false, false) => {
                     return Err(SubmitError::ReservationNotFound { reservation_id: id });
                 }
+                // A re-submit while in_flight is await/query the daemon, never a
+                // rebuild (F-E): the daemon owns the resolution authority.
                 (false, true) => {
                     return Err(SubmitError::SubmitAlreadyPending { reservation_id: id });
                 }
@@ -1697,45 +1711,61 @@ where
                 (true, false) => {}
             }
 
-            let held = state
+            let reference = state
                 .consumer_held
                 .get(&id)
                 .expect("consumer_held membership established above")
-                .clone();
+                .reference;
+            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            should_reanchor(current_tip, reference.height.0) || self.reference_orphaned(&reference)
+        };
 
-            if held.snapshot_id != state.current_snapshot {
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                        reservation_id: id,
-                        reservation_snapshot: held.snapshot_id,
-                        current_snapshot: state.current_snapshot,
-                    },
-                );
-                return Err(SubmitError::SnapshotInvalidated {
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
+        // --- re-anchor if stale (three-phase, lock-free prover) ---
+        if stale {
+            match self.reanchor_consumer_held(id).await {
+                // Reproved or ContentChanged: the entry now carries a fresh proof
+                // and a possibly-advanced content_gen. The broadcast gate below
+                // enforces consent uniformly via seen_gen, so both fall through.
+                Ok(_) => {}
+                Err(ReanchorError::ReselectionRequired { .. }) => {
+                    return Err(SubmitError::ReselectionRequired { reservation_id: id });
+                }
+                Err(ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_)) => {
+                    return Err(SubmitError::ReanchorUnavailable { reservation_id: id });
+                }
+            }
+        }
+
+        // --- broadcast gate (sync): content_gen consent + atomic flip, then send ---
+        let tx_bytes = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            self.refresh_current_snapshot(&mut state);
+
+            // A concurrent discard could have removed the entry during the
+            // re-anchor (re-anchor never moves it to in_flight, so absence here
+            // means discarded).
+            let Some(held) = state.consumer_held.get(&id).cloned() else {
+                return Err(SubmitError::ReservationNotFound { reservation_id: id });
+            };
+
+            // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
+            // must match the materialized `content_gen`; a mismatch means a
+            // re-anchor (this submit's, or a prior one the consumer has not
+            // re-confirmed) advanced the realized content — withhold and return
+            // the advanced generation. Makes broadcasting unauthorized content
+            // unrepresentable.
+            if seen_gen != held.content_gen {
+                return Err(SubmitError::ContentChanged {
+                    reservation_id: id,
+                    content_gen: held.content_gen,
                 });
             }
 
-            let stored_tip = self
-                .ledger
-                .with_ledger_block(|ledger| ledger.block_hash_at(held.built_at_height).copied());
-            if stored_tip != Some(held.built_at_tip_hash) {
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                        reservation_id: id,
-                        reservation_snapshot: held.snapshot_id,
-                        current_snapshot: state.current_snapshot,
-                    },
-                );
-                return Err(SubmitError::SnapshotInvalidated {
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
-                });
-            }
-
+            // Flip consumer_held → in_flight atomically under the lock, then send
+            // lock-free: the proof is "committed as of" the flip (F-H).
             let created_at = held.created_at;
             let tx_bytes = held.tx_bytes;
             state.consumer_held.remove(&id);
@@ -2135,9 +2165,10 @@ where
     fn submit(
         &self,
         id: ReservationId,
+        seen_gen: u64,
     ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send {
         let this = self;
-        async move { this.submit_async(id).await }
+        async move { this.submit_async(id, seen_gen).await }
     }
 
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
@@ -2945,7 +2976,10 @@ mod tests {
             "the build produces a real signed tx"
         );
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes)),
@@ -3013,7 +3047,10 @@ mod tests {
         }
         assert_eq!(pending.outstanding(), 1);
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
@@ -3103,7 +3140,10 @@ mod tests {
             kind: TerminalErrorKind::DoubleSpend,
         }));
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonRejectedTerminal {
@@ -3144,7 +3184,10 @@ mod tests {
         pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
             kind: TerminalErrorKind::FeeTooLow,
         }));
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonRejectedTerminal {
@@ -3184,7 +3227,7 @@ mod tests {
             kind: TerminalErrorKind::Malformed,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::Malformed
             })
@@ -3210,7 +3253,10 @@ mod tests {
             reservation_id: built.id,
         }));
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonAmbiguous {
@@ -3259,7 +3305,7 @@ mod tests {
             reservation_id: built.id,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
                 ..
@@ -3280,7 +3326,7 @@ mod tests {
             reservation_id: built.id,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonTimeout,
                 ..
@@ -3405,12 +3451,15 @@ mod tests {
         );
     }
 
+    /// CT-5d (§5): a benign tip advance no longer invalidates a still-canonical,
+    /// in-window proof — it broadcasts as-is, with no re-anchor. This replaces the
+    /// pre-CT-5d `SnapshotInvalidated`-on-every-block behavior: the reference, not
+    /// the `SnapshotId`, is now the staleness authority.
     #[tokio::test]
-    async fn pending_tx_submit_snapshot_invalidated_coherence() {
+    async fn submit_carries_proof_across_benign_tip_advance() {
         let sink = Arc::new(AssertionSink::new());
         let (ledger, _tree_dir, tree) =
             funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
-        let build_snapshot = derive_snapshot_id(&ledger.snapshot());
         let pending = test_pending_tx_with_tree_and_sink(
             Arc::clone(&ledger),
             tree,
@@ -3420,8 +3469,11 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        assert_eq!(built.snapshot_id, build_snapshot);
+        // Reference anchored at tip(20) − REF_ANCHOR_AGE(6) = 14.
+        assert_eq!(built.reference_height, 14);
 
+        // Advance the tip a few blocks with no reorg: reference age 25 − 14 = 11,
+        // well within the daemon window and still canonical → not stale.
         populate_ledger(
             ledger.as_ref(),
             21,
@@ -3429,30 +3481,24 @@ mod tests {
             25,
         );
 
-        let err = pending.submit(built.id).await.unwrap_err();
-        let SubmitError::SnapshotInvalidated {
-            reservation_snapshot,
-            current_snapshot,
-        } = err
-        else {
-            panic!("expected SnapshotInvalidated, got {err:?}");
-        };
-        assert_eq!(reservation_snapshot, build_snapshot);
-        assert_ne!(current_snapshot, build_snapshot);
-        assert_eq!(pending.outstanding(), 1);
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("benign tip advance broadcasts the existing proof as-is");
+        assert_eq!(pending.outstanding(), 0, "submit consumed the reservation");
 
         let events = sink.recorded_pending();
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSnapshotInvalidated { .. })),
-            "SnapshotInvalidated must emit SubmitSnapshotInvalidated: {events:?}"
+                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSucceeded { .. })),
+            "benign advance must submit successfully: {events:?}"
         );
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, PendingTxDiagnostic::Discarded { .. })),
-            "lazy R5: no auto-Discarded on snapshot invalidation: {events:?}"
+                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSnapshotInvalidated { .. })),
+            "CT-5d retires SnapshotInvalidated on a benign tip advance: {events:?}"
         );
     }
 
@@ -3475,47 +3521,52 @@ mod tests {
         assert_eq!(recovery.outstanding(), 1);
     }
 
-    /// Hybrid-style snapshot rotation: build at S1, advance ledger,
-    /// submit observes lazy-R5 `SnapshotInvalidated` (segment-2h).
+    /// CT-5d (§4): the `content_gen` consent gate. Submitting with a `seen_gen`
+    /// that does not match the reservation's materialized `content_gen` is
+    /// withheld as [`SubmitError::ContentChanged`] — never broadcast — and the
+    /// reservation stays `consumer_held`. Re-confirming with the correct
+    /// generation broadcasts. (Here the mismatch is synthetic: a fresh build is
+    /// generation 0, so a consumer passing a stale generation 1 is refused.)
     #[tokio::test]
-    async fn hybrid_pending_tx_snapshot_rotation_on_submit() {
-        let sink = Arc::new(AssertionSink::new());
+    async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
         let (ledger, _tree_dir, tree) =
             funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
-        let s1 = derive_snapshot_id(&ledger.snapshot());
-        let pending = test_pending_tx_with_tree_and_sink(
-            Arc::clone(&ledger),
-            tree,
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
         let built = pending
             .build(standard_request(7_000))
             .await
-            .expect("build at S1");
-        assert_eq!(built.snapshot_id, s1);
+            .expect("build ok");
+        assert_eq!(built.content_gen, 0, "a fresh build is generation 0");
 
-        populate_ledger(
-            ledger.as_ref(),
-            21,
-            vec![make_recovered_output(9, 300, 2_000)],
-            30,
-        );
-        let s2 = derive_snapshot_id(&ledger.snapshot());
-        assert_ne!(s1, s2);
-
-        let SubmitError::SnapshotInvalidated {
-            reservation_snapshot,
-            current_snapshot,
-        } = pending.submit(built.id).await.unwrap_err()
+        // Submit immediately (no tip advance → not stale, no re-anchor) with a
+        // generation the consumer never saw: withhold, do not broadcast.
+        let err = pending
+            .submit(built.id, built.content_gen + 1)
+            .await
+            .unwrap_err();
+        let SubmitError::ContentChanged {
+            reservation_id,
+            content_gen,
+        } = err
         else {
-            panic!("submit after rotation must return SnapshotInvalidated");
+            panic!("expected ContentChanged, got {err:?}");
         };
-        assert_eq!(reservation_snapshot, s1);
-        assert_eq!(current_snapshot, s2);
+        assert_eq!(reservation_id, built.id);
+        assert_eq!(
+            content_gen, 0,
+            "the materialized generation to re-confirm with"
+        );
+        assert_eq!(
+            pending.outstanding(),
+            1,
+            "withheld: the reservation stays consumer_held"
+        );
 
+        // Re-confirming with the correct generation broadcasts.
         pending
-            .discard(built.id, DiscardReason::ConsumerExplicit)
-            .expect("consumer releases stale reservation");
+            .submit(built.id, 0)
+            .await
+            .expect("correct seen_gen broadcasts");
         assert_eq!(pending.outstanding(), 0);
     }
 
@@ -3704,7 +3755,10 @@ mod tests {
             tx.weight()
         );
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
@@ -3737,7 +3791,10 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.submit(built.id).await.expect("first submit");
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("first submit");
         assert_eq!(daemon.submitted_count(), 1);
 
         let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
@@ -3751,7 +3808,10 @@ mod tests {
         );
         assert_eq!(daemon.submitted_count(), 1);
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, SubmitError::ReservationNotFound { .. }),
             "reservation consumed after first submit: {err:?}"
