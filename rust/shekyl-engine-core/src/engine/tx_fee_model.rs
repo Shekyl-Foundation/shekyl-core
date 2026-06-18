@@ -11,6 +11,7 @@
 
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
+use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
 
 use super::traits::key::FeeDirective;
@@ -33,20 +34,98 @@ const TX_PREFIX_EXTRA_WEIGHT: usize = 64;
 /// Bulletproof+ aggregate proof size scales with output count (2a synthetic path KAT).
 const BULLETPROOF_PLUS_PER_OUTPUT_WEIGHT: usize = 320;
 
-/// Depth-1 FCMP proof sizes measured on the synthetic path (`kat_print_depth1_fcmp_sizes`).
-const FCMP_PROOF_DEPTH1: [usize; 9] = [0, 3_392, 4_832, 5_152, 6_048, 7_104, 6_880, 7_712, 8_416];
-
-/// Marginal FCMP proof bytes per additional tree layer above depth 1.
+/// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
+/// `n_in ∈ 0..=8` and `tree_depth ∈ 0..=24` (row/col 0 are unused sentinels).
 ///
-/// Full `[1,8]×[2,24]` grid measurement is blocked on depth-parametric synthetic
-/// tree path validity (PF7 / §3.0.5); reopen at CT-5 when curve-tree fixtures land.
-/// Until then the fee predictor uses the depth-1 KAT row plus this conservative
-/// per-layer increment (over-estimates vs production when depth > 1).
-const FCMP_PROOF_BYTES_PER_DEPTH_LAYER: usize = 320;
+/// Emitted by `kat_emit_fcmp_proof_size_table` from the depth-consistent
+/// single-path synthetic trees (PF7) — the CT-5c calibration the
+/// pre-curve-tree-fixture comment deferred. The depth-1 column equals the
+/// independently-known depth-1 row (the prior `FCMP_PROOF_DEPTH1` constant),
+/// which cross-validates the measurement. The series is **non-monotonic** in
+/// depth (the FCMP++ inner-product argument rounds), so this is a lookup table,
+/// not a closed-form per-layer increment. `kat_fcmp_proof_size_grid` validates
+/// every cell against re-measurement (`#[ignore]`; ~slow); `kat_fcmp_proof_size_depth1_row`
+/// guards the depth-1 column in CI.
+const FCMP_PROOF_SIZE_KAT: [[usize; 25]; 9] = [
+    [0; 25],
+    [
+        0, 3392, 3808, 4160, 4704, 4928, 5344, 5696, 6240, 5760, 5280, 5472, 5824, 6016, 6240,
+        6432, 6784, 6464, 5952, 6112, 6304, 6496, 6688, 6720, 6912,
+    ],
+    [
+        0, 4832, 5792, 5440, 6272, 6784, 6528, 7040, 7488, 7296, 6848, 7200, 7584, 7936, 8192,
+        8544, 8928, 8768, 8288, 8480, 8704, 9056, 9408, 9472, 9824,
+    ],
+    [
+        0, 5152, 6528, 7104, 7520, 7200, 7264, 7680, 8256, 8640, 9216, 9088, 8800, 9152, 9696,
+        10080, 10464, 10848, 11264, 11648, 12032, 12256, 12096, 12480, 12704,
+    ],
+    [
+        0, 6048, 7968, 7808, 8128, 8832, 8768, 9472, 10112, 10112, 9856, 10400, 10976, 11520,
+        11968, 12512, 13088, 13120, 12832, 13216, 13632, 14176, 14720, 14976, 15520,
+    ],
+    [
+        0, 7104, 8544, 8224, 8832, 9600, 10560, 10432, 10496, 11072, 11840, 12416, 13024, 13760,
+        13792, 13696, 14272, 14816, 15424, 16000, 16576, 17152, 17728, 18144, 18720,
+    ],
+    [
+        0, 6880, 8672, 9600, 10112, 10144, 10560, 11200, 12128, 12864, 13664, 13760, 13952, 14400,
+        15296, 15904, 16512, 17248, 18016, 18752, 19360, 19936, 20000, 20608, 21312,
+    ],
+    [
+        0, 7712, 9728, 9824, 10624, 11552, 12000, 12800, 13760, 13984, 14240, 15008, 15808, 16576,
+        17504, 18272, 19040, 19648, 20448, 21216, 21280, 21536, 22304, 23040, 23808,
+    ],
+    [
+        0, 8416, 10784, 11008, 11712, 12800, 13120, 14208, 15232, 15616, 15744, 16672, 17632,
+        18560, 19392, 20320, 21280, 21696, 21792, 22560, 23360, 24288, 25216, 25856, 26784,
+    ],
+];
+
+/// Compile-time guard tying the table's dimensions to the canonical proof-system
+/// limits: the rows cover `n_in ∈ 0..=MAX_INPUTS` and the columns
+/// `tree_depth ∈ 0..=MAX_TREE_DEPTH` (index 0 unused). If either limit changes,
+/// this fails to compile — forcing a table regeneration — rather than silently
+/// falling back to `FCMP_PROOF_SIZE_MAX` for the newly-reachable cells (which
+/// could under-estimate fees if real proofs there exceed the current max).
+const _: () = {
+    assert!(FCMP_PROOF_SIZE_KAT.len() == MAX_INPUTS + 1);
+    assert!(FCMP_PROOF_SIZE_KAT[0].len() == MAX_TREE_DEPTH as usize + 1);
+};
+
+/// Largest cell of [`FCMP_PROOF_SIZE_KAT`]; the conservative fallback for an
+/// out-of-range cell that should be unreachable (`validate_inputs` enforces
+/// `n_in ∈ 1..=MAX_INPUTS`, `tree_depth ∈ 1..=MAX_TREE_DEPTH`).
+///
+/// Derived from the table at compile time, not hardcoded, so regenerating the
+/// table can never leave the fallback stale — under-estimating fees (a
+/// non-conservative drift) or over-estimating them.
+const FCMP_PROOF_SIZE_MAX: usize = {
+    let mut max = 0;
+    let mut i = 0;
+    while i < FCMP_PROOF_SIZE_KAT.len() {
+        let row = &FCMP_PROOF_SIZE_KAT[i];
+        let mut j = 0;
+        while j < row.len() {
+            if row[j] > max {
+                max = row[j];
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    max
+};
 
 fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
-    let base = FCMP_PROOF_DEPTH1.get(n_in).copied().unwrap_or(8_416);
-    base + usize::from(tree_depth.saturating_sub(1)) * FCMP_PROOF_BYTES_PER_DEPTH_LAYER
+    // Every reachable `(n_in, tree_depth)` has a measured cell. An out-of-range
+    // lookup (rejected upstream) falls back to the largest measured size so the
+    // fee estimate is conservative rather than panicking or under-paying.
+    FCMP_PROOF_SIZE_KAT
+        .get(n_in)
+        .and_then(|row| row.get(usize::from(tree_depth)).copied())
+        .filter(|&v| v != 0)
+        .unwrap_or(FCMP_PROOF_SIZE_MAX)
 }
 
 /// Structural weight predictor (§3.10.1). Clawback is 0 for 2a (`n_out ∈ {1,2}`).

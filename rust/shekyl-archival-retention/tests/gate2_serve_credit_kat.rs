@@ -22,7 +22,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
+    AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
@@ -290,13 +290,19 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
         .iter()
         .find(|b| b.height == last_drained)
         .expect("drained block");
-    let leaf_hashes = shekyl_curve_tree::recon::extract_leaf_hashes(Some(&drained.blob));
     let raw = drained.outputs[0];
-    let founder = OutputIdentity {
+    // gindex = cumulative vouts in earlier blocks (drain-order next_output_seq);
+    // resolve by it (X3), with the (output_key, commitment) as the consistency
+    // pair.
+    let founder_gindex: u64 = blocks
+        .iter()
+        .filter(|b| b.height < last_drained)
+        .map(|b| b.outputs.len() as u64)
+        .sum();
+    let founder = AssembleInput {
+        gindex: Gindex(founder_gindex),
         output_key: raw.output_key,
-        commitment: raw.commitment,
-        h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(&leaf_hashes, 0),
-        target: raw.target,
+        commitment: raw.commitment.expect("coinbase output has a commitment"),
     };
     let path = client
         .assemble_path(&founder, &reference)

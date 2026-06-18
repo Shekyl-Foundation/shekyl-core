@@ -57,6 +57,35 @@ pub struct OutputIdentity {
     pub target: TargetKind,
 }
 
+/// A request to assemble one owned output's membership path (X3, CT-5c).
+///
+/// Carries the **`gindex`** — the tree's unique key, equal to the wallet's
+/// `TransferDetails.global_output_index` — as the resolution key, plus the
+/// `(output_key, commitment)` the caller expects at that gindex for the
+/// post-resolution consistency check. Resolving by `gindex` is total (the
+/// owned output is always a drained leaf), eliminating the `(output_key,
+/// commitment)` content-match's collision case; the carried pair is then used
+/// only to *verify* the resolution, not to perform it (a mismatch is
+/// [`crate::ClientError::IdentityMismatch`]).
+///
+/// Deliberately **not** a full [`OutputIdentity`]: resolution uses only
+/// `gindex` and the check uses only `(output_key, commitment)`, so carrying
+/// `h_pqc` / `target` would force the engine to fabricate two fields it does
+/// not hold for an owned output (the real `h_pqc` comes back *from* the
+/// drained leaf in [`ChunkLeaf`]). Public material only — `Copy`, no secrets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AssembleInput {
+    /// Global output index (`= TransferDetails.global_output_index`), the
+    /// tree's unique resolution key.
+    pub gindex: Gindex,
+    /// Compressed Ed25519 output public key (`O`) the caller expects at
+    /// `gindex`.
+    pub output_key: [u8; 32],
+    /// Amount commitment (`C`) the caller expects at `gindex`. Non-optional:
+    /// an owned output is always leaf-eligible and commitment-bearing.
+    pub commitment: [u8; 32],
+}
+
 /// Implement `redb::Value` + `redb::Key` for an integer newtype by
 /// delegating every operation to the inner primitive's impl.
 ///

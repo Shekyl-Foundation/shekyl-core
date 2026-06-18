@@ -112,8 +112,49 @@ pub enum ClientError {
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
-        /// Compressed output key that was not found among drained leaves.
+        /// Global output index (the resolution key, X3) that matched no drained
+        /// leaf at the reference height — the primary diagnostic for a numbering
+        /// desync or a caller passing a not-yet-drained output.
+        gindex: Gindex,
+        /// Compressed output key the caller supplied alongside `gindex`.
         output_key: [u8; 32],
+    },
+    /// `gindex` resolved to a drained leaf whose `(output_key, commitment)`
+    /// does not match the caller-supplied [`crate::AssembleInput`] (X3,
+    /// CT-5c). The curve tree's `next_output_seq` numbering and the wallet's
+    /// `TransferDetails.global_output_index` must be identical for `gindex`
+    /// resolution to be sound; a mismatch means those numberings diverged
+    /// (the classic cause: a new output class entering the tree shifted the
+    /// count) or the store/scanner desynced. Refuse rather than assemble a
+    /// wrong-leaf proof — DoS-never-theft, the only runtime guard of an
+    /// inter-component invariant no single component owns.
+    IdentityMismatch {
+        /// Global output index whose resolved leaf failed the identity check.
+        gindex: Gindex,
+        /// Output key the caller expected at `gindex`.
+        expected_output_key: [u8; 32],
+        /// Output key actually found at `gindex` among the drained leaves.
+        got_output_key: [u8; 32],
+        /// Whether the resolved leaf's amount commitment matched the expected
+        /// one. The check is on the full `(output_key, commitment)` pair, so
+        /// this disambiguates a commitment-only divergence (keys match,
+        /// commitment does not) from a wrong-leaf divergence — without widening
+        /// the error enum past the `result_large_err` threshold with a fourth
+        /// 32-byte field. The values themselves are recoverable from `gindex`.
+        commitment_matched: bool,
+    },
+    /// A batch membership-assembly request carried more inputs than the FCMP++
+    /// proof system permits per transaction (`shekyl_fcmp::MAX_INPUTS`). Raised
+    /// at the engine's `AssembleTx` actor boundary before any path is assembled,
+    /// so an over-length request cannot spin the single-writer actor in an
+    /// unbounded loop (a self-inflicted DoS). The engine's output selection is
+    /// independently bounded by the same limit, so this is a defense-in-depth
+    /// backstop at the actor boundary, never a production path.
+    TooManyInputs {
+        /// Number of inputs supplied in the batch.
+        got: usize,
+        /// Maximum membership inputs per transaction.
+        max: usize,
     },
     /// Persistent leaf store failure (I/O or corruption).
     Store(StoreError),
@@ -694,6 +735,36 @@ impl CurveTreeClient {
     /// store propagate — there is no silent fallback to the replay oracle, so
     /// KATs and callers gate the CT-1 hot path rather than masking corruption.
     pub fn root_at(&self, reference_height: BlockHeight) -> Result<[u8; 32], ClientError> {
+        // Single-source the reconstruction: defer to `root_and_depth_at` and
+        // drop the depth (CT-5c Q1). Both the root-only read (this method, the
+        // §3.3 verify hot path) and the root+depth read go through the one
+        // `root_at_count(n)` call, so they cannot describe different tree
+        // states. The discarded depth is `layer_count_for_leaves`, a handful of
+        // integer divisions — negligible on the verify path.
+        self.root_and_depth_at(reference_height)
+            .map(|(root, _)| root)
+    }
+
+    /// Reconstruct the curve-tree root **and** its depth at `reference_height`,
+    /// both pinned to the same drained leaf count `n` (CT-5c Q1).
+    ///
+    /// The root is the [`LeafStore::root_at_count`] hot path; the depth is
+    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] over the same `n` (depth is
+    /// a pure function of the leaf count, so it needs no tree build). The two
+    /// reads share `n`, so the returned `(root, depth)` always describe the same
+    /// tree state — there is no cross-await window in which they could diverge.
+    ///
+    /// The CT-5c send path needs both before assembling: the depth sizes the
+    /// FCMP++ proof weight for fee estimation (which runs *before* path
+    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
+    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
+    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
+    /// drift KAT, so the engine can assert their equality as a consistency
+    /// check that never fires benignly.
+    pub fn root_and_depth_at(
+        &self,
+        reference_height: BlockHeight,
+    ) -> Result<([u8; 32], u8), ClientError> {
         self.ensure_live()?;
         let within_chain = self
             .ingested_tip_height
@@ -706,7 +777,9 @@ impl CurveTreeClient {
         }
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
-        self.store.root_at_count(n).map_err(ClientError::from)
+        let root = self.store.root_at_count(n).map_err(ClientError::from)?;
+        let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
+        Ok((root, depth))
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`
