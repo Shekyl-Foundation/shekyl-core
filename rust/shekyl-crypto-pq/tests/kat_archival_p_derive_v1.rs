@@ -176,8 +176,8 @@ fn run_tier1(v: &Tier1Vector) {
                 "kem_d_z" => derive_p_kem_d_z(&master, net, fmt, v.p_slot),
                 _ => unreachable!(),
             };
-            let exp = v.expected.out_hex.as_ref().expect("out_hex");
-            assert_eq!(hex::encode(out.as_slice()), *exp, "{}", v.id);
+            let exp = v.expected.out_hex.as_deref().expect("out_hex");
+            assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
         }
         "account_sign_seed" | "ml_dsa_seed" | "bond_spend_ed_seed" | "bond_spend_ml_dsa_seed" => {
             let out = match v.kind.as_str() {
@@ -189,8 +189,8 @@ fn run_tier1(v: &Tier1Vector) {
                 }
                 _ => unreachable!(),
             };
-            let exp = v.expected.out_hex.as_ref().expect("out_hex");
-            assert_eq!(hex::encode(out.as_slice()), *exp, "{}", v.id);
+            let exp = v.expected.out_hex.as_deref().expect("out_hex");
+            assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
         }
         "slot_separation" => {
             // Same inputs, two p_slots: identity keys must differ.
@@ -201,13 +201,13 @@ fn run_tier1(v: &Tier1Vector) {
             let b_hex = hex::encode(b.hybrid_sign_pk.to_canonical_bytes().unwrap());
             assert_eq!(
                 a_hex,
-                *v.expected.out_a_hex.as_ref().expect("out_a_hex"),
+                v.expected.out_a_hex.as_deref().expect("out_a_hex"),
                 "{} a",
                 v.id
             );
             assert_eq!(
                 b_hex,
-                *v.expected.out_b_hex.as_ref().expect("out_b_hex"),
+                v.expected.out_b_hex.as_deref().expect("out_b_hex"),
                 "{} b",
                 v.id
             );
@@ -222,13 +222,13 @@ fn run_tier1(v: &Tier1Vector) {
             let b_hex = hex::encode(bond.as_slice());
             assert_eq!(
                 a_hex,
-                *v.expected.out_a_hex.as_ref().expect("out_a_hex"),
+                v.expected.out_a_hex.as_deref().expect("out_a_hex"),
                 "{} a",
                 v.id
             );
             assert_eq!(
                 b_hex,
-                *v.expected.out_b_hex.as_ref().expect("out_b_hex"),
+                v.expected.out_b_hex.as_deref().expect("out_b_hex"),
                 "{} b",
                 v.id
             );
