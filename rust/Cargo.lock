@@ -3668,6 +3668,8 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-generators",
  "shekyl-io",
+ "shekyl-rct-balance",
+ "shekyl-units",
  "thiserror",
 ]
 
@@ -4184,6 +4186,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-pow-randomx",
+]
+
+[[package]]
+name = "shekyl-rct-balance"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-generators",
+ "shekyl-units",
 ]
 
 [[package]]
