@@ -56,15 +56,33 @@ use shekyl_units::AtomicUnits;
 /// The signature covers [`ArchivalBondPostVin::signature_preimage`] (which binds
 /// `tx_prefix_hash`, the canonical id, holdings, and the cleartext terms) under
 /// the `P` identity hybrid key.
+///
+/// Fields are private: a `JoinMarketVin` can be produced **only** by
+/// [`build_join_market_vin`], which establishes the genesis-frozen JoinMarket
+/// invariants (`post_kind == JoinMarket`, `bond_debit == 0`,
+/// `bonded_total_atomic == bond_credit == bond_floor(holdings) != 0`). Consumers
+/// that hold one therefore have a structural witness those invariants hold,
+/// without re-validating them — the same property the verify side
+/// (`verify_join_market_bond_post`) checks for a decoded wire vin.
 #[derive(Clone, Debug)]
 pub struct JoinMarketVin {
-    /// The bond-post input, ready for wire encoding / verify.
-    pub vin: ArchivalBondPostVin,
-    /// Hybrid (Ed25519 + ML-DSA-65) signature over the post preimage.
-    pub signature: HybridSignature,
+    vin: ArchivalBondPostVin,
+    signature: HybridSignature,
 }
 
 impl JoinMarketVin {
+    /// The bond-post input, ready for wire encoding / verify.
+    #[must_use]
+    pub fn vin(&self) -> &ArchivalBondPostVin {
+        &self.vin
+    }
+
+    /// The hybrid (Ed25519 + ML-DSA-65) signature over the post preimage.
+    #[must_use]
+    pub fn signature(&self) -> &HybridSignature {
+        &self.signature
+    }
+
     /// The cleartext balance term for this post's `bond_credit`, on the output
     /// side. Feed alongside the funding inputs / outputs to
     /// `shekyl-tx-builder::sign_transaction_with_terms` as the sole
@@ -136,10 +154,15 @@ pub fn build_join_market_vin(
 /// amount-level invariant the engine enforces when selecting funding, *before*
 /// the prover builds the masked commitments. All arithmetic is checked.
 ///
+/// Takes a [`JoinMarketVin`] rather than a bare `ArchivalBondPostVin`: the
+/// `bond_credit` this rule depends on is then the constructed floor by
+/// type (`bonded_total == bond_credit == bond_floor != 0`, `bond_debit == 0`),
+/// so the precheck cannot return a false "OK" for a malformed post. The
+/// JoinMarket invariants are not re-validated here — they are guaranteed by the
+/// only constructor, [`build_join_market_vin`].
+///
 /// # Errors
 ///
-/// - [`BondBuildError::NotCreditPath`] if `vin` is not a JoinMarket post or
-///   carries a non-zero `bond_debit` (the credit rule does not apply).
 /// - [`BondBuildError::AmountOverflow`] if `outputs + fee + bond_credit`
 ///   overflows `u64`.
 /// - [`BondBuildError::CreditImbalance`] if `funding_total` does not equal that
@@ -151,20 +174,9 @@ pub fn verify_credit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,
     fee: AtomicUnits,
-    vin: &ArchivalBondPostVin,
+    post: &JoinMarketVin,
 ) -> Result<(), BondBuildError> {
-    // The credit funding equation `funding == outputs + fee + bond_credit`
-    // assumes the only extra balance term is `bond_credit` on the output side.
-    // A non-JoinMarket kind or a non-zero `bond_debit` (an input-side term)
-    // would make this check a false "OK"; reject it loudly instead.
-    if vin.post_kind != BondPostKind::JoinMarket || vin.bond_debit != 0 {
-        return Err(BondBuildError::NotCreditPath {
-            post_kind: vin.post_kind,
-            bond_debit: vin.bond_debit,
-        });
-    }
-
-    let bond_credit = AtomicUnits::from_raw(vin.bond_credit);
+    let bond_credit = AtomicUnits::from_raw(post.vin.bond_credit);
     let required = output_total
         .checked_add(fee)
         .and_then(|s| s.checked_add(bond_credit))
@@ -174,7 +186,7 @@ pub fn verify_credit_funding(
             funding: funding_total.to_raw(),
             outputs: output_total.to_raw(),
             fee: fee.to_raw(),
-            floor: vin.bond_credit,
+            floor: post.vin.bond_credit,
         });
     }
     Ok(())

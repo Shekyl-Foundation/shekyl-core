@@ -80,7 +80,6 @@ pub fn sign_transaction(
 ///
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
-#[allow(clippy::cast_possible_truncation)]
 pub fn sign_transaction_with_terms(
     tx_prefix_hash: [u8; 32],
     inputs: &[SpendInput],

@@ -18,8 +18,8 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding, BondBuildError};
 use shekyl_archival_retention::{
-    bond_floor, verify_bond_post_rct_balance, verify_join_market_bond_post, BondPostKind,
-    BondRctBalanceError, HoldingsDescriptor, HoldingsKind,
+    bond_floor, verify_bond_post_rct_balance, verify_join_market_bond_post, BondRctBalanceError,
+    HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -59,17 +59,17 @@ fn join_market_construct_verifies_against_retention() {
         .expect("build JoinMarket vin");
 
     // The vin is shaped exactly as the credit-path verify side requires.
-    assert_eq!(built.vin.bonded_total_atomic, floor);
-    assert_eq!(built.vin.bond_credit, floor);
-    assert_eq!(built.vin.bond_debit, 0);
+    assert_eq!(built.vin().bonded_total_atomic, floor);
+    assert_eq!(built.vin().bond_credit, floor);
+    assert_eq!(built.vin().bond_debit, 0);
 
     // --- verify (1/2): vin semantics, record does not yet exist ---
-    verify_join_market_bond_post(&built.vin, false).expect("verify accepts fresh JoinMarket post");
+    verify_join_market_bond_post(built.vin(), false).expect("verify accepts fresh JoinMarket post");
 
     // The hybrid signature is valid under P_pubkey over the post preimage.
-    let preimage = built.vin.signature_preimage(&TX_PREFIX_HASH);
+    let preimage = built.vin().signature_preimage(&TX_PREFIX_HASH);
     let sig_ok = HybridEd25519MlDsa
-        .verify(keys.hybrid_bond_id(), &preimage, &built.signature)
+        .verify(keys.hybrid_bond_id(), &preimage, built.signature())
         .expect("verify hybrid signature");
     assert!(sig_ok, "JoinMarket signature must verify under P_pubkey");
 
@@ -84,7 +84,7 @@ fn join_market_construct_verifies_against_retention() {
         AtomicUnits::from_raw(funding),
         AtomicUnits::from_raw(CHANGE),
         AtomicUnits::from_raw(FEE),
-        &built.vin,
+        &built,
     )
     .expect("credit funding rule holds");
 
@@ -109,7 +109,7 @@ fn imbalanced_funding_is_rejected_before_proving() {
         AtomicUnits::from_raw(99),
         AtomicUnits::from_raw(50),
         AtomicUnits::from_raw(10),
-        &built.vin,
+        &built,
     );
     assert!(matches!(
         result,
@@ -136,37 +136,5 @@ fn wrong_credit_amount_breaks_the_balance() {
     // Claiming a bond_credit other than the funded floor must not balance.
     let result = verify_bond_post_rct_balance(&pseudo_outs, &out_masks, FEE, floor - 1, 0);
     assert_eq!(result, Err(BondRctBalanceError::SumMismatch));
-    assert_eq!(built.vin.bond_credit, floor);
-}
-
-#[test]
-fn credit_funding_rejects_non_credit_path() {
-    let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys");
-    let built = build_join_market_vin(&keys, shard_set(vec![1]), &TX_PREFIX_HASH)
-        .expect("build JoinMarket vin");
-
-    let floor = built.vin.bond_credit;
-    let funding = AtomicUnits::from_raw(floor);
-    let zero = AtomicUnits::ZERO;
-
-    // A non-zero bond_debit (an input-side term) makes the credit equation
-    // unsound: reject loudly rather than returning a false "OK".
-    let mut debit_vin = built.vin.clone();
-    debit_vin.bond_debit = 1;
-    assert!(matches!(
-        verify_credit_funding(funding, zero, zero, &debit_vin),
-        Err(BondBuildError::NotCreditPath { bond_debit: 1, .. })
-    ));
-
-    // A non-JoinMarket kind is rejected even with a zero bond_debit.
-    let mut rebond_vin = built.vin.clone();
-    rebond_vin.post_kind = BondPostKind::Rebond;
-    assert!(matches!(
-        verify_credit_funding(funding, zero, zero, &rebond_vin),
-        Err(BondBuildError::NotCreditPath {
-            post_kind: BondPostKind::Rebond,
-            ..
-        })
-    ));
+    assert_eq!(built.vin().bond_credit, floor);
 }
