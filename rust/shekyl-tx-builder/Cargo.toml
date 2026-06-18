@@ -19,6 +19,10 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# Single-sourced RCT cleartext balance terms (InputTerm / OutputTerm). Construct
+# consumes the same typed-side terms verify checks
+# (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2); the builder stays bond-agnostic.
+shekyl-rct-balance = { path = "../shekyl-rct-balance" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }

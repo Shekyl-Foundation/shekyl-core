@@ -740,24 +740,54 @@ sustainability is unaffected by the recalibration.
   standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
   guide is the only currently-unblocked slice and was taken first.
 
-- **Wallet-side archival bond-post construction (design + JoinMarket, in
-  progress 2026-06-17, `docs/archival-bond-construction-design` +
-  `feat/archival-p-derivation`).** The construction counterpart to the
+- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0
+  landed; PR 1 in review; PR 2 pending).** The construction counterpart to the
   genesis-frozen `shekyl-archival-retention` verify side. Design doc:
   [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
-  (under review, 2-3 rounds). Sequence: **PR 0** `shekyl-crypto-pq::archival_p`
-  (the `P`-identity + `bond_spend_pk` derivation, gate-6 §9.3/§9.4) -- built in
-  parallel, not gated on the doc's rounds, with an `ARCHIVAL_P_DERIVE_V1` KAT on
-  the **aarch64 qemu lane** (third cross-arch-deterministic primitive) + a
-  label-sensitivity negative; **PR 1** `shekyl-archival-bond-builder` (JoinMarket
-  vin + RCT witness) + a generic cleartext balance term in `shekyl-tx-builder`;
-  **PR 2** StakeEngine orchestration + standoff self-cert. Honest milestone for
-  the unit: the **round-trip KAT** against a synthetic tree -- **not** an on-chain
-  bond, which is gated on the real `CurveTreeClient` (CT-5). This unblocks
-  operator-experience slices (i)/(ii) (the funding/bond-construction call site
-  they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate construction is
-  **provisional** until their verify side lands (reopening trigger: the paired
-  verify+construct PR for each kind).
+  (Round 1 closed on `dev`). Sequence: **PR 0 (landed, #152)**
+  `shekyl-crypto-pq::archival_p` (the `P`-identity + `bond_spend_pk` derivation,
+  gate-6 §9.3/§9.4) with an `ARCHIVAL_P_DERIVE_V1` KAT on the **aarch64 qemu
+  lane** (third cross-arch-deterministic primitive) + a label-sensitivity
+  negative; **PR 1 (in review, #155, opened 2026-06-18)**
+  `shekyl-archival-bond-builder` (JoinMarket vin +
+  hybrid signature + credit funding rule) **plus the single-sourced
+  `shekyl-rct-balance` crate** -- the §11.1 Q2 upgrade: the cleartext balance
+  equation and its typed-side terms (`InputTerm`/`OutputTerm`) live once and are
+  imported by *both* `shekyl-tx-builder` (construct, via
+  `sign_transaction_with_terms`) and `shekyl-archival-retention` (verify, via
+  `bond_rct_balance`), so a genesis-frozen consensus equation cannot diverge
+  across the two; **PR 2** StakeEngine orchestration + standoff self-cert +
+  funding selection + the synthetic-tree `sign_transaction_with_terms` prover
+  round-trip. Honest milestone for the unit: the **round-trip KAT** against a
+  synthetic balance witness (PR 1: `tests/join_market_round_trip.rs`, exercising
+  `verify_join_market_bond_post` + `verify_bond_post_rct_balance`) -- **not** an
+  on-chain bond, which is gated on the real `CurveTreeClient` (CT-5). This
+  unblocks operator-experience slices (i)/(ii) (the funding/bond-construction
+  call site they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate
+  construction is **provisional** until their verify side lands (reopening
+  trigger: the paired verify+construct PR for each kind).
+
+- **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
+  balance surface introduced in PR 1 carries the inherited "RCT" name
+  (`shekyl-rct-balance`, `verify_rct_balance`, `bond_rct_balance`,
+  `verify_bond_post_rct_balance`). The name is *correct* -- "RCT" here is the
+  live curve25519 Pedersen-commitment confidential-tx model
+  (`RCTTypeFcmpPlusPlusPqc`), not the removed ring-signature legacy
+  (`60-no-monero-legacy`); the balance equation and cleartext terms (fee,
+  `bond_credit`, `bond_debit`) are live consensus. But the bare token "RCT"
+  reads as the deleted RingCT lineage at a glance, the same clarity wart already
+  tracked for `ScannableBlock.output_index_for_first_ringct_output` above.
+  Disposition: **naming-only sweep**, no wire-format / consensus / behavior
+  change, to pick ownership-neutral terms (e.g. `confidential-balance` /
+  `commitment-balance`) across the new construct surface and reconcile with the
+  existing `ringct`-residue rename. **This is a separate PR** (the user pinned it
+  out of PR 1 to keep that PR's scope to the construction logic). Placed in the
+  V3.0 pre-genesis queue because the crate name + `verify_*` symbols are
+  cross-crate API: a rename is free pre-genesis and a breaking change
+  post-genesis (`16-architectural-inheritance.mdc` pre-genesis discount).
+  **Target: V3.0.** Reopening is not conditional -- it is scheduled; the only
+  open question is whether to bundle it with the `ringct`-residue rename above
+  (same theme, same pre-genesis-window rationale).
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

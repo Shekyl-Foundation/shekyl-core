@@ -1,15 +1,19 @@
 //! Bond-post RCT balance equation (ARCHIVAL_BOND_GATE4.md §3.2).
 //!
 //! Verifies `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`
-//! over curve25519 commitments. Bulletproof+ verification remains in C++ (`rctSigs`).
+//! over curve25519 commitments. The commitment-sum arithmetic and the
+//! typed-side cleartext terms are **single-sourced** in
+//! [`shekyl_rct_balance`](shekyl_rct_balance) (the same definitions construct
+//! uses, so construct and verify cannot diverge —
+//! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 / §11.1 Q2). This module
+//! adds only the bond-specific term rigidity: exactly one of `bond_credit` /
+//! `bond_debit` is non-zero, mapped to the matching typed side. Bulletproof+
+//! verification remains in C++ (`rctSigs`).
 
 #![deny(unsafe_code)]
 
-use curve25519_dalek::{
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    scalar::Scalar,
-};
-use shekyl_generators::H as H_POINT_LAZY;
+use shekyl_rct_balance::{verify_rct_balance, InputTerm, OutputTerm, RctBalanceError};
+use shekyl_units::AtomicUnits;
 
 /// Bond-post balance sum failure modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,43 +28,24 @@ pub enum BondRctBalanceError {
     SumMismatch,
 }
 
-/// Amount encoding for `scalarmultH`: zero-padded 32-byte LE `u64` (Monero `d2h`).
-fn d2h_scalar(amount: u64) -> Scalar {
-    let mut bytes = [0u8; 32];
-    bytes[..8].copy_from_slice(&amount.to_le_bytes());
-    Scalar::from_bytes_mod_order(bytes)
-}
-
-fn amount_h(amount: u64) -> EdwardsPoint {
-    d2h_scalar(amount) * *H_POINT_LAZY
-}
-
-fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, BondRctBalanceError> {
-    let point = CompressedEdwardsY::from_slice(bytes)
-        .map_err(|_| BondRctBalanceError::InvalidPoint)?
-        .decompress()
-        .ok_or(BondRctBalanceError::InvalidPoint)?;
-    if !point.is_torsion_free() {
-        return Err(BondRctBalanceError::InvalidPoint);
+impl From<RctBalanceError> for BondRctBalanceError {
+    fn from(e: RctBalanceError) -> Self {
+        match e {
+            RctBalanceError::InvalidPoint => Self::InvalidPoint,
+            RctBalanceError::SumMismatch => Self::SumMismatch,
+        }
     }
-    Ok(point)
-}
-
-fn sum_commitments_flat(flat: &[u8]) -> Result<EdwardsPoint, BondRctBalanceError> {
-    if !flat.len().is_multiple_of(32) {
-        return Err(BondRctBalanceError::InvalidPoint);
-    }
-    let mut sum = EdwardsPoint::default();
-    for chunk in flat.chunks_exact(32) {
-        let key: &[u8; 32] = chunk
-            .try_into()
-            .map_err(|_| BondRctBalanceError::InvalidPoint)?;
-        sum += decompress_point(key)?;
-    }
-    Ok(sum)
 }
 
 /// Verify the bond-post RCT balance equation for flattened `N × 32` commitment keys.
+///
+/// Enforces the bond term rigidity (exactly one of `bond_credit` / `bond_debit`
+/// non-zero — §3.2) and then delegates the commitment-sum balance to the
+/// single-sourced [`verify_rct_balance`], mapping `bond_credit` to an
+/// [`OutputTerm`] and `bond_debit` to an [`InputTerm`]. That side mapping is the
+/// genesis-frozen `bond_credit -> extra_outputs`, `bond_debit -> extra_inputs`
+/// relationship; construct builds the same typed terms, so the two cannot pick
+/// opposite sides.
 pub fn verify_bond_post_rct_balance(
     pseudo_outs_flat: &[u8],
     out_masks_flat: &[u8],
@@ -75,31 +60,36 @@ pub fn verify_bond_post_rct_balance(
         return Err(BondRctBalanceError::NoBondTerm);
     }
 
-    let mut sum_out = sum_commitments_flat(out_masks_flat)?;
-    sum_out += amount_h(txn_fee);
-    sum_out += amount_h(bond_credit);
+    // Exactly one direction term is non-zero; place it on its fixed side.
+    let extra_inputs = [InputTerm::new(AtomicUnits::from_raw(bond_debit))];
+    let extra_outputs = [OutputTerm::new(AtomicUnits::from_raw(bond_credit))];
 
-    let mut sum_pseudo = sum_commitments_flat(pseudo_outs_flat)?;
-    sum_pseudo += amount_h(bond_debit);
-
-    if sum_pseudo == sum_out {
-        Ok(())
-    } else {
-        Err(BondRctBalanceError::SumMismatch)
-    }
+    verify_rct_balance(
+        pseudo_outs_flat,
+        out_masks_flat,
+        AtomicUnits::from_raw(txn_fee),
+        &extra_inputs,
+        &extra_outputs,
+    )
+    .map_err(BondRctBalanceError::from)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
+    use shekyl_rct_balance::amount_commitment;
 
     fn commit(amount: u64, mask: Scalar) -> [u8; 32] {
-        (mask * G + amount_h(amount)).compress().to_bytes()
+        (mask * G + amount_commitment(AtomicUnits::from_raw(amount)))
+            .compress()
+            .to_bytes()
     }
 
     fn h_only(amount: u64) -> [u8; 32] {
-        amount_h(amount).compress().to_bytes()
+        amount_commitment(AtomicUnits::from_raw(amount))
+            .compress()
+            .to_bytes()
     }
 
     #[test]
@@ -107,6 +97,15 @@ mod tests {
         assert_eq!(
             verify_bond_post_rct_balance(&[], &[], 0, 0, 0),
             Err(BondRctBalanceError::NoBondTerm)
+        );
+    }
+
+    #[test]
+    fn rejects_both_bond_terms() {
+        let pseudo = h_only(1);
+        assert_eq!(
+            verify_bond_post_rct_balance(&pseudo, &[], 0, 1, 1),
+            Err(BondRctBalanceError::BothTermsNonzero)
         );
     }
 

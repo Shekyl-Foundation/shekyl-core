@@ -28,6 +28,16 @@ members = [
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
 
+    # Single-sourced RCT cleartext balance equation + typed-side terms, imported
+    # by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention)
+    # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2 / §11.1 Q2)
+    "shekyl-rct-balance",
+
+    # Construct side of the archival bond: JoinMarket vin + hybrid signature +
+    # credit balance term, mirroring the shekyl-archival-retention verify side
+    # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7)
+    "shekyl-archival-bond-builder",
+
     # Link-image crate: the daemon's single Rust archive (shekyl-ffi +
     # shekyl-daemon-rpc → one tracing-core dispatcher). No logic; see
     # its crate docs and src/daemon/CMakeLists.txt's nm gate.

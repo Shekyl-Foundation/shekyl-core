@@ -1,0 +1,20 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-rct-balance"
+description = "Single-sourced RCT cleartext balance equation and typed-side terms, imported by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention) (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+curve25519-dalek = "4"
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-units = { path = "../shekyl-units" }
+
+[lints]
+workspace = true

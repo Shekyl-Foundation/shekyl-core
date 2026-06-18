@@ -345,7 +345,14 @@ fn validate_accepts_all_legal_depths() {
     for depth in 1..=shekyl_fcmp::MAX_TREE_DEPTH {
         let input = dummy_spend_input_at_depth(depth);
         let tree = dummy_tree_at_depth(depth);
-        let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
+        let result = validate_inputs(
+            &[input],
+            &[dummy_output(100)],
+            AtomicUnits::ZERO,
+            &[],
+            &[],
+            &tree,
+        );
         assert!(
             result.is_ok(),
             "depth {} should pass validation (c1={}, c2={}), got: {:?}",
@@ -362,7 +369,14 @@ fn validate_rejects_above_max_depth() {
     let bad_depth = shekyl_fcmp::MAX_TREE_DEPTH + 1;
     let input = dummy_spend_input_at_depth(bad_depth);
     let tree = dummy_tree_at_depth(bad_depth);
-    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
+    let result = validate_inputs(
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[],
+        &[],
+        &tree,
+    );
     assert!(
         matches!(result, Err(TxBuilderError::TreeDepthTooLarge(d)) if d == bad_depth),
         "depth {} should be rejected as exceeding MAX_TREE_DEPTH ({}), got: {:?}",
@@ -402,7 +416,14 @@ fn validate_rejects_wrong_branch_count_for_depth() {
     let mut input = dummy_spend_input_at_depth(3);
     input.c1_layers.push(vec![[13u8; 32]]);
     let tree = dummy_tree_at_depth(3);
-    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
+    let result = validate_inputs(
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[],
+        &[],
+        &tree,
+    );
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
         "c1+c2+1 != depth should trigger BranchLayerMismatch, got: {result:?}",
@@ -420,9 +441,67 @@ fn validate_rejects_swapped_c1_c2_alternation() {
     input.c1_layers = vec![vec![[11u8; 32]]; saved_c2.len()]; // was 1, should be 2
     input.c2_layers = vec![vec![[12u8; 32]]; saved_c1.len()]; // was 2, should be 1
     let tree = dummy_tree_at_depth(4);
-    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
+    let result = validate_inputs(
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[],
+        &[],
+        &tree,
+    );
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
         "swapped c1/c2 alternation should trigger BranchLayerMismatch, got: {result:?}",
     );
+}
+
+// ── Typed-side cleartext balance terms (ARCHIVAL_BOND_CONSTRUCTION.md §7.2) ──
+
+#[test]
+fn extra_output_term_raises_required_total() {
+    use shekyl_rct_balance::{InputTerm, OutputTerm};
+    // input=100, output=100, fee=0 is exactly sufficient with no extra terms.
+    let input = dummy_spend_input_at_depth(1);
+    let tree = dummy_tree_at_depth(1);
+    assert!(validate_inputs(
+        std::slice::from_ref(&input),
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[],
+        &[],
+        &tree,
+    )
+    .is_ok());
+
+    // A 1-unit OutputTerm (e.g. a bond_credit) makes the inputs insufficient...
+    let one = AtomicUnits::from_raw(1);
+    let result = validate_inputs(
+        std::slice::from_ref(&input),
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[],
+        &[OutputTerm::new(one)],
+        &tree,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(TxBuilderError::InsufficientFunds {
+                available_total: 100,
+                required_total: 101
+            })
+        ),
+        "an extra OutputTerm must raise the required total, got: {result:?}",
+    );
+
+    // ...and a matching InputTerm on the other side closes the gap again.
+    assert!(validate_inputs(
+        std::slice::from_ref(&input),
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &[InputTerm::new(one)],
+        &[OutputTerm::new(one)],
+        &tree,
+    )
+    .is_ok());
 }

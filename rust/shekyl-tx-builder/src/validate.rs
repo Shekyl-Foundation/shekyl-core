@@ -7,6 +7,7 @@
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use shekyl_rct_balance::{InputTerm, OutputTerm};
 use shekyl_units::AtomicUnits;
 
 /// Prover-side input validation for FCMP++ signing.
@@ -15,12 +16,21 @@ use shekyl_units::AtomicUnits;
 /// does not check c1/c2 counts explicitly -- the proof structure implicitly
 /// enforces depth through the serialized transcript layout.
 ///
+/// `extra_inputs` / `extra_outputs` are the cleartext `amount * H` balance
+/// terms (the same single-sourced [`InputTerm`] / [`OutputTerm`] the verify
+/// side checks): they ride on the input or output side of the amount balance
+/// exactly like `fee`, with implicit mask 0, so they enter only the
+/// funds-sufficiency arithmetic here, not the pseudo-mask balancing or range
+/// proofs. The common transfer path passes empty slices.
+///
 /// Returns `Ok(())` if all preconditions hold, or the first failing
 /// [`TxBuilderError`] variant.
 pub(crate) fn validate_inputs(
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: AtomicUnits,
+    extra_inputs: &[InputTerm],
+    extra_outputs: &[OutputTerm],
     tree: &TreeContext,
 ) -> Result<(), TxBuilderError> {
     // --- Count bounds ---
@@ -57,13 +67,29 @@ pub(crate) fn validate_inputs(
             .checked_add(out.amount)
             .ok_or(TxBuilderError::OutputAmountOverflow)?;
     }
-    let output_plus_fee = output_total
+    // Fold the cleartext balance terms onto their fixed sides: `extra_inputs`
+    // add to what the inputs make available, `extra_outputs` add to what must be
+    // covered (alongside `fee`). All checked, so a term cannot silently wrap the
+    // money path.
+    let extra_in_total = AtomicUnits::checked_sum(extra_inputs.iter().map(|t| t.amount()))
+        .ok_or(TxBuilderError::InputAmountOverflow)?;
+    let available = input_total
+        .checked_add(extra_in_total)
+        .ok_or(TxBuilderError::InputAmountOverflow)?;
+
+    let required = output_total
         .checked_add(fee)
         .ok_or(TxBuilderError::OutputAmountOverflow)?;
-    if input_total < output_plus_fee {
+    let extra_out_total = AtomicUnits::checked_sum(extra_outputs.iter().map(|t| t.amount()))
+        .ok_or(TxBuilderError::OutputAmountOverflow)?;
+    let required = required
+        .checked_add(extra_out_total)
+        .ok_or(TxBuilderError::OutputAmountOverflow)?;
+
+    if available < required {
         return Err(TxBuilderError::InsufficientFunds {
-            input_total: input_total.to_raw(),
-            output_plus_fee: output_plus_fee.to_raw(),
+            available_total: available.to_raw(),
+            required_total: required.to_raw(),
         });
     }
 

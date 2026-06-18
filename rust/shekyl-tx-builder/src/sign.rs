@@ -20,6 +20,7 @@ use zeroize::Zeroizing;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
 use shekyl_primitives::Commitment;
+use shekyl_rct_balance::{InputTerm, OutputTerm};
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -47,10 +48,10 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the Selene curve tree root
-///   from the block header, **not** the block hash. Passing the block hash
-///   will produce an invalid proof that the verifier rejects.
-#[allow(clippy::cast_possible_truncation)]
+/// - The `tree_root` in `TreeContext` must be the curve tree root from the
+///   block header's `curve_tree_root` field (the topmost-layer node, whose
+///   curve depends on tree depth), **not** the block hash. Passing the block
+///   hash will produce an invalid proof that the verifier rejects.
 pub fn sign_transaction(
     tx_prefix_hash: [u8; 32],
     inputs: &[SpendInput],
@@ -58,8 +59,38 @@ pub fn sign_transaction(
     fee: shekyl_units::AtomicUnits,
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
+    // The common transfer path carries no extra cleartext balance terms.
+    sign_transaction_with_terms(tx_prefix_hash, inputs, outputs, fee, &[], &[], tree)
+}
+
+/// Construct the proof portion of an FCMP++ transaction that carries extra
+/// cleartext balance terms (e.g. an archival bond's `bond_credit`).
+///
+/// Identical to [`sign_transaction`] except for the single-sourced
+/// [`InputTerm`] / [`OutputTerm`] slices, which are cleartext `amount * H`
+/// contributions on the input / output side of the balance — the same terms the
+/// verify side checks (`shekyl-rct-balance`). Because each rides with implicit
+/// mask 0 (like `fee`), they affect only the funds-sufficiency validation, not
+/// the pseudo-output mask balancing or the Bulletproof+ range proofs (which
+/// cover only the real output commitments). The caller is responsible for
+/// making the amount balance *exact* (typically via a change output) so the
+/// consensus equality
+/// `sum(pseudoOuts) + extra_inputs = sum(out_masks) + fee + extra_outputs`
+/// holds; this builder enforces only sufficiency.
+///
+/// This crate stays bond-agnostic: it never names "bond", it consumes generic
+/// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
+pub fn sign_transaction_with_terms(
+    tx_prefix_hash: [u8; 32],
+    inputs: &[SpendInput],
+    outputs: &[OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &[InputTerm],
+    extra_outputs: &[OutputTerm],
+    tree: &TreeContext,
+) -> Result<SignedProofs, TxBuilderError> {
     // ── 1. Validate ──────────────────────────────────────────────────
-    validate_inputs(inputs, outputs, fee, tree)?;
+    validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     let n_in = inputs.len();
     let n_out = outputs.len();
