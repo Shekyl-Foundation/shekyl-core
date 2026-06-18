@@ -45,7 +45,9 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use shekyl_curve_tree::{select_reference_height, BlockHeight, ReferenceBlock, REF_ANCHOR_AGE};
+use shekyl_curve_tree::{
+    select_reference_height, AssembleInput, BlockHeight, Gindex, ReferenceBlock, REF_ANCHOR_AGE,
+};
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
@@ -515,9 +517,22 @@ where
     }
 }
 
+/// The output of the synchronous selection phase (CT-5c): everything the
+/// asynchronous assembly + fold need, captured under the state lock so the
+/// `AssembleTx` round-trip can run lock-free.
+/// The output of the synchronous selection phase (CT-5c): the per-input
+/// `AssembleInput`s and the fee directive, captured under the state lock so the
+/// `AssembleTx` round-trip + fold can run lock-free. The selected output indices
+/// ride `meta.selected.indices`; the fold re-reads the transfers by those
+/// indices (`TransferDetails` is not `Clone`) and guards the re-read with a
+/// `gindex` check against these `AssembleInput`s.
 #[allow(private_bounds)]
-struct BuildAssembled {
-    tx_to_sign: super::traits::key::TxToSign,
+struct BuildSelected {
+    /// One assemble request per selected input, in transaction input order —
+    /// `gindex` resolution key + `(O, C)` consistency pair (X3). Public material.
+    assemble_inputs: Vec<AssembleInput>,
+    /// The fee directive sized against the real tree depth.
+    fee_directive: super::traits::key::FeeDirective,
     meta: BuiltPendingMeta,
 }
 
@@ -631,13 +646,14 @@ where
         }
     }
 
-    fn build_assemble_sync(
+    fn build_select_sync(
         &self,
         request: &TxRequest,
         fee_snapshot: super::traits::FeeEstimates,
         tree_gate: TreeSpendGate,
         reference: Option<ReferenceBlock>,
-    ) -> Result<BuildAssembled, SendError> {
+        tree_depth: u8,
+    ) -> Result<BuildSelected, SendError> {
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
@@ -911,7 +927,6 @@ where
         }
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
-        let tree_depth = 1u8;
         let payment_count = request.recipients.len();
         let rate = fee_rate_for_priority(request.priority, &fee_snapshot).map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
@@ -1026,27 +1041,34 @@ where
             }
         }
 
-        // CT-5b §3.2: this is `TreeContext.reference_block` — the reference
-        // block *hash* (rctSig.referenceBlock), NOT the curve-tree root (which
-        // is `TreeContext.tree_root`; conflating the two is the prover bug
-        // `shekyl-tx-builder` was created to fix). Bind the *real* reference-
-        // height block hash when a `ReferenceBlock` was resolved (tree enforced,
-        // chain old enough, tree covers the reference); else fall back to the
-        // tip-hash placeholder (no tree / not-yet-anchorable). The re-derived
-        // `curve_tree_root` is bound in the `ReferenceBlock` and feeds the
-        // synthetic `tree_root`'s replacement in CT-5c, where the real
-        // `assemble_path` lands; the `[u8; 32]` param stays until CT-5c's T1.
-        let reference_block_hash = reference.map_or(tip_hash, |r| r.block_hash);
-        let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
-            assemble_tx_to_sign(
-                self.network,
-                request,
-                &selected.indices,
-                ledger.transfers(),
-                reference_block_hash,
-                tree_depth,
-                fee_directive,
-            )
+        // CT-5c: the reference-height block hash is no longer threaded as a raw
+        // `[u8; 32]` here — it rides the `ReferenceBlock` into the real
+        // `assemble_tx` (T1), and the resulting `AssembledPath.tree` carries it
+        // into the signing context. `tree_depth` is the real depth read at the
+        // reference height (T2), already used to size the fee above.
+        //
+        // Build one `AssembleInput` per selected input: `gindex`
+        // (= `global_output_index`) is the resolution key, and
+        // `(output_key, commitment)` the post-resolution consistency pair (X3).
+        // Public material only. `TransferDetails` is not `Clone` (it is
+        // secret-bearing), so the secret-pathway fields are not captured here;
+        // the fold re-reads the transfers by index after the assemble await and
+        // guards against an index shift by checking each transfer's `gindex`
+        // against the matching `AssembleInput`.
+        let assemble_inputs = self.ledger.with_ledger_block(|ledger| {
+            let transfers = ledger.transfers();
+            let mut assemble_inputs = Vec::with_capacity(selected.indices.len());
+            for &index in &selected.indices {
+                let td = transfers.get(index).ok_or(SendError::CannotSign {
+                    reason: "selected transfer index out of range",
+                })?;
+                assemble_inputs.push(AssembleInput {
+                    gindex: Gindex(td.global_output_index),
+                    output_key: td.key.compress().to_bytes(),
+                    commitment: td.commitment.calculate().compress().to_bytes(),
+                });
+            }
+            Ok::<_, SendError>(assemble_inputs)
         })?;
 
         let reservation_id = ReservationId::new(state.next_id);
@@ -1060,8 +1082,9 @@ where
 
         drop(state);
 
-        Ok(BuildAssembled {
-            tx_to_sign,
+        Ok(BuildSelected {
+            assemble_inputs,
+            fee_directive,
             meta: BuiltPendingMeta {
                 fee,
                 selected,
@@ -1455,17 +1478,19 @@ where
                 }
             }
         };
-        // CT-5b §3.2: bind the reference block the proof anchors to. The
-        // reference root is never persisted (derive>hold, R1-Q6) — re-derive it
-        // from the actor at `reference_height = tip − REF_ANCHOR_AGE`. Only when
-        // a tree is enforced, the chain is old enough, and the tree has reached
-        // the reference height (so the root is reconstructable); otherwise leave
-        // it unresolved and the synchronous build classifies the condition
-        // (`WalletTooYoungToSpend` / `SpendUnavailableRebuilding`) or, with no
-        // tree, falls back to the placeholder reference (synthetic path, CT-5c
-        // replaces it). The signer still builds synthetic membership paths; only
-        // the reference *selection* is real here.
-        let reference = match &self.curve_tree {
+        // CT-5b §3.2 / CT-5c: bind the reference block the proof anchors to and
+        // read the tree depth there. The reference root is never persisted
+        // (derive>hold, R1-Q6) — read `(root, depth)` from the actor at
+        // `reference_height = tip − REF_ANCHOR_AGE` in one snapshot
+        // (`reference_root_and_depth`, Q1). Only when a tree is enforced, the
+        // chain is old enough, and the tree has reached the reference height (so
+        // the root is reconstructable); otherwise leave it unresolved and the
+        // synchronous selection classifies the condition (`WalletTooYoungToSpend`
+        // / `SpendUnavailableRebuilding`) or, with no tree, the assembly step
+        // below refuses (a spend requires the curve tree — no synthetic
+        // fallback). The depth sizes the FCMP++ proof weight for fee estimation;
+        // its `1` default is inert because those unresolved cases never assemble.
+        let (reference, tree_depth) = match &self.curve_tree {
             Some(handle) => {
                 let synced = self.ledger.with_ledger_block(LedgerBlock::height);
                 match select_reference_height(synced) {
@@ -1475,8 +1500,10 @@ where
                             TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
                         ) =>
                     {
-                        let curve_tree_root =
-                            handle.root_at(BlockHeight(rh)).await.map_err(|err| {
+                        let (curve_tree_root, depth) = handle
+                            .reference_root_and_depth(BlockHeight(rh))
+                            .await
+                            .map_err(|err| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
                                     map_curve_tree_handle_error_for_send(&err),
@@ -1493,20 +1520,92 @@ where
                                     },
                                 )
                             })?;
-                        Some(ReferenceBlock {
-                            height: BlockHeight(rh),
-                            curve_tree_root,
-                            block_hash,
-                        })
+                        (
+                            Some(ReferenceBlock {
+                                height: BlockHeight(rh),
+                                curve_tree_root,
+                                block_hash,
+                            }),
+                            depth,
+                        )
                     }
-                    _ => None,
+                    _ => (None, 1u8),
                 }
             }
-            None => None,
+            None => (None, 1u8),
         };
-        let BuildAssembled { tx_to_sign, meta } =
-            self.build_assemble_sync(&request, fee_snapshot, tree_gate, reference)?;
+        let BuildSelected {
+            assemble_inputs,
+            fee_directive,
+            meta,
+        } = self.build_select_sync(&request, fee_snapshot, tree_gate, reference, tree_depth)?;
         let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
+
+        // CT-5c: assemble the real FCMP++ membership paths for the whole tx in
+        // one actor round-trip (`AssembleTx`, T3), then fold them into the
+        // signing context. A spend requires the curve tree and a resolved
+        // reference; both hold whenever the C2 gate admitted a candidate, so
+        // their absence here is a not-yet-spendable / no-tree condition the gate
+        // already classified — a defensive refusal, not a user-facing path. The
+        // reservation cleanup (armed above) releases the output locks if any of
+        // these steps fail.
+        let handle = self.curve_tree.as_ref().ok_or_else(|| {
+            fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::CannotSign {
+                    reason: "curve tree required to assemble a membership proof",
+                },
+            )
+        })?;
+        let reference = reference.ok_or_else(|| {
+            fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::CannotSign {
+                    reason: "no reference block resolved for membership assembly",
+                },
+            )
+        })?;
+        let paths = handle
+            .assemble_tx(reference, assemble_inputs.clone())
+            .await
+            .map_err(|err| {
+                fail_build_after_attempted(
+                    self.sink.as_ref(),
+                    map_curve_tree_handle_error_for_send(&err),
+                )
+            })?;
+        // Q1: the assembled depth must equal the depth the fee was sized against.
+        // Both are read at the one reference height, so a divergence means the
+        // tree moved under the reference — refuse rather than sign a proof whose
+        // weight the fee did not cover. Holds as a tautology under a valid
+        // reference; never fires benignly.
+        if paths
+            .first()
+            .is_some_and(|p| p.tree.tree_depth != tree_depth)
+        {
+            return Err(fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::CannotSign {
+                    reason: "assembled tree depth diverged from the fee estimate",
+                },
+            ));
+        }
+        // Fold the real paths into the signing context, re-reading the selected
+        // transfers by index for their secret-pathway fields (`TransferDetails`
+        // is not `Clone`). `assemble_tx_to_sign` guards each re-read with a
+        // `gindex` check against `assemble_inputs`, so an index shift under a
+        // reorg during the assemble round-trip is refused, not mis-signed.
+        let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
+            assemble_tx_to_sign(
+                self.network,
+                &request,
+                &meta.selected.indices,
+                ledger.transfers(),
+                &assemble_inputs,
+                &paths,
+                fee_directive,
+            )
+        })?;
         let signed = self
             .signer
             .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
@@ -1915,6 +2014,94 @@ mod tests {
         (dir, handle)
     }
 
+    /// CT-5c consistent fixture: a `(ledger, tree)` pair whose tree leaves
+    /// **are** the ledger's owned outputs, so the real `assemble_path` resolves
+    /// each by gindex and the signer builds a real membership proof.
+    ///
+    /// Each `specs` entry is `(seed, amount)`; the output's `global_output_index`
+    /// is its position, so it equals the tree's drain-order gindex (the owned
+    /// outputs are the chain's first and only leaves). They are populated into
+    /// the ledger at `owned_block` (which also wires the secret-pathway fields)
+    /// and ingested into the tree as one non-miner transaction at the same
+    /// height — `TaggedKey` non-miner maturity is `+DEFAULT_LOCK_WINDOW`
+    /// (= `SPENDABLE_AGE`), matching the ledger's `eligible_height`. The block's
+    /// `0x07` leaf-hash blob carries each output's real `h_pqc`, so the tree
+    /// leaf's identity (`O`, `C`, `h_pqc`) equals the ledger output's. Empty
+    /// blocks advance the cursor to `synced`. Pick `owned_block` so the leaves
+    /// are drained at the reference height: `owned_block + SPENDABLE_AGE <=
+    /// synced - REF_ANCHOR_AGE`.
+    async fn funded_ledger_and_tree(
+        specs: &[(u8, u64)],
+        owned_block: u64,
+        synced: u64,
+    ) -> (Arc<LocalLedger>, TempDir, CurveTreeHandle) {
+        use curve25519_dalek::scalar::Scalar;
+        use shekyl_crypto_pq::output::construct_output;
+        use shekyl_curve_tree::{RawOutput, TargetKind};
+        use shekyl_oxide::primitives::Commitment;
+
+        // Ledger side: the same `make_recovered_output` outputs `populate_ledger`
+        // wires the secret-pathway fields (`source_ciphertext`, `output_handle`,
+        // `key_image`) for. `global_output_index` = position = tree gindex.
+        let ledger = Arc::new(test_ledger());
+        let recovered: Vec<_> = specs
+            .iter()
+            .enumerate()
+            .map(|(i, &(seed, amt))| make_recovered_output(seed, i as u64, amt))
+            .collect();
+        populate_ledger(ledger.as_ref(), owned_block, recovered, synced);
+
+        // Tree side: reconstruct each output's on-chain identity (`O`, `C`,
+        // `h_pqc`) and ingest them as the chain's first outputs so gindex ==
+        // global_output_index.
+        let blob = test_account_blob();
+        let mut raw_outputs = Vec::with_capacity(specs.len());
+        let mut leaf_blob = Vec::with_capacity(specs.len() * 32);
+        for &(seed, amt) in specs {
+            let output_index = u64::from(seed);
+            let c = construct_output(
+                &TEST_OUTPUT_TX_KEY,
+                &blob.x25519_pk,
+                &blob.ml_kem_ek,
+                &test_recipient_spend_pk(),
+                amt,
+                output_index,
+            )
+            .expect("construct_output for consistent tree leaf");
+            let commitment = Commitment {
+                mask: Scalar::from_canonical_bytes(c.z).expect("mask canonical"),
+                amount: amt,
+            }
+            .calculate()
+            .compress()
+            .to_bytes();
+            raw_outputs.push(RawOutput {
+                output_key: c.output_key,
+                commitment: Some(commitment),
+                target: TargetKind::TaggedKey,
+            });
+            leaf_blob.extend_from_slice(&c.h_pqc);
+        }
+
+        let (dir, handle) = fresh_tree_handle();
+        for h in 0..=synced {
+            let txs = if h == owned_block {
+                Arc::new(vec![crate::scan::OwnedTxLeaves {
+                    is_miner: false,
+                    leaf_hash_blob: Some(leaf_blob.clone()),
+                    outputs: raw_outputs.clone(),
+                }])
+            } else {
+                Arc::new(Vec::new())
+            };
+            handle
+                .ingest(BlockHeight(h), txs)
+                .await
+                .expect("consistent-fixture ingest");
+        }
+        (ledger, dir, handle)
+    }
+
     fn test_pending_tx_with_tree(ledger: Arc<LocalLedger>, tree: CurveTreeHandle) -> TestPendingTx {
         LocalPendingTx::new(
             Arc::new(LocalSigner::new(test_signer_handle())),
@@ -1928,6 +2115,55 @@ mod tests {
             ReservationTTLConfig::default(),
             Network::Mainnet,
         )
+    }
+
+    fn test_pending_tx_with_tree_and_sink(
+        ledger: Arc<LocalLedger>,
+        tree: CurveTreeHandle,
+        sink: Arc<dyn DiagnosticSink>,
+    ) -> TestPendingTx {
+        LocalPendingTx::new(
+            Arc::new(LocalSigner::new(test_signer_handle())),
+            WalletGreedyOutputSelector,
+            DaemonFeeEstimator,
+            test_fee_snapshot_source(),
+            test_submitter(),
+            ledger,
+            Some(tree),
+            sink,
+            ReservationTTLConfig::default(),
+            Network::Mainnet,
+        )
+    }
+
+    /// CT-5c: the standard funded fixture (`funded_ledger`'s two outputs,
+    /// 50_000 + 30_000) backed by a **consistent** curve tree — the tree leaves
+    /// are those outputs, so the real `assemble_path` resolves them and the
+    /// signer builds a real proof. Returns the pending engine, the ledger, and
+    /// the tree-store `TempDir` (which the caller must keep alive). Replaces the
+    /// pre-CT-5c `test_pending_tx(funded_ledger())`, which had no tree.
+    async fn funded_pending_tx() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
+        let (ledger, dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        (pending, ledger, dir)
+    }
+
+    /// [`funded_pending_tx`] with a caller-supplied diagnostic sink.
+    async fn funded_pending_tx_with_sink(
+        sink: Arc<dyn DiagnosticSink>,
+    ) -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
+        let (ledger, dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree_and_sink(Arc::clone(&ledger), tree, sink);
+        (pending, ledger, dir)
+    }
+
+    /// [`funded_pending_tx`] with a **single** 50_000 output — for reservation
+    /// tests that assert a second build is blocked because the one output is
+    /// locked (a two-output fixture would let the second build use the spare).
+    async fn funded_pending_tx_one() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
+        let (ledger, dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        (pending, ledger, dir)
     }
 
     /// `TreeSpendGate::covers` boundary: the inert (no-tree) gate covers
@@ -1988,12 +2224,11 @@ mod tests {
     /// outputs are present at the reference block — spendable.
     #[tokio::test]
     async fn rebuilt_tree_spends_normally() {
-        let ledger = funded_ledger(); // eligible_height == 1 + SPENDABLE_AGE == 11
-                                      // Cursor must reach the reference height (synced 20 − REF_ANCHOR_AGE 6
-                                      // = 14), not merely the outputs' eligible height — the proof anchors to
-                                      // the reference block, whose root needs the tree caught up to it.
-        let (_dir, tree) = tree_handle_ingested_through(20).await;
-        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        // A consistent tree caught up past the reference height (synced 20 −
+        // REF_ANCHOR_AGE 6 = 14): the outputs' leaves are present and the
+        // reference root is reconstructable, so the spend gate is inert and the
+        // build assembles a real proof.
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
 
         let built = pending
             .build(standard_request(7_000))
@@ -2174,69 +2409,62 @@ mod tests {
         }
     }
 
-    /// CT-5b §3.2 commit 3: with a tree caught up past the reference height, the
-    /// build binds the re-derived reference root into the assembly's
-    /// `TreeContext.reference_block` (replacing the tip-hash placeholder).
-    /// Drives `build_assemble_sync` directly so the assembled `TxToSign` is
-    /// inspectable before signing.
+    /// CT-5c DoD: a real-root membership proof builds and submits end-to-end.
+    /// The consistent fixture's tree leaves **are** the ledger's owned outputs,
+    /// so the engine resolves the real `assemble_path` at the reference height
+    /// (`tip − REF_ANCHOR_AGE` = 14 for synced 20; the eligible-11 output is
+    /// drained there), folds it into the signing context, and the signer builds
+    /// a real FCMP++ proof against the reconstructed root — the last synthetic
+    /// placeholder on the spend path is gone. (The `reference_block` *hash*
+    /// binding, distinct from the curve-tree root, is pinned by the curve-tree
+    /// `assemble_kat`; conflating them is the prover bug `shekyl-tx-builder`
+    /// exists to prevent.)
     #[tokio::test]
-    async fn reference_root_threaded_into_assembly() {
-        let ledger = Arc::new(test_ledger());
-        // synced 20 → reference_height 14; the eligible-11 output is spendable.
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![make_recovered_output(1, 100, 50_000)],
-            20,
-        );
-        let (_dir, tree) = tree_handle_ingested_through(20).await;
+    async fn real_root_membership_proof_builds_and_submits() {
+        let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
         let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
 
-        // Distinct values: `TreeContext.reference_block` is the reference block
-        // *hash*, not the curve-tree root (`tree_root`). Conflating them is the
-        // prover bug `shekyl-tx-builder` exists to prevent, so assert the hash
-        // lands in `reference_block` and the root does *not*.
-        const REF_ROOT: [u8; 32] = [0x42; 32];
-        const REF_BLOCK_HASH: [u8; 32] = [0xAB; 32];
-        let reference = Some(ReferenceBlock {
-            height: BlockHeight(14),
-            curve_tree_root: REF_ROOT,
-            block_hash: REF_BLOCK_HASH,
-        });
-        let assembled = pending
-            .build_assemble_sync(
-                &standard_request(7_000),
-                test_fee_estimates(),
-                TreeSpendGate::Enforced {
-                    covered_through: Some(20),
-                },
-                reference,
-            )
-            .expect("a caught-up tree assembles a tx");
-        let tree = &assembled.tx_to_sign.fcmp_plus_plus_context.tree;
-        assert_eq!(
-            tree.reference_block, REF_BLOCK_HASH,
-            "the real reference block *hash* is bound into TreeContext.reference_block",
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("a real-root membership proof builds against the consistent tree");
+        assert!(
+            !built.tx_bytes.is_empty(),
+            "the build produces a real signed tx"
         );
-        assert_ne!(
-            tree.reference_block, REF_ROOT,
-            "the curve-tree root must NOT land in the reference-block-hash slot",
+
+        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        assert_eq!(
+            tx_hash,
+            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes)),
+            "the submitted hash is the signed tx bytes' hash",
+        );
+    }
+
+    /// CT-5c: a spend requires the curve tree to assemble a membership proof.
+    /// With no tree configured (a degenerate test/partial-construction state),
+    /// a build that clears selection is **refused** rather than producing an
+    /// unprovable transaction — the synthetic fallback is gone.
+    #[tokio::test]
+    async fn build_without_curve_tree_is_refused() {
+        let pending = test_pending_tx(funded_ledger());
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("a build with no curve tree must be refused");
+        assert!(
+            matches!(err, SendError::CannotSign { reason } if reason.contains("curve tree")),
+            "no-tree build must be refused with a curve-tree reason: {err:?}"
         );
     }
 
     #[tokio::test]
     async fn build_then_submit_marks_outputs_spent() {
-        let ledger = Arc::new(test_ledger());
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![
-                make_recovered_output(1, 100, 50_000),
-                make_recovered_output(2, 101, 30_000),
-            ],
-            20,
-        );
-        let pending = test_pending_tx(Arc::clone(&ledger));
+        // CT-5c: a consistent ledger+tree so the real `assemble_path` resolves
+        // the spent output and the signer builds a real membership proof.
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
 
         let built = pending
             .build(standard_request(7_000))
@@ -2257,10 +2485,12 @@ mod tests {
             let Transaction::V3 { prefix, .. } = &tx;
             let n_in = prefix.inputs.len();
             let n_out = prefix.outputs.len();
+            // Real tree depth for the 2-leaf consistent fixture is 2
+            // (`layer_count_for_leaves(2)`); the fee was sized against it.
             let predicted = crate::engine::tx_fee_model::predict_weight(
                 n_in,
                 n_out,
-                1,
+                2,
                 built.fee_atomic_units.to_raw(),
             );
             assert_eq!(
@@ -2292,17 +2522,7 @@ mod tests {
 
     #[tokio::test]
     async fn discard_releases_output_locks() {
-        let ledger = Arc::new(test_ledger());
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![
-                make_recovered_output(1, 100, 50_000),
-                make_recovered_output(2, 101, 30_000),
-            ],
-            20,
-        );
-        let pending = test_pending_tx(Arc::clone(&ledger));
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
 
         let first = pending
             .build(standard_request(7_000))
@@ -2322,14 +2542,7 @@ mod tests {
 
     #[tokio::test]
     async fn discard_blocked_while_in_flight() {
-        let ledger = Arc::new(test_ledger());
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![make_recovered_output(1, 100, 50_000)],
-            20,
-        );
-        let pending = test_pending_tx(Arc::clone(&ledger));
+        let (pending, _ledger, _tree_dir) = funded_pending_tx_one().await;
 
         let built = pending
             .build(standard_request(1_000))
@@ -2368,10 +2581,8 @@ mod tests {
     #[tokio::test]
     async fn submit_double_spend_emits_terminal_discarded() {
         let sink = Arc::new(AssertionSink::new());
-        let pending = test_pending_tx_with_sink(
-            funded_ledger(),
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2412,11 +2623,8 @@ mod tests {
     #[tokio::test]
     async fn submit_fee_too_low_releases_outputs() {
         let sink = Arc::new(AssertionSink::new());
-        let ledger = funded_ledger();
-        let pending = test_pending_tx_with_sink(
-            Arc::clone(&ledger),
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2455,7 +2663,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_malformed_releases_outputs() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2479,10 +2687,8 @@ mod tests {
     #[tokio::test]
     async fn submit_timeout_keeps_reservation_in_flight() {
         let sink = Arc::new(AssertionSink::new());
-        let pending = test_pending_tx_with_sink(
-            funded_ledger(),
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2531,7 +2737,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_daemon_unavailable_same_as_timeout() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2574,7 +2780,7 @@ mod tests {
 
     #[tokio::test]
     async fn signal_mempool_evicted_on_in_flight_succeeds() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = build_in_flight_via_daemon_timeout(&pending).await;
         pending
             .signal_mempool_evicted(built.id)
@@ -2584,7 +2790,7 @@ mod tests {
 
     #[tokio::test]
     async fn signal_mempool_evicted_on_consumer_held_returns_not_found() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = pending
             .build(standard_request(7_000))
             .await
@@ -2597,7 +2803,7 @@ mod tests {
 
     #[tokio::test]
     async fn signal_mempool_evicted_on_never_existed_returns_not_found() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let err = pending
             .signal_mempool_evicted(ReservationId::new(99))
             .expect_err("unknown rid");
@@ -2607,10 +2813,8 @@ mod tests {
     #[tokio::test]
     async fn signal_mempool_evicted_emits_mempool_evicted_diagnostic() {
         let sink = Arc::new(AssertionSink::new());
-        let pending = test_pending_tx_with_sink(
-            funded_ledger(),
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
         let built = build_in_flight_via_daemon_timeout(&pending).await;
         pending
             .signal_mempool_evicted(built.id)
@@ -2630,7 +2834,7 @@ mod tests {
 
     #[tokio::test]
     async fn signal_mempool_evicted_releases_output_locks() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = build_in_flight_via_daemon_timeout(&pending).await;
         pending
             .signal_mempool_evicted(built.id)
@@ -2647,7 +2851,7 @@ mod tests {
     /// post-eviction `discard` is idempotent-not-found, not blocked.
     #[tokio::test]
     async fn signal_mempool_evicted_ownership_boundary() {
-        let pending = test_pending_tx(funded_ledger());
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
         let built = build_in_flight_via_daemon_timeout(&pending).await;
 
         pending
@@ -2669,10 +2873,8 @@ mod tests {
     #[tokio::test]
     async fn pending_tx_build_emission_return_coherence() {
         let sink = Arc::new(AssertionSink::new());
-        let pending = test_pending_tx_with_sink(
-            funded_ledger(),
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
         let err = pending
             .build(standard_request(999_999_999))
             .await
@@ -2694,10 +2896,12 @@ mod tests {
     #[tokio::test]
     async fn pending_tx_submit_snapshot_invalidated_coherence() {
         let sink = Arc::new(AssertionSink::new());
-        let ledger = funded_ledger();
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
         let build_snapshot = derive_snapshot_id(&ledger.snapshot());
-        let pending = test_pending_tx_with_sink(
+        let pending = test_pending_tx_with_tree_and_sink(
             Arc::clone(&ledger),
+            tree,
             Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
         );
         let built = pending
@@ -2750,7 +2954,7 @@ mod tests {
             "PanickingSink::Any must panic the spawned build task"
         );
 
-        let recovery = test_pending_tx(funded_ledger());
+        let (recovery, _r_ledger, _r_tree_dir) = funded_pending_tx().await;
         assert_eq!(recovery.outstanding(), 0);
         recovery
             .build(standard_request(7_000))
@@ -2764,10 +2968,12 @@ mod tests {
     #[tokio::test]
     async fn hybrid_pending_tx_snapshot_rotation_on_submit() {
         let sink = Arc::new(AssertionSink::new());
-        let ledger = funded_ledger();
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
         let s1 = derive_snapshot_id(&ledger.snapshot());
-        let pending = test_pending_tx_with_sink(
+        let pending = test_pending_tx_with_tree_and_sink(
             Arc::clone(&ledger),
+            tree,
             Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
         );
         let built = pending
@@ -2852,23 +3058,10 @@ mod tests {
         LocalLedger,
     >;
 
-    fn daemon_funded_ledger() -> Arc<LocalLedger> {
-        let ledger = Arc::new(test_ledger());
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![
-                make_recovered_output(1, 100, 500_000),
-                make_recovered_output(2, 101, 300_000),
-            ],
-            20,
-        );
-        ledger
-    }
-
     fn daemon_backed_pending_tx(
         daemon: Arc<crate::engine::test_support::TestDaemon>,
         ledger: Arc<LocalLedger>,
+        tree: CurveTreeHandle,
     ) -> DaemonBackedPendingTx {
         daemon.set_fee_estimates(daemon_fee_estimates_distinct());
         LocalPendingTx::new(
@@ -2878,7 +3071,7 @@ mod tests {
             crate::engine::fee_snapshot::DaemonFeeSnapshotSource::from_arc(Arc::clone(&daemon)),
             Arc::new(crate::engine::transaction_submitter::DaemonTransactionSubmitter::new(daemon)),
             ledger,
-            None,
+            Some(tree),
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
             Network::Mainnet,
@@ -2888,14 +3081,7 @@ mod tests {
     /// PHASE_2A_SEND_PATH.md §8.3 — outputs stay locked after build until submit/discard.
     #[tokio::test]
     async fn reserved_outputs_blocked_from_second_build() {
-        let ledger = Arc::new(test_ledger());
-        populate_ledger(
-            ledger.as_ref(),
-            1,
-            vec![make_recovered_output(1, 100, 50_000)],
-            20,
-        );
-        let pending = test_pending_tx(Arc::clone(&ledger));
+        let (pending, _ledger, _tree_dir) = funded_pending_tx_one().await;
         let _first = pending
             .build(standard_request(7_000))
             .await
@@ -2911,6 +3097,9 @@ mod tests {
     fn assemble_tx_to_sign_rejects_missing_key_image() {
         use crate::engine::signing_assembly::assemble_tx_to_sign;
         use crate::engine::tx_fee_model::build_fee_directive;
+        use shekyl_curve_tree::{
+            AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext,
+        };
         use shekyl_rpc::FeeRate;
 
         let ledger = Arc::new(test_ledger());
@@ -2920,24 +3109,36 @@ mod tests {
             vec![make_recovered_output(1, 100, 50_000)],
             20,
         );
-        let tip_hash = ledger
-            .read()
-            .ledger
-            .ledger
-            .block_hash_at(20)
-            .copied()
-            .expect("tip hash");
         let request = standard_request(7_000);
         let rate = FeeRate::new(10, 1).expect("rate");
         let fee_directive = build_fee_directive(&rate, 1, request.recipients.len(), 1);
+        // The `gindex` must equal the output's `global_output_index` (100) so the
+        // index-stability guard passes and the missing-`key_image` check inside
+        // `input_context_from_transfer` is reached. The path is unused before
+        // that check fires, so a placeholder suffices.
+        let assemble_inputs = vec![AssembleInput {
+            gindex: Gindex(100),
+            output_key: [0u8; 32],
+            commitment: [0u8; 32],
+        }];
+        let paths = vec![AssembledPath {
+            leaf_chunk: Vec::new(),
+            c1_layers: Vec::new(),
+            c2_layers: Vec::new(),
+            tree: CtTreeContext {
+                reference_block: [0u8; 32],
+                tree_root: [0u8; 32],
+                tree_depth: 1,
+            },
+        }];
         let err = ledger.with_ledger_block(|block| {
             assemble_tx_to_sign(
                 Network::Mainnet,
                 &request,
                 &[0],
                 block.transfers(),
-                tip_hash,
-                1,
+                &assemble_inputs,
+                &paths,
                 fee_directive,
             )
         });
@@ -2960,8 +3161,9 @@ mod tests {
         use shekyl_oxide::transaction::Transaction;
 
         let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
-        let ledger = daemon_funded_ledger();
-        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), Arc::clone(&ledger));
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(1, 500_000), (2, 300_000)], 1, 20).await;
+        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), Arc::clone(&ledger), tree);
 
         let built = pending
             .build(standard_request(7_000))
@@ -2977,15 +3179,16 @@ mod tests {
 
         let snapshot = daemon_fee_estimates_distinct();
         let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
-        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, 1, 0));
-        let expected_fee = converge_fee(&rate, n_in, n_out, 1, seed);
+        // Real tree depth for the 2-leaf consistent fixture is 2.
+        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, 2, 0));
+        let expected_fee = converge_fee(&rate, n_in, n_out, 2, seed);
         assert_eq!(
             built.fee_atomic_units.to_raw(),
             expected_fee,
             "built fee must match daemon Standard tier through production path"
         );
         assert_eq!(
-            predict_weight(n_in, n_out, 1, built.fee_atomic_units.to_raw()),
+            predict_weight(n_in, n_out, 2, built.fee_atomic_units.to_raw()),
             tx.weight()
         );
 
@@ -3014,8 +3217,9 @@ mod tests {
         use crate::engine::transaction_submitter::DaemonTransactionSubmitter;
 
         let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
-        let ledger = daemon_funded_ledger();
-        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), ledger);
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(1, 500_000), (2, 300_000)], 1, 20).await;
+        let pending = daemon_backed_pending_tx(Arc::clone(&daemon), ledger, tree);
 
         let built = pending
             .build(standard_request(7_000))

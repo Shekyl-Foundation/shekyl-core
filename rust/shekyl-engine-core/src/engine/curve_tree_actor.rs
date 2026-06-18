@@ -75,7 +75,10 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
 use kameo::message::{Context, Message};
 
-use shekyl_curve_tree::{BlockHeight, BlockLeaves, ClientError, CurveTreeClient, TxLeafInputs};
+use shekyl_curve_tree::{
+    AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
+    ReferenceBlock, TxLeafInputs,
+};
 
 use crate::scan::OwnedTxLeaves;
 
@@ -182,10 +185,10 @@ pub(crate) struct IngestedTipHeight;
 /// past a tree state it ingested but cannot reproduce against the header the
 /// producer claimed.
 ///
-/// This is the compare sibling of the [`RootAt`] read-back — both are
-/// production root operations (`RootAt` returns the reconstructed root,
-/// `VerifyRoot` compares it against an expected value). It is keyed by
-/// `(height, expected_root)` rather than a full
+/// This is the compare sibling of the [`RootAndDepthAt`] read-back — both are
+/// production root operations (`RootAndDepthAt` returns the reconstructed root
+/// and depth, `VerifyRoot` compares the root against an expected value). It is
+/// keyed by `(height, expected_root)` rather than a full
 /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) because ingest has no
 /// `block_hash` to anchor — the header root is the only field
 /// [`CurveTreeClient::verify_root`] consults, so this mirrors its compare
@@ -197,19 +200,38 @@ pub(crate) struct VerifyRoot {
     pub expected_root: [u8; 32],
 }
 
-/// Actor message reading [`CurveTreeClient::root_at`]: the reconstructed
-/// curve-tree root as of `height`.
+/// Actor message reading [`CurveTreeClient::root_and_depth_at`]: the
+/// reconstructed root **and** the tree depth at `height`, both pinned to the
+/// same drained leaf count (CT-5c Q1).
 ///
-/// The **send-time re-derivation** of the reference-height root (CT-5b §3.2):
-/// the reference root is never persisted (derive>hold, R1-Q6) — it is
-/// reconstructed here at send time and bound into the
-/// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) the proof anchors to.
-/// Also the read-back the CT-5a commit-6 oracle KAT (in `refresh.rs`'s
-/// `start_refresh_integration_tests`) uses to assert the engine ingest path
-/// reproduces the consensus header root at every height.
-pub(crate) struct RootAt {
-    /// The reference height whose reconstructed root to read.
+/// The send path needs both before assembling: the depth sizes the FCMP++
+/// proof weight for fee estimation (which runs before path assembly), and the
+/// root binds the [`ReferenceBlock`]. Read together in one handler invocation
+/// so they describe the same tree state. This is also the read-back the CT-5a
+/// commit-6 oracle KAT (in `refresh.rs`) uses — taking the root, ignoring the
+/// depth — to assert the ingest path reproduces the consensus header root.
+pub(crate) struct RootAndDepthAt {
+    /// The reference height whose reconstructed root and depth to read.
     pub height: BlockHeight,
+}
+
+/// Actor message assembling every membership path for one transaction in a
+/// single handler invocation (CT-5c T3 / Q2).
+///
+/// The handler loops [`CurveTreeClient::assemble_path`] over `inputs` against
+/// the one shared `reference`. Because the actor processes messages serially,
+/// no [`IngestBlock`] / [`RollbackToFork`] interleaves mid-assembly — the
+/// read-path snapshot atomicity (E1) is the handler invocation itself, not a
+/// discipline the caller must uphold. One `reference` for the whole batch makes
+/// the C1 single-snapshot guarantee (every input shares one tree context) the
+/// only representable shape. Bounded by `shekyl_fcmp::MAX_INPUTS` at the handler
+/// boundary so an over-length request cannot spin the actor.
+pub(crate) struct AssembleTx {
+    /// The single reference block every input's path anchors to (C1).
+    pub reference: ReferenceBlock,
+    /// The owned outputs to assemble paths for, in transaction input order; the
+    /// reply preserves that order.
+    pub inputs: Vec<AssembleInput>,
 }
 
 impl Message<IngestBlock> for CurveTreeActor {
@@ -288,11 +310,44 @@ impl Message<VerifyRoot> for CurveTreeActor {
     }
 }
 
-impl Message<RootAt> for CurveTreeActor {
-    type Reply = Result<[u8; 32], ClientError>;
+impl Message<RootAndDepthAt> for CurveTreeActor {
+    type Reply = Result<([u8; 32], u8), ClientError>;
 
-    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.client.root_at(msg.height)
+    async fn handle(
+        &mut self,
+        msg: RootAndDepthAt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client.root_and_depth_at(msg.height)
+    }
+}
+
+impl Message<AssembleTx> for CurveTreeActor {
+    type Reply = Result<Vec<AssembledPath>, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: AssembleTx,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Handler-boundary bound (Q2): refuse an over-length batch before the
+        // loop so a buggy or hostile caller cannot spin the single-writer actor.
+        // The engine's selection is independently bounded, so this never fires
+        // in production — it makes the bad state unrepresentable at the actor
+        // boundary, not merely upstream of it.
+        if msg.inputs.len() > shekyl_tx_builder::MAX_INPUTS {
+            return Err(ClientError::TooManyInputs {
+                got: msg.inputs.len(),
+                max: shekyl_tx_builder::MAX_INPUTS,
+            });
+        }
+        // One handler invocation = one snapshot: every path is assembled
+        // against the same `reference` with no ingest/rollback interleave (E1).
+        let mut paths = Vec::with_capacity(msg.inputs.len());
+        for input in &msg.inputs {
+            paths.push(self.client.assemble_path(input, &msg.reference)?);
+        }
+        Ok(paths)
     }
 }
 
@@ -582,22 +637,40 @@ impl CurveTreeHandle {
         actor.wait_for_shutdown().await;
     }
 
-    /// Read the reconstructed curve-tree root as of `height`
-    /// ([`CurveTreeClient::root_at`]) through the actor — the CT-5b §3.2
-    /// send-time re-derivation of the reference-height root (the root is never
-    /// persisted; reconstructed here and bound into the
-    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)). Also the read-back
-    /// the CT-5a commit-6 oracle KAT uses to assert the ingest path reproduces
-    /// the consensus header root at every height. On a stopped actor returns
+    /// Read the reconstructed root **and** depth at `height`
+    /// ([`CurveTreeClient::root_and_depth_at`]) through the actor (CT-5c Q1).
+    /// The send path binds the root into the
+    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) and uses the depth
+    /// to size the FCMP++ proof weight for fee estimation *before* assembling
+    /// any path. Both are pinned to one drained leaf count, so they describe the
+    /// same tree state. On a stopped actor returns
     /// [`CurveTreeHandleError::Unavailable`]; a height beyond the ingested tip
-    /// surfaces the client's `ReferenceBeyondIngestedTip` via
-    /// [`CurveTreeHandleError::Client`].
-    pub(crate) async fn root_at(
+    /// surfaces the client's `ReferenceBeyondIngestedTip`.
+    pub(crate) async fn reference_root_and_depth(
         &self,
         height: BlockHeight,
-    ) -> Result<[u8; 32], CurveTreeHandleError> {
+    ) -> Result<([u8; 32], u8), CurveTreeHandleError> {
         self.actor_ref()
-            .ask(RootAt { height })
+            .ask(RootAndDepthAt { height })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Assemble every membership path for one transaction in a single actor
+    /// round-trip ([`AssembleTx`], CT-5c T3 / Q2). `inputs` are the owned
+    /// outputs in transaction input order; the reply preserves that order, every
+    /// path sharing the one `reference` (C1). The whole batch assembles under a
+    /// single handler invocation, so no ingest/rollback interleaves (E1). On a
+    /// stopped actor returns [`CurveTreeHandleError::Unavailable`]; an
+    /// over-length batch or a per-input failure (root mismatch, undrained,
+    /// identity mismatch) surfaces as [`CurveTreeHandleError::Client`].
+    pub(crate) async fn assemble_tx(
+        &self,
+        reference: ReferenceBlock,
+        inputs: Vec<AssembleInput>,
+    ) -> Result<Vec<AssembledPath>, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(AssembleTx { reference, inputs })
             .await
             .map_err(collapse_send_error)
     }
@@ -652,7 +725,8 @@ mod tests {
         assert_send::<RollbackToFork>();
         assert_send::<IngestedTipHeight>();
         assert_send::<VerifyRoot>();
-        assert_send::<RootAt>();
+        assert_send::<RootAndDepthAt>();
+        assert_send::<AssembleTx>();
         assert_send::<OwnedTxLeaves>();
     }
 

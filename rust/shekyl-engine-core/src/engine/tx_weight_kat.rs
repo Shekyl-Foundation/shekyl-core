@@ -8,9 +8,7 @@
 #[cfg(test)]
 pub(crate) mod support {
     use crate::engine::local_keys::LocalKeys;
-    use crate::engine::synthetic_tree::{
-        enrich_input_tree, selene_single_chunk_tree_root, synthetic_h_pqc_bytes,
-    };
+    use crate::engine::synthetic_tree::{consistent_synthetic_path, synthetic_h_pqc_bytes};
     use curve25519_dalek::scalar::Scalar;
     use curve25519_dalek::EdwardsPoint;
     use shekyl_crypto_pq::kem::HybridCiphertext;
@@ -75,7 +73,6 @@ pub(crate) mod support {
                 h_pqc,
             });
 
-            let (lc, c1, c2, _) = enrich_input_tree(vec![leaf_chunk[i].clone()], tree_depth);
             spend_inputs.push(SpendInput {
                 output_key: leaf_chunk[i].output_key,
                 commitment: leaf_chunk[i].commitment,
@@ -86,17 +83,21 @@ pub(crate) mod support {
                 h_pqc: leaf_chunk[i].h_pqc,
                 combined_ss: bundle.combined_ss.to_vec(),
                 output_index: i as u64,
-                leaf_chunk: lc,
-                c1_layers: c1,
-                c2_layers: c2,
+                // Filled below with the one shared depth-consistent path.
+                leaf_chunk: Vec::new(),
+                c1_layers: Vec::new(),
+                c2_layers: Vec::new(),
             });
         }
 
-        // Shared leaf chunk for multi-input (M3c shape).
-        if n_in > 1 {
-            for inp in &mut spend_inputs {
-                inp.leaf_chunk = leaf_chunk.clone();
-            }
+        // PF7: one depth-consistent single-path tree over the shared leaf chunk
+        // (all inputs sit in it — the M3c shape). Every input shares the same
+        // branches and root, so the FCMP++ witness is consistent at any depth.
+        let (c1, c2, tree_root) = consistent_synthetic_path(&leaf_chunk, tree_depth);
+        for inp in &mut spend_inputs {
+            inp.leaf_chunk = leaf_chunk.clone();
+            inp.c1_layers = c1.clone();
+            inp.c2_layers = c2.clone();
         }
 
         let fee = 1_000u64;
@@ -136,7 +137,6 @@ pub(crate) mod support {
             },
         };
 
-        let tree_root = selene_single_chunk_tree_root(&leaf_chunk);
         let tree = TreeContext {
             reference_block: [0xD4; 32],
             tree_root,

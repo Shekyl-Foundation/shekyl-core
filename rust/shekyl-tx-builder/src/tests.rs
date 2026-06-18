@@ -25,7 +25,7 @@ fn dummy_leaf_entry() -> LeafEntry {
 }
 
 fn dummy_spend_input(amount: u64) -> SpendInput {
-    // depth=2 -> 1 branch at even index 0 -> C1 (Selene), 0 C2 (Helios)
+    // depth=2 -> 1 branch at index 0 (tree layer 1) -> C2 (Helios), 0 C1 (Selene)
     SpendInput {
         output_key: [1u8; 32],
         commitment: [3u8; 32],
@@ -37,8 +37,8 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
         combined_ss: vec![0u8; 64],
         output_index: 0,
         leaf_chunk: vec![dummy_leaf_entry()],
-        c1_layers: vec![vec![[11u8; 32]]],
-        c2_layers: vec![],
+        c1_layers: vec![],
+        c2_layers: vec![vec![[12u8; 32]]],
     }
 }
 
@@ -307,15 +307,20 @@ fn test_sign_pqc_length_mismatch() {
 // ── Parametric depth tests ────────────────────────────────────────────
 //
 // The c1/c2 split is derived from the FCMP++ tower spec, not observed
-// behavior. The upstream Fcmp::verify iterates layers 0..depth-2 with
-// even indices as C1 (Selene) and odd as C2 (Helios).
+// behavior. The leaf chunk is a C1 (Selene) node at layer 0; the branch
+// directly above it (index 0, tree layer 1) is C2 (Helios), then alternating.
+// So C2 (Helios) gets the even branch indices and C1 (Selene) the odd ones:
+// c2 = ceil(B/2), c1 = floor(B/2). This matches the prover's
+// "curve_2_layers is populated before curve_1_layers" and
+// `shekyl_curve_tree::assemble_path`.
 
 /// Build a `SpendInput` with the spec-correct c1/c2 split for a given depth.
 fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
     let branch_count = depth.saturating_sub(1) as usize;
-    // Even-indexed branches are C1, odd-indexed are C2
-    let c1_count = branch_count.div_ceil(2);
-    let c2_count = branch_count / 2;
+    // Branch index 0 (tree layer 1) is C2 (Helios); the even-indexed branches
+    // are C2 and the odd-indexed are C1.
+    let c1_count = branch_count / 2;
+    let c2_count = branch_count.div_ceil(2);
     SpendInput {
         output_key: [1u8; 32],
         commitment: [3u8; 32],
@@ -350,8 +355,8 @@ fn validate_accepts_all_legal_depths() {
             result.is_ok(),
             "depth {} should pass validation (c1={}, c2={}), got: {:?}",
             depth,
-            (depth.saturating_sub(1) as usize).div_ceil(2),
             depth.saturating_sub(1) as usize / 2,
+            (depth.saturating_sub(1) as usize).div_ceil(2),
             result,
         );
     }
@@ -384,10 +389,10 @@ fn validate_depth_2_correct_branch_split() {
     let input = dummy_spend_input_at_depth(2);
     assert_eq!(
         input.c1_layers.len(),
-        1,
-        "depth=2: c1 should be 1 (layer 0 is C1)"
+        0,
+        "depth=2: c1 should be 0 (the only branch, layer 1, is C2/Helios)"
     );
-    assert_eq!(input.c2_layers.len(), 0, "depth=2: c2 should be 0");
+    assert_eq!(input.c2_layers.len(), 1, "depth=2: c2 should be 1");
 }
 
 #[test]
@@ -412,13 +417,13 @@ fn validate_rejects_wrong_branch_count_for_depth() {
 #[test]
 fn validate_rejects_swapped_c1_c2_alternation() {
     // depth=3 expects c1=1, c2=1. Swap them: c1=1, c2=1 is actually valid
-    // for depth=3 since both equal 1. Use depth=4 instead: expects c1=2, c2=1.
-    // Provide c1=1, c2=2 (swapped) -- correct total but wrong alternation.
+    // for depth=3 since both equal 1. Use depth=4 instead: expects c1=1, c2=2.
+    // Provide c1=2, c2=1 (swapped) -- correct total but wrong alternation.
     let mut input = dummy_spend_input_at_depth(4);
     let saved_c1 = input.c1_layers.clone();
     let saved_c2 = input.c2_layers.clone();
-    input.c1_layers = vec![vec![[11u8; 32]]; saved_c2.len()]; // was 1, should be 2
-    input.c2_layers = vec![vec![[12u8; 32]]; saved_c1.len()]; // was 2, should be 1
+    input.c1_layers = vec![vec![[11u8; 32]]; saved_c2.len()]; // was 1, now 2 (wrong)
+    input.c2_layers = vec![vec![[12u8; 32]]; saved_c1.len()]; // was 2, now 1 (wrong)
     let tree = dummy_tree_at_depth(4);
     let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
     assert!(

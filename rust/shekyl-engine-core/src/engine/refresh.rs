@@ -4248,9 +4248,9 @@ mod start_refresh_integration_tests {
 
         let mut mismatches = Vec::new();
         for b in &blocks {
-            let got = g
+            let (got, _depth) = g
                 .curve_tree
-                .root_at(BlockHeight(b.height))
+                .reference_root_and_depth(BlockHeight(b.height))
                 .await
                 .expect("root read");
             if got != b.root {
@@ -4358,9 +4358,9 @@ mod start_refresh_integration_tests {
         //    oracle on the shared prefix) and the re-mined suffix alike.
         let mut mismatches = Vec::new();
         for b in &deep {
-            let got = g
+            let (got, _depth) = g
                 .curve_tree
-                .root_at(BlockHeight(b.height))
+                .reference_root_and_depth(BlockHeight(b.height))
                 .await
                 .expect("root read");
             if got != b.root {
