@@ -4,6 +4,38 @@
 
 ### Added
 
+- **crypto/economics: archival bond-post construction PR 1 -- single-sourced RCT
+  balance + JoinMarket builder (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7,
+  `feat/archival-bond-builder`).** The construct side of the archival bond, the
+  mirror of the genesis-frozen `shekyl-archival-retention` verify side. Three
+  pieces:
+  - **`shekyl-rct-balance` (new crate)** single-sources the genesis-frozen RCT
+    cleartext balance equation `sum(pseudoOuts) + extra_inputs = sum(out_masks) +
+    fee + extra_outputs` and its typed-side terms. The side is a *type*, not a
+    runtime tag: `InputTerm` and `OutputTerm` (checked-`u64` newtypes over
+    `AtomicUnits`) make a wrong-side cleartext term unrepresentable. The verify
+    equation that previously lived in `shekyl-archival-retention::bond_rct_balance`
+    migrated here; `bond_rct_balance` now wraps it with the bond-specific
+    credit-xor-debit term rigidity. Imported by *both*
+    `shekyl-tx-builder` (construct) and `shekyl-archival-retention` (verify), so
+    the two cannot diverge on a consensus rule (§7.2 / §11.1 Q2).
+  - **`shekyl-tx-builder`** gains `sign_transaction_with_terms`, threading the
+    `shekyl-rct-balance` typed-side terms into funds-sufficiency validation;
+    `sign_transaction` is now a zero-terms wrapper, so the transfer path is
+    unchanged. The crate stays bond-agnostic (never names "bond"; it consumes
+    generic typed-side terms).
+  - **`shekyl-archival-bond-builder` (new crate)** builds the JoinMarket
+    `ArchivalBondPostVin` (`bonded_total == bond_credit == bond_floor`,
+    `bond_debit == 0`), signs its preimage with the `P` identity hybrid key,
+    supplies `bond_credit = floor` as the `OutputTerm`, and enforces the credit
+    funding rule. The masked commitments + FCMP++ membership proofs are left to
+    the prover (PR 2); re-deriving them here would be a second construction path
+    for a genesis-frozen commitment. A round-trip KAT
+    (`tests/join_market_round_trip.rs`) derives `P`, constructs + signs the vin,
+    and confirms `verify_join_market_bond_post` + `verify_bond_post_rct_balance`
+    accept against a synthetic balance witness -- the honest §3 milestone (not an
+    on-chain bond; that is CT-5 work). Cross-refs: `FOLLOWUPS.md`
+    (construction-flow item; "RCT" naming-review item deferred to a separate PR).
 - **docs: design the wallet-side archival bond-post construction flow
   (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`, 2026-06-17,
   `docs/archival-bond-construction-design`).** The verify side
