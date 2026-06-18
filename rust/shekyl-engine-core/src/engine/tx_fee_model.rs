@@ -11,6 +11,7 @@
 
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
+use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
 
 use super::traits::key::FeeDirective;
@@ -80,6 +81,17 @@ const FCMP_PROOF_SIZE_KAT: [[usize; 25]; 9] = [
         18560, 19392, 20320, 21280, 21696, 21792, 22560, 23360, 24288, 25216, 25856, 26784,
     ],
 ];
+
+/// Compile-time guard tying the table's dimensions to the canonical proof-system
+/// limits: the rows cover `n_in ∈ 0..=MAX_INPUTS` and the columns
+/// `tree_depth ∈ 0..=MAX_TREE_DEPTH` (index 0 unused). If either limit changes,
+/// this fails to compile — forcing a table regeneration — rather than silently
+/// falling back to `FCMP_PROOF_SIZE_MAX` for the newly-reachable cells (which
+/// could under-estimate fees if real proofs there exceed the current max).
+const _: () = {
+    assert!(FCMP_PROOF_SIZE_KAT.len() == MAX_INPUTS + 1);
+    assert!(FCMP_PROOF_SIZE_KAT[0].len() == MAX_TREE_DEPTH as usize + 1);
+};
 
 /// Largest cell of [`FCMP_PROOF_SIZE_KAT`]; the conservative fallback for an
 /// out-of-range cell that should be unreachable (`validate_inputs` enforces

@@ -128,6 +128,16 @@ sustainability is unaffected by the recalibration.
   which point in-memory-only assembly breaks for pruned wallets by
   construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
   R1-Q6.
+  - **Per-input reconstruction reuse (CT-5c, 2026-06-18).** `assemble_path` is
+    called once per input by the `AssembleTx` actor handler, and each call
+    re-runs `drained_sorted` + `build_layers` (O(n log n)) and a linear
+    `gindex` `.position()` scan (O(n)) over the whole drained set. For a tx with
+    `k` inputs that is O(k·n log n). When this perf item is taken up, fold the
+    reconstruction to **once per transaction** (the batch shares one tree
+    snapshot) and resolve each input's drain-position via an ingest-time
+    `gindex → position` index, bringing per-input lookup to O(log n)/O(1). A
+    binary search alone does **not** apply: `drained` is sorted by
+    `(maturity, gindex)`, so `gindex` is not monotonic across maturity buckets.
 
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.

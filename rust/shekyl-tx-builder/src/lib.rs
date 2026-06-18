@@ -97,6 +97,12 @@ pub use wire::{
 /// Maximum number of inputs per transaction (consensus limit, matches `shekyl-fcmp::MAX_INPUTS`).
 pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
 
+/// Maximum curve-tree depth a membership proof spans (consensus limit,
+/// re-exported from `shekyl-fcmp` so engine-side consumers that depend on
+/// tx-builder — not fcmp directly — have a single source for the proof-system
+/// limits alongside [`MAX_INPUTS`]).
+pub const MAX_TREE_DEPTH: u8 = shekyl_fcmp::MAX_TREE_DEPTH;
+
 /// Maximum number of outputs per transaction.
 ///
 /// # Canonical source of truth

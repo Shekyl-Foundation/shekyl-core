@@ -98,6 +98,15 @@ impl CurveTreeClient {
         // X3: resolve by `gindex`, the tree's unique key, not by `(O, C)`
         // content. The owned output's gindex is always present among drained
         // leaves, so this is total — no collision case.
+        //
+        // The linear scan is O(n) but not the hot spot: `drained` is sorted by
+        // `(maturity, gindex)` (not `gindex`), so `gindex` is not monotonic and a
+        // binary search does not apply; and this call already pays O(n log n) for
+        // `drained_sorted` + `build_layers` above, which dominate the scan. The
+        // real optimization is batch-level — reconstruct `drained`/`layers` once
+        // per transaction and reuse across its inputs (and key the lookup by an
+        // ingest-time `gindex → drain-position` index) — tracked as the
+        // store-backed / per-input-reconstruction assembly follow-up.
         let leaf_pos = drained
             .iter()
             .position(|e| e.gindex == input.gindex)

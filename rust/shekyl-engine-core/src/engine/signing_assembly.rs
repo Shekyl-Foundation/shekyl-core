@@ -54,6 +54,23 @@ pub(crate) fn assemble_tx_to_sign(
     paths: &[AssembledPath],
     fee_directive: FeeDirective,
 ) -> Result<TxToSign, SendError> {
+    // The three arrays are built in lockstep (selection → one `AssembleInput`
+    // per index → one path per input), so a length mismatch is an internal
+    // plumbing bug, not a runtime condition. The `debug_assert`s surface the
+    // actual counts in dev/CI (where it would be diagnosed); the release guard
+    // refuses gracefully rather than letting the `zip` below silently truncate
+    // to a shorter — and unsound — transaction. (`CannotSign`'s reason is
+    // `&'static str`, so the counts ride the assert rather than the error.)
+    debug_assert_eq!(
+        selected_indices.len(),
+        paths.len(),
+        "assembled path count must equal selected input count",
+    );
+    debug_assert_eq!(
+        selected_indices.len(),
+        assemble_inputs.len(),
+        "assemble-input count must equal selected input count",
+    );
     if selected_indices.len() != paths.len() || selected_indices.len() != assemble_inputs.len() {
         return Err(SendError::CannotSign {
             reason: "assembled path count does not match selected input count",
