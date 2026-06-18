@@ -235,6 +235,22 @@ sustainability is unaffected by the recalibration.
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
 
+- **Output-class numbering-equivalence re-verification (CT-5c X3 standing
+  precondition, tracked 2026-06-18).** Target: standing — applies to any future
+  PR that adds an output class to the curve tree. CT-5c resolves owned outputs
+  by `gindex`, which is sound only because the tree's `next_output_seq`
+  numbering is identical to the scanner's `global_output_index` numbering; the
+  `(O, C)` post-resolution check (`ClientError::IdentityMismatch`) is the only
+  runtime guard of that unowned inter-component invariant. The classic way the
+  two diverge is a new output class shifting the drain-order count (coinbase
+  forced exactly this alignment; bond-post / archival outputs are the next
+  candidates). **Reopening trigger (rule-21):** any PR that adds an output class
+  the curve tree indexes must re-verify `global_output_index ↔ tree gindex`
+  equivalence — ideally with a mixed-output-class numbering KAT (the curve-tree
+  `assemble_kat` is coinbase-only; the scanner side is engine-local) — *before*
+  merge. See [`docs/design/CT5C_ASSEMBLER_CUTOVER.md`](./design/CT5C_ASSEMBLER_CUTOVER.md)
+  §5 / §10.
+
 - **Full-segment freeze + prune-retention KAT at production `j=2` leaf count
   (CT-1 Round 1 deferral, tracked 2026-06-13).** Target: V3.0, with the
   prune-policy / store-backed assembly work (`CURVE_TREE_CLIENT.md` §8 #9).

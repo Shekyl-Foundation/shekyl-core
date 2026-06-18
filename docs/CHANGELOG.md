@@ -31,6 +31,37 @@
 
 ### Changed
 
+- **wallet: cut the spend path over to real FCMP++ membership proofs; delete the
+  synthetic placeholders (CT-5c assembler cutover, 2026-06-18,
+  `feat/ct-5c-assembler-cutover`).** The send path now assembles the real
+  curve-tree membership path the daemon will verify, instead of synthetic
+  vectors. `build` splits into synchronous selection → one batch `AssembleTx`
+  actor round-trip → a fold into the signing context (the tx-level
+  `ReferenceBlock` carries the consensus root + block hash; the per-input paths
+  carry the real leaf chunks and branch layers). Owned outputs resolve by
+  `gindex` (the tree's unique key, X3) with a post-resolution `(O, C)`
+  consistency check (`ClientError::IdentityMismatch`) that guards the
+  tree-`next_output_seq` ↔ scanner-`global_output_index` numbering equivalence;
+  the assembler's reference param drops to `ReferenceBlock` (T1) and the depth is
+  read from the assembled path / a `root_and_depth_at` snapshot rather than a
+  hardcoded `1` (T2). A spend now **requires** the curve tree — the no-tree
+  synthetic fallback is gone (`synthetic_tree` survives only `#[cfg(test)]` for
+  the weight/signing KATs that need depth-controlled fixtures; the A4 reversion
+  clause of `CT5C_ASSEMBLER_CUTOVER.md`).
+  - **Fixes a latent FCMP++ proof-input bug:** `shekyl-tx-builder`'s branch-layer
+    validation had the C1 (Selene) / C2 (Helios) parity **inverted** (expected
+    Selene as the first branch above the leaf; the real curve tree and the
+    prover are Helios-first). The pre-cutover synthetic generator shared the
+    same inversion, so the two agreed while both disagreed with the real tree —
+    a wrong-layout proof the daemon would have rejected. Surfaced by the real
+    `assemble_path` and corrected to `c2 = ceil(B/2), c1 = floor(B/2)`.
+  - **Calibrates the fee model against measured proof sizes:** the
+    deferred-to-CT-5 placeholder (a flat `+320` bytes/layer that under-estimated
+    real depth-2 proofs → under-paid fees) is replaced by a measured
+    `[n_in][depth]` table. The series is non-monotonic in depth (the FCMP++
+    inner-product proof rounds), so a closed-form per-layer increment is
+    impossible; the table is emitted over depth-consistent single-path synthetic
+    trees (PF7) and its depth-1 column cross-checks the prior measured row.
 - **wallet/scanner: `eligible_height` now floors on the output's additional
   timelock and stake lock, not just `+SPENDABLE_AGE` (CT-5c X5, 2026-06-17,
   `feat/ct-5c-x5-eligible-height`).** `TransferDetails::from_wallet_output`

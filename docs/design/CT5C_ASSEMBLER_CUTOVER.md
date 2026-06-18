@@ -1,13 +1,13 @@
 # CT-5c — assembler cutover: real `assemble_path` into the 2A signer (design round)
 
-**Status:** Design round conducted 2026-06-17, three forks resolved (§4). This
-doc is the frozen contract the CT-5c implementation cuts against, per
-[`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc) (spec first,
-code second) and the design-round discipline of
-[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
-It refines — does not supersede — [`CT5_ENGINE_WIRING.md`](CT5_ENGINE_WIRING.md)
-§3.4 / §3.7 (T1–T3) / §5.1 (X3); where this doc adds scope (§3, the fee-path
-depth finding) it is called out explicitly.
+**Status:** **IMPLEMENTED + closed, 2026-06-18** (`feat/ct-5c-assembler-cutover`).
+Design round conducted 2026-06-17, three forks resolved (§4); implemented per
+this contract. Closure notes (§10) record what the implementation surfaced
+beyond the design: a latent FCMP++ layer-parity bug in `shekyl-tx-builder`, the
+PF7 unblock that made the measured fee table possible, and two scoped
+refinements (the A4 `synthetic_tree` demotion and the minimal `AssembleInput`
+shape). This doc refined — did not supersede — [`CT5_ENGINE_WIRING.md`](CT5_ENGINE_WIRING.md)
+§3.4 / §3.7 (T1–T3) / §5.1 (X3).
 
 **Predecessors landed:** CT-5a (CurveTreeActor + ingest), CT-5b (§3.3 ingest
 verify + reference-block selection + C2 spendability gate, PR #149), CT-5c/X5
@@ -431,3 +431,56 @@ place review rounds concentrate; the migration is itself part of the value
   resolution keys on.
 - [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §3.5 / §4.3 — path layout and the
   caller-supplies-root integrity model `assemble_path` enforces.
+
+---
+
+## 10. Closure notes (what implementation surfaced)
+
+- **Latent FCMP++ layer-parity bug (found + fixed).** `shekyl-tx-builder`'s
+  `validate_inputs` expected the first branch above the leaf to be C1 (Selene);
+  the real curve tree and the prover (`prover/mod.rs`: "curve_2_layers is
+  populated before curve_1_layers") are **C2 (Helios)-first**, so the correct
+  split is `c2 = ceil(B/2)`, `c1 = floor(B/2)`. The pre-cutover synthetic
+  generator (`enrich_input_tree`) shared the *same* inversion, so the validator
+  and the fixtures agreed with each other while both disagreed with the real
+  tree — a wrong-layout proof the daemon would reject, invisible until the real
+  `assemble_path` produced a genuine path. Fixed in `validate.rs`, the synthetic
+  generator, and the tx-builder KATs. This is the class of bug the cutover
+  exists to surface (synthetic self-consistency hiding a real-path defect).
+
+- **PF7 unblock → measured fee table.** The §3.2 fee-depth finding deepened: the
+  proof-size measurement harness ran on the synthetic path, whose single-chunk
+  root is only a consistent FCMP++ witness at depth 1 (`AcProveError(InconsistentWitness)`
+  above it — the documented PF7 block). Resolved by `consistent_synthetic_path`:
+  a **single-path** synthetic tree (one node per layer, hashed upward) that is a
+  valid witness at any depth without an astronomically large tree, with per-layer
+  padding identical to a full tree. With PF7, the `[n_in][depth]` grid is
+  measurable; `fcmp_proof_size` is now a measured lookup table (non-monotonic in
+  depth — a closed-form increment is impossible). Cross-validated two ways: the
+  depth-1 column equals the prior measured row, and the depth-2 `(n_in=1)` cell
+  matches the real-tree proof in `build_then_submit_marks_outputs_spent`.
+
+- **A4 reversion clause fired (`synthetic_tree` retained, test-only).** R1-Q5 /
+  §1 expected `synthetic_tree` deletable ("no non-daemon test surface needs
+  synthetic vectors"). Two do — the tx-weight KAT and the `local_keys` signing
+  KATs need depth-controlled fixtures a real tree can't cheaply provide. So per
+  the A4 clause the module is **retained `#[cfg(test)]`** (production grep-clean),
+  not deleted. DoD adjusted: "no *production* synthetic references."
+
+- **`AssembleInput` is minimal, not a full `OutputIdentity` (§5 Q3 refinement).**
+  Resolution uses only `gindex` and the check only `(output_key, commitment)`, so
+  a full `OutputIdentity` would force the engine to fabricate `h_pqc`/`target` it
+  does not hold for an owned output (the real `h_pqc` returns *from* the drained
+  leaf). `AssembleInput { gindex, output_key, commitment }` carries exactly what
+  is used (rule 18).
+
+- **Reopening trigger (rule-21, Q3).** Any new output class that enters the curve
+  tree must re-verify `global_output_index ↔ tree gindex` numbering equivalence
+  before merge — the `(O, C)` post-resolution check is the only runtime guard of
+  that unowned inter-component invariant. Recorded in `FOLLOWUPS.md`.
+
+- **Test migration (§7).** Success-path engine tests moved to a consistent
+  ledger+tree fixture (`funded_ledger_and_tree` / `funded_pending_tx*`): the
+  tree's leaves *are* the ledger's owned outputs, so the real `assemble_path`
+  resolves them. A new `build_without_curve_tree_is_refused` pins the
+  no-synthetic-fallback behavior.
