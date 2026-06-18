@@ -4,6 +4,30 @@
 
 ### Added
 
+- **crypto/economics: archival bond-post construction PR 2a -- full-prover
+  synthetic-tree round-trip KAT (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §3,
+  `feat/archival-bond-roundtrip-kat`).** PR 1 closed the bond balance against a
+  hand-built (synthetic) balance witness; PR 2a closes it against the **real
+  FCMP++ prover**. The new test
+  `join_market_bond_post_signs_and_verifies_through_prover` (in
+  `shekyl-engine-core::engine::local_keys::tests`, reusing the M3c synthetic
+  depth-1 tree and key-derivation fixtures rather than promoting them to public
+  API) builds a JoinMarket vin with `shekyl-archival-bond-builder`, carries its
+  `bond_credit` through `shekyl-tx-builder::sign_transaction_with_terms` as the
+  sole output-side cleartext term, and checks the **prover-emitted** commitments
+  against the genesis-frozen verify side: `verify_join_market_bond_post`, the
+  hybrid signature under `P_pubkey`, the Bulletproof+ range proof, the FCMP++
+  membership proof, and `verify_bond_post_rct_balance`. It also asserts the verify
+  side *rejects* a wrong `bond_credit` (`SumMismatch`), a tampered output
+  commitment, a tampered signature preimage, and a replayed post (`RecordExists`)
+  -- the honest milestone is "valid accepts and invalid rejects." One encoding
+  bridge: `sign.rs` emits output commitments as `8*C` (wire cofactoring) while the
+  balance equation is defined over the prime-order `C`, so the KAT recovers
+  `C = (8*C) * 8^{-1}` before the balance check. Adds
+  `shekyl-archival-bond-builder` + `shekyl-archival-retention` as
+  `shekyl-engine-core` dev-deps (first-party path-deps, no new third-party
+  supply-chain surface, no dependency cycle). Tree stays synthetic; on-chain
+  end-to-end remains CT-5 work.
 - **crypto/economics: archival bond-post construction PR 1 -- single-sourced RCT
   balance + JoinMarket builder (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7,
   `feat/archival-bond-builder`).** The construct side of the archival bond, the

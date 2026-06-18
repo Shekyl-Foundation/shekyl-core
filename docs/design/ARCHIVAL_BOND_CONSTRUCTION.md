@@ -82,6 +82,45 @@ archival_p derive -> build JoinMarket vin + RCT witness
 "A bond exists on a chain" comes when the curve-tree client is real. Naming this
 now prevents discovering the gap after PR 2 ships.
 
+**PR 2a strengthens this milestone (2026-06-18).** PR 1's round-trip KAT closed
+the balance equation against a *synthetic* balance witness (hand-built
+`pseudo_outs`/`out_masks`). PR 2a replaces the synthetic witness with the
+**real FCMP++ prover**: the JoinMarket vin's `bond_credit` rides through
+`shekyl-tx-builder::sign_transaction_with_terms` as the single output-side
+cleartext term, and the verify side
+(`verify_join_market_bond_post`, `verify_bond_post_rct_balance`, the BP+ range
+proof, and the FCMP++ membership proof) is checked against the **prover-emitted**
+commitments. The tree stays synthetic (depth-1 single-leaf-chunk, the M3c
+fixture); what PR 2a removes is the gap between "construction balances against a
+witness we wrote" and "construction balances against the proof the prover
+actually emits."
+
+The synthetic tree here is **not** a stale path: CT-5c
+(`CT5C_ASSEMBLER_CUTOVER.md`) cut the *production* spend path over to the real
+`assemble_path` / `CurveTreeClient`, and its A4 reversion clause deliberately
+retained the `synthetic_tree` fixtures `#[cfg(test)]`-only for exactly the
+`local_keys` signing KATs (and the tx-weight KAT) — depth-controlled fixtures a
+real tree can't cheaply provide. So PR 2a uses the sanctioned KAT surface. The
+remaining gap to a **real-tree bond** round-trip is therefore *not* "CT-5
+doesn't exist" — `assemble_path` is real as of CT-5c, and transfers already have
+a real-tree round-trip (`local_pending_tx::build_then_submit_marks_outputs_spent`
+over `funded_ledger_and_tree`). The bond gap is narrower: the engine signer
+(`sign_bridge.rs`) calls the **zero-terms** `sign_transaction`, with no
+engine-side plumbing for the bond's cleartext `credit_term`. Threading that term
+from the bond request through the build path is **PR 2c**, so the real-tree bond
+round-trip (mirroring `build_then_submit_…` with `credit_term` threaded) lands as
+2c's closing milestone, tracked in `FOLLOWUPS.md`.
+The KAT also asserts the verify side *rejects* a wrong `bond_credit`, a tampered
+output commitment, a tampered signature preimage, and a replayed post -- the
+honest milestone is "valid accepts and invalid rejects," not accept alone. Lives
+in `shekyl-engine-core::engine::local_keys::tests`
+(`join_market_bond_post_signs_and_verifies_through_prover`), reusing the M3c
+synthetic-tree and key-derivation fixtures rather than promoting them to public
+API. One encoding bridge: `sign.rs` emits output commitments as `8*C` (subgroup
+cofactoring on the wire) while the balance equation is defined over the
+prime-order `C`, so the KAT recovers `C = (8*C) * 8^{-1}` before the balance
+check -- both sides then carry genuine prover output.
+
 ## 4. Single-sourcing by import
 
 Construction reuses the validated verify-side types rather than re-deriving

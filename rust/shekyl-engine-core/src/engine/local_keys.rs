@@ -1554,6 +1554,315 @@ mod tests {
         }
     }
 
+    /// PR 2a — full-prover synthetic-tree round-trip for a JoinMarket archival
+    /// bond post (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §3).
+    ///
+    /// The honest milestone for the construct side: a bond built by
+    /// `shekyl-archival-bond-builder` is driven through the *real* FCMP++
+    /// prover (`tx_builder::sign_transaction_with_terms`, carrying the bond's
+    /// `bond_credit` as the single-sourced output-side cleartext term), and the
+    /// prover-emitted commitments are checked against the
+    /// `shekyl-archival-retention` verify side consensus uses.
+    ///
+    /// # What is real and what is synthetic
+    ///
+    /// The prover, the Bulletproof+ range proof, the FCMP++ membership proof,
+    /// the pseudo-out balancing, and both verify entrypoints
+    /// (`verify_join_market_bond_post`, `verify_bond_post_rct_balance`) are the
+    /// production paths. The curve tree is **synthetic**: a single-leaf-chunk
+    /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
+    /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
+    /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
+    /// same slice that cut production over to the real `assemble_path`. A
+    /// real-tree bond round-trip (mirroring `local_pending_tx`'s
+    /// `build_then_submit_marks_outputs_spent` over `funded_ledger_and_tree`) is
+    /// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
+    /// bond's cleartext `credit_term` through the engine signer, which today
+    /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That
+    /// threading is PR 2c, so the real-tree bond KAT lands as 2c's closing
+    /// milestone (`FOLLOWUPS.md`). This test pins that construct → prove → verify
+    /// composes today, independent of the tree source.
+    ///
+    /// # Commitment encoding
+    ///
+    /// `SignedProofs.pseudo_outs` are the raw FCMP++ `C_tilde` points
+    /// (prime-order `a_i*G + amount*H`, with `sum(a_i) == sum(out_masks)` by the
+    /// prover's pseudo-out balancing). `SignedProofs.commitments` are `8*C` —
+    /// the subgroup-safety cofactor multiplication `sign.rs` applies on the
+    /// wire. The RCT balance equation (`shekyl-rct-balance`) is defined over the
+    /// prime-order `C`, so the test recovers `C = (8*C) * 8^{-1}` before feeding
+    /// the balance check; both sides then carry genuine prover output.
+    ///
+    /// # Accept *and* reject
+    ///
+    /// A round-trip that only checks "valid accepts" can pass against a verify
+    /// that accepts everything. The test therefore also asserts the verify side
+    /// *rejects* a wrong `bond_credit`, a tampered commitment, a signature that
+    /// does not cover the post preimage, and a replayed post (record already
+    /// exists). The dedicated-bond-spend-key commitment negative is owed to the
+    /// GF-1 work (`feat/gf1-dedicated-bond-spend-key`): that field is not in the
+    /// merged `ArchivalBondPostVin`, so the negative lands with GF-1.
+    #[test]
+    fn join_market_bond_post_signs_and_verifies_through_prover() {
+        use rand_core::OsRng;
+        use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
+        use shekyl_archival_retention::{
+            bond_floor, verify_bond_post_rct_balance, verify_join_market_bond_post, BondPostError,
+            BondRctBalanceError, HoldingsDescriptor, HoldingsKind,
+        };
+        use shekyl_bulletproofs::Bulletproof;
+        use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+        use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+        use shekyl_fcmp::PqcLeafScalar;
+        use shekyl_io::CompressedPoint;
+        use shekyl_primitives::Commitment;
+        use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
+
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+
+        // Wallet keys fund the transaction; the bond persona `P` is a separate
+        // identity that authorizes the post (credit paths sign under P_pubkey).
+        let keys = LocalKeys::from_test_seed(TEST_SEED);
+        let p_keys = derive_archival_p_keys(
+            &[0x33u8; MASTER_SEED_BYTES],
+            DerivationNetwork::Mainnet,
+            SeedFormat::Bip39,
+            0,
+        )
+        .expect("derive archival P keys");
+
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        let floor = bond_floor(&holdings);
+        assert!(
+            floor > 0,
+            "bond floor must be positive for the fixture holdings"
+        );
+
+        let signable_tx_hash = [0xC3u8; 32];
+        let reference_block = [0xD4u8; 32];
+        let tree_depth: u8 = 1;
+        let fee: u64 = 1_000;
+
+        // ── Construct + sign the bond vin ────────────────────────────────
+        let built = build_join_market_vin(&p_keys, holdings.clone(), &signable_tx_hash)
+            .expect("build JoinMarket vin");
+        assert_eq!(built.vin().bond_credit, floor);
+        assert_eq!(built.vin().bond_debit, 0);
+
+        // ── One funding input paid to the wallet ─────────────────────────
+        let recipient_spend_pk = derived_spend_pk_for_test(
+            &keys.derived.view_scalar,
+            &keys.derived.spend_public,
+            PRIMARY_CLAIM_INDEX_LE,
+        );
+        let input_index: u64 = 0;
+        // Funding covers the change output, the fee, and the bond credit.
+        let input_amount: u64 = floor + fee + 1_000_000;
+
+        let constructed = construct_output(
+            &TEST_TX_KEY_SECRET,
+            &keys.keys.x25519_pk,
+            &keys.keys.ml_kem_ek,
+            &recipient_spend_pk,
+            input_amount,
+            input_index,
+        )
+        .expect("construct_output succeeds for synthetic funding output");
+        let ciphertext = HybridCiphertext {
+            x25519: constructed.kem_ciphertext_x25519,
+            ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+        };
+        let bundle = keys
+            .derive_primary_source_secrets_bundle(&ciphertext, input_index)
+            .expect("engine derive_primary_source_secrets_bundle must succeed");
+
+        let h_pqc = make_synthetic_h_pqc_bytes(0xB0);
+        let leaf_chunk = vec![LeafEntry {
+            output_key: constructed.output_key,
+            key_image_gen: shekyl_generators::biased_hash_to_point(constructed.output_key)
+                .compress()
+                .to_bytes(),
+            commitment: constructed.commitment,
+            h_pqc,
+        }];
+        let tree_root = crate::engine::synthetic_tree::selene_single_chunk_tree_root(&leaf_chunk);
+        let tree = TreeContext {
+            reference_block,
+            tree_root,
+            tree_depth,
+        };
+
+        let inputs = vec![SpendInput {
+            output_key: constructed.output_key,
+            commitment: constructed.commitment,
+            amount: AtomicUnits::from_raw(input_amount),
+            spend_key_x: *bundle.spend_key_x,
+            spend_key_y: *bundle.spend_key_y,
+            commitment_mask: *bundle.commitment_mask,
+            h_pqc,
+            combined_ss: bundle.combined_ss.to_vec(),
+            output_index: input_index,
+            leaf_chunk: leaf_chunk.clone(),
+            c1_layers: vec![],
+            c2_layers: vec![],
+        }];
+
+        // ── One change output: change = funding - fee - bond_credit ──────
+        // The change output's index is offset so it never collides with the
+        // input index (a matching (combined_ss, output_index) collapses the
+        // FCMP++ rerandomization scalar to zero — see the M3c fixture note).
+        let change: u64 = input_amount - fee - floor;
+        let change_output_index: u64 = input_index + 100;
+        let outputs = vec![make_recipient_output_info(
+            &keys,
+            change,
+            change_output_index,
+        )];
+
+        // Amount-level credit funding rule (§7.3): funding == change+fee+credit.
+        verify_credit_funding(
+            AtomicUnits::from_raw(input_amount),
+            AtomicUnits::from_raw(change),
+            AtomicUnits::from_raw(fee),
+            &built,
+        )
+        .expect("credit funding rule holds before proving");
+
+        // ── Prove: bond_credit rides as the sole output-side cleartext term ─
+        let credit_term = built.credit_term();
+        let signed = sign_transaction_with_terms(
+            signable_tx_hash,
+            &inputs,
+            &outputs,
+            AtomicUnits::from_raw(fee),
+            &[],
+            &[credit_term],
+            &tree,
+        )
+        .expect("sign_transaction_with_terms must succeed for the bond post");
+
+        // ── Verify 1/4: vin semantics, record does not yet exist ─────────
+        verify_join_market_bond_post(built.vin(), false)
+            .expect("verify accepts a fresh JoinMarket post");
+
+        // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
+        let preimage = built.vin().signature_preimage(&signable_tx_hash);
+        assert!(
+            HybridEd25519MlDsa
+                .verify(p_keys.hybrid_bond_id(), &preimage, built.signature())
+                .expect("verify hybrid signature"),
+            "JoinMarket signature must verify under P_pubkey"
+        );
+
+        // ── Verify 3/4: Bulletproof+ over the un-cofactored change commitment ─
+        let bp_commitments: Vec<CompressedPoint> = outputs
+            .iter()
+            .map(|out| {
+                let mask = Scalar::from_canonical_bytes(out.commitment_mask)
+                    .expect("commitment_mask from OutputInfo is canonical");
+                let c = Commitment::new(mask, out.amount.to_raw());
+                CompressedPoint::from(c.calculate().compress().to_bytes())
+            })
+            .collect();
+        let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
+            .expect("bulletproof_plus deserializes");
+        let mut rng = OsRng;
+        assert!(
+            bp.verify(&mut rng, &bp_commitments),
+            "BP+ verifier must accept the bond-post range proof"
+        );
+
+        // ── Verify 4/4: FCMP++ membership over the prover pseudo-outs ─────
+        let key_images: Vec<KeyImage> = inputs
+            .iter()
+            .map(|inp| {
+                KeyImage::from_canonical_bytes(compute_test_key_image(
+                    inp.output_key,
+                    inp.spend_key_x,
+                ))
+            })
+            .collect();
+        let pqc_pk_hashes: Vec<PqcLeafScalar> =
+            inputs.iter().map(|inp| PqcLeafScalar(inp.h_pqc)).collect();
+        let proof = ShekylFcmpProof {
+            data: signed.fcmp_proof.clone(),
+            num_inputs: 1,
+            tree_depth,
+        };
+        assert!(
+            matches!(
+                verify(
+                    &proof,
+                    &key_images,
+                    &signed.pseudo_outs,
+                    &pqc_pk_hashes,
+                    &tree.tree_root,
+                    tree.tree_depth,
+                    signable_tx_hash,
+                ),
+                Ok(true)
+            ),
+            "FCMP++ verifier must accept the bond-post membership proof"
+        );
+
+        // ── RCT cleartext balance over the PROVER-emitted commitments ────
+        // Recover prime-order C from the wire's 8*C (see docstring) so the
+        // balance equation and the prover output share an encoding.
+        let inv8 = Scalar::from(8u64).invert();
+        let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
+        let out_masks_flat: Vec<u8> = signed
+            .commitments
+            .iter()
+            .flat_map(|c| {
+                let cofactored = CompressedEdwardsY::from_slice(c)
+                    .expect("commitment is 32 bytes")
+                    .decompress()
+                    .expect("emitted commitment is on-curve");
+                (cofactored * inv8).compress().to_bytes()
+            })
+            .collect();
+        verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
+            .expect("bond-post RCT balance closes over prover-emitted commitments");
+
+        // ── Reject 1: a wrong bond_credit must not balance ───────────────
+        assert_eq!(
+            verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            Err(BondRctBalanceError::SumMismatch),
+            "a bond_credit other than the funded floor must break the balance"
+        );
+
+        // ── Reject 2: a tampered output commitment must be rejected ──────
+        let mut tampered = out_masks_flat.clone();
+        tampered[0] ^= 0x01;
+        assert!(
+            verify_bond_post_rct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            "a tampered commitment must not satisfy the balance"
+        );
+
+        // ── Reject 3: a signature that does not cover the post is rejected ─
+        let mut wrong_preimage = preimage;
+        wrong_preimage[0] ^= 0x01;
+        assert!(
+            !HybridEd25519MlDsa
+                .verify(p_keys.hybrid_bond_id(), &wrong_preimage, built.signature())
+                .expect("verify hybrid signature against tampered preimage"),
+            "the bond signature must not verify against a tampered preimage"
+        );
+
+        // ── Reject 4: a replayed post (record already exists) is rejected ─
+        assert_eq!(
+            verify_join_market_bond_post(built.vin(), true),
+            Err(BondPostError::RecordExists),
+            "verify must reject a post whose P_canonical_id already has a record"
+        );
+    }
+
     /// Cross-seed isolation: the byte-identical-derivation property
     /// holds within a wallet, but the bundle bytes diverge across
     /// distinct seeds even when the on-chain ciphertext is identical.
