@@ -1529,8 +1529,6 @@ mod tests {
         let wallet =
             Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
 
-        use std::time::Instant;
-
         use super::super::local_pending_tx::ConsumerHeldEntry;
 
         let id = super::super::pending::ReservationId::new(0);
@@ -1540,16 +1538,7 @@ mod tests {
             .lock()
             .expect("pending state lock not poisoned")
             .consumer_held
-            .insert(
-                id,
-                ConsumerHeldEntry {
-                    created_at: Instant::now(),
-                    snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
-                    built_at_height: 0,
-                    built_at_tip_hash: [0u8; 32],
-                    tx_bytes: vec![0xAB; 64],
-                },
-            );
+            .insert(id, ConsumerHeldEntry::for_outstanding_test(vec![0xAB; 64]));
 
         let count_before = wallet.outstanding_pending_txs();
         assert_eq!(count_before, 1);

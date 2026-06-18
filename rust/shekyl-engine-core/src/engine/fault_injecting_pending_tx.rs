@@ -213,6 +213,8 @@ mod tests {
                     snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
                     tx_bytes: Vec::new(),
                     recipients: Vec::new(),
+                    content_gen: 0,
+                    reference_height: 0,
                 })
             }
         }

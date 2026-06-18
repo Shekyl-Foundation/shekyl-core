@@ -87,6 +87,59 @@ use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 /// a single grep-able rename.
 pub(crate) type OutputId = usize;
 
+/// Semantic, canonically-ordered fingerprint of a built tx's *authorized
+/// content* — the `(fee, who-gets-how-much, change)` the consumer reviewed.
+///
+/// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4, F-G/F-G′): a re-anchor advances
+/// [`ConsumerHeldEntry::content_gen`] **iff this fingerprint changes**, so it
+/// must capture exactly what consent is over and nothing else:
+///
+/// - **Semantic, not byte-level** — a reprove re-derives a fresh one-time
+///   *change address* every time; the fingerprint carries the change *amount*
+///   only, never the address, or transparent reprove would spuriously bump
+///   `content_gen` (F-G).
+/// - **Canonically ordered** — CryptoNote-lineage txs shuffle outputs so the
+///   change output is not positionally identifiable, and a reprove re-runs the
+///   build internals → re-shuffles; the destinations are sorted here so the
+///   fingerprint is invariant under that privacy permutation (F-G′).
+///
+/// Consent is over *who gets how much* and the fee — not the wallet's own change
+/// address or the output order — so two builds that pay the same recipients the
+/// same amounts with the same fee and change compare equal regardless of address
+/// re-randomization or output shuffle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContentFingerprint {
+    /// Fee in atomic units.
+    fee: u64,
+    /// Authorized destinations as `(address, amount)`, sorted canonically so an
+    /// output reshuffle does not change the fingerprint (F-G′).
+    dests: Vec<(String, u64)>,
+    /// Change amount (atomic units). The change *address* is deliberately
+    /// excluded — it re-randomizes on every reprove (F-G).
+    change: u64,
+}
+
+impl ContentFingerprint {
+    /// Build the canonical fingerprint from the realized `(fee, recipients,
+    /// change)`. Sorts the destinations so the result is permutation-invariant.
+    fn from_parts(
+        fee: AtomicUnits,
+        recipients: &[TxRecipientSummary],
+        change: AtomicUnits,
+    ) -> Self {
+        let mut dests: Vec<(String, u64)> = recipients
+            .iter()
+            .map(|r| (r.address.clone(), r.amount_atomic_units.to_raw()))
+            .collect();
+        dests.sort();
+        Self {
+            fee: fee.to_raw(),
+            dests,
+            change: change.to_raw(),
+        }
+    }
+}
+
 /// Per-reservation metadata while the rid lives in `consumer_held`.
 ///
 /// The (γ) lean shape stores collection membership in
@@ -96,6 +149,12 @@ pub(crate) type OutputId = usize;
 /// though V3.0's `consumer_held` map values are lighter than the
 /// V3.x eager-discard `ConsumerHeldEntry { snapshot_id, created_at }`
 /// substrate named in §5.6.7 P9.
+///
+/// CT-5d adds the substrate a submit-time re-anchor needs: a `consumer_held`
+/// entry must carry enough to *rebuild* (the `request`), the anchor it was built
+/// against (`reference`), and the consent state (`content_gen` + `fingerprint`).
+/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
+/// §7), so these are runtime-only fields with no schema-migration cost.
 #[derive(Debug, Clone)]
 pub(crate) struct ConsumerHeldEntry {
     /// Build-time [`Instant`] for the R8 TTL safety-net.
@@ -108,6 +167,53 @@ pub(crate) struct ConsumerHeldEntry {
     pub built_at_tip_hash: [u8; 32],
     /// Serialized signed transaction for daemon broadcast.
     pub tx_bytes: Vec<u8>,
+    /// CT-5d: the original build request (recipients + priority). Re-anchor
+    /// (reprove/reselect) re-runs the build pipeline from this, so the entry
+    /// carries enough to rebuild, not just to submit `tx_bytes` (§3).
+    #[allow(dead_code)] // consumed by the CT-5d re-anchor primitive (commit 2).
+    pub request: TxRequest,
+    /// CT-5d: the reference block this proof is anchored to. The submit
+    /// pre-flight reads it for `should_reanchor` (age) and `reference_orphaned`
+    /// (point query) (§5).
+    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
+    pub reference: ReferenceBlock,
+    /// CT-5d: consumer-visible content generation. Advances only when a
+    /// re-anchor changes the realized content (`fingerprint`), never on a proof
+    /// refresh; `submit(id, seen_gen)` compares against it (§4 F-G).
+    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
+    pub content_gen: u64,
+    /// CT-5d: the materialized content fingerprint `content_gen` advances
+    /// against (§4 F-G/F-G′).
+    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
+    pub fingerprint: ContentFingerprint,
+}
+
+#[cfg(test)]
+impl ConsumerHeldEntry {
+    /// Minimal entry for cross-module tests that only need a `consumer_held`
+    /// member to exist (e.g. the close-refusal test in `lifecycle`). Re-anchor
+    /// tests build through the real pipeline and never use this — the
+    /// `request` / `reference` here are placeholders, not a re-anchorable tx.
+    pub(crate) fn for_outstanding_test(tx_bytes: Vec<u8>) -> Self {
+        Self {
+            created_at: Instant::now(),
+            snapshot_id: SnapshotId([0u8; 16]),
+            built_at_height: 0,
+            built_at_tip_hash: [0u8; 32],
+            tx_bytes,
+            request: TxRequest {
+                recipients: Vec::new(),
+                priority: crate::engine::pending::FeePriority::Standard,
+            },
+            reference: ReferenceBlock {
+                height: BlockHeight(0),
+                curve_tree_root: [0u8; 32],
+                block_hash: [0u8; 32],
+            },
+            content_gen: 0,
+            fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),
+        }
+    }
 }
 
 /// Stage 1 ledger access for spendable-output enumeration.
@@ -1102,6 +1208,7 @@ where
         &self,
         request: &TxRequest,
         meta: &BuiltPendingMeta,
+        reference: ReferenceBlock,
         tx_bytes: Vec<u8>,
     ) -> Result<PendingTx, SendError> {
         let mut state = self.state.lock().map_err(|_| {
@@ -1117,16 +1224,6 @@ where
         let id = meta.reservation_id;
         let snapshot_id = state.current_snapshot;
         let created_at = Instant::now();
-        state.consumer_held.insert(
-            id,
-            ConsumerHeldEntry {
-                created_at,
-                snapshot_id,
-                built_at_height: meta.synced,
-                built_at_tip_hash: meta.tip_hash,
-                tx_bytes: tx_bytes.clone(),
-            },
-        );
 
         let summary: Vec<TxRecipientSummary> = request
             .recipients
@@ -1137,6 +1234,39 @@ where
             })
             .collect();
 
+        // CT-5d: the realized content fingerprint `content_gen` advances against
+        // (§4 F-G). `change = total_covered − Σrecipients − fee`; the balance was
+        // already validated in `build_select_sync`, so the saturating arithmetic
+        // here only guards a corrupted-state underflow (never expected).
+        let paid: u64 = summary
+            .iter()
+            .map(|r| r.amount_atomic_units.to_raw())
+            .fold(0u64, u64::saturating_add);
+        let change = AtomicUnits::from_raw(
+            meta.selected
+                .total_covered
+                .to_raw()
+                .saturating_sub(paid)
+                .saturating_sub(meta.fee.to_raw()),
+        );
+        let fingerprint = ContentFingerprint::from_parts(meta.fee, &summary, change);
+
+        state.consumer_held.insert(
+            id,
+            ConsumerHeldEntry {
+                created_at,
+                snapshot_id,
+                built_at_height: meta.synced,
+                built_at_tip_hash: meta.tip_hash,
+                tx_bytes: tx_bytes.clone(),
+                request: request.clone(),
+                reference,
+                // A fresh build is generation 0; re-anchor bumps it (§4).
+                content_gen: 0,
+                fingerprint,
+            },
+        );
+
         let pending = PendingTx {
             id,
             built_at_height: meta.synced,
@@ -1145,6 +1275,9 @@ where
             snapshot_id,
             tx_bytes,
             recipients: summary,
+            // Fresh build: generation 0, anchored at the resolved reference.
+            content_gen: 0,
+            reference_height: reference.height.0,
         };
 
         emit_pending_tx_diagnostic(
@@ -1612,7 +1745,7 @@ where
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
         let tx_bytes = signed.tx_bytes().to_vec();
-        let pending = self.commit_built_sync(&request, &meta, tx_bytes)?;
+        let pending = self.commit_built_sync(&request, &meta, reference, tx_bytes)?;
         reservation_cleanup.disarm();
         Ok(pending)
     }

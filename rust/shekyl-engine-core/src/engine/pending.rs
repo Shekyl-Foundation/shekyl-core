@@ -387,6 +387,17 @@ pub struct PendingTx {
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): consumer-visible content
+    /// generation. A fresh build is `0`; a submit-time re-anchor that changes
+    /// the realized `(fee, recipients, change)` bumps it and **withholds
+    /// broadcast**, returning a new handle with the advanced value. The consumer
+    /// passes the value it last reviewed back as `submit(id, seen_gen)`; a
+    /// mismatch means the authorized content changed and must be re-confirmed.
+    pub content_gen: u64,
+    /// CT-5d: the height of the reference block this proof is anchored to
+    /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
+    /// the anchor age without parsing `tx_bytes`.
+    pub reference_height: u64,
 }
 
 /// Default reservation TTL used by both
@@ -642,6 +653,10 @@ pub(crate) fn build_pending_tx_in_state(
         snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
+        // Legacy free-function helper has no curve-tree anchor; CT-5d
+        // re-anchor is exercised through `LocalPendingTx`, not here.
+        content_gen: 0,
+        reference_height: 0,
     };
 
     reservations.insert(id, reservation);
