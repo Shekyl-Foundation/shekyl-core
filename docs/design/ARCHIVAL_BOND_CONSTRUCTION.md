@@ -1,4 +1,4 @@
-# Archival bond-post construction (wallet side, Stage 3 StakeEngine)
+# Archival bond-post construction (wallet-side, Stage 3 StakeEngine)
 
 Status: design, under review (target 2-3 rounds; see Section 11).
 Scope owner: wallet/engine + crypto-pq.
@@ -129,21 +129,30 @@ flowchart TD
 inside an existing engine crate. The new-crate option is the current proposal
 for isolation + KAT-ability; Section 11.)
 
-## 6. PR 0 -- `archival_p` derivation (BUILT NOW, in parallel)
+## 6. PR 0 -- `archival_p` derivation (PR #152, built in parallel)
 
-PR 0 is **not gated on this doc's review rounds.** Its design is already
-settled: the bundle is `ARCHIVAL_FIREWALL_GATE6.md` §9.4, the labels are §9.3,
-the crate home is decided, and the freeze pattern mirrors
+PR 0 is **not gated on this doc's review rounds**; it is implemented separately
+in [PR #152](https://github.com/Shekyl-Foundation/shekyl-core/pull/152)
+(`feat/archival-p-derivation`). Its design was already settled: the bundle is
+`ARCHIVAL_FIREWALL_GATE6.md` §9.4, the labels are §9.3, the crate home is
+decided, and the freeze pattern mirrors
 [`address_derivation_freeze.rs`](../../rust/shekyl-crypto-pq/src/address_derivation_freeze.rs).
 None of that is among the open construction-flow questions the rounds exist to
 resolve. PR 0 is the highest-stakes primitive in the project (a bit of
-derivation drift means a user cannot recover their own bond) and is built
-carefully today, with the doc's rounds running on PR 1/2 alongside.
+derivation drift means a user cannot recover their own bond) and was built
+carefully alongside this doc's PR 1/2 rounds.
+
+> **Merge-order note.** This section describes PR #152's derivation as built.
+> If this doc lands on `dev` before #152, treat §6 as the **spec #152
+> implements** rather than a description of code already on `dev`; the two are
+> kept in sync deliberately (§6 was updated when #152 froze the scalar-vs-seed
+> resolution). Merging #152 first keeps every "built/landed" reference here
+> accurate on `dev`.
 
 ### 6.1 Keys (gate-6 §9.4 `ArchivalPKeys`)
 
 ```text
-ArchivalPKeys {                       // landed: matches gate-6 §9.4 (post scalar-vs-seed resolution)
+ArchivalPKeys {                       // PR #152: matches gate-6 §9.4 (post scalar-vs-seed resolution)
   p_slot: u32,
   spend_pk/sk, view_pk/sk,            // Ed25519 ADDRESS scalars, via wide-reduce (L=64)
   ml_kem_ek/dk,                       // ML-KEM-768
