@@ -143,39 +143,59 @@ carefully today, with the doc's rounds running on PR 1/2 alongside.
 ### 6.1 Keys (gate-6 §9.4 `ArchivalPKeys`)
 
 ```text
-ArchivalPKeys {
+ArchivalPKeys {                       // landed: matches gate-6 §9.4 (post scalar-vs-seed resolution)
   p_slot: u32,
-  spend_pk/sk, view_pk/sk,            // Ed25519, via wide-reduce
+  spend_pk/sk, view_pk/sk,            // Ed25519 ADDRESS scalars, via wide-reduce (L=64)
   ml_kem_ek/dk,                       // ML-KEM-768
   x25519_pk,                          // montgomery(view_pk)
-  hybrid_sign_pk/sk,                  // Hybrid{ed25519=spend, ml_dsa=account}
-  hybrid_bond_id: HybridPublicKey,    // == hybrid_sign_pk; bond-record IDENTITY only
-  bond_spend_pk/sk: HybridPublicKey,  // GF-1 debit authorizer, distinct labels
-  p_canonical_id: [u8; 32],
+  hybrid_sign_pk/sk,                  // IDENTITY; Hybrid{ed25519=account_sign_seed, ml_dsa=account}
+  bond_spend_pk/sk,                   // GF-1 debit authorizer; Hybrid{ed25519=bond_spend_ed_seed, ...}
 }
+// hybrid_bond_id() is an accessor returning &hybrid_sign_pk (== invariant enforced
+//   structurally, no second copy). p_canonical_id is NOT a field: it is computed
+//   downstream by shekyl-archival-retention::id over hybrid_bond_id's canonical bytes.
 ```
 
-`ZeroizeOnDrop`, **not `Clone`** (per `21-reversion-clause-discipline.mdc` and
-`AllKeysBlob`'s precedent); lives in the StakeEngine actor task.
+Per-field `ZeroizeOnDrop` (the container holds non-`Zeroize` public material, so
+it is *not* a single `derive(ZeroizeOnDrop)`; each secret field wipes via its own
+destructor), and **not `Clone`** (per `21-reversion-clause-discipline.mdc` and
+`AllKeysBlob`'s precedent). Lives in the StakeEngine actor task; the `!Clone`
+bound is what keeps the bundle from escaping the actor (§10.1).
+
+**Scalar-vs-seed (genesis-frozen, 2026-06-17).** The two `hybrid` Ed25519 halves
+(`account_sign_seed` for the identity, `bond_spend_ed_seed` for the debit
+authorizer) are dedicated `L=32` RFC 8032 seeds, **not** the address spend
+scalar -- `HybridEd25519MlDsa` is seed-keyed (`SigningKey::from_bytes` clamps
+`SHA512(seed)`). The identity uses its own `account_sign_seed` rather than
+reusing `spend`, which decouples the public `P_pubkey` from the receive-address
+spend key (privacy-positive, gate-6 §9.3). Receive-address spend/view stay
+`L=64` wide-reduce (real scalar consumers: `spend·B`, `montgomery(view)`).
 
 ### 6.2 HKDF labels (gate-6 §9.3, pinned `L`)
 
-| Output | Label | L |
-| --- | --- | --- |
-| `spend_wide` | `shekyl-archival-p-ed25519-spend-v1` | 64 |
-| `view_wide` | `shekyl-archival-p-ed25519-view-v1` | 64 |
-| `kem_d_z` | `shekyl-archival-p-ml-kem-768-v1` | 64 |
-| `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 |
-| `bond_spend_wide` | `shekyl-archival-p-bond-spend-ed25519-v1` | 64 |
-| `bond_spend_ml_dsa_seed` | `shekyl-archival-p-bond-spend-ml-dsa-65-v1` | 32 |
+| Output | Label | L | Consumer |
+| --- | --- | --- | --- |
+| `spend_wide` | `shekyl-archival-p-ed25519-spend-v1` | 64 | wide-reduce -> address spend scalar |
+| `view_wide` | `shekyl-archival-p-ed25519-view-v1` | 64 | wide-reduce -> address view scalar |
+| `kem_d_z` | `shekyl-archival-p-ml-kem-768-v1` | 64 | SHA3-ChaCha -> ML-KEM-768 KG |
+| `account_sign_seed` | `shekyl-archival-p-ed25519-account-sign-v1` | 32 | RFC 8032 seed -> identity Ed25519 half |
+| `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 | `keygen_from_seed` -> identity ML-DSA half |
+| `bond_spend_ed_seed` | `shekyl-archival-p-bond-spend-ed25519-v1` | 32 | RFC 8032 seed -> bond-spend Ed25519 half |
+| `bond_spend_ml_dsa_seed` | `shekyl-archival-p-bond-spend-ml-dsa-65-v1` | 32 | `keygen_from_seed` -> bond-spend ML-DSA half |
 
-`info = LABEL || 0x00 || p_slot.to_le_bytes()`. The **single-byte `0x00`
-separator is locked into the KAT at manifest-authoring time** per the §9.3
-KAT-author note, so the wire is fixed before any label is ever added (prevents a
-future label being a prefix of an existing `LABEL || slot`). The ML-KEM
-intermediary (`SHA3-256(b"shekyl-mlkem-chacha-seed" || kem_d_z)` ->
-`ChaCha20Rng`) is the same function as principal; archival separation comes from
-the distinct `kem_d_z` bytes.
+`info = LABEL || 0x00 || p_slot.to_le_bytes()` -- **implemented and
+genesis-frozen** in `archival_p` and the KAT (not merely a KAT-author note; the
+separator is on the wire). Collision-safety note: the `0x00` is
+belt-and-suspenders, not load-bearing. Because `p_slot` is a fixed-width 4-byte
+suffix, two distinct `(LABEL, p_slot)` pairs already cannot produce the same
+bytes -- different-length labels give different total lengths, equal-length
+distinct labels differ in the label region -- so *distinct* labels suffice and
+prefix-freeness is not required. The separator adds nothing semantically here;
+it is frozen because it costs nothing and the corpus is already pinned (removing
+it would be a pointless KAT re-open). The ML-KEM intermediary
+(`SHA3-256(b"shekyl-mlkem-chacha-seed" || kem_d_z)` -> `ChaCha20Rng`) is the
+same function as principal; archival separation comes from the distinct
+`kem_d_z` bytes.
 
 ### 6.3 KAT -- `ARCHIVAL_P_DERIVE_V1` (third cross-arch-deterministic primitive)
 
@@ -186,14 +206,17 @@ highest-stakes of the three. The KAT mirrors the
 the `*_manifest_hash` freeze tripwire, and adds two determinism-discipline
 requirements:
 
-1. **aarch64 qemu-user lane.** The existing `address_derivation_freeze` KAT in
-   `shekyl-crypto-pq` does **not** currently run on the aarch64 lane -- that lane
+1. **aarch64 qemu-user lane.** The `address_derivation_freeze` KAT in
+   `shekyl-crypto-pq` did **not** run on the aarch64 lane -- that lane
    ([`.github/workflows/depends.yml`](../../.github/workflows/depends.yml), step
-   "archival KAT tests run under aarch64 (qemu-user)") runs only
-   `shekyl-archival-retention` and `shekyl-standoff`. PR 0 **adds
-   `shekyl-crypto-pq` to that lane** so `ARCHIVAL_P_DERIVE_V1` is verified
-   bit-identical on ARM, not just compiled. (This is the "ARM phone can't
-   recover the bond" failure mode made into a gate.)
+   "archival KAT tests run under aarch64 (qemu-user)") ran only
+   `shekyl-archival-retention` and `shekyl-standoff`. PR 0 **added the
+   `ARCHIVAL_P_DERIVE_V1` KAT (`shekyl-crypto-pq --test
+   kat_archival_p_derive_v1`) to that lane** (scoped to the KAT binary so the
+   slow keygen path runs only for the pinned vectors), so the derivation is
+   verified bit-identical on ARM, not just compiled. Confirmed passing under
+   `qemu-aarch64-static` locally. (This is the "ARM phone can't recover the
+   bond" failure mode made into a gate.)
 2. **Label-sensitivity negative.** A test that derives under a wrong label and
    asserts a different key -- proving the GF-1-carve independence (P identity
    vs. `bond_spend_pk` under distinct labels) is *demonstrated*, not just
@@ -305,6 +328,58 @@ anything exercises it. Each carries its named verify-side gap:
 - This is where the operator-guide footgun guards
   ([`STAKER_OPERATOR_GUIDE.md`](../STAKER_OPERATOR_GUIDE.md), slice 2 of the
   operator unit) attach.
+
+### 10.1 Actor encapsulation, efficiency, and lifecycle
+
+The StakeEngine actor *is* the gate-6 firewall: §9.6's "StakeEngine is sole
+owner of `P.view_sk`, structurally disjoint from LedgerEngine, route-by-decap,
+never cross-assigned" is GF-2 realized as actor isolation. The three properties
+below are what make that isolation hold rather than merely declare it; they are
+design dispositions for PR 2, not open questions.
+
+**Efficiency -- derivation is CPU-bound; keep it off the async hot path.**
+`derive_archival_p_keys` is dominated by PQ keygen (ML-DSA-65 + ML-KEM-768
+keygen; HKDF and Ed25519 are cheap). A single-`P` wallet is ~1 ms, borderline
+inline. The multi-`P` whale -- the operator this dependability work exists for
+-- derives `N` bundles on wallet open; `N` serial keygens run inside an async
+`kameo` handler block the Tokio worker thread (cooperative scheduling, no
+preemption), stalling the whole runtime for tens of ms at open. **Disposition:**
+run derivation on `spawn_blocking`, and since per-slot keygens are independent,
+either parallelize them or derive lazily per-`P` on first use rather than all
+up-front. This keeps a whale's wallet-open from becoming a visible stall and
+keeps the actor responsive to other messages during derivation.
+
+**Robustness -- the message protocol stays operation-shaped, never
+key-shaped.** Actor isolation holds *only* if the message API never leaks the
+bundle. Messages carry **requests** ("sign this preimage", "decap this") and
+responses carry **results** (a signature, an ownership decision) -- never the
+key bundle, never a `Clone` of it. `ArchivalPKeys` being `!Clone` +
+per-field-`ZeroizeOnDrop` (§6.1) is what *binds* this: the secret cannot escape
+the actor because nothing can request it and nothing can copy it out. The P-scan
+pipeline (`combined_ss` recovery) stays **inside** StakeEngine, so only scan
+*results* cross the actor boundary, not shared secrets. The moment a decapped
+secret would need to flow to another actor, that message type would need its own
+`ZeroizeOnDrop` -- a door to keep shut. (If a future design opens it, that is a
+gate-6 isolation amendment, not a PR-2 implementation detail.)
+
+**Robustness -- re-derive-on-restart makes `master_seed_64` the load-bearing
+root.** `ArchivalPKeys` is derived on wallet open and **not persisted** (no
+derived key at rest -- the right call). The consequence: StakeEngine re-derives
+on every actor restart and every rotation, so `master_seed_64` must outlive the
+StakeEngine actor and carry the same `mlock` + `ZeroizeOnDrop` discipline as the
+bundle -- it is the root the whole firewall hangs off, and a `kameo` supervision
+restart re-touches it. Two PR-2 confirmations:
+
+1. **Seed survives a StakeEngine panic/restart cleanly**, so re-derivation
+   succeeds deterministically. The `aarch64` `ARCHIVAL_P_DERIVE_V1` KAT (§6.3)
+   is what guarantees the *same* keys come back -- restart-determinism is the
+   runtime consumer of that cross-arch freeze.
+2. **`p_slot` rotation is atomic in the actor** -- the old bundle is wiped *as*
+   the new one is installed, with no window where both `P`s are live. This is
+   the restore-flow co-activation hazard (gate-6 §10.9 isolation pin) surfacing
+   at the actor layer: a rotation that briefly holds two active `P` identities
+   is exactly the co-activation §10.9 forbids, so it must be a **single state
+   transition**, not drop-then-derive with a gap.
 
 ## 11. Review plan and open questions
 
