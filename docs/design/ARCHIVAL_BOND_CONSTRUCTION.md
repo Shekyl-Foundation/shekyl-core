@@ -392,6 +392,22 @@ anything exercises it. Each carries its named verify-side gap:
 
 ## 10. PR 2 -- StakeEngine orchestration + standoff self-cert
 
+> **Status (PR 2b landed inert, `feat/archival-stake-engine`).** The
+> StakeEngine actor and its handle now exist
+> (`shekyl-engine-core::engine::stake_engine`): it owns `master_seed_64` and the
+> active persona, derives `ArchivalPKeys` lazily off the hot path
+> (`spawn_blocking`), rotates slots in a single atomic transition, re-derives
+> deterministically on (re-)spawn, and is fail-stop with a user-facing
+> `StakeActorUnavailable` recovery diagnostic. It carries the typed surface the
+> rest of §10/§10.1 assumes -- `PSlot`, the wipe-disciplined `StakeMasterSeed`,
+> and a public-only `PersonaIdentity` reply (holds the typed `HybridPublicKey`,
+> no secret field). It is **inert**: registered and test-exercised only, with no
+> `Engine` wiring. The remaining §10 scope -- the parallel JoinMarket request
+> type, funding selection, the standoff `draw_entry_gap` + `certify_draw`
+> self-cert (fail-stop on non-conformance), and the live open/create lifecycle
+> wiring that brings a seed-holding actor into existence -- lands in **PR 2c**;
+> the `arti-client` transport isolation lands in **PR 2d**.
+
 - A **parallel StakeEngine request type** for JoinMarket (§11.1 Q3, resolved) --
   *not* a variant on the shared `TxRequest`, which would route bond construction
   through the `LedgerEngine` transfer pipeline and violate §9.6/§10.1. A

@@ -766,8 +766,8 @@ sustainability is unaffected by the recalibration.
   standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
   guide is the only currently-unblocked slice and was taken first.
 
-- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0-1
-  landed; PR 2 in progress as a 2a-2d sub-PR chain).** The construction
+- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0-2a
+  landed; PR 2b in progress as part of a 2a-2d sub-PR chain).** The construction
   counterpart to the genesis-frozen `shekyl-archival-retention` verify side.
   Design doc:
   [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
@@ -785,14 +785,19 @@ sustainability is unaffected by the recalibration.
   `bond_rct_balance`), so a genesis-frozen consensus equation cannot diverge
   across the two. **PR 2** (StakeEngine orchestration) exceeded the branching
   guidance and was decomposed into a sequenced sub-PR chain, each landing inert
-  until the chain closes: **PR 2a (in progress, `feat/archival-bond-roundtrip-kat`)**
+  until the chain closes: **PR 2a (landed #156, `feat/archival-bond-roundtrip-kat`)**
   the full-prover synthetic-tree round-trip KAT -- the JoinMarket bond drives the
   *real* FCMP++ prover (`sign_transaction_with_terms`, `bond_credit` as the sole
   output-side cleartext term) and checks the prover-emitted commitments against
   the verify side, plus accept/reject negatives (wrong `bond_credit`, tampered
-  commitment, tampered preimage, replay); **PR 2b** the `StakeEngine` kameo actor
-  (lazy per-`P` `ArchivalPKeys`, `!Clone`/`ZeroizeOnDrop`, `spawn_blocking`
-  derivation, fail-stop diagnostic), inert; **PR 2c** the parallel JoinMarket bond
+  commitment, tampered preimage, replay); **PR 2b (in progress,
+  `feat/archival-stake-engine`)** the `StakeEngine` kameo actor
+  (`shekyl-engine-core::engine::stake_engine`): lazy per-`P` `ArchivalPKeys`
+  (`!Clone`/`ZeroizeOnDrop`), `spawn_blocking` derivation, atomic slot rotation,
+  re-derive-on-restart, fail-stop `StakeActorUnavailable` diagnostic; typed
+  domain values (`PSlot`, `StakeMasterSeed`, `PersonaIdentity` carrying only the
+  public `HybridPublicKey`); landed inert (tests only, no `Engine` wiring until
+  2c); **PR 2c** the parallel JoinMarket bond
   request + funding selection + the two timing seams (economic >=1 SEB / ramp vs.
   network `draw_entry_gap(600)`, never cross-applied; entry seam only, exit seam
   deferred to the unbond slice) + fail-stop `certify_draw` self-cert, with
