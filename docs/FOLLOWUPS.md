@@ -740,15 +740,16 @@ sustainability is unaffected by the recalibration.
   standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
   guide is the only currently-unblocked slice and was taken first.
 
-- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0
-  landed; PR 1 in review; PR 2 pending).** The construction counterpart to the
-  genesis-frozen `shekyl-archival-retention` verify side. Design doc:
+- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0-1
+  landed; PR 2 in progress as a 2a-2d sub-PR chain).** The construction
+  counterpart to the genesis-frozen `shekyl-archival-retention` verify side.
+  Design doc:
   [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
   (Round 1 closed on `dev`). Sequence: **PR 0 (landed, #152)**
   `shekyl-crypto-pq::archival_p` (the `P`-identity + `bond_spend_pk` derivation,
   gate-6 §9.3/§9.4) with an `ARCHIVAL_P_DERIVE_V1` KAT on the **aarch64 qemu
   lane** (third cross-arch-deterministic primitive) + a label-sensitivity
-  negative; **PR 1 (in review, #155, opened 2026-06-18)**
+  negative; **PR 1 (landed, #155, merged 2026-06-18)**
   `shekyl-archival-bond-builder` (JoinMarket vin +
   hybrid signature + credit funding rule) **plus the single-sourced
   `shekyl-rct-balance` crate** -- the §11.1 Q2 upgrade: the cleartext balance
@@ -756,16 +757,32 @@ sustainability is unaffected by the recalibration.
   imported by *both* `shekyl-tx-builder` (construct, via
   `sign_transaction_with_terms`) and `shekyl-archival-retention` (verify, via
   `bond_rct_balance`), so a genesis-frozen consensus equation cannot diverge
-  across the two; **PR 2** StakeEngine orchestration + standoff self-cert +
-  funding selection + the synthetic-tree `sign_transaction_with_terms` prover
-  round-trip. Honest milestone for the unit: the **round-trip KAT** against a
-  synthetic balance witness (PR 1: `tests/join_market_round_trip.rs`, exercising
-  `verify_join_market_bond_post` + `verify_bond_post_rct_balance`) -- **not** an
-  on-chain bond, which is gated on the real `CurveTreeClient` (CT-5). This
-  unblocks operator-experience slices (i)/(ii) (the funding/bond-construction
-  call site they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate
-  construction is **provisional** until their verify side lands (reopening
-  trigger: the paired verify+construct PR for each kind).
+  across the two. **PR 2** (StakeEngine orchestration) exceeded the branching
+  guidance and was decomposed into a sequenced sub-PR chain, each landing inert
+  until the chain closes: **PR 2a (in progress, `feat/archival-bond-roundtrip-kat`)**
+  the full-prover synthetic-tree round-trip KAT -- the JoinMarket bond drives the
+  *real* FCMP++ prover (`sign_transaction_with_terms`, `bond_credit` as the sole
+  output-side cleartext term) and checks the prover-emitted commitments against
+  the verify side, plus accept/reject negatives (wrong `bond_credit`, tampered
+  commitment, tampered preimage, replay); **PR 2b** the `StakeEngine` kameo actor
+  (lazy per-`P` `ArchivalPKeys`, `!Clone`/`ZeroizeOnDrop`, `spawn_blocking`
+  derivation, fail-stop diagnostic), inert; **PR 2c** the parallel JoinMarket bond
+  request + funding selection + the two timing seams (economic >=1 SEB / ramp vs.
+  network `draw_entry_gap(600)`, never cross-applied; entry seam only, exit seam
+  deferred to the unbond slice) + fail-stop `certify_draw` self-cert, with
+  broadcast structurally gated on 2d; **PR 2d** the `arti-client`
+  security-critical pre-flight (guard isolation verified at source, `cargo audit`,
+  Guix repro, `AUDIT_SCOPE.md`) + the `P`-isolated outbound `DaemonEngine`,
+  outbound-only (inbound onion-service HS deferred to the announce-wire item).
+  Honest milestone for the unit: the **round-trip KAT** -- PR 1 closed it against
+  a synthetic balance witness (`tests/join_market_round_trip.rs`); PR 2a
+  strengthens it to the real prover over a synthetic depth-1 tree
+  (`shekyl-engine-core::engine::local_keys::tests`) -- **not** an on-chain bond,
+  which is gated on the real `CurveTreeClient` (CT-5). This unblocks
+  operator-experience slices (i)/(ii) (the funding/bond-construction call site
+  they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate construction is
+  **provisional** until their verify side lands (reopening trigger: the paired
+  verify+construct PR for each kind).
 
 - **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
   balance surface introduced in PR 1 carries the inherited "RCT" name

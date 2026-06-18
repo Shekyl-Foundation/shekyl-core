@@ -82,6 +82,29 @@ archival_p derive -> build JoinMarket vin + RCT witness
 "A bond exists on a chain" comes when the curve-tree client is real. Naming this
 now prevents discovering the gap after PR 2 ships.
 
+**PR 2a strengthens this milestone (2026-06-18).** PR 1's round-trip KAT closed
+the balance equation against a *synthetic* balance witness (hand-built
+`pseudo_outs`/`out_masks`). PR 2a replaces the synthetic witness with the
+**real FCMP++ prover**: the JoinMarket vin's `bond_credit` rides through
+`shekyl-tx-builder::sign_transaction_with_terms` as the single output-side
+cleartext term, and the verify side
+(`verify_join_market_bond_post`, `verify_bond_post_rct_balance`, the BP+ range
+proof, and the FCMP++ membership proof) is checked against the **prover-emitted**
+commitments. The tree stays synthetic (depth-1 single-leaf-chunk, the M3c
+fixture), so the gap to a real-chain bond is unchanged and still CT-5 work; what
+PR 2a removes is the gap between "construction balances against a witness we
+wrote" and "construction balances against the proof the prover actually emits."
+The KAT also asserts the verify side *rejects* a wrong `bond_credit`, a tampered
+output commitment, a tampered signature preimage, and a replayed post -- the
+honest milestone is "valid accepts and invalid rejects," not accept alone. Lives
+in `shekyl-engine-core::engine::local_keys::tests`
+(`join_market_bond_post_signs_and_verifies_through_prover`), reusing the M3c
+synthetic-tree and key-derivation fixtures rather than promoting them to public
+API. One encoding bridge: `sign.rs` emits output commitments as `8*C` (subgroup
+cofactoring on the wire) while the balance equation is defined over the
+prime-order `C`, so the KAT recovers `C = (8*C) * 8^{-1}` before the balance
+check -- both sides then carry genuine prover output.
+
 ## 4. Single-sourcing by import
 
 Construction reuses the validated verify-side types rather than re-deriving
