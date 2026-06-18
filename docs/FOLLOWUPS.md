@@ -796,7 +796,15 @@ sustainability is unaffected by the recalibration.
   request + funding selection + the two timing seams (economic >=1 SEB / ramp vs.
   network `draw_entry_gap(600)`, never cross-applied; entry seam only, exit seam
   deferred to the unbond slice) + fail-stop `certify_draw` self-cert, with
-  broadcast structurally gated on 2d; **PR 2d** the `arti-client`
+  broadcast structurally gated on 2d. **2c's closing milestone is the real-tree
+  bond round-trip** -- the bond's cleartext `credit_term` threaded through the
+  engine signer (today `sign_bridge.rs` calls the zero-terms `sign_transaction`)
+  and driven over a real `assemble_path` tree, mirroring
+  `local_pending_tx::build_then_submit_marks_outputs_spent` /
+  `funded_ledger_and_tree`. PR 2a's KAT is the *synthetic-tree* composition
+  milestone (the A4-retained `local_keys` signing-KAT surface of
+  `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT is gated on 2c's
+  term-threading, not on CT-5 (`assemble_path` is real as of CT-5c). **PR 2d** the `arti-client`
   security-critical pre-flight (guard isolation verified at source, `cargo audit`,
   Guix repro, `AUDIT_SCOPE.md`) + the `P`-isolated outbound `DaemonEngine`,
   outbound-only (inbound onion-service HS deferred to the announce-wire item).

@@ -1570,10 +1570,18 @@ mod tests {
     /// the pseudo-out balancing, and both verify entrypoints
     /// (`verify_join_market_bond_post`, `verify_bond_post_rct_balance`) are the
     /// production paths. The curve tree is **synthetic**: a single-leaf-chunk
-    /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. A
-    /// round-trip against the real `CurveTreeClient` is CT-5 work (§8); this
-    /// test pins that construct → prove → verify composes today, independent of
-    /// the tree source.
+    /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
+    /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
+    /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
+    /// same slice that cut production over to the real `assemble_path`. A
+    /// real-tree bond round-trip (mirroring `local_pending_tx`'s
+    /// `build_then_submit_marks_outputs_spent` over `funded_ledger_and_tree`) is
+    /// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
+    /// bond's cleartext `credit_term` through the engine signer, which today
+    /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That
+    /// threading is PR 2c, so the real-tree bond KAT lands as 2c's closing
+    /// milestone (`FOLLOWUPS.md`). This test pins that construct → prove → verify
+    /// composes today, independent of the tree source.
     ///
     /// # Commitment encoding
     ///

@@ -91,9 +91,25 @@ cleartext term, and the verify side
 (`verify_join_market_bond_post`, `verify_bond_post_rct_balance`, the BP+ range
 proof, and the FCMP++ membership proof) is checked against the **prover-emitted**
 commitments. The tree stays synthetic (depth-1 single-leaf-chunk, the M3c
-fixture), so the gap to a real-chain bond is unchanged and still CT-5 work; what
-PR 2a removes is the gap between "construction balances against a witness we
-wrote" and "construction balances against the proof the prover actually emits."
+fixture); what PR 2a removes is the gap between "construction balances against a
+witness we wrote" and "construction balances against the proof the prover
+actually emits."
+
+The synthetic tree here is **not** a stale path: CT-5c
+(`CT5C_ASSEMBLER_CUTOVER.md`) cut the *production* spend path over to the real
+`assemble_path` / `CurveTreeClient`, and its A4 reversion clause deliberately
+retained the `synthetic_tree` fixtures `#[cfg(test)]`-only for exactly the
+`local_keys` signing KATs (and the tx-weight KAT) — depth-controlled fixtures a
+real tree can't cheaply provide. So PR 2a uses the sanctioned KAT surface. The
+remaining gap to a **real-tree bond** round-trip is therefore *not* "CT-5
+doesn't exist" — `assemble_path` is real as of CT-5c, and transfers already have
+a real-tree round-trip (`local_pending_tx::build_then_submit_marks_outputs_spent`
+over `funded_ledger_and_tree`). The bond gap is narrower: the engine signer
+(`sign_bridge.rs`) calls the **zero-terms** `sign_transaction`, with no
+engine-side plumbing for the bond's cleartext `credit_term`. Threading that term
+from the bond request through the build path is **PR 2c**, so the real-tree bond
+round-trip (mirroring `build_then_submit_…` with `credit_term` threaded) lands as
+2c's closing milestone, tracked in `FOLLOWUPS.md`.
 The KAT also asserts the verify side *rejects* a wrong `bond_credit`, a tampered
 output commitment, a tampered signature preimage, and a replayed post -- the
 honest milestone is "valid accepts and invalid rejects," not accept alone. Lives
