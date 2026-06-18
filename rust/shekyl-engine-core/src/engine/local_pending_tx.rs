@@ -46,7 +46,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_curve_tree::{
-    select_reference_height, AssembleInput, BlockHeight, Gindex, ReferenceBlock, REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
+    REBUILD_AT, REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
@@ -489,6 +490,28 @@ fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -> SendError
     }
 }
 
+/// Classify a curve-tree handle error encountered during a CT-5d re-anchor
+/// (`docs/design/CT5D_REANCHOR.md` §3): the two `CurveTreeHandleError` variants
+/// map to the two re-anchor failure modes.
+fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> ReanchorError {
+    match err {
+        // The client returned an error *inside* the handler: the selected input
+        // is not resolvable at the fresh reference — almost always a
+        // reorg-orphaned output. Content-preserving reprove is impossible;
+        // reselection (CT-5d-deferred) is the fix, so tell the consumer to
+        // discard and rebuild rather than carry a proof that cannot be built.
+        CurveTreeHandleError::Client(_) => ReanchorError::ReselectionRequired {
+            detail:
+                "membership assembly failed at the fresh reference (input likely reorg-orphaned); discard and rebuild",
+        },
+        // The actor is fail-stopped / timed out — transient, recoverable by
+        // respawn; retriable once the tree resyncs.
+        CurveTreeHandleError::Unavailable => ReanchorError::ReferenceResyncing {
+            detail: "curve tree actor unavailable; retry once it resyncs",
+        },
+    }
+}
+
 fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
@@ -637,6 +660,50 @@ struct BuildSelected {
     /// The fee directive sized against the real tree depth.
     fee_directive: super::traits::key::FeeDirective,
     meta: BuiltPendingMeta,
+}
+
+/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d [`docs/design/CT5D_REANCHOR.md`]
+/// §3a): the tip/tree can move during the lock-free prover run, re-staling the
+/// freshly-anchored reference. Retry the whole pre-phase→prover→commit loop a
+/// few times; a tip moving faster than this is better surfaced as a clean
+/// "resyncing, retry later" than spun on.
+const REANCHOR_MAX_RETRIES: u8 = 3;
+
+/// Outcome of a successful in-place reprove (CT-5d §3 reprove path / §4 consent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReanchorOutcome {
+    /// Reproved against a fresh reference; the realized `(fee, recipients,
+    /// change)` is unchanged, so `content_gen` is unchanged and the swapped-in
+    /// tx is transparent to broadcast (§4).
+    Reproved { content_gen: u64 },
+    /// Reproved, but the realized content changed (a fresh-depth fee shift, F-A),
+    /// so `content_gen` advanced; the caller must **withhold broadcast** and
+    /// return the new artifact for re-confirm (§4).
+    ContentChanged { content_gen: u64 },
+}
+
+/// Why a re-anchor could not reprove in place (CT-5d §3).
+//
+// `dead_code` allow: the variant payloads are read by the CT-5d submit
+// pre-flight (commit 3) when it maps a re-anchor failure to a `SubmitError`.
+// Pattern matches the `ttl` / `Reservation` "type substrate before consumer"
+// allows in this crate.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum ReanchorError {
+    /// The fresh reference is not yet anchorable under the two-sided gate (§3b):
+    /// the tree has not ingested far enough (still resyncing), or it lags the
+    /// chain tip so far that a freshly-anchored reference would already be past
+    /// the rebuild threshold. Retriable once the tree catches up.
+    ReferenceResyncing { detail: &'static str },
+    /// The proof cannot be content-preservingly reproved with the currently
+    /// selected inputs: a selected output was orphaned (membership resolution
+    /// failed at the fresh reference), or the fresh-depth fee exceeds what those
+    /// inputs cover (F-I). Reselection is the CT-5d-deferred path
+    /// (`docs/FOLLOWUPS.md` "CT-5d reselect"); the consumer discards and rebuilds.
+    ReselectionRequired { detail: &'static str },
+    /// A transient assembly/signing failure that leaves the reservation intact.
+    Failed(SendError),
 }
 
 #[allow(private_bounds)]
@@ -1290,6 +1357,321 @@ where
         );
 
         Ok(pending)
+    }
+
+    /// CT-5d re-anchor — **reprove** path ([`docs/design/CT5D_REANCHOR.md`] §3/§3a):
+    /// refresh a `consumer_held` proof against a fresh reference without changing
+    /// its inputs.
+    ///
+    /// Three-phase so the FCMP++ prover never holds the state lock (mirrors
+    /// `build`, and the shape the Stage-4 `PendingTxActor` migration needs):
+    ///
+    /// 1. **async pre-phase** (no state lock) — select the fresh reference under
+    ///    the two-sided ingested-tip gate (§3b) and compute the fixed-input fee
+    ///    at the fresh depth.
+    /// 2. **prover** (lock-free) — `assemble_tx` + fold + sign.
+    /// 3. **lock₂** (sync) — re-validate the reference is still canonical (the
+    ///    TOCTOU the lock-drop opens, §5, all sync `with_ledger_block` reads —
+    ///    F-J) and swap `tx_bytes` / `reference` / `fingerprint` / `content_gen`
+    ///    in place. `content_gen` advances iff the realized content changed (§4).
+    ///
+    /// Reselection (a deep reorg that orphaned a selected output, or a fresh-depth
+    /// fee the fixed inputs cannot cover — F-I) is the CT-5d-deferred path: it
+    /// surfaces as [`ReanchorError::ReselectionRequired`] so the consumer
+    /// discards and rebuilds — never a bad proof, never a silent mutation.
+    #[allow(dead_code)] // consumed by the CT-5d submit pre-flight (commit 3).
+    async fn reanchor_consumer_held(
+        &self,
+        id: ReservationId,
+    ) -> Result<ReanchorOutcome, ReanchorError> {
+        let handle =
+            self.curve_tree
+                .as_ref()
+                .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "curve tree required to re-anchor a membership proof",
+                }))?;
+
+        // The lock-free prover run can re-stale the freshly-anchored reference
+        // (the lock₂ TOCTOU); retry the whole loop a bounded number of times
+        // before surfacing a clean "resyncing" (§3a).
+        let mut last_resync: Option<ReanchorError> = None;
+        for _attempt in 0..REANCHOR_MAX_RETRIES {
+            // --- lock₀ (sync): snapshot the entry's rebuild context ---
+            let (request, selected_indices, old_fingerprint, old_content_gen) = {
+                let state = self.state.lock().map_err(|_| {
+                    ReanchorError::Failed(SendError::CannotSign {
+                        reason: "pending-tx state lock poisoned",
+                    })
+                })?;
+                let held = state.consumer_held.get(&id).ok_or(ReanchorError::Failed(
+                    SendError::CannotSign {
+                        reason: "reservation is no longer consumer_held",
+                    },
+                ))?;
+                // Reprove keeps the same inputs: recover them from `output_locks`
+                // (the same shape `finalize_submit_accept` uses).
+                let mut selected: Vec<OutputId> = state
+                    .output_locks
+                    .iter()
+                    .filter_map(|(o, owner)| (*owner == id).then_some(*o))
+                    .collect();
+                selected.sort_unstable();
+                (
+                    held.request.clone(),
+                    selected,
+                    held.fingerprint.clone(),
+                    held.content_gen,
+                )
+            };
+
+            let summary: Vec<TxRecipientSummary> = request
+                .recipients
+                .iter()
+                .map(|r| TxRecipientSummary {
+                    address: r.address.clone(),
+                    amount_atomic_units: r.amount_atomic_units,
+                })
+                .collect();
+
+            // --- phase 0 (async, no state lock): fresh reference + fixed-input fee ---
+            let fee_snapshot = self
+                .fee_snapshot_source
+                .fetch()
+                .await
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let covered_through = handle
+                .ingested_tip_height()
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?
+                .map(|bh| bh.0);
+            let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
+                detail: "curve tree has not ingested any block yet",
+            })?;
+            let chain_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            // Two-sided ingested-tip gate (§3b, F-C): the lower arm anchors at or
+            // below the ingested tip; the upper arm refuses a reference already
+            // past the rebuild threshold (the tree is too far behind to anchor a
+            // submittable reference). Both are never-submit-a-bad-proof gates.
+            let anchor_tip = chain_tip.min(ingested);
+            let reference_height = anchor_tip.checked_sub(REF_ANCHOR_AGE).ok_or(
+                ReanchorError::ReferenceResyncing {
+                    detail: "chain too short to anchor a reference",
+                },
+            )?;
+            if chain_tip.saturating_sub(reference_height) > REBUILD_AT {
+                return Err(ReanchorError::ReferenceResyncing {
+                    detail: "tree too far behind to anchor a submittable reference; resync",
+                });
+            }
+            let (curve_tree_root, depth) = handle
+                .reference_root_and_depth(BlockHeight(reference_height))
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
+            let reference = match self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
+            {
+                Some(block_hash) => ReferenceBlock {
+                    height: BlockHeight(reference_height),
+                    curve_tree_root,
+                    block_hash,
+                },
+                None => {
+                    return Err(ReanchorError::ReferenceResyncing {
+                        detail: "reference-height block hash missing from ledger",
+                    })
+                }
+            };
+
+            // Fixed-input fee at the fresh depth (F-I). The inputs do not change
+            // on the reprove path, so `input_count` is the already-selected set;
+            // a fee the current inputs cannot cover escalates to reselection.
+            let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
+            let payment_count = request.recipients.len();
+            let rate = fee_rate_for_priority(request.priority, &fee_snapshot)
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let fee = self
+                .fee_estimator
+                .estimate_fee(
+                    request.priority,
+                    &FeeEstimationContext {
+                        ledger: &ledger_snapshot,
+                        recipient_count: payment_count,
+                        input_count: selected_indices.len(),
+                        output_count: payment_count + 1,
+                        fee_snapshot,
+                        tree_depth: depth,
+                    },
+                )
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err.into())))?;
+
+            let mut total_amount = AtomicUnits::ZERO;
+            for recipient in &request.recipients {
+                total_amount = total_amount
+                    .checked_add(recipient.amount_atomic_units)
+                    .ok_or(ReanchorError::Failed(SendError::InvalidRecipient {
+                        reason: "recipient amount sum overflowed u64",
+                    }))?;
+            }
+            let required = total_amount.checked_add(fee).ok_or(ReanchorError::Failed(
+                SendError::InvalidRecipient {
+                    reason: "amount + fee overflowed u64",
+                },
+            ))?;
+
+            // Re-read the selected inputs for `total_covered` and the assemble
+            // inputs (public material only; the fold re-reads the secret pathway
+            // by index after the assemble, guarding an index shift via `gindex`).
+            let (assemble_inputs, total_covered) = self
+                .ledger
+                .with_ledger_block(|ledger| {
+                    let transfers = ledger.transfers();
+                    let mut assemble_inputs = Vec::with_capacity(selected_indices.len());
+                    let mut covered = AtomicUnits::ZERO;
+                    for &index in &selected_indices {
+                        let td = transfers.get(index).ok_or(SendError::CannotSign {
+                            reason: "selected transfer index out of range during re-anchor",
+                        })?;
+                        covered =
+                            covered
+                                .checked_add(td.amount())
+                                .ok_or(SendError::CannotSign {
+                                    reason: "selected-input sum overflowed during re-anchor",
+                                })?;
+                        assemble_inputs.push(AssembleInput {
+                            gindex: Gindex(td.global_output_index),
+                            output_key: td.key.compress().to_bytes(),
+                            commitment: td.commitment.calculate().compress().to_bytes(),
+                        });
+                    }
+                    Ok::<_, SendError>((assemble_inputs, covered))
+                })
+                .map_err(ReanchorError::Failed)?;
+
+            if total_covered < required {
+                return Err(ReanchorError::ReselectionRequired {
+                    detail:
+                        "fresh-depth fee exceeds the selected inputs' coverage; discard and rebuild",
+                });
+            }
+            let change = AtomicUnits::from_raw(
+                total_covered
+                    .to_raw()
+                    .saturating_sub(total_amount.to_raw())
+                    .saturating_sub(fee.to_raw()),
+            );
+            let fee_directive =
+                build_fee_directive(&rate, selected_indices.len(), payment_count, depth);
+
+            // --- phase 2 (prover, lock-free): assemble + fold + sign ---
+            let paths = handle
+                .assemble_tx(reference, assemble_inputs.clone())
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
+            if paths.first().is_some_and(|p| p.tree.tree_depth != depth) {
+                // The tree moved under the reference between the depth read and
+                // the assemble — re-stale; retry the whole loop.
+                last_resync = Some(ReanchorError::ReferenceResyncing {
+                    detail: "assembled tree depth diverged from the fresh reference",
+                });
+                continue;
+            }
+            let tx_to_sign = self
+                .ledger
+                .with_ledger_block(|ledger| {
+                    assemble_tx_to_sign(
+                        self.network,
+                        &request,
+                        &selected_indices,
+                        ledger.transfers(),
+                        &assemble_inputs,
+                        &paths,
+                        fee_directive,
+                    )
+                })
+                .map_err(ReanchorError::Failed)?;
+            let signed = self
+                .signer
+                .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
+                .await
+                .map_err(|err| {
+                    let signer_err: SignerError = err.into();
+                    ReanchorError::Failed(map_signer_error(&signer_err))
+                })?;
+            let tx_bytes = signed.tx_bytes().to_vec();
+            let new_fingerprint = ContentFingerprint::from_parts(fee, &summary, change);
+
+            // --- lock₂ (sync): authoritative re-validation + commit the swap ---
+            let mut state = self.state.lock().map_err(|_| {
+                ReanchorError::Failed(SendError::CannotSign {
+                    reason: "pending-tx state lock poisoned",
+                })
+            })?;
+            // A concurrent submit/discard could have removed the entry while the
+            // prover ran (we held no lock). Fail clean, leaving nothing changed.
+            if !state.consumer_held.contains_key(&id) {
+                return Err(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "reservation left consumer_held during re-anchor",
+                }));
+            }
+            // Authoritative staleness re-derivation at commit (the lock₂ TOCTOU,
+            // §3a/§5): the fresh reference must still be canonical and not itself
+            // already due for re-anchor. All sync ledger reads (F-J).
+            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            let still_canonical = self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
+                == Some(reference.block_hash);
+            if !still_canonical || should_reanchor(current_tip, reference_height) {
+                last_resync = Some(ReanchorError::ReferenceResyncing {
+                    detail: "reference re-staled during the prover run",
+                });
+                continue;
+            }
+            let Some(current_tip_hash) = self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(current_tip).copied())
+            else {
+                return Err(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "current tip block hash missing from ledger",
+                }));
+            };
+            self.refresh_current_snapshot(&mut state);
+            let snapshot_id = state.current_snapshot;
+
+            // `content_gen` advances iff the realized content changed — against
+            // the entry's *materialized* fingerprint, never `seen_gen` (§4 F-G).
+            let content_changed = new_fingerprint != old_fingerprint;
+            let content_gen = if content_changed {
+                old_content_gen.saturating_add(1)
+            } else {
+                old_content_gen
+            };
+
+            let entry = state
+                .consumer_held
+                .get_mut(&id)
+                .expect("consumer_held membership re-checked above");
+            entry.tx_bytes = tx_bytes;
+            entry.reference = reference;
+            entry.fingerprint = new_fingerprint;
+            entry.content_gen = content_gen;
+            entry.built_at_height = current_tip;
+            entry.built_at_tip_hash = current_tip_hash;
+            entry.snapshot_id = snapshot_id;
+
+            return Ok(if content_changed {
+                ReanchorOutcome::ContentChanged { content_gen }
+            } else {
+                ReanchorOutcome::Reproved { content_gen }
+            });
+        }
+
+        // Retries exhausted: the tip/tree is moving faster than the prover can
+        // anchor against it. A clean "retry later" beats spinning (§3a).
+        Err(last_resync.unwrap_or(ReanchorError::ReferenceResyncing {
+            detail: "re-anchor retries exhausted; tip moving too fast, retry later",
+        }))
     }
 
     async fn submit_async(&self, id: ReservationId) -> Result<TxHash, SubmitError> {
