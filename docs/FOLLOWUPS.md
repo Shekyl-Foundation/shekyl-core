@@ -87,6 +87,21 @@ sustainability is unaffected by the recalibration.
   address spend pubkey; discharge by citing the structural binding it uses
   instead. Target: V3.0 (must discharge before the emission leg freezes).
 
+- **Corpus-freeze guards: align `address_derivation_freeze` error message
+  with `archival_p_freeze` (Copilot PR #152, 2026-06-17).** PR #152 enriched
+  `archival_p_derive_manifest_self_check` to emit the computed and pinned
+  digests in hex on mismatch ([`rust/shekyl-crypto-pq/src/archival_p_freeze.rs`](../rust/shekyl-crypto-pq/src/archival_p_freeze.rs)),
+  because that guard's primary failure mode is platform-drift on the aarch64
+  qemu lane and self-diagnosing output speeds CI triage. The sibling
+  `address_derivation_manifest_self_check`
+  ([`rust/shekyl-crypto-pq/src/address_derivation_freeze.rs`](../rust/shekyl-crypto-pq/src/address_derivation_freeze.rs))
+  still carries the terse "hash mismatch" form; the two freeze guards should
+  read as mirror images. Kept out of PR #152's `archival_p` scope per
+  `15-deletion-and-debt` ("while we're here is the enemy"). **Discharge:** a
+  one-line consistency commit applying the same `hex32` treatment (or a shared
+  helper) to the address-derivation guard. Target: V3.0 (cosmetic/diagnostic;
+  not genesis-blocking, but cheap to land before the freeze gate).
+
 - **Rename the `ringct` Monero-legacy residue in `shekyl-oxide` (rule-60
   dead-naming; surfaced in the CT-5 design closure, 2026-06-14).** The public
   field `ScannableBlock.output_index_for_first_ringct_output`
