@@ -3656,6 +3656,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-archival-bond-builder"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
+ "shekyl-rct-balance",
+ "shekyl-units",
+ "thiserror",
+]
+
+[[package]]
 name = "shekyl-archival-retention"
 version = "3.1.0"
 dependencies = [

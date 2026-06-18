@@ -1,0 +1,31 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-archival-bond-builder"
+description = "Deterministic JoinMarket archival bond-post vin + hybrid signature + RCT credit-witness construction, single-sourced against the shekyl-archival-retention verify side (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Verify-side types + floor + the term-side definitions (single-sourced; the
+# builder constructs exactly what verify checks — §4 single-sourcing-by-import).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `ArchivalPKeys` (P identity + bond-spend hybrid keys) and hybrid signing.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Typed-side cleartext balance terms (bond_credit -> OutputTerm — §7.2).
+shekyl-rct-balance = { path = "../shekyl-rct-balance" }
+shekyl-units = { path = "../shekyl-units" }
+thiserror.workspace = true
+
+[dev-dependencies]
+# Round-trip KAT constructs the synthetic balance commitment witness inline
+# (§3 honest milestone: synthetic curve tree, not a real chain).
+curve25519-dalek = "4"
+
+[lints]
+workspace = true
