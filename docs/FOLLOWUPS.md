@@ -169,6 +169,16 @@ sustainability is unaffected by the recalibration.
   which point in-memory-only assembly breaks for pruned wallets by
   construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
   R1-Q6.
+  - **Per-input reconstruction reuse (CT-5c, 2026-06-18).** `assemble_path` is
+    called once per input by the `AssembleTx` actor handler, and each call
+    re-runs `drained_sorted` + `build_layers` (O(n log n)) and a linear
+    `gindex` `.position()` scan (O(n)) over the whole drained set. For a tx with
+    `k` inputs that is O(k·n log n). When this perf item is taken up, fold the
+    reconstruction to **once per transaction** (the batch shares one tree
+    snapshot) and resolve each input's drain-position via an ingest-time
+    `gindex → position` index, bringing per-input lookup to O(log n)/O(1). A
+    binary search alone does **not** apply: `drained` is sorted by
+    `(maturity, gindex)`, so `gindex` is not monotonic across maturity buckets.
 
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
@@ -275,6 +285,22 @@ sustainability is unaffected by the recalibration.
   oracle. See [`docs/design/CT2_ROUND1_CLOSEOUT.md`](./design/CT2_ROUND1_CLOSEOUT.md)
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
+
+- **Output-class numbering-equivalence re-verification (CT-5c X3 standing
+  precondition, tracked 2026-06-18).** Target: standing — applies to any future
+  PR that adds an output class to the curve tree. CT-5c resolves owned outputs
+  by `gindex`, which is sound only because the tree's `next_output_seq`
+  numbering is identical to the scanner's `global_output_index` numbering; the
+  `(O, C)` post-resolution check (`ClientError::IdentityMismatch`) is the only
+  runtime guard of that unowned inter-component invariant. The classic way the
+  two diverge is a new output class shifting the drain-order count (coinbase
+  forced exactly this alignment; bond-post / archival outputs are the next
+  candidates). **Reopening trigger (rule-21):** any PR that adds an output class
+  the curve tree indexes must re-verify `global_output_index ↔ tree gindex`
+  equivalence — ideally with a mixed-output-class numbering KAT (the curve-tree
+  `assemble_kat` is coinbase-only; the scanner side is engine-local) — *before*
+  merge. See [`docs/design/CT5C_ASSEMBLER_CUTOVER.md`](./design/CT5C_ASSEMBLER_CUTOVER.md)
+  §5 / §10.
 
 - **Full-segment freeze + prune-retention KAT at production `j=2` leaf count
   (CT-1 Round 1 deferral, tracked 2026-06-13).** Target: V3.0, with the

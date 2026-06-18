@@ -25,8 +25,8 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::{
-    AssembledPath, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex,
+    RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{
     ed25519_point_to_selene_scalar, hash_grow_helios, hash_grow_selene, helios_hash_init,
@@ -124,16 +124,34 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
     client
 }
 
-/// The [`OutputIdentity`] of `block`'s single coinbase output, with `h_pqc`
-/// resolved from its `0x07` blob — what the wallet matches on (§4.3).
-fn coinbase_identity(block: &Block) -> OutputIdentity {
-    let leaf_hashes = shekyl_curve_tree::recon::extract_leaf_hashes(Some(&block.blob));
+/// Global output index (gindex) of `target_height`'s coinbase output: the
+/// cumulative count of every vout in earlier blocks, in drain order. The
+/// fixture's blocks are consecutive from genesis and every coinbase output is
+/// leaf-eligible, so this equals the client's `next_output_seq` assignment —
+/// which is exactly the numbering equivalence the post-resolution check guards
+/// (the scanner-side half of that equivalence is covered engine-side, where the
+/// scanner's `global_output_index` exists; X3 §5.1 / Q3).
+fn coinbase_gindex(blocks: &[Block], target_height: u64) -> u64 {
+    blocks
+        .iter()
+        .filter(|b| b.height < target_height)
+        .map(|b| b.outputs.len() as u64)
+        .sum()
+}
+
+/// The [`AssembleInput`] for `target_height`'s coinbase: its `gindex` (the X3
+/// resolution key) plus the `(output_key, commitment)` the post-resolution
+/// consistency check verifies.
+fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
+    let block = blocks
+        .iter()
+        .find(|b| b.height == target_height)
+        .unwrap_or_else(|| panic!("block {target_height} in fixture"));
     let raw = block.outputs[0];
-    OutputIdentity {
+    AssembleInput {
+        gindex: Gindex(coinbase_gindex(blocks, target_height)),
         output_key: raw.output_key,
-        commitment: raw.commitment,
-        h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(&leaf_hashes, 0),
-        target: raw.target,
+        commitment: raw.commitment.expect("coinbase output has a commitment"),
     }
 }
 
@@ -172,7 +190,7 @@ fn recompute_root(path: &AssembledPath) -> [u8; 32] {
 }
 
 /// Assemble `target`'s path at `reference` and run all three checks.
-fn check_path(client: &CurveTreeClient, target: &OutputIdentity, reference: &ReferenceBlock) {
+fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &ReferenceBlock) {
     let path = client
         .assemble_path(target, reference)
         .expect("assemble path for a drained coinbase output");
@@ -213,11 +231,11 @@ fn check_path(client: &CurveTreeClient, target: &OutputIdentity, reference: &Ref
         "the leaf node must appear in the first (Helios) branch",
     );
 
-    // The matched output is actually present in the returned leaf chunk.
+    // The resolved output is actually present in the returned leaf chunk.
     assert!(
-        path.leaf_chunk.iter().any(
-            |cl| cl.output_key == target.output_key && Some(cl.commitment) == target.commitment
-        ),
+        path.leaf_chunk
+            .iter()
+            .any(|cl| cl.output_key == target.output_key && cl.commitment == target.commitment),
         "the target output must be in its own leaf chunk",
     );
 }
@@ -249,11 +267,7 @@ fn assembled_path_recomputes_to_consensus_root() {
     let mid = last_drained / 2;
 
     for target_height in [0u64, mid, last_drained] {
-        let block = blocks
-            .iter()
-            .find(|b| b.height == target_height)
-            .unwrap_or_else(|| panic!("block {target_height} in fixture"));
-        let target = coinbase_identity(block);
+        let target = coinbase_input(&blocks, target_height);
         check_path(&client, &target, &reference);
     }
 }
@@ -270,11 +284,13 @@ fn assemble_path_rejects_undrained_output() {
         block_hash: [0u8; 32],
     };
 
-    // The tip's own coinbase has not matured (let alone drained) at the tip,
-    // so it is not a leaf in the reference tree: a lookup miss, not a bad path.
-    let undrained = coinbase_identity(tip);
+    // The tip's own coinbase has not matured (let alone drained) at the tip, so
+    // its gindex is not among the drained leaves at the reference: a lookup
+    // miss, not a bad path.
+    let undrained = coinbase_input(&blocks, tip.height);
     match client.assemble_path(&undrained, &reference) {
-        Err(shekyl_curve_tree::ClientError::OutputNotDrained { output_key }) => {
+        Err(shekyl_curve_tree::ClientError::OutputNotDrained { gindex, output_key }) => {
+            assert_eq!(gindex, undrained.gindex);
             assert_eq!(output_key, undrained.output_key);
         }
         other => panic!("expected OutputNotDrained, got {other:?}"),
@@ -287,7 +303,7 @@ fn assemble_path_rejects_root_mismatch() {
     let client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
-    let founder = coinbase_identity(&blocks[0]);
+    let founder = coinbase_input(&blocks, blocks[0].height);
     // A reference carrying the wrong consensus root must fail the integrity
     // gate before any path is assembled.
     let bad = ReferenceBlock {
@@ -300,5 +316,41 @@ fn assemble_path_rejects_root_mismatch() {
             assert_eq!(height, BlockHeight(tip.height));
         }
         other => panic!("expected RootMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn assemble_path_rejects_identity_mismatch() {
+    let blocks = main_chain();
+    let client = client_over(&blocks);
+
+    let tip = blocks.last().expect("non-empty chain");
+    let reference = ReferenceBlock {
+        height: BlockHeight(tip.height),
+        curve_tree_root: tip.root,
+        block_hash: [0u8; 32],
+    };
+
+    // A genuinely drained coinbase, but with the expected output_key tampered:
+    // the gindex resolves to the real leaf, then the post-resolution (O, C)
+    // check rejects it (X3 — the tree-vs-scanner numbering-desync guard).
+    let last_drained = reference.height.0.saturating_sub(61);
+    let mut tampered = coinbase_input(&blocks, last_drained);
+    let real_key = tampered.output_key;
+    tampered.output_key = [0x99u8; 32];
+    assert_ne!(tampered.output_key, real_key, "tamper must change the key");
+
+    match client.assemble_path(&tampered, &reference) {
+        Err(shekyl_curve_tree::ClientError::IdentityMismatch {
+            gindex,
+            expected_output_key,
+            got_output_key,
+            ..
+        }) => {
+            assert_eq!(gindex, tampered.gindex);
+            assert_eq!(expected_output_key, [0x99u8; 32]);
+            assert_eq!(got_output_key, real_key);
+        }
+        other => panic!("expected IdentityMismatch, got {other:?}"),
     }
 }

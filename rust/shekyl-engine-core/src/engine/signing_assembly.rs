@@ -3,52 +3,116 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Orchestrator-side signing-context assembly (Phase 2a §3.4).
+//! Orchestrator-side signing-context assembly (Phase 2a §3.4 / CT-5c).
 //!
-//! Builds populated [`TxToSign`] from ledger [`TransferDetails`] and the
-//! build request. Real curve-tree paths and tree-root verification land
-//! with the curve-tree client (§3.0.4); until then the synthetic depth-1
-//! path per §3.0.5 supplies structural placeholders for 2a-2 plumbing.
+//! Builds a populated [`TxToSign`] from the selected ledger [`TransferDetails`]
+//! and the real FCMP++ membership paths assembled by the curve-tree client
+//! (`shekyl_curve_tree::CurveTreeClient::assemble_path`, delivered as the batch
+//! `AssembleTx` reply — see [`super::curve_tree_actor`]). The per-input
+//! secret-pathway fields (`handle`, `key_image`, `source_ciphertext`) come from
+//! the transfer; the public membership material (leaf chunk, branch layers,
+//! tree context) comes from the assembled path — a field copy across the
+//! curve-tree → tx-builder type boundary, no transform. Secrets are added only
+//! later, in [`super::sign_bridge`] → `SpendInput`, so this stays on the public
+//! side of the secret-locality boundary ([`36-secret-locality`]).
+//!
+//! [`36-secret-locality`]: ../../../../../.cursor/rules/36-secret-locality.mdc
 
-use curve25519_dalek::EdwardsPoint;
+use shekyl_curve_tree::{AssembleInput, AssembledPath, ChunkLeaf, TreeContext as CurveTreeContext};
 use shekyl_engine_state::TransferDetails;
-use shekyl_generators::biased_hash_to_point;
-use shekyl_oxide::primitives::Commitment;
-use shekyl_tx_builder::LeafEntry;
+use shekyl_tx_builder::{LeafEntry, TreeContext};
 
 use super::error::SendError;
 use super::network::Network;
 use super::pending::TxRequest;
-use super::synthetic_tree::{enrich_input_tree, synthetic_h_pqc_bytes, synthetic_tree_context};
 use super::traits::key::{
     FcmpPlusPlusContext, FeeDirective, OutputDestination, TxInputSigningContext, TxOutputContext,
     TxToSign,
 };
 
-/// Assemble a [`TxToSign`] for the selected transfer indices.
+/// Assemble a [`TxToSign`] from the selected transfers and their assembled
+/// membership paths.
+///
+/// `selected_indices`, `assemble_inputs`, and `paths` are parallel arrays in
+/// transaction input order: input `i` is the transfer at
+/// `transfers[selected_indices[i]]`, whose membership request was
+/// `assemble_inputs[i]` and whose assembled path is `paths[i]`.
+/// [`TransferDetails`] is not `Clone` (it is secret-bearing), so the transfers
+/// are read here by index rather than captured at selection time; each re-read
+/// is guarded by a `gindex` check against `assemble_inputs[i]`, so an index
+/// shift under a reorg between selection and this fold is refused, not
+/// mis-signed. Every path shares one [`shekyl_curve_tree::TreeContext`] (the C1
+/// single-snapshot guarantee — `assemble_tx` anchored every input to one
+/// reference), so the tx's `FcmpPlusPlusContext` takes the first path's tree
+/// context.
 pub(crate) fn assemble_tx_to_sign(
     network: Network,
     request: &TxRequest,
     selected_indices: &[usize],
     transfers: &[TransferDetails],
-    reference_block: [u8; 32],
-    tree_depth: u8,
+    assemble_inputs: &[AssembleInput],
+    paths: &[AssembledPath],
     fee_directive: FeeDirective,
 ) -> Result<TxToSign, SendError> {
-    let mut inputs = Vec::with_capacity(selected_indices.len());
+    // The three arrays are built in lockstep (selection → one `AssembleInput`
+    // per index → one path per input), so a length mismatch is an internal
+    // plumbing bug, not a runtime condition. The `debug_assert`s surface the
+    // actual counts in dev/CI (where it would be diagnosed); the release guard
+    // refuses gracefully rather than letting the `zip` below silently truncate
+    // to a shorter — and unsound — transaction. (`CannotSign`'s reason is
+    // `&'static str`, so the counts ride the assert rather than the error.)
+    debug_assert_eq!(
+        selected_indices.len(),
+        paths.len(),
+        "assembled path count must equal selected input count",
+    );
+    debug_assert_eq!(
+        selected_indices.len(),
+        assemble_inputs.len(),
+        "assemble-input count must equal selected input count",
+    );
+    if selected_indices.len() != paths.len() || selected_indices.len() != assemble_inputs.len() {
+        return Err(SendError::CannotSign {
+            reason: "assembled path count does not match selected input count",
+        });
+    }
+    let Some(first) = paths.first() else {
+        return Err(SendError::CannotSign {
+            reason: "transaction has no inputs to assemble",
+        });
+    };
 
-    for &index in selected_indices {
+    let mut inputs = Vec::with_capacity(selected_indices.len());
+    for ((&index, ai), path) in selected_indices.iter().zip(assemble_inputs).zip(paths) {
         let td = transfers.get(index).ok_or(SendError::CannotSign {
             reason: "selected transfer index out of range",
         })?;
-        inputs.push(input_context_from_transfer(td, tree_depth)?);
+        // Index-stability guard: the transfer at this index must still be the
+        // output its path was assembled for. A `gindex` mismatch means the
+        // transfer vector shifted under the tx between selection and fold (a
+        // reorg during the AssembleTx round-trip) — refuse rather than bind the
+        // wrong secrets to this path.
+        if td.global_output_index != ai.gindex.0 {
+            return Err(SendError::CannotSign {
+                reason: "selected transfer shifted under the transaction during assembly",
+            });
+        }
+        // C1 single-snapshot: every input shares one tree context (`assemble_tx`
+        // anchored them all to one reference). Enforce it at this boundary
+        // rather than trusting the caller — a path whose tree disagrees would
+        // bind a tx context (root/depth) inconsistent with that input's
+        // membership data. Refuse rather than sign.
+        if path.tree != first.tree {
+            return Err(SendError::CannotSign {
+                reason: "assembled paths disagree on the tree context",
+            });
+        }
+        inputs.push(input_context_from_transfer(td, path)?);
     }
 
-    let leaf_for_root = inputs
-        .first()
-        .map(|i| i.leaf_chunk.as_slice())
-        .unwrap_or(&[]);
-    let tree = synthetic_tree_context(reference_block, tree_depth, leaf_for_root);
+    // C1: one tree context for the whole tx — verified equal across all inputs
+    // in the loop above, so the first path's context represents the whole tx.
+    let tree = tree_context_from(&first.tree);
 
     let mut outputs = Vec::with_capacity(request.recipients.len() + 1);
     for recipient in &request.recipients {
@@ -74,7 +138,7 @@ pub(crate) fn assemble_tx_to_sign(
 
 fn input_context_from_transfer(
     td: &TransferDetails,
-    tree_depth: u8,
+    path: &AssembledPath,
 ) -> Result<TxInputSigningContext, SendError> {
     let key_image = td.key_image.ok_or(SendError::CannotSign {
         reason: "transfer missing key_image (scanner/indexes not populated)",
@@ -85,19 +149,23 @@ fn input_context_from_transfer(
     let source_ciphertext = td.source_ciphertext.clone().ok_or(SendError::CannotSign {
         reason: "transfer missing source_ciphertext",
     })?;
-    let output_key = output_key_bytes(&td.key);
-    let commitment = commitment_bytes(&td.commitment);
-    let h_pqc = synthetic_h_pqc_bytes(td.internal_output_index);
-    let key_image_gen = key_image_gen_bytes(&output_key);
+    let output_key = td.key.compress().to_bytes();
+    let commitment = td.commitment.calculate().compress().to_bytes();
 
-    let leaf_entry = LeafEntry {
-        output_key,
-        key_image_gen,
-        commitment,
-        h_pqc,
-    };
-
-    let (leaf_chunk, c1_layers, c2_layers, _) = enrich_input_tree(vec![leaf_entry], tree_depth);
+    let leaf_chunk: Vec<LeafEntry> = path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect();
+    // This input's own PQC leaf hash is the real `h_pqc` of its own entry in the
+    // assembled leaf chunk (the chunk carries the path node's full child set,
+    // including the spent output). Matched on the full `(O, C)` identity pair
+    // (the same pairing `assemble_path`'s post-resolution check uses), so the
+    // lookup is unambiguous even if two chunk entries ever shared an output key.
+    let h_pqc = path
+        .leaf_chunk
+        .iter()
+        .find(|cl| cl.output_key == output_key && cl.commitment == commitment)
+        .map(|cl| cl.h_pqc)
+        .ok_or(SendError::CannotSign {
+            reason: "assembled leaf chunk does not contain the spent output",
+        })?;
 
     Ok(TxInputSigningContext {
         handle,
@@ -112,19 +180,26 @@ fn input_context_from_transfer(
         commitment,
         h_pqc,
         leaf_chunk,
-        c1_layers,
-        c2_layers,
+        c1_layers: path.c1_layers.clone(),
+        c2_layers: path.c2_layers.clone(),
     })
 }
 
-fn output_key_bytes(point: &EdwardsPoint) -> [u8; 32] {
-    point.compress().to_bytes()
+/// Field copy across the curve-tree → tx-builder boundary (mirror types, no
+/// transform).
+fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
+    LeafEntry {
+        output_key: cl.output_key,
+        key_image_gen: cl.key_image_gen,
+        commitment: cl.commitment,
+        h_pqc: cl.h_pqc,
+    }
 }
 
-fn commitment_bytes(commitment: &Commitment) -> [u8; 32] {
-    commitment.calculate().compress().to_bytes()
-}
-
-fn key_image_gen_bytes(output_key: &[u8; 32]) -> [u8; 32] {
-    biased_hash_to_point(*output_key).compress().to_bytes()
+fn tree_context_from(tree: &CurveTreeContext) -> TreeContext {
+    TreeContext {
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
+    }
 }

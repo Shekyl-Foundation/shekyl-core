@@ -37,7 +37,7 @@
 
 use crate::client::{ClientError, CurveTreeClient};
 use crate::recon::{assemble_leaf_stream, drained_sorted};
-use crate::types::{AssembledPath, ChunkLeaf, OutputIdentity, ReferenceBlock, TreeContext};
+use crate::types::{AssembleInput, AssembledPath, ChunkLeaf, ReferenceBlock, TreeContext};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
     selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
@@ -47,10 +47,16 @@ impl CurveTreeClient {
     /// Assemble the FCMP++ membership path for one owned output at a
     /// reference block.
     ///
-    /// `id` is matched against the drained leaves by output key (`O`,
-    /// primary) and commitment (`C`, disambiguation), per §4.3. The block
-    /// hash threaded into [`TreeContext::reference_block`] (for the eventual
-    /// `rctSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
+    /// `input` resolves the owned leaf by its **`gindex`** — the tree's unique
+    /// key, equal to the wallet's `TransferDetails.global_output_index` (X3,
+    /// CT-5c). Resolution by `gindex` is total (an owned output is always a
+    /// drained leaf), so there is no `(output_key, commitment)` collision case;
+    /// the carried `(output_key, commitment)` is used only to *verify* the
+    /// resolution after the fact ([`ClientError::IdentityMismatch`]), catching
+    /// a tree-vs-scanner numbering desync rather than performing the lookup.
+    ///
+    /// The block hash threaded into [`TreeContext::reference_block`] (for the
+    /// eventual `rctSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
     /// caller supplies the full consensus anchor (height, root, hash) as one
     /// value. Reference-block *selection* (the validity-horizon arithmetic in
     /// [`crate::reference`], e.g. [`crate::reference::select_reference_height`])
@@ -59,11 +65,13 @@ impl CurveTreeClient {
     ///
     /// Runs the integrity gate first: returns [`ClientError::RootMismatch`]
     /// if the reconstructed root does not match `reference.curve_tree_root`,
-    /// and [`ClientError::OutputNotDrained`] if `id` is not a drained leaf at
-    /// the reference height.
+    /// [`ClientError::OutputNotDrained`] if `input.gindex` is not a drained
+    /// leaf at the reference height, and [`ClientError::IdentityMismatch`] if
+    /// the leaf at `input.gindex` does not carry the expected `(output_key,
+    /// commitment)`.
     pub fn assemble_path(
         &self,
-        id: &OutputIdentity,
+        input: &AssembleInput,
         reference: &ReferenceBlock,
     ) -> Result<AssembledPath, ClientError> {
         let cutoff = Self::drained_through(reference.height);
@@ -87,14 +95,42 @@ impl CurveTreeClient {
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
         let drained = drained_sorted(&self.entries, cutoff.0);
+        // X3: resolve by `gindex`, the tree's unique key, not by `(O, C)`
+        // content. The owned output's gindex is always present among drained
+        // leaves, so this is total — no collision case.
+        //
+        // The linear scan is O(n) but not the hot spot: `drained` is sorted by
+        // `(maturity, gindex)` (not `gindex`), so `gindex` is not monotonic and a
+        // binary search does not apply; and this call already pays O(n log n) for
+        // `drained_sorted` + `build_layers` above, which dominate the scan. The
+        // real optimization is batch-level — reconstruct `drained`/`layers` once
+        // per transaction and reuse across its inputs (and key the lookup by an
+        // ingest-time `gindex → drain-position` index) — tracked as the
+        // store-backed / per-input-reconstruction assembly follow-up.
         let leaf_pos = drained
             .iter()
-            .position(|e| {
-                e.identity.output_key == id.output_key && e.identity.commitment == id.commitment
-            })
+            .position(|e| e.gindex == input.gindex)
             .ok_or(ClientError::OutputNotDrained {
-                output_key: id.output_key,
+                gindex: input.gindex,
+                output_key: input.output_key,
             })?;
+        // Post-resolution consistency check (X3): the leaf at `gindex` must be
+        // the output the caller expected. A mismatch means the tree's
+        // `next_output_seq` numbering and the wallet's `global_output_index`
+        // have diverged (or the store/scanner desynced) — refuse rather than
+        // assemble a wrong-leaf proof. This is the only runtime guard of that
+        // inter-component invariant (no single component owns it).
+        let resolved = &drained[leaf_pos];
+        if resolved.identity.output_key != input.output_key
+            || resolved.identity.commitment != Some(input.commitment)
+        {
+            return Err(ClientError::IdentityMismatch {
+                gindex: input.gindex,
+                expected_output_key: input.output_key,
+                got_output_key: resolved.identity.output_key,
+                commitment_matched: resolved.identity.commitment == Some(input.commitment),
+            });
+        }
 
         let depth = u8::try_from(layers.len()).expect("curve-tree depth fits u8");
 

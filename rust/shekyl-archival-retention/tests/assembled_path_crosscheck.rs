@@ -8,7 +8,7 @@
 use serde_json::Value;
 use shekyl_archival_retention::{verify_segment_path, SegmentPathOpening};
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, OutputIdentity, RawOutput,
+    AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
@@ -73,14 +73,30 @@ fn main_chain() -> Vec<Block> {
         .collect()
 }
 
-fn coinbase_identity(block: &Block) -> OutputIdentity {
-    let leaf_hashes = shekyl_curve_tree::recon::extract_leaf_hashes(Some(&block.blob));
+/// Coinbase gindex of `target_height`: the cumulative count of every vout in
+/// earlier blocks (the chain is consecutive from genesis; every coinbase output
+/// is leaf-eligible), so it equals the client's drain-order `next_output_seq`.
+fn coinbase_gindex(blocks: &[Block], target_height: u64) -> u64 {
+    blocks
+        .iter()
+        .filter(|b| b.height < target_height)
+        .map(|b| b.outputs.len() as u64)
+        .sum()
+}
+
+/// The [`AssembleInput`] for `target_height`'s coinbase: its `gindex` (X3
+/// resolution key) plus the `(output_key, commitment)` the post-resolution
+/// check verifies.
+fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
+    let block = blocks
+        .iter()
+        .find(|b| b.height == target_height)
+        .unwrap_or_else(|| panic!("block {target_height} in fixture"));
     let raw = block.outputs[0];
-    OutputIdentity {
+    AssembleInput {
+        gindex: Gindex(coinbase_gindex(blocks, target_height)),
         output_key: raw.output_key,
-        commitment: raw.commitment,
-        h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(&leaf_hashes, 0),
-        target: raw.target,
+        commitment: raw.commitment.expect("coinbase output has a commitment"),
     }
 }
 
@@ -124,11 +140,7 @@ fn assembled_path_verifies_as_segment_opening() {
         block_hash: [0xC7u8; 32],
     };
     let last_drained = reference.height.0.saturating_sub(61);
-    let drained_block = blocks
-        .iter()
-        .find(|b| b.height == last_drained)
-        .unwrap_or_else(|| panic!("block {last_drained} in fixture"));
-    let founder = coinbase_identity(drained_block);
+    let founder = coinbase_input(&blocks, last_drained);
 
     let path = client
         .assemble_path(&founder, &reference)

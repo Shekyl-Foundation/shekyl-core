@@ -4,24 +4,16 @@
 // BSD-3-Clause
 
 //! Depth-parametric synthetic FCMP++ tree fixtures (§3.0.5 / PF7).
+//!
+//! **Test-only since CT-5c.** Production assembles real membership paths via
+//! the curve-tree client; these synthetic, depth-controlled fixtures survive
+//! only for the non-daemon test surfaces that need them (the tx-weight KAT and
+//! the `local_keys` signing KATs) — the A4 reversion clause of
+//! `docs/design/CT5C_ASSEMBLER_CUTOVER.md`.
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
-use shekyl_tx_builder::{LeafEntry, TreeContext};
-
-/// Canonical Selene scalar sibling for structural C1 layers (pre-mainnet).
-#[must_use]
-pub(crate) fn placeholder_selene_sibling(seed: u64) -> [u8; 32] {
-    synthetic_h_pqc_bytes(seed)
-}
-
-/// Canonical Helios scalar sibling for structural C2 layers (pre-mainnet).
-#[must_use]
-pub(crate) fn placeholder_helios_sibling(seed: u64) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    use helioselene::HelioseleneField;
-    HelioseleneField::from(seed.wrapping_add(0x1_0000)).to_repr()
-}
+use shekyl_tx_builder::LeafEntry;
 
 /// Synthetic `h_pqc` bytes for a leaf entry.
 #[must_use]
@@ -117,48 +109,56 @@ pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32
     root_point.to_bytes()
 }
 
-/// Synthetic tree root for the given depth and leaf chunk.
-#[must_use]
-pub(crate) fn synthetic_tree_root_from_leaf_chunk(
-    leaf_chunk: &[LeafEntry],
-    _depth: u8,
-) -> [u8; 32] {
-    // Pre-mainnet: depth > 1 uses the same single-chunk root recipe until CT-5.
-    selene_single_chunk_tree_root(leaf_chunk)
-}
+/// `(c1_layers, c2_layers, tree_root)` for a depth-consistent synthetic path.
+type SyntheticPath = (Vec<Vec<[u8; 32]>>, Vec<Vec<[u8; 32]>>, [u8; 32]);
 
-/// Default synthetic tree context for 2a builds.
+/// A depth-consistent **single-path** synthetic tree over `leaf_chunk` (PF7):
+/// the branch layers (`c1`, `c2`) and `tree_root` for a tree whose every layer
+/// above the leaf holds exactly one node — the path node — hashed upward to the
+/// target `depth`.
+///
+/// Unlike the pre-CT-5c placeholder branches (which did not hash to the
+/// single-chunk root, so the FCMP++ prover rejected them above depth 1 —
+/// `InconsistentWitness`, the PF7 block), this is a genuine consistent witness
+/// at **any** depth without an astronomically large tree: the leaf chunk hashes
+/// to a Selene node (layer 0), whose x-coord is the sole child in the layer-1
+/// Helios branch, whose node's x-coord is the sole child in the layer-2 Selene
+/// branch, and so on to the root. The prover pads each branch to the layer width
+/// (Selene 38 / Helios 18) exactly as for a full tree, so the measured proof
+/// size equals a real tree's at the same `(n_in, depth)`.
+///
+/// Returns `(c1_layers, c2_layers, tree_root)`, shared by every input of the tx
+/// (the inputs all sit in the one leaf chunk). Branch index 0 (tree layer 1) is
+/// C2 (Helios), alternating upward, matching `shekyl_curve_tree::assemble_path`
+/// and the prover's "curve_2_layers populated before curve_1_layers".
 #[must_use]
-pub(crate) fn synthetic_tree_context(
-    reference_block: [u8; 32],
-    depth: u8,
-    leaf_chunk: &[LeafEntry],
-) -> TreeContext {
-    TreeContext {
-        reference_block,
-        tree_root: synthetic_tree_root_from_leaf_chunk(leaf_chunk, depth),
-        tree_depth: depth,
+pub(crate) fn consistent_synthetic_path(leaf_chunk: &[LeafEntry], depth: u8) -> SyntheticPath {
+    use shekyl_fcmp::tree::{
+        hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
+        layer_is_selene, selene_hash_init, selene_point_to_helios_scalar,
+    };
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    // Layer 0: the Selene leaf node (same recipe the prover hashes the leaf
+    // chunk to, and the depth-1 root).
+    let mut node = selene_single_chunk_tree_root(leaf_chunk);
+    let mut c1_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+    let mut c2_layers: Vec<Vec<[u8; 32]>> = Vec::new();
+
+    for layer in 1..depth {
+        if layer_is_selene(layer) {
+            // Even layer (Selene node): its sole child is the Helios node below;
+            // its x-coord as a Selene scalar is the branch.
+            let scalar = helios_point_to_selene_scalar(&node).expect("helios->selene");
+            node = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &[scalar]).expect("selene node");
+            c1_layers.push(vec![scalar]);
+        } else {
+            // Odd layer (Helios node): its sole child is the Selene node below.
+            let scalar = selene_point_to_helios_scalar(&node).expect("selene->helios");
+            node = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &[scalar]).expect("helios node");
+            c2_layers.push(vec![scalar]);
+        }
     }
-}
 
-type EnrichedInputTree = (
-    Vec<LeafEntry>,
-    Vec<Vec<[u8; 32]>>,
-    Vec<Vec<[u8; 32]>>,
-    [u8; 32],
-);
-
-/// Attach branch layers and root to an input context leaf.
-pub(crate) fn enrich_input_tree(leaf_chunk: Vec<LeafEntry>, depth: u8) -> EnrichedInputTree {
-    let branch_count = depth.saturating_sub(1) as usize;
-    let c1_count = branch_count.div_ceil(2);
-    let c2_count = branch_count / 2;
-    let c1_layers: Vec<Vec<[u8; 32]>> = (0..c1_count)
-        .map(|i| vec![placeholder_selene_sibling(i as u64 + 1)])
-        .collect();
-    let c2_layers: Vec<Vec<[u8; 32]>> = (0..c2_count)
-        .map(|i| vec![placeholder_helios_sibling(i as u64 + 1)])
-        .collect();
-    let root = synthetic_tree_root_from_leaf_chunk(&leaf_chunk, depth);
-    (leaf_chunk, c1_layers, c2_layers, root)
+    (c1_layers, c2_layers, node)
 }

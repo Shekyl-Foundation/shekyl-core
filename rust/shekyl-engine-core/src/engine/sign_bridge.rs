@@ -22,15 +22,13 @@ use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SpendInput, TreeContext,
-    WireEncodeInput,
+    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SpendInput, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
 use super::error::KeyEngineError;
 use super::local_keys::LocalKeys;
-use super::synthetic_tree::{enrich_input_tree, synthetic_tree_root_from_leaf_chunk};
 use super::traits::key::{
     TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
 };
@@ -280,7 +278,6 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         bundles.insert(input.internal_output_index, bundle);
     }
 
-    let depth = tree_ctx.tree_depth.max(1);
     let mut spend_inputs = Vec::with_capacity(tx.inputs.len());
     let mut key_images = Vec::with_capacity(tx.inputs.len());
     let mut pqc_pubkeys = Vec::with_capacity(tx.inputs.len());
@@ -298,26 +295,31 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         let pk = derive_pqc_public_key(&combined, input.internal_output_index)
             .map_err(KeyEngineError::SourceCiphertextDecapsulationFailed)?;
 
-        let (leaf_chunk, c1_layers, c2_layers, _) =
-            enrich_input_tree(input.leaf_chunk.clone(), depth);
         if input.key_image.as_bytes().iter().all(|b| *b == 0) {
             return Err(KeyEngineError::MissingKeyImage {
                 output_index: input.internal_output_index,
             });
         }
+        // CT-5c: the membership path (leaf chunk + branch layers) is the *real*
+        // path the curve-tree client assembled, threaded verbatim through the
+        // signing context — not re-derived or padded here. The pre-CT-5c
+        // synthetic re-run (`enrich_input_tree`) is gone; clobbering the real
+        // branches with placeholders was the second of the two synthetic sites.
         spend_inputs.push(spend_input_from_context(
-            input, bundle, leaf_chunk, c1_layers, c2_layers,
+            input,
+            bundle,
+            input.leaf_chunk.clone(),
+            input.c1_layers.clone(),
+            input.c2_layers.clone(),
         ));
         key_images.push(*input.key_image.as_bytes());
         pqc_pubkeys.push(pk);
     }
 
-    let tree_root = synthetic_tree_root_from_leaf_chunk(&spend_inputs[0].leaf_chunk, depth);
-    let tree = TreeContext {
-        reference_block: tree_ctx.reference_block,
-        tree_root,
-        tree_depth: depth,
-    };
+    // CT-5c: the real tree context from the assembled paths, used verbatim. The
+    // pre-CT-5c synthetic root overwrite (`synthetic_tree_root_from_leaf_chunk`)
+    // is gone — `tree_ctx.tree_root` is the consensus root the proof anchors to.
+    let tree = tree_ctx;
 
     let output_infos: Vec<OutputInfo> = built_outputs.iter().map(|b| b.info.clone()).collect();
     let output_keys: Vec<[u8; 32]> = built_outputs.iter().map(|b| b.output_key).collect();

@@ -122,13 +122,22 @@ pub(crate) fn validate_inputs(
         // includes the leaf layer: layers = LMDB_depth + 1.
         // Branch layers cover everything above the leaf layer:
         //   branch_count = layers - 1
-        // Even-indexed branches are C1 (Selene), odd-indexed are C2 (Helios):
-        //   c1 = ceil(B/2), c2 = floor(B/2).
+        // The leaf chunk is a C1 (Selene) node at layer 0; the branch directly
+        // above it (index 0, tree layer 1) is **C2 (Helios)**, then alternating
+        // upward — matching `shekyl_curve_tree::assemble_path` and the FCMP++
+        // prover (`prover/mod.rs`: "curve_2_layers is populated before
+        // curve_1_layers", so `expected_2 >= expected_1`). So the first/odd-from-
+        // leaf branches are C2 and the even ones are C1:
+        //   c2 = ceil(B/2), c1 = floor(B/2).
+        // (Pre-CT-5c this was inverted; the synthetic path generator shared the
+        // same inversion, so the two agreed with each other while disagreeing
+        // with the real curve-tree layer parity — the real `assemble_path`
+        // surfaced it.)
         let c1 = inp.c1_layers.len();
         let c2 = inp.c2_layers.len();
         let branch_count = (tree.tree_depth as usize).saturating_sub(1);
-        let expected_c1 = branch_count.div_ceil(2);
-        let expected_c2 = branch_count / 2;
+        let expected_c1 = branch_count / 2;
+        let expected_c2 = branch_count.div_ceil(2);
         if c1 != expected_c1 || c2 != expected_c2 {
             return Err(TxBuilderError::BranchLayerMismatch {
                 index: i,

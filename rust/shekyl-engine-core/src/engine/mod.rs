@@ -226,6 +226,15 @@ pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;
+/// CT-5c: production no longer uses synthetic membership vectors — the signer
+/// folds the real paths the curve-tree client assembled (`assemble_path`).
+/// Retained `#[cfg(test)]` for the two non-daemon test surfaces that genuinely
+/// need synthetic, depth-controlled fixtures: the tx-weight KAT
+/// ([`tx_weight_kat`], which measures FCMP++ proof size across tree depths) and
+/// the [`local_keys`] signing KATs. This is the A4 reversion clause of
+/// `docs/design/CT5C_ASSEMBLER_CUTOVER.md` firing (the doc had recorded "none
+/// identified"; two were).
+#[cfg(test)]
 pub(crate) mod synthetic_tree;
 pub(crate) mod traits;
 pub(crate) mod transaction_submitter;
