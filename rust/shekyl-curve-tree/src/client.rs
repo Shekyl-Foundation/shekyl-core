@@ -132,6 +132,19 @@ pub enum ClientError {
         /// Output key actually found at `gindex` among the drained leaves.
         got_output_key: [u8; 32],
     },
+    /// A batch membership-assembly request carried more inputs than the FCMP++
+    /// proof system permits per transaction (`shekyl_fcmp::MAX_INPUTS`). Raised
+    /// at the engine's `AssembleTx` actor boundary before any path is assembled,
+    /// so an over-length request cannot spin the single-writer actor in an
+    /// unbounded loop (a self-inflicted DoS). The engine's output selection is
+    /// independently bounded by the same limit, so this is a defense-in-depth
+    /// backstop at the actor boundary, never a production path.
+    TooManyInputs {
+        /// Number of inputs supplied in the batch.
+        got: usize,
+        /// Maximum membership inputs per transaction.
+        max: usize,
+    },
     /// Persistent leaf store failure (I/O or corruption).
     Store(StoreError),
     /// [`CurveTreeClient::ingest_block`] was called with a block height that
@@ -711,6 +724,36 @@ impl CurveTreeClient {
     /// store propagate — there is no silent fallback to the replay oracle, so
     /// KATs and callers gate the CT-1 hot path rather than masking corruption.
     pub fn root_at(&self, reference_height: BlockHeight) -> Result<[u8; 32], ClientError> {
+        // Single-source the reconstruction: defer to `root_and_depth_at` and
+        // drop the depth (CT-5c Q1). Both the root-only read (this method, the
+        // §3.3 verify hot path) and the root+depth read go through the one
+        // `root_at_count(n)` call, so they cannot describe different tree
+        // states. The discarded depth is `layer_count_for_leaves`, a handful of
+        // integer divisions — negligible on the verify path.
+        self.root_and_depth_at(reference_height)
+            .map(|(root, _)| root)
+    }
+
+    /// Reconstruct the curve-tree root **and** its depth at `reference_height`,
+    /// both pinned to the same drained leaf count `n` (CT-5c Q1).
+    ///
+    /// The root is the [`LeafStore::root_at_count`] hot path; the depth is
+    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] over the same `n` (depth is
+    /// a pure function of the leaf count, so it needs no tree build). The two
+    /// reads share `n`, so the returned `(root, depth)` always describe the same
+    /// tree state — there is no cross-await window in which they could diverge.
+    ///
+    /// The CT-5c send path needs both before assembling: the depth sizes the
+    /// FCMP++ proof weight for fee estimation (which runs *before* path
+    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
+    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
+    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
+    /// drift KAT, so the engine can assert their equality as a consistency
+    /// check that never fires benignly.
+    pub fn root_and_depth_at(
+        &self,
+        reference_height: BlockHeight,
+    ) -> Result<([u8; 32], u8), ClientError> {
         self.ensure_live()?;
         let within_chain = self
             .ingested_tip_height
@@ -723,7 +766,9 @@ impl CurveTreeClient {
         }
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
-        self.store.root_at_count(n).map_err(ClientError::from)
+        let root = self.store.root_at_count(n).map_err(ClientError::from)?;
+        let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
+        Ok((root, depth))
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`

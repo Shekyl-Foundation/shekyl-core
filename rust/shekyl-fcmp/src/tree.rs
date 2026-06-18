@@ -356,6 +356,45 @@ pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> 
     try_build_upper_layers(initial_layer, start_layer_idx).expect("valid layer nodes")
 }
 
+/// Curve-tree depth (number of layers) for a tree of `leaf_count` leaves,
+/// computed without building the tree.
+///
+/// Tree depth is a **pure function of the leaf count** — it depends only on how
+/// many times `leaf_count` reduces through the fixed [`SELENE_CHUNK_WIDTH`] /
+/// [`HELIOS_CHUNK_WIDTH`] ladder, never on the leaf *values*. This mirrors the
+/// exact reduction in [`try_build_upper_layers`] (leaf layer packs
+/// `SELENE_CHUNK_WIDTH` leaves per node; the stop condition is "single node at a
+/// layer `>= 1`", so a non-empty tree is depth `>= 2` and the bare Selene leaf
+/// layer is never the root), and is pinned equal to `build_layers(..).len()` by
+/// the `layer_count_for_leaves_matches_build_layers` KAT.
+///
+/// It exists so a caller that needs the depth but not the tree — the CT-5c fee
+/// path, which must size the FCMP++ proof weight *before* assembling any path —
+/// reads it cheaply from the leaf count alone, while the assembler keeps taking
+/// its depth from the layers it already builds. The KAT is the single-source
+/// guard: this arithmetic and `build_layers` cannot drift.
+///
+/// `leaf_count == 0` returns `1`, matching `build_layers(&[]).len()` (the
+/// empty-tree sentinel layer); callers handle the empty tree separately.
+#[must_use]
+pub fn layer_count_for_leaves(leaf_count: u64) -> u8 {
+    if leaf_count == 0 {
+        return 1;
+    }
+    // Layer 0 (leaf, Selene): each node packs SELENE_CHUNK_WIDTH leaves.
+    let mut nodes = leaf_count.div_ceil(SELENE_CHUNK_WIDTH as u64);
+    let mut layer_idx: u8 = 0;
+    let mut layers: u8 = 1;
+    // Reduce upward until a single node at a layer >= 1 (the root) — the same
+    // stop condition as `try_build_upper_layers`.
+    while !(nodes == 1 && layer_idx >= 1) {
+        layer_idx = layer_idx.checked_add(1).expect("curve-tree depth fits u8");
+        nodes = nodes.div_ceil(chunk_width(layer_idx) as u64);
+        layers = layers.checked_add(1).expect("curve-tree depth fits u8");
+    }
+    layers
+}
+
 /// Hash upward from `start_layer_idx` until layer `target_layer_idx`, returning
 /// that layer's nodes.
 ///
@@ -648,6 +687,35 @@ mod tests {
         assert_eq!(chunk_width(1), HELIOS_CHUNK_WIDTH);
         assert_eq!(chunk_width(2), SELENE_CHUNK_WIDTH);
         assert_eq!(chunk_width(3), HELIOS_CHUNK_WIDTH);
+    }
+
+    /// Drift guard (CT-5c Q1): `layer_count_for_leaves(n)` must equal the depth
+    /// `build_layers` actually produces for `n` leaves, so the fee path can read
+    /// depth from the leaf count without building the tree. Covers the empty
+    /// tree and both reduction boundaries (SELENE_CHUNK_WIDTH=38,
+    /// HELIOS_CHUNK_WIDTH=18 ⇒ depth 2 up to n=684, depth 3 from n=685).
+    #[test]
+    fn layer_count_for_leaves_matches_build_layers() {
+        // Distinct, canonical leaf scalars (small values < field modulus); the
+        // depth is value-independent, so any valid scalars exercise the count.
+        fn leaf_scalars_for(n: usize) -> Vec<[u8; 32]> {
+            (0..n * SCALARS_PER_LEAF)
+                .map(|i| {
+                    let mut s = [0u8; 32];
+                    s[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    s
+                })
+                .collect()
+        }
+
+        for n in [0usize, 1, 2, 37, 38, 39, 100, 683, 684, 685, 700, 1000] {
+            let expected = build_layers(&leaf_scalars_for(n)).len();
+            assert_eq!(
+                usize::from(layer_count_for_leaves(n as u64)),
+                expected,
+                "layer_count_for_leaves({n}) must equal build_layers depth",
+            );
+        }
     }
 
     #[test]
