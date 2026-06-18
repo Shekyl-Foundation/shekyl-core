@@ -48,9 +48,10 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the Selene curve tree root
-///   from the block header, **not** the block hash. Passing the block hash
-///   will produce an invalid proof that the verifier rejects.
+/// - The `tree_root` in `TreeContext` must be the curve tree root from the
+///   block header's `curve_tree_root` field (the topmost-layer node, whose
+///   curve depends on tree depth), **not** the block hash. Passing the block
+///   hash will produce an invalid proof that the verifier rejects.
 pub fn sign_transaction(
     tx_prefix_hash: [u8; 32],
     inputs: &[SpendInput],

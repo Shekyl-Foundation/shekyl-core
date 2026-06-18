@@ -138,6 +138,8 @@ pub fn build_join_market_vin(
 ///
 /// # Errors
 ///
+/// - [`BondBuildError::NotCreditPath`] if `vin` is not a JoinMarket post or
+///   carries a non-zero `bond_debit` (the credit rule does not apply).
 /// - [`BondBuildError::AmountOverflow`] if `outputs + fee + bond_credit`
 ///   overflows `u64`.
 /// - [`BondBuildError::CreditImbalance`] if `funding_total` does not equal that
@@ -151,6 +153,17 @@ pub fn verify_credit_funding(
     fee: AtomicUnits,
     vin: &ArchivalBondPostVin,
 ) -> Result<(), BondBuildError> {
+    // The credit funding equation `funding == outputs + fee + bond_credit`
+    // assumes the only extra balance term is `bond_credit` on the output side.
+    // A non-JoinMarket kind or a non-zero `bond_debit` (an input-side term)
+    // would make this check a false "OK"; reject it loudly instead.
+    if vin.post_kind != BondPostKind::JoinMarket || vin.bond_debit != 0 {
+        return Err(BondBuildError::NotCreditPath {
+            post_kind: vin.post_kind,
+            bond_debit: vin.bond_debit,
+        });
+    }
+
     let bond_credit = AtomicUnits::from_raw(vin.bond_credit);
     let required = output_total
         .checked_add(fee)

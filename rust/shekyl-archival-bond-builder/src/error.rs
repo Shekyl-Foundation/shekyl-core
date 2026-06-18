@@ -5,6 +5,7 @@
 
 //! Bond-construction failure modes.
 
+use shekyl_archival_retention::BondPostKind;
 use thiserror::Error;
 
 /// Errors raised while constructing a JoinMarket archival bond post.
@@ -14,6 +15,23 @@ pub enum BondBuildError {
     /// shard set or count overflow). A bond cannot be posted for nothing.
     #[error("bond_floor(holdings) is zero; holdings are structurally invalid")]
     BondFloorZero,
+
+    /// `verify_credit_funding` was applied to a vin that is not a JoinMarket
+    /// credit-path post. The credit funding equation
+    /// `funding == outputs + fee + bond_credit` is only sound when there is no
+    /// input-side bond term, so a non-JoinMarket kind or a non-zero
+    /// `bond_debit` is rejected rather than silently accepted at the amount
+    /// level.
+    #[error(
+        "vin is not a JoinMarket credit-path post \
+         (post_kind={post_kind:?}, bond_debit={bond_debit})"
+    )]
+    NotCreditPath {
+        /// The offending vin's post kind.
+        post_kind: BondPostKind,
+        /// The offending vin's `bond_debit` (must be zero on a credit path).
+        bond_debit: u64,
+    },
 
     /// The P identity hybrid public key could not be serialized to its
     /// canonical wire bytes.

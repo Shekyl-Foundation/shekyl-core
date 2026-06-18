@@ -42,12 +42,14 @@ pub enum TxBuilderError {
     #[error("output {index} has zero amount")]
     ZeroOutputAmount { index: usize },
 
-    /// Summing all input amounts would overflow `u64`.
-    #[error("total input amount overflows u64")]
+    /// Summing the input-side amounts (inputs plus any input-side cleartext
+    /// balance terms, `extra_inputs`) would overflow `u64`.
+    #[error("total input-side amount overflows u64")]
     InputAmountOverflow,
 
-    /// Summing all output amounts plus the fee would overflow `u64`.
-    #[error("total output amount + fee overflows u64")]
+    /// Summing the output-side amounts (outputs, fee, and any output-side
+    /// cleartext balance terms, `extra_outputs`) would overflow `u64`.
+    #[error("total output-side amount overflows u64")]
     OutputAmountOverflow,
 
     /// The value available (inputs + input-side cleartext terms) is less than

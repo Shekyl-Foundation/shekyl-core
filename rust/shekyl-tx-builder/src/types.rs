@@ -307,9 +307,11 @@ pub struct OutputInfo {
 ///
 /// # Important distinction
 ///
-/// `tree_root` is the Selene hash root extracted from the block header's
-/// `curve_tree_root` field. It is **not** the block hash. Confusing these
-/// was the root cause of the prover bug this crate was created to fix.
+/// `tree_root` is the curve tree root extracted from the block header's
+/// `curve_tree_root` field (the topmost-layer node — Helios or Selene
+/// depending on tree depth, per `shekyl-fcmp/src/tree.rs`). It is **not** the
+/// block hash. Confusing these was the root cause of the prover bug this
+/// crate was created to fix.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
     /// Hash of the reference block (stored in rctSig.referenceBlock).
