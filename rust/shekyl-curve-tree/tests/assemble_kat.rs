@@ -344,6 +344,7 @@ fn assemble_path_rejects_identity_mismatch() {
             gindex,
             expected_output_key,
             got_output_key,
+            ..
         }) => {
             assert_eq!(gindex, tampered.gindex);
             assert_eq!(expected_output_key, [0x99u8; 32]);

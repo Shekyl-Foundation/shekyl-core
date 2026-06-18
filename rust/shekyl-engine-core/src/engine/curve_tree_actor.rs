@@ -224,8 +224,10 @@ pub(crate) struct RootAndDepthAt {
 /// read-path snapshot atomicity (E1) is the handler invocation itself, not a
 /// discipline the caller must uphold. One `reference` for the whole batch makes
 /// the C1 single-snapshot guarantee (every input shares one tree context) the
-/// only representable shape. Bounded by `shekyl_fcmp::MAX_INPUTS` at the handler
-/// boundary so an over-length request cannot spin the actor.
+/// only representable shape. Bounded by `shekyl_tx_builder::MAX_INPUTS` — which
+/// is defined as `= shekyl_fcmp::MAX_INPUTS`, so the engine bound and the FCMP++
+/// proof-system limit are one constant, not two that could drift — at the
+/// handler boundary so an over-length request cannot spin the actor.
 pub(crate) struct AssembleTx {
     /// The single reference block every input's path anchors to (C1).
     pub reference: ReferenceBlock,
@@ -334,7 +336,9 @@ impl Message<AssembleTx> for CurveTreeActor {
         // loop so a buggy or hostile caller cannot spin the single-writer actor.
         // The engine's selection is independently bounded, so this never fires
         // in production — it makes the bad state unrepresentable at the actor
-        // boundary, not merely upstream of it.
+        // boundary, not merely upstream of it. `shekyl_tx_builder::MAX_INPUTS`
+        // is `= shekyl_fcmp::MAX_INPUTS` (a re-export), so this is the canonical
+        // FCMP++ proof limit — engine-core depends on tx-builder, not fcmp.
         if msg.inputs.len() > shekyl_tx_builder::MAX_INPUTS {
             return Err(ClientError::TooManyInputs {
                 got: msg.inputs.len(),

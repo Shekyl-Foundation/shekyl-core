@@ -517,9 +517,6 @@ where
     }
 }
 
-/// The output of the synchronous selection phase (CT-5c): everything the
-/// asynchronous assembly + fold need, captured under the state lock so the
-/// `AssembleTx` round-trip can run lock-free.
 /// The output of the synchronous selection phase (CT-5c): the per-input
 /// `AssembleInput`s and the fee directive, captured under the state lock so the
 /// `AssembleTx` round-trip + fold can run lock-free. The selected output indices

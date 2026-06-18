@@ -80,11 +80,21 @@ pub(crate) fn assemble_tx_to_sign(
                 reason: "selected transfer shifted under the transaction during assembly",
             });
         }
+        // C1 single-snapshot: every input shares one tree context (`assemble_tx`
+        // anchored them all to one reference). Enforce it at this boundary
+        // rather than trusting the caller — a path whose tree disagrees would
+        // bind a tx context (root/depth) inconsistent with that input's
+        // membership data. Refuse rather than sign.
+        if path.tree != first.tree {
+            return Err(SendError::CannotSign {
+                reason: "assembled paths disagree on the tree context",
+            });
+        }
         inputs.push(input_context_from_transfer(td, path)?);
     }
 
-    // C1: one tree context for the whole tx. `assemble_tx` anchored every path
-    // to the same reference block, so all `path.tree` are equal; take the first.
+    // C1: one tree context for the whole tx — verified equal across all inputs
+    // in the loop above, so the first path's context represents the whole tx.
     let tree = tree_context_from(&first.tree);
 
     let mut outputs = Vec::with_capacity(request.recipients.len() + 1);
@@ -128,13 +138,13 @@ fn input_context_from_transfer(
     let leaf_chunk: Vec<LeafEntry> = path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect();
     // This input's own PQC leaf hash is the real `h_pqc` of its own entry in the
     // assembled leaf chunk (the chunk carries the path node's full child set,
-    // including the spent output). Matched by output key — `assemble_path`'s
-    // post-resolution identity check already guaranteed the resolved leaf is
-    // this output, so the entry is present.
+    // including the spent output). Matched on the full `(O, C)` identity pair
+    // (the same pairing `assemble_path`'s post-resolution check uses), so the
+    // lookup is unambiguous even if two chunk entries ever shared an output key.
     let h_pqc = path
         .leaf_chunk
         .iter()
-        .find(|cl| cl.output_key == output_key)
+        .find(|cl| cl.output_key == output_key && cl.commitment == commitment)
         .map(|cl| cl.h_pqc)
         .ok_or(SendError::CannotSign {
             reason: "assembled leaf chunk does not contain the spent output",

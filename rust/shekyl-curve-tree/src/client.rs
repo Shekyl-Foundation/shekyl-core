@@ -131,6 +131,13 @@ pub enum ClientError {
         expected_output_key: [u8; 32],
         /// Output key actually found at `gindex` among the drained leaves.
         got_output_key: [u8; 32],
+        /// Whether the resolved leaf's amount commitment matched the expected
+        /// one. The check is on the full `(output_key, commitment)` pair, so
+        /// this disambiguates a commitment-only divergence (keys match,
+        /// commitment does not) from a wrong-leaf divergence — without widening
+        /// the error enum past the `result_large_err` threshold with a fourth
+        /// 32-byte field. The values themselves are recoverable from `gindex`.
+        commitment_matched: bool,
     },
     /// A batch membership-assembly request carried more inputs than the FCMP++
     /// proof system permits per transaction (`shekyl_fcmp::MAX_INPUTS`). Raised

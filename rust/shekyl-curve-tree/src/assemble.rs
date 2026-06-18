@@ -118,6 +118,7 @@ impl CurveTreeClient {
                 gindex: input.gindex,
                 expected_output_key: input.output_key,
                 got_output_key: resolved.identity.output_key,
+                commitment_matched: resolved.identity.commitment == Some(input.commitment),
             });
         }
 
