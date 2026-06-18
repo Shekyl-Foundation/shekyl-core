@@ -2376,6 +2376,28 @@ mod tests {
         RecoveredWalletOutput::new_for_test(base, amount)
     }
 
+    /// Advance the ledger by empty blocks `from..=to` (no owned outputs), keeping
+    /// the `[h & 0xFF; 32]` block-hash scheme `populate_ledger` uses so an earlier
+    /// reference height stays canonical. Used by the CT-5d re-anchor KATs to age a
+    /// reference past the rebuild horizon without changing the funded set.
+    fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
+        use shekyl_scanner::{LedgerIndexesExt, Timelocked};
+
+        let mut guard = ledger.write();
+        let state = &mut *guard;
+        let ledger_block = &mut state.ledger.ledger;
+        let indexes = &mut state.indexes;
+        for h in from..=to {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                ledger_block,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
+    }
+
     fn populate_ledger(
         ledger: &LocalLedger,
         block_height: u64,
@@ -2984,6 +3006,134 @@ mod tests {
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes)),
             "the submitted hash is the signed tx bytes' hash",
+        );
+    }
+
+    /// CT-5d (§4 F-G/F-G′): the content fingerprint is semantic and
+    /// canonically-ordered — it is invariant under the privacy output shuffle
+    /// (which a reprove re-runs) and excludes the re-randomized change address
+    /// (the change *amount* is captured, the address is not even a parameter),
+    /// but it does move on any change to *who gets how much* or the fee.
+    #[test]
+    fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
+        let r = |addr: &str, amt: u64| TxRecipientSummary {
+            address: addr.to_string(),
+            amount_atomic_units: AtomicUnits::from_raw(amt),
+        };
+        let fee = AtomicUnits::from_raw(1_000);
+        let change = AtomicUnits::from_raw(500);
+
+        let base = ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
+        // F-G′: the same recipients/amounts in a different output order compare
+        // equal — a reprove's reshuffle must not bump content_gen.
+        let reshuffled =
+            ContentFingerprint::from_parts(fee, &[r("addr_b", 20), r("addr_a", 10)], change);
+        assert_eq!(
+            base, reshuffled,
+            "output order must not change the fingerprint"
+        );
+        // Idempotent: rebuilding the identical content compares equal.
+        let again =
+            ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
+        assert_eq!(base, again, "identical content is idempotent");
+
+        // The consent axis: fee, change amount, and recipient amount each move it.
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(
+                AtomicUnits::from_raw(2_000),
+                &[r("addr_a", 10), r("addr_b", 20)],
+                change
+            ),
+            "a different fee is a content change"
+        );
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(
+                fee,
+                &[r("addr_a", 10), r("addr_b", 20)],
+                AtomicUnits::from_raw(600)
+            ),
+            "a different change amount is a content change"
+        );
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(fee, &[r("addr_a", 11), r("addr_b", 20)], change),
+            "a different recipient amount is a content change"
+        );
+    }
+
+    /// CT-5d (§3a, headline): a proof carried past the rebuild horizon
+    /// re-anchors at submit (the reprove path) and broadcasts. Same inputs, same
+    /// tree depth → the realized content is unchanged → `content_gen` stays put
+    /// → transparent broadcast.
+    #[tokio::test]
+    async fn submit_reanchors_at_horizon_then_broadcasts() {
+        let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+        // Clone the handle so the test can advance the (shared-actor) tree cursor
+        // after handing one to the engine.
+        let tree_for_advance = tree.clone();
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        assert_eq!(built.reference_height, 14);
+        assert_eq!(built.content_gen, 0, "fresh build is generation 0");
+
+        // Advance BOTH the ledger and the tree well past the rebuild horizon:
+        // chain tip 80, tree ingested through 80. Reference age 80 − 14 = 66 ≥
+        // REBUILD_AT (50) → submit must re-anchor (reprove) at 80 − 6 = 74; the
+        // owned leaf (drained at 1 + SPENDABLE_AGE = 11) is in the tree there.
+        advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+        for h in 21..=80 {
+            tree_for_advance
+                .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+                .await
+                .expect("advance tree cursor");
+        }
+
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("horizon re-anchor reproves and broadcasts transparently");
+        assert_eq!(
+            pending.outstanding(),
+            0,
+            "submit consumed the reservation after re-anchor"
+        );
+    }
+
+    /// CT-5d (§3b, F-C upper arm): when the tree lags the chain tip so far that a
+    /// freshly-anchored reference would already be past the rebuild threshold,
+    /// the re-anchor refuses cleanly (`ReanchorUnavailable`) rather than anchor a
+    /// stale reference — and the reservation is preserved.
+    #[tokio::test]
+    async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
+        let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+
+        // Advance the ledger far ahead (chain 80) but NOT the tree (cursor stays
+        // at 20): the fresh reference would anchor at min(80, 20) − 6 = 14, age
+        // 80 − 14 = 66 > REBUILD_AT (50). The upper arm fails clean.
+        advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SubmitError::ReanchorUnavailable { reservation_id } if reservation_id == built.id),
+            "tree-too-far-behind must fail clean as ReanchorUnavailable, got {err:?}"
+        );
+        assert_eq!(
+            pending.outstanding(),
+            1,
+            "reservation preserved on clean fail"
         );
     }
 
