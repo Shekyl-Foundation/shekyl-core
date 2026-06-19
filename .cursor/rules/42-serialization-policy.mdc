@@ -37,6 +37,7 @@ constant's declaration line. The pairings are:
 | `BookkeepingBlock`       | `BOOKKEEPING_BLOCK_VERSION`       | `rust/shekyl-engine-state/src/bookkeeping_block.rs`     |
 | `TxMetaBlock`            | `TX_META_BLOCK_VERSION`           | `rust/shekyl-engine-state/src/tx_meta_block.rs`         |
 | `SyncStateBlock`         | `SYNC_STATE_BLOCK_VERSION`        | `rust/shekyl-engine-state/src/sync_state_block.rs`      |
+| `StakingBlock`           | `STAKING_BLOCK_VERSION`           | `rust/shekyl-engine-state/src/staking_block.rs`         |
 
 `WalletLedger` carries both the bundle-level `format_version` **and**
 every inner block's `block_version`. A change that only affects one

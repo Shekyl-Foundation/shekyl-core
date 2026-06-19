@@ -5,9 +5,9 @@
 
 //! `.wallet`-side ledger aggregator.
 //!
-//! Bundles the four typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
-//! [`TxMetaBlock`], and [`SyncStateBlock`] — into a single
-//! postcard-serialized payload that the wallet-file orchestrator
+//! Bundles the five typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
+//! [`TxMetaBlock`], [`SyncStateBlock`], and [`StakingBlock`] — into a
+//! single postcard-serialized payload that the wallet-file orchestrator
 //! (commit 2h) stores as Region 2 of the `.wallet` file.
 //!
 //! # Two-tier versioning
@@ -36,7 +36,7 @@
 //!
 //! # Wire format
 //!
-//! `postcard` over the four blocks in declared field order plus the
+//! `postcard` over the five blocks in declared field order plus the
 //! bundle `format_version`. Every inner block's `block_version` stays
 //! within the block's own postcard frame, so a version bump on one
 //! block does not accidentally shift the byte offsets of any other
@@ -46,12 +46,13 @@
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
 //! [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
+//! [`StakingBlock`]: crate::staking_block::StakingBlock
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
-    sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
+    staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
 };
 
 /// Bundle-level `format_version`.
@@ -76,6 +77,10 @@ use crate::{
 /// `TransferDetails`). Version `7` is the primary-claim rename:
 /// `BOOKKEEPING_BLOCK_VERSION` 5 (`AddressBookEntry::is_subaddress`
 /// deleted).
+/// Version `8` adds the archival-staking [`StakingBlock`] as a fifth
+/// top-level block (`STAKING_BLOCK_VERSION` 1); the aggregator layout
+/// itself grew a block, so the bundle bytes shift and the format
+/// version bumps.
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -87,7 +92,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 7;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 8;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -118,6 +123,10 @@ pub struct WalletLedger {
 
     /// Scan anchor + pending-tx tracking + daemon context.
     pub sync_state: SyncStateBlock,
+
+    /// Archival-staking persona bookkeeping: cursor + enabled flag +
+    /// the reconcilable live-bond hint.
+    pub staking: StakingBlock,
 }
 
 impl WalletLedger {
@@ -130,6 +139,7 @@ impl WalletLedger {
             bookkeeping: BookkeepingBlock::empty(),
             tx_meta: TxMetaBlock::empty(),
             sync_state: SyncStateBlock::empty(),
+            staking: StakingBlock::empty(),
         }
     }
 
@@ -142,6 +152,7 @@ impl WalletLedger {
         bookkeeping: BookkeepingBlock,
         tx_meta: TxMetaBlock,
         sync_state: SyncStateBlock,
+        staking: StakingBlock,
     ) -> Self {
         Self {
             format_version: WALLET_LEDGER_FORMAT_VERSION,
@@ -149,6 +160,7 @@ impl WalletLedger {
             bookkeeping,
             tx_meta,
             sync_state,
+            staking,
         }
     }
 
@@ -184,12 +196,14 @@ impl WalletLedger {
     }
 
     /// Fan out per-block version checks. Ordered ledger → bookkeeping
-    /// → tx_meta → sync_state so failure diagnostics are predictable.
+    /// → tx_meta → sync_state → staking so failure diagnostics are
+    /// predictable.
     pub fn check_all_block_versions(&self) -> Result<(), WalletLedgerError> {
         self.ledger.check_version()?;
         self.bookkeeping.check_version()?;
         self.tx_meta.check_version()?;
         self.sync_state.check_version()?;
+        self.staking.check_version()?;
         Ok(())
     }
 }
@@ -203,7 +217,8 @@ mod tests {
     use super::*;
     use crate::{
         bookkeeping_block::BOOKKEEPING_BLOCK_VERSION, ledger_block::LEDGER_BLOCK_VERSION,
-        sync_state_block::SYNC_STATE_BLOCK_VERSION, tx_meta_block::TX_META_BLOCK_VERSION,
+        staking_block::STAKING_BLOCK_VERSION, sync_state_block::SYNC_STATE_BLOCK_VERSION,
+        tx_meta_block::TX_META_BLOCK_VERSION,
     };
 
     #[test]
@@ -214,6 +229,7 @@ mod tests {
         assert_eq!(w.bookkeeping.block_version, BOOKKEEPING_BLOCK_VERSION);
         assert_eq!(w.tx_meta.block_version, TX_META_BLOCK_VERSION);
         assert_eq!(w.sync_state.block_version, SYNC_STATE_BLOCK_VERSION);
+        assert_eq!(w.staking.block_version, STAKING_BLOCK_VERSION);
 
         let bytes = w.to_postcard_bytes().expect("serialize");
         let back = WalletLedger::from_postcard_bytes(&bytes).expect("deserialize");
@@ -222,6 +238,7 @@ mod tests {
         assert_eq!(back.bookkeeping.block_version, BOOKKEEPING_BLOCK_VERSION);
         assert_eq!(back.tx_meta.block_version, TX_META_BLOCK_VERSION);
         assert_eq!(back.sync_state.block_version, SYNC_STATE_BLOCK_VERSION);
+        assert_eq!(back.staking.block_version, STAKING_BLOCK_VERSION);
     }
 
     #[test]
@@ -329,6 +346,25 @@ mod tests {
                 assert_eq!(binary, SYNC_STATE_BLOCK_VERSION);
             }
             other => panic!("expected UnsupportedBlockVersion(sync_state), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inner_staking_block_version_bump_is_refused_by_aggregator() {
+        let mut w = WalletLedger::empty();
+        w.staking.block_version = 314;
+        let bytes = w.to_postcard_bytes().expect("serialize");
+        match WalletLedger::from_postcard_bytes(&bytes).unwrap_err() {
+            WalletLedgerError::UnsupportedBlockVersion {
+                block,
+                file,
+                binary,
+            } => {
+                assert_eq!(block, "staking");
+                assert_eq!(file, 314);
+                assert_eq!(binary, STAKING_BLOCK_VERSION);
+            }
+            other => panic!("expected UnsupportedBlockVersion(staking), got {other:?}"),
         }
     }
 

@@ -41,6 +41,7 @@ pub mod safety_constants;
 pub mod schema_snapshot;
 pub mod serde_helpers;
 pub mod staker_pool;
+pub mod staking_block;
 pub mod sync_state_block;
 pub mod transfer;
 pub mod tx_meta_block;
@@ -59,6 +60,7 @@ pub use payment_request::{
 };
 pub use safety_constants::NetworkSafetyConstants;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
+pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
 pub use tx_meta_block::{

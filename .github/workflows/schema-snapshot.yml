@@ -105,6 +105,7 @@ jobs:
             "bookkeeping_block|rust/shekyl-engine-state/src/bookkeeping_block.rs|BOOKKEEPING_BLOCK_VERSION"
             "tx_meta_block|rust/shekyl-engine-state/src/tx_meta_block.rs|TX_META_BLOCK_VERSION"
             "sync_state_block|rust/shekyl-engine-state/src/sync_state_block.rs|SYNC_STATE_BLOCK_VERSION"
+            "staking_block|rust/shekyl-engine-state/src/staking_block.rs|STAKING_BLOCK_VERSION"
           )
 
           # The PR's full diff, source-relative. `git diff --name-only

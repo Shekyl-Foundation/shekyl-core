@@ -65,11 +65,14 @@ use shekyl_engine_file::{
     CreateParams as FileCreateParams, OpenOutcome, SafetyOverrides, WalletFile, WalletFileError,
 };
 use shekyl_engine_prefs::{LoadOutcome as PrefsLoadOutcome, WalletPrefs};
-use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+use shekyl_engine_state::{LedgerIndexes, StakingBlock, WalletLedger};
+
+use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 
 use super::error::{IoError, KeyError, OpenError};
 use super::local_ledger::LocalLedger;
 use super::local_refresh::LocalRefresh;
+use super::stake_engine::{PSlot, StakeEngineHandle, ARCHIVAL_PERSONA_LOOKAHEAD};
 use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::{Capability, DaemonClient, Engine, EngineSignerKind, SoloSigner};
 
@@ -513,6 +516,8 @@ impl Engine<SoloSigner> {
         Self::assemble(
             file,
             blob,
+            master_seed_64,
+            seed_format,
             initial_ledger,
             indexes,
             prefs,
@@ -618,7 +623,16 @@ impl Engine<SoloSigner> {
         let indexes = LedgerIndexes::rebuild_from_ledger(&ledger.ledger);
 
         let wallet = Self::assemble(
-            file, blob, ledger, indexes, prefs, daemon, network, capability,
+            file,
+            blob,
+            &inputs.master_seed_64,
+            seed_format,
+            ledger,
+            indexes,
+            prefs,
+            daemon,
+            network,
+            capability,
         )?;
 
         Ok(match restored_from {
@@ -675,6 +689,8 @@ impl Engine<SoloSigner> {
     fn assemble(
         mut file: WalletFile,
         keys: AllKeysBlob,
+        master_seed: &[u8; MASTER_SEED_BYTES],
+        seed_format: SeedFormat,
         ledger: WalletLedger,
         indexes: LedgerIndexes,
         prefs: WalletPrefs,
@@ -755,6 +771,18 @@ impl Engine<SoloSigner> {
             })?
         };
 
+        // ARCHIVAL_BOND_CONSTRUCTION.md §10.2 (Model D): for a staker, derive the
+        // derive-forward set from the still-borrowed `master_seed` and spawn the
+        // StakeEngine over it. Read `&ledger.staking` *before* `ledger` is moved
+        // into the `LocalLedger` aggregate below. Non-stakers (the common case)
+        // get `None` — no derivation, no resident personas, no actor.
+        let stake = Self::spawn_stake_engine_if_staker(
+            master_seed,
+            network_to_derivation(network),
+            seed_format,
+            &ledger.staking,
+        )?;
+
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
         let fee_snapshot_source = super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
         let submitter = std::sync::Arc::new(
@@ -810,8 +838,88 @@ impl Engine<SoloSigner> {
             refresh_slot: super::refresh::RefreshSlot::new(),
             refresh,
             economics,
+            stake,
             _signer: std::marker::PhantomData,
         })
+    }
+
+    /// Derive the Model-D derive-forward set and spawn the archival
+    /// [`StakeEngine`](super::stake_engine::StakeEngine) for a staker, or return
+    /// `None` for a non-staker (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2).
+    ///
+    /// The derive-forward set is
+    /// `{persisted bonded slots} ∪ {cursor ..= cursor + ARCHIVAL_PERSONA_LOOKAHEAD}`,
+    /// where `cursor` is the **scan-reconciled monotone** persona cursor
+    /// ([`StakingBlock::monotone_current_slot_from_record`]) — never at or below
+    /// an observed bonded slot, so a stale/rolled-back `p_slot` can never re-derive
+    /// a rotated-past persona as "current". The bonded slots are unioned in because
+    /// under Model D the seed is dropped after this function returns, so a persona
+    /// absent from the held set is unreachable for the wallet's life — and a
+    /// retired-but-bonded persona's `bond_spend` key is needed to unbond it.
+    ///
+    /// The bundles are derived here from the transiently-borrowed `master_seed`;
+    /// the seed is **not** moved in (it stays owned by the caller and drops at the
+    /// caller's function end), and it never reaches the spawned actor. The actor
+    /// starts **idle** (`active = None`): nothing is on the wire until 2c-2b's
+    /// request path mints a [`PersonaHandle`](super::stake_engine::PersonaHandle)
+    /// and activates it.
+    ///
+    /// # Cost
+    ///
+    /// One PQ keygen per slot in the set, run synchronously here. The whole
+    /// `create` / `open_full` call is the blocking unit async callers wrap in
+    /// `spawn_blocking` (module docs), so this is off the open hot path at that
+    /// granularity; intra-call parallelism across the (small, `k`-bounded) set is
+    /// a perf follow-up, not a correctness concern. Only stakers pay it.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError::Key`] if any archival derivation fails (same closed-error
+    /// contract as `rederive_account`).
+    fn spawn_stake_engine_if_staker(
+        master_seed: &[u8; MASTER_SEED_BYTES],
+        derivation_network: DerivationNetwork,
+        seed_format: SeedFormat,
+        staking: &StakingBlock,
+    ) -> Result<Option<StakeEngineHandle>, OpenError> {
+        if !staking.staking_enabled {
+            return Ok(None);
+        }
+
+        let cursor = staking.monotone_current_slot_from_record();
+
+        // Union the persisted bonded hint with the lookahead window. A `BTreeSet`
+        // dedups the overlap (a bonded slot inside the window appears once) and
+        // keeps the derive order deterministic.
+        let mut slots: std::collections::BTreeSet<u32> =
+            staking.bonded_slots.iter().copied().collect();
+        for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
+            // `cursor + offset` can saturate at `u32::MAX` only for a wallet that
+            // has rotated ~4 billion times; `checked_add` drops the out-of-range
+            // tail rather than wrapping to slot 0 (which would re-derive a
+            // rotated-past persona — the exact unlinkability break the monotone
+            // cursor prevents).
+            if let Some(slot) = cursor.checked_add(offset) {
+                slots.insert(slot);
+            }
+        }
+
+        let mut bundles = std::collections::BTreeMap::new();
+        for &slot in &slots {
+            let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
+                .map_err(|e| {
+                OpenError::Key(KeyError::Primitive {
+                    detail: rederivation_failure_detail(&e),
+                })
+            })?;
+            bundles.insert(PSlot(slot), keys);
+        }
+
+        let bonded: std::collections::BTreeSet<PSlot> =
+            staking.bonded_slots.iter().copied().map(PSlot).collect();
+
+        // Idle at open: the request path (2c-2b) mints a handle and activates.
+        Ok(Some(StakeEngineHandle::spawn(bundles, bonded, None)))
     }
 }
 
@@ -936,6 +1044,7 @@ impl<
             refresh_slot,
             refresh,
             economics,
+            stake,
             _signer,
         } = self;
         Engine {
@@ -954,6 +1063,7 @@ impl<
             refresh_slot,
             refresh,
             economics,
+            stake,
             _signer,
         }
     }

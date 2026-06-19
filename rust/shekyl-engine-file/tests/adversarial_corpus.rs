@@ -604,6 +604,7 @@ fn ledger_invariant_orphan_tx_key_is_refused() {
         shekyl_engine_state::BookkeepingBlock::empty(),
         tx_meta,
         shekyl_engine_state::SyncStateBlock::empty(),
+        shekyl_engine_state::StakingBlock::empty(),
     );
 
     // `to_postcard_bytes` serializes unconditionally; the invariant
