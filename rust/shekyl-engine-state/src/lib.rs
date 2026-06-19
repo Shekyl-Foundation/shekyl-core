@@ -26,8 +26,11 @@
 //!
 //! The serialization-format policy for this crate is pinned by
 //! `.cursor/rules/42-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
-//! defined here use `postcard` for on-disk storage; metadata (identity + settings) lives
-//! in [`shekyl_crypto_pq::wallet_state`] and uses JSON.
+//! defined here use `postcard` for on-disk storage. The earlier JSON metadata bundle in
+//! `shekyl-crypto-pq` (identity + settings) was a superseded first draft and has been
+//! deleted; identity is carried in the encrypted `.wallet.keys` envelope, and user
+//! settings follow the four-layer model in `docs/WALLET_PREFS.md` §2 (hardcoded
+//! constants, advisory TOML, CLI-ephemeral overrides, and tier-4 sealed ledger state).
 
 pub mod bookkeeping_block;
 pub mod error;

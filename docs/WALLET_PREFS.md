@@ -1,7 +1,12 @@
 # Shekyl Wallet Preferences — Categorization & Storage Policy
 
-**Status:** design spec. No normative code reference yet; this document
-is the contract that commits `2k.1` … `2k.5` implement.
+**Status:** implemented. Commits `2k.1` … `2k.5` landed the three user-facing
+layers (`NetworkSafetyConstants`, the `shekyl-engine-prefs` TOML crate, CLI
+overrides); §2.4 adds the fourth — **sealed wallet state** — to align this
+policy with the tier-4 staking storage (`StakingBlock`). The first-draft
+sealed-settings monolith (`shekyl-crypto-pq/src/wallet_state/`) was an orphan and
+has been deleted; see
+[`region_2_consolidated_disposition.md`](./region_2_consolidated_disposition.md).
 **Scope:** the ~30 user-tunable wallet settings inherited from the
 Monero-lineage `wallet2` `keys_file_data` blob, restructured for Shekyl
 V3.0 according to their attack-surface profile.
@@ -42,22 +47,46 @@ That shape is wrong for Shekyl V3:
   philosophy** that Shekyl V3 otherwise rejects (no base58, no Electrum,
   no pre-V3 formats).
 
-This document pins the replacement.
+This document pins the replacement. The decomposition is now complete in
+code: the sealed-settings monolith no longer exists — its funds-relevant half
+became tier-1 `NetworkSafetyConstants`, its advisory half the tier-3
+`shekyl-engine-prefs` TOML, its funds-load-bearing state the tier-4 sealed
+blocks (§2.4), and the abandoned first-draft `wallet_state` module was deleted.
 
-## 2. Three-layer storage model
+## 2. Four-layer storage model
 
-Every setting lands in exactly one of three layers:
+Every setting lands in exactly one of four layers. **Decide tier 4 first** — see
+the funds-first decision order below the table:
 
 | Layer                  | Where                                       | Who modifies         | Integrity                     | Evolution policy                                    |
 |------------------------|---------------------------------------------|----------------------|-------------------------------|-----------------------------------------------------|
 | **Hardcoded**          | `shekyl_engine_state::safety_constants`     | Rust source, per network | Compile-time                  | Changed by release; never by a user or a data file. |
 | **Plaintext TOML**     | `<base>.prefs.toml` + `<base>.prefs.toml.hmac` | GUI, CLI, or text editor | HMAC-SHA256 over file bytes   | Add/remove fields freely; missing fields use defaults. |
 | **CLI-ephemeral override** | `shekyl-cli` command-line flags         | User at invocation time  | None (never persisted)        | N/A — not stored.                                   |
+| **Sealed wallet state**    | `.wallet` (file-layout region 2): `shekyl_engine_state` blocks inside `WalletLedger` | Engine only (chain-reconciled) | AEAD (XChaCha20-Poly1305) under the region-2 wrap key | Strict per-block version; **refuse-to-load** on drift/tamper — never reset-to-default. |
 
 The categorization is per-field and not negotiable. Rule
-`42-serialization-policy.mdc` will pin this at the workspace level:
-**adding a new wallet-tunable field requires explicitly choosing a layer
-and, for TOML or CLI-override, writing the rationale in this document.**
+[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc) pins
+this at the workspace level: **adding a new wallet-tunable field requires
+explicitly choosing a layer and, for TOML or CLI-override, writing the rationale
+in this document.**
+
+**Funds-first decision order.** Choose the layer by asking, in this order — the
+funds question comes *first*, before "is it user-tunable?":
+
+> 1. **Does resetting this field to its default lose or endanger funds?** →
+>    **Sealed wallet state (tier 4).** Stop. Do not ask "is it user-tunable" —
+>    `staking_enabled`, `p_slot`, and the bonded set are user-chosen *and*
+>    funds-load-bearing, so they are tier 4, not advisory TOML.
+> 2. Is it network-fixed with no legitimate per-wallet variance? → **Hardcoded**
+>    (+ a CLI-ephemeral override for sessions).
+> 3. Is it user-tunable and *not* funds-threatening? → **Plaintext TOML.**
+
+The hidden assumption *user-tunable ⟹ not funds-threatening* — which a three-layer
+menu bakes in — has no slot for user-chosen, persistent, funds-load-bearing state.
+Tier 4 is that slot. See
+[`region_2_consolidated_disposition.md`](./region_2_consolidated_disposition.md)
+for the full derivation.
 
 ### 2.1 Hardcoded (consensus-relevant, safe defaults)
 
@@ -124,6 +153,28 @@ GUI.
   default. Loud by construction.
 - **GUI exposure:** none. The GUI constructs `SafetyOverrides::none()`
   unconditionally. Advanced workflows require `shekyl-cli`.
+
+### 2.4 Sealed wallet state (funds-load-bearing, chain-reconciled)
+
+Funds-load-bearing state the engine reconciles against the chain — output set,
+key images, sync cursor, and the staking persona (`staking_enabled`, the monotone
+slot cursor, the reconcilable live-bond hint). Not user-edited; reset-to-default
+would lose or endanger funds.
+
+- **Principle:** losing or tampering with this state loses or endangers funds, so
+  it is never silently defaulted. Unlike tier 3 (quarantine → defaults on tamper),
+  tier 4 **refuses to load** on any drift.
+- **Storage:** `shekyl_engine_state` blocks (`WalletLedger` and its inner blocks,
+  including `StakingBlock`) serialized into file-layout region 2 of the `.wallet`
+  file, AEAD-sealed (XChaCha20-Poly1305) under the region-2 wrap key derived from
+  `file_kek`. Owned and read/written by the Rust engine; C++ never parses it.
+- **Integrity & evolution:** strict per-block version constants, snapshot-pinned
+  and CI-enforced by
+  [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc); a
+  version mismatch refuses rather than migrates — its "no silent migration" stance.
+- **Why not TOML:** filing funds-load-bearing state into advisory TOML means a
+  tamper event quarantines it and loads a default — e.g. `staking_enabled = false`,
+  which bricks unbonding. That is the exact funds-loss this tier exists to prevent.
 
 ## 3. Field-by-field categorization
 

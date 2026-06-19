@@ -1618,66 +1618,6 @@ bool shekyl_wallet_extract_rederivation_inputs(
     uint8_t* out_master_seed_64,
     uint32_t* out_error);
 
-/* ---------------------------------------------------------------------------
- * Wallet preferences (Layer 2 of the three-layer config model).
- *
- * On-disk these live in a co-located `<P>.prefs.toml` plus
- * `<P>.prefs.toml.hmac` pair, where `<P>` is the state file path with
- * any trailing `.wallet` suffix stripped. The HMAC key is derived
- * inside Rust from the handle's `file_kek` + `expected_classical_address`,
- * so C++ never sees key material.
- *
- * The FFI surface uses JSON as the wire format even though the on-disk
- * form is TOML — rapidjson is already linked from wallet2.cpp and the
- * JSON↔TOML conversion happens behind the handle. The JSON schema is
- * the serde serialization of `shekyl_wallet_prefs::WalletPrefs`:
- * nested objects named `cosmetic`, `operational`, `device`, `rpc`, and
- * the top-level `subaddress_lookahead`. All nested structs carry
- * `#[serde(deny_unknown_fields)]`, so callers MUST NOT attempt to
- * smuggle Bucket-3 fields (`max_reorg_depth`, `skip_to_height`,
- * `refresh_from_block_height`) through this surface — those are
- * CLI-ephemeral overrides passed to `shekyl_wallet_open` via
- * `ShekylSafetyOverrides`.
- *
- * The get path is advisory: a missing file or tampered HMAC pair is
- * not an error. Defaults are returned, the tamper event is surfaced
- * via `out_was_tampered`, and the corrupt files (if any) are moved
- * aside by the Rust layer. This matches the refuse-to-load policy for
- * the keys/state files (which DO refuse) but acknowledges that losing
- * user preferences is a UX regression rather than a security event.
- * See `docs/WALLET_PREFS.md §5`.
- * ---------------------------------------------------------------------------
- */
-
-/* Read the wallet's preferences, serialized as UTF-8 JSON, into
- * `out_buf`. Uses the standard two-call sizing discipline:
- *
- *     size_t n = 0; uint32_t e = 0;
- *     shekyl_wallet_prefs_get_json(h, NULL, 0, &n, &tampered, &e);
- *     // e == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL, n now holds length
- *     std::vector<uint8_t> buf(n);
- *     shekyl_wallet_prefs_get_json(h, buf.data(), n, &n, &tampered, &e);
- *
- * The JSON is NOT NUL-terminated. `out_was_tampered` receives true iff
- * the on-disk pair was corrupt and has been quarantined; defaults are
- * still returned. wallet2.cpp should surface a UI banner on tamper
- * but MUST NOT refuse to open the wallet. */
-bool shekyl_wallet_prefs_get_json(
-    ShekylWallet* h,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    bool* out_was_tampered,
-    uint32_t* out_error);
-
-/* Persist caller-supplied preferences JSON. The JSON must round-trip
- * through `shekyl_wallet_prefs::WalletPrefs`'s strict schema; unknown
- * fields or Bucket-3 field names land as `SHEKYL_WALLET_ERR_PREFS`.
- * On success both `<base>.prefs.toml` and `<base>.prefs.toml.hmac`
- * have been atomically rewritten. */
-bool shekyl_wallet_prefs_set_json(
-    ShekylWallet* h,
-    const uint8_t* json_ptr, size_t json_len,
-    uint32_t* out_error);
-
 /* ===========================================================================
  * save_as -- atomic-within-a-filesystem wallet relocate
  * ---------------------------------------------------------------------------
