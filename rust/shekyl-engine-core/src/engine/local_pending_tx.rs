@@ -47,7 +47,7 @@ use std::time::Instant;
 
 use shekyl_curve_tree::{
     select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
-    REBUILD_AT, REF_ANCHOR_AGE,
+    REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
@@ -1483,7 +1483,14 @@ where
                     detail: "chain too short to anchor a reference",
                 },
             )?;
-            if chain_tip.saturating_sub(reference_height) > REBUILD_AT {
+            // Upper arm of the two-sided gate (§3b, F-C): refuse a fresh
+            // reference that is *already* due for re-anchor — same predicate the
+            // lock₂ re-validation uses (`should_reanchor`, inclusive at
+            // REBUILD_AT), so a reference that passes here can never immediately
+            // fail lock₂ on the age criterion and burn a prover attempt. (The
+            // reference is always below `chain_tip`, so the reorg/age-None arm of
+            // `should_reanchor` does not fire here — only the age threshold.)
+            if should_reanchor(chain_tip, reference_height) {
                 return Err(ReanchorError::ReferenceResyncing {
                     detail: "tree too far behind to anchor a submittable reference; resync",
                 });

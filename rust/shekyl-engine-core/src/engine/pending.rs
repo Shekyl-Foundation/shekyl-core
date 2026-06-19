@@ -663,10 +663,13 @@ pub(crate) fn build_pending_tx_in_state(
         // Legacy free-function helper (no curve tree); CT-5d re-anchor is
         // exercised through `LocalPendingTx`. Report the canonical anchor height
         // (`tip − REF_ANCHOR_AGE`) the production path would compute, so this
-        // diagnostics field stays a real height consistent with its doc rather
-        // than a `0` that reads as a genesis-height anchor.
+        // diagnostics field stays a real height consistent with its doc. A built
+        // tx implies a selected spendable output, hence `synced >= SPENDABLE_AGE >
+        // REF_ANCHOR_AGE`, so the canonical height always exists — no `0`
+        // (genesis-looking) fallback.
         content_gen: 0,
-        reference_height: shekyl_curve_tree::select_reference_height(synced).unwrap_or(0),
+        reference_height: shekyl_curve_tree::select_reference_height(synced)
+            .expect("a built tx implies synced >= SPENDABLE_AGE > REF_ANCHOR_AGE"),
     };
 
     reservations.insert(id, reservation);

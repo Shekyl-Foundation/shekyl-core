@@ -1085,20 +1085,22 @@ pub enum SubmitError {
         reservation_id: ReservationId,
     },
 
-    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): the submit-time re-anchor
-    /// changed the realized `(fee, recipients, change)`, so the content the
-    /// consumer last reviewed (`seen_gen`) is stale. Broadcast is **withheld**;
-    /// the reservation stays `consumer_held` with the advanced `content_gen` and
-    /// fresh `tx_bytes`. The consumer re-reads the handle, reviews the new
-    /// `(fee, change)`, and resubmits with the advanced `content_gen`. This makes
-    /// "broadcast content the user did not authorize" unrepresentable.
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): the submitted `seen_gen` does
+    /// not match the reservation's current `content_gen`, so broadcast is
+    /// **withheld**. This covers both cases by the same gate: a re-anchor *during
+    /// this submit* advanced the content, or a *prior* re-anchor advanced it and
+    /// the consumer resubmitted with a stale generation. The reservation stays
+    /// `consumer_held` with the current `content_gen` and its (fresh) `tx_bytes`;
+    /// the consumer reviews the current `(fee, change)` and resubmits with the
+    /// current `content_gen`. This makes "broadcast content the user did not
+    /// authorize" unrepresentable.
     #[error(
-        "content changed on re-anchor for reservation {reservation_id:?}; re-confirm at content_gen {content_gen}"
+        "content generation mismatch for reservation {reservation_id:?}: submitted seen_gen is stale; re-confirm at content_gen {content_gen}"
     )]
     ContentChanged {
-        /// The reservation whose authorized content advanced.
+        /// The reservation whose authorized content the consumer must re-confirm.
         reservation_id: ReservationId,
-        /// The advanced `content_gen` the consumer must resubmit with.
+        /// The reservation's current `content_gen` — the value to resubmit with.
         content_gen: u64,
     },
 
