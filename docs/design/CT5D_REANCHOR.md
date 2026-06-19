@@ -1,6 +1,18 @@
 # CT-5d (reanchor slice) — proactive horizon + reorg-fork-crossing re-anchor (design round)
 
-**Status:** Design round conducted 2026-06-18 (three passes — pass 2 absorbed six
+**Status:** IMPLEMENTED 2026-06-18 — the **reprove** path (content-preserving
+re-anchor) ships in `feat/ct-5d-reanchor-closeout` (commits 1–5): the reference-
+staleness submit model, the three-phase reprove primitive, the two-sided gate,
+the `content_gen` consent gate, and the horizon / two-sided-gate / fingerprint
+KATs. The content-*changing* **reselect** path (§3 deep-reorg / F-I fee-escalation
++ the lock-transplant of §3a phase 1/3) is **deferred under rule-21**: it surfaces
+as a clean `SubmitError::ReselectionRequired` (discard and rebuild) — never a bad
+proof, never a silent mutation — with the reopening criterion tracked in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) ("CT-5d reselect"). The eager `merge.rs`
+mark (F-D) and the `ContentChanged` re-confirm accessor (§4) are likewise tracked
+there. Design round below retained as the frozen contract.
+
+**Design round** conducted 2026-06-18 (three passes — pass 2 absorbed six
 seam findings validated against the code: F-A consent-keys-on-realized-delta,
 F-B/§3a three-phase prover-lock-free, F-C two-sided ingested-tip gate, F-D
 point-query staleness + drop the `merge.rs` coupling, F-E the `in_flight`
