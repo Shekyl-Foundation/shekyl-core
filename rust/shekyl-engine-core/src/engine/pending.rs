@@ -387,6 +387,24 @@ pub struct PendingTx {
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): consumer-visible content
+    /// generation. A fresh build is `0`; a submit-time re-anchor that changes the
+    /// realized `(fee, recipients, change)` advances it and **withholds
+    /// broadcast** — `submit` returns [`SubmitError::ContentChanged`] carrying the
+    /// advanced generation, and the reservation stays `consumer_held` with the
+    /// fresh proof (it is *not* auto-released and no new handle is returned). The
+    /// consumer resubmits with the advanced `content_gen` as `submit(id, seen_gen)`
+    /// to broadcast; a `seen_gen` that does not match the current generation means
+    /// the authorized content changed since the consumer last reviewed it and must
+    /// be re-confirmed first. (Reviewing the re-anchored `(fee, change)` before
+    /// re-confirming needs a pending-tx read accessor — tracked in `FOLLOWUPS.md`.)
+    ///
+    /// [`SubmitError::ContentChanged`]: super::error::SubmitError::ContentChanged
+    pub content_gen: u64,
+    /// CT-5d: the height of the reference block this proof is anchored to
+    /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
+    /// the anchor age without parsing `tx_bytes`.
+    pub reference_height: u64,
 }
 
 /// Default reservation TTL used by both
@@ -642,6 +660,16 @@ pub(crate) fn build_pending_tx_in_state(
         snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
+        // Legacy free-function helper (no curve tree); CT-5d re-anchor is
+        // exercised through `LocalPendingTx`. Report the canonical anchor height
+        // (`tip − REF_ANCHOR_AGE`) the production path would compute, so this
+        // diagnostics field stays a real height consistent with its doc. A built
+        // tx implies a selected spendable output, hence `synced >= SPENDABLE_AGE >
+        // REF_ANCHOR_AGE`, so the canonical height always exists — no `0`
+        // (genesis-looking) fallback.
+        content_gen: 0,
+        reference_height: shekyl_curve_tree::select_reference_height(synced)
+            .expect("a built tx implies synced >= SPENDABLE_AGE > REF_ANCHOR_AGE"),
     };
 
     reservations.insert(id, reservation);
@@ -790,8 +818,16 @@ impl<
     }
 
     /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
-    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        poll_immediate_submit(id, self.pending.submit(id))
+    ///
+    /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
+    /// it gates broadcast against a submit-time re-anchor that changed the
+    /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
+    pub fn submit_pending_tx(
+        &mut self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
+        poll_immediate_submit(id, self.pending.submit(id, seen_gen))
     }
 
     /// Discard a reservation via [`PendingTxEngine::discard`].

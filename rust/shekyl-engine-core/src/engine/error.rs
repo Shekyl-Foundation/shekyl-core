@@ -1084,6 +1084,54 @@ pub enum SubmitError {
         /// The rid whose duplicate submit was refused.
         reservation_id: ReservationId,
     },
+
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): the submitted `seen_gen` does
+    /// not match the reservation's current `content_gen`, so broadcast is
+    /// **withheld**. This covers both cases by the same gate: a re-anchor *during
+    /// this submit* advanced the content, or a *prior* re-anchor advanced it and
+    /// the consumer resubmitted with a stale generation. The reservation stays
+    /// `consumer_held` with the current `content_gen` and its (fresh) `tx_bytes`;
+    /// the consumer reviews the current `(fee, change)` and resubmits with the
+    /// current `content_gen`. This makes "broadcast content the user did not
+    /// authorize" unrepresentable.
+    #[error(
+        "content generation mismatch for reservation {reservation_id:?}: submitted seen_gen is stale; re-confirm at content_gen {content_gen}"
+    )]
+    ContentChanged {
+        /// The reservation whose authorized content the consumer must re-confirm.
+        reservation_id: ReservationId,
+        /// The reservation's current `content_gen` — the value to resubmit with.
+        content_gen: u64,
+    },
+
+    /// CT-5d (§3 / §3b): the proof needs re-anchoring but the re-anchor could not
+    /// complete right now. Either the curve tree cannot yet anchor a fresh
+    /// reference — still resyncing (e.g. post-reorg) or lagging the chain tip too
+    /// far to anchor a submittable reference (§3b) — or a transient build/sign
+    /// step failed (fee-snapshot fetch, signer, or an internal re-anchor error).
+    /// In all cases the reservation is preserved (`consumer_held`); the consumer
+    /// retries (or discards).
+    #[error(
+        "reservation {reservation_id:?} cannot re-anchor right now; reservation preserved, retry later"
+    )]
+    ReanchorUnavailable {
+        /// The reservation whose re-anchor could not complete; preserved.
+        reservation_id: ReservationId,
+    },
+
+    /// CT-5d (§3, F-I): the proof cannot be content-preservingly re-anchored —
+    /// a deep reorg orphaned a selected input, or the fresh-depth fee exceeds the
+    /// selected inputs' coverage. Reselection is the CT-5d-deferred path
+    /// (`docs/FOLLOWUPS.md` "CT-5d reselect"); the consumer discards and rebuilds.
+    /// The reservation is preserved so the consumer can review it before
+    /// discarding.
+    #[error(
+        "reservation {reservation_id:?} needs reselection (deep reorg / fee escalation); discard and rebuild"
+    )]
+    ReselectionRequired {
+        /// The reservation that must be discarded and rebuilt.
+        reservation_id: ReservationId,
+    },
 }
 
 // --- PendingTxEngine collaborator-error vocabulary (PR 5) -----------------

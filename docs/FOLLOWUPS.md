@@ -325,6 +325,69 @@ sustainability is unaffected by the recalibration.
   merge. See [`docs/design/CT5C_ASSEMBLER_CUTOVER.md`](./design/CT5C_ASSEMBLER_CUTOVER.md)
   §5 / §10.
 
+- **CT-5d reselect: content-changing re-anchor (lock-transplant), tracked
+  2026-06-18.** Target: V3.1+ (the clean-fail fallback is genesis-safe).
+  CT-5d ships the *reprove* re-anchor (content-preserving: same inputs, fresh
+  reference, re-assemble + re-sign). The *reselect* path — re-anchoring when a
+  deep reorg orphaned a *selected* output, or the fresh-depth fee exceeds the
+  selected inputs' coverage (F-I) — is deferred: it requires releasing the old
+  rid's `output_locks` and acquiring new ones under the same stable rid while
+  holding both across the prover (a temp-rid selection that ignores the old
+  rid's own locks, then a lock₂ rekey + fail-clean restore — materially larger
+  and riskier than reprove over the money path). Today these surface as a clean
+  `SubmitError::ReselectionRequired`; the consumer discards and rebuilds — never
+  a bad proof, never a silent mutation. **Reopening trigger (rule-21):** an
+  observed rate of deep-reorg-orphaned-selected-output / fee-escalation submit
+  failures that makes discard-and-rebuild a real UX cost, or an audit requiring
+  in-place reselection. See [`docs/design/CT5D_REANCHOR.md`](./design/CT5D_REANCHOR.md)
+  §3 (F-I) and the deferred-reselect KATs (d/g).
+
+- **CT-5d background opportunistic re-anchor + the eager reorg mark, tracked
+  2026-06-18.** Target: V3.1+ (measurement-gated). CT-5d is submit-centric:
+  staleness is re-derived authoritatively at submit, so the slice carries no
+  `merge.rs` reorg-branch coupling and no `stale` flag. A throttled background
+  task could proactively re-anchor stale `consumer_held` entries (off the reorg
+  handler and a timer) so submit usually finds a fresh tx — trading wasted
+  prover work on abandoned txs for lower submit latency. **This is the home for
+  the eager `merge.rs` mark** (the advisory `stale` flag + `PendingTxEngine`
+  reorg method) the lazy slice deliberately omitted; the mark is scaffolding the
+  rebuilder consumes, useless without it. **Reopening trigger:** the built-tx
+  submit-vs-abandon rate (currently unmeasured) shows proactive rebuild wins.
+  See [`docs/design/CT5D_REANCHOR.md`](./design/CT5D_REANCHOR.md) §5 (F-D) / §7.
+
+- **CT-5d broadcast-but-unmined reference orphan, tracked 2026-06-18.** Target:
+  V3.0 (send-path money-loss hazard). A tx broadcast *before* a reorg that then
+  orphans its reference is evicted from the daemon mempool: the wallet believes
+  it is in-flight, but the payment silently dies. CT-5d's re-anchor stops at the
+  `consumer_held → in_flight` boundary (re-anchoring a live proof would be a
+  double-spend + correlation surface), so this lives past CT-5d's scope — but it
+  is a real pre-genesis robustness gap in `in_flight` resolution (the daemon owns
+  it only until the daemon drops it). **Reopening trigger:** the `in_flight`
+  daemon-resolution / mempool-monitor work (Stage 4 `MempoolMonitorActor`) lands,
+  or a reorg-storm wargame surfaces silent payment loss. See §7.
+
+- **CT-5d re-confirm UX: handle accessor + `(fee, change)` delta on
+  `ContentChanged`, tracked 2026-06-18.** Target: V3.0 (consent UX completeness).
+  The engine's consent gate is sound — broadcast requires `seen_gen ==
+  content_gen`, and `content_gen` advances only on a real content change — but
+  `SubmitError::ContentChanged` carries only the advanced `content_gen`, and
+  there is no accessor to read the re-anchored artifact's new `(fee, change)`.
+  A front-end that blindly resubmits with the returned `content_gen` would
+  auto-confirm without showing the user the delta, weakening the consent
+  property in practice. Add a `peek_pending(id) -> PendingTx` accessor (or carry
+  the new fee/change on `ContentChanged`) so the front-end can surface the delta
+  for genuine re-approval. **Reopening trigger:** the wallet-RPC / front-end send
+  surface wires `submit(id, seen_gen)`. See §4.
+
+- **CT-5d: retire the vestigial `SnapshotId` / `SnapshotInvalidated` submit path,
+  tracked 2026-06-18.** Target: V3.1+ (cleanup). CT-5d makes the *reference* the
+  submit staleness authority for the curve-tree-enforced path (every
+  `consumer_held` entry), so `SubmitError::SnapshotInvalidated` and
+  `PendingTxDiagnostic::SubmitSnapshotInvalidated` are no longer constructed on
+  the money path. They are retained as `pub` API to avoid an enum break mid-stage.
+  **Reopening trigger:** the Stage-4 `PendingTxActor` rework, which re-decides the
+  staleness surface wholesale and can drop the dead variants. See §5.
+
 - **Full-segment freeze + prune-retention KAT at production `j=2` leaf count
   (CT-1 Round 1 deferral, tracked 2026-06-13).** Target: V3.0, with the
   prune-policy / store-backed assembly work (`CURVE_TREE_CLIENT.md` §8 #9).

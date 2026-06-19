@@ -12,6 +12,19 @@ proof, never a silent mutation — with the reopening criterion tracked in
 mark (F-D) and the `ContentChanged` re-confirm accessor (§4) are likewise tracked
 there. Design round below retained as the frozen contract.
 
+**Scope boundary (CT-5d ↔ archival bond, gate-6 firewall).** Re-anchor is
+**transfer-shaped**: it reproves from a stored `TxRequest` (recipients + priority).
+Archival bond-posts are *not* transfer-shaped — `bond_credit` rides as an
+`OutputTerm`, not a recipient — and by design they **never enter
+`PendingTxEngine`**: they construct + submit through the separate `StakeEngine`
+path over persona `P`'s own circuit, the gate-6 staking firewall
+([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md) §10.1 / §11.1 Q3
+makes the cross-assignment structurally unrepresentable). The two lines share the
+curve-tree **membership** infrastructure (`CurveTreeClient` / `assemble_path` /
+the FCMP++ prover) but not the **submission** path. A future maintainer wiring
+bond submission (PR 2c-2) must not route a bond-post into this re-anchor — its
+reprove would rebuild a standard transfer and lose the bond semantics.
+
 **Design round** conducted 2026-06-18 (three passes — pass 2 absorbed six
 seam findings validated against the code: F-A consent-keys-on-realized-delta,
 F-B/§3a three-phase prover-lock-free, F-C two-sided ingested-tip gate, F-D

@@ -46,7 +46,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_curve_tree::{
-    select_reference_height, AssembleInput, BlockHeight, Gindex, ReferenceBlock, REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
+    REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
@@ -87,6 +88,86 @@ use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 /// a single grep-able rename.
 pub(crate) type OutputId = usize;
 
+/// Semantic, canonically-ordered fingerprint of a built tx's *authorized
+/// content* — the `(fee, who-gets-how-much, change)` the consumer reviewed.
+///
+/// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4, F-G/F-G′): a re-anchor advances
+/// [`ConsumerHeldEntry::content_gen`] **iff this fingerprint changes**, so it
+/// must capture exactly what consent is over and nothing else:
+///
+/// - **Semantic, not byte-level** — a reprove re-derives a fresh one-time
+///   *change address* every time; the fingerprint carries the change *amount*
+///   only, never the address, or transparent reprove would spuriously bump
+///   `content_gen` (F-G).
+/// - **Canonically ordered** — CryptoNote-lineage txs shuffle outputs so the
+///   change output is not positionally identifiable, and a reprove re-runs the
+///   build internals → re-shuffles; the destinations are sorted here so the
+///   fingerprint is invariant under that privacy permutation (F-G′).
+///
+/// Consent is over *who gets how much* and the fee — not the wallet's own change
+/// address or the output order — so two builds that pay the same recipients the
+/// same amounts with the same fee and change compare equal regardless of address
+/// re-randomization or output shuffle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContentFingerprint {
+    /// Fee in atomic units.
+    fee: u64,
+    /// Authorized destinations as `(address, amount)`, sorted canonically so an
+    /// output reshuffle does not change the fingerprint (F-G′).
+    dests: Vec<(String, u64)>,
+    /// Change amount (atomic units). The change *address* is deliberately
+    /// excluded — it re-randomizes on every reprove (F-G).
+    change: u64,
+}
+
+impl ContentFingerprint {
+    /// Build the canonical fingerprint from the realized `(fee, recipients,
+    /// change)`. Sorts the destinations so the result is permutation-invariant.
+    fn from_parts(
+        fee: AtomicUnits,
+        recipients: &[TxRecipientSummary],
+        change: AtomicUnits,
+    ) -> Self {
+        let mut dests: Vec<(String, u64)> = recipients
+            .iter()
+            .map(|r| (r.address.clone(), r.amount_atomic_units.to_raw()))
+            .collect();
+        dests.sort();
+        Self {
+            fee: fee.to_raw(),
+            dests,
+            change: change.to_raw(),
+        }
+    }
+
+    /// Single-sourced fingerprint construction from the realized build amounts,
+    /// with **checked** arithmetic (`change = total_covered − Σrecipients − fee`).
+    ///
+    /// The fingerprint gates consent (§4 F-G), so a balance that does not add up
+    /// — `total_covered < Σrecipients + fee`, only reachable under corrupt state
+    /// since `build` validates funding first — must fail loud rather than
+    /// saturate to a wrong `change` that could mask a content change and skip a
+    /// `content_gen` bump. Used by both the fresh-build commit and the re-anchor
+    /// so the two derive the fingerprint identically.
+    fn from_build(
+        fee: AtomicUnits,
+        recipients: &[TxRecipientSummary],
+        total_covered: AtomicUnits,
+    ) -> Result<Self, SendError> {
+        let paid = AtomicUnits::checked_sum(recipients.iter().map(|r| r.amount_atomic_units))
+            .ok_or(SendError::CannotSign {
+                reason: "recipient amount sum overflowed computing the content fingerprint",
+            })?;
+        let change = paid
+            .checked_add(fee)
+            .and_then(|spent| total_covered.checked_sub(spent))
+            .ok_or(SendError::CannotSign {
+                reason: "balance does not cover recipients + fee computing the content fingerprint",
+            })?;
+        Ok(Self::from_parts(fee, recipients, change))
+    }
+}
+
 /// Per-reservation metadata while the rid lives in `consumer_held`.
 ///
 /// The (γ) lean shape stores collection membership in
@@ -96,6 +177,12 @@ pub(crate) type OutputId = usize;
 /// though V3.0's `consumer_held` map values are lighter than the
 /// V3.x eager-discard `ConsumerHeldEntry { snapshot_id, created_at }`
 /// substrate named in §5.6.7 P9.
+///
+/// CT-5d adds the substrate a submit-time re-anchor needs: a `consumer_held`
+/// entry must carry enough to *rebuild* (the `request`), the anchor it was built
+/// against (`reference`), and the consent state (`content_gen` + `fingerprint`).
+/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
+/// §7), so these are runtime-only fields with no schema-migration cost.
 #[derive(Debug, Clone)]
 pub(crate) struct ConsumerHeldEntry {
     /// Build-time [`Instant`] for the R8 TTL safety-net.
@@ -108,6 +195,49 @@ pub(crate) struct ConsumerHeldEntry {
     pub built_at_tip_hash: [u8; 32],
     /// Serialized signed transaction for daemon broadcast.
     pub tx_bytes: Vec<u8>,
+    /// CT-5d: the original build request (recipients + priority). Re-anchor
+    /// re-runs the build pipeline from this, so the entry carries enough to
+    /// rebuild, not just to submit `tx_bytes` (§3).
+    pub request: TxRequest,
+    /// CT-5d: the reference block this proof is anchored to. The submit
+    /// pre-flight reads it for `should_reanchor` (age) and `reference_orphaned`
+    /// (point query) (§5).
+    pub reference: ReferenceBlock,
+    /// CT-5d: consumer-visible content generation. Advances only when a
+    /// re-anchor changes the realized content (`fingerprint`), never on a proof
+    /// refresh; `submit(id, seen_gen)` compares against it (§4 F-G).
+    pub content_gen: u64,
+    /// CT-5d: the materialized content fingerprint `content_gen` advances
+    /// against (§4 F-G/F-G′).
+    pub fingerprint: ContentFingerprint,
+}
+
+#[cfg(test)]
+impl ConsumerHeldEntry {
+    /// Minimal entry for cross-module tests that only need a `consumer_held`
+    /// member to exist (e.g. the close-refusal test in `lifecycle`). Re-anchor
+    /// tests build through the real pipeline and never use this — the
+    /// `request` / `reference` here are placeholders, not a re-anchorable tx.
+    pub(crate) fn for_outstanding_test(tx_bytes: Vec<u8>) -> Self {
+        Self {
+            created_at: Instant::now(),
+            snapshot_id: SnapshotId([0u8; 16]),
+            built_at_height: 0,
+            built_at_tip_hash: [0u8; 32],
+            tx_bytes,
+            request: TxRequest {
+                recipients: Vec::new(),
+                priority: crate::engine::pending::FeePriority::Standard,
+            },
+            reference: ReferenceBlock {
+                height: BlockHeight(0),
+                curve_tree_root: [0u8; 32],
+                block_hash: [0u8; 32],
+            },
+            content_gen: 0,
+            fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),
+        }
+    }
 }
 
 /// Stage 1 ledger access for spendable-output enumeration.
@@ -383,6 +513,28 @@ fn map_curve_tree_handle_error_for_send(err: &CurveTreeHandleError) -> SendError
     }
 }
 
+/// Classify a curve-tree handle error encountered during a CT-5d re-anchor
+/// (`docs/design/CT5D_REANCHOR.md` §3): the two `CurveTreeHandleError` variants
+/// map to the two re-anchor failure modes.
+fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> ReanchorError {
+    match err {
+        // The client returned an error *inside* the handler: the selected input
+        // is not resolvable at the fresh reference — almost always a
+        // reorg-orphaned output. Content-preserving reprove is impossible;
+        // reselection (CT-5d-deferred) is the fix, so tell the consumer to
+        // discard and rebuild rather than carry a proof that cannot be built.
+        CurveTreeHandleError::Client(_) => ReanchorError::ReselectionRequired {
+            detail:
+                "membership assembly failed at the fresh reference (input likely reorg-orphaned); discard and rebuild",
+        },
+        // The actor is fail-stopped / timed out — transient, recoverable by
+        // respawn; retriable once the tree resyncs.
+        CurveTreeHandleError::Unavailable => ReanchorError::ReferenceResyncing {
+            detail: "curve tree actor unavailable; retry once it resyncs",
+        },
+    }
+}
+
 fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
@@ -533,6 +685,50 @@ struct BuildSelected {
     meta: BuiltPendingMeta,
 }
 
+/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d [`docs/design/CT5D_REANCHOR.md`]
+/// §3a): the tip/tree can move during the lock-free prover run, re-staling the
+/// freshly-anchored reference. Retry the whole pre-phase→prover→commit loop a
+/// few times; a tip moving faster than this is better surfaced as a clean
+/// "resyncing, retry later" than spun on.
+const REANCHOR_MAX_RETRIES: u8 = 3;
+
+/// Outcome of a successful in-place reprove (CT-5d §3 reprove path / §4 consent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReanchorOutcome {
+    /// Reproved against a fresh reference; the realized `(fee, recipients,
+    /// change)` is unchanged, so `content_gen` is unchanged and the swapped-in
+    /// tx is transparent to broadcast (§4).
+    Reproved { content_gen: u64 },
+    /// Reproved, but the realized content changed (a fresh-depth fee shift, F-A),
+    /// so `content_gen` advanced; the caller must **withhold broadcast** and
+    /// return the new artifact for re-confirm (§4).
+    ContentChanged { content_gen: u64 },
+}
+
+/// Why a re-anchor could not reprove in place (CT-5d §3).
+//
+// `dead_code` allow: the submit pre-flight maps these by *variant* to a
+// `SubmitError`, so the `detail` / `SendError` payloads are carried for
+// diagnostics (the `Debug` render) but not read on the mapping path. Kept as
+// data so a future logging/telemetry hook surfaces the precise cause.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum ReanchorError {
+    /// The fresh reference is not yet anchorable under the two-sided gate (§3b):
+    /// the tree has not ingested far enough (still resyncing), or it lags the
+    /// chain tip so far that a freshly-anchored reference would already be past
+    /// the rebuild threshold. Retriable once the tree catches up.
+    ReferenceResyncing { detail: &'static str },
+    /// The proof cannot be content-preservingly reproved with the currently
+    /// selected inputs: a selected output was orphaned (membership resolution
+    /// failed at the fresh reference), or the fresh-depth fee exceeds what those
+    /// inputs cover (F-I). Reselection is the CT-5d-deferred path
+    /// (`docs/FOLLOWUPS.md` "CT-5d reselect"); the consumer discards and rebuilds.
+    ReselectionRequired { detail: &'static str },
+    /// A transient assembly/signing failure that leaves the reservation intact.
+    Failed(SendError),
+}
+
 #[allow(private_bounds)]
 impl<S, O, F, FS, TS, L> LocalPendingTx<S, O, F, FS, TS, L>
 where
@@ -545,6 +741,18 @@ where
 {
     fn refresh_current_snapshot(&self, state: &mut PendingTxState) {
         state.current_snapshot = derive_snapshot_id(&self.ledger.snapshot());
+    }
+
+    /// CT-5d (`docs/design/CT5D_REANCHOR.md` §5): is `reference` no longer
+    /// canonical? A stateless point query — the canonical block at the reference
+    /// height is no longer the one the proof was anchored against (a reorg
+    /// replaced it). One sync `with_ledger_block` read (F-J); handles arbitrarily
+    /// many intervening reorgs for free, since it compares against the *current*
+    /// canonical hash, not a retained fork history.
+    fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
+        self.ledger
+            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height.0).copied())
+            != Some(reference.block_hash)
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
@@ -1102,6 +1310,7 @@ where
         &self,
         request: &TxRequest,
         meta: &BuiltPendingMeta,
+        reference: ReferenceBlock,
         tx_bytes: Vec<u8>,
     ) -> Result<PendingTx, SendError> {
         let mut state = self.state.lock().map_err(|_| {
@@ -1117,16 +1326,6 @@ where
         let id = meta.reservation_id;
         let snapshot_id = state.current_snapshot;
         let created_at = Instant::now();
-        state.consumer_held.insert(
-            id,
-            ConsumerHeldEntry {
-                created_at,
-                snapshot_id,
-                built_at_height: meta.synced,
-                built_at_tip_hash: meta.tip_hash,
-                tx_bytes: tx_bytes.clone(),
-            },
-        );
 
         let summary: Vec<TxRecipientSummary> = request
             .recipients
@@ -1137,6 +1336,30 @@ where
             })
             .collect();
 
+        // CT-5d: the realized content fingerprint `content_gen` advances against
+        // (§4 F-G). Built with checked arithmetic — the balance was validated in
+        // `build_select_sync`, so a failure here is corrupt state and must fail
+        // the build rather than feed a wrong value into a consent decision.
+        let fingerprint =
+            ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
+                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
+
+        state.consumer_held.insert(
+            id,
+            ConsumerHeldEntry {
+                created_at,
+                snapshot_id,
+                built_at_height: meta.synced,
+                built_at_tip_hash: meta.tip_hash,
+                tx_bytes: tx_bytes.clone(),
+                request: request.clone(),
+                reference,
+                // A fresh build is generation 0; re-anchor bumps it (§4).
+                content_gen: 0,
+                fingerprint,
+            },
+        );
+
         let pending = PendingTx {
             id,
             built_at_height: meta.synced,
@@ -1145,6 +1368,9 @@ where
             snapshot_id,
             tx_bytes,
             recipients: summary,
+            // Fresh build: generation 0, anchored at the resolved reference.
+            content_gen: 0,
+            reference_height: reference.height.0,
         };
 
         emit_pending_tx_diagnostic(
@@ -1159,8 +1385,355 @@ where
         Ok(pending)
     }
 
-    async fn submit_async(&self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        let tx_bytes = {
+    /// CT-5d re-anchor — **reprove** path ([`docs/design/CT5D_REANCHOR.md`] §3/§3a):
+    /// refresh a `consumer_held` proof against a fresh reference without changing
+    /// its inputs.
+    ///
+    /// Three-phase so the FCMP++ prover never holds the state lock (mirrors
+    /// `build`, and the shape the Stage-4 `PendingTxActor` migration needs):
+    ///
+    /// 1. **async pre-phase** (no state lock) — select the fresh reference under
+    ///    the two-sided ingested-tip gate (§3b) and compute the fixed-input fee
+    ///    at the fresh depth.
+    /// 2. **prover** (lock-free) — `assemble_tx` + fold + sign.
+    /// 3. **lock₂** (sync) — re-validate the reference is still canonical (the
+    ///    TOCTOU the lock-drop opens, §5, all sync `with_ledger_block` reads —
+    ///    F-J) and swap `tx_bytes` / `reference` / `fingerprint` / `content_gen`
+    ///    in place. `content_gen` advances iff the realized content changed (§4).
+    ///
+    /// Reselection (a deep reorg that orphaned a selected output, or a fresh-depth
+    /// fee the fixed inputs cannot cover — F-I) is the CT-5d-deferred path: it
+    /// surfaces as [`ReanchorError::ReselectionRequired`] so the consumer
+    /// discards and rebuilds — never a bad proof, never a silent mutation.
+    async fn reanchor_consumer_held(
+        &self,
+        id: ReservationId,
+    ) -> Result<ReanchorOutcome, ReanchorError> {
+        let handle =
+            self.curve_tree
+                .as_ref()
+                .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "curve tree required to re-anchor a membership proof",
+                }))?;
+
+        // The lock-free prover run can re-stale the freshly-anchored reference
+        // (the lock₂ TOCTOU); retry the whole loop a bounded number of times
+        // before surfacing a clean "resyncing" (§3a).
+        let mut last_resync: Option<ReanchorError> = None;
+        for _attempt in 0..REANCHOR_MAX_RETRIES {
+            // --- lock₀ (sync): snapshot the entry's rebuild context ---
+            // Only the rebuild *inputs* are snapshotted here. The consent baseline
+            // (the entry's current fingerprint / content_gen) is deliberately NOT
+            // captured at lock₀: a concurrent re-anchor can advance it while the
+            // prover runs, so it is re-read authoritatively at lock₂ (§4 F-G) to
+            // keep content_gen monotonic.
+            let (request, selected_indices) = {
+                let state = self.state.lock().map_err(|_| {
+                    ReanchorError::Failed(SendError::CannotSign {
+                        reason: "pending-tx state lock poisoned",
+                    })
+                })?;
+                let held = state.consumer_held.get(&id).ok_or(ReanchorError::Failed(
+                    SendError::CannotSign {
+                        reason: "reservation is no longer consumer_held",
+                    },
+                ))?;
+                // Reprove keeps the same inputs: recover them from `output_locks`
+                // (the same shape `finalize_submit_accept` uses).
+                let mut selected: Vec<OutputId> = state
+                    .output_locks
+                    .iter()
+                    .filter_map(|(o, owner)| (*owner == id).then_some(*o))
+                    .collect();
+                selected.sort_unstable();
+                (held.request.clone(), selected)
+            };
+
+            let summary: Vec<TxRecipientSummary> = request
+                .recipients
+                .iter()
+                .map(|r| TxRecipientSummary {
+                    address: r.address.clone(),
+                    amount_atomic_units: r.amount_atomic_units,
+                })
+                .collect();
+
+            // --- phase 0 (async, no state lock): fresh reference + fixed-input fee ---
+            let fee_snapshot = self
+                .fee_snapshot_source
+                .fetch()
+                .await
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let covered_through = handle
+                .ingested_tip_height()
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?
+                .map(|bh| bh.0);
+            let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
+                detail: "curve tree has not ingested any block yet",
+            })?;
+            let chain_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            // Two-sided ingested-tip gate (§3b, F-C): the lower arm anchors at or
+            // below the ingested tip; the upper arm refuses a reference already
+            // past the rebuild threshold (the tree is too far behind to anchor a
+            // submittable reference). Both are never-submit-a-bad-proof gates.
+            let anchor_tip = chain_tip.min(ingested);
+            let reference_height = anchor_tip.checked_sub(REF_ANCHOR_AGE).ok_or(
+                ReanchorError::ReferenceResyncing {
+                    detail: "chain too short to anchor a reference",
+                },
+            )?;
+            // Upper arm of the two-sided gate (§3b, F-C): refuse a fresh
+            // reference that is *already* due for re-anchor — same predicate the
+            // lock₂ re-validation uses (`should_reanchor`, inclusive at
+            // REBUILD_AT), so a reference that passes here can never immediately
+            // fail lock₂ on the age criterion and burn a prover attempt. (The
+            // reference is always below `chain_tip`, so the reorg/age-None arm of
+            // `should_reanchor` does not fire here — only the age threshold.)
+            if should_reanchor(chain_tip, reference_height) {
+                return Err(ReanchorError::ReferenceResyncing {
+                    detail: "tree too far behind to anchor a submittable reference; resync",
+                });
+            }
+            let (curve_tree_root, depth) = handle
+                .reference_root_and_depth(BlockHeight(reference_height))
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
+            let reference = match self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
+            {
+                Some(block_hash) => ReferenceBlock {
+                    height: BlockHeight(reference_height),
+                    curve_tree_root,
+                    block_hash,
+                },
+                None => {
+                    return Err(ReanchorError::ReferenceResyncing {
+                        detail: "reference-height block hash missing from ledger",
+                    })
+                }
+            };
+
+            // Fixed-input fee at the fresh depth (F-I). The inputs do not change
+            // on the reprove path, so `input_count` is the already-selected set;
+            // a fee the current inputs cannot cover escalates to reselection.
+            let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
+            let payment_count = request.recipients.len();
+            let rate = fee_rate_for_priority(request.priority, &fee_snapshot)
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let fee = self
+                .fee_estimator
+                .estimate_fee(
+                    request.priority,
+                    &FeeEstimationContext {
+                        ledger: &ledger_snapshot,
+                        recipient_count: payment_count,
+                        input_count: selected_indices.len(),
+                        output_count: payment_count + 1,
+                        fee_snapshot,
+                        tree_depth: depth,
+                    },
+                )
+                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err.into())))?;
+
+            let mut total_amount = AtomicUnits::ZERO;
+            for recipient in &request.recipients {
+                total_amount = total_amount
+                    .checked_add(recipient.amount_atomic_units)
+                    .ok_or(ReanchorError::Failed(SendError::InvalidRecipient {
+                        reason: "recipient amount sum overflowed u64",
+                    }))?;
+            }
+            let required = total_amount.checked_add(fee).ok_or(ReanchorError::Failed(
+                SendError::InvalidRecipient {
+                    reason: "amount + fee overflowed u64",
+                },
+            ))?;
+
+            // Re-read the selected inputs for `total_covered` and the assemble
+            // inputs (public material only; the fold re-reads the secret pathway
+            // by index after the assemble, guarding an index shift via `gindex`).
+            let (assemble_inputs, total_covered) = self
+                .ledger
+                .with_ledger_block(|ledger| {
+                    let transfers = ledger.transfers();
+                    let mut assemble_inputs = Vec::with_capacity(selected_indices.len());
+                    let mut covered = AtomicUnits::ZERO;
+                    for &index in &selected_indices {
+                        let td = transfers.get(index).ok_or(SendError::CannotSign {
+                            reason: "selected transfer index out of range during re-anchor",
+                        })?;
+                        covered =
+                            covered
+                                .checked_add(td.amount())
+                                .ok_or(SendError::CannotSign {
+                                    reason: "selected-input sum overflowed during re-anchor",
+                                })?;
+                        assemble_inputs.push(AssembleInput {
+                            gindex: Gindex(td.global_output_index),
+                            output_key: td.key.compress().to_bytes(),
+                            commitment: td.commitment.calculate().compress().to_bytes(),
+                        });
+                    }
+                    Ok::<_, SendError>((assemble_inputs, covered))
+                })
+                .map_err(ReanchorError::Failed)?;
+
+            if total_covered < required {
+                return Err(ReanchorError::ReselectionRequired {
+                    detail:
+                        "fresh-depth fee exceeds the selected inputs' coverage; discard and rebuild",
+                });
+            }
+            let fee_directive =
+                build_fee_directive(&rate, selected_indices.len(), payment_count, depth);
+
+            // --- phase 2 (prover, lock-free): assemble + fold + sign ---
+            let paths = handle
+                .assemble_tx(reference, assemble_inputs.clone())
+                .await
+                .map_err(|err| map_handle_err_to_reanchor(&err))?;
+            // Check *every* path's depth, not just the first: all paths share the
+            // one reference's tree so they should agree, but verifying all closes
+            // the gap if that invariant ever breaks (the per-input branch-layer
+            // count is authoritatively re-checked downstream in tx-builder's
+            // `validate_inputs`; this is the fee-sizing pre-check).
+            if paths.iter().any(|p| p.tree.tree_depth != depth) {
+                // The tree moved under the reference between the depth read and
+                // the assemble — re-stale; retry the whole loop.
+                last_resync = Some(ReanchorError::ReferenceResyncing {
+                    detail: "assembled tree depth diverged from the fresh reference",
+                });
+                continue;
+            }
+            let tx_to_sign = self
+                .ledger
+                .with_ledger_block(|ledger| {
+                    assemble_tx_to_sign(
+                        self.network,
+                        &request,
+                        &selected_indices,
+                        ledger.transfers(),
+                        &assemble_inputs,
+                        &paths,
+                        fee_directive,
+                    )
+                })
+                .map_err(ReanchorError::Failed)?;
+            let signed = self
+                .signer
+                .sign_transfer(TransferSigningContext::from_tx(tx_to_sign))
+                .await
+                .map_err(|err| {
+                    let signer_err: SignerError = err.into();
+                    ReanchorError::Failed(map_signer_error(&signer_err))
+                })?;
+            let tx_bytes = signed.tx_bytes().to_vec();
+            // Checked + single-sourced with the fresh-build path (§4 F-G); the
+            // fee-coverage check above guarantees this succeeds here.
+            let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
+                .map_err(ReanchorError::Failed)?;
+
+            // --- lock₂ (sync): authoritative re-validation + commit the swap ---
+            let mut state = self.state.lock().map_err(|_| {
+                ReanchorError::Failed(SendError::CannotSign {
+                    reason: "pending-tx state lock poisoned",
+                })
+            })?;
+            // A concurrent submit/discard could have removed the entry while the
+            // prover ran (we held no lock). Fail clean, leaving nothing changed.
+            if !state.consumer_held.contains_key(&id) {
+                return Err(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "reservation left consumer_held during re-anchor",
+                }));
+            }
+            // Authoritative staleness re-derivation at commit (the lock₂ TOCTOU,
+            // §3a/§5): the fresh reference must still be canonical and not itself
+            // already due for re-anchor. All sync ledger reads (F-J).
+            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            let still_canonical = self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
+                == Some(reference.block_hash);
+            if !still_canonical || should_reanchor(current_tip, reference_height) {
+                last_resync = Some(ReanchorError::ReferenceResyncing {
+                    detail: "reference re-staled during the prover run",
+                });
+                continue;
+            }
+            let Some(current_tip_hash) = self
+                .ledger
+                .with_ledger_block(|ledger| ledger.block_hash_at(current_tip).copied())
+            else {
+                return Err(ReanchorError::Failed(SendError::CannotSign {
+                    reason: "current tip block hash missing from ledger",
+                }));
+            };
+            self.refresh_current_snapshot(&mut state);
+            let snapshot_id = state.current_snapshot;
+
+            let entry = state
+                .consumer_held
+                .get_mut(&id)
+                .expect("consumer_held membership re-checked above");
+
+            // `content_gen` advances iff the realized content changed — measured
+            // against the entry's CURRENT materialized fingerprint and generation,
+            // read here under lock₂, never `seen_gen` and never the lock₀ snapshot
+            // (§4 F-G). Reading the committed state at commit keeps the
+            // advancement monotonic when a concurrent re-anchor advanced the entry
+            // while this attempt's prover ran.
+            let content_changed = new_fingerprint != entry.fingerprint;
+            // `checked_add`, not saturating: `content_gen` is the consent counter,
+            // so a saturated value would silently stop advancing and defeat the
+            // must-re-confirm invariant. Overflow is unreachable in practice (a
+            // u64 of content-changing re-anchors), but fail clean if it ever
+            // occurs — the entry is left untouched (still the prior proof).
+            let content_gen = if content_changed {
+                entry
+                    .content_gen
+                    .checked_add(1)
+                    .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                        reason: "content_gen overflow on re-anchor (consent counter exhausted)",
+                    }))?
+            } else {
+                entry.content_gen
+            };
+
+            entry.tx_bytes = tx_bytes;
+            entry.reference = reference;
+            entry.fingerprint = new_fingerprint;
+            entry.content_gen = content_gen;
+            entry.built_at_height = current_tip;
+            entry.built_at_tip_hash = current_tip_hash;
+            entry.snapshot_id = snapshot_id;
+
+            return Ok(if content_changed {
+                ReanchorOutcome::ContentChanged { content_gen }
+            } else {
+                ReanchorOutcome::Reproved { content_gen }
+            });
+        }
+
+        // Retries exhausted: the tip/tree is moving faster than the prover can
+        // anchor against it. A clean "retry later" beats spinning (§3a).
+        Err(last_resync.unwrap_or(ReanchorError::ReferenceResyncing {
+            detail: "re-anchor retries exhausted; tip moving too fast, retry later",
+        }))
+    }
+
+    async fn submit_async(&self, id: ReservationId, seen_gen: u64) -> Result<TxHash, SubmitError> {
+        // --- pre-flight: membership under the state lock, staleness outside it
+        // (CT-5d §5). The reference is the staleness authority — it *replaces* the
+        // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
+        // invalidates a still-canonical proof; only an aged-out or reorg-orphaned
+        // reference triggers a re-anchor. Only the membership classification and
+        // the `ReferenceBlock` copy need the pending-tx lock; the staleness reads
+        // hit the ledger (a different lock) and are re-validated authoritatively at
+        // the re-anchor's lock₂ regardless, so the state lock is dropped before
+        // touching the ledger (F5: no nested lock, less contention).
+        let reference = {
             let mut state = self
                 .state
                 .lock()
@@ -1173,6 +1746,8 @@ where
                 (false, false) => {
                     return Err(SubmitError::ReservationNotFound { reservation_id: id });
                 }
+                // A re-submit while in_flight is await/query the daemon, never a
+                // rebuild (F-E): the daemon owns the resolution authority.
                 (false, true) => {
                     return Err(SubmitError::SubmitAlreadyPending { reservation_id: id });
                 }
@@ -1182,55 +1757,93 @@ where
                 (true, false) => {}
             }
 
-            let held = state
+            state
                 .consumer_held
                 .get(&id)
                 .expect("consumer_held membership established above")
-                .clone();
+                .reference
+        };
 
-            if held.snapshot_id != state.current_snapshot {
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                        reservation_id: id,
-                        reservation_snapshot: held.snapshot_id,
-                        current_snapshot: state.current_snapshot,
-                    },
-                );
-                return Err(SubmitError::SnapshotInvalidated {
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
+        // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
+        let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+        let stale =
+            should_reanchor(current_tip, reference.height.0) || self.reference_orphaned(&reference);
+
+        // --- re-anchor if stale (three-phase, lock-free prover) ---
+        if stale {
+            match self.reanchor_consumer_held(id).await {
+                // Reproved or ContentChanged: the entry now carries a fresh proof
+                // and a possibly-advanced content_gen. The broadcast gate below
+                // enforces consent uniformly via seen_gen, so both fall through.
+                Ok(_) => {}
+                Err(ReanchorError::ReselectionRequired { .. }) => {
+                    return Err(SubmitError::ReselectionRequired { reservation_id: id });
+                }
+                Err(ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_)) => {
+                    return Err(SubmitError::ReanchorUnavailable { reservation_id: id });
+                }
+            }
+        }
+
+        // --- broadcast gate (sync): content_gen consent + atomic flip, then send ---
+        let tx_bytes = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            self.refresh_current_snapshot(&mut state);
+
+            // The entry can leave `consumer_held` between the pre-flight read and
+            // here: the lock is released across the (possible) re-anchor, and the
+            // engine is `&self` + `Mutex` — a *concurrent* `submit(id)` may have
+            // already flipped it to `in_flight` (the re-anchor itself never does).
+            // Preserve the P2 contract uniformly: a flipped entry is
+            // `SubmitAlreadyPending`, a vanished one is discarded / never-existed.
+            // Peek `content_gen` only (a `Copy`, no entry clone); the entry is
+            // moved out below iff the consent gate passes.
+            let content_gen = match state.consumer_held.get(&id) {
+                Some(held) => held.content_gen,
+                None => {
+                    return Err(if state.in_flight.contains_key(&id) {
+                        SubmitError::SubmitAlreadyPending { reservation_id: id }
+                    } else {
+                        SubmitError::ReservationNotFound { reservation_id: id }
+                    });
+                }
+            };
+
+            // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
+            // must match the materialized `content_gen`; a mismatch means a
+            // re-anchor (this submit's, or a prior one the consumer has not
+            // re-confirmed) advanced the realized content — withhold and return
+            // the advanced generation. Makes broadcasting unauthorized content
+            // unrepresentable. The entry stays `consumer_held` (not moved).
+            if seen_gen != content_gen {
+                return Err(SubmitError::ContentChanged {
+                    reservation_id: id,
+                    content_gen,
                 });
             }
 
-            let stored_tip = self
-                .ledger
-                .with_ledger_block(|ledger| ledger.block_hash_at(held.built_at_height).copied());
-            if stored_tip != Some(held.built_at_tip_hash) {
-                emit_pending_tx_diagnostic(
-                    self.sink.as_ref(),
-                    PendingTxDiagnostic::SubmitSnapshotInvalidated {
-                        reservation_id: id,
-                        reservation_snapshot: held.snapshot_id,
-                        current_snapshot: state.current_snapshot,
-                    },
-                );
-                return Err(SubmitError::SnapshotInvalidated {
-                    reservation_snapshot: held.snapshot_id,
-                    current_snapshot: state.current_snapshot,
-                });
-            }
-
-            let created_at = held.created_at;
+            // Consent satisfied. Move the entry out of `consumer_held` (no deep
+            // clone of `tx_bytes`) and flip it to `in_flight` atomically under the
+            // lock, then send lock-free — "committed as of" the flip (F-H). The
+            // lock is held continuously since the peek above (no await), so the
+            // entry is still present. Only the one `tx_bytes` copy `in_flight`
+            // retains (for ambiguous-resolution hash/retry) is cloned; the
+            // original moves on to the send.
+            let held = state
+                .consumer_held
+                .remove(&id)
+                .expect("consumer_held membership established above, lock held throughout");
             let tx_bytes = held.tx_bytes;
-            state.consumer_held.remove(&id);
             let submitted_at = Instant::now();
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
                     tx_bytes: tx_bytes.clone(),
                     snapshot_id: held.snapshot_id,
-                    created_at,
+                    created_at: held.created_at,
                     submitted_at,
                 },
             );
@@ -1575,11 +2188,10 @@ where
         // Both are read at the one reference height, so a divergence means the
         // tree moved under the reference — refuse rather than sign a proof whose
         // weight the fee did not cover. Holds as a tautology under a valid
-        // reference; never fires benignly.
-        if paths
-            .first()
-            .is_some_and(|p| p.tree.tree_depth != tree_depth)
-        {
+        // reference; never fires benignly. Check *every* path (all share the one
+        // reference's tree, so they should agree — verifying all closes the gap
+        // if that invariant ever breaks).
+        if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::CannotSign {
@@ -1612,7 +2224,7 @@ where
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
         let tx_bytes = signed.tx_bytes().to_vec();
-        let pending = self.commit_built_sync(&request, &meta, tx_bytes)?;
+        let pending = self.commit_built_sync(&request, &meta, reference, tx_bytes)?;
         reservation_cleanup.disarm();
         Ok(pending)
     }
@@ -1620,9 +2232,10 @@ where
     fn submit(
         &self,
         id: ReservationId,
+        seen_gen: u64,
     ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send {
         let this = self;
-        async move { this.submit_async(id).await }
+        async move { this.submit_async(id, seen_gen).await }
     }
 
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
@@ -1828,6 +2441,28 @@ mod tests {
             None,
         );
         RecoveredWalletOutput::new_for_test(base, amount)
+    }
+
+    /// Advance the ledger by empty blocks `from..=to` (no owned outputs), keeping
+    /// the `[h & 0xFF; 32]` block-hash scheme `populate_ledger` uses so an earlier
+    /// reference height stays canonical. Used by the CT-5d re-anchor KATs to age a
+    /// reference past the rebuild horizon without changing the funded set.
+    fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
+        use shekyl_scanner::{LedgerIndexesExt, Timelocked};
+
+        let mut guard = ledger.write();
+        let state = &mut *guard;
+        let ledger_block = &mut state.ledger.ledger;
+        let indexes = &mut state.indexes;
+        for h in from..=to {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                ledger_block,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
     }
 
     fn populate_ledger(
@@ -2430,11 +3065,142 @@ mod tests {
             "the build produces a real signed tx"
         );
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes)),
             "the submitted hash is the signed tx bytes' hash",
+        );
+    }
+
+    /// CT-5d (§4 F-G/F-G′): the content fingerprint is semantic and
+    /// canonically-ordered — it is invariant under the privacy output shuffle
+    /// (which a reprove re-runs) and excludes the re-randomized change address
+    /// (the change *amount* is captured, the address is not even a parameter),
+    /// but it does move on any change to *who gets how much* or the fee.
+    #[test]
+    fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
+        let r = |addr: &str, amt: u64| TxRecipientSummary {
+            address: addr.to_string(),
+            amount_atomic_units: AtomicUnits::from_raw(amt),
+        };
+        let fee = AtomicUnits::from_raw(1_000);
+        let change = AtomicUnits::from_raw(500);
+
+        let base = ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
+        // F-G′: the same recipients/amounts in a different output order compare
+        // equal — a reprove's reshuffle must not bump content_gen.
+        let reshuffled =
+            ContentFingerprint::from_parts(fee, &[r("addr_b", 20), r("addr_a", 10)], change);
+        assert_eq!(
+            base, reshuffled,
+            "output order must not change the fingerprint"
+        );
+        // Idempotent: rebuilding the identical content compares equal.
+        let again =
+            ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
+        assert_eq!(base, again, "identical content is idempotent");
+
+        // The consent axis: fee, change amount, and recipient amount each move it.
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(
+                AtomicUnits::from_raw(2_000),
+                &[r("addr_a", 10), r("addr_b", 20)],
+                change
+            ),
+            "a different fee is a content change"
+        );
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(
+                fee,
+                &[r("addr_a", 10), r("addr_b", 20)],
+                AtomicUnits::from_raw(600)
+            ),
+            "a different change amount is a content change"
+        );
+        assert_ne!(
+            base,
+            ContentFingerprint::from_parts(fee, &[r("addr_a", 11), r("addr_b", 20)], change),
+            "a different recipient amount is a content change"
+        );
+    }
+
+    /// CT-5d (§3a, headline): a proof carried past the rebuild horizon
+    /// re-anchors at submit (the reprove path) and broadcasts. Same inputs, same
+    /// tree depth → the realized content is unchanged → `content_gen` stays put
+    /// → transparent broadcast.
+    #[tokio::test]
+    async fn submit_reanchors_at_horizon_then_broadcasts() {
+        let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+        // Clone the handle so the test can advance the (shared-actor) tree cursor
+        // after handing one to the engine.
+        let tree_for_advance = tree.clone();
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        assert_eq!(built.reference_height, 14);
+        assert_eq!(built.content_gen, 0, "fresh build is generation 0");
+
+        // Advance BOTH the ledger and the tree well past the rebuild horizon:
+        // chain tip 80, tree ingested through 80. Reference age 80 − 14 = 66 ≥
+        // REBUILD_AT (50) → submit must re-anchor (reprove) at 80 − 6 = 74; the
+        // owned leaf (drained at 1 + SPENDABLE_AGE = 11) is in the tree there.
+        advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+        for h in 21..=80 {
+            tree_for_advance
+                .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+                .await
+                .expect("advance tree cursor");
+        }
+
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("horizon re-anchor reproves and broadcasts transparently");
+        assert_eq!(
+            pending.outstanding(),
+            0,
+            "submit consumed the reservation after re-anchor"
+        );
+    }
+
+    /// CT-5d (§3b, F-C upper arm): when the tree lags the chain tip so far that a
+    /// freshly-anchored reference would already be past the rebuild threshold,
+    /// the re-anchor refuses cleanly (`ReanchorUnavailable`) rather than anchor a
+    /// stale reference — and the reservation is preserved.
+    #[tokio::test]
+    async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
+        let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+
+        // Advance the ledger far ahead (chain 80) but NOT the tree (cursor stays
+        // at 20): the fresh reference would anchor at min(80, 20) − 6 = 14, age
+        // 80 − 14 = 66 > REBUILD_AT (50). The upper arm fails clean.
+        advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SubmitError::ReanchorUnavailable { reservation_id } if reservation_id == built.id),
+            "tree-too-far-behind must fail clean as ReanchorUnavailable, got {err:?}"
+        );
+        assert_eq!(
+            pending.outstanding(),
+            1,
+            "reservation preserved on clean fail"
         );
     }
 
@@ -2498,7 +3264,10 @@ mod tests {
         }
         assert_eq!(pending.outstanding(), 1);
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
@@ -3058,7 +3827,10 @@ mod tests {
             kind: TerminalErrorKind::DoubleSpend,
         }));
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonRejectedTerminal {
@@ -3099,7 +3871,10 @@ mod tests {
         pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
             kind: TerminalErrorKind::FeeTooLow,
         }));
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonRejectedTerminal {
@@ -3139,7 +3914,7 @@ mod tests {
             kind: TerminalErrorKind::Malformed,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::Malformed
             })
@@ -3165,7 +3940,10 @@ mod tests {
             reservation_id: built.id,
         }));
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             SubmitError::DaemonAmbiguous {
@@ -3214,7 +3992,7 @@ mod tests {
             reservation_id: built.id,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
                 ..
@@ -3235,7 +4013,7 @@ mod tests {
             reservation_id: built.id,
         }));
         assert!(matches!(
-            pending.submit(built.id).await,
+            pending.submit(built.id, built.content_gen).await,
             Err(SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonTimeout,
                 ..
@@ -3360,12 +4138,15 @@ mod tests {
         );
     }
 
+    /// CT-5d (§5): a benign tip advance no longer invalidates a still-canonical,
+    /// in-window proof — it broadcasts as-is, with no re-anchor. This replaces the
+    /// pre-CT-5d `SnapshotInvalidated`-on-every-block behavior: the reference, not
+    /// the `SnapshotId`, is now the staleness authority.
     #[tokio::test]
-    async fn pending_tx_submit_snapshot_invalidated_coherence() {
+    async fn submit_carries_proof_across_benign_tip_advance() {
         let sink = Arc::new(AssertionSink::new());
         let (ledger, _tree_dir, tree) =
             funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
-        let build_snapshot = derive_snapshot_id(&ledger.snapshot());
         let pending = test_pending_tx_with_tree_and_sink(
             Arc::clone(&ledger),
             tree,
@@ -3375,8 +4156,11 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        assert_eq!(built.snapshot_id, build_snapshot);
+        // Reference anchored at tip(20) − REF_ANCHOR_AGE(6) = 14.
+        assert_eq!(built.reference_height, 14);
 
+        // Advance the tip a few blocks with no reorg: reference age 25 − 14 = 11,
+        // well within the daemon window and still canonical → not stale.
         populate_ledger(
             ledger.as_ref(),
             21,
@@ -3384,30 +4168,24 @@ mod tests {
             25,
         );
 
-        let err = pending.submit(built.id).await.unwrap_err();
-        let SubmitError::SnapshotInvalidated {
-            reservation_snapshot,
-            current_snapshot,
-        } = err
-        else {
-            panic!("expected SnapshotInvalidated, got {err:?}");
-        };
-        assert_eq!(reservation_snapshot, build_snapshot);
-        assert_ne!(current_snapshot, build_snapshot);
-        assert_eq!(pending.outstanding(), 1);
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("benign tip advance broadcasts the existing proof as-is");
+        assert_eq!(pending.outstanding(), 0, "submit consumed the reservation");
 
         let events = sink.recorded_pending();
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSnapshotInvalidated { .. })),
-            "SnapshotInvalidated must emit SubmitSnapshotInvalidated: {events:?}"
+                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSucceeded { .. })),
+            "benign advance must submit successfully: {events:?}"
         );
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, PendingTxDiagnostic::Discarded { .. })),
-            "lazy R5: no auto-Discarded on snapshot invalidation: {events:?}"
+                .any(|e| matches!(e, PendingTxDiagnostic::SubmitSnapshotInvalidated { .. })),
+            "CT-5d retires SnapshotInvalidated on a benign tip advance: {events:?}"
         );
     }
 
@@ -3430,47 +4208,52 @@ mod tests {
         assert_eq!(recovery.outstanding(), 1);
     }
 
-    /// Hybrid-style snapshot rotation: build at S1, advance ledger,
-    /// submit observes lazy-R5 `SnapshotInvalidated` (segment-2h).
+    /// CT-5d (§4): the `content_gen` consent gate. Submitting with a `seen_gen`
+    /// that does not match the reservation's materialized `content_gen` is
+    /// withheld as [`SubmitError::ContentChanged`] — never broadcast — and the
+    /// reservation stays `consumer_held`. Re-confirming with the correct
+    /// generation broadcasts. (Here the mismatch is synthetic: a fresh build is
+    /// generation 0, so a consumer passing a stale generation 1 is refused.)
     #[tokio::test]
-    async fn hybrid_pending_tx_snapshot_rotation_on_submit() {
-        let sink = Arc::new(AssertionSink::new());
+    async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
         let (ledger, _tree_dir, tree) =
             funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
-        let s1 = derive_snapshot_id(&ledger.snapshot());
-        let pending = test_pending_tx_with_tree_and_sink(
-            Arc::clone(&ledger),
-            tree,
-            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
-        );
+        let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
         let built = pending
             .build(standard_request(7_000))
             .await
-            .expect("build at S1");
-        assert_eq!(built.snapshot_id, s1);
+            .expect("build ok");
+        assert_eq!(built.content_gen, 0, "a fresh build is generation 0");
 
-        populate_ledger(
-            ledger.as_ref(),
-            21,
-            vec![make_recovered_output(9, 300, 2_000)],
-            30,
-        );
-        let s2 = derive_snapshot_id(&ledger.snapshot());
-        assert_ne!(s1, s2);
-
-        let SubmitError::SnapshotInvalidated {
-            reservation_snapshot,
-            current_snapshot,
-        } = pending.submit(built.id).await.unwrap_err()
+        // Submit immediately (no tip advance → not stale, no re-anchor) with a
+        // generation the consumer never saw: withhold, do not broadcast.
+        let err = pending
+            .submit(built.id, built.content_gen + 1)
+            .await
+            .unwrap_err();
+        let SubmitError::ContentChanged {
+            reservation_id,
+            content_gen,
+        } = err
         else {
-            panic!("submit after rotation must return SnapshotInvalidated");
+            panic!("expected ContentChanged, got {err:?}");
         };
-        assert_eq!(reservation_snapshot, s1);
-        assert_eq!(current_snapshot, s2);
+        assert_eq!(reservation_id, built.id);
+        assert_eq!(
+            content_gen, 0,
+            "the materialized generation to re-confirm with"
+        );
+        assert_eq!(
+            pending.outstanding(),
+            1,
+            "withheld: the reservation stays consumer_held"
+        );
 
+        // Re-confirming with the correct generation broadcasts.
         pending
-            .discard(built.id, DiscardReason::ConsumerExplicit)
-            .expect("consumer releases stale reservation");
+            .submit(built.id, 0)
+            .await
+            .expect("correct seen_gen broadcasts");
         assert_eq!(pending.outstanding(), 0);
     }
 
@@ -3659,7 +4442,10 @@ mod tests {
             tx.weight()
         );
 
-        let tx_hash = pending.submit(built.id).await.expect("submit ok");
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit ok");
         assert_eq!(
             tx_hash,
             TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
@@ -3692,7 +4478,10 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.submit(built.id).await.expect("first submit");
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("first submit");
         assert_eq!(daemon.submitted_count(), 1);
 
         let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
@@ -3706,7 +4495,10 @@ mod tests {
         );
         assert_eq!(daemon.submitted_count(), 1);
 
-        let err = pending.submit(built.id).await.unwrap_err();
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, SubmitError::ReservationNotFound { .. }),
             "reservation consumed after first submit: {err:?}"

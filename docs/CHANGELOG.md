@@ -86,6 +86,33 @@
   `shekyl-engine-core` dev-deps (first-party path-deps, no new third-party
   supply-chain surface, no dependency cycle). Tree stays synthetic; on-chain
   end-to-end remains CT-5 work.
+- **wallet: CT-5d submit-time proof re-anchor (reprove) + consent gate
+  (`docs/design/CT5D_REANCHOR.md`, `feat/ct-5d-reanchor-closeout`).** A built-but-
+  unsubmitted FCMP++ proof anchors to a reference block `tip − REF_ANCHOR_AGE`;
+  a tip advance past the rebuild horizon, or a reorg that orphans the reference,
+  would otherwise degrade to a submit-time daemon rejection. The submit path now
+  re-anchors instead of rejecting:
+  - The **reference** is the submit staleness authority (`should_reanchor ||
+    reference_orphaned`), replacing the `SnapshotId` check that invalidated on
+    every block — a benign tip advance now broadcasts the existing proof as-is.
+  - When stale, submit **reproves** in place (fresh reference, re-assemble,
+    re-sign) three-phase so the prover never holds the pending-tx lock (mirrors
+    `build`; the shape the Stage-4 `PendingTxActor` migration needs). The fresh
+    reference is selected under a two-sided ingested-tip gate (anchors at/below
+    the ingested tip; refuses a reference already past the rebuild threshold).
+  - **Consent:** `submit(id, seen_gen)` gates broadcast on a `content_gen` that
+    advances only when the re-anchor changes the realized `(fee, recipients,
+    change)` — fingerprinted semantically + canonically (excludes the
+    re-randomized change address; invariant under the output shuffle). A change
+    is withheld as `SubmitError::ContentChanged` for re-confirm; broadcasting
+    unauthorized content is unrepresentable.
+  - `ConsumerHeldEntry` carries the rebuild substrate (`request`, `reference`,
+    `content_gen`, fingerprint); `PendingTx` exposes `content_gen` +
+    `reference_height`. Runtime-only state — no schema migration.
+  - **Deferred (rule-21):** the content-*changing* reselect path (deep reorg
+    orphaning a selected input, or fee escalation) fails clean as
+    `SubmitError::ReselectionRequired` (discard and rebuild) rather than
+    transplanting locks under the stable rid; see `FOLLOWUPS.md`.
 - **crypto/economics: archival bond-post construction PR 1 -- single-sourced RCT
   balance + JoinMarket builder (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7,
   `feat/archival-bond-builder`).** The construct side of the archival bond, the
