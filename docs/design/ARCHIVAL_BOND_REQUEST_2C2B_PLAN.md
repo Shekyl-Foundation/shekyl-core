@@ -182,13 +182,33 @@ guard* (a SEB spacing is only meaningful if there is a principal→`P` funding l
 to space). The corrected disposition splits funding into two regimes, each with
 its own mechanism, to settle in Round 1:
 
-- **Cold-start = principal-funded, ≥ 1-SEB-spaced + standoff-decorrelated.** This
-  **does** touch principal-output selection; the SEB spacing (economic layer) +
-  the standoff `draw_entry_gap` (timing layer) are the firewall guards that make
-  it safe, not a prohibition. SP-2.d's clean "never principal" was true only for
-  steady-state.
+- **Cold-start = principal-seeded, amount-decoupled, ≥ 1-SEB-spaced +
+  standoff-decorrelated.** The SEB spacing + standoff `draw_entry_gap` decorrelate
+  **when** `P` acts — but **timing decorrelation is not enough**: spacing does
+  nothing for **amount** or **membership-set**, and a principal spend of a
+  `bond_floor`-shaped amount at a distinctive moment **fingerprints the link on
+  the amount** regardless of how well-spaced it is. The fix is to **amount-decouple
+  the cold-start**: the principal makes a **generic** transfer to `P` (an
+  unremarkable amount), `P` **holds** it, and posts the bond **later, from its own
+  holdings** — so the bond's `bond_floor`-shaped spend originates from a `P` UTXO,
+  **not** from a principal spend shaped like `bond_floor`. That converts one
+  linkable event ("principal spends bond-shaped amount → `P` posts", linkable on
+  amount **and** timing) into **two unremarkable events**. Cold-start therefore
+  carries **three** guards — amount-decoupling, SEB spacing, standoff timing — not
+  just the SEB spacing. **Feasibility note (interacts with SP-2.e):** the
+  cold-start funding output is a **self-payment** — the wallet owns both the
+  principal and `P`, so it **knows** the seeding UTXO without scanning. So
+  amount-decoupling is implementable in 2c-2b **even with `P`-scanning deferred**;
+  it is *third-party* `P`-earnings (steady-state) that need the 2d-1 scan, not the
+  principal's own seed. (SP-2.d's clean "never principal" was wrong; the corrected
+  shape is "principal **seeds** at cold-start, amount-decoupled and decorrelated.")
 - **Steady-state = `P`-local earnings (fund-from-earnings ramp, ≥ 2 settlement
-  epochs).** Presupposes a `P`-output set (SP-2.e).
+  epochs).** Presupposes a *third-party*-populated `P`-output set → the 2d-1
+  `P`-scan (SP-2.e).
+- **Sim obligation (Round 4 / `STAKER_ARCHIVAL_SIM`).** Model the cold-start
+  funding event against **amount and membership-set adversaries**, not only
+  timing — it is the single most correlatable event in `P`'s life, so all three
+  dimensions belong in the adversary model.
 
 *Verdict: correction, not confirmation — the §11.1 dispositions did not close
 this; it is the Round-1 anchor question, sharper than "where does the `P`-funding
@@ -270,11 +290,18 @@ Per the user's framing and rule 26 §"Part A" / `A3` (threat-model addenda is a
    principal-funding-spend → bond-post interval** (the cold-start seam from
    Round 1); **`NetworkGap` gates the prep-spend / announce / bond-post events**
    (the standoff `draw_entry_gap(600)` window).
-3. **Round 3 — RNG seams.** Live degeneracy guard (fail-loud) vs gated
-   `certify_draw`; the `GapRng`-over-`OsRng` adapter; when each runs (per-draw
-   vs per-session). Negative controls (`double_jitter_trap`, `correlated_walk`)
-   prove the guard **bites** (assert it fires — S7(b)), not merely that the shapes
-   exist.
+3. **Round 3 — RNG seams (output *and* source).** Live degeneracy guard
+   (fail-loud) vs gated `certify_draw`; the `GapRng`-over-`OsRng` adapter; when
+   each runs (per-draw vs per-session). Negative controls (`double_jitter_trap`,
+   `correlated_walk`) prove the guard **bites** (assert it fires — S7(b)), not
+   merely that the shapes exist. **Source failure, not only statistical
+   degeneracy:** the degeneracy guard checks the draw's *distribution*, but
+   `OsRng` can *fail* (early boot, seccomp blocking the syscall, exhausted
+   entropy). Use the **fallible** path (`try_fill_bytes`), treat a source error as
+   **fail-loud-refuse** at the same altitude as the degeneracy guard, and — the
+   part that actually bites — **audit that there is no silent fallback RNG**
+   anywhere in the draw path: the catastrophic case is not the source erroring, it
+   is a **fallback to a weaker source** on that error.
 4. **Round 4 — threat-model addenda (`A3`).** Named attacker objectives against
    the request path: cross-assignment via the new request, transport correlation
    (confirm 2c-2b ships none), economic correlation of funding, RNG degeneracy
