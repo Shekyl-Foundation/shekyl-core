@@ -104,12 +104,38 @@ real tree can't cheaply provide. So PR 2a uses the sanctioned KAT surface. The
 remaining gap to a **real-tree bond** round-trip is therefore *not* "CT-5
 doesn't exist" — `assemble_path` is real as of CT-5c, and transfers already have
 a real-tree round-trip (`local_pending_tx::build_then_submit_marks_outputs_spent`
-over `funded_ledger_and_tree`). The bond gap is narrower: the engine signer
-(`sign_bridge.rs`) calls the **zero-terms** `sign_transaction`, with no
-engine-side plumbing for the bond's cleartext `credit_term`. Threading that term
-from the bond request through the build path is **PR 2c**, so the real-tree bond
-round-trip (mirroring `build_then_submit_…` with `credit_term` threaded) lands as
-2c's closing milestone, tracked in `FOLLOWUPS.md`.
+over `funded_ledger_and_tree`).
+
+**PR 2c-1 lands the real-tree bond composition (2026-06-18).** When CT-5c made
+`assemble_path` available earlier than planned, PR 2c was split: **PR 2c-1**
+closes the real-tree bond round-trip and **PR 2c-2** carries the StakeEngine
+wiring / JoinMarket orchestration. The 2c-1 KAT
+(`local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`)
+re-runs PR 2a's composition over a **real** depth-2 `assemble_path` tree (the
+`funded_ledger_and_tree` fixture, the same path `build_then_submit_…` drives),
+carrying the bond's `credit_term` through `sign_transaction_with_terms` over
+genuine branch layers and checking BP+, the RCT balance over prover-emitted
+commitments, and vin/signature accept+reject. It drives the prover directly
+rather than the transfer bridge (`sign_bridge.rs` deliberately still calls the
+**zero-terms** `sign_transaction`): per Q3 a bond does not take the transfer
+signer path, so threading a credit term through the bridge would be dead code
+until the StakeEngine caller lands in 2c-2 (rules 15/21).
+
+One discovered blocker scopes 2c-1's honesty: FCMP++ `verify` does **not** yet
+accept a proof built over a *real multi-layer* assembled path. No workspace test
+verifies such a path today — PR 2a and the FFI round-trip verify a depth-1
+**synthetic** single-leaf root, and the real-tree transfer KATs only *build and
+submit* (they never call `verify` locally). The first attempt
+(`join_market_bond_post_fcmp_verify_over_real_tree`) returns
+`BatchVerificationFailed`, despite the prover succeeding over the same path and
+`assemble_kat` proving the assembled branches re-hash to the consensus root —
+isolating the gap to the upstream `Fcmp::prove`↔`verify` ↔ consensus
+`hash_grow` consistency over real branch layers, a **CT-5** surface, not the
+bond construction. The verify-accept assertion therefore rides as an
+`#[ignore]`d sibling rather than a faked pass; it un-ignores when CT-5 lands a
+real-tree prove→verify roundtrip (tracked in `FOLLOWUPS.md`,
+"real-tree FCMP++ verify"). The earlier "not on CT-5" note above was correct for
+the prove side only.
 The KAT also asserts the verify side *rejects* a wrong `bond_credit`, a tampered
 output commitment, a tampered signature preimage, and a replayed post -- the
 honest milestone is "valid accepts and invalid rejects," not accept alone. Lives
