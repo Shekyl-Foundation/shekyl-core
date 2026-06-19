@@ -1,0 +1,25 @@
+[package]
+name = "shekyl-shard-source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shard data-source abstraction: list + aggregate lookup (fixtures today, ArchivalEngine at Stage 5)"
+
+[dependencies]
+shekyl-shard-visual = { path = "../shekyl-shard-visual" }
+serde = { workspace = true, features = ["derive"] }
+hex = "0.4"
+thiserror.workspace = true
+
+[features]
+# Stage 5 ArchivalEngine-backed source. The impl is a seam stub today
+# (docs/V3_SHARD_VISUALIZATION.md, shekyl-gui-wallet/docs/SHARD_PREVIEW_CUTOVER.md).
+archival = []
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
