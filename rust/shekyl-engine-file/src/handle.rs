@@ -68,7 +68,7 @@ use shekyl_engine_prefs::{
     LoadOutcome as PrefsLoadOutcome, PrefsHmacKey, WalletPrefs,
 };
 use shekyl_engine_state::{
-    BookkeepingBlock, LedgerBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
+    BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
 
 use crate::atomic::atomic_write_file;
@@ -452,6 +452,7 @@ impl WalletFile {
                     BookkeepingBlock::empty(),
                     TxMetaBlock::empty(),
                     SyncStateBlock::new(restore_from_height, None),
+                    StakingBlock::empty(),
                 );
                 OpenOutcome::StateLost {
                     ledger,
