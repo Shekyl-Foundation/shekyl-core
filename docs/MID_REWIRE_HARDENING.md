@@ -578,11 +578,12 @@ invariant (currently pinned only in
 to mechanical check.
 
 **Approach.** Use `postcard::experimental::schema::Schema` (aka
-`postcard-schema`) to produce a `NamedType` tree for each of the
-four ledger blocks (`LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`,
-`SyncStateBlock`) plus the aggregator `WalletLedger`. Serialize the
-tree as pretty JSON; commit the JSON as a snapshot. CI job diffs the
-snapshot on every PR; any change requires a `block_version` (or
+`postcard-schema`) to produce a `NamedType` tree for each ledger block
+(`LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`,
+and `StakingBlock` — the last added in PR 2c-2a for staker bond
+bookkeeping) plus the aggregator `WalletLedger`. Serialize the tree as
+pretty JSON; commit the JSON as a snapshot. CI job diffs the snapshot
+on every PR; any change requires a `block_version` (or
 `WALLET_LEDGER_VERSION`) bump in the same commit.
 
 **Why postcard-schema and not schemars / typetag.** Postcard is the
@@ -595,8 +596,9 @@ trait-object serialization and solves a different problem.
 
 - `rust/shekyl-engine-state/schemas/ledger_block.snap`,
   `bookkeeping_block.snap`, `tx_meta_block.snap`,
-  `sync_state_block.snap`, `wallet_ledger.snap`. Pretty JSON, stable
-  ordering, committed to the repo.
+  `sync_state_block.snap`, `staking_block.snap`, `wallet_ledger.snap`.
+  Pretty JSON, stable ordering, committed to the repo. (`staking_block.snap`
+  added in PR 2c-2a.)
 - `rust/shekyl-engine-state/src/schema_snapshot.rs` — a test module
   containing a single test per block that writes the live schema to
   the corresponding `.snap` file **if `UPDATE_SNAPSHOTS=1` is set**,

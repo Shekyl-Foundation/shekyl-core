@@ -418,21 +418,34 @@ anything exercises it. Each carries its named verify-side gap:
 
 ## 10. PR 2 -- StakeEngine orchestration + standoff self-cert
 
-> **Status (PR 2b landed inert, `feat/archival-stake-engine`).** The
-> StakeEngine actor and its handle now exist
-> (`shekyl-engine-core::engine::stake_engine`): it owns `master_seed_64` and the
-> active persona, derives `ArchivalPKeys` lazily off the hot path
-> (`spawn_blocking`), rotates slots in a single atomic transition, re-derives
-> deterministically on (re-)spawn, and is fail-stop with a user-facing
-> `StakeActorUnavailable` recovery diagnostic. It carries the typed surface the
-> rest of §10/§10.1 assumes -- `PSlot`, the wipe-disciplined `StakeMasterSeed`,
-> and a public-only `PersonaIdentity` reply (holds the typed `HybridPublicKey`,
-> no secret field). It is **inert**: registered and test-exercised only, with no
-> `Engine` wiring. The remaining §10 scope -- the parallel JoinMarket request
-> type, funding selection, the standoff `draw_entry_gap` + `certify_draw`
-> self-cert (fail-stop on non-conformance), and the live open/create lifecycle
-> wiring that brings a seed-holding actor into existence -- lands in **PR 2c**;
-> the `arti-client` transport isolation lands in **PR 2d**.
+> **Status (PR 2c-2a landed inert, `feat/archival-stake-wiring`).** The
+> StakeEngine actor is now **wired into the engine lifecycle under Model D**
+> (§10.2) and **no longer owns the master seed**. At `assemble()`, a
+> staker-flagged wallet derives the **derive-forward set** of `ArchivalPKeys`
+> bundles and hands them to the actor; the seed is borrowed (`&[u8; 64]`) and
+> drops at function end, exactly as for `AllKeysBlob`. The actor holds the
+> pre-derived bundles (`ZeroizeOnDrop`/`!Clone`, same class as `AllKeysBlob`),
+> rotates the active slot in a single atomic transition, wipes only retired
+> personas **with no live bond**, and is fail-stop with a user-facing
+> `StakeActorUnavailable` recovery diagnostic. Lookahead exhaustion, first-stake
+> mid-session, and post-panic recovery all collapse onto **reopen** (re-runs
+> `assemble()` with the transient seed) — no re-auth / KEK machinery. New typed
+> surface: `PSlot`; the operation-scoped `PersonaHandle` (minted only for held
+> personas, §10.2); the `PersistedBondTicket` persist-before-use typestate (the
+> cross-split seam, produced here and consumed in 2c-2b); the public-only
+> `PersonaIdentity` reply. Staker metadata persists in a new sealed
+> `StakingBlock` inside `WalletLedger` (§10.2, store decision). It is **inert**:
+> wired, derived, spawned, and test-exercised, with **no JoinMarket request
+> path** yet. The remaining scope -- the parallel JoinMarket request type that
+> consumes the ticket, funding selection, the two typed timing seams, the live
+> RNG degeneracy check + `certify_draw` self-cert, and the milestone KAT --
+> lands in **PR 2c-2b**; broadcast/re-anchor and the `arti-client` transport
+> isolation land in **PR 2d**.
+>
+> The 2b-era model in this section (seed-owning actor, lazy `spawn_blocking`
+> derivation, re-derive-on-restart) is **superseded by Model D**; the
+> "re-derive-on-restart makes `master_seed_64` the load-bearing root"
+> disposition below is retained for history and explicitly marked superseded.
 
 - A **parallel StakeEngine request type** for JoinMarket (§11.1 Q3, resolved) --
   *not* a variant on the shared `TxRequest`, which would route bond construction
@@ -485,7 +498,12 @@ secret would need to flow to another actor, that message type would need its own
 gate-6 isolation amendment, not a PR-2 implementation detail.)
 
 **Robustness -- re-derive-on-restart makes `master_seed_64` the load-bearing
-root.** `ArchivalPKeys` is derived on wallet open and **not persisted** (no
+root.** *(SUPERSEDED by Model D, §10.2 — retained for history. Under Model D the
+actor no longer owns the seed; it holds pre-derived bundles, and "restart" is
+"reopen the wallet", which re-runs `assemble()` with the transient seed. The
+seed is no longer held session-long by anything. The atomic-rotation property in
+point 2 below survives unchanged and is load-bearing under Model D.)*
+`ArchivalPKeys` is derived on wallet open and **not persisted** (no
 derived key at rest -- the right call). The consequence: StakeEngine re-derives
 on every actor restart and every rotation, so `master_seed_64` must outlive the
 StakeEngine actor and carry the same `mlock` + `ZeroizeOnDrop` discipline as the
@@ -495,13 +513,165 @@ restart re-touches it. Two PR-2 confirmations:
 1. **Seed survives a StakeEngine panic/restart cleanly**, so re-derivation
    succeeds deterministically. The `aarch64` `ARCHIVAL_P_DERIVE_V1` KAT (§6.3)
    is what guarantees the *same* keys come back -- restart-determinism is the
-   runtime consumer of that cross-arch freeze.
+   runtime consumer of that cross-arch freeze. *(Under Model D this becomes:
+   reopen re-derives deterministically; the KAT is still the cross-arch
+   determinism anchor.)*
 2. **`p_slot` rotation is atomic in the actor** -- the old bundle is wiped *as*
    the new one is installed, with no window where both `P`s are live. This is
    the restore-flow co-activation hazard (gate-6 §10.9 isolation pin) surfacing
    at the actor layer: a rotation that briefly holds two active `P` identities
    is exactly the co-activation §10.9 forbids, so it must be a **single state
-   transition**, not drop-then-derive with a gap.
+   transition**, not drop-then-derive with a gap. *(Load-bearing and unchanged
+   under Model D — rotation switches the active held bundle in one transition.)*
+
+### 10.2 Model D — seed-free actor, bonded-union derive-forward, typed contracts (PR 2c-2a)
+
+PR 2c-2a wires the inert actor into the lifecycle. The design round rejected the
+"where do we stash the root so it's around at rotation time" trilemma (eager /
+re-fetch / held) by dropping its shared premise — *that rotation re-acquires the
+seed at all*. The `KeyEngine` already shows the pattern: the seed is transiently
+on the stack during `assemble()`, derives `AllKeysBlob` there, and drops. Model D
+applies the same shape to staking.
+
+**The model.** At `assemble()`, for a staker-flagged wallet, derive the
+**derive-forward set** —
+`{personas with live bonds, from persisted state} ∪ {p_slot ..= p_slot + k}` —
+hold those `ArchivalPKeys` bundles (same `ZeroizeOnDrop` / `!Clone` / `mlock`
+class as `AllKeysBlob`, **not** the root), and **drop the seed as today**.
+Rotation switches the active bundle and wipes only retired personas **with no
+live bond**; it never touches the root. Non-stakers derive and hold nothing.
+Lookahead exhaustion, first-stake mid-session, and post-panic recovery all
+collapse onto **reopen**, which re-runs `assemble()` with the transient seed — no
+re-auth machinery, so this ships in 2c-2 (smoother "re-auth without reopen" is a
+later rule-21 polish, not a prerequisite). `k` defaults to **2** (current + one
+rotation covers nearly every session), bounds `[0, 8]`; `k = 0` degenerates to
+reopen-to-rotate, still root-free.
+
+**Why the bonded *union*, not a clean lookahead window (load-bearing — bricks
+unbonding otherwise).** The archival model rotates *while bonded*: you rotate to
+a fresh persona for unlinkability and the retired persona's bonds sit on-chain as
+dormant consensus balances (not co-activation — no simultaneous wire activity —
+so the firewall permits it). Unbonding a retired persona later needs that
+persona's `bond_spend` key. Under the discarded Model E the seed was held so any
+slot was re-derivable on demand; under Model D the seed is gone after
+`assemble()`, so a persona absent from the pre-derived set is **unreachable for
+the rest of the wallet's life**. A retired-but-bonded persona under a bare
+`{p_slot ..= p_slot + k}` window is exactly that — Model D as first converged
+would brick unbonding for every persona you have rotated past. The fix keeps D
+intact: the held set is the **bonded union plus the lookahead**. The live-bonded
+set is knowable (the wallet tracks its own outstanding bonds per persona),
+bounded by the staker's own behavior (unbond to shrink it), and each bundle is
+the same derived class. Rotation-wipe is therefore "wipe retired personas with no
+live bond", not a clean shrinking window.
+
+**Persist-before-use is a typestate, not a discipline (typed contract #1; the
+cross-split seam).** `p_slot` and the per-persona bond record must persist
+**before the persona key signs the bond at build time** — not merely before the
+bond posts on-chain (see the CT-5d finding below). A crash in that window,
+combined with the bonded-union rule, could otherwise drop a bonded persona from
+the derived set entirely and make it unreachable. The invariant is lifted into
+the types: `Engine::persist_bond_record(..) -> PersistedBondTicket` is the *only*
+producer of a `PersistedBondTicket`, and 2c-2b's `sign_bond(ticket:
+PersistedBondTicket, ..)` consumes it — so sign-before-persist is *uncallable*,
+there is no ticket to pass. The ticket is `!Clone` and consumed by value; minting
+it goes through `save_state` → `atomic_write_file` (`tmp → fsync → rename →
+fsync(parent)`), so the ticket witnesses a **durable, crash-atomic** commit. This
+is the contract across the split: 2c-2a *produces* the type, 2c-2b *consumes* it,
+so the cross-PR ordering is a type the second PR cannot violate, not a convention
+to remember. Persist-before-use makes the only crash failure a *wasted slot*
+(cursor ahead of chain — benign, slots are free), never a *lost* one.
+
+**`PersonaHandle` is minted only for held personas, and is operation-scoped
+(typed contract #2; collapses `PersonaUnreachable`).** Activation takes a
+`PersonaHandle` minted only for a persona actually in the held set, not a raw
+`PSlot` validated per use — so "use an unheld persona" has no expressible form
+and the can't-happen guard collapses to the single slot→handle minting boundary.
+`LookaheadExhausted` is kept as a **real** domain error (budget consumed →
+reopen), not a can't-happen. The handle is **operation-scoped**: rotation wipes
+retired *ephemeral* (unbonded) personas, so a handle to one held by a caller
+across that rotation would sign against zeroized memory; handles are therefore
+minted and consumed within one StakeEngine operation, `!Clone`, and an actor
+**generation** counter advances on any activation that changes the active slot,
+so a stale handle presented after a rotation is rejected (`StaleHandle`). Bonded
+personas are never wiped while bonded, so the hazard is the ephemeral case, but
+that is the security-relevant one.
+
+**Wipe-only-no-live-bond is partly structural (typed contract #4).** The held
+set distinguishes a `Bonded` bundle from an `Ephemeral` one (`HeldPersona`), and
+the rotation-wipe path consumes only the `Ephemeral` variant by value
+(`wipe_ephemeral`), so "wipe a persona with a live bond" is uncallable — the
+bonded-union invariant enforced by the type of what wipe can touch, not by a
+remembered check.
+
+**Store decision — a new sealed `StakingBlock` in `WalletLedger` (Option C).**
+Staker metadata persists as a new `StakingBlock` inside `WalletLedger`
+(`shekyl-engine-state`, the region-2 *state* file) — **not** in `SettingsBlock` /
+`WalletMetadata` (region-2 *metadata*, the wallet2/FFI surface, **not loaded by
+the Rust engine's `assemble()`**) and **not** in `WalletPrefs` (advisory tier; a
+tamper-reset silently drops funds-load-bearing state). The bonded-set is the
+wallet's reconciled view of its own chain state — the same *kind* of state as the
+output/balance set in `BookkeepingBlock`, reconciled the same way (scan →
+reconcile → rewrite), so the ledger is its semantically correct home;
+`p_slot`/`staking_enabled` are config-shaped but funds-load-bearing, so they want
+the sealed tier regardless. `WalletLedger` is AEAD-sealed and written via
+`atomic_write_file`, satisfying the ticket's "committed before sign" guarantee by
+construction. A new `STAKING_BLOCK_VERSION` keeps staking entirely inside the
+Rust domain — no `SETTINGS_BLOCK_VERSION` bump perturbing a C++-read schema for
+state the C++ path has no use for.
+
+**Two freeze-time semantics the store choice forces (both pinned at the
+format freeze):**
+
+1. **`bonded_slots` is a reconcilable *hint*, not a source of truth.** Because
+   persist-before-use admits phantom records (a crash between commit and sign
+   leaves "slot *i* bonded" with no actual bond), the bonded-union rule would
+   otherwise derive a phantom slot forever. `bonded_slots` is a flat `Vec<u32>`
+   with documented "hint, reconciled against bond state" semantics; the 2d
+   scan-reconcile (scan posted + `consumer_held`, drop slots with no real bond,
+   rewrite the block) GCs phantoms **without a second `STAKING_BLOCK_VERSION`
+   bump**. No aggregator invariant treats `bonded_slots` as truth — that would
+   contradict the hint semantics. The reconcile is 2d-era (it needs the personas
+   derived first to scan them — a chicken-and-egg that forces it post-derive).
+
+2. **`p_slot` is a scan-reconciled monotone cursor, not a trusted value — a
+   *privacy* property.** Region-2 sealing gives confidentiality + integrity but
+   not necessarily *anti-rollback* (a sealed blob can be replaced with an older
+   validly-sealed one). A stale or rolled-back `p_slot` would re-activate a slot
+   already rotated past, and re-using a retired persona **links its activities** —
+   the exact unlinkability rotation exists to break. Fix:
+   `current_slot = max(persisted p_slot, highest_bonded_slot_seen + 1)` after the
+   scan, so current can never sit at or below a slot with on-chain activity. This
+   makes Option C robust **without** depending on a region-2 anti-rollback
+   property we cannot easily prove — the scan heals a reverted cursor.
+   `StakingBlock::monotone_current_slot` is the pure, unit-tested helper for the
+   `max` (full scan input arrives in 2d; 2c-2a feeds it the persisted/bonded-set
+   evidence available at open).
+
+**CT-5d re-anchor finding (verified at source — sets how early the bonded-union
+rule bites).** The bond's persona signature covers
+`ArchivalBondPostVin::signature_preimage(tx_prefix_hash)`: it binds the
+`tx_prefix_hash`, canonical id, holdings, and cleartext terms — **not** the
+FCMP++ membership proof or the curve-tree root (those live in the RCT/prunable
+section, outside the prefix). A *content-preserving* reprove (same inputs ⇒ same
+output locks ⇒ `tx_prefix_hash` unchanged) leaves the persona signature valid.
+But CT-5d §4 (F-A) is explicit that a reprove *routinely moves `(fee, change)`* —
+depth-growth shrinks the change output, a moved fee snapshot does the same — and
+the change-output amount lives in the vout, so the prefix changes and the persona
+re-signs. **Persona re-sign is therefore the common case, not the rare deep
+reselect**: any fee/change drift over the standoff delay triggers it, and on a
+600-block window that is most of the time. So a *pending-broadcast* bond needs its
+building persona's key for essentially the whole standoff delay, and the
+bonded-set rule spans the **`consumer_held` (built, pending broadcast) window
+plus posted-and-still-bonded**, not posted-only. 2c-2 lands no submission, so this
+does not execute yet; it is pinned now so the schema and derive-forward set are
+correct when broadcast/re-anchor wiring lands in 2d.
+
+**Perf — the derivation cost relocates, it does not vanish.** The actor loses its
+in-handler `spawn_blocking`, but `assemble()` now inherits `|union|` PQ keygens
+on *every* flagged-staker open (vs. the old actor's first-stake-only keygen) —
+strictly more frequent — so it runs off the open hot path (`spawn_blocking`,
+parallel, staker-only). This is the perf side of the zero-root-exposure trade
+(privacy/security over performance, the correct priority direction).
 
 **Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
 parallel request type isolates *construction*; the residual gap is the network

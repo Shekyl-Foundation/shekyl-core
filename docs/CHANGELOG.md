@@ -4,6 +4,59 @@
 
 ### Added
 
+- **wallet: archival StakeEngine lifecycle wiring (Model D) -- inert (PR 2c-2a)
+  (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2,
+  `feat/archival-stake-wiring`).** Wires the inert 2b StakeEngine into the engine
+  lifecycle under **Model D**, which eliminates session-long master-seed
+  retention: the actor no longer owns the seed. At `assemble()`, a staker-flagged
+  wallet derives the **derive-forward set** — `{personas with live bonds} ∪
+  {p_slot ..= p_slot + k}` (`k = 2`, bounds `[0, 8]`) — off the open hot path
+  (`spawn_blocking`, parallel, staker-only), hands the pre-derived `ArchivalPKeys`
+  bundles to the actor, and **drops the borrowed seed** (`&[u8; 64]`) at function
+  end, exactly as for `AllKeysBlob`. Non-stakers derive and hold nothing
+  (`Engine.stake == None`). Lookahead exhaustion / first-stake mid-session /
+  post-panic recovery all resolve via **reopen** — no re-auth or KEK machinery.
+  - **New sealed `StakingBlock` in `WalletLedger`** (`shekyl-engine-state`,
+    region-2 state file; `STAKING_BLOCK_VERSION = 1`, `WALLET_LEDGER_FORMAT_VERSION`
+    bumped, schema snapshot + CI pairing added). Carries `staking_enabled`, the
+    `p_slot` cursor, and `bonded_slots` (the per-persona live-bond record). Chosen
+    over `SettingsBlock` (C++/FFI surface, not loaded by `assemble()`) and
+    `WalletPrefs` (advisory tier — a tamper-reset would silently drop
+    funds-load-bearing state); the ledger is the semantically correct home for
+    chain-reconciled bond bookkeeping and gives AEAD sealing + `atomic_write_file`
+    (`tmp → fsync → rename → fsync(parent)`) crash-atomic durability.
+  - **`bonded_slots` is a reconcilable hint, not truth** (flat `Vec<u32>`,
+    documented semantics) so the 2d scan-reconcile GCs phantom records (from a
+    persist-before-sign crash) without a second version bump.
+  - **`p_slot` is a scan-reconciled monotone cursor** —
+    `current = max(persisted p_slot, highest_bonded_slot_seen + 1)`
+    (`StakingBlock::monotone_current_slot`) — a *privacy* property: it can never
+    re-activate a retired persona (which would link its activities), and it heals
+    a rolled-back cursor without depending on a region-2 anti-rollback property.
+  - **`PersistedBondTicket` persist-before-use typestate** (the cross-split seam):
+    `Engine::persist_bond_record(..) -> PersistedBondTicket` is the sole producer;
+    the ticket is `!Clone`, consumed by value, and minted only after a durable
+    `save_state`, so 2c-2b's `sign_bond(ticket, ..)` makes sign-before-persist
+    uncallable.
+  - **Operation-scoped `PersonaHandle`** minted only for held personas (collapses
+    the can't-happen `PersonaUnreachable` to one slot→handle boundary; keeps
+    `LookaheadExhausted` as a real domain error), `!Clone`, with an actor
+    `generation` counter that rejects a stale handle after rotation
+    (`StaleHandle`) — closing the use-after-wipe on a wiped ephemeral persona.
+  - **`HeldPersona` Bonded/Ephemeral** with a `wipe_ephemeral` path that consumes
+    only the `Ephemeral` variant, so "wipe a persona with a live bond" is
+    uncallable — the bonded-union invariant (retired-but-bonded personas stay
+    resident so unbonding remains reachable) enforced by type.
+  Drops the actor's `StakeMasterSeed` root, in-handler `spawn_blocking`, and
+  in-actor derivation error path. Landed **inert**: wired, derived, spawned, and
+  test-exercised (12 `stake_engine` + 2 `stake_persist` tests, incl. durable
+  persist+reopen and staker-reopen-over-bonded-union-lookahead), with **no
+  JoinMarket request path** (that, the typed timing seams, the live RNG check,
+  and the milestone KAT land in PR 2c-2b; broadcast/re-anchor + Arti transport in
+  PR 2d). The CT-5d re-anchor finding (persona signature binds `tx_prefix_hash`,
+  not the proof) is pinned now so the schema and derive-forward set are correct
+  when 2d wires submission. See `FOLLOWUPS.md` "StakeEngine Model D wiring" for
+  the deferred-work reopens.
 - **crypto/economics: archival bond-post construction PR 2c-1 -- real-tree
   composition KAT (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §3,
   `feat/archival-bond-realtree-kat`).** PR 2a closed the bond round-trip over a

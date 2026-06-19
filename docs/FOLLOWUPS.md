@@ -832,11 +832,28 @@ sustainability is unaffected by the recalibration.
   **construct→prove half over genuine branch layers is proved**; the FCMP++
   **verify-accept half is the one piece gated on CT-5** (see the dedicated
   "real-tree FCMP++ verify" item below) and rides as an `#[ignore]`d sibling
-  KAT. **PR 2c-2** the parallel JoinMarket bond
-  request + funding selection + the two timing seams (economic >=1 SEB / ramp vs.
-  network `draw_entry_gap(600)`, never cross-applied; entry seam only, exit seam
-  deferred to the unbond slice) + fail-stop `certify_draw` self-cert + the
-  `StakeEngine` `Engine` wiring, with broadcast structurally gated on 2d. PR 2a's
+  KAT.   **PR 2c-2** was itself **split into 2c-2a / 2c-2b** for review isolation of the
+  persisted formats (not size): **PR 2c-2a (landed inert,
+  `feat/archival-stake-wiring`)** the security-critical genesis-adjacent
+  foundation under **Model D** — the `StakeEngine` no longer owns the seed; at
+  `assemble()` a staker-flagged wallet derives the **derive-forward set**
+  (`{personas with live bonds} ∪ {p_slot ..= p_slot + k}`, `k = 2`), hands the
+  pre-derived `ArchivalPKeys` bundles to the actor, and drops the borrowed seed —
+  with a new sealed **`StakingBlock` in `WalletLedger`**
+  (`STAKING_BLOCK_VERSION = 1`; `WALLET_LEDGER_FORMAT_VERSION` bumped) carrying
+  `staking_enabled`, the scan-reconciled-monotone `p_slot` cursor, and the
+  `bonded_slots` reconcilable hint; the **`PersistedBondTicket` persist-before-use
+  typestate** (the cross-split seam, produced here, consumed by 2c-2b's
+  `sign_bond`); the operation-scoped `PersonaHandle` (minted only for held
+  personas, generation-validated); and `HeldPersona` Bonded/Ephemeral with
+  wipe-only-ephemeral. Inert — wired, derived, spawned, test-exercised, no
+  JoinMarket request path. **PR 2c-2b (branches off dev after 2c-2a)** the
+  parallel JoinMarket bond request + funding selection + the two timing seams as
+  two types (`NetworkGap(BlockSpan)` `draw_entry_gap(600)` vs.
+  `EconomicSpacing(SebSpan)` >=1 SEB / ramp, cross-apply = compile error; entry
+  seam only, exit seam deferred to the unbond slice) + the float-free live
+  degeneracy check (fail-loud) + gated `certify_draw` self-cert + the milestone
+  KAT, with broadcast structurally gated on 2d. PR 2a's
   KAT is the *synthetic-tree* composition milestone (the A4-retained `local_keys`
   signing-KAT surface of `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT's
   prove half is unblocked by CT-5c, but its **verify half is gated on CT-5
@@ -855,6 +872,41 @@ sustainability is unaffected by the recalibration.
   they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate construction is
   **provisional** until their verify side lands (reopening trigger: the paired
   verify+construct PR for each kind).
+
+- **StakeEngine Model D wiring — deferred work + rule-21 reopens (PR 2c-2a,
+  landed inert 2026-06-18).** The 2c-2a freeze (`STAKING_BLOCK_VERSION = 1`,
+  `WALLET_LEDGER_FORMAT_VERSION` bump) is a **pre-genesis recreate, no migration
+  code** (rules 15/60) — the `StakingBlock` format is frozen at genesis, so the
+  items below must land before V3.0 launch or be explicitly correctable without a
+  second bump. Substrate-anchored reopens (rule 21):
+  - **2d full-scan reconciliation of `bonded_slots` / `p_slot`.** `bonded_slots`
+    is a derive-time *hint*, not truth: persist-before-use admits phantom records
+    (crash between commit and sign). 2d scans posted + `consumer_held`, drops
+    slots with no real bond, and feeds `monotone_current_slot` the real
+    `highest_bonded_slot_seen`. The flat `Vec<u32>` + documented hint semantics
+    are deliberately chosen so this GC needs **no second `STAKING_BLOCK_VERSION`
+    bump**. **Reopen when** persona scanning lands (the reconcile needs personas
+    derived first — chicken-and-egg forces it post-derive, hence 2d not 2c-2).
+    **Target: V3.0** (must land before genesis freezes the absence of GC).
+  - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
+    finding (persona signature binds `tx_prefix_hash`, not the proof, so a
+    content-changing re-anchor re-signs the persona — the *common* path over a
+    600-block window) is pinned in the schema and derive-forward set now, but does
+    not execute until 2d wires submission + re-anchor. **Reopen when** the 2d
+    broadcast/re-anchor path lands; verify the bonded-set spans `consumer_held`
+    plus posted, not posted-only. **Target: V3.0.**
+  - **Arbitrary / policy-driven slot rotation.** Model D's derive-forward set and
+    `monotone_current_slot` assume **sequential** rotation (`p_slot' = p_slot + 1`,
+    per `ARCHIVAL_FIREWALL_GATE6.md` §9.2). **Reopen if** rotation ever becomes
+    policy-driven to arbitrary slots — the derive-ahead set must then widen to
+    cover the reachable slots. No such design is known. **Target: V3.x.**
+  - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
+    mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with
+    the transient seed) — correct and root-free, but a one-time UX friction. A
+    smoother re-derive-without-reopen is purely *additive* (remove the reopen
+    friction), not a different corner of the seed-lifetime trilemma. **Reopen
+    when** the friction is measured as worth the re-auth machinery. **Target:
+    V3.x.**
 
 - **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
   balance surface introduced in PR 1 carries the inherited "RCT" name
