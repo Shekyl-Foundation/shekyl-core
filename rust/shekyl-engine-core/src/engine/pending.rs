@@ -653,10 +653,13 @@ pub(crate) fn build_pending_tx_in_state(
         snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
-        // Legacy free-function helper has no curve-tree anchor; CT-5d
-        // re-anchor is exercised through `LocalPendingTx`, not here.
+        // Legacy free-function helper (no curve tree); CT-5d re-anchor is
+        // exercised through `LocalPendingTx`. Report the canonical anchor height
+        // (`tip − REF_ANCHOR_AGE`) the production path would compute, so this
+        // diagnostics field stays a real height consistent with its doc rather
+        // than a `0` that reads as a genesis-height anchor.
         content_gen: 0,
-        reference_height: 0,
+        reference_height: shekyl_curve_tree::select_reference_height(synced).unwrap_or(0),
     };
 
     reservations.insert(id, reservation);

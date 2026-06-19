@@ -1404,7 +1404,12 @@ where
         let mut last_resync: Option<ReanchorError> = None;
         for _attempt in 0..REANCHOR_MAX_RETRIES {
             // --- lock₀ (sync): snapshot the entry's rebuild context ---
-            let (request, selected_indices, old_fingerprint, old_content_gen) = {
+            // Only the rebuild *inputs* are snapshotted here. The consent baseline
+            // (the entry's current fingerprint / content_gen) is deliberately NOT
+            // captured at lock₀: a concurrent re-anchor can advance it while the
+            // prover runs, so it is re-read authoritatively at lock₂ (§4 F-G) to
+            // keep content_gen monotonic.
+            let (request, selected_indices) = {
                 let state = self.state.lock().map_err(|_| {
                     ReanchorError::Failed(SendError::CannotSign {
                         reason: "pending-tx state lock poisoned",
@@ -1423,12 +1428,7 @@ where
                     .filter_map(|(o, owner)| (*owner == id).then_some(*o))
                     .collect();
                 selected.sort_unstable();
-                (
-                    held.request.clone(),
-                    selected,
-                    held.fingerprint.clone(),
-                    held.content_gen,
-                )
+                (held.request.clone(), selected)
             };
 
             let summary: Vec<TxRecipientSummary> = request
@@ -1575,7 +1575,12 @@ where
                 .assemble_tx(reference, assemble_inputs.clone())
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
-            if paths.first().is_some_and(|p| p.tree.tree_depth != depth) {
+            // Check *every* path's depth, not just the first: all paths share the
+            // one reference's tree so they should agree, but verifying all closes
+            // the gap if that invariant ever breaks (the per-input branch-layer
+            // count is authoritatively re-checked downstream in tx-builder's
+            // `validate_inputs`; this is the fee-sizing pre-check).
+            if paths.iter().any(|p| p.tree.tree_depth != depth) {
                 // The tree moved under the reference between the depth read and
                 // the assemble — re-stale; retry the whole loop.
                 last_resync = Some(ReanchorError::ReferenceResyncing {
@@ -1646,19 +1651,24 @@ where
             self.refresh_current_snapshot(&mut state);
             let snapshot_id = state.current_snapshot;
 
-            // `content_gen` advances iff the realized content changed — against
-            // the entry's *materialized* fingerprint, never `seen_gen` (§4 F-G).
-            let content_changed = new_fingerprint != old_fingerprint;
-            let content_gen = if content_changed {
-                old_content_gen.saturating_add(1)
-            } else {
-                old_content_gen
-            };
-
             let entry = state
                 .consumer_held
                 .get_mut(&id)
                 .expect("consumer_held membership re-checked above");
+
+            // `content_gen` advances iff the realized content changed — measured
+            // against the entry's CURRENT materialized fingerprint and generation,
+            // read here under lock₂, never `seen_gen` and never the lock₀ snapshot
+            // (§4 F-G). Reading the committed state at commit keeps the
+            // advancement monotonic when a concurrent re-anchor advanced the entry
+            // while this attempt's prover ran.
+            let content_changed = new_fingerprint != entry.fingerprint;
+            let content_gen = if content_changed {
+                entry.content_gen.saturating_add(1)
+            } else {
+                entry.content_gen
+            };
+
             entry.tx_bytes = tx_bytes;
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
@@ -1750,12 +1760,17 @@ where
             // already flipped it to `in_flight` (the re-anchor itself never does).
             // Preserve the P2 contract uniformly: a flipped entry is
             // `SubmitAlreadyPending`, a vanished one is discarded / never-existed.
-            let Some(held) = state.consumer_held.get(&id).cloned() else {
-                return Err(if state.in_flight.contains_key(&id) {
-                    SubmitError::SubmitAlreadyPending { reservation_id: id }
-                } else {
-                    SubmitError::ReservationNotFound { reservation_id: id }
-                });
+            // Peek `content_gen` only (a `Copy`, no entry clone); the entry is
+            // moved out below iff the consent gate passes.
+            let content_gen = match state.consumer_held.get(&id) {
+                Some(held) => held.content_gen,
+                None => {
+                    return Err(if state.in_flight.contains_key(&id) {
+                        SubmitError::SubmitAlreadyPending { reservation_id: id }
+                    } else {
+                        SubmitError::ReservationNotFound { reservation_id: id }
+                    });
+                }
             };
 
             // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
@@ -1763,26 +1778,33 @@ where
             // re-anchor (this submit's, or a prior one the consumer has not
             // re-confirmed) advanced the realized content — withhold and return
             // the advanced generation. Makes broadcasting unauthorized content
-            // unrepresentable.
-            if seen_gen != held.content_gen {
+            // unrepresentable. The entry stays `consumer_held` (not moved).
+            if seen_gen != content_gen {
                 return Err(SubmitError::ContentChanged {
                     reservation_id: id,
-                    content_gen: held.content_gen,
+                    content_gen,
                 });
             }
 
-            // Flip consumer_held → in_flight atomically under the lock, then send
-            // lock-free: the proof is "committed as of" the flip (F-H).
-            let created_at = held.created_at;
+            // Consent satisfied. Move the entry out of `consumer_held` (no deep
+            // clone of `tx_bytes`) and flip it to `in_flight` atomically under the
+            // lock, then send lock-free — "committed as of" the flip (F-H). The
+            // lock is held continuously since the peek above (no await), so the
+            // entry is still present. Only the one `tx_bytes` copy `in_flight`
+            // retains (for ambiguous-resolution hash/retry) is cloned; the
+            // original moves on to the send.
+            let held = state
+                .consumer_held
+                .remove(&id)
+                .expect("consumer_held membership established above, lock held throughout");
             let tx_bytes = held.tx_bytes;
-            state.consumer_held.remove(&id);
             let submitted_at = Instant::now();
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
                     tx_bytes: tx_bytes.clone(),
                     snapshot_id: held.snapshot_id,
-                    created_at,
+                    created_at: held.created_at,
                     submitted_at,
                 },
             );
@@ -2127,11 +2149,10 @@ where
         // Both are read at the one reference height, so a divergence means the
         // tree moved under the reference — refuse rather than sign a proof whose
         // weight the fee did not cover. Holds as a tautology under a valid
-        // reference; never fires benignly.
-        if paths
-            .first()
-            .is_some_and(|p| p.tree.tree_depth != tree_depth)
-        {
+        // reference; never fires benignly. Check *every* path (all share the one
+        // reference's tree, so they should agree — verifying all closes the gap
+        // if that invariant ever breaks).
+        if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::CannotSign {
