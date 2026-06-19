@@ -1744,11 +1744,18 @@ where
                 .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
             self.refresh_current_snapshot(&mut state);
 
-            // A concurrent discard could have removed the entry during the
-            // re-anchor (re-anchor never moves it to in_flight, so absence here
-            // means discarded).
+            // The entry can leave `consumer_held` between the pre-flight read and
+            // here: the lock is released across the (possible) re-anchor, and the
+            // engine is `&self` + `Mutex` — a *concurrent* `submit(id)` may have
+            // already flipped it to `in_flight` (the re-anchor itself never does).
+            // Preserve the P2 contract uniformly: a flipped entry is
+            // `SubmitAlreadyPending`, a vanished one is discarded / never-existed.
             let Some(held) = state.consumer_held.get(&id).cloned() else {
-                return Err(SubmitError::ReservationNotFound { reservation_id: id });
+                return Err(if state.in_flight.contains_key(&id) {
+                    SubmitError::SubmitAlreadyPending { reservation_id: id }
+                } else {
+                    SubmitError::ReservationNotFound { reservation_id: id }
+                });
             };
 
             // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
