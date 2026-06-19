@@ -669,9 +669,15 @@ correct when broadcast/re-anchor wiring lands in 2d.
 **Perf — the derivation cost relocates, it does not vanish.** The actor loses its
 in-handler `spawn_blocking`, but `assemble()` now inherits `|union|` PQ keygens
 on *every* flagged-staker open (vs. the old actor's first-stake-only keygen) —
-strictly more frequent — so it runs off the open hot path (`spawn_blocking`,
-parallel, staker-only). This is the perf side of the zero-root-exposure trade
-(privacy/security over performance, the correct priority direction).
+strictly more frequent. As implemented in 2c-2a the keygens run **synchronously
+and sequentially** inside the sync `create` / `open_full` call (staker-only).
+That whole call is the blocking unit async callers already wrap in
+`spawn_blocking` (see the lifecycle module docs), so the keygens are off the
+*async* hot path at that granularity without `assemble()` itself spawning
+anything. Intra-call parallelism across the (small, `k`-bounded) `union` is a
+documented perf follow-up (`docs/FOLLOWUPS.md`), not a correctness concern. This
+is the perf side of the zero-root-exposure trade (privacy/security over
+performance, the correct priority direction).
 
 **Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
 parallel request type isolates *construction*; the residual gap is the network

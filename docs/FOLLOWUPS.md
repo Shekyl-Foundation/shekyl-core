@@ -907,6 +907,15 @@ sustainability is unaffected by the recalibration.
     friction), not a different corner of the seed-lifetime trilemma. **Reopen
     when** the friction is measured as worth the re-auth machinery. **Target:
     V3.x.**
+  - **Intra-call parallel persona derivation (perf).** 2c-2a derives the
+    derive-forward `union` **synchronously and sequentially** inside the sync
+    `create` / `open_full` call (`Engine::spawn_stake_engine_if_staker`). That
+    call is the blocking unit async callers already wrap in `spawn_blocking`, so
+    the keygens are off the *async* hot path, but a staker with a large bonded
+    `union` pays `|union|` PQ keygens serially at open. Deriving the (small,
+    `k`-bounded) set in parallel is a wall-clock optimization with no correctness
+    or security bearing. **Reopen if** open latency for high-`union` stakers is
+    measured as user-visible. **Target: V3.x.**
 
 - **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
   balance surface introduced in PR 1 carries the inherited "RCT" name

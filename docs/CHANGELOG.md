@@ -10,10 +10,14 @@
   lifecycle under **Model D**, which eliminates session-long master-seed
   retention: the actor no longer owns the seed. At `assemble()`, a staker-flagged
   wallet derives the **derive-forward set** — `{personas with live bonds} ∪
-  {p_slot ..= p_slot + k}` (`k = 2`, bounds `[0, 8]`) — off the open hot path
-  (`spawn_blocking`, parallel, staker-only), hands the pre-derived `ArchivalPKeys`
-  bundles to the actor, and **drops the borrowed seed** (`&[u8; 64]`) at function
-  end, exactly as for `AllKeysBlob`. Non-stakers derive and hold nothing
+  {p_slot ..= p_slot + k}` (`k = 2`, bounds `[0, 8]`) — synchronously inside the
+  sync open/create call (staker-only; one PQ keygen per slot), hands the
+  pre-derived `ArchivalPKeys` bundles to the actor, and **drops the borrowed
+  seed** (`&[u8; 64]`) at function end, exactly as for `AllKeysBlob`. The whole
+  `create` / `open_full` call is the blocking unit async callers already wrap in
+  `spawn_blocking`, so the keygens are off the async hot path at that
+  granularity; intra-call parallelism across the (small, `k`-bounded) set is a
+  documented perf follow-up, not done here. Non-stakers derive and hold nothing
   (`Engine.stake == None`). Lookahead exhaustion / first-stake mid-session /
   post-panic recovery all resolve via **reopen** — no re-auth or KEK machinery.
   - **New sealed `StakingBlock` in `WalletLedger`** (`shekyl-engine-state`,

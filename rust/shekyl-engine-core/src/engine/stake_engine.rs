@@ -92,7 +92,7 @@
 //!
 //! [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 //! [`ArchivalPKeys`]: shekyl_crypto_pq::archival_p::ArchivalPKeys
-//! [`PersistedBondTicket`]: PersistedBondTicket
+//! [`PersistedBondTicket`]: super::stake_persist::PersistedBondTicket
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
