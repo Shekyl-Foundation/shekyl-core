@@ -1102,13 +1102,18 @@ pub enum SubmitError {
         content_gen: u64,
     },
 
-    /// CT-5d (§3b): the proof needs re-anchoring but the curve tree cannot yet
-    /// anchor a fresh reference — it is still resyncing (e.g. post-reorg) or lags
-    /// the chain tip too far to anchor a submittable reference. Transient; the
-    /// reservation is preserved. Retry once the tree catches up.
-    #[error("reservation {reservation_id:?} cannot re-anchor yet; tree resyncing, retry later")]
+    /// CT-5d (§3 / §3b): the proof needs re-anchoring but the re-anchor could not
+    /// complete right now. Either the curve tree cannot yet anchor a fresh
+    /// reference — still resyncing (e.g. post-reorg) or lagging the chain tip too
+    /// far to anchor a submittable reference (§3b) — or a transient build/sign
+    /// step failed (fee-snapshot fetch, signer, or an internal re-anchor error).
+    /// In all cases the reservation is preserved (`consumer_held`); the consumer
+    /// retries (or discards).
+    #[error(
+        "reservation {reservation_id:?} cannot re-anchor right now; reservation preserved, retry later"
+    )]
     ReanchorUnavailable {
-        /// The reservation awaiting a fresh, anchorable reference.
+        /// The reservation whose re-anchor could not complete; preserved.
         reservation_id: ReservationId,
     },
 

@@ -139,6 +139,33 @@ impl ContentFingerprint {
             change: change.to_raw(),
         }
     }
+
+    /// Single-sourced fingerprint construction from the realized build amounts,
+    /// with **checked** arithmetic (`change = total_covered − Σrecipients − fee`).
+    ///
+    /// The fingerprint gates consent (§4 F-G), so a balance that does not add up
+    /// — `total_covered < Σrecipients + fee`, only reachable under corrupt state
+    /// since `build` validates funding first — must fail loud rather than
+    /// saturate to a wrong `change` that could mask a content change and skip a
+    /// `content_gen` bump. Used by both the fresh-build commit and the re-anchor
+    /// so the two derive the fingerprint identically.
+    fn from_build(
+        fee: AtomicUnits,
+        recipients: &[TxRecipientSummary],
+        total_covered: AtomicUnits,
+    ) -> Result<Self, SendError> {
+        let paid = AtomicUnits::checked_sum(recipients.iter().map(|r| r.amount_atomic_units))
+            .ok_or(SendError::CannotSign {
+                reason: "recipient amount sum overflowed computing the content fingerprint",
+            })?;
+        let change = paid
+            .checked_add(fee)
+            .and_then(|spent| total_covered.checked_sub(spent))
+            .ok_or(SendError::CannotSign {
+                reason: "balance does not cover recipients + fee computing the content fingerprint",
+            })?;
+        Ok(Self::from_parts(fee, recipients, change))
+    }
 }
 
 /// Per-reservation metadata while the rid lives in `consumer_held`.
@@ -1310,21 +1337,12 @@ where
             .collect();
 
         // CT-5d: the realized content fingerprint `content_gen` advances against
-        // (§4 F-G). `change = total_covered − Σrecipients − fee`; the balance was
-        // already validated in `build_select_sync`, so the saturating arithmetic
-        // here only guards a corrupted-state underflow (never expected).
-        let paid: u64 = summary
-            .iter()
-            .map(|r| r.amount_atomic_units.to_raw())
-            .fold(0u64, u64::saturating_add);
-        let change = AtomicUnits::from_raw(
-            meta.selected
-                .total_covered
-                .to_raw()
-                .saturating_sub(paid)
-                .saturating_sub(meta.fee.to_raw()),
-        );
-        let fingerprint = ContentFingerprint::from_parts(meta.fee, &summary, change);
+        // (§4 F-G). Built with checked arithmetic — the balance was validated in
+        // `build_select_sync`, so a failure here is corrupt state and must fail
+        // the build rather than feed a wrong value into a consent decision.
+        let fingerprint =
+            ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
+                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         state.consumer_held.insert(
             id,
@@ -1561,12 +1579,6 @@ where
                         "fresh-depth fee exceeds the selected inputs' coverage; discard and rebuild",
                 });
             }
-            let change = AtomicUnits::from_raw(
-                total_covered
-                    .to_raw()
-                    .saturating_sub(total_amount.to_raw())
-                    .saturating_sub(fee.to_raw()),
-            );
             let fee_directive =
                 build_fee_directive(&rate, selected_indices.len(), payment_count, depth);
 
@@ -1611,7 +1623,10 @@ where
                     ReanchorError::Failed(map_signer_error(&signer_err))
                 })?;
             let tx_bytes = signed.tx_bytes().to_vec();
-            let new_fingerprint = ContentFingerprint::from_parts(fee, &summary, change);
+            // Checked + single-sourced with the fresh-build path (§4 F-G); the
+            // fee-coverage check above guarantees this succeeds here.
+            let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
+                .map_err(ReanchorError::Failed)?;
 
             // --- lock₂ (sync): authoritative re-validation + commit the swap ---
             let mut state = self.state.lock().map_err(|_| {
@@ -1663,8 +1678,18 @@ where
             // advancement monotonic when a concurrent re-anchor advanced the entry
             // while this attempt's prover ran.
             let content_changed = new_fingerprint != entry.fingerprint;
+            // `checked_add`, not saturating: `content_gen` is the consent counter,
+            // so a saturated value would silently stop advancing and defeat the
+            // must-re-confirm invariant. Overflow is unreachable in practice (a
+            // u64 of content-changing re-anchors), but fail clean if it ever
+            // occurs — the entry is left untouched (still the prior proof).
             let content_gen = if content_changed {
-                entry.content_gen.saturating_add(1)
+                entry
+                    .content_gen
+                    .checked_add(1)
+                    .ok_or(ReanchorError::Failed(SendError::CannotSign {
+                        reason: "content_gen overflow on re-anchor (consent counter exhausted)",
+                    }))?
             } else {
                 entry.content_gen
             };
@@ -1692,12 +1717,16 @@ where
     }
 
     async fn submit_async(&self, id: ReservationId, seen_gen: u64) -> Result<TxHash, SubmitError> {
-        // --- pre-flight (sync): membership + reference-staleness decision (CT-5d
-        // §5). The reference is the staleness authority — it *replaces* the
+        // --- pre-flight: membership under the state lock, staleness outside it
+        // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
         // invalidates a still-canonical proof; only an aged-out or reorg-orphaned
-        // reference triggers a re-anchor. All sync ledger reads (F-J).
-        let stale = {
+        // reference triggers a re-anchor. Only the membership classification and
+        // the `ReferenceBlock` copy need the pending-tx lock; the staleness reads
+        // hit the ledger (a different lock) and are re-validated authoritatively at
+        // the re-anchor's lock₂ regardless, so the state lock is dropped before
+        // touching the ledger (F5: no nested lock, less contention).
+        let reference = {
             let mut state = self
                 .state
                 .lock()
@@ -1721,14 +1750,17 @@ where
                 (true, false) => {}
             }
 
-            let reference = state
+            state
                 .consumer_held
                 .get(&id)
                 .expect("consumer_held membership established above")
-                .reference;
-            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-            should_reanchor(current_tip, reference.height.0) || self.reference_orphaned(&reference)
+                .reference
         };
+
+        // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
+        let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+        let stale =
+            should_reanchor(current_tip, reference.height.0) || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {

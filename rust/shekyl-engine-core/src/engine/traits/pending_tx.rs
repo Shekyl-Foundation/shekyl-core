@@ -224,10 +224,11 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// consumer last reviewed on the [`PendingTx`] handle — must match the
     /// reservation's current `content_gen`. A re-anchor that changes the realized
     /// `(fee, recipients, change)` advances `content_gen` and returns
-    /// [`SubmitError::ContentChanged`] **without broadcasting**; the reservation
-    /// stays `consumer_held` (no auto-release, lazy R5) with a fresh proof, and
-    /// the consumer re-reads and resubmits with the advanced `content_gen`. A
-    /// reference that cannot anchor yet returns [`SubmitError::ReanchorUnavailable`];
+    /// [`SubmitError::ContentChanged`] (carrying the advanced generation)
+    /// **without broadcasting**; the reservation stays `consumer_held` (no
+    /// auto-release, lazy R5) with the fresh proof, and the consumer resubmits
+    /// with the advanced `content_gen` to broadcast. A reference that cannot
+    /// anchor yet returns [`SubmitError::ReanchorUnavailable`];
     /// one needing reselection (deep reorg / fee escalation) returns
     /// [`SubmitError::ReselectionRequired`]. R8 TTL handles abandonment.
     ///

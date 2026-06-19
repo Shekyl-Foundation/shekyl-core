@@ -388,11 +388,18 @@ pub struct PendingTx {
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
     /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): consumer-visible content
-    /// generation. A fresh build is `0`; a submit-time re-anchor that changes
-    /// the realized `(fee, recipients, change)` bumps it and **withholds
-    /// broadcast**, returning a new handle with the advanced value. The consumer
-    /// passes the value it last reviewed back as `submit(id, seen_gen)`; a
-    /// mismatch means the authorized content changed and must be re-confirmed.
+    /// generation. A fresh build is `0`; a submit-time re-anchor that changes the
+    /// realized `(fee, recipients, change)` advances it and **withholds
+    /// broadcast** — `submit` returns [`SubmitError::ContentChanged`] carrying the
+    /// advanced generation, and the reservation stays `consumer_held` with the
+    /// fresh proof (it is *not* auto-released and no new handle is returned). The
+    /// consumer resubmits with the advanced `content_gen` as `submit(id, seen_gen)`
+    /// to broadcast; a `seen_gen` that does not match the current generation means
+    /// the authorized content changed since the consumer last reviewed it and must
+    /// be re-confirmed first. (Reviewing the re-anchored `(fee, change)` before
+    /// re-confirming needs a pending-tx read accessor — tracked in `FOLLOWUPS.md`.)
+    ///
+    /// [`SubmitError::ContentChanged`]: super::error::SubmitError::ContentChanged
     pub content_gen: u64,
     /// CT-5d: the height of the reference block this proof is anchored to
     /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
