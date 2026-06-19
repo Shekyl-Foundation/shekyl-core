@@ -2803,10 +2803,12 @@ mod tests {
             )
             .await
             .expect("real assemble_path resolves the funding leaf");
-        let path = &paths[0];
+        let path = paths
+            .first()
+            .expect("assemble_tx returns one path per AssembleInput");
         assert_eq!(
             path.tree.tree_depth, ref_depth,
-            "assembled depth matches the reference depth the fee was sized against"
+            "assembled path depth agrees with the depth resolved from the same reference block"
         );
         assert_eq!(
             path.tree.tree_depth, 2,
