@@ -36,7 +36,7 @@
 //! single read-only query that needs indexes ([`Self::staker_pool`])
 //! is exposed here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use shekyl_crypto_pq::key_image::KeyImage;
@@ -82,6 +82,19 @@ pub struct LedgerIndexes {
     /// Per-tier accrual aggregate used to estimate claim rewards.
     /// Rebuilt by replaying the scanned range at open time.
     pub(crate) staker_pool: StakerPoolState,
+    /// Global output indices for which an unstake transaction has been
+    /// broadcast but not yet observed as spent on-chain. Advisory display
+    /// state for the staking UI's "pending unstake" badge.
+    ///
+    /// Deliberately rebuilt **empty** on open: an in-flight unstake is not
+    /// reconstructible from [`LedgerBlock`] (it is an off-chain intent), and
+    /// losing the marker on restart is safe — a confirmed unstake spends the
+    /// output, which drops it from the staking view regardless of this set;
+    /// an unconfirmed one simply shows without the badge until the user
+    /// re-broadcasts or it confirms. This keeps the
+    /// reconstructible-from-replay invariant: the rebuilt value (empty) is a
+    /// valid state, it just carries no persisted off-chain information.
+    pub(crate) pending_unstake: HashSet<u64>,
 }
 
 impl LedgerIndexes {
@@ -93,6 +106,7 @@ impl LedgerIndexes {
             key_images: HashMap::new(),
             pub_keys: HashMap::new(),
             staker_pool: StakerPoolState::new(),
+            pending_unstake: HashSet::new(),
         }
     }
 
@@ -353,6 +367,23 @@ impl LedgerIndexes {
         &self.staker_pool
     }
 
+    /// Mark a staked output's global index as having an in-flight (broadcast
+    /// but unconfirmed) unstake transaction. Idempotent.
+    pub fn mark_pending_unstake(&mut self, global_output_index: u64) {
+        self.pending_unstake.insert(global_output_index);
+    }
+
+    /// Clear the in-flight unstake marker for a staked output, e.g. once the
+    /// spend is observed on-chain. Returns whether a marker was present.
+    pub fn clear_pending_unstake(&mut self, global_output_index: u64) -> bool {
+        self.pending_unstake.remove(&global_output_index)
+    }
+
+    /// Whether a staked output has an in-flight unstake transaction.
+    pub fn is_pending_unstake(&self, global_output_index: u64) -> bool {
+        self.pending_unstake.contains(&global_output_index)
+    }
+
     /// Verify structural invariants of the indexes against the given
     /// [`LedgerBlock`].
     ///
@@ -581,6 +612,30 @@ mod tests {
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(indexes.key_images.get(&ki(0xAA)).copied(), Some(0));
         indexes.check_invariants(&ledger).expect("after ingest");
+    }
+
+    #[test]
+    fn pending_unstake_marker_round_trips() {
+        let mut indexes = LedgerIndexes::empty();
+        assert!(!indexes.is_pending_unstake(500));
+
+        indexes.mark_pending_unstake(500);
+        indexes.mark_pending_unstake(500); // idempotent
+        assert!(indexes.is_pending_unstake(500));
+        assert!(!indexes.is_pending_unstake(501));
+
+        assert!(indexes.clear_pending_unstake(500));
+        assert!(!indexes.clear_pending_unstake(500)); // already gone
+        assert!(!indexes.is_pending_unstake(500));
+    }
+
+    #[test]
+    fn pending_unstake_rebuilds_empty() {
+        // The marker is off-chain intent: a freshly rebuilt index set never
+        // carries it (the reconstructible-from-replay invariant).
+        let ledger = LedgerBlock::empty();
+        let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
+        assert!(!indexes.is_pending_unstake(0));
     }
 
     #[test]

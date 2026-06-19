@@ -415,6 +415,144 @@ pub(crate) mod staking {
         assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(2)).len(), 2);
     }
 
+    // ── stake_views (PR-2 unified staking read shape) ──
+
+    /// Build a ledger with a tier-0 and a tier-2 staked output (created at
+    /// height 1000) plus a non-staked output, and prime a few accrual records
+    /// so reward estimates are non-zero.
+    fn staked_ledger_with_accrual() -> (LedgerBlock, LedgerIndexes) {
+        use shekyl_engine_state::staker_pool::AccrualRecord;
+        let (mut ledger, mut indexes) = fresh_state();
+        let outputs = vec![
+            (
+                make_wallet_output(
+                    [42; 32],
+                    0,
+                    500,
+                    2_000_000_000,
+                    Some(StakingMeta { lock_tier: 0 }),
+                ),
+                2_000_000_000,
+            ),
+            (
+                make_wallet_output(
+                    [42; 32],
+                    1,
+                    501,
+                    3_000_000_000,
+                    Some(StakingMeta { lock_tier: 2 }),
+                ),
+                3_000_000_000,
+            ),
+            // Non-staked output: must be excluded from stake_views.
+            (
+                make_wallet_output([42; 32], 2, 502, 1_000_000_000, None),
+                1_000_000_000,
+            ),
+        ];
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xDD; 32], make_timelocked(outputs));
+
+        // Reward = emission * weight / total_weighted_stake per block, summed.
+        for h in 1001..=1005 {
+            indexes.insert_accrual(
+                h,
+                AccrualRecord {
+                    staker_emission: 1_000,
+                    staker_fee_pool: 0,
+                    total_weighted_stake: 3_000_000_000,
+                },
+            );
+        }
+        (ledger, indexes)
+    }
+
+    #[test]
+    fn stake_views_reports_maturity_and_excludes_non_staked() {
+        let (ledger, indexes) = staked_ledger_with_accrual();
+        // tier-0 matured, tier-2 still locked.
+        let height = 1000 + tier_lock(0) + 5;
+        let views = ledger.stake_views(
+            &indexes,
+            height,
+            |amt, _tier| amt,
+            shekyl_staking::MAX_CLAIM_RANGE,
+        );
+
+        assert_eq!(views.len(), 2, "non-staked output excluded");
+
+        let short = views.iter().find(|v| v.global_output_index == 500).unwrap();
+        assert_eq!(short.tier, 0);
+        assert_eq!(short.amount, AtomicUnits::from_raw(2_000_000_000));
+        assert!(short.matured);
+        assert_eq!(short.blocks_until_mature, 0);
+        // Matured: no remaining projection — yield equals accrued.
+        assert_eq!(short.estimated_yield_to_maturity, short.accrued_claimable);
+        assert!(short.accrued_claimable.to_raw() > 0, "accrual recorded");
+
+        let long = views.iter().find(|v| v.global_output_index == 501).unwrap();
+        assert_eq!(long.tier, 2);
+        assert!(!long.matured);
+        assert_eq!(long.blocks_until_mature, (1000 + tier_lock(2)) - height);
+        // Not matured + non-zero accrual ⇒ projection adds to the estimate.
+        assert!(long.estimated_yield_to_maturity >= long.accrued_claimable);
+        assert!(long.estimated_yield_to_maturity.to_raw() > long.accrued_claimable.to_raw());
+    }
+
+    #[test]
+    fn stake_views_excludes_spent_stakes() {
+        let (mut ledger, indexes) = staked_ledger_with_accrual();
+        let height = 1000 + tier_lock(2) + 1;
+        assert_eq!(
+            ledger
+                .stake_views(&indexes, height, |a, _| a, shekyl_staking::MAX_CLAIM_RANGE)
+                .len(),
+            2
+        );
+
+        // Spend the tier-0 output (unstake confirmed on-chain) — it drops out.
+        let ki = ledger.transfers()[0]
+            .key_image
+            .expect("key image set by process_scanned_outputs");
+        indexes.detect_spends(&mut ledger, height, &[ki]);
+        assert!(ledger.transfers()[0].spent);
+        let views = ledger.stake_views(&indexes, height, |a, _| a, shekyl_staking::MAX_CLAIM_RANGE);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].global_output_index, 501);
+    }
+
+    #[test]
+    fn stake_views_reflects_pending_unstake_marker() {
+        let (ledger, mut indexes) = staked_ledger_with_accrual();
+        let height = 1000 + tier_lock(2) + 1;
+
+        indexes.mark_pending_unstake(501);
+        let views = ledger.stake_views(&indexes, height, |a, _| a, shekyl_staking::MAX_CLAIM_RANGE);
+        assert!(
+            views
+                .iter()
+                .find(|v| v.global_output_index == 501)
+                .unwrap()
+                .pending_unstake
+        );
+        assert!(
+            !views
+                .iter()
+                .find(|v| v.global_output_index == 500)
+                .unwrap()
+                .pending_unstake
+        );
+
+        assert!(indexes.clear_pending_unstake(501));
+        let views = ledger.stake_views(&indexes, height, |a, _| a, shekyl_staking::MAX_CLAIM_RANGE);
+        assert!(
+            !views
+                .iter()
+                .find(|v| v.global_output_index == 501)
+                .unwrap()
+                .pending_unstake
+        );
+    }
+
     // ── Reorg handling ──
 
     #[test]

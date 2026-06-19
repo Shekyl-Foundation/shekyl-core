@@ -53,6 +53,7 @@ pub mod ledger_ext;
 pub mod output;
 pub mod scan;
 pub mod shared_key;
+pub mod stake_view;
 pub mod staker_pool;
 pub mod transfer;
 pub mod view_pair;
@@ -79,6 +80,7 @@ pub use scan::{
     MAX_OUTPUTS,
 };
 pub use shared_key::SharedKeyDerivations;
+pub use stake_view::StakeView;
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 
 // ── Explicit (non-glob) re-exports of types moved to `shekyl-engine-state`. ──

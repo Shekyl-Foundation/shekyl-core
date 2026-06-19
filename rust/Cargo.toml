@@ -118,6 +118,10 @@ members = [
     # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
     "shekyl-randomx-differential",
     "shekyl-shard-visual",
+
+    # Shard data-source abstraction (list + aggregate lookup) consumed by the
+    # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
+    "shekyl-shard-source",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

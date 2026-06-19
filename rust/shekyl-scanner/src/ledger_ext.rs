@@ -229,6 +229,34 @@ pub trait LedgerBlockExt {
     ) -> Vec<(ClaimableInfo, AtomicUnits)>
     where
         F: Fn(u64, u8) -> u64;
+
+    /// Compute a per-output [`StakeView`] for every live staked output.
+    ///
+    /// One record per staked, unspent output — the single read shape the
+    /// staking UI consumes (superseding the separate staked / claimable /
+    /// unstakeable queries). Composes:
+    ///
+    /// - maturity (`blocks_until_mature`, `matured`) from `stake_lock_until`
+    ///   versus `current_height` — pure ledger state, no daemon call;
+    /// - `accrued_claimable` via [`StakerPoolState::estimate_reward_with_splitting`]
+    ///   over the unclaimed range, identical to [`Self::claimable_rewards_summary`];
+    /// - `estimated_yield_to_maturity`, a linear extrapolation of the accrued
+    ///   reward at its trailing average per-block rate across the remaining
+    ///   lock — a display estimate, not a guarantee;
+    /// - `pending_unstake` from [`LedgerIndexes::is_pending_unstake`].
+    ///
+    /// `weight_fn` and `max_claim_range` mirror [`Self::claimable_rewards_summary`].
+    ///
+    /// [`StakerPoolState::estimate_reward_with_splitting`]: shekyl_engine_state::staker_pool::StakerPoolState::estimate_reward_with_splitting
+    fn stake_views<F>(
+        &self,
+        indexes: &LedgerIndexes,
+        current_height: u64,
+        weight_fn: F,
+        max_claim_range: u64,
+    ) -> Vec<crate::stake_view::StakeView>
+    where
+        F: Fn(u64, u8) -> u64;
 }
 
 impl LedgerBlockExt for LedgerBlock {
@@ -265,6 +293,72 @@ impl LedgerBlockExt for LedgerBlock {
             }
         }
         results
+    }
+
+    fn stake_views<F>(
+        &self,
+        indexes: &LedgerIndexes,
+        current_height: u64,
+        weight_fn: F,
+        max_claim_range: u64,
+    ) -> Vec<crate::stake_view::StakeView>
+    where
+        F: Fn(u64, u8) -> u64,
+    {
+        let mut views = Vec::new();
+        for td in self.transfers() {
+            // Live stakes only: an unstaked (spent) output is no longer a
+            // stake and drops out of the view — which is also what makes the
+            // advisory `pending_unstake` marker safe to lose on restart.
+            if !td.staked || td.spent {
+                continue;
+            }
+
+            let weight = weight_fn(td.amount().to_raw(), td.stake_tier);
+            let from_height = if td.last_claimed_height > 0 {
+                td.last_claimed_height
+            } else {
+                td.block_height
+            };
+            let accrued_to = std::cmp::min(current_height, td.stake_lock_until);
+            let (accrued, _chunks) = indexes.staker_pool().estimate_reward_with_splitting(
+                from_height,
+                accrued_to,
+                weight,
+                max_claim_range,
+            );
+
+            let blocks_until_mature = td.stake_lock_until.saturating_sub(current_height);
+            // Linear projection: at the trailing average per-block rate
+            // (accrued / accrued_range), how much would accrue over the
+            // remaining lock. Cross-multiplied in u128 to keep precision and
+            // avoid the divide-first rounding floor; saturates rather than
+            // truncates so the cast lints stay satisfied.
+            let accrued_range = accrued_to.saturating_sub(from_height);
+            let projected_remaining = if accrued_range > 0 {
+                let scaled = u128::from(accrued) * u128::from(blocks_until_mature)
+                    / u128::from(accrued_range);
+                u64::try_from(scaled).unwrap_or(u64::MAX)
+            } else {
+                0
+            };
+            let estimated_yield = accrued.saturating_add(projected_remaining);
+
+            views.push(crate::stake_view::StakeView {
+                tx_hash: td.tx_hash.to_string(),
+                global_output_index: td.global_output_index,
+                amount: td.amount(),
+                tier: td.stake_tier,
+                stake_height: td.block_height,
+                stake_lock_until: td.stake_lock_until,
+                blocks_until_mature,
+                matured: td.is_matured_stake(current_height),
+                pending_unstake: indexes.is_pending_unstake(td.global_output_index),
+                accrued_claimable: AtomicUnits::from_raw(accrued),
+                estimated_yield_to_maturity: AtomicUnits::from_raw(estimated_yield),
+            });
+        }
+        views
     }
 }
 

@@ -4254,6 +4254,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-shard-source"
+version = "3.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "shekyl-shard-visual",
+ "thiserror",
+]
+
+[[package]]
 name = "shekyl-shard-visual"
 version = "3.1.0"
 dependencies = [
