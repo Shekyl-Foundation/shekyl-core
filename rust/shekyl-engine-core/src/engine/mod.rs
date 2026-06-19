@@ -226,11 +226,17 @@ pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;
-/// PR 2b (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10/§10.1): the archival
-/// staking actor that owns `master_seed_64` and the active persona `P`. Landed
-/// inert — exercised by tests only; PR 2c wires it into the open/create
-/// lifecycle with its first consumer (the JoinMarket bond request).
+/// PR 2b/2c-2a (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2): the
+/// archival staking actor that owns the pre-derived archival personas `P` (the
+/// Model D derive-forward set), not the seed. Landed inert — exercised by tests
+/// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
+/// into the lifecycle.
 pub(crate) mod stake_engine;
+/// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
+/// `PersistedBondTicket` persist-before-use typestate and its sole producer
+/// `Engine::persist_bond_record`. Inert until 2c-2b's `sign_bond` consumes the
+/// ticket; produced here so the cross-split contract is an unforgeable type.
+pub(crate) mod stake_persist;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
 /// Retained `#[cfg(test)]` for the two non-daemon test surfaces that genuinely
@@ -301,6 +307,7 @@ use shekyl_engine_state::WalletLedger;
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::key_actor::{HandleDerivationViewSecret, KeyEngineHandle};
 use crate::engine::local_ledger::LedgerState;
+use crate::engine::stake_engine::StakeEngineHandle;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
@@ -626,6 +633,28 @@ pub struct Engine<
     #[allow(dead_code)]
     pub(crate) economics: E,
 
+    /// Handle to the wallet's [`StakeEngine`](super::stake_engine::StakeEngine),
+    /// the archival-staking actor that holds the Model-D pre-derived persona
+    /// bundles (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2). `Some` only for a wallet
+    /// that has staked (`StakingBlock::staking_enabled`); `None` for the
+    /// overwhelming majority of wallets, which derive and hold no personas.
+    ///
+    /// Spawned in [`assemble`](Self::assemble) over the derive-forward set —
+    /// `{persisted bonded slots} ∪ {p_slot ..= p_slot + lookahead}` — derived
+    /// there while the master seed is transiently borrowed, so the seed never
+    /// reaches the actor and is dropped at the caller exactly as in the
+    /// non-staker path. The actor's `Drop` (last handle clone) stops it and
+    /// wipes the held bundles (`ZeroizeOnDrop`), mirroring `key`.
+    //
+    // `#[allow(dead_code)]`: held but not yet *read* on any production path —
+    // the consumer (the JoinMarket bond request that mints a `PersonaHandle`
+    // and consumes a `PersistedBondTicket`) lands in 2c-2b. Its load-bearing
+    // role here is ownership: spawning the actor at open for stakers and
+    // wiping the bundles at close. The allow is reopened for deletion when
+    // 2c-2b's read sites land, per `21-reversion-clause-discipline.mdc`.
+    #[allow(dead_code)]
+    pub(crate) stake: Option<StakeEngineHandle>,
+
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
@@ -697,6 +726,7 @@ impl<
             .field("refresh", &"<redacted: RefreshEngine>")
             .field("refresh_kind", &std::any::type_name::<R>())
             .field("economics_kind", &std::any::type_name::<E>())
+            .field("staking", &self.stake.is_some())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
     }
@@ -932,6 +962,7 @@ impl<
             refresh_slot,
             refresh: _old,
             economics,
+            stake,
             _signer,
         } = self;
         Engine {
@@ -950,6 +981,7 @@ impl<
             refresh_slot,
             refresh: std::sync::Arc::new(refresh),
             economics,
+            stake,
             _signer,
         }
     }
@@ -983,6 +1015,7 @@ impl<
             refresh_slot,
             refresh,
             economics,
+            stake,
             _signer,
         } = self;
         Engine {
@@ -1001,6 +1034,7 @@ impl<
             refresh_slot,
             refresh,
             economics,
+            stake,
             _signer,
         }
     }
