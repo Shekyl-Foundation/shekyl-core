@@ -276,16 +276,3 @@ absence.
 Everything else — coexistence models, FFI getters, version contracts, region-2 readers — was
 scaffolding for a building that was already demolished. The region-2 work is a sweep, not a
 build.
-
----
-
-## 6. Open items requiring your input
-
-1. **Sequencing:** delete the orphan as its own pre-cutover PR, or fold the deletion into the
-   cutover PR? (Pre-cutover keeps `git bisect` clean and isolates the ~1,300-line removal from
-   the C++ purge; folding in is fewer PRs. Branching discipline + "while we're here is the enemy"
-   both argue for a standalone delete commit.)
-2. **Background-sync (F-6 caveat):** is it in V3.0 scope? If yes, `custom_background_key` needs a
-   sealed-home spec before the module delete removes the placeholder; if no, it dies clean.
-3. **WALLET_PREFS / rule 42 amendment (F-1):** do you want the tier-4 amendment drafted as a
-   docs PR now, or held until the cutover lands so the model is described against the final tree?
