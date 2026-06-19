@@ -6,13 +6,10 @@
 //! Errors produced when (de)serializing the postcard-encoded ledger blocks
 //! that live on the `.wallet` side of the two-file wallet envelope.
 //!
-//! This is the `.wallet`-side counterpart of
-//! [`shekyl_crypto_pq::wallet_state::WalletStateError`], which covers the
-//! JSON-encoded metadata bundle on the `.wallet.keys` side. The two error
-//! types are deliberately distinct: their wire formats, their version
-//! domains (`CURRENT_METADATA_FORMAT_VERSION` vs. the ledger's own bundle
-//! version arriving in commit 2g), and their failure modes (JSON-decode
-//! vs. postcard-decode) do not overlap.
+//! These errors are intentionally narrow: postcard-decode failures plus
+//! version and length mismatches for the typed blocks in this crate. Per the
+//! rule-81 "no silent migration" stance they refuse rather than migrate on any
+//! version drift.
 
 /// Errors produced by [`LedgerBlock`](crate::ledger_block::LedgerBlock) and
 /// the other `.wallet`-side typed blocks in this crate.

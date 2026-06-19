@@ -66,7 +66,6 @@ pub mod output;
 pub mod output_claim;
 pub mod signature;
 pub mod wallet_envelope;
-pub mod wallet_state;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;

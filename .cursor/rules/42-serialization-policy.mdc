@@ -7,10 +7,10 @@ globs:
 
 # Serialization policy
 
-Persisted blocks in Rust — today the five inside
+Persisted blocks in Rust — today the six inside
 `rust/shekyl-engine-state/` (`WalletLedger`, `LedgerBlock`,
-`BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`), and any future
-block type that lands on disk — carry an explicit **version constant**
+`BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `StakingBlock`), and any
+future block type that lands on disk — carry an explicit **version constant**
 whose sole job is to let a binary reject a file whose wire format it
 cannot read. Changing the wire format without bumping the constant is
 a silent data-corruption hazard: an older binary can accept a newer
@@ -23,6 +23,28 @@ The mid-rewire hardening pass (commit 4, see
 check via `postcard-schema` snapshots. This rule is the prose
 counterpart: a reviewer looking at a PR diff can check it by eye, and
 the CI enforces it on every landing.
+
+## Funds-first tier placement
+
+Before this rule's version-pairing even applies, you have to know a field
+belongs in a persisted (tier-4) block at all. New wallet-tunable state is
+placed by a **funds-first** decision order — the funds question is asked
+*first*, before "is it user-tunable?":
+
+1. **Does resetting this field to its default lose or endanger funds?** →
+   **Tier 4: a sealed `shekyl-engine-state` block** — which this rule governs
+   (strict version, snapshot-pinned, refuse-to-load). Stop here.
+2. Network-fixed with no legitimate per-wallet variance? → Tier 1
+   (`NetworkSafetyConstants`), plus a CLI-ephemeral override for sessions.
+3. User-tunable and *not* funds-threatening? → Tier 3 (advisory
+   `<base>.prefs.toml`).
+
+Tiers 1–3 are specified in [`docs/WALLET_PREFS.md`](../../docs/WALLET_PREFS.md)
+§2. The trap this order exists to prevent: a user-chosen, persistent,
+funds-load-bearing field (`staking_enabled`, `p_slot`, the bonded set)
+reflexively filed into advisory TOML, where a tamper-quarantine default-resets
+it and endangers funds. Such fields are tier 4 — which is exactly why
+`StakingBlock` carries a version constant in the table below.
 
 ## The pairing
 
