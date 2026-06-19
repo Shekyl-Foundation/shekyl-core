@@ -133,8 +133,7 @@ pub const SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION: u32 = 23;
 /// Preferences-layer failure. Covers every
 /// [`shekyl_engine_prefs::PrefsError`] variant surfaced through the
 /// wallet-file layer when the engine loads or persists [`shekyl_engine_prefs::WalletPrefs`]
-/// (e.g. an internal HMAC-length invariant violation or a JSON
-/// serialization failure).
+/// (e.g. a TOML (de)serialization, schema-version, HMAC, or I/O failure).
 ///
 /// Tamper-on-load events do **not** surface via this code: per
 /// `docs/WALLET_PREFS.md §5` the prefs system is advisory, so a

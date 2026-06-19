@@ -28,8 +28,9 @@
 //! `.cursor/rules/42-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
 //! defined here use `postcard` for on-disk storage. The earlier JSON metadata bundle in
 //! `shekyl-crypto-pq` (identity + settings) was a superseded first draft and has been
-//! deleted; identity now lives in the `.wallet.keys` region-1 AAD and settings in the
-//! tier-3 `shekyl-engine-prefs` TOML.
+//! deleted; identity is carried in the encrypted `.wallet.keys` envelope, and user
+//! settings follow the layered model in `docs/WALLET_PREFS.md` (hardcoded constants,
+//! advisory TOML, and tier-4 sealed ledger state).
 
 pub mod bookkeeping_block;
 pub mod error;

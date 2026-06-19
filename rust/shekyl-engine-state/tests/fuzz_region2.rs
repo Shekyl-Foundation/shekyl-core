@@ -16,7 +16,7 @@
 //!
 //! Panic-freedom is the load-bearing property. The orchestrator calls
 //! this function against bytes that have been authenticated by the
-//! envelope AEAD but that must, by rule-81, still be treated as
+//! envelope AEAD but that must, by rule 42 (no silent migration), still be treated as
 //! potentially malformed — a future binary running against an older
 //! (or a tampered-but-correctly-tagged) file must refuse via a typed
 //! error, never abort the process. A panic here would turn a

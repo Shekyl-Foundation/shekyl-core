@@ -8,8 +8,8 @@
 //!
 //! These errors are intentionally narrow: postcard-decode failures plus
 //! version and length mismatches for the typed blocks in this crate. Per the
-//! rule-81 "no silent migration" stance they refuse rather than migrate on any
-//! version drift.
+//! "no silent migration" stance pinned by rule 42 (serialization-policy) they
+//! refuse rather than migrate on any version drift.
 
 /// Errors produced by [`LedgerBlock`](crate::ledger_block::LedgerBlock) and
 /// the other `.wallet`-side typed blocks in this crate.
@@ -30,8 +30,8 @@ pub enum WalletLedgerError {
 
     /// A block's own `block_version` does not match the version this binary
     /// knows how to read for that block. Each block evolves independently;
-    /// a mismatch on any block aborts the whole load per the rule-81 "no
-    /// silent migration" stance.
+    /// a mismatch on any block aborts the whole load per the "no silent
+    /// migration" stance pinned by rule 42 (serialization-policy).
     #[error(
         "unsupported {block} block version: file = {file}, binary = {binary}; \
          no migration path exists in this binary"

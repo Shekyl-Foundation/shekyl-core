@@ -171,7 +171,7 @@ would lose or endanger funds.
 - **Integrity & evolution:** strict per-block version constants, snapshot-pinned
   and CI-enforced by
   [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc); a
-  version mismatch refuses rather than migrates (rule-81 "no silent migration").
+  version mismatch refuses rather than migrates — its "no silent migration" stance.
 - **Why not TOML:** filing funds-load-bearing state into advisory TOML means a
   tamper event quarantines it and loads a default — e.g. `staking_enabled = false`,
   which bricks unbonding. That is the exact funds-loss this tier exists to prevent.
