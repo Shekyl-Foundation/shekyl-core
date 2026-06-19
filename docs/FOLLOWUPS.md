@@ -286,6 +286,29 @@ sustainability is unaffected by the recalibration.
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
 
+- **Real-tree FCMP++ verify (`shekyl_fcmp::proof::verify` over a real
+  multi-layer `assemble_path`) — gated on CT-5 (surfaced PR 2c-1, 2026-06-18).**
+  Target: V3.0, with the CT-5 series. No workspace test verifies an FCMP++
+  membership proof built over a *real multi-layer* assembled path: 2a
+  (`local_keys`) and the FFI `signing_round_trip` both verify a depth-1
+  **synthetic** single-leaf Selene root, and the real-tree transfer KATs
+  (`local_pending_tx::build_then_submit_marks_outputs_spent`,
+  `real_root_membership_proof_builds_and_submits`) only **build and submit** —
+  they never call `verify` locally. PR 2c-1's
+  `join_market_bond_post_fcmp_verify_over_real_tree` is the first to try and
+  currently returns `Err(BatchVerificationFailed)`, despite (a) the prover
+  succeeding over the same path and (b) `assemble_kat` proving the assembled
+  branches re-hash bottom-up to the consensus root. That isolates the gap to the
+  upstream `Fcmp::prove`/`verify` ↔ consensus `hash_grow` consistency over real
+  branch layers — a CT-5 surface, not the bond construction (the construct→prove
+  half, BP+, the RCT balance, and vin/signature accept+reject are all proved by
+  the active 2c-1 KAT). The verify-accept assertion lives as an `#[ignore]`d
+  sibling so it does not fake a pass. **Reopening trigger:** CT-5 lands a
+  real-tree prove→verify roundtrip (any test that `verify`-accepts a proof over
+  a multi-layer `assemble_path`); then drop the `#[ignore]` on
+  `join_market_bond_post_fcmp_verify_over_real_tree`, which closes 2c-1's
+  real-tree milestone.
+
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future
   PR that adds an output class to the curve tree. CT-5c resolves owned outputs
@@ -790,26 +813,36 @@ sustainability is unaffected by the recalibration.
   *real* FCMP++ prover (`sign_transaction_with_terms`, `bond_credit` as the sole
   output-side cleartext term) and checks the prover-emitted commitments against
   the verify side, plus accept/reject negatives (wrong `bond_credit`, tampered
-  commitment, tampered preimage, replay); **PR 2b (in progress,
+  commitment, tampered preimage, replay); **PR 2b (landed #157,
   `feat/archival-stake-engine`)** the `StakeEngine` kameo actor
   (`shekyl-engine-core::engine::stake_engine`): lazy per-`P` `ArchivalPKeys`
   (`!Clone`/`ZeroizeOnDrop`), `spawn_blocking` derivation, atomic slot rotation,
   re-derive-on-restart, fail-stop `StakeActorUnavailable` diagnostic; typed
   domain values (`PSlot`, `StakeMasterSeed`, `PersonaIdentity` carrying only the
   public `HybridPublicKey`); landed inert (tests only, no `Engine` wiring until
-  2c); **PR 2c** the parallel JoinMarket bond
+  2c). **PR 2c was split into 2c-1 / 2c-2** when CT-5c made the real
+  `assemble_path` available earlier than planned: **PR 2c-1 (in progress,
+  `feat/archival-bond-realtree-kat`)** the real-tree composition KAT --
+  `local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`
+  drives the bond's cleartext `credit_term` through
+  `sign_transaction_with_terms` over a *real* depth-2 `assemble_path` tree (the
+  `funded_ledger_and_tree` fixture, the same path
+  `build_then_submit_marks_outputs_spent` drives), asserting BP+, the RCT
+  balance over prover-emitted commitments, and vin/signature accept+reject. The
+  **construct→prove half over genuine branch layers is proved**; the FCMP++
+  **verify-accept half is the one piece gated on CT-5** (see the dedicated
+  "real-tree FCMP++ verify" item below) and rides as an `#[ignore]`d sibling
+  KAT. **PR 2c-2** the parallel JoinMarket bond
   request + funding selection + the two timing seams (economic >=1 SEB / ramp vs.
   network `draw_entry_gap(600)`, never cross-applied; entry seam only, exit seam
-  deferred to the unbond slice) + fail-stop `certify_draw` self-cert, with
-  broadcast structurally gated on 2d. **2c's closing milestone is the real-tree
-  bond round-trip** -- the bond's cleartext `credit_term` threaded through the
-  engine signer (today `sign_bridge.rs` calls the zero-terms `sign_transaction`)
-  and driven over a real `assemble_path` tree, mirroring
-  `local_pending_tx::build_then_submit_marks_outputs_spent` /
-  `funded_ledger_and_tree`. PR 2a's KAT is the *synthetic-tree* composition
-  milestone (the A4-retained `local_keys` signing-KAT surface of
-  `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT is gated on 2c's
-  term-threading, not on CT-5 (`assemble_path` is real as of CT-5c). **PR 2d** the `arti-client`
+  deferred to the unbond slice) + fail-stop `certify_draw` self-cert + the
+  `StakeEngine` `Engine` wiring, with broadcast structurally gated on 2d. PR 2a's
+  KAT is the *synthetic-tree* composition milestone (the A4-retained `local_keys`
+  signing-KAT surface of `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT's
+  prove half is unblocked by CT-5c, but its **verify half is gated on CT-5
+  closing the FCMP++ prove↔verify roundtrip over real multi-layer branch
+  layers** (the prior "not on CT-5" note was correct only for the prove side).
+  **PR 2d** the `arti-client`
   security-critical pre-flight (guard isolation verified at source, `cargo audit`,
   Guix repro, `AUDIT_SCOPE.md`) + the `P`-isolated outbound `DaemonEngine`,
   outbound-only (inbound onion-service HS deferred to the announce-wire item).

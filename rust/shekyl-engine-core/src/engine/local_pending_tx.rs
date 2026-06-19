@@ -2517,6 +2517,474 @@ mod tests {
         assert!(spent);
     }
 
+    /// PR 2c-1 — the real-tree closing milestone for archival bond-post
+    /// construction (`ARCHIVAL_BOND_CONSTRUCTION.md` §3; `FOLLOWUPS.md`).
+    ///
+    /// PR 2a (`local_keys::join_market_bond_post_signs_and_verifies_through_prover`)
+    /// proved the construct → prove → verify composition over a **synthetic**
+    /// single-leaf-chunk tree. This test re-runs the same composition over a
+    /// **real** curve tree: the funding output is a drained leaf of the
+    /// consistent `funded_ledger_and_tree` fixture, and its membership path is
+    /// assembled by the production `CurveTreeClient::assemble_path` (CT-5c) — the
+    /// same path the real-tree transfer KAT
+    /// (`build_then_submit_marks_outputs_spent`) drives. The bond's `bond_credit`
+    /// rides as the single-sourced output-side cleartext term through
+    /// `tx_builder::sign_transaction_with_terms`, the credit-term threading the
+    /// 2a docstring deferred to this milestone.
+    ///
+    /// # Why drive the prover directly, not the engine `build`
+    ///
+    /// Per `ARCHIVAL_BOND_CONSTRUCTION.md` Q3, a bond post does **not** go
+    /// through the transfer signer (`TxRequest` / `sign_tx`); the StakeEngine
+    /// constructs it on a parallel path. That production sign path lands with its
+    /// StakeEngine caller in PR 2c-2 — adding an inert credit-term entry point to
+    /// the transfer bridge here would be dead code on a path bonds never take
+    /// (rules 15/21). This KAT assembles the real path from the fixture's tree
+    /// and calls `sign_transaction_with_terms` directly, exactly as 2c-2's
+    /// StakeEngine path will, proving the cryptographic composition over a real
+    /// root independent of the orchestration wiring.
+    ///
+    /// # What is real here that was synthetic in 2a
+    ///
+    /// The tree root, the depth, and the `c1`/`c2` branch layers come from the
+    /// real `assemble_path` over a depth-2 fixture (two drained leaves), so the
+    /// FCMP++ membership proof traverses genuine branch chunks rather than a
+    /// single synthetic leaf chunk. Everything else (the prover, BP+, FCMP++
+    /// verify, the two retention verify entrypoints, the cofactor recovery for
+    /// the RCT balance) is identical to 2a.
+    ///
+    /// # Commitment encoding
+    ///
+    /// `SignedProofs.pseudo_outs` are the prime-order FCMP++ `C_tilde` points;
+    /// `SignedProofs.commitments` are `8*C` (the subgroup-safety cofactor
+    /// `sign.rs` applies on the wire). The RCT balance equation is defined over
+    /// prime-order `C`, so the test recovers `C = (8*C) * 8^{-1}` before the
+    /// balance check (see 2a's docstring for the full rationale).
+    ///
+    /// # Accept *and* reject
+    ///
+    /// Mirrors 2a: the verify side must reject a wrong `bond_credit`, a tampered
+    /// commitment, a signature that does not cover the post preimage, and a
+    /// replayed post. A round-trip that only asserts "valid accepts" can pass
+    /// against a verify that accepts everything.
+    #[tokio::test]
+    async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
+        use rand_core::OsRng;
+        use shekyl_archival_retention::{
+            verify_bond_post_rct_balance, verify_join_market_bond_post, BondPostError,
+            BondRctBalanceError,
+        };
+        use shekyl_bulletproofs::Bulletproof;
+        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+        use shekyl_io::CompressedPoint;
+        use shekyl_primitives::Commitment;
+
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use curve25519_dalek::scalar::Scalar;
+
+        // Shared real-tree setup: assemble the real depth-2 membership path and
+        // sign the bond post (`bond_credit` as the sole cleartext term). The
+        // construct→prove half over genuine branch layers happens here.
+        let RealTreeBondProofs {
+            signed,
+            outputs,
+            built,
+            p_keys,
+            fee,
+            floor,
+            signable_tx_hash,
+            ..
+        } = real_tree_bond_post_proofs().await;
+
+        // ── Verify 1/4: vin semantics, record does not yet exist ─────────
+        verify_join_market_bond_post(built.vin(), false)
+            .expect("verify accepts a fresh JoinMarket post");
+
+        // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
+        let preimage = built.vin().signature_preimage(&signable_tx_hash);
+        assert!(
+            HybridEd25519MlDsa
+                .verify(p_keys.hybrid_bond_id(), &preimage, built.signature())
+                .expect("verify hybrid signature"),
+            "JoinMarket signature must verify under P_pubkey"
+        );
+
+        // ── Verify 3/4: BP+ over the un-cofactored change commitment ─────
+        let bp_commitments: Vec<CompressedPoint> = outputs
+            .iter()
+            .map(|out| {
+                let mask = Scalar::from_canonical_bytes(out.commitment_mask)
+                    .expect("commitment_mask canonical");
+                let c = Commitment::new(mask, out.amount.to_raw());
+                CompressedPoint::from(c.calculate().compress().to_bytes())
+            })
+            .collect();
+        let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
+            .expect("bulletproof_plus deserializes");
+        let mut rng = OsRng;
+        assert!(
+            bp.verify(&mut rng, &bp_commitments),
+            "BP+ verifier must accept the bond-post range proof"
+        );
+
+        // ── Verify 4/4 (FCMP++ membership over the REAL root) is deferred ─
+        // The construct→prove half already ran in the shared setup:
+        // `sign_transaction_with_terms` assembled and proved over genuine
+        // depth-2 branch layers from the production `CurveTreeClient`. The
+        // verify half — `shekyl_fcmp::proof::verify` *accepting* a proof over a
+        // real multi-layer assembled path — is the `#[ignore]`d sibling
+        // `join_market_bond_post_fcmp_verify_over_real_tree`, gated on the CT-5
+        // series closing the upstream FCMP++ prove↔verify roundtrip over real
+        // branch layers (no workspace test verifies a real multi-layer path
+        // today; see FOLLOWUPS.md "real-tree FCMP++ verify").
+
+        // ── RCT balance over PROVER-emitted commitments (recover prime-order) ─
+        let inv8 = Scalar::from(8u64).invert();
+        let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
+        let out_masks_flat: Vec<u8> = signed
+            .commitments
+            .iter()
+            .flat_map(|c| {
+                let cofactored = CompressedEdwardsY::from_slice(c)
+                    .expect("commitment is 32 bytes")
+                    .decompress()
+                    .expect("emitted commitment is on-curve");
+                (cofactored * inv8).compress().to_bytes()
+            })
+            .collect();
+        verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
+            .expect("bond-post RCT balance closes over the real-tree prover output");
+
+        // ── Reject 1: a wrong bond_credit must not balance ───────────────
+        assert_eq!(
+            verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            Err(BondRctBalanceError::SumMismatch),
+            "a bond_credit other than the funded floor must break the balance"
+        );
+
+        // ── Reject 2: a tampered output commitment is rejected ───────────
+        let mut tampered = out_masks_flat.clone();
+        tampered[0] ^= 0x01;
+        assert!(
+            verify_bond_post_rct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            "a tampered commitment must not satisfy the balance"
+        );
+
+        // ── Reject 3: a signature that does not cover the post is rejected ─
+        let mut wrong_preimage = preimage;
+        wrong_preimage[0] ^= 0x01;
+        assert!(
+            !HybridEd25519MlDsa
+                .verify(p_keys.hybrid_bond_id(), &wrong_preimage, built.signature())
+                .expect("verify against tampered preimage"),
+            "the bond signature must not verify against a tampered preimage"
+        );
+
+        // ── Reject 4: a replayed post (record already exists) is rejected ─
+        assert_eq!(
+            verify_join_market_bond_post(built.vin(), true),
+            Err(BondPostError::RecordExists),
+            "verify must reject a post whose P_canonical_id already has a record"
+        );
+    }
+
+    /// Single-sourced setup for the PR 2c-1 real-tree bond-post KATs: build a
+    /// consistent ledger+tree (depth 2: two drained leaves), assemble the real
+    /// membership path for the funding leaf via the production
+    /// `CurveTreeClient`, and sign the bond post with `bond_credit` as the sole
+    /// output-side cleartext term. The construct→prove half over genuine branch
+    /// layers happens here; both the active composition KAT and the `#[ignore]`d
+    /// FCMP++-verify KAT consume the result so the intricate setup is not
+    /// duplicated.
+    struct RealTreeBondProofs {
+        signed: shekyl_tx_builder::types::SignedProofs,
+        tree_ctx: shekyl_tx_builder::TreeContext,
+        outputs: Vec<shekyl_tx_builder::types::OutputInfo>,
+        built: shekyl_archival_bond_builder::JoinMarketVin,
+        p_keys: shekyl_crypto_pq::archival_p::ArchivalPKeys,
+        output_key: [u8; 32],
+        h_pqc: [u8; 32],
+        spend_key_x: [u8; 32],
+        fee: u64,
+        floor: u64,
+        signable_tx_hash: [u8; 32],
+    }
+
+    async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
+        use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
+        use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind};
+        use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+        use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+        use shekyl_crypto_pq::output::construct_output;
+        use shekyl_tx_builder::types::OutputInfo;
+        use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
+
+        // ── Bond persona `P` + holdings → bond floor ─────────────────────
+        let p_keys = derive_archival_p_keys(
+            &[0x33u8; MASTER_SEED_BYTES],
+            DerivationNetwork::Mainnet,
+            SeedFormat::Bip39,
+            0,
+        )
+        .expect("derive archival P keys");
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        let floor = bond_floor(&holdings);
+        assert!(
+            floor > 0,
+            "bond floor must be positive for fixture holdings"
+        );
+
+        let fee: u64 = 1_000;
+        // Funding covers the change output, the fee, and the bond credit.
+        let input_amount: u64 = floor + fee + 1_000_000;
+        let signable_tx_hash = [0xC3u8; 32];
+
+        // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
+        // The bond spends gindex 0 (the first leaf); the second leaf makes the
+        // tree depth 2 so the assembled path carries genuine branch layers,
+        // matching the real-tree transfer KAT's fixture shape.
+        let spend_seed = 1u8;
+        let (ledger, _tree_dir, tree) =
+            funded_ledger_and_tree(&[(spend_seed, input_amount), (2, 25_000)], 1, 20).await;
+
+        // ── Reconstruct funding output identity + derive spend bundle ────
+        // Mirrors `funded_ledger_and_tree`'s leaf construction so (`O`, `C`,
+        // `h_pqc`) equal the ingested leaf, and `populate_ledger`'s bundle
+        // derivation so the spend secrets match the on-chain output.
+        let blob = test_account_blob();
+        let output_index = u64::from(spend_seed);
+        let constructed = construct_output(
+            &TEST_OUTPUT_TX_KEY,
+            &blob.x25519_pk,
+            &blob.ml_kem_ek,
+            &test_recipient_spend_pk(),
+            input_amount,
+            output_index,
+        )
+        .expect("construct funding output");
+        let ciphertext = HybridCiphertext {
+            x25519: constructed.kem_ciphertext_x25519,
+            ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+        };
+        let local = LocalKeys::from_test_seed(PENDING_TX_TEST_RAW_SEED);
+        let bundle = local
+            .derive_primary_source_secrets_bundle(&ciphertext, output_index)
+            .expect("derive spend secrets for funding output");
+
+        // ── Reference selection — mirror the engine `build` path ─────────
+        let synced = ledger.with_ledger_block(LedgerBlock::height);
+        let rh = select_reference_height(synced).expect("reference height resolves");
+        let (curve_tree_root, ref_depth) = tree
+            .reference_root_and_depth(BlockHeight(rh))
+            .await
+            .expect("reference root+depth");
+        let block_hash = ledger
+            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+            .expect("reference block hash present");
+        let reference = ReferenceBlock {
+            height: BlockHeight(rh),
+            curve_tree_root,
+            block_hash,
+        };
+
+        // ── Assemble the REAL membership path for the funding output ─────
+        let paths = tree
+            .assemble_tx(
+                reference,
+                vec![AssembleInput {
+                    gindex: Gindex(0),
+                    output_key: constructed.output_key,
+                    commitment: constructed.commitment,
+                }],
+            )
+            .await
+            .expect("real assemble_path resolves the funding leaf");
+        let path = &paths[0];
+        assert_eq!(
+            path.tree.tree_depth, ref_depth,
+            "assembled depth matches the reference depth the fee was sized against"
+        );
+        assert_eq!(
+            path.tree.tree_depth, 2,
+            "the two-leaf consistent fixture yields a real depth-2 tree"
+        );
+        assert!(
+            !path.c1_layers.is_empty() || !path.c2_layers.is_empty(),
+            "a real depth-2 path carries genuine branch layers, not a synthetic leaf chunk"
+        );
+
+        // Map curve-tree path → tx-builder signing inputs (mirror types).
+        let leaf_chunk: Vec<LeafEntry> = path
+            .leaf_chunk
+            .iter()
+            .map(|cl| LeafEntry {
+                output_key: cl.output_key,
+                key_image_gen: cl.key_image_gen,
+                commitment: cl.commitment,
+                h_pqc: cl.h_pqc,
+            })
+            .collect();
+        let tree_ctx = TreeContext {
+            reference_block: path.tree.reference_block,
+            tree_root: path.tree.tree_root,
+            tree_depth: path.tree.tree_depth,
+        };
+
+        let inputs = vec![SpendInput {
+            output_key: constructed.output_key,
+            commitment: constructed.commitment,
+            amount: AtomicUnits::from_raw(input_amount),
+            spend_key_x: *bundle.spend_key_x,
+            spend_key_y: *bundle.spend_key_y,
+            commitment_mask: *bundle.commitment_mask,
+            h_pqc: constructed.h_pqc,
+            combined_ss: bundle.combined_ss.to_vec(),
+            output_index,
+            leaf_chunk,
+            c1_layers: path.c1_layers.clone(),
+            c2_layers: path.c2_layers.clone(),
+        }];
+
+        // ── Build the bond vin + the change output ───────────────────────
+        let built = build_join_market_vin(&p_keys, holdings.clone(), &signable_tx_hash)
+            .expect("build JoinMarket vin");
+        assert_eq!(built.vin().bond_credit, floor);
+        assert_eq!(built.vin().bond_debit, 0);
+
+        let change: u64 = input_amount - fee - floor;
+        // Offset the change index so (combined_ss, output_index) never collides
+        // with the input (a collision zeroes the FCMP++ rerandomization scalar).
+        let change_output_index: u64 = output_index + 100;
+        let change_out = construct_output(
+            &TEST_OUTPUT_TX_KEY,
+            &blob.x25519_pk,
+            &blob.ml_kem_ek,
+            &test_recipient_spend_pk(),
+            change,
+            change_output_index,
+        )
+        .expect("construct change output");
+        let outputs = vec![OutputInfo {
+            dest_key: change_out.output_key,
+            amount: AtomicUnits::from_raw(change),
+            commitment_mask: change_out.z,
+            enc_amount: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&change_out.enc_amount);
+                enc[8] = change_out.amount_tag;
+                enc
+            },
+            enc_label: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&change_out.enc_label);
+                enc[8] = change_out.label_tag;
+                enc
+            },
+        }];
+
+        // Amount-level credit-funding rule (§7.3): funding == change + fee + credit.
+        verify_credit_funding(
+            AtomicUnits::from_raw(input_amount),
+            AtomicUnits::from_raw(change),
+            AtomicUnits::from_raw(fee),
+            &built,
+        )
+        .expect("credit funding rule holds before proving");
+
+        // ── Prove over the REAL tree: bond_credit is the sole cleartext term ─
+        let credit_term = built.credit_term();
+        let signed = sign_transaction_with_terms(
+            signable_tx_hash,
+            &inputs,
+            &outputs,
+            AtomicUnits::from_raw(fee),
+            &[],
+            &[credit_term],
+            &tree_ctx,
+        )
+        .expect("sign_transaction_with_terms succeeds over the real tree");
+
+        RealTreeBondProofs {
+            signed,
+            tree_ctx,
+            outputs,
+            built,
+            p_keys,
+            output_key: constructed.output_key,
+            h_pqc: constructed.h_pqc,
+            spend_key_x: *bundle.spend_key_x,
+            fee,
+            floor,
+            signable_tx_hash,
+        }
+    }
+
+    /// PR 2c-1 (deferred half): `shekyl_fcmp::proof::verify` must *accept* a
+    /// membership proof built over a **real multi-layer** assembled path.
+    ///
+    /// `#[ignore]`d, not deleted (rules 15/21): the construct→prove half is
+    /// already covered by the active sibling
+    /// (`join_market_bond_post_signs_and_verifies_over_real_tree`), which proves
+    /// the bond composition over a real depth-2 tree. This is the one assertion
+    /// blocked on the CT-5 series closing the upstream FCMP++ prove↔verify
+    /// roundtrip over genuine branch layers: no workspace test verifies a real
+    /// multi-layer path today (2a and the FFI round-trip both verify a depth-1
+    /// synthetic single-leaf root), and this is the first to try — it currently
+    /// returns `Err(BatchVerificationFailed)`.
+    ///
+    /// Reopening criterion (FOLLOWUPS.md "real-tree FCMP++ verify"): when the
+    /// CT-5 real-tree prove↔verify roundtrip lands, drop `#[ignore]`; this KAT
+    /// then closes 2c-1's real-tree milestone.
+    #[tokio::test]
+    #[ignore = "blocked on CT-5 real-tree FCMP++ prove<->verify roundtrip; see FOLLOWUPS.md"]
+    async fn join_market_bond_post_fcmp_verify_over_real_tree() {
+        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+        use shekyl_fcmp::PqcLeafScalar;
+
+        use curve25519_dalek::scalar::Scalar;
+
+        let RealTreeBondProofs {
+            signed,
+            tree_ctx,
+            output_key,
+            h_pqc,
+            spend_key_x,
+            signable_tx_hash,
+            ..
+        } = real_tree_bond_post_proofs().await;
+
+        // Key image L = x · Hp(O); the FCMP++ verifier checks the SAL proof
+        // binds this exact image (depth-independent — identical to the 2a path).
+        let i_point = shekyl_generators::biased_hash_to_point(output_key);
+        let x_scalar = Scalar::from_canonical_bytes(spend_key_x).expect("spend_key_x canonical");
+        let key_images = vec![KeyImage::from_canonical_bytes(
+            (i_point * x_scalar).compress().to_bytes(),
+        )];
+        let pqc_pk_hashes = vec![PqcLeafScalar(h_pqc)];
+        let proof = ShekylFcmpProof {
+            data: signed.fcmp_proof.clone(),
+            num_inputs: 1,
+            tree_depth: tree_ctx.tree_depth,
+        };
+        let fcmp_result = verify(
+            &proof,
+            &key_images,
+            &signed.pseudo_outs,
+            &pqc_pk_hashes,
+            &tree_ctx.tree_root,
+            tree_ctx.tree_depth,
+            signable_tx_hash,
+        );
+        assert!(
+            matches!(fcmp_result, Ok(true)),
+            "FCMP++ verifier must accept the bond-post proof over the real root: {fcmp_result:?}"
+        );
+    }
+
     #[tokio::test]
     async fn discard_releases_output_locks() {
         let (pending, _ledger, _tree_dir) = funded_pending_tx().await;

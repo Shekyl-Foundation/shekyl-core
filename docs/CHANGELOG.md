@@ -4,6 +4,28 @@
 
 ### Added
 
+- **crypto/economics: archival bond-post construction PR 2c-1 -- real-tree
+  composition KAT (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §3,
+  `feat/archival-bond-realtree-kat`).** PR 2a closed the bond round-trip over a
+  *synthetic* depth-1 tree; PR 2c-1 re-runs the same composition over a **real**
+  curve tree. The new test
+  `join_market_bond_post_signs_and_verifies_over_real_tree` (in
+  `shekyl-engine-core::engine::local_pending_tx::tests`) spends a drained leaf of
+  the consistent `funded_ledger_and_tree` fixture, assembles its membership path
+  via the production `CurveTreeClient::assemble_path` (the same path
+  `build_then_submit_marks_outputs_spent` drives), carries the bond's
+  `bond_credit` through `shekyl-tx-builder::sign_transaction_with_terms` as the
+  sole output-side cleartext term over genuine depth-2 branch layers, and checks
+  BP+, the RCT balance over prover-emitted commitments (with `8*C → C` cofactor
+  recovery), and `verify_join_market_bond_post`/the hybrid signature
+  accept+reject. **Scope honesty:** the construct→prove half over real branch
+  layers is proved here; the FCMP++ *verify-accept* half over a real multi-layer
+  path is the one piece still gated on the CT-5 series closing the upstream
+  `Fcmp::prove`↔`verify` roundtrip (no workspace test verifies a real
+  multi-layer path today; the first attempt returns `BatchVerificationFailed`),
+  so it rides as an `#[ignore]`d sibling
+  (`join_market_bond_post_fcmp_verify_over_real_tree`) rather than a faked pass.
+  See `FOLLOWUPS.md` "real-tree FCMP++ verify" for the reopening trigger.
 - **wallet: archival staking actor (StakeEngine) -- inert (PR 2b)
   (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10/§10.1,
   `feat/archival-stake-engine`).** The gate-6 staking firewall realized as
