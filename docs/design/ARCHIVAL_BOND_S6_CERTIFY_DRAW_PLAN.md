@@ -16,10 +16,11 @@ PR #163 (2c-2b) merges**, because S6 wiring consumes 2c-2b substrate:
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited because this
 touches the gate-6 firewall RNG surface — but **scoped tighter than 2c-2b**: the
 design is already settled in 2c-2b §3.3, so this is a **2-round** effort, not 6).
-**Status:** **DRAFT (review-revised 2026-06-20) — scoping pre-flight open;
-design rounds + impl-time pre-flight pending. Prerequisite #163 **merged**; S6
-branch can be cut off `dev` now. Findings F1–F4 + sequencing/coupling +
-fossil-sweep folded in.**
+**Status:** **IMPLEMENTED (2026-06-20) — Rounds 1 + 2 closed (§2.2), R0-D#
+pre-flight closed. Code on `feat/archival-stake-certify-draw` (off `dev`,
+prerequisite #163 merged); all gates green (engine-core 319 default / 322
+conformance ×3 stable). Awaiting PR review/merge; FOLLOWUPS "S6 deferred" flips
+to landed at merge.**
 
 ---
 
@@ -287,6 +288,61 @@ compile check, not investigation.
 (Two rounds, not six: the *design* — what `certify_draw` is, why session-level,
 the sample size — was settled and measured in 2c-2b §3.3 / R0-D4. S6 is a
 **wiring** decision, not a fresh design.)
+
+### 2.2 Round 1 + Round 2 — CLOSED (2026-06-20)
+
+Implemented on `feat/archival-stake-certify-draw`. The §2.1 shape landed exactly;
+the open DQs resolved as predicted, plus one substantive R0-D# finding.
+
+**Resolved design questions:**
+
+- **DQ1 (feature name):** `conformance` on `shekyl-engine-core` →
+  `shekyl-standoff/conformance`, mirroring the existing standoff lane.
+- **DQ2 (start-error / empty enum):** `StakeEngineStartError` `#[derive(Debug,
+  Clone)]` with the `RngSelfCertFailed(CertifyReport)` variant `#[cfg]`-out by
+  default. **Confirmed:** the default build's *empty* enum compiles warning-free —
+  `on_start` returns `Ok` always, `Err` is unconstructible, zero-cost. The F3
+  "uninhabited-error shim" worry was unnecessary.
+- **DQ3 (loud x86 skip):** **`compile_error!`** chosen — a module-level
+  `#[cfg(all(feature = "conformance", not(target_arch = "x86_64")))] compile_error!`
+  rejects the unsupported combination at build time, so a diagnostic build that
+  can't run the diagnostic fails loudly rather than silently "passing."
+- **DQ4 (sample-size home):** `CERTIFY_SAMPLE_N` in `shekyl-standoff`
+  (`conformance.rs`), re-exported by `stake_timing.rs`; the 6 KAT literals
+  repointed in the same PR. Tolerance can't fork.
+
+**R0-D# pre-flight findings:**
+
+- **`R0-D1` — wall-clock CONFIRMED.** The `on_start` self-cert is exactly
+  `certify_draw(OsRng, 600, CERTIFY_SAMPLE_N)` — measured ~9–15 ms (R0-D4 holds).
+  Negligible at spawn: the spawn already does PQ keygen (~100 ms+), which
+  dominates.
+- **`R0-D2` — `drive_persistence` cannot be reused for the startup bridge.**
+  Its current-thread fallback runs the future on a *fresh* runtime, which would
+  **deadlock** here — the awaited work (the actor's `on_start`) lives on the
+  *ambient* runtime, not inside the future. The bridge uses `block_in_place`
+  directly, which **panics loudly** on a current-thread runtime (the panic-not-
+  deadlock signal the review flagged); production wallet-open is `rt-multi-thread`.
+- **`R0-D3` — self-cert is a real flake source if run every spawn; FIXED.**
+  *The substrate falsified a convenience.* Wiring the self-cert into `on_start`
+  meant **every** stake test's spawn graded the real `OsRng` (~40 grades/suite).
+  The uniformity chi-square's **α=1e-6 false-positive is not "never"** — a full
+  run hit it (observed `chi_square 126.49` vs `crit 126.05` → `uniform_ok: false`),
+  killing the actor and cascading into 1–2 unrelated assertion failures per run
+  (one even propagated through the open path → `OpenError::StakeRngSelfCertFailed`).
+  Fix: the test-only injector is a **`TestSelfCert` enum defaulting to `Skip`**, so
+  unrelated tests don't grade at all; only the two dedicated S6 tests opt into
+  `RealOsRng` / `Degenerate`. Production always grades. A per-args field (not a
+  global) keeps it race-free. **3× consecutive clean conformance runs (322 passed)
+  confirm the fix.** *(Note: `shekyl-standoff`'s `conformance.rs` module doc says
+  "a correct draw never false-fails" — true for the fixed-seed published KAT, but
+  S6 is the first repeated-fresh-sample consumer, so the α=1e-6 tail is reachable;
+  hence the skip-default.)*
+
+**Tests landed:** `run_session_self_cert_rejects_stuck_rng` (the decision);
+`session_self_cert_passes_over_os_rng_at_spawn` (`RealOsRng` pass + actor serves);
+`degenerate_self_cert_fail_stops_spawn` (full fail-stop → `StakeActorUnavailable`).
+CI: an engine-core `--features conformance` x86 lane in `build.yml`.
 
 ---
 
