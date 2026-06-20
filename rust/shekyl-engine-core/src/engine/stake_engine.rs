@@ -111,9 +111,12 @@ use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 use super::stake_timing::DEFAULT_ENTRY_GAP;
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
-// is **x86-only**: its goodness-of-fit is float, which is not bit-identical
-// across architectures. Rather than silently compile the self-cert out on
-// aarch64 (which would let a `--features conformance` diagnostic build report
+// is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
+// matching the `x86_64`-only CI conformance lane and the standoff conformance
+// lane it mirrors): its goodness-of-fit is float, which is not bit-identical
+// across architectures, and `x86_64` is the only target the diagnostic is built
+// and run on. Rather than silently compile the self-cert out on a non-`x86_64`
+// target (which would let a `--features conformance` diagnostic build report
 // "conformance passed" when the grade never ran — false assurance), fail the
 // build loudly: a diagnostic build that cannot run the diagnostic must say so at
 // compile time, not pretend success at runtime. With this guard, `conformance`
@@ -121,9 +124,10 @@ use super::stake_timing::DEFAULT_ENTRY_GAP;
 #[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
 compile_error!(
     "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`) \
-     is x86-only — its float goodness-of-fit is not bit-identical across \
-     architectures. Build the `conformance` feature on x86_64 (where the CI \
-     conformance lane runs); do not enable it on other targets."
+     is `x86_64`-only — its float goodness-of-fit is not bit-identical across \
+     architectures. Build the `conformance` feature on `x86_64` (where the CI \
+     conformance lane runs); do not enable it on other targets (including 32-bit \
+     x86)."
 );
 
 // ---------------------------------------------------------------------------
@@ -621,8 +625,8 @@ impl Actor for StakeEngine {
         let active = args.active.filter(|slot| held.contains_key(slot));
 
         // S6 — session RNG self-cert. Compiled in **only** under the `conformance`
-        // feature (x86 enforced by the module-level `compile_error!`); the default
-        // build has no grade at all. Grade the real `OsRng` adapter before the
+        // feature (`x86_64` enforced by the module-level `compile_error!`); the
+        // default build has no grade at all. Grade the real `OsRng` adapter before the
         // actor accepts any work; a non-conformant CSPRNG fail-stops the spawn (and
         // so wallet-open), so a degenerate timing RNG never reaches the gate-6
         // decorrelation draw. This certifies the real adapter at the real
@@ -1043,24 +1047,35 @@ impl StakeEngineHandle {
         Self { actor }
     }
 
-    /// S6 — block until the actor's `on_start` self-cert completes, surfacing a
-    /// non-conformant-RNG (or panic) startup failure as a human-readable string.
-    /// Conformance build only — this is the **eager** observation path
-    /// ([`ActorRef::wait_for_startup_result`], S6 plan §2.1). `Ok(())` means the
-    /// actor started and the production CSPRNG graded conformant.
+    /// S6 — block until the actor's `on_start` self-cert completes, returning the
+    /// **structured** [`StakeSelfCertFailure`] on failure (the grade's
+    /// `CertifyReport` is preserved, not stringified). Conformance build only —
+    /// the **eager** observation path ([`ActorRef::wait_for_startup_result`], S6
+    /// plan §2.1). `Ok(())` means the actor started and the CSPRNG graded
+    /// conformant.
     #[cfg(feature = "conformance")]
-    pub(crate) async fn wait_for_self_cert(&self) -> Result<(), String> {
+    pub(crate) async fn wait_for_self_cert(
+        &self,
+    ) -> Result<(), crate::engine::error::StakeSelfCertFailure> {
+        use crate::engine::error::StakeSelfCertFailure;
         use kameo::error::HookError;
         match self.actor.wait_for_startup_result().await {
             Ok(()) => Ok(()),
-            Err(HookError::Error(StakeEngineStartError::RngSelfCertFailed(report))) => {
-                Err(format!(
-                    "the OS CSPRNG graded non-conformant for entry-gap timing draws: {report:?}"
-                ))
-            }
-            Err(HookError::Panicked(p)) => Err(format!(
+            // Match the inner error generically rather than by variant, so a
+            // future `StakeEngineStartError` variant (2d-1's always-on startup
+            // failures) does not force a refactor here. Today the only variant is
+            // `RngSelfCertFailed`, whose `CertifyReport` is kept structured; any
+            // other (future) start error renders via `Debug`.
+            Err(HookError::Error(start_err)) => match start_err {
+                StakeEngineStartError::RngSelfCertFailed(report) => {
+                    Err(StakeSelfCertFailure::NonConformant(report))
+                }
+                #[allow(unreachable_patterns)]
+                other => Err(StakeSelfCertFailure::StartupFailed(format!("{other:?}"))),
+            },
+            Err(HookError::Panicked(p)) => Err(StakeSelfCertFailure::StartupFailed(format!(
                 "on_start panicked (likely the OS entropy source failed mid-draw): {p:?}"
-            )),
+            ))),
         }
     }
 

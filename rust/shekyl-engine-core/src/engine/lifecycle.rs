@@ -940,8 +940,8 @@ impl Engine<SoloSigner> {
         {
             let rt = tokio::runtime::Handle::current();
             let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
-            if let Err(detail) = cert {
-                return Err(OpenError::StakeRngSelfCertFailed(detail));
+            if let Err(failure) = cert {
+                return Err(OpenError::StakeRngSelfCertFailed(failure));
             }
         }
 
