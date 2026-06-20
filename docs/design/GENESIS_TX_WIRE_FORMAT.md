@@ -510,15 +510,18 @@ over-cap block, must be rejected by both impls).
 - The block-202612 hash special-case is Monero chain history — a dead pre-genesis
   branch; **shed** ([`60-no-monero-legacy`]); the vendored Rust `block.rs` carries
   it and the clean crate must drop it.
-- **PoW = preimage + seed.** The above pins the PoW *preimage*; PoW determinism
-  also requires the **RandomX seed/epoch** — which block's hash seeds the cache at
-  a given height, the epoch length, and the lag (a verifier on the wrong seed
-  diverges). C++ uses `SEEDHASH_EPOCH_BLOCKS = 2048`, `SEEDHASH_EPOCH_LAG = 64`,
-  `rx_seedheight(height)` with the main/secondary transition
-  (rx-slow-hash.c:137-188). **`shekyl-pow-randomx` owns this freeze** — pin the
-  epoch/lag as deliberate genesis values and **confirm they are intended, not
-  inherited** (RandomX **v2** is a fork; the epoch/lag may differ from stock — a
-  Q7-class "choose, don't inherit" check for the PoW seed).
+- **PoW = preimage + seed; the seed is RandomX v2's, not stock.** The above pins
+  the PoW *preimage*; PoW determinism also requires the **seed/epoch** — which
+  block's hash seeds the cache, the epoch length, the lag (a verifier on the wrong
+  seed diverges). The genesis PoW is **Shekyl's own RandomX v2 fork**
+  (`external/randomx-v2` + `rust/shekyl-pow-randomx`; in-tree, intentionally
+  uncompiled, lands at the Stage-3 RPC cutover), so the seed/epoch is a
+  **Shekyl-owned genesis value, deliberate by construction** — not stock to ratify.
+  The freeze anchors on **`shekyl-pow-randomx`** (`Seedhash` + cache derivation,
+  per `RANDOMX_V2_PHASE2F_PLAN.md`) plus the daemon's epoch-from-height
+  (`seedhash.rs:90`) — **not** the stock C++ `rx-slow-hash.c` (`2048`/`64`,
+  rx-slow-hash.c:137-188), which is only the v1 lineage. Pin v2's epoch/lag from
+  that owner when v2 lands.
 
 ## 12. Canonical-form / reject rules (must-reject enumeration)
 
@@ -589,8 +592,9 @@ Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 complet
 3. **§10 completed** with block-level bounds (`CRYPTONOTE_MAX_TX_PER_BLOCK`,
    block-weight machinery); the V1/V2/V5 reward-zone fossil handed to the economics
    owner.
-4. **§11 completed**: PoW = preimage + seed; the RandomX seed/epoch (2048/64,
-   `rx_seedheight`) pinned to `shekyl-pow-randomx`, v2 epoch/lag to be confirmed
-   deliberate.
+4. **§11 completed**: PoW = preimage + seed; the seed is **RandomX v2's** (Shekyl's
+   fork — `external/randomx-v2` + `shekyl-pow-randomx`, genesis PoW landing at the
+   Stage-3 RPC cutover), owned by `shekyl-pow-randomx` per `RANDOMX_V2_PHASE2F_PLAN`
+   — a deliberate Shekyl genesis value by construction, **not** stock `rx-slow-hash.c`.
 
 All free pre-genesis (hard forks later).
