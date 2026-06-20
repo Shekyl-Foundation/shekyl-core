@@ -145,6 +145,45 @@ pub enum OpenError {
         /// Capability the stub method represents.
         capability: super::Capability,
     },
+
+    /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
+    /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap
+    /// timing draws (or the entropy source failed mid-draw). A degenerate timing
+    /// RNG defeats the gate-6 decorrelation firewall, so the staker actor refuses
+    /// to start and wallet-open fails loudly rather than staking on a CSPRNG that
+    /// cannot produce unlinkable timing. This variant does not exist in the
+    /// default (non-`conformance`) build — production carries no float/stats
+    /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
+    ///
+    /// Carries the **structured** [`StakeSelfCertFailure`] (not a pre-rendered
+    /// string), keeping the grade detail — the `CertifyReport` — available for
+    /// logging / programmatic handling, per the module's no-stringly-typed-error
+    /// rule. The `#[source]` chains it; `Display` still renders the human message.
+    #[cfg(feature = "conformance")]
+    #[error("wallet open refused: StakeEngine session RNG self-cert failed at startup: {0}")]
+    StakeRngSelfCertFailed(#[source] StakeSelfCertFailure),
+}
+
+/// **Conformance build only (S6).** Why the StakeEngine startup session RNG
+/// self-cert failed — structured so the grade detail survives to logging /
+/// handling instead of being stringified at the actor boundary (the wallet-core
+/// API does not return stringly-typed errors; see the module doc). Surfaced
+/// through [`OpenError::StakeRngSelfCertFailed`].
+#[cfg(feature = "conformance")]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum StakeSelfCertFailure {
+    /// The OS CSPRNG graded **non-conformant** for the entry-gap timing draws.
+    /// Carries the full [`CertifyReport`](shekyl_standoff::conformance::CertifyReport)
+    /// (chi-square, the three property verdicts) — the data worth keeping.
+    #[error("the OS CSPRNG graded non-conformant for entry-gap timing draws: {0:?}")]
+    NonConformant(shekyl_standoff::conformance::CertifyReport),
+
+    /// `on_start` failed before the grade completed — typically a panic from the
+    /// OS entropy source failing mid-draw, or (future) another startup error.
+    /// A panic / foreign start error has no richer structure than its rendered
+    /// cause, so this case is honestly a string.
+    #[error("StakeEngine startup failed before the self-cert completed: {0}")]
+    StartupFailed(String),
 }
 
 // --- Persistence -----------------------------------------------------------
