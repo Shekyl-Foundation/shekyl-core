@@ -327,7 +327,10 @@ pub trait Rpc: Sync + Clone {
         params: Option<Value>,
     ) -> impl Send + Future<Output = Result<Response, RpcError>> {
         async move {
-            let mut req = json!({ "method": method });
+            // Emit a compliant JSON-RPC 2.0 envelope. The Shekyl daemon RPC
+            // server requires `id` (and the spec mandates `jsonrpc`); the
+            // response `id` is unused here (only `result` is read).
+            let mut req = json!({ "jsonrpc": "2.0", "id": 0, "method": method });
             if let Some(params) = params {
                 req.as_object_mut()
                     .expect("accessing object as object failed?")
