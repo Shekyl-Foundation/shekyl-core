@@ -33,28 +33,31 @@ structurally cannot (it needs lag-1 autocorrelation over `n` draws). That
 deferral is this PR.
 
 **The self-cert is `conformance`-feature-gated with zero default-production
-surface.** Two reasons hold; a third commonly-stated one does **not**, and the
-distinction matters (it is the difference between an intrinsic law and an
-artifact of today's grader):
+surface.** The gating is correct, but be precise about *why* — it is **one design
+choice resting on two artifacts of *this grader***, none of which is an intrinsic
+law of session-level certification:
 
-1. **Dependency surface (intrinsic).** The grade pulls `shekyl-stats` via
-   `shekyl-standoff`'s `conformance` feature (`Cargo.toml:20`). The production
-   wallet must not carry the statistics crate.
-2. **Design of record.** 2c-2b §3.3 already states: "*runs at session start,
-   gated (not per-draw) … `conformance` feature, not shipped into production
-   builds.*"
-3. **NOT a law — float/x86 is an artifact of *this grader*.** `grade_sample`
-   (`conformance.rs`) happens to compute its goodness-of-fit in `f64` (decile
-   fractions, `max_decile_dev`, the `8/√n` tolerance), which `shekyl-standoff`
-   correctly keeps x86-only because float is not bit-identical across
-   architectures. But a session-level RNG check is **not inherently float**: a
-   lag-1 autocorrelation test is a ratio of sums of products, which a fixed-point
-   implementation with a defined **integer** tolerance could compute
-   cross-arch-deterministically and float-free. So the constraint that pins this
-   to a conformance build is an **implementation property of the current grader**,
-   not a property of session-level certification. We keep the **float-free
-   default-production** call — it is right on consensus-determinism grounds — but
-   we do **not** claim the gating is forced by the nature of the task.
+1. **Artifact — float / cross-arch.** `grade_sample` (`conformance.rs`) computes
+   its goodness-of-fit in `f64` (decile fractions, `max_decile_dev`, the `8/√n`
+   tolerance), which `shekyl-standoff` correctly keeps **x86-only** because float
+   is not bit-identical across architectures, and production is deliberately
+   float-free.
+2. **Artifact — `shekyl-stats` dependency.** The grade pulls `shekyl-stats` via
+   `shekyl-standoff`'s `conformance` feature (`Cargo.toml:20`); production must
+   not carry the statistics crate. **This is the *same class* as (1), not an
+   independent law:** a fixed-point reimplementation of the grade would pull
+   neither float *nor* `shekyl-stats`.
+3. **Choice — design of record.** 2c-2b §3.3 records the decision: "*runs at
+   session start, gated (not per-draw) … `conformance` feature, not shipped into
+   production builds.*"
+
+Both (1) and (2) are **implementation properties of the current grader**, not
+properties of the task: a session-level RNG check is not inherently float or
+stats-bearing — a lag-1 autocorrelation test is a ratio of sums of products, which
+a fixed-point implementation with a defined **integer** tolerance could compute
+cross-arch-deterministically, float-free **and** `shekyl-stats`-free. We keep the
+**float-free default-production** call (right on consensus-determinism grounds) but
+do **not** claim the gating is forced by the nature of session-level certification.
 
 **Honest framing of what this delivers (F1).** Because the grade runs only in a
 `conformance` build (typically CI's x86 lane, or an opt-in operator diagnostic),
@@ -74,11 +77,14 @@ default-production build**, only in CI. For a firewall where a degenerate timing
 RNG defeats the gate-6 decorrelation, this is a real residual. It is
 **low-probability** (`OsRng` is a vetted CSPRNG, not a stuck/correlated source)
 but **unmitigated at production runtime**. *Reopen trigger:* a **fixed-point,
-integer, cross-arch-deterministic session grader becomes feasible or needed** —
-at which point the session self-cert can move onto the float-free production path
-and certify the *user's* RNG at *their* session. The trigger is explicitly **not**
-the implicit "never"; it is gated on the grader, which §1.2 marks out of scope
-for S6 but reachable.
+integer, cross-arch-deterministic *and* `shekyl-stats`-free session grader becomes
+feasible or needed** — at which point the session self-cert can move onto the
+float-free production path and certify the *user's* RNG at *their* session. Both
+clauses matter: a fixed-point grader that *still* pulled `shekyl-stats` would
+satisfy a float-only trigger yet remain unshippable to production, so the residual
+would read closed while it isn't. The trigger is explicitly **not** the implicit
+"never"; it is gated on the grader, which §1.2 marks out of scope for S6 but
+reachable.
 
 **Why S6 *now* — coupling, not freshness.** The load-bearing reason to take S6 as
 the interstitial before 2d-1 is **shared-surface coupling, not "the #163 substrate
@@ -100,7 +106,7 @@ designed once for both — see DQ2/F3). Freshness is the weaker restatement of t
 | --- | --- | --- |
 | S6.1 | **Wire `certify_draw` into `StakeEngine::on_start`**, gated behind a new `shekyl-engine-core` `conformance` feature that enables `shekyl-standoff/conformance`. Draws over `OsRngGapAdapter` at the canonical `DEFAULT_ENTRY_GAP.as_blocks()` window. | `on_start` (`stake_engine.rs:515`); `OsRngGapAdapter` (`stake_engine.rs`); `certify_draw` (`conformance.rs:377`); `DEFAULT_ENTRY_GAP` (`stake_timing.rs`). |
 | S6.2 | **Failure handling — fail-stop.** A failed grade refuses to spawn the StakeEngine (no staking on a CSPRNG that fails conformance — a non-conformant timing RNG defeats the gate-6 decorrelation firewall). Resolve the `on_start` `Infallible` → real-error question (DQ2). | `Actor::Error = Infallible` (`stake_engine.rs:510`); `CertifyReport::passed()` (`conformance.rs`). |
-| S6.3 | **Single-source the sample size `n` (F4).** `n = 200_000` (R0-D4: tolerance `8/√n` ≈ 0.0179, wall-clock ≈ 14–15 ms debug) **already exists** as a bare literal **6×** in `conformance_grading.rs` (lines 37, 70, 105, 108, 175, 190). Do **not** add a 7th copy at the `on_start` call site — define **one** named constant and have **both** the production call site **and** the reference KAT consume it (repoint `conformance_grading.rs` in the *same* PR). If the reference grade and the production grade ever used different `n`, the `8/√n` tolerance forks and the two certs stop being comparable. | 2c-2b §4 R0-D4; `conformance_grading.rs:37,70,105,108,175,190`. |
+| S6.3 | **Single-source the sample size `n` (F4) — define it *down* in `shekyl-standoff`.** `n = 200_000` (R0-D4: tolerance `8/√n` ≈ 0.0179, wall-clock ≈ 14–15 ms debug) **already exists** as a bare literal **6×** in `conformance_grading.rs` (lines 37, 70, 105, 108, 175, 190). Do **not** add a 7th copy at the `on_start` call site, and do **not** home it in engine-core (the standoff KAT can't reach upward — DQ4). Define **`CERTIFY_SAMPLE_N` in `shekyl-standoff`** (beside the grader), have **both** the production `on_start` call site (via a `stake_timing.rs` re-export) **and** the reference KAT consume it (repoint `conformance_grading.rs` in the *same* PR). If the reference grade and the production grade ever used different `n`, the `8/√n` tolerance forks and the two certs stop being comparable. | 2c-2b §4 R0-D4; `conformance_grading.rs:37,70,105,108,175,190`; `shekyl-standoff` (new const). |
 | S6.4 | **CI conformance job + spawn test.** A test that spawns `StakeEngine` under `--features conformance` and asserts the self-cert ran and passed over `OsRng`; a CI lane that builds/tests engine-core with the feature on x86. | mirrors `conformance_grading.rs`; CI lane addition. |
 | S6.5 | **Remove the `TODO(S6)` marker(s)** in `stake_engine.rs`; **fold in** the stale CT-5 comment fix in `local_pending_tx.rs:3404–3408` (calls the now-live verify KAT the "`#[ignore]`d sibling … gated on CT-5" — a fossil after #162). | `stake_engine.rs:762`; `local_pending_tx.rs:3404–3408`. |
 
@@ -166,10 +172,20 @@ operator diagnostic). No phantom-accrual or user-invocability concern.
   log/marker** that the grade was **skipped, not passed**. *Settle which; default
   to `compile_error!`* (a diagnostic build that can't run the diagnostic should
   say so at compile time, not pretend success at runtime).
-- **DQ4 — Sample-size constant home.** The constant from S6.3 (single-sourced,
-  consumed by both the production call site and the repointed reference KAT).
-  Home: `stake_timing.rs`, beside `DEFAULT_ENTRY_GAP` (the timing-constants home).
-  Value `200_000` per R0-D4 — unchanged, just named and shared.
+- **DQ4 — Sample-size constant home: it must live *down* in `shekyl-standoff`.**
+  The single-sourced `n` (S6.3) is consumed by **two crates**: the six
+  `conformance_grading.rs` literals (in `shekyl-standoff` itself) **and** the
+  `on_start` call site (`shekyl-engine-core`, which depends *up* on standoff). A
+  home in `stake_timing.rs` (engine-core) **cannot compile** — the standoff KAT
+  would reference an engine-core symbol against the dependency edge. So the source
+  of truth is **`CERTIFY_SAMPLE_N` in `shekyl-standoff`**, beside `certify_draw` /
+  the grader (it is a grader constant — `8/√n` is the grade's own tolerance
+  contract). `stake_timing.rs` gets a **re-export**, not the definition:
+  `pub use shekyl_standoff::CERTIFY_SAMPLE_N;` (beside `DEFAULT_ENTRY_GAP`, for
+  call-site ergonomics) — **exactly the pattern the file already uses**, where
+  `DEFAULT_ENTRY_GAP` wraps `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW` (source of
+  truth down, alias up). Value `200_000` per R0-D4 — unchanged, just named, shared,
+  and reachable by both consumers.
 
 ### 2.1 Pre-Round-1 substrate findings — kameo `on_start` error semantics (RESOLVED 2026-06-20)
 
@@ -228,6 +244,27 @@ enum StakeEngineStartError {
   `OpenError` variant**, so wallet-open fails **loudly with the RNG reason**.
 - The sync→async bridge **and** the `OpenError` widening are **both
   `conformance`-gated** → zero default-production surface (consistent with §0).
+
+**2d-1 hand-off — what it inherits, and what it does *not* (scope it now).** The
+F3 win is real but bounded: 2d-1 inherits the **error *type*** (it adds always-on
+variants like `ScanStoreOpen` / `CursorRecovery` rather than reshaping it), **but
+not a ready-made startup-failure *path***. S6's observation plumbing — the eager
+`wait_for_startup_result()`, the `block_in_place` bridge, the `OpenError`
+widening — is **`conformance`-gated and S6-specific**. When 2d-1 adds production
+failures, it must **lift that plumbing out of the `conformance` cfg into the
+default build**, and it may not even want S6's model: eager-block-on-open is fine
+for a ~15 ms RNG grade but questionable for a potentially-slow `P`-scan sweep,
+where **async-with-status** (open proceeds, scan readiness surfaced separately)
+likely beats blocking wallet-open. So "designed once for both" is true **only of
+the enum**; 2d-1 still builds its own always-on observation and picks its own
+surfacing model. 2d-1's plan must budget for that, not assume S6 paved it.
+
+**Round-1 verify (contained to conformance, but panic-not-error if wrong):**
+`tokio::task::block_in_place` **panics on a current-thread runtime**. Confirm the
+conformance spawn test **and** any wallet-open call site that reaches the bridge
+run under the **multi-threaded** runtime (the "same pattern as `drive_persistence`"
+note implies they do — `drive_persistence` is the `rt-multi-thread`-gated branch —
+but verify, since the failure mode is a panic, not a graceful error).
 
 Round-1 first action is now *implementation* of this shape + the empty-enum
 compile check, not investigation.
