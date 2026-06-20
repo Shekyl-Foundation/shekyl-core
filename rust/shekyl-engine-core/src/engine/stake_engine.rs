@@ -817,10 +817,29 @@ impl GapRng for OsRngGapAdapter {
 /// **Extracted for testability** (S7(b)): tests feed degenerate `GapRng`
 /// implementations directly into this function without going through the actor
 /// or `OsRng`.
+///
+/// # Precondition: `window > 0`
+///
+/// A zero-width window draws `spread == 0` deterministically on every call, so
+/// the two probe draws are *trivially* equal and the guard would fire — but that
+/// is a **window misconfiguration**, not RNG degeneracy: a zero-width standoff
+/// provides no funding↔bond-post decorrelation, defeating the gate-6 firewall
+/// the draw exists to serve. The operational caller always passes
+/// [`DEFAULT_ENTRY_GAP_WINDOW`] (600), so a zero window is unreachable in
+/// production; the `debug_assert` catches any future misuse loudly in test/debug
+/// builds rather than silently mislabelling it as `RngDegeneracy`. (More
+/// generally the guard is only well-behaved for windows large enough that
+/// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
 ) -> Result<(u64, bool), ()> {
+    debug_assert!(
+        window > 0,
+        "entry-gap window must be > 0: a zero-width standoff provides no \
+         decorrelation and makes the degeneracy guard fire unconditionally; \
+         pass the operational DEFAULT_ENTRY_GAP_WINDOW"
+    );
     let (spread_draw, bond_first) = draw_entry_gap(window, rng);
     let (spread_probe, _) = draw_entry_gap(window, rng);
     if spread_draw == spread_probe {
@@ -930,10 +949,12 @@ impl StakeEngineHandle {
     /// # Errors
     ///
     /// - [`StakeEngineError::StakeActorUnavailable`] — actor stopped (terminal).
-    /// - [`StakeEngineError::StaleHandle`] — handle is from a prior generation.
-    /// - [`StakeEngineError::LookaheadExhausted`] — slot not in the held set
-    ///   (shouldn't happen if the handle was freshly minted, but handled for
-    ///   completeness — the actor state is the authoritative check).
+    /// - [`StakeEngineError::StaleHandle`] — the handle is from a prior
+    ///   generation *or* its slot is no longer in the held set. Both collapse to
+    ///   `StaleHandle` in `validate_handle` (a wipe advances the generation, so a
+    ///   stale-generation handle and a no-longer-held slot are the same failure).
+    ///   `LookaheadExhausted` is *not* reachable here — it is a `mint_handle`
+    ///   error; signing only validates an already-minted handle.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
@@ -1326,9 +1347,13 @@ mod tests {
     // degeneracy logic is exercised with injectable RNGs without going through the
     // actor (which uses `OsRngGapAdapter` in production).
     //
-    // S7(c) trybuild compile-fail tests (sign without ticket, unheld-handle sign)
-    // live in `tests/` with the `trybuild` dev-dep (to wire in a follow-up commit
-    // once `trybuild` is added to `[dev-dependencies]`).
+    // S7(c) unrepresentability ("sign without ticket", "unheld-handle sign") is
+    // NOT covered by trybuild: that path was retired (plan §4.1 R0-D1) because the
+    // capability tokens are `pub(crate)` with module-private fields, so an external
+    // trybuild crate cannot name them without re-exposing firewall internals. It is
+    // instead enforced unconditionally by the type system (module-private fields +
+    // by-value consumption), with the `!Clone` half pinned by the always-on
+    // `AmbiguousIfImpl` `const _` guard above (near `PersonaHandle`).
 
     /// S7(b) — degeneracy guard fires on a stuck-RNG (double-jitter-trap pattern).
     ///
@@ -1345,9 +1370,12 @@ mod tests {
         }
 
         // Any constant value produces the same spread twice → guard fires.
+        // Use the canonical operational window (single-sourced) so the test
+        // tracks the wallet's real draw window rather than a stray literal.
         for seed in [0u64, 1, 42, u64::MAX / 2] {
             let mut rng = ConstRng(seed);
-            let result = draw_entry_gap_guarded(600, &mut rng);
+            let result =
+                draw_entry_gap_guarded(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW, &mut rng);
             assert!(
                 result.is_err(),
                 "stuck-RNG seed {seed}: expected degeneracy guard to fire, got ok"
@@ -1372,7 +1400,7 @@ mod tests {
         }
 
         let mut rng = CounterRng(0xDEAD_BEEF_0000_0000);
-        let result = draw_entry_gap_guarded(600, &mut rng);
+        let result = draw_entry_gap_guarded(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW, &mut rng);
         assert!(
             result.is_ok(),
             "counter RNG should not trigger the degeneracy guard: {result:?}"
