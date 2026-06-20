@@ -47,7 +47,7 @@
 
 pub mod draw;
 
-pub use draw::{draw_entry_gap, GapRng};
+pub use draw::{draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 
 #[cfg(feature = "conformance")]
 pub mod conformance;

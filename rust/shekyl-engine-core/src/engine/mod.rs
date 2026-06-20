@@ -237,6 +237,12 @@ pub(crate) mod stake_engine;
 /// `Engine::persist_bond_record`. Inert until 2c-2b's `sign_bond` consumes the
 /// ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
+/// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,
+/// `NetworkGap`, `EconomicSpacing`, and their named default constants. Prevents
+/// cross-applying the block-level standoff window with the economic SEB spacing
+/// (distinct inner types → compile error on cross-apply). Design-now; real checks
+/// wire in cold-start / 2d wiring.
+pub(crate) mod stake_timing;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
 /// Retained `#[cfg(test)]` for the two non-daemon test surfaces that genuinely

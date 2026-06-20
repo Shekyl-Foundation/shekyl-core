@@ -81,6 +81,19 @@ impl PersistedBondTicket {
     pub(crate) fn p_slot(&self) -> PSlot {
         self.p_slot
     }
+
+    /// Test-only ticket constructor for negative-control tests that need a
+    /// ticket without going through the real `Engine::persist_bond_record`
+    /// path (e.g. slot-mismatch tests that need a ticket for a specific slot
+    /// that was never actually persisted).
+    ///
+    /// **Must not be used in production paths.** The name is intentionally
+    /// awkward to prevent accidental use: a legitimate caller always goes
+    /// through `persist_bond_record`.
+    #[cfg(test)]
+    pub(crate) fn __test_only_forge(p_slot: PSlot) -> Self {
+        Self { p_slot }
+    }
 }
 
 // `D: DaemonEngine` / `L = LocalLedger` / `R = LocalRefresh` specialization

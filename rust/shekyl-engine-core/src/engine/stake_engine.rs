@@ -101,8 +101,14 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
 use kameo::message::{Context, Message};
 
+use rand_core::RngCore as _;
+use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
+use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_standoff::draw::{draw_entry_gap, GapRng};
+
+use super::stake_timing::DEFAULT_ENTRY_GAP;
 
 // ---------------------------------------------------------------------------
 // Typed domain values
@@ -252,6 +258,43 @@ impl PersonaHandle {
     }
 }
 
+/// Always-on compile-time guard: the two operation capability tokens
+/// ([`PersonaHandle`], [`PersistedBondTicket`]) must remain **single-use** —
+/// neither `Clone` nor `Copy`. Their single-use-ness is what makes "use an
+/// unheld persona" (typed contract #2) and "sign before persist" (typed
+/// contract #1) unrepresentable: a token is consumed *by value* by `sign_bond`
+/// and cannot be duplicated to bypass the consumption.
+///
+/// This replaces the originally-planned `trybuild` compile-fail tests for S7(c)
+/// (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4 R0-D# finding): `trybuild` compiles
+/// each case as an **external** crate, which cannot name these `pub(crate)`
+/// firewall types without a re-export that would itself re-expose the internals
+/// the firewall exists to encapsulate. The enforcement is the type system —
+/// module-private fields + `!Clone` + by-value consumption — which holds for
+/// **all** code unconditionally, a stronger guarantee than any external
+/// snapshot. This `const _` block is the regression guard that the `!Clone`
+/// half of that guarantee is never silently weakened by a careless
+/// `#[derive(Clone)]`. It is a zero-cost compile-time check (no runtime, no
+/// dependency); it is the inlined equivalent of
+/// `static_assertions::assert_not_impl_all!`.
+///
+/// If either token gains a `Clone`/`Copy` impl, the `AmbiguousIfImpl`
+/// resolution below becomes ambiguous and the crate fails to compile.
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn token_must_stay_single_use() {}
+    }
+    impl<T> AmbiguousIfImpl<()> for T {}
+    #[allow(dead_code)]
+    struct Invalid;
+    impl<T: Clone> AmbiguousIfImpl<Invalid> for T {}
+
+    // Resolves uniquely iff the type is NOT `Clone`; ambiguous (compile error)
+    // if a `Clone` impl is ever added.
+    let _ = <PersonaHandle as AmbiguousIfImpl<_>>::token_must_stay_single_use;
+    let _ = <super::stake_persist::PersistedBondTicket as AmbiguousIfImpl<_>>::token_must_stay_single_use;
+};
+
 /// The public identity of an activated persona `P`.
 ///
 /// Carries **only public material** — the typed [`HybridPublicKey`] that rides
@@ -319,6 +362,56 @@ pub(crate) enum StakeEngineError {
     /// wipe, so it is rejected. Non-terminal: mint a fresh handle and retry.
     #[error("stale persona handle: re-mint a handle (a rotation occurred since it was issued)")]
     StaleHandle,
+
+    /// The OS entropy source failed to supply bytes for the entry-gap timing draw
+    /// (`SignBond`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
+    /// a source failure is fail-loud and terminal for this request — no silent
+    /// fallback to a weaker source. The cause may be **transient** (very early
+    /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
+    /// seccomp policy or permission restriction blocking the `getrandom` syscall);
+    /// the underlying `rand_core::Error` is retained as the error `source()` so an
+    /// operator can tell which — the prior message presumed a transient cause and
+    /// wrongly implied a retry would always help.
+    #[error(
+        "entry-gap draw failed: the OS entropy source is unavailable ({0}); \
+         cause may be transient (early boot) or persistent (sandbox/seccomp or \
+         permission restriction) — a retry helps only in the transient case"
+    )]
+    RngSourceFailed(#[source] rand_core::Error),
+
+    /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
+    /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
+    /// same RNG produced identical spreads, which is the signature of a stuck
+    /// or non-random source. The draw is rejected; a correct CSPRNG produces
+    /// consecutive equal spreads with probability ≈ 1/601 — a single retry
+    /// resolves an unlucky-but-correct draw. Multiple consecutive `RngDegeneracy`
+    /// errors indicate a broken entropy source.
+    #[error(
+        "entry-gap draw degenerate: consecutive spreads were equal (stuck-RNG guard); \
+         retry the bond request"
+    )]
+    RngDegeneracy,
+
+    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`SignBond`]
+    /// name different persona slots. A ticket witnesses the durable persist for a
+    /// *specific* slot; it cannot authorize signing for any other slot.
+    /// Non-terminal: ensure both are obtained for the same `p_slot`.
+    #[error(
+        "sign-bond slot mismatch: handle names slot {handle_slot:?}, \
+         ticket names slot {ticket_slot:?}; both must name the same persona slot"
+    )]
+    SlotMismatch {
+        handle_slot: PSlot,
+        ticket_slot: PSlot,
+    },
+
+    /// Bond construction failed after the actor validated the handle and ticket
+    /// (`SignBond`, S2). The persona bundle was available but
+    /// [`build_join_market_vin`] returned an error — see the wrapped
+    /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
+    /// `IdentityEncode`, or `Sign`).
+    #[error("bond construction failed: {0}")]
+    BondBuild(#[from] BondBuildError),
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +667,204 @@ impl Message<ActivePersona> for StakeEngine {
     }
 }
 
+/// Request the StakeEngine to build and sign a JoinMarket archival bond post,
+/// consuming the persist-before-use typestate (Bond-PR 2c-2b, S1/S2).
+///
+/// Both `handle` and `ticket` must name the same persona slot: the handle
+/// proves the slot is currently held at the generation this message was minted
+/// for; the ticket proves its live-bond record was durably committed before
+/// signing. This structural pairing makes "sign before persist" and "sign for
+/// an unheld persona" unexpressible (typed contracts #1 and #2).
+///
+/// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
+/// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
+/// no silent fallback to a weaker source), then the draw is taken and checked
+/// for the double-jitter degeneracy pattern. A degenerate draw is rejected;
+/// a correct CSPRNG produces consecutive equal spreads with probability ≈ 1/601,
+/// so a single retry resolves an unlucky-but-correct draw.
+///
+/// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
+/// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
+/// called here, returning the signed `JoinMarketVin` for the engine to wire
+/// into the transaction.
+///
+/// Does **not** advance the rotation generation — signing does not change
+/// the active slot or wipe any persona.
+///
+/// # Caller workflow
+///
+/// ```text
+/// stake.mint_handle(slot)      → handle1
+/// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
+/// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
+/// stake.mint_handle(slot)      → handle2
+/// stake.sign_bond(handle2, ticket, holdings, tx_prefix_hash) → JoinMarketVin
+/// ```
+#[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
+pub(crate) struct SignBond {
+    /// Operation-scoped capability proving the slot is currently held (typed
+    /// contract #2). Must match `ticket.p_slot()`.
+    pub handle: PersonaHandle,
+    /// Proof that the live-bond record was durably persisted for this slot
+    /// before signing (typed contract #1). Must match `handle.p_slot()`.
+    pub ticket: super::stake_persist::PersistedBondTicket,
+    /// Holdings to compute `bond_floor` from. Passed to
+    /// [`build_join_market_vin`] inside the actor.
+    pub holdings: HoldingsDescriptor,
+    /// 32-byte prefix hash of the transaction the bond post rides in.
+    /// Binds the signature to this specific transaction.
+    pub tx_prefix_hash: [u8; 32],
+}
+
+impl Message<SignBond> for StakeEngine {
+    type Reply = Result<JoinMarketVin, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignBond,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // 1. Validate the handle: generation currency + slot membership.
+        self.validate_handle(&msg.handle)?;
+
+        // 2. Slot cross-check: ticket witnesses persist for a specific slot; it
+        //    cannot authorize signing for any other slot (even a held one).
+        let handle_slot = msg.handle.p_slot;
+        let ticket_slot = msg.ticket.p_slot();
+        if handle_slot != ticket_slot {
+            return Err(StakeEngineError::SlotMismatch {
+                handle_slot,
+                ticket_slot,
+            });
+        }
+
+        // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
+        //    `GapRng::next_u64` is infallible; a source failure therefore must be
+        //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
+        //    No silent fallback: source failure → `RngSourceFailed`, not a retry
+        //    on a weaker source.
+        {
+            let mut probe = [0u8; 8];
+            rand_core::OsRng
+                .try_fill_bytes(&mut probe)
+                .map_err(StakeEngineError::RngSourceFailed)?;
+            let _ = probe; // consumed; used only to exercise the source
+        }
+
+        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
+        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
+        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
+        //    The actual timing draw result is returned on success.
+        let mut rng = OsRngGapAdapter;
+        let (_spread, _bond_first) =
+            draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+                .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
+        // TODO(S6): session-level `certify_draw` self-cert over `OsRngGapAdapter`
+        // (gated; runs at session start, not per-draw).
+        // TODO(2d): wire `_spread` and `_bond_first` into the broadcast timing
+        // (deferred — 2c-2b lands inert, no submission path).
+
+        // 5. Borrow the held bundle — slot membership confirmed by step 1.
+        let keys = self
+            .held
+            .get(&handle_slot)
+            .expect("validate_handle confirmed slot is held")
+            .keys();
+
+        // 6. Build and sign the JoinMarket vin inside the actor.
+        //    `ArchivalPKeys` is borrowed here and never returned to the caller
+        //    (rule 36-secret-locality): only the signed `JoinMarketVin` crosses
+        //    the actor boundary.
+        build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
+            .map_err(StakeEngineError::BondBuild)
+    }
+}
+
+/// Adapts [`rand_core::OsRng`] to the [`GapRng`] trait for use in
+/// [`SignBond`]'s entry-gap draw.
+///
+/// `GapRng` requires only `next_u64`; `OsRng` implements `RngCore` (which
+/// includes `next_u64`). This zero-state adapter bridges the two without
+/// pulling `rand_core`'s full `RngCore` trait into the message handler. If
+/// `OsRng::next_u64` panics (i.e., the entropy source dies mid-draw after the
+/// step-3 preflight), the actor's fail-stop fires — the panic is loud, not
+/// silent (Round 3 acceptance condition).
+struct OsRngGapAdapter;
+
+impl GapRng for OsRngGapAdapter {
+    fn next_u64(&mut self) -> u64 {
+        // `RngCore` (for `next_u64`) is in scope via the module-level import.
+        rand_core::OsRng.next_u64()
+    }
+}
+
+/// The entry-gap degeneracy guard fired: two consecutive draws produced equal
+/// spreads (the double-jitter-trap signature).
+///
+/// A named zero-sized type rather than `()` so the failure reads at the
+/// signature and the single call site maps it explicitly. It is deliberately
+/// **not** an enum: there is exactly one way this guard fails, and a multi-variant
+/// "in case we add more later" error would be pre-provisioned flexibility
+/// (`21-reversion-clause-discipline.mdc`) — add a variant (or a new error type)
+/// when a second failure mode actually exists.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DegenerateDraw;
+
+/// Draw an entry gap and check for the double-jitter-trap degeneracy pattern
+/// (S5, Round 3 — per-draw guard, float-free, integer-only).
+///
+/// Draws twice from `rng`. If the two `spread` values are equal, the guard
+/// fires and [`DegenerateDraw`] is returned — the caller maps this to
+/// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's
+/// `(spread, bond_first)` is returned; the probe draw is consumed and
+/// discarded.
+///
+/// **Why two draws?** The double-jitter trap produces a triangular spread
+/// distribution (peaked at 0) by computing `|a - b|`; consecutive draws from
+/// such a source are statistically likely to cluster. Two consecutive equal
+/// spreads from a correct CSPRNG occur with probability ≈ 1/(window+1) ≈
+/// 0.17 % — rare enough to fire on a stuck RNG without triggering excessive
+/// retries on a correct one.
+///
+/// **False-positive handling:** the caller (the `SignBond` handler) surfaces
+/// `RngDegeneracy` and the user retries. A single false positive in 601 bond
+/// requests is acceptable; multiple consecutive false positives signal a
+/// broken entropy source.
+///
+/// **Extracted for testability** (S7(b)): tests feed degenerate `GapRng`
+/// implementations directly into this function without going through the actor
+/// or `OsRng`.
+///
+/// # Precondition: `window > 0`
+///
+/// A zero-width window draws `spread == 0` deterministically on every call, so
+/// the two probe draws are *trivially* equal and the guard would fire — but that
+/// is a **window misconfiguration**, not RNG degeneracy: a zero-width standoff
+/// provides no funding↔bond-post decorrelation, defeating the gate-6 firewall
+/// the draw exists to serve. The operational caller always passes
+/// [`DEFAULT_ENTRY_GAP`] (600), so a zero window is unreachable in
+/// production; the `debug_assert` catches any future misuse loudly in test/debug
+/// builds rather than silently mislabelling it as `RngDegeneracy`. (More
+/// generally the guard is only well-behaved for windows large enough that
+/// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
+pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
+    window: u64,
+    rng: &mut R,
+) -> Result<(u64, bool), DegenerateDraw> {
+    debug_assert!(
+        window > 0,
+        "entry-gap window must be > 0: a zero-width standoff provides no \
+         decorrelation and makes the degeneracy guard fire unconditionally; \
+         pass the operational DEFAULT_ENTRY_GAP window"
+    );
+    let (spread_draw, bond_first) = draw_entry_gap(window, rng);
+    let (spread_probe, _) = draw_entry_gap(window, rng);
+    if spread_draw == spread_probe {
+        return Err(DegenerateDraw);
+    }
+    Ok((spread_draw, bond_first))
+}
+
 // ---------------------------------------------------------------------------
 // Handle
 // ---------------------------------------------------------------------------
@@ -659,6 +950,47 @@ impl StakeEngineHandle {
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
             .ask(ActivePersona)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Build and sign a JoinMarket archival bond post for the persona named by
+    /// `handle` (Bond-PR 2c-2b, S1/S2).
+    ///
+    /// Consumes both `handle` (operation-scoped capability, typed contract #2)
+    /// and `ticket` (persist-before-use witness, typed contract #1) by value,
+    /// so "sign before persist" and "sign for an unheld persona" are uncallable.
+    ///
+    /// See [`SignBond`] for the full caller workflow.
+    ///
+    /// # Errors
+    ///
+    /// - [`StakeEngineError::StakeActorUnavailable`] — actor stopped (terminal).
+    /// - [`StakeEngineError::StaleHandle`] — the handle is from a prior
+    ///   generation *or* its slot is no longer in the held set. Both collapse to
+    ///   `StaleHandle` in `validate_handle` (a wipe advances the generation, so a
+    ///   stale-generation handle and a no-longer-held slot are the same failure).
+    ///   `LookaheadExhausted` is *not* reachable here — it is a `mint_handle`
+    ///   error; signing only validates an already-minted handle.
+    /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
+    /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
+    /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
+    /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
+    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
+    pub(crate) async fn sign_bond(
+        &self,
+        handle: PersonaHandle,
+        ticket: super::stake_persist::PersistedBondTicket,
+        holdings: HoldingsDescriptor,
+        tx_prefix_hash: [u8; 32],
+    ) -> Result<JoinMarketVin, StakeEngineError> {
+        self.actor
+            .ask(SignBond {
+                handle,
+                ticket,
+                holdings,
+                tx_prefix_hash,
+            })
             .await
             .map_err(collapse_send_error)
     }
@@ -1019,5 +1351,167 @@ mod tests {
             .await
             .expect_err("post-death query fails");
         assert!(matches!(err, StakeEngineError::StakeActorUnavailable));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bond-PR 2c-2b S7 — request-path composition KAT + own-surface negatives
+    // -----------------------------------------------------------------------
+    //
+    // S7(a): `verify_credit_funding` reject on wrong funding.
+    // S7(b): degeneracy guard fires on degenerate draw (double-jitter-trap RNG).
+    //
+    // The `draw_entry_gap_guarded` helper is extracted and tested directly so the
+    // degeneracy logic is exercised with injectable RNGs without going through the
+    // actor (which uses `OsRngGapAdapter` in production).
+    //
+    // S7(c) unrepresentability ("sign without ticket", "unheld-handle sign") is
+    // NOT covered by trybuild: that path was retired (plan §4.1 R0-D1) because the
+    // capability tokens are `pub(crate)` with module-private fields, so an external
+    // trybuild crate cannot name them without re-exposing firewall internals. It is
+    // instead enforced unconditionally by the type system (module-private fields +
+    // by-value consumption), with the `!Clone` half pinned by the always-on
+    // `AmbiguousIfImpl` `const _` guard above (near `PersonaHandle`).
+
+    /// S7(b) — degeneracy guard fires on a stuck-RNG (double-jitter-trap pattern).
+    ///
+    /// A `ConstRng` that always returns the same `u64` produces identical spread
+    /// values on every call to `draw_entry_gap`, so `draw_entry_gap_guarded`
+    /// must fire the degeneracy guard for any window > 0.
+    #[test]
+    fn degeneracy_guard_fires_on_stuck_rng() {
+        struct ConstRng(u64);
+        impl GapRng for ConstRng {
+            fn next_u64(&mut self) -> u64 {
+                self.0
+            }
+        }
+
+        // Any constant value produces the same spread twice → guard fires.
+        // Use the canonical operational window (single-sourced) so the test
+        // tracks the wallet's real draw window rather than a stray literal.
+        for seed in [0u64, 1, 42, u64::MAX / 2] {
+            let mut rng = ConstRng(seed);
+            let result =
+                draw_entry_gap_guarded(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW, &mut rng);
+            assert!(
+                result.is_err(),
+                "stuck-RNG seed {seed}: expected degeneracy guard to fire, got ok"
+            );
+        }
+    }
+
+    /// S7(b) — degeneracy guard passes a correct RNG.
+    ///
+    /// A deterministic counter RNG produces distinct consecutive spreads (except
+    /// in pathological cases the guard's false-positive rate handles via retry),
+    /// so the guard should pass for the common case.
+    #[test]
+    fn degeneracy_guard_passes_correct_rng() {
+        struct CounterRng(u64);
+        impl GapRng for CounterRng {
+            fn next_u64(&mut self) -> u64 {
+                let v = self.0;
+                self.0 = self.0.wrapping_add(1_000_000_007); // large coprime step
+                v
+            }
+        }
+
+        let mut rng = CounterRng(0xDEAD_BEEF_0000_0000);
+        let result = draw_entry_gap_guarded(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW, &mut rng);
+        assert!(
+            result.is_ok(),
+            "counter RNG should not trigger the degeneracy guard: {result:?}"
+        );
+    }
+
+    /// S7(a) — `verify_credit_funding` rejects incorrect funding totals.
+    ///
+    /// Tests the builder-level funding invariant directly (the actor path would
+    /// call `verify_credit_funding` after the `sign_bond` handler produces the
+    /// `JoinMarketVin`). Exercises both underflow and overflow cases.
+    #[test]
+    fn verify_credit_funding_rejects_wrong_total() {
+        use shekyl_archival_bond_builder::{verify_credit_funding, BondBuildError};
+        use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
+        use shekyl_units::AtomicUnits;
+
+        let bundle = derive_bundle(0);
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        let tx_prefix_hash = [0u8; 32];
+        let vin = build_join_market_vin(&bundle, holdings, &tx_prefix_hash)
+            .expect("build_join_market_vin succeeds for valid inputs");
+
+        let fee = AtomicUnits::from_raw(100);
+        let outputs = AtomicUnits::from_raw(500);
+        let bond_credit = AtomicUnits::from_raw(vin.vin().bond_credit);
+        let correct_total = outputs
+            .checked_add(fee)
+            .and_then(|s| s.checked_add(bond_credit))
+            .expect("test amounts fit in u64");
+
+        assert!(
+            verify_credit_funding(correct_total, outputs, fee, &vin).is_ok(),
+            "correct total must pass"
+        );
+
+        let short = AtomicUnits::from_raw(correct_total.to_raw() - 1);
+        let err = verify_credit_funding(short, outputs, fee, &vin)
+            .expect_err("underflow funding must fail");
+        assert!(
+            matches!(err, BondBuildError::CreditImbalance { .. }),
+            "wrong error: {err:?}"
+        );
+
+        let over = AtomicUnits::from_raw(correct_total.to_raw() + 1);
+        let err = verify_credit_funding(over, outputs, fee, &vin)
+            .expect_err("overflow funding must fail");
+        assert!(
+            matches!(err, BondBuildError::CreditImbalance { .. }),
+            "wrong error: {err:?}"
+        );
+    }
+
+    /// S7 slot-mismatch negative — a ticket for slot A with a handle for slot B
+    /// produces [`StakeEngineError::SlotMismatch`], not a signing attempt.
+    #[tokio::test]
+    async fn sign_bond_slot_mismatch_is_rejected() {
+        use crate::engine::stake_persist::PersistedBondTicket;
+        use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
+
+        let handle = spawn_over(&[0, 1], &[], None);
+        mint_and_activate(&handle, 0)
+            .await
+            .expect("activate slot 0");
+        let h0 = handle
+            .mint_handle(PSlot(0))
+            .await
+            .expect("mint handle for slot 0");
+
+        // Forge a ticket for slot 1 (bypassing Engine::persist_bond_record
+        // via the test-only constructor on PersistedBondTicket).
+        let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot(1));
+
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        let err = handle
+            .sign_bond(h0, ticket_for_slot_1, holdings, [0u8; 32])
+            .await
+            .expect_err("slot mismatch must fail");
+
+        assert!(
+            matches!(
+                err,
+                StakeEngineError::SlotMismatch {
+                    handle_slot: PSlot(0),
+                    ticket_slot: PSlot(1),
+                }
+            ),
+            "expected SlotMismatch(0, 1), got {err:?}"
+        );
     }
 }
