@@ -1,10 +1,10 @@
 # Shekyl Genesis Transaction / Block Wire Format — Specification
 
-**Status:** Round 0 **approved** 2026-06-20; freeze-gate (§6) mostly resolved —
-the code-resolvable items (Q2 single-output coinbase, Q3 shed plain key, Q6
-proof/Bp+ location, Q7 clean tag renumber, Q10 varint) and Q4/Q5 are closed; only
-**Q1** (`txin_fcmp` minimal fields — needs a spend blob) and **Q11** (staked
-amount vs cover model — a staking call) remain before the Round-1 / Wave-1 freeze. **This document, once ratified, IS the genesis freeze** for the binary
+**Status:** Round 0 **approved** 2026-06-20; freeze-gate (§6) resolved down to two
+items — **Q11** (staked amount vs cover model, a staking call) and **Q4 Wave-2**
+(archival arm sign-off). Q1–Q10 + Q5 are closed (incl. Q1 at source: `txin_fcmp`
+= `key_image` only; Q7 clean tag renumber). The Round-1 / Wave-1 freeze is ready
+pending the Q11 call. **This document, once ratified, IS the genesis freeze** for the binary
 block/tx wire format: the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
 match it where we deliberately diverge. **Process:** multi-round design
@@ -103,7 +103,7 @@ wire usage) — they are not a genesis surface and carry no tag-scheme decision.
 | `0xff` | `txin_gen` (:126) | **Ratify** | coinbase height (varint). |
 | `0x00` | `txin_to_script` (:135,851) | **Shed** | CryptoNote placeholder, no producer. Remove from genesis tag space. |
 | `0x01` | `txin_to_scripthash` (:148,852) | **Shed** | idem. |
-| `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** | drop `key_offsets` (ring-decoy vestige; FCMP++ proves against the full set) and the by-amount machinery. **OPEN:** confirm `key_image` is the only field the daemon FCMP++ verify consumes (needs a spend blob — §6 Q1). |
+| `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** (Q1 resolved) | Genesis `txin_fcmp` = `k_image[32]` **only**. `key_offsets` is consensus-**required empty** for FCMP++ inputs (`blockchain.cpp:3715`); `amount` is `0` and unused — FCMP++ membership is `shekyl_fcmp_verify` against the curve-tree root, not the legacy ring path (`scan_outputkeys_for_indexes`/`get_output_key` by amount+offsets). Both vestigial → dropped. |
 | `0x03` | `txin_stake_claim` (:176) | **Spec + ratify** | `VARINT(amount) VARINT(staked_output_index) VARINT(from_height) VARINT(to_height) k_image[32]`. `staked_output_index` is a **global** output index (:179, confirmed) — not an amount-output-index, so no by-amount heritage smuggled. |
 | `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (Wave 2; coordinate w/ archival track) | `p_canonical_id[32] VARINT(shard_id) VARINT(settlement_epoch) segment_subroot_rk[32] leaf_index_in_segment(u32 LE) leaf_bytes[ARCHIVAL_LEAF_BYTES] path{c1_layers,c2_layers : vec<vec<hash>>} hybrid_signature(varint+bytes)`. |
 | `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (Wave 2; unrepresented in Rust today) | `hybrid_public_key(varint+bytes) p_canonical_id[32] post_kind(u8) holdings{kind_u8, [shard_ids vec if ShardSetCompact]} VARINT(bonded_total_atomic) VARINT(bond_credit) VARINT(bond_debit)`. |
@@ -246,8 +246,11 @@ the pre-cut bytes; the cut flips both sides together (§7 atomic-flip).
 
 Format: **ID — item.** *(status)* disposition / what's needed.
 
-- **Q1 — `txin_fcmp` minimal fields.** *(OPEN, needs spend blob + source)* Does the
-  daemon FCMP++ verify read `amount`/`key_offsets` at all, or only `key_image`?
+- **Q1 — `txin_fcmp` minimal fields.** *(RESOLVED at source)* Consensus *requires*
+  `key_offsets` empty for FCMP++ inputs (`blockchain.cpp:3706-3721`), and `amount`
+  is `0`/unused (membership via `shekyl_fcmp_verify` / curve tree, not the ring
+  path). Genesis `txin_fcmp` = `k_image[32]` only. A spend blob is still useful as
+  a positive-corpus item but is no longer a design blocker.
 - **Q2 — coinbase output count.** *(RESOLVED)* `max_outs=1` (`blockchain.cpp:1900`)
   always collapses the reward to **one** output; shed the decompose machinery and
   formalize single-output (§2.4, §5).
@@ -314,9 +317,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 ## 8. Sequencing
 
 1. Round 0 (this doc) → **approved**.
-2. Code-resolvable items closed (Q2/Q3/Q6/Q7/Q10 + Q4/Q5). **Remaining before
-   freeze:** capture a spend blob → resolve **Q1** (`txin_fcmp` minimal fields);
-   your calls on **Q11** (staked amount vs cover) + **Q4 Wave-2** archival sign-off.
+2. Q1–Q10 + Q5 closed (Q1 resolved at source). **Remaining before the Wave-1
+   freeze:** your **Q11** call (staked amount vs cover) + **Q4 Wave-2** archival
+   sign-off. A spend blob is captured later as a positive-corpus item, not a
+   blocker.
 3. **Round 1 (Wave 1):** freeze the settled byte tables (gen, fcmp, stake,
    outputs, rct, header, pow-blob), pin the varint, reference the proof/BpPlus
    freeze (Q6).
