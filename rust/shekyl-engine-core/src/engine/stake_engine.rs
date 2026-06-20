@@ -258,6 +258,43 @@ impl PersonaHandle {
     }
 }
 
+/// Always-on compile-time guard: the two operation capability tokens
+/// ([`PersonaHandle`], [`PersistedBondTicket`]) must remain **single-use** —
+/// neither `Clone` nor `Copy`. Their single-use-ness is what makes "use an
+/// unheld persona" (typed contract #2) and "sign before persist" (typed
+/// contract #1) unrepresentable: a token is consumed *by value* by `sign_bond`
+/// and cannot be duplicated to bypass the consumption.
+///
+/// This replaces the originally-planned `trybuild` compile-fail tests for S7(c)
+/// (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4 R0-D# finding): `trybuild` compiles
+/// each case as an **external** crate, which cannot name these `pub(crate)`
+/// firewall types without a re-export that would itself re-expose the internals
+/// the firewall exists to encapsulate. The enforcement is the type system —
+/// module-private fields + `!Clone` + by-value consumption — which holds for
+/// **all** code unconditionally, a stronger guarantee than any external
+/// snapshot. This `const _` block is the regression guard that the `!Clone`
+/// half of that guarantee is never silently weakened by a careless
+/// `#[derive(Clone)]`. It is a zero-cost compile-time check (no runtime, no
+/// dependency); it is the inlined equivalent of
+/// `static_assertions::assert_not_impl_all!`.
+///
+/// If either token gains a `Clone`/`Copy` impl, the `AmbiguousIfImpl`
+/// resolution below becomes ambiguous and the crate fails to compile.
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn token_must_stay_single_use() {}
+    }
+    impl<T> AmbiguousIfImpl<()> for T {}
+    #[allow(dead_code)]
+    struct Invalid;
+    impl<T: Clone> AmbiguousIfImpl<Invalid> for T {}
+
+    // Resolves uniquely iff the type is NOT `Clone`; ambiguous (compile error)
+    // if a `Clone` impl is ever added.
+    let _ = <PersonaHandle as AmbiguousIfImpl<_>>::token_must_stay_single_use;
+    let _ = <super::stake_persist::PersistedBondTicket as AmbiguousIfImpl<_>>::token_must_stay_single_use;
+};
+
 /// The public identity of an activated persona `P`.
 ///
 /// Carries **only public material** — the typed [`HybridPublicKey`] that rides
