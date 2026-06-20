@@ -5,10 +5,13 @@ Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
 on the Wave-2 `bond_post` arm, no Wave-1 impact) and merged into Q4; Q12 resolved
 (genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
-**The Round-1 / Wave-1 freeze is ready.** Settled surface = `gen`+`fcmp` inputs,
-`tagged_key` output, ct, header, pow-blob. The only deferred surface is **Wave 2**
-(the `P`-model staking-archival arms), which freezes later with the
-staking-archival workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
+**Round-1 / Wave-1 freeze drafted** (§9–§14: byte tables, resource bounds,
+hashing layer, reject rules, domain constraints) — pending your ratification, plus
+two new creation cuts it surfaced (trailing-byte exact-consumption; explicit
+`fcmp_proof` cap). Settled surface = `gen`+`fcmp` inputs, `tagged_key` output, ct,
+header, pow-blob, tx `version=3`. The only deferred surface is **Wave 2** (the
+`P`-model staking-archival arms), which freezes later with the staking-archival
+workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
 block/tx wire format: the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
 match it where we deliberately diverge. **Process:** multi-round design
@@ -418,3 +421,125 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 6. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip).
 7. **Wave 2:** freeze archival `0x4`/`0x5` under the combined wire+semantics
    sign-off; extend the crate + corpus.
+
+---
+
+# Round 1 — Wave-1 freeze (byte tables + bounds + hashes + reject rules)
+
+**Status:** Round-1 draft (2026-06-20), for ratification. A genesis freeze is not
+just byte order — it is also the **bounds**, the **hashes**, and the
+**canonical-form/reject rules**, each of which freezes identically. All
+source-confirmed at `dev`. Integers little-endian; `V(x)` = canonical varint
+(§6 Q10); `cn_fast_hash` = keccak-256.
+
+## 9. Wave-1 frozen byte layout
+
+Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values until
+the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
+pre-renumber tags until recapture.)*
+
+**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32]`; genesis `major=1, minor=0` (§13).
+**9.2 Block** — `BlockHeader · Transaction(miner) · V(n_tx) · n_tx×Hash[32]`.
+**9.3 Transaction** — `V(version=3) · TxPrefix · Ct`.
+**9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.
+**9.5 Inputs** — `gen 0x00`: `tag(1) · V(height)`. `fcmp 0x01`: `tag(1) · key_image[32]` (no `amount`/`key_offsets`, Q1).
+**9.6 Outputs** — `tagged_key 0x00` (sole type): `V(amount) · tag(1) · key[32] · view_tag(1)` (amount cleartext for coinbase, `0` for confidential spend outputs).
+**9.7 Ct** — `ct_type(1)` then:
+- `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
+- `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
+
+  `enc_amount`/`enc_label` = 8B value + 1B tag (9B); `outPk` = 32B commitment;
+  the `enc_label` indistinguishability invariant (§2.3) is binding.
+**9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
+**9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6).
+
+## 10. Resource bounds (frozen limits — reject on exceed)
+
+| Bound | Value | Enforced | Constant |
+|---|---|---|---|
+| inputs / tx | **8** | blockchain.cpp:3618 | `FCMP_MAX_INPUTS_PER_TX` (config:211) |
+| outputs / tx | **16** | BP+ layout (rctSigs.cpp:211; tx_verification_utils.cpp:213) | `BULLETPROOF_PLUS_MAX_OUTPUTS` (config:241) |
+| tx size | **1,000,000** | tx_verification_utils.cpp:63 | `CRYPTONOTE_MAX_TX_SIZE` (config:44) |
+| tx_extra | **24,576** | cryptonote_tx_utils.cpp:579 | `MAX_TX_EXTRA_SIZE` (config:254) |
+| PQC pubkey blob | **1,996** single / 13,974 multisig-max | cryptonote_basic.h:347 | `PQC_HYBRID_SINGLE_KEY_LEN` / `PQC_MAX_PUBLIC_KEY_BLOB` (config:291) |
+| PQC sig blob | **3,385** single / 23,697 multisig-max | cryptonote_basic.h:350 | `PQC_HYBRID_SINGLE_SIG_LEN` / `PQC_MAX_SIGNATURE_BLOB` (config:293) |
+| `nbp` | **== 1** (one aggregated BP+) | tx_verification_utils.cpp:213 | `is_canonical_bulletproof_plus_layout` |
+| `curve_trees_tree_depth` | `0 < depth ≤ chain depth` (dynamic) | blockchain.cpp:3964,4070 | — |
+| `fcmp_proof` len | **NO explicit cap** (only tx-size) | — | **GAP — add an explicit cap at genesis (creation cut)** |
+
+Each is a §7 negative-corpus reject case (a 9-input or 17-output tx must be
+rejected by both impls).
+
+## 11. Hashing layer (consensus identities)
+
+- **Tx hash** = `cn_fast_hash` over concatenated component hashes (format_utils.cpp:1200-1252):
+  - coinbase (`Null`, no pqc): **3-part** `H(prefix) · H(base) · null_hash`
+  - spend (`Fcmp`, pqc present): **4-part** `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`
+
+  where `H(prefix)` = `get_transaction_prefix_hash` (version + prefix fields),
+  `H(base)` = hash of `serialize_ct_base`, `H(pqc_auths)` = hash of the serialized
+  pqc_auths vec, `H(prunable)` = hash of prunable (`null_hash` for coinbase).
+- **Pruning stable (pruned == full).** `pqc_auths` are **unprunable** (kept in the
+  pruned form, format_utils.cpp:1204) and `prunable_hash` is retained, so all
+  components match → identical tx hash. *(The EOF-tolerant pqc-auths-empty form is
+  a genuinely different tx with the 3-part hash — correct, not a collision.)*
+- **Block hash** = `cn_fast_hash( V(len) · hashing_blob )`, where
+  `hashing_blob = BlockHeader · tx_tree_hash · V(tx_count+1)`. The `V(len)` prefix
+  comes from `get_object_hash` serializing the blob as a string
+  (format_utils.h:178-183, .cpp:1303-1323). **The PoW hash uses `hashing_blob`
+  WITHOUT the `V(len)` prefix** — the two preimages differ.
+- **tx_tree_hash** = Merkle tree-hash over `[ miner_tx_hash, tx_hashes… ]`
+  (format_utils.cpp:1449-1472).
+- The block-202612 hash special-case is Monero chain history — a dead pre-genesis
+  branch; **shed** ([`60-no-monero-legacy`]); the vendored Rust `block.rs` carries
+  it and the clean crate must drop it.
+
+## 12. Canonical-form / reject rules (must-reject enumeration)
+
+- **Inputs strictly ascending by key image** — `memcmp(ki, last) >= 0 → reject`
+  (blockchain.cpp:3642-3663). One rule, two guarantees: rejects **unsorted** AND
+  **in-tx duplicate** key images. (fcmp inputs; gen has none.)
+- **Non-canonical varints rejected** (Q10).
+- **unlock_time timestamp form rejected** — `unlock_time >=
+  CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL (500,000,000) → reject` (blockchain.cpp:3473).
+  unlock_time is a **block height only** — a creation cut (Monero allowed the
+  timestamp form); otherwise unconstrained for non-coinbase.
+- **Trailing bytes — GAP at the oracle; CLOSE at genesis.** `parse_and_validate_tx_from_blob`
+  (format_utils.cpp:183) does **not** check exact consumption (no remaining-bytes
+  check, no re-serialize compare), so appended garbage yields a different blob for
+  the same tx (malleability). **The genesis Rust serializer MUST enforce exact
+  consumption** (reject trailing bytes on tx + block parse) — a deliberate creation
+  cut; the matching C++ fix is a gate-(c) change.
+- Cross-tx/chain double-spend (key image already spent) — blockchain.cpp:3521
+  (chain-state, not a parse rule).
+
+Gate = **identical accept/reject** (§7), not round-trip.
+
+## 13. Domain constraints (validator-enforced consensus rules)
+
+- **Coinbase:** `vin.size()==1` (blockchain.cpp:1524); `vin[0]==gen` (1525);
+  `gen.height==block height` (1529); `ct type==Null` (1527); single output
+  (`max_outs=1`, 1900); `unlock_time == height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`
+  (`=60`, 1535); outputs sum == block reward (`validate_miner_transaction`).
+- **pqc_auths binding:** `count == vin.size()` (blockchain.cpp:3752);
+  `auth_version == 1` (tx_pqc_verify.cpp:169); `scheme_id ∈ {1 single, 2 multisig}`
+  (tx_pqc_verify.cpp:181); **`flags == 0` — unknown bits rejected, not ignored**
+  (tx_pqc_verify.cpp:175); serve_credit txs carry **empty** pqc_auths.
+- **referenceBlock window:** `tip − FCMP_REFERENCE_BLOCK_MAX_AGE(100) ≤ ref_height
+  ≤ tip − FCMP_REFERENCE_BLOCK_MIN_AGE(5)` (blockchain.cpp:3946-3954). (§2.3
+  specifies the field; this is its validity window.)
+- **CT balance:** `Σ pseudoOuts == Σ outPk + fee` (+ `bond_credit` for bond-post) —
+  `verRctSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
+  blockchain.cpp:4125). The general spend rule (the bond floor §2.0 is the
+  bond-post case of this).
+- **Versions:** block `major=1, minor=0`; tx `version=3` (Q12). The format is
+  version-frozen — a later format is a hard fork (V4 = lattice-only).
+
+## 14. Round-1 findings (new creation cuts surfaced by the freeze pass)
+
+1. **Trailing-byte malleability gap** (§12) — close at genesis: the Rust
+   serializer enforces exact consumption; C++ gate-(c) matches.
+2. **`fcmp_proof` has no explicit length cap** (§10) — add one at genesis rather
+   than relying on the 1 MB tx-size bound (a tighter, explicit consensus limit).
+
+Both are pre-genesis creation cuts (free now, hard forks later).
