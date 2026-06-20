@@ -13,9 +13,10 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
-**Status:** **OPEN — scoping pre-flight closed; design rounds 1–6 closed
-(2026-06-19); only the rule-26 impl-time pre-flight (`R0-D#`, §4) remains
-before production-merge.**
+**Status:** **OPEN — scoping pre-flight closed; design rounds 1–6 closed; the
+rule-26 impl-time pre-flight (`R0-D1`–`R0-D4`, §4.1) closed (2026-06-19). All
+design + reconciliation gates met; remaining before merge is the rule-45/50
+workspace gate sweep + the substrate re-check, then PR.**
 
 ---
 
@@ -643,19 +644,19 @@ it will check:
 - **Substrate re-check.** Re-read every disposition's cited substrate at the
   impl pin (the `stake_engine.rs` / `stake_persist.rs` / `draw.rs` /
   `conformance.rs` lines this doc cites; the §10.2 typed contracts).
-- **Artifact execution + numeric reconciliation (`B6`/`B9`).** Open numeric
-  claims to verify against substrate/measurement at that pass:
-  - **`B6`: the 600-block entry-gap window has no named constant** — it lives
-    only as test literals (`golden_vector.rs:19` `GOLDEN_WINDOW = 600`,
-    `conformance_grading.rs` `window = 600u64`). 2c-2b must introduce a named
-    wallet-default constant and reconcile it against the golden vector.
-  - **`B6`: settlement-epoch / SEB / ramp constants** (`≥ 1` SEB spacing, `≥ 2`
-    settlement epochs ramp — `ARCHIVAL_TIMING_CONSTANTS.md` §7 lines 253, 256)
-    resolve through `config/consensus_constants.json` (§6.3); pin their values
-    at the source line, not from the table prose.
-  - **`B9`: `certify_draw` sample size `n`** vs CI wall-clock — pick `n` from the
-    tolerance math (`conformance.rs:300–310`, `8/sqrt(n)`), measured, not
-    estimated.
+- **Artifact execution + numeric reconciliation (`B6`/`B9`) — CLOSED.** All
+  three numeric claims are now reconciled against substrate/measurement (see
+  §4.1 findings):
+  - **`B6` entry-gap window → `R0-D2` (single-sourced).** The 600 literal,
+    formerly triplicated, now resolves through `shekyl-standoff`'s
+    `pub const DEFAULT_ENTRY_GAP_WINDOW = 600`; the golden vector and the wallet
+    both reference it, and a drift fails `golden_vector_is_bit_identical`.
+  - **`B6` SEB/ramp constants → `R0-D3` (reconciled).** `MIN_COLD_START_SPACING`
+    (1 SEB) = "≥ 1 settlement epoch"; SEB length `settlement_epoch_blocks = 10000`
+    is consensus (`config/consensus_constants.json:19`); ramp deferred (SP-2.e).
+  - **`B9` `certify_draw` sample size → `R0-D4` (pinned + measured).** `n =
+    200_000`, `tolerance ≈ 0.0179`, wall-clock **~14–15 ms** (debug, incl.
+    startup); production call site rides the deferred S6 hook.
 
 ### 4.1 Closed findings
 
@@ -697,6 +698,55 @@ ever become `pub` for an independent reason (then an external crate can name
 them without a bespoke re-export, and `trybuild` snapshots become free). No such
 need is known.
 
+**`R0-D2` — B6a: the 600-block entry-gap window is now single-sourced
+(2026-06-19).** *Numeric reconciliation + drift-guard.*
+
+At design time the `600` window was three independent literals
+(`golden_vector.rs:19`, `conformance_grading.rs:175,237`, and the new
+`stake_timing::DEFAULT_ENTRY_GAP_WINDOW`). They agreed at `600`, but nothing
+*enforced* the agreement: the golden vector guards the draw **algorithm**, not
+the wallet-window-vs-certified-window gap — a change to `stake_timing`'s literal
+would not have failed any test. Per `shekyl-standoff`'s own single-source
+doctrine ("the simulator, the published conformance vector, and the wallet all
+import the same `draw_entry_gap`"), the **value** is now single-sourced too:
+
+- `shekyl-standoff` exports `pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600`
+  (`src/draw.rs`), re-exported at the crate face (`src/lib.rs`).
+- `golden_vector.rs` sources `GOLDEN_WINDOW` from the const (not a literal).
+- `stake_timing::DEFAULT_ENTRY_GAP_WINDOW: NetworkGap` wraps the shared const:
+  `NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW))`.
+
+**Verified to bite cross-crate:** flipping the const to `601` re-draws and fails
+`golden_vector_is_bit_identical`. Value unchanged (`600`) → frozen vector stays
+bit-identical; `cargo test -p shekyl-engine-core` (318) + `-p shekyl-standoff`
+green; fmt + clippy clean. The Round-2 placement (the typed `NetworkGap` lives
+in `stake_timing`) is preserved — only the raw `u64` moved to the scheme's home.
+
+**`R0-D3` — B6b: cold-start SEB spacing reconciled (2026-06-19).** *Unit
+reconciliation.* `MIN_COLD_START_SPACING = EconomicSpacing(SebSpan(1))` matches
+`ARCHIVAL_TIMING_CONSTANTS.md` §7 "Min spacing join-Market ↔ principal spend:
+≥ 1 settlement epoch" (gate-6 R4). The split is now explicit in the const's doc:
+the **count** (1 SEB) is wallet policy; the SEB **length**
+(`settlement_epoch_blocks = 10000`) is consensus
+(`config/consensus_constants.json:19`). The `SebSpan → blocks` elapsed check
+(`1 × settlement_epoch_blocks`) is wire-later with the cold-start funding source
+(SP-2.d, deferred). The steady-state ramp (`≥ 2 settlement epochs`,
+`ARCHIVAL_TIMING_CONSTANTS.md` §7) is steady-state-deferred (SP-2.e) — no 2c-2b
+constant needed.
+
+**`R0-D4` — B9: `certify_draw` sample size pinned + measured (2026-06-19).**
+*Measured, not estimated.* The reference sample is `n = 200_000`
+(`conformance_grading.rs:175`), giving `tolerance(200_000) = 8/√200000 ≈ 0.0179`
+(`conformance.rs:301–309`) — generous enough a correct CSPRNG never false-fails,
+tight enough gross bias (`≳ 0.1`) fails. **Wall-clock measured** (not estimated):
+`self_cert_passes_reference_rng` (the n=200k `certify_draw` call) runs in
+**~14–15 ms** in a debug build *including process startup* — i.e. the draw+grade
+itself is sub-15 ms, negligible for a session-start gated check (release is
+faster). The `n` choice is therefore settled and shown cheap; only the
+**production call site** is deferred (it rides the deferred S6 session-start
+hook — see FOLLOWUPS "S6 — `certify_draw` session self-cert wiring"). No
+CI-wall-clock concern blocks that wiring.
+
 ---
 
 ## Process notes
@@ -708,8 +758,8 @@ need is known.
   `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`; plus
   the persisted-schema snapshot (`42`) — **2c-2b should not bump
   `STAKING_BLOCK_VERSION`** (the format froze in 2c-2a; the `bonded_slots` hint
-  semantics were chosen so 2d's GC needs no second bump — `stake_engine.rs:166–
-  168`, FOLLOWUPS lines 949–951).
+  semantics were chosen so 2d's GC needs no second bump — `stake_engine.rs:173`,
+  FOLLOWUPS lines 949–951).
 - **No C++.** Entire unit is Rust, advancing the FFI boundary inward
   (`20`/`25`); staking stays inside the Rust domain (no `SETTINGS_BLOCK_VERSION`
   perturbation — §10.2 store decision, lines 606–620).
