@@ -37,7 +37,17 @@ use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc::Rpc;
 use shekyl_simple_request_rpc::SimpleRequestRpc;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
+
+use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
+use super::refresh::RefreshOptions;
+use super::{DaemonClient, Engine, SoloSigner};
+use shekyl_address::Network;
+use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::wallet_envelope::KdfParams;
+use shekyl_engine_file::SafetyOverrides;
+use shekyl_engine_prefs::WalletPrefs;
+use shekyl_scanner::LedgerBlockExt;
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
 /// races on the RPC port and is resource-heavy (each mines blocks). Serialize all
@@ -208,34 +218,19 @@ impl Drop for RegtestDaemon {
     }
 }
 
-/// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
-/// and `generateblocks` advances the chain. De-risks the Phase-0 foundation
-/// (spawn, RPC, wallet creation, address-format match) before layering the spend
-/// path on top.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
-    use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
-    use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
-    use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_prefs::WalletPrefs;
-
-    let daemon = RegtestDaemon::start().await;
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+/// Create a fresh Mainnet PQC wallet pointed at the daemon RPC. Mainnet matches
+/// FAKECHAIN's mainnet consensus/address params — the strongest-parity choice.
+/// `seed_byte` distinguishes wallets (sender vs destination). Returns the engine
+/// plus the tempdir, which the caller must keep alive (it owns the wallet files).
+async fn new_wallet(rpc_port: u16, seed_byte: u8) -> (Engine<SoloSigner>, tempfile::TempDir) {
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
         .expect("wallet rpc");
     let daemon_client = DaemonClient::new(rpc);
-
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
-    let seed = [0x11u8; MASTER_SEED_BYTES];
+    let seed = [seed_byte; MASTER_SEED_BYTES];
     let creds = Credentials::password_only(b"track2-test");
-
-    // FAKECHAIN uses mainnet config/address format (cryptonote_config.h:372), so
-    // the wallet is Mainnet + Bip39 (the only permitted seed format for Mainnet).
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
@@ -255,10 +250,23 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
         prefs: WalletPrefs::default(),
     };
     let wallet = Engine::<SoloSigner>::create(params, daemon_client).expect("create wallet");
-    let address = wallet
-        .primary_address()
-        .encode()
-        .expect("encode wallet address");
+    (wallet, tmp)
+}
+
+fn wallet_address(w: &Engine<SoloSigner>) -> String {
+    w.primary_address().encode().expect("encode wallet address")
+}
+
+/// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
+/// and `generateblocks` advances the chain. De-risks the Phase-0 foundation
+/// (spawn, RPC, wallet creation, address-format match) before layering the spend
+/// path on top.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp) = new_wallet(daemon.rpc_port, 0x11).await;
+    let address = wallet_address(&wallet);
     eprintln!("wallet address: {address}");
 
     let before = daemon.height().await;
@@ -276,4 +284,103 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
         "generateblocks should return 3 hashes"
     );
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
+}
+
+/// Keystone step 1 — the refresh/scan surface (mirror of submit): the daemon
+/// serializes blocks (C++), the wallet parses them (Rust), and shared-FFI
+/// scan/tree recognizes the coinbase. Mine coinbase to the wallet, mature it
+/// past the `+60` lock, refresh, and assert the matured coinbase is **spendable**
+/// (`unlocked`).
+///
+/// Diagnosis discipline on a balance miss (parse-first, top-down): (1) the
+/// `get_blocks` response parse of the large PQC coinbase fields
+/// (`x25519 eph || ml_kem ct || O || C`) is the likeliest culprit — the new
+/// C++↔Rust wire surface, amplified by ~1184-byte ML-KEM fields; (2) scan /
+/// decapsulation (shared FFI); (3) verify-at-ingest / tree (shared FFI,
+/// Tier-A-proven — a failure here is usually a symptom of (1)). A wire-shape
+/// mismatch on the ML-KEM fields is a canonical-layout arbitration (block wire
+/// freezes at genesis), not an auto-Rust fix.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn e2e_refresh_detects_matured_coinbase() {
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp) = new_wallet(daemon.rpc_port, 0x11).await;
+    let address = wallet_address(&wallet);
+
+    // Mine coinbase to the wallet, then past the +60 coinbase lock so the early
+    // coinbases mature. 70 blocks → the first ~10 are spendable.
+    daemon.generate_blocks(70, &address).await;
+    let tip = daemon.height().await;
+    eprintln!("daemon tip after mining: {tip}");
+
+    // Parse-first localization probe: exercise the two RPCs refresh makes
+    // (get_height, then per-block fetch) directly, to surface the RAW RpcError
+    // that the refresh path collapses into a bounded "daemon I/O failure".
+    eprintln!(
+        "probe get_height: {:?}",
+        daemon.rpc.get_height().await.map_err(|e| format!("{e:?}"))
+    );
+    eprintln!(
+        "probe get_scannable_block_by_number(1): {:?}",
+        daemon
+            .rpc
+            .get_scannable_block_by_number(1)
+            .await
+            .map(|_| "ok")
+            .map_err(|e| format!("{e:?}"))
+    );
+
+    // Differential probe of the block-wire seam: fetch the raw block blob the
+    // daemon (C++ oracle) serialized and run the Rust `Block::read` directly, to
+    // surface the io::Error the rpc layer discards behind "invalid block". This
+    // is the first genesis-format-definition data point.
+    {
+        #[derive(Deserialize, Debug)]
+        struct BlockResp {
+            blob: String,
+        }
+        let br: BlockResp = daemon
+            .rpc
+            .json_rpc_call("get_block", Some(json!({ "height": 1 })))
+            .await
+            .expect("get_block json");
+        let bytes = hex::decode(&br.blob).expect("block blob hex");
+        eprintln!("block 1 blob: {} bytes", bytes.len());
+        match shekyl_oxide::block::Block::read(&mut bytes.as_slice()) {
+            Ok(_) => eprintln!("Block::read: ok"),
+            Err(e) => eprintln!("Block::read ERR: {e}"),
+        }
+    }
+
+    // Fetch is lock-free inside `start_refresh`; deltas apply under a brief write
+    // lock, so the balance read below is never starved by network I/O.
+    let arc = Arc::new(RwLock::new(wallet));
+    let summary = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh")
+        .join()
+        .await
+        .expect("refresh joins");
+    eprintln!(
+        "refresh: blocks_processed={}, range={:?}",
+        summary.blocks_processed, summary.processed_height_range
+    );
+
+    let bal = {
+        let g = arc.read().await;
+        let ledger = g.ledger();
+        let block = &ledger.ledger;
+        block.balance(block.height())
+    };
+    eprintln!(
+        "balance: total={:?} unlocked(spendable)={:?} locked_by_timelock={:?}",
+        bal.total, bal.unlocked, bal.locked_by_timelock
+    );
+
+    assert_ne!(
+        bal.unlocked,
+        shekyl_units::AtomicUnits::ZERO,
+        "matured coinbase must be spendable; if zero, suspect the get_blocks PQC-field \
+         parse FIRST (parse-first diagnosis), not the scan/tree (shared FFI)"
+    );
 }

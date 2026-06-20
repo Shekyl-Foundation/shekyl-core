@@ -205,6 +205,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
 gungraun = "0.19"
 tempfile = "3"
+# Track-2 regtest e2e: decode daemon `get_block` blobs to differential-test the
+# block-wire serialize/parse boundary (Rust `Block::read` vs the C++ oracle).
+hex = "0.4"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
 # retry-backoff tests use to make exponential delays instantaneous
