@@ -4,6 +4,22 @@
 
 ### Added
 
+- **crypto/wallet: real-tree FCMP++ prove→verify roundtrip now works
+  (`feat/ct-5-real-tree-verify`).** The first test to verify an FCMP++ membership
+  proof over a *real multi-layer* `assemble_path`
+  (`join_market_bond_post_fcmp_verify_over_real_tree`, previously `#[ignore]`d)
+  was failing `BatchVerificationFailed`. Root cause: `shekyl-curve-tree::assemble`
+  emits **partial (narrow) branch chunks** for incomplete tree nodes, but the
+  FCMP membership circuit requires the full chunk width — a seam the upstream FCMP
+  tests never exercise (they always fill to width), and the prover doesn't catch
+  (it ignores the root). Fixed by **zero-padding branch chunks to width** in
+  `shekyl_fcmp::proof::prove` / `prove_with_sal`: zero scalars vanish in the layer
+  hash, so the **consensus tree root is unchanged** (no daemon/consensus change,
+  no CT-2 Tier-A regression), and the daemon's `shekyl_fcmp_verify` — the same
+  Rust `verify` via FFI — accepts it. The audited vendored FCMP crypto was sound;
+  the bug was first-party (our driving). Closes PR 2c-1's deferred verify half
+  and the 2a real-tree milestone; covers depth-2 (deeper trees tracked in
+  `FOLLOWUPS.md`). Regression KAT: `ct5_partial_branch_chunk_is_padded_and_verifies`.
 - **wallet: archival StakeEngine lifecycle wiring (Model D) -- inert (PR 2c-2a)
   (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2,
   `feat/archival-stake-wiring`).** Wires the inert 2b StakeEngine into the engine

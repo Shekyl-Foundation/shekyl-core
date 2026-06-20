@@ -3694,24 +3694,18 @@ mod tests {
         }
     }
 
-    /// PR 2c-1 (deferred half): `shekyl_fcmp::proof::verify` must *accept* a
-    /// membership proof built over a **real multi-layer** assembled path.
+    /// `shekyl_fcmp::proof::verify` *accepts* a membership proof built over a
+    /// **real multi-layer** assembled path — the CT-5 real-tree prove↔verify
+    /// roundtrip, closing PR 2c-1's deferred half and 2a's milestone.
     ///
-    /// `#[ignore]`d, not deleted (rules 15/21): the construct→prove half is
-    /// already covered by the active sibling
-    /// (`join_market_bond_post_signs_and_verifies_over_real_tree`), which proves
-    /// the bond composition over a real depth-2 tree. This is the one assertion
-    /// blocked on the CT-5 series closing the upstream FCMP++ prove↔verify
-    /// roundtrip over genuine branch layers: no workspace test verifies a real
-    /// multi-layer path today (2a and the FFI round-trip both verify a depth-1
-    /// synthetic single-leaf root), and this is the first to try — it currently
-    /// returns `Err(BatchVerificationFailed)`.
-    ///
-    /// Reopening criterion (FOLLOWUPS.md "real-tree FCMP++ verify"): when the
-    /// CT-5 real-tree prove↔verify roundtrip lands, drop `#[ignore]`; this KAT
-    /// then closes 2c-1's real-tree milestone.
+    /// This was the first test to verify a real multi-layer path (2a and the FFI
+    /// round-trip only verify a depth-1 synthetic single-leaf root). It surfaced
+    /// the partial-branch-chunk bug: `shekyl-curve-tree::assemble` emits narrow
+    /// chunks for incomplete tree nodes, but the FCMP membership circuit needs the
+    /// full chunk width, so verify returned `Err(BatchVerificationFailed)`. Fixed
+    /// by zero-padding branch chunks to width in `shekyl_fcmp::proof::prove` (zero
+    /// scalars vanish in the layer hash, so the consensus root is unchanged).
     #[tokio::test]
-    #[ignore = "blocked on CT-5 real-tree FCMP++ prove<->verify roundtrip; see FOLLOWUPS.md"]
     async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;

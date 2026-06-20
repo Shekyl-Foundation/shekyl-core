@@ -69,6 +69,16 @@ pub enum ProveError {
         field: &'static str,
     },
 
+    #[error(
+        "branch chunk too wide at input {input_index}: {field} has {len} siblings (max {max})"
+    )]
+    BranchChunkTooWide {
+        input_index: usize,
+        field: &'static str,
+        len: usize,
+        max: usize,
+    },
+
     #[error("scalar decomposition failed (zero blinding factor)")]
     ScalarDecompositionFailed,
 
@@ -331,7 +341,15 @@ pub fn prove(
                 field: "h_pqc",
             })?;
 
-        // Build C1/C2 branch layers
+        // Build C1/C2 branch layers, zero-padded to the full chunk width.
+        //
+        // The consensus curve tree stores PARTIAL (narrow) chunks for incomplete
+        // nodes (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the
+        // FCMP membership circuit is built for fixed-width chunks. Zero scalars
+        // vanish in the layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so
+        // zero-padding here satisfies the circuit while leaving the consensus root
+        // unchanged. Without this, a proof over a partial branch chunk fails
+        // verification with `BatchVerificationFailed` (CT-5 real-tree verify fix).
         let mut c1_layers = Vec::new();
         for layer in &input.c1_branch_layers {
             let scalars: Vec<<Selene as Ciphersuite>::F> = layer
@@ -343,7 +361,12 @@ pub fn prove(
                     input_index: idx,
                     field: "c1_branch",
                 })?;
-            c1_layers.push(scalars);
+            c1_layers.push(pad_branch_chunk::<Selene>(
+                scalars,
+                crate::tree::SELENE_CHUNK_WIDTH,
+                idx,
+                "c1_branch",
+            )?);
         }
         let mut c2_layers = Vec::new();
         for layer in &input.c2_branch_layers {
@@ -356,7 +379,12 @@ pub fn prove(
                     input_index: idx,
                     field: "c2_branch",
                 })?;
-            c2_layers.push(scalars);
+            c2_layers.push(pad_branch_chunk::<Helios>(
+                scalars,
+                crate::tree::HELIOS_CHUNK_WIDTH,
+                idx,
+                "c2_branch",
+            )?);
         }
 
         paths.push(Path::<Curves> {
@@ -540,6 +568,11 @@ pub fn prove_with_sal(
                 field: "h_pqc",
             })?;
 
+        // Zero-pad partial branch chunks to the full chunk width — see
+        // `pad_branch_chunk` for the rationale (the consensus tree stores narrow
+        // chunks; the FCMP circuit needs full width; zero scalars vanish in the
+        // layer hash so the consensus root is unchanged; an over-wide chunk is
+        // rejected rather than silently truncated).
         let mut c1_layers = Vec::new();
         for layer in &chunk.c1_branch_layers {
             let scalars: Vec<<Selene as Ciphersuite>::F> = layer
@@ -551,7 +584,12 @@ pub fn prove_with_sal(
                     input_index: idx,
                     field: "c1_branch",
                 })?;
-            c1_layers.push(scalars);
+            c1_layers.push(pad_branch_chunk::<Selene>(
+                scalars,
+                crate::tree::SELENE_CHUNK_WIDTH,
+                idx,
+                "c1_branch",
+            )?);
         }
         let mut c2_layers = Vec::new();
         for layer in &chunk.c2_branch_layers {
@@ -564,7 +602,12 @@ pub fn prove_with_sal(
                     input_index: idx,
                     field: "c2_branch",
                 })?;
-            c2_layers.push(scalars);
+            c2_layers.push(pad_branch_chunk::<Helios>(
+                scalars,
+                crate::tree::HELIOS_CHUNK_WIDTH,
+                idx,
+                "c2_branch",
+            )?);
         }
 
         paths.push(Path::<Curves> {
@@ -794,6 +837,37 @@ fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>
     }
 }
 
+/// Zero-pad a deserialized branch-layer chunk to the FCMP circuit's fixed chunk
+/// `width`, rejecting an over-wide chunk instead of silently truncating it.
+///
+/// The consensus curve tree stores PARTIAL (narrow) chunks for incomplete nodes
+/// (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the FCMP
+/// membership circuit is built for fixed-width chunks. Zero scalars vanish in the
+/// layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so zero-padding here
+/// satisfies the circuit while leaving the consensus root unchanged.
+///
+/// A real chunk has at most `width` children, so `len > width` is malformed
+/// input and is rejected: silently dropping the extra siblings would produce a
+/// proof for a *different* path, and a wrong proof from bad input is the failure
+/// class the security precondition forbids.
+fn pad_branch_chunk<C: Ciphersuite>(
+    mut scalars: Vec<C::F>,
+    width: usize,
+    input_index: usize,
+    field: &'static str,
+) -> Result<Vec<C::F>, ProveError> {
+    if scalars.len() > width {
+        return Err(ProveError::BranchChunkTooWide {
+            input_index,
+            field,
+            len: scalars.len(),
+            max: width,
+        });
+    }
+    scalars.resize(width, C::F::ZERO);
+    Ok(scalars)
+}
+
 fn deserialize_tree_root(bytes: &[u8; 32], layers: usize) -> Option<TreeRoot<Selene, Helios>> {
     if layers % 2 == 1 {
         let ct = <Selene as Ciphersuite>::G::from_bytes(bytes);
@@ -821,6 +895,46 @@ mod tests {
         let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
         let result = prove(&inputs, &[0; 32], 8, [0; 32]);
         assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
+    }
+
+    /// `pad_branch_chunk` zero-pads short chunks (the partial-chunk fix) but
+    /// rejects an over-wide chunk rather than silently truncating it — a too-long
+    /// chunk is malformed input and must not yield a proof over a different path.
+    #[test]
+    fn pad_branch_chunk_pads_short_and_rejects_oversize() {
+        use crate::tree::HELIOS_CHUNK_WIDTH;
+        type F = <Helios as Ciphersuite>::F;
+
+        // Short chunk → zero-padded to width, original sibling preserved at index 0.
+        let padded =
+            pad_branch_chunk::<Helios>(vec![F::ONE], HELIOS_CHUNK_WIDTH, 0, "c2_branch").unwrap();
+        assert_eq!(padded.len(), HELIOS_CHUNK_WIDTH);
+        assert_eq!(padded[0], F::ONE);
+        assert!(padded[1..].iter().all(|s| *s == F::ZERO));
+
+        // Exactly width → unchanged (no truncation, no pad).
+        let full = pad_branch_chunk::<Helios>(
+            vec![F::ONE; HELIOS_CHUNK_WIDTH],
+            HELIOS_CHUNK_WIDTH,
+            0,
+            "c2_branch",
+        )
+        .unwrap();
+        assert_eq!(full.len(), HELIOS_CHUNK_WIDTH);
+
+        // Over-wide → rejected, not truncated.
+        let err = pad_branch_chunk::<Helios>(
+            vec![F::ONE; HELIOS_CHUNK_WIDTH + 1],
+            HELIOS_CHUNK_WIDTH,
+            3,
+            "c2_branch",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ProveError::BranchChunkTooWide { input_index: 3, field: "c2_branch", len, max }
+                if len == HELIOS_CHUNK_WIDTH + 1 && max == HELIOS_CHUNK_WIDTH
+        ));
     }
 
     #[test]
@@ -997,6 +1111,116 @@ mod tests {
         assert!(
             wrong_root.is_err() || matches!(wrong_root, Ok(false)),
             "wrong tree root must not verify"
+        );
+    }
+
+    /// CT-5 regression: a depth-2 proof over a **partial (narrow) Helios branch
+    /// chunk** must verify. The consensus curve tree stores partial chunks for
+    /// incomplete nodes (a single-leaf root's Helios chunk is 1-wide), but the
+    /// FCMP circuit needs the full chunk width. `prove` zero-pads internally; this
+    /// pins that, so a regression (dropping the pad) re-breaks `BatchVerificationFailed`.
+    /// Pure-Rust, no real `assemble`: leaf → Selene node → narrow Helios root via
+    /// the same `hash_grow_helios`/`selene_point_to_helios_scalar` the tree uses.
+    #[test]
+    #[allow(non_snake_case)]
+    fn ct5_partial_branch_chunk_is_padded_and_verifies() {
+        use crate::tree::{hash_grow_helios, helios_hash_init, selene_point_to_helios_scalar};
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha20Rng;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        // Deterministic: a regression KAT must reproduce the same witness every
+        // run, so a failure is debuggable and the `selene_point_to_helios_scalar`
+        // `.expect()` below is guaranteed for this fixed fixture (the test passing
+        // confirms the seed yields a convertible, non-identity leaf point).
+        let mut rng = ChaCha20Rng::seed_from_u64(0xC75_0002_0000);
+        let tree_depth: u8 = 2;
+        let signable_tx_hash = [0xABu8; 32];
+
+        let x = Scalar::random(&mut rng);
+        let y = Scalar::random(&mut rng);
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut rng);
+        let C = EdwardsPoint::random(&mut rng);
+        let L = I * x;
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut rng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
+
+        // Leaf → Selene leaf node (the FCMP leaf hash; same formula the passing
+        // depth-1 `prove_verify_roundtrip` uses for its root).
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let leaf_selene: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
+            + multiexp_vartime(&[
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0,
+                    generators[0],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0,
+                    generators[1],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0,
+                    generators[2],
+                ),
+                (h_pqc_field, generators[3]),
+            ]);
+        let leaf_selene_bytes = leaf_selene.to_bytes();
+
+        // The consensus root is the NARROW hash (`hash_grow` over the actual
+        // children only — one child for a single-leaf root), exactly what
+        // `build_layers` / the daemon produce. The branch chunk handed to the
+        // prover is the matching narrow 1-wide chunk; `prove` zero-pads it to
+        // width internally (zero scalars vanish, so the padded hash == this narrow
+        // root), and verify must accept.
+        let helios_child =
+            selene_point_to_helios_scalar(&leaf_selene_bytes).expect("selene→helios conv");
+        let tree_root: [u8; 32] =
+            hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &[helios_child])
+                .expect("narrow consensus root");
+        let helios_chunk: Vec<[u8; 32]> = vec![helios_child];
+
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+        let z = Scalar::random(&mut rng);
+        let a = Scalar::random(&mut rng);
+        let input = ProveInput {
+            output_key: o_bytes,
+            key_image_gen: i_bytes,
+            commitment: c_bytes,
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr(),
+            spend_key_y: y.to_repr(),
+            commitment_mask: z.to_repr(),
+            pseudo_out_blind: a.to_repr(),
+            leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            // Narrow 1-wide Helios chunk (the partial-chunk case); `prove` pads it.
+            c2_branch_layers: vec![BranchLayer {
+                siblings: helios_chunk.clone(),
+            }],
+        };
+
+        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
+            .expect("prove over a partial branch chunk should succeed");
+
+        let key_images = [KeyImage::from_canonical_bytes(L.to_bytes())];
+        let ok = verify(
+            &result.proof,
+            &key_images,
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
+        assert!(
+            matches!(ok, Ok(true)),
+            "a proof over a partial (zero-padded) Helios branch chunk must verify: {ok:?}"
         );
     }
 
