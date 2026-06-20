@@ -69,6 +69,16 @@ pub enum ProveError {
         field: &'static str,
     },
 
+    #[error(
+        "branch chunk too wide at input {input_index}: {field} has {len} siblings (max {max})"
+    )]
+    BranchChunkTooWide {
+        input_index: usize,
+        field: &'static str,
+        len: usize,
+        max: usize,
+    },
+
     #[error("scalar decomposition failed (zero blinding factor)")]
     ScalarDecompositionFailed,
 
@@ -342,7 +352,7 @@ pub fn prove(
         // verification with `BatchVerificationFailed` (CT-5 real-tree verify fix).
         let mut c1_layers = Vec::new();
         for layer in &input.c1_branch_layers {
-            let mut scalars: Vec<<Selene as Ciphersuite>::F> = layer
+            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
                 .siblings
                 .iter()
                 .map(deserialize_selene_scalar)
@@ -351,15 +361,16 @@ pub fn prove(
                     input_index: idx,
                     field: "c1_branch",
                 })?;
-            scalars.resize(
+            c1_layers.push(pad_branch_chunk::<Selene>(
+                scalars,
                 crate::tree::SELENE_CHUNK_WIDTH,
-                <Selene as Ciphersuite>::F::ZERO,
-            );
-            c1_layers.push(scalars);
+                idx,
+                "c1_branch",
+            )?);
         }
         let mut c2_layers = Vec::new();
         for layer in &input.c2_branch_layers {
-            let mut scalars: Vec<<Helios as Ciphersuite>::F> = layer
+            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
                 .siblings
                 .iter()
                 .map(deserialize_helios_scalar)
@@ -368,11 +379,12 @@ pub fn prove(
                     input_index: idx,
                     field: "c2_branch",
                 })?;
-            scalars.resize(
+            c2_layers.push(pad_branch_chunk::<Helios>(
+                scalars,
                 crate::tree::HELIOS_CHUNK_WIDTH,
-                <Helios as Ciphersuite>::F::ZERO,
-            );
-            c2_layers.push(scalars);
+                idx,
+                "c2_branch",
+            )?);
         }
 
         paths.push(Path::<Curves> {
@@ -556,13 +568,14 @@ pub fn prove_with_sal(
                 field: "h_pqc",
             })?;
 
-        // Zero-pad partial branch chunks to the full chunk width — see the
-        // matching block in `prove` for the rationale (the consensus tree stores
-        // narrow chunks; the FCMP circuit needs full width; zero scalars vanish in
-        // the layer hash so the consensus root is unchanged).
+        // Zero-pad partial branch chunks to the full chunk width — see
+        // `pad_branch_chunk` for the rationale (the consensus tree stores narrow
+        // chunks; the FCMP circuit needs full width; zero scalars vanish in the
+        // layer hash so the consensus root is unchanged; an over-wide chunk is
+        // rejected rather than silently truncated).
         let mut c1_layers = Vec::new();
         for layer in &chunk.c1_branch_layers {
-            let mut scalars: Vec<<Selene as Ciphersuite>::F> = layer
+            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
                 .siblings
                 .iter()
                 .map(deserialize_selene_scalar)
@@ -571,15 +584,16 @@ pub fn prove_with_sal(
                     input_index: idx,
                     field: "c1_branch",
                 })?;
-            scalars.resize(
+            c1_layers.push(pad_branch_chunk::<Selene>(
+                scalars,
                 crate::tree::SELENE_CHUNK_WIDTH,
-                <Selene as Ciphersuite>::F::ZERO,
-            );
-            c1_layers.push(scalars);
+                idx,
+                "c1_branch",
+            )?);
         }
         let mut c2_layers = Vec::new();
         for layer in &chunk.c2_branch_layers {
-            let mut scalars: Vec<<Helios as Ciphersuite>::F> = layer
+            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
                 .siblings
                 .iter()
                 .map(deserialize_helios_scalar)
@@ -588,11 +602,12 @@ pub fn prove_with_sal(
                     input_index: idx,
                     field: "c2_branch",
                 })?;
-            scalars.resize(
+            c2_layers.push(pad_branch_chunk::<Helios>(
+                scalars,
                 crate::tree::HELIOS_CHUNK_WIDTH,
-                <Helios as Ciphersuite>::F::ZERO,
-            );
-            c2_layers.push(scalars);
+                idx,
+                "c2_branch",
+            )?);
         }
 
         paths.push(Path::<Curves> {
@@ -822,6 +837,37 @@ fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>
     }
 }
 
+/// Zero-pad a deserialized branch-layer chunk to the FCMP circuit's fixed chunk
+/// `width`, rejecting an over-wide chunk instead of silently truncating it.
+///
+/// The consensus curve tree stores PARTIAL (narrow) chunks for incomplete nodes
+/// (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the FCMP
+/// membership circuit is built for fixed-width chunks. Zero scalars vanish in the
+/// layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so zero-padding here
+/// satisfies the circuit while leaving the consensus root unchanged.
+///
+/// A real chunk has at most `width` children, so `len > width` is malformed
+/// input. We reject it rather than `Vec::resize`-truncating: dropping siblings
+/// would silently produce a proof for a *different* path — a wrong proof from bad
+/// input is the failure class the security precondition forbids.
+fn pad_branch_chunk<C: Ciphersuite>(
+    mut scalars: Vec<C::F>,
+    width: usize,
+    input_index: usize,
+    field: &'static str,
+) -> Result<Vec<C::F>, ProveError> {
+    if scalars.len() > width {
+        return Err(ProveError::BranchChunkTooWide {
+            input_index,
+            field,
+            len: scalars.len(),
+            max: width,
+        });
+    }
+    scalars.resize(width, C::F::ZERO);
+    Ok(scalars)
+}
+
 fn deserialize_tree_root(bytes: &[u8; 32], layers: usize) -> Option<TreeRoot<Selene, Helios>> {
     if layers % 2 == 1 {
         let ct = <Selene as Ciphersuite>::G::from_bytes(bytes);
@@ -849,6 +895,46 @@ mod tests {
         let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
         let result = prove(&inputs, &[0; 32], 8, [0; 32]);
         assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
+    }
+
+    /// `pad_branch_chunk` zero-pads short chunks (the partial-chunk fix) but
+    /// rejects an over-wide chunk rather than silently truncating it — a too-long
+    /// chunk is malformed input and must not yield a proof over a different path.
+    #[test]
+    fn pad_branch_chunk_pads_short_and_rejects_oversize() {
+        use crate::tree::HELIOS_CHUNK_WIDTH;
+        type F = <Helios as Ciphersuite>::F;
+
+        // Short chunk → zero-padded to width, original sibling preserved at index 0.
+        let padded =
+            pad_branch_chunk::<Helios>(vec![F::ONE], HELIOS_CHUNK_WIDTH, 0, "c2_branch").unwrap();
+        assert_eq!(padded.len(), HELIOS_CHUNK_WIDTH);
+        assert_eq!(padded[0], F::ONE);
+        assert!(padded[1..].iter().all(|s| *s == F::ZERO));
+
+        // Exactly width → unchanged (no truncation, no pad).
+        let full = pad_branch_chunk::<Helios>(
+            vec![F::ONE; HELIOS_CHUNK_WIDTH],
+            HELIOS_CHUNK_WIDTH,
+            0,
+            "c2_branch",
+        )
+        .unwrap();
+        assert_eq!(full.len(), HELIOS_CHUNK_WIDTH);
+
+        // Over-wide → rejected, not truncated.
+        let err = pad_branch_chunk::<Helios>(
+            vec![F::ONE; HELIOS_CHUNK_WIDTH + 1],
+            HELIOS_CHUNK_WIDTH,
+            3,
+            "c2_branch",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ProveError::BranchChunkTooWide { input_index: 3, field: "c2_branch", len, max }
+                if len == HELIOS_CHUNK_WIDTH + 1 && max == HELIOS_CHUNK_WIDTH
+        ));
     }
 
     #[test]
