@@ -13,8 +13,9 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
-**Status:** **OPEN — scoping pre-flight closed; design rounds 1–5 closed
-(2026-06-19); round 6 (closure) and impl-time pre-flight (R0-D#) pending.**
+**Status:** **OPEN — scoping pre-flight closed; design rounds 1–6 closed
+(2026-06-19); only the rule-26 impl-time pre-flight (`R0-D#`, §4) remains
+before production-merge.**
 
 ---
 
@@ -585,6 +586,51 @@ correction is the retired S4 placement speculation (d); everything else is a
 pure line-number shift from inserting ~530 lines of new code into
 `stake_engine.rs` / `stake_persist.rs` / `stake_timing.rs`. The §1.1 scope
 table and the §"Process notes" pins are updated in place to the round-5 lines.
+
+---
+
+### 3.6 Round 6 findings — closure + forward-action propagation (`A5`) — CLOSED (2026-06-19)
+
+Confirms every carried item has a live target anchor, and propagates the
+forward actions that **implementation created** (not visible at design time)
+into `docs/FOLLOWUPS.md`.
+
+**(a) §1.2 carried items — every one resolves to a live anchor (verified at
+`docs/FOLLOWUPS.md` HEAD).**
+
+| Carried item | Anchor | Verified |
+| --- | --- | --- |
+| Broadcast / re-anchor wiring | FOLLOWUPS §"StakeEngine Model D wiring" → "Broadcast / re-anchor wiring activates the CT-5d persona-pin"; `CT5D_REANCHOR.md` | ✓ present |
+| `arti-client` `P`-isolated transport | FOLLOWUPS "PR 2d" `arti-client` security-critical pre-flight | ✓ present |
+| `P`-scan layer (SP-2.e) | Bond-PR 2d-1 (arc §2 / §3.6); `archival_p.rs:332` capability | ✓ present |
+| 2d full-scan reconciliation | FOLLOWUPS "2d full-scan reconciliation of `bonded_slots` / `p_slot`" (rule-21 reopen) | ✓ present |
+| Exit timing seam (unbond) | §10 (line 457–462); unbond slice | ✓ named |
+| Intra-call parallel keygen (perf) | FOLLOWUPS "Intra-call parallel persona derivation (perf)"; §10.2 perf note | ✓ present |
+
+**(b) Implementation-created forward actions — NEWLY propagated to FOLLOWUPS.**
+These were not design-time deferrals; they emerged when 2c-2b code landed and
+chose design-now / wire-later boundaries. A new FOLLOWUPS top-level bullet,
+"Archival bond request path — deferred items (PR 2c-2b, landed inert
+2026-06-19)," now anchors all four:
+
+| New forward action | Why deferred | Target |
+| --- | --- | --- |
+| **S6 `certify_draw` session self-cert wiring** | Live degeneracy guard ships; the stronger session-level statistical check needs a session-start lifecycle hook the actor does not have yet (`TODO(S6)` ×2 in `stake_engine.rs`). | V3.0 (RNG gate, not consensus-frozen) |
+| **S7(c) `trybuild` compile-fail tests** | Unrepresentability asserted today by `!Clone`/by-value types + runtime negatives; compile-fail proofs need the `trybuild` dev-dep. | 2c-2b merge (test-completeness, not a forward PR) |
+| **`CoverAmount` bond-tx orchestration** | Type ships inert; the `bond_floor + cover` send + `P`-change threading lands with 2d bond-transaction assembly. | V3.0 (cold-start decorrelation, genesis-adjacent) |
+| **Opt-in cover recovery (GUI/CLI)** | Stake-once-and-recover re-creates the principal↔`P` link; must be a separately-gated, independently-timed, disclosed GUI/CLI op, never the default. | V3.x (post-launch UX) |
+
+**(c) Roadmap-bullet correction.** The pre-implementation FOLLOWUPS roadmap
+listed `certify_draw` self-cert and the full KAT as landing *in* 2c-2b. That
+phrasing is corrected: 2c-2b settles their **design** and defers the **wiring**
+(certify_draw session hook) / **completeness** (trybuild). The amendment points
+forward to the new deferred-items bullet so the audit trail is single-sourced.
+
+**(d) Outcome.** No carried item is anchorless; no implementation-created
+deferral is untracked. The scope boundary is closed: 2c-2b consumes exactly the
+2c-2a inert surface and defers exactly the 2d-anchored items plus the four newly-
+propagated wire-later actions. Rounds 1–6 are closed; the only remaining gate is
+the rule-26 impl-time pre-flight (`R0-D#`, §4 below) before production-merge.
 
 ---
 

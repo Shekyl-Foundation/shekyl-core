@@ -914,9 +914,11 @@ sustainability is unaffected by the recalibration.
   parallel JoinMarket bond request + funding selection + the two timing seams as
   two types (`NetworkGap(BlockSpan)` `draw_entry_gap(600)` vs.
   `EconomicSpacing(SebSpan)` >=1 SEB / ramp, cross-apply = compile error; entry
-  seam only, exit seam deferred to the unbond slice) + the float-free live
-  degeneracy check (fail-loud) + gated `certify_draw` self-cert + the milestone
-  KAT, with broadcast structurally gated on 2d. PR 2a's
+  seam only, exit seam deferred to the unbond slice) + `CoverAmount` (cold-start
+  amount-decorrelation, wire-2d) + the float-free live degeneracy check
+  (fail-loud) + the `certify_draw` self-cert **design** (session-wiring deferred —
+  see "Archival bond request path — deferred items" below) + the milestone KAT,
+  with broadcast structurally gated on 2d. PR 2a's
   KAT is the *synthetic-tree* composition milestone (the A4-retained `local_keys`
   signing-KAT surface of `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT's
   prove half is unblocked by CT-5c, but its **verify half is gated on CT-5
@@ -979,6 +981,46 @@ sustainability is unaffected by the recalibration.
     `k`-bounded) set in parallel is a wall-clock optimization with no correctness
     or security bearing. **Reopen if** open latency for high-`union` stakers is
     measured as user-visible. **Target: V3.x.**
+
+- **Archival bond request path — deferred items (PR 2c-2b, landed inert
+  2026-06-19).** 2c-2b landed the `SignBond` message, the persist-before-use
+  consumer (`sign_bond` consumes `PersistedBondTicket` by value), the two timing
+  seams + `CoverAmount` (`stake_timing.rs`), the float-free live degeneracy guard
+  (`draw_entry_gap_guarded`), and the S7 own-surface negatives — all inert (no
+  user-invocable caller; broadcast gated on 2d, §1.4 of
+  `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`). The roadmap bullet above listed
+  `certify_draw` self-cert and the full KAT as in-2c-2b; implementation settled
+  the **design** for those and **deferred the wiring**. Deferred items:
+  - **S6 — `certify_draw` session self-cert wiring.** The design is settled
+    (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.3): a session-start, `conformance`-
+    gated `certify_draw` over the `OsRngGapAdapter`, catching the correlated-walk
+    pattern the per-draw degeneracy guard cannot. The live degeneracy guard
+    **ships now**; only the stronger statistical session check is deferred (two
+    `TODO(S6)` markers at the call sites in `stake_engine.rs`). **Reopen when**
+    the session-lifecycle hook exists to run it (the actor has no session-start
+    seam wired yet). **Target: V3.0** (RNG-quality gate, not consensus-frozen —
+    correctable post-genesis without a format bump).
+  - **S7(c) — `trybuild` compile-fail tests.** The unrepresentability proofs
+    (`sign_bond` without a `PersistedBondTicket`; a `PersonaHandle` for an unheld
+    slot) are asserted today only by the by-value `!Clone` types plus runtime
+    negatives; the *compile-fail* assertions need the `trybuild` dev-dep wired.
+    **Reopen** to close before the 2c-2b PR merges (test-completeness item, not a
+    forward-PR dependency). **Target: 2c-2b merge.**
+  - **`CoverAmount` bond-transaction orchestration (wire-2d).** The type ships
+    inert; the orchestration that sends `bond_floor + cover`, stakes the floor,
+    and threads the cover as a `P`-change output lands with 2d's bond-transaction
+    assembly. The recommended random cover value is computed and presented by the
+    GUI/CLI, not the engine. **Reopen when** 2d bond-transaction orchestration
+    lands. **Target: V3.0** (cover is the cold-start amount-decorrelation
+    mechanism — genesis-adjacent privacy; see §3.4).
+  - **Opt-in cover recovery (GUI/CLI).** The stake-once-and-recover path —
+    an independently-timed, privacy-cost-disclosed `P`→principal transfer that
+    re-creates the principal↔`P` link — is **not** the default (default is
+    cover-stays-with-`P`). It must be a named, separately-gated GUI/CLI operation
+    that never shares code paths with the bond request or unbond, and warns the
+    user at opt-in. **Reopen when** a concrete floor-only-staking need surfaces in
+    `shekyl-gui-wallet` / `shekyl-web`. **Target: V3.x** (post-launch UX, not
+    genesis-frozen).
 
 - **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
   balance surface introduced in PR 1 carries the inherited "RCT" name
