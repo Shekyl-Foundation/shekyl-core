@@ -1000,12 +1000,18 @@ sustainability is unaffected by the recalibration.
     the session-lifecycle hook exists to run it (the actor has no session-start
     seam wired yet). **Target: V3.0** (RNG-quality gate, not consensus-frozen —
     correctable post-genesis without a format bump).
-  - **S7(c) — `trybuild` compile-fail tests.** The unrepresentability proofs
-    (`sign_bond` without a `PersistedBondTicket`; a `PersonaHandle` for an unheld
-    slot) are asserted today only by the by-value `!Clone` types plus runtime
-    negatives; the *compile-fail* assertions need the `trybuild` dev-dep wired.
-    **Reopen** to close before the 2c-2b PR merges (test-completeness item, not a
-    forward-PR dependency). **Target: 2c-2b merge.**
+  - **S7(c) — `trybuild` compile-fail tests — RETIRED (R0-D1, 2026-06-19).** The
+    tokens (`SignBond` / `PersonaHandle` / `PersistedBondTicket`) are `pub(crate)`
+    with module-private fields, so `trybuild` — which compiles each case as an
+    external crate — cannot name them without a re-export that re-exposes the
+    firewall internals S1/S2 exist to encapsulate. The unrepresentability is
+    instead enforced unconditionally by the type system (module-private fields +
+    `!Clone` + by-value consumption in `sign_bond`); the `!Clone` half is pinned
+    by an always-on, dependency-free `const _` compile-time guard in
+    `stake_engine.rs` (verified to bite — `E0283` on a stray `#[derive(Clone)]`).
+    The runtime negatives (slot-mismatch, degeneracy-guard-fires) cover the
+    cross-check and RNG surfaces. See `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4.1.
+    **Reopen iff** these tokens ever become `pub` for an independent reason.
   - **`CoverAmount` bond-transaction orchestration (wire-2d).** The type ships
     inert; the orchestration that sends `bond_floor + cover`, stakes the floor,
     and threads the cover as a `P`-change output lands with 2d's bond-transaction

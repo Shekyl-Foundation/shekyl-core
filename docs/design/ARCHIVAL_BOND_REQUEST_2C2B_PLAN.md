@@ -65,7 +65,7 @@ inert by 2c-2a.
 | S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the unbond slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:72`, `SebSpan:81`, `NetworkGap:94`, `EconomicSpacing:110`, `DEFAULT_ENTRY_GAP_WINDOW:118`, `MIN_COLD_START_SPACING:126`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
 | S5 | **Live RNG degeneracy check (float-free, fail-loud)** — the cheap integer-only guard, distinct from the statistical self-cert. | §10 (lines 457–462); FOLLOWUPS (line 917–918) | Runs against `draw_entry_gap` output (`shekyl-standoff/src/draw.rs:57`). Negative-control shapes already exist: `draw_entry_gap_double_jitter_trap` (`conformance.rs:135`), `correlated_walk` (`conformance.rs:208`). |
 | S6 | **`certify_draw` self-cert against the shipping wallet's CSPRNG (gated)** — proves the *shipping wallet's RNG* produces conformant draws, not merely the reference. | §10 (lines 457–462) | `certify_draw` (`conformance.rs:377`) over a `GapRng` (`draw.rs:13`) adapter on `rand_core::OsRng` (the shipping CSPRNG — `shekyl-tx-builder/src/sign.rs:17`, `engine/sign_bridge.rs:14`). |
-| S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** `trybuild` **compile-fail** tests proving the unrepresentability claims — `sign_bond` without a `PersistedBondTicket`, a `PersonaHandle` for an unheld slot — do not compile. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path (`builder/Cargo.toml` `[dev-dependencies]` — currently empty, to wire). `trybuild` dev-dep to add. |
+| S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** ~~`trybuild` **compile-fail** tests~~ **→ RETIRED, replaced by an in-crate `!Clone` guard (§4.1 `R0-D1`)**: the tokens are `pub(crate)` with module-private fields, so `trybuild` (external crate) cannot reach them without re-exposing firewall internals; the unrepresentability is type-system-enforced unconditionally, and the `!Clone` half is pinned by an always-on `const _` guard verified to bite. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4.1 `R0-D1`; §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path. No `trybuild` dep (retired). |
 
 ### 1.2 Explicitly out of scope (carried to PR 2d, `A5` forward-action)
 
@@ -634,6 +634,8 @@ the rule-26 impl-time pre-flight (`R0-D#`, §4 below) before production-merge.
 
 ---
 
+## 4. Impl-time pre-flight pass (`R0-D#`)
+
 Runs **after** round 6 closes, **before** production commits (rule 26 §"Pre-
 flight pass"). Two halves, agenda noted now so the rounds produce the artifacts
 it will check:
@@ -654,6 +656,46 @@ it will check:
   - **`B9`: `certify_draw` sample size `n`** vs CI wall-clock — pick `n` from the
     tolerance math (`conformance.rs:300–310`, `8/sqrt(n)`), measured, not
     estimated.
+
+### 4.1 Closed findings
+
+**`R0-D1` — S7(c) `trybuild` compile-fail tests RETIRED; replaced by an
+in-crate `!Clone` guard (2026-06-19).** *Substrate falsifies the design.*
+
+The plan (§1.1 S7, S7(c)) specced `trybuild` compile-fail tests proving the
+unrepresentability claims (`sign_bond` without a `PersistedBondTicket`; a
+`PersonaHandle` for an unheld slot). The substrate makes this **the wrong
+tool**:
+
+- `SignBond`, `PersonaHandle`, `PersistedBondTicket`, and the whole
+  `stake_engine` / `stake_persist` surface are `pub(crate)`
+  (`engine/mod.rs:234,239`); the capability tokens' identifying fields are
+  **module-private** (`PersonaHandle.{p_slot,generation}` `stake_engine.rs:248–249`;
+  `PersistedBondTicket.p_slot` `stake_persist.rs:74`).
+- `trybuild` compiles each case as an **external** crate (verified against the
+  one workspace precedent, `shekyl-logging/tests/trybuild.rs`, which tests only
+  the `pub` API). An external crate cannot **name** these `pub(crate)` types
+  without a re-export — and a re-export would re-expose the firewall internals
+  S1/S2 exist to encapsulate. A test that needs to weaken the property it
+  asserts is no test.
+
+**Resolution.** The unrepresentability is already enforced unconditionally by
+the type system — module-private fields (no constructor outside the defining
+module) + `!Clone` + by-value consumption in `sign_bond`
+(`stake_engine.rs:907–908`). That is stronger than any external snapshot (holds
+for *all* code, not one example). The `!Clone` half — the only half a careless
+edit could silently weaken via `#[derive(Clone)]` — is now pinned by an
+**always-on, zero-cost, dependency-free** compile-time guard
+(`stake_engine.rs`, the `const _: fn()` block after `PersonaHandle`; the inlined
+equivalent of `static_assertions::assert_not_impl_all!`). Verified to bite:
+deriving `Clone` on either token makes the guard's `AmbiguousIfImpl` resolution
+ambiguous (`E0283`) and fails the build. The runtime negatives (slot-mismatch,
+degeneracy-guard-fires) remain the coverage for the cross-check and RNG surfaces.
+
+**Reversion clause (rule 21).** Reopen the `trybuild` path **iff** these tokens
+ever become `pub` for an independent reason (then an external crate can name
+them without a bespoke re-export, and `trybuild` snapshots become free). No such
+need is known.
 
 ---
 
