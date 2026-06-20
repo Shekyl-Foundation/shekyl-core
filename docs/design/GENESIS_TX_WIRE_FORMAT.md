@@ -3,9 +3,9 @@
 **Status:** Round 0 **approved** 2026-06-20. Freeze-gate (§6) **resolved for
 Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_key`
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
-on the Wave-2 `bond_post` arm, no Wave-1 impact) and merged into Q4. **The Round-1
-/ Wave-1 freeze is ready**, pending one ratify call folded into it — **Q12**
-(genesis tx `version = 1` vs inherited `3`). Settled surface = `gen`+`fcmp` inputs,
+on the Wave-2 `bond_post` arm, no Wave-1 impact) and merged into Q4; Q12 resolved
+(genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
+**The Round-1 / Wave-1 freeze is ready.** Settled surface = `gen`+`fcmp` inputs,
 `tagged_key` output, ct, header, pow-blob. The only deferred surface is **Wave 2**
 (the `P`-model staking-archival arms), which freezes later with the
 staking-archival workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
@@ -234,7 +234,7 @@ raw bytes; `vec(f)` = `V(len)` then `len ×` f.
 ```
 Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
 BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
-Transaction      := V(version)  TxPrefix  Ct          # genesis version=1 (Q12; C++ source emits 3)
+Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
 Input            := tag(1) ...        # Wave-1: 00 gen | 01 fcmp.  Wave-2 (P-model): 02 serve_credit | 03 bond_post.  (stake_claim shed)
 Output           := V(amount) tag(1) ...   # 00 tagged_key — sole genesis output (staked_key + plain key shed; view_tag mandatory)
@@ -299,9 +299,7 @@ format:
 4. Remove the `decompose_amount_into_digits` machinery — `max_outs=1` already
    forces a single coinbase output (Q2 resolved), so the decomposition is dead
    code; formalize the single-output invariant.
-5. Flip the genesis tx **version `3 → 1`** (Q12): `CURRENT_TRANSACTION_VERSION`,
-   the `version` check (`cryptonote_basic.h:370`), and the `version` varint in the
-   tx-hash preimage.
+(Tx `version` stays `3` — Q12 resolved keep-with-reason, no gate-(c) change.)
 
 Each lands as its own change with C++ + Rust + a locked vector, byte-identity
 re-verified against the *new* oracle. Until a given cut lands, the corpus pins
@@ -374,14 +372,17 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   cover is ordinary CT (no wire field) → **no Wave-1 impact**; the `bond_post`
   floor freezes with Q4 in Wave 2. *(Corrects an earlier "no public amount"
   framing.)*
-- **Q12 — transaction version value.** *(Apply Q7 logic — proposed clean=1)*
-  `V(version)` is the first field of every tx; C++ emits `3` (Monero lineage:
-  v1=CryptoNote, v2=RingCT, v3=FCMP++). By the same clean-sheet logic as Q7,
-  Shekyl has exactly **one** genesis format and never met Monero on-chain, so the
-  honest first-version value is **`1`**, not `3`. Proposed: genesis `version = 1`,
-  a gate-(c) flip (C++ `CURRENT_TRANSACTION_VERSION` + the `version` check at
-  `cryptonote_basic.h:370` + the tx-hash preimage, which includes `version`). A
-  Wave-1 surface value — **ratify with the Round-1 freeze**.
+- **Q12 — transaction version value.** *(RESOLVED → keep `3`, deliberately)*
+  Applying Q7 ("choose, don't inherit-by-default") lands on **keep `version = 3`** —
+  the *opposite* of the tag renumber, because the number `3` carries real Shekyl
+  meaning. It is the established genesis version across `CURRENT_TRANSACTION_VERSION`
+  (`cryptonote_config.h:48`), the binaries, and the docs (incl.
+  `docs/VERSIONING.md`), and it slots into the canonical **V3-genesis → V4
+  lattice-only** roadmap (`00-mission.mdc:19`), where the fully-PQC future is `4`.
+  Keeping `3` also makes it unambiguous in C++ review that *Shekyl's v3 is not
+  Monero's v1* (CryptoNote). Tags renumbered because their values were meaningless
+  to Shekyl; `version` stays `3` because its value is load-bearing. **No gate-(c)
+  change.**
 
 ## 7. Differential methodology (extends CONSENSUS_PORT_SEQUENCE §3)
 
