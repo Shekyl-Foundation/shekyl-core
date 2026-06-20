@@ -179,6 +179,11 @@ sustainability is unaffected by the recalibration.
     `gindex → position` index, bringing per-input lookup to O(log n)/O(1). A
     binary search alone does **not** apply: `drained` is sorted by
     `(maturity, gindex)`, so `gindex` is not monotonic across maturity buckets.
+    **Reopening trigger:** a measured send-latency budget where per-input
+    reconstruction is material (multi-input spends at mainnet tree size), or the
+    Track-2 regtest surfaces it as a hotspot — not before (rules 21/70: no
+    speculative perf ahead of its trigger). CT-5 Round 1 deferred; see
+    [`CT5_ROUND1_CLOSEOUT.md`](./design/CT5_ROUND1_CLOSEOUT.md) §5.
 
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
@@ -216,26 +221,6 @@ sustainability is unaffected by the recalibration.
   [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
   [`docs/design/CT3_ROUND1_CLOSEOUT.md`](./design/CT3_ROUND1_CLOSEOUT.md) §4.
 
-- **CT-5 rollback error handling: drop-and-reopen poisoned client
-  (CT-3c poison contract, 2026-06-12; machine-enforced 2026-06-13).**
-  Target: V3.0, with the engine refresh wiring (CT-5).
-  `CurveTreeClient::rollback_to_fork` commits the store rollback before
-  rebuilding memory; if a post-store check fails (`FrozenSegmentRkMismatch`,
-  `FrozenSegmentRecordMissing`, duplicate gindex on rebuild, pruned/corrupt
-  shape, etc.), the method returns `Err` with the store authoritative and
-  rolled back but the in-memory client object still stale. **The detection
-  is now self-enforcing:** the client sets an internal poison flag at the
-  store commit and clears it only on full rebuild success, so a stale client
-  fails fast with `ClientError::Poisoned` on every load-bearing call
-  (`ingest_block`, `root_at`, `verify_root`, `rollback_to_fork`) rather than
-  silently ingesting against stale memory or returning a stale root. CT-5's
-  residual obligation is only the *reaction*: map `ClientError::Poisoned`
-  (and, conservatively, any rollback `Err`) to drop-and-reopen rather than
-  retry-with-same-object. **Reopening trigger:** if CT-5 introduces a
-  rollback actor/wrapper that owns this policy centrally, fold the item into
-  that actor's contract and close it.
-  See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4 CT-3c.
-
 - **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1
   disposition, 2026-06-12).** Target: V3.0, with prune-policy / store
   startup hardening. CT-3c intentionally runs the bounded
@@ -255,19 +240,6 @@ sustainability is unaffected by the recalibration.
   rollback wiring PR. **Reopening trigger:** store-backed assembly or
   pruned resume needs an all-segment integrity sweep, or audit requires a
   startup/maintenance mode that pays the full scan cost explicitly.
-
-- **Carry `BlockHeight`/`Gindex` typing across the client → engine seam
-  (CT-3a P5, 2026-06-12; client portion closed by CT-3b 2026-06-12).**
-  Target: V3.0, with the engine refresh wiring (CT-5). CT-3a newtypes
-  every `LeafStore` `pub fn` and `types.rs` struct; **CT-3b retyped the
-  client's outward signatures** (`BlockLeaves.height`, `ingest_block`,
-  `root_at`, `verify_root`, `drained_leaf_count`, the height-carrying
-  `ClientError` fields) so raw `u64` heights no longer cross any client
-  method boundary. Remaining scope: carry the newtypes (or engine-side
-  equivalents) through the `shekyl-engine-*` boundary when the refresh
-  wiring consumes the client API. The `recon`-layer `u64` cutoffs are
-  internal-oracle surface and stay bare by design. See
-  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §4.
 
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
