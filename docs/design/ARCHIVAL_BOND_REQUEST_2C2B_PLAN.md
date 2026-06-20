@@ -13,8 +13,8 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
-**Status:** **OPEN — scoping pre-flight (this document).** Design rounds 1–6 and
-the impl-time pre-flight pass have not run.
+**Status:** **OPEN — scoping pre-flight closed; design rounds 1–3 closed
+(2026-06-19); rounds 4–6 and impl-time pre-flight (R0-D#) pending.**
 
 ---
 
@@ -311,9 +311,134 @@ Per the user's framing and rule 26 §"Part A" / `A3` (threat-model addenda is a
 6. **Round 6 — closure + forward-action propagation (`A5`).** Confirm every
    carried item (2d transport, 2d reconcile, exit seam) has a target anchor.
 
+### 3.1 Round 1 findings — CLOSED (2026-06-19)
+
+**Funding-regime design (SP-2.d, design-now / wire-later) — SETTLED.**
+
+The regime selector is typed; neither real source is wired in 2c-2b.
+
+- **Cold-start** (principal-seeded): principal makes a generic transfer to `P`
+  (amount-decoupled), `P` holds, `P` posts from its own UTXO.
+  `EconomicSpacing(SebSpan(≥ 1))` gates the principal→`P` transfer →
+  bond-post interval (the cold-start decorrelation guard).
+  `NetworkGap(BlockSpan(600))` gates the standoff draw inside the
+  bond-post event. **Real source deferred:** actual principal-output
+  selection is wire-later.
+- **Steady-state** (`P`-local fund-from-earnings): requires the `P`-scan
+  pipeline (Bond-PR 2d-1). **Real source deferred** (SP-2.e).
+- Both regimes: the bond-post funding UTXO originates from a
+  `P`-held output; `verify_credit_funding` is the amount invariant
+  regardless of regime.
+- **KAT posture:** synthetic `P`-holdings over `funded_ledger_and_tree`;
+  regime selector exercised with fixtures only, no real source wired.
+
+**`SignBond` message signature — SETTLED.**
+
+```rust
+pub(crate) struct SignBond {
+    pub handle: PersonaHandle,        // validates slot is held + generation current
+    pub ticket: PersistedBondTicket,  // validates persist happened before sign
+    pub holdings: HoldingsDescriptor, // for bond_floor computation
+    pub tx_prefix_hash: [u8; 32],     // binds signature to this transaction
+}
+
+impl Message<SignBond> for StakeEngine {
+    type Reply = Result<JoinMarketVin, StakeEngineError>;
+    // handler: validate_handle → slot-cross-check → source-preflight →
+    //          entry-gap draw + degeneracy guard → build_join_market_vin
+}
+```
+
+New `StakeEngineError` variants: `RngSourceFailed`, `RngDegeneracy`,
+`SlotMismatch { handle_slot, ticket_slot }`, `BondBuild(BondBuildError)`.
+
+`SignBond` does **not** advance the rotation generation — signing does not
+rotate the active slot or wipe any persona.
+
+Caller workflow (two handle mints — handles are single-use, per §10.2 #2):
+
+1. `mint_handle(slot)` + `activate_persona(handle1)` → sets active slot.
+2. `Engine::persist_bond_record(slot)` → `PersistedBondTicket` (durable).
+3. `mint_handle(slot)` + `sign_bond(handle2, ticket, holdings, hash)` → `JoinMarketVin`.
+
+**Finding 5 retraction — CONFIRMED.**
+`PersonaHandle` use-after-wipe is unexpressible in the 2c-2a substrate:
+rotation advances `generation` → `StaleHandle` on stale handle; wiped
+persona removed from `held` → membership check fails. 2c-2b inherits
+this guarantee without additional machinery.
+
 ---
 
-## 4. Impl-time pre-flight pass (rule-26 Round 0 / `R0-D#`) — reserved, agenda
+### 3.2 Round 2 findings — CLOSED (2026-06-19)
+
+**Timing-seam type homes — SETTLED.**
+
+- `BlockSpan(u64)` — lives in `shekyl-engine-core::engine::stake_timing`
+  (sole consumer in scope; promotion to `shekyl-types` is a reversion-clause
+  item for when a second consumer emerges).
+- `SebSpan(u64)` — lives in `shekyl-engine-core::engine::stake_timing`
+  for the same reason.
+- `NetworkGap(BlockSpan)` and `EconomicSpacing(SebSpan)` — role-wrapper
+  newtypes in `stake_timing`; cross-apply is a compile error (distinct inner
+  types).
+- `DEFAULT_ENTRY_GAP_WINDOW: NetworkGap = NetworkGap(BlockSpan(600))` —
+  named constant, closes B6 (no unnamed 600 literal in callers).
+- `MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSpan(1))` —
+  names the cold-start guard value; real ledger-elapsed check is wire-later.
+
+**Which seam each gates (finding 6 close-out) — SETTLED.**
+
+- `NetworkGap` gates: `draw_entry_gap` standoff window (block-level timing
+  for the prep-spend / announce / bond-post sequence inside the `SignBond`
+  handler).
+- `EconomicSpacing` gates: principal→`P` seed transfer → bond-post interval
+  (cold-start decorrelation; elapse ≥ 1 SEB between events). Design-now as
+  the named constant; real elapsed check deferred to cold-start wiring.
+
+New `shekyl-engine-core` production deps required: `shekyl-standoff`
+(for `GapRng` + `draw_entry_gap`) and `shekyl-archival-bond-builder` (for
+`build_join_market_vin` inside `SignBond` handler — promotes from dev-dep).
+
+---
+
+### 3.3 Round 3 findings — CLOSED (2026-06-19)
+
+**RNG seams — SETTLED.**
+
+*Source failure (fail-loud, no silent fallback):*
+`OsRng::try_fill_bytes` preflights the entropy source before drawing.
+A source error maps to `StakeEngineError::RngSourceFailed` (terminal for
+the request). No silent fallback to a weaker source anywhere in the draw
+path — the catastrophic failure is a weaker-source *silent* fallback, not
+the source erroring (a panic or error is loud). The TOC-TOU between
+preflight and draw is accepted: a source that is alive at preflight and
+then dies mid-draw triggers the actor's fail-stop (panic = loud). The
+`GapRng::next_u64` trait is infallible by design; introducing source
+failure into it would require changing `shekyl-standoff`'s API — deferred
+per the reversion clause if a specific need emerges.
+
+*Per-draw degeneracy guard (float-free, fail-loud — S5):*
+After the entry-gap draw, one probe draw is taken from the same RNG adapter.
+If `spread_draw == spread_probe`, the guard fires `StakeEngineError::RngDegeneracy`.
+This catches the double-jitter-trap degenerate pattern with probability
+≈ 1 per 601 for a correct CSPRNG (acceptable false-positive rate; a bond
+retry is cheap). The guard is extracted into a tested helper
+`draw_entry_gap_guarded(window, rng)` so the degeneracy logic is unit-tested
+with injectable degenerate RNGs (conformance-gated, not injected into the
+live actor).
+
+*Session-level self-cert (S6 — `certify_draw`, gated):*
+`certify_draw` over `GapRng`-adapted `OsRng` runs at session start, gated
+(not per-draw). Catches the correlated-walk pattern that per-draw
+comparison cannot detect (requires lag-1 autocorrelation over ≥ n draws,
+float-bearing — `conformance` feature, not shipped into production builds).
+
+*Adapter — `OsRngGapAdapter`:*
+A private struct in `stake_engine.rs` implementing `GapRng` via
+`OsRng::next_u64()`. Single-method, no state. Tests use conformance-module
+degenerate-RNG fixtures via the `draw_entry_gap_guarded` helper directly.
+
+---
 
 Runs **after** round 6 closes, **before** production commits (rule 26 §"Pre-
 flight pass"). Two halves, agenda noted now so the rounds produce the artifacts
