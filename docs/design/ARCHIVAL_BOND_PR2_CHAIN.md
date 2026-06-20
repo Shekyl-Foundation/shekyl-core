@@ -53,9 +53,9 @@ new prose uses the prefix.
 | --- | --- | --- | --- | --- |
 | **2a** | `feat/archival-bond-roundtrip-kat` #156 | **landed** | Synthetic-tree round-trip KAT | §3.1 (record) |
 | **2b** | `feat/archival-stake-engine` #157 | **landed inert — partly superseded** | StakeEngine actor, *seed-owning* model | §3.2 (record + supersession §4) |
-| **2c-1** | `feat/archival-bond-realtree-kat` #158 | **landed** | Real-tree composition KAT (prove half; verify `#[ignore]`, CT-5-gated) | §3.3 (record) |
+| **2c-1** | `feat/archival-bond-realtree-kat` #158 | **landed** | Real-tree composition KAT (prove half; verify half now **live** — CT-5 closed #162) | §3.3 (record) |
 | **2c-2a** | `feat/archival-stake-wiring` | **landed inert** | **Model D** wiring (seed-free actor + typed contracts + `StakingBlock`) | §3.4 (record) |
-| **2c-2b** | `feat/archival-bond-request` | **not started — plans to land inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) |
+| **2c-2b** | `feat/archival-bond-request` #163 (archived) | **landed inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) + S6 follow-on §3.5.1 |
 | **2d-1** | — | **not started — prerequisite** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation | §3.6 (foundation) |
 | **2d-2** | — | **not started** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for) | §3.6 |
 
@@ -89,9 +89,19 @@ drives the bond's cleartext `credit_term` through `sign_transaction_with_terms`
 over a **real depth-2 `assemble_path` tree** (the `funded_ledger_and_tree`
 fixture), asserting BP+, the RCT balance over prover-emitted commitments, and
 vin/signature accept+reject. The **construct→prove half over genuine branch
-layers is proved**; the FCMP++ **verify-accept half is gated on CT-5** and rides
-as an `#[ignore]`d sibling KAT. (Split from 2c-2 when CT-5c made the real
-`assemble_path` available earlier than planned.)
+layers is proved**; the FCMP++ **verify-accept half is now live** —
+`join_market_bond_post_fcmp_verify_over_real_tree`
+(`local_pending_tx.rs:3709`) runs as a normal `#[tokio::test]` (the `#[ignore]`
+was lifted when CT-5 closed in #162: the partial-branch-chunk bug was fixed by
+zero-padding branch chunks to circuit width in `shekyl_fcmp::proof::prove`).
+(Split from 2c-2 when CT-5c made the real `assemble_path` available earlier than
+planned.)
+
+> **Fossil note (2026-06-20):** the sibling comment in
+> `join_market_bond_post_signs_and_verifies_over_real_tree`
+> (`local_pending_tx.rs:3404–3408`) still describes the verify KAT as the
+> "`#[ignore]`d sibling … gated on CT-5." That is stale — fold a one-line comment
+> correction into the next PR touching that crate (S6).
 
 ### 3.4 Bond-PR 2c-2a — Model D wiring (landed inert)
 
@@ -191,13 +201,14 @@ sealed `StakingBlock`, and the generation-counter handle invalidation.
 | KAT | Bond-PR | Tree | Proves | Gate |
 | --- | --- | --- | --- | --- |
 | Synthetic-tree round-trip | 2a (#156) | synthetic | construct ↔ verify over a synthetic balance witness | none |
-| Real-tree composition | 2c-1 (#158) | **real** depth-2 `assemble_path` | construct→**prove** over genuine branch layers; BP+ + RCT balance | verify half `#[ignore]`, CT-5 |
-| **Request-path composition** | **2c-2b** | (composition, not a new prover path) | mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify accept | real-tree verify still CT-5-gated |
+| Real-tree composition | 2c-1 (#158) | **real** depth-2 `assemble_path` | construct→**prove** over genuine branch layers; BP+ + RCT balance | verify half **live** (CT-5 closed #162) |
+| **Request-path composition** | **2c-2b (#163)** | (composition, not a new prover path) | mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify accept | none new (real-tree verify now live; on-chain bond gated on **2d** broadcast/transport) |
 
 2c-2b's "milestone KAT" is the **request-path composition** — it exercises the
 *orchestration seam* (handle + ticket + request → signed vin → verify), **not** a
-new prover round-trip; the prover round-trips are already closed by 2a/2c-1. The
-on-chain bond remains gated on the real `CurveTreeClient` (CT-5).
+new prover round-trip; the prover round-trips are already closed by 2a/2c-1. With
+CT-5 closed (#162), the real-tree verify half is live; the **on-chain** bond now
+remains gated on **2d** (broadcast + `P`-isolated transport), **not** CT-5.
 
 ---
 
@@ -214,9 +225,14 @@ into the 2A signer):
   persona re-sign behavior Bond-PR 2d's broadcast/re-anchor activates.
   `CT5D_REANCHOR.md`.
 - **CT-5 full closure** (FCMP++ prove↔verify over real multi-layer branch layers)
-  — **still gating** the real-tree **verify** half (the `#[ignore]`d KATs) and
-  all of Bond-PR 2d. Tracked as the "real-tree FCMP++ verify" item in
-  `FOLLOWUPS.md`.
+  — **CLOSED 2026-06-20 (#162)**. The blocker was a first-party prover bug, not
+  vendored-crypto unsoundness: `shekyl-curve-tree::assemble` emitted **narrow**
+  branch chunks for incomplete nodes, but the FCMP membership circuit needs the
+  full chunk width; the fix zero-pads branch chunks to width in
+  `shekyl_fcmp::proof::prove` (zero scalars vanish in the layer hash, so the
+  consensus root is unchanged). The real-tree **verify** KATs are now **live**
+  (no `#[ignore]`). **Bond-PR 2d is no longer gated on CT-5** — its remaining
+  gate is **internal** (2d-1's `P`-scan layer, then 2d-2 broadcast/transport).
 
 ---
 
