@@ -4346,4 +4346,70 @@ sites: `rust/shekyl-oxide/shekyl-oxide/src/transaction.rs` (`Timelock`,
 
 ---
 
+## 2026-06-20 — redb for the daemon store; consensus serializer ported replicate-exact before any deliberate format change
+
+**Decision.** Two binding decisions for the C++ → all-Rust consensus port (full
+sequence and source pins in
+[`docs/design/CONSENSUS_PORT_SEQUENCE.md`](design/CONSENSUS_PORT_SEQUENCE.md)):
+
+1. **The Rust daemon `blockchain_db` uses redb, not heed/liblmdb.** The eight
+   inherited `MDB_DUPSORT` tables convert to composite-key `Table`s (not redb
+   `MultimapTable`); the FCMP++ curve-tree store — the structure the daemon and
+   the `shekyl-curve-tree`/`shekyl-engine-core` wallet stack share — is *already*
+   composite-keyed on both sides, so one Rust tree-store impl serves both.
+
+2. **The binary consensus serializer is ported "replicate-exact" first; any
+   deliberate format change (the `rct_signatures` → `ct_signatures` rename) is a
+   separate, later step that does not touch the binary wire.** The binary archive
+   is positional (`binary_archive::tag()` is a no-op,
+   `src/serialization/binary_archive.h:71`), so field names cost zero bytes and
+   the rename is binary-/tx-hash-invariant by construction. Replicate-exact
+   (prove the Rust serializer bit-identical to C++) precedes any format
+   arbitration, with locked vectors gating each.
+
+**Rationale.** redb is defended on **engine-consistency** (it is already the
+workspace store — `redb = "4.1.0"` in `rust/Cargo.toml`, used by
+`shekyl-curve-tree`/`shekyl-engine-core`; there is zero heed/lmdb in the Rust
+tree, so heed would *introduce* the only C-FFI storage seam into an otherwise
+pure-Rust stack), the **map-resize footgun** (liblmdb's pre-sized map +
+`do_resize` machinery is an operational hazard on an unbounded daemon DB; redb
+grows dynamically), **trusted-base/reproducibility** (removes liblmdb-C from the
+TCB and Guix graph and the MSVC-FFI risk already decisive for the wallet), and
+**`pop_block` atomicity by construction** (a redb `WriteTransaction` replaces
+resize-aware manual batching). **It is *not* defended on speed:** heed is
+zero-copy (mmap'd liblmdb hands back a borrowed `&[u8]`; the FFI cost is
+per-call C overhead, not a per-byte transcode), and on raw reads liblmdb
+historically edges redb — so "redb is faster" is rejected as a false rationale.
+The rejected alternative (**heed**) was attractive for one reason — a Rust
+daemon could read the same on-disk LMDB file as the C++ oracle for a byte-level
+shared-DB cross-check — but consensus is over *logical* chain state, not on-disk
+bytes, so the differential test that matters (same block sequence → identical
+tip / cumulative difficulty / output set / key-image set / tree root) is
+unaffected; the cross-check is a nicety, not a correctness requirement. The bet
+is de-risked because the on-disk format is **node-local — not a consensus wire
+format and not frozen at genesis** — so redb is reversible without a hardfork,
+unlike the serializer. The serializer ordering (replicate-exact before rename)
+keeps "did I port correctly" and "did I change the format on purpose" from being
+debugged at once.
+
+**Rule-21 reopen triggers.** (redb) stressnet shows write-amplification or
+large-DB latency outside an agreed envelope vs. the C++/liblmdb oracle; or a
+surviving *consensus* query hits `OUTPUT_AMOUNTS` by amount (vs. global index),
+the one table that would genuinely want a multimap. (serializer) any tx-hash or
+binary-blob delta appears under the JSON rename — a non-tag path leaked the name
+into the wire; halt and find it.
+
+**Reference.**
+[`docs/design/CONSENSUS_PORT_SEQUENCE.md`](design/CONSENSUS_PORT_SEQUENCE.md)
+(the full Stage 0–7 sequence, Pin A/B source pins, and the corpus-is-spec
+retirement gate); [`docs/design/TRACK2_REGTEST_PARITY.md`](design/TRACK2_REGTEST_PARITY.md)
+(the differential rig this generalizes). Source anchors:
+`src/serialization/binary_archive.h:71` (`tag()` no-op),
+`src/blockchain_db/lmdb/db_lmdb.cpp:1651` (the "No DUPSORT, use composite keys"
+invariant), `:1597-1613` (the 8 inherited DUPSORT tables),
+`src/fcmp/rctTypes.h` + `src/cryptonote_basic/cryptonote_basic.h` (the binary
+tx/rct layout being ported).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
