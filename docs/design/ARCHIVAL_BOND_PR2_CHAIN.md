@@ -119,7 +119,7 @@ persist-before-use (#1, the cross-split seam consumed by 2c-2b), operation-scope
 path**. Substrate: `stake_engine.rs`, `stake_persist.rs`,
 `lifecycle.rs::spawn_stake_engine_if_staker` (`:879`).
 
-### 3.5 Bond-PR 2c-2b — JoinMarket request path (in review — PR #163)
+### 3.5 Bond-PR 2c-2b — JoinMarket request path (landed inert — PR #163)
 
 Full plan: [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md).
 Consumes the 2c-2a inert surface (`PersistedBondTicket`, `PersonaHandle`); adds
