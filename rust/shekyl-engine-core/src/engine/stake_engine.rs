@@ -462,7 +462,10 @@ pub(crate) struct StakeEngineArgs {
     /// uniformity chi-square has a nonzero false-positive rate at α=1e-6, an
     /// occasional-flake source (a stray false-fail kills the actor and cascades
     /// into unrelated assertions). The dedicated S6 tests opt in explicitly. The
-    /// field does not exist in production builds, where the self-cert always runs.
+    /// field exists only in `test + conformance` builds. In a **non-test
+    /// `conformance`** build the self-cert always runs (the real `OsRng` grade,
+    /// no selector); in the **default** build the self-cert is compiled out
+    /// entirely and there is no grade.
     #[cfg(all(test, feature = "conformance"))]
     pub self_cert: TestSelfCert,
 }
@@ -617,16 +620,17 @@ impl Actor for StakeEngine {
         // dangling cursor to idle rather than carry an unresolvable active slot.
         let active = args.active.filter(|slot| held.contains_key(slot));
 
-        // S6 — session RNG self-cert (conformance build only; x86 enforced by the
-        // module-level `compile_error!`). Grade the production `OsRng` adapter
-        // before the actor accepts any work; a non-conformant CSPRNG fail-stops
-        // the spawn (and so wallet-open), so a degenerate timing RNG never reaches
-        // the gate-6 decorrelation draw. This certifies the real adapter at the
-        // real session-start — stronger than the reference-RNG KAT, though it runs
-        // only in a conformance build (S6 §0). Production always grades the real
-        // adapter; the conformance *test* build selects via `args.self_cert`
-        // (default `Skip`, so unrelated tests are neither slowed nor flaked by the
-        // grade's α=1e-6 false-positive).
+        // S6 — session RNG self-cert. Compiled in **only** under the `conformance`
+        // feature (x86 enforced by the module-level `compile_error!`); the default
+        // build has no grade at all. Grade the real `OsRng` adapter before the
+        // actor accepts any work; a non-conformant CSPRNG fail-stops the spawn (and
+        // so wallet-open), so a degenerate timing RNG never reaches the gate-6
+        // decorrelation draw. This certifies the real adapter at the real
+        // session-start — stronger than the reference-RNG KAT (S6 §0). A
+        // **non-test `conformance`** build always grades; the **`test +
+        // conformance`** build selects via `args.self_cert` (default `Skip`, so
+        // unrelated tests are neither slowed nor flaked by the grade's α=1e-6
+        // false-positive).
         #[cfg(all(feature = "conformance", not(test)))]
         run_session_self_cert(&mut OsRngGapAdapter)?;
         #[cfg(all(feature = "conformance", test))]
@@ -1029,9 +1033,10 @@ impl StakeEngineHandle {
             bundles,
             bonded,
             active,
-            // Production always grades the real OsRng adapter; in test+conformance
-            // the default is `Skip` so unrelated stake tests are not flaked by the
-            // grade. The dedicated S6 tests build args directly with their mode.
+            // A non-test `conformance` build always grades the real OsRng adapter
+            // (no field); in `test + conformance` the default is `Skip` so
+            // unrelated stake tests are not flaked by the grade. The dedicated S6
+            // tests build args directly with their mode.
             #[cfg(all(test, feature = "conformance"))]
             self_cert: TestSelfCert::Skip,
         });
