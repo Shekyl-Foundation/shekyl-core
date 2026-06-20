@@ -847,9 +847,9 @@ fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>
 /// satisfies the circuit while leaving the consensus root unchanged.
 ///
 /// A real chunk has at most `width` children, so `len > width` is malformed
-/// input. We reject it rather than `Vec::resize`-truncating: dropping siblings
-/// would silently produce a proof for a *different* path — a wrong proof from bad
-/// input is the failure class the security precondition forbids.
+/// input and is rejected: silently dropping the extra siblings would produce a
+/// proof for a *different* path, and a wrong proof from bad input is the failure
+/// class the security precondition forbids.
 fn pad_branch_chunk<C: Ciphersuite>(
     mut scalars: Vec<C::F>,
     width: usize,
@@ -1127,18 +1127,25 @@ mod tests {
         use crate::tree::{hash_grow_helios, helios_hash_init, selene_point_to_helios_scalar};
         use ec_divisors::DivisorCurve;
         use multiexp::multiexp_vartime;
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha20Rng;
         use shekyl_generators::SELENE_HASH_INIT;
 
+        // Deterministic: a regression KAT must reproduce the same witness every
+        // run, so a failure is debuggable and the `selene_point_to_helios_scalar`
+        // `.expect()` below is guaranteed for this fixed fixture (the test passing
+        // confirms the seed yields a convertible, non-identity leaf point).
+        let mut rng = ChaCha20Rng::seed_from_u64(0xC75_0002_0000);
         let tree_depth: u8 = 2;
         let signable_tx_hash = [0xABu8; 32];
 
-        let x = Scalar::random(&mut OsRng);
-        let y = Scalar::random(&mut OsRng);
+        let x = Scalar::random(&mut rng);
+        let y = Scalar::random(&mut rng);
         let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
-        let I = EdwardsPoint::random(&mut OsRng);
-        let C = EdwardsPoint::random(&mut OsRng);
+        let I = EdwardsPoint::random(&mut rng);
+        let C = EdwardsPoint::random(&mut rng);
         let L = I * x;
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut rng);
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         // Leaf → Selene leaf node (the FCMP leaf hash; same formula the passing
@@ -1178,8 +1185,8 @@ mod tests {
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
         let c_bytes = C.to_bytes();
-        let z = Scalar::random(&mut OsRng);
-        let a = Scalar::random(&mut OsRng);
+        let z = Scalar::random(&mut rng);
+        let a = Scalar::random(&mut rng);
         let input = ProveInput {
             output_key: o_bytes,
             key_image_gen: i_bytes,

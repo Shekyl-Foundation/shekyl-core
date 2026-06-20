@@ -302,8 +302,8 @@ sustainability is unaffected by the recalibration.
   *leaf* chunk verified without padding). Validate **depth-3+** (a Selene branch
   layer, and whether the leaf chunk needs padding at scale) once larger real-tree
   fixtures exist (Track-2 regtest / Tier-B). Separately, advance the
-  ~8-week-stale `monero-oxide@3933664d` pin as routine maintenance (ruled out as
-  the cause — the pinned crate's own `test_single_input` passes layers 1-9).
+  `monero-oxide@3933664d` pin (synced 2026-04-25) as routine maintenance — ruled
+  out as the cause: the pinned crate's own `test_single_input` passes layers 1-9.
   **Reopening trigger:** a depth-3+ real-tree verify, or the Tier-B fixture.
   Target: V3.0 with the CT-5 series.
 
