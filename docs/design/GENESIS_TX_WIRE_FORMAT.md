@@ -5,13 +5,15 @@ Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
 on the Wave-2 `bond_post` arm, no Wave-1 impact) and merged into Q4; Q12 resolved
 (genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
-**Round-1 / Wave-1 freeze drafted** (§9–§14: byte tables, resource bounds,
-hashing layer, reject rules, domain constraints) — pending your ratification, plus
-two new creation cuts it surfaced (trailing-byte exact-consumption; explicit
-`fcmp_proof` cap). Settled surface = `gen`+`fcmp` inputs, `tagged_key` output, ct,
-header, pow-blob, tx `version=3`. The only deferred surface is **Wave 2** (the
-`P`-model staking-archival arms), which freezes later with the staking-archival
-workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
+**Round-1 / Wave-1 freeze RATIFIED 2026-06-20** (§9–§14): byte tables, bounds
+(per-tx + block-level), hashing (preimage + RandomX seed), the recursive
+canonical-encoding invariant + reject rules, domain constraints. Both creation
+cuts adopted in stronger form (canonical-encoding invariant; exact determined
+proof/Bp+ length). **Design phase complete — the genesis Wave-1 wire format is
+frozen.** Next is implementation (rebase onto current dev → the clean crate).
+Settled surface = `gen`+`fcmp` inputs, `tagged_key` output, ct, header, pow-blob,
+tx `version=3`. Deferred: **Wave 2** (the `P`-model staking-archival arms), which
+freezes later with the staking-archival workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
 block/tx wire format: the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
 match it where we deliberately diverge. **Process:** multi-round design
@@ -426,10 +428,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 
 # Round 1 — Wave-1 freeze (byte tables + bounds + hashes + reject rules)
 
-**Status:** Round-1 draft (2026-06-20), for ratification. A genesis freeze is not
-just byte order — it is also the **bounds**, the **hashes**, and the
-**canonical-form/reject rules**, each of which freezes identically. All
-source-confirmed at `dev`. Integers little-endian; `V(x)` = canonical varint
+**Status:** Round-1 **RATIFIED 2026-06-20** — the genesis Wave-1 wire format is
+frozen. A genesis freeze is not just byte order — it is also the **bounds**, the
+**hashes**, and the **canonical-form/reject rules**, each of which freezes
+identically. All source-confirmed at `dev`. Integers little-endian; `V(x)` = canonical varint
 (§6 Q10); `cn_fast_hash` = keccak-256.
 
 ## 9. Wave-1 frozen byte layout
@@ -450,8 +452,8 @@ pre-renumber tags until recapture.)*
 
   `enc_amount`/`enc_label` = 8B value + 1B tag (9B); `outPk` = 32B commitment;
   the `enc_label` indistinguishability invariant (§2.3) is binding.
-**9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
-**9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6).
+**9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
+**9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -463,12 +465,27 @@ pre-renumber tags until recapture.)*
 | tx_extra | **24,576** | cryptonote_tx_utils.cpp:579 | `MAX_TX_EXTRA_SIZE` (config:254) |
 | PQC pubkey blob | **1,996** single / 13,974 multisig-max | cryptonote_basic.h:347 | `PQC_HYBRID_SINGLE_KEY_LEN` / `PQC_MAX_PUBLIC_KEY_BLOB` (config:291) |
 | PQC sig blob | **3,385** single / 23,697 multisig-max | cryptonote_basic.h:350 | `PQC_HYBRID_SINGLE_SIG_LEN` / `PQC_MAX_SIGNATURE_BLOB` (config:293) |
-| `nbp` | **== 1** (one aggregated BP+) | tx_verification_utils.cpp:213 | `is_canonical_bulletproof_plus_layout` |
+| `nbp` / Bp+ len | **`nbp==1`** AND Bp+ byte length **exact by `nout`** | tx_verification_utils.cpp:213 | `is_canonical_bulletproof_plus_layout`; canonical-form corollary |
 | `curve_trees_tree_depth` | `0 < depth ≤ chain depth` (dynamic) | blockchain.cpp:3964,4070 | — |
-| `fcmp_proof` len | **NO explicit cap** (only tx-size) | — | **GAP — add an explicit cap at genesis (creation cut)** |
+| `fcmp_proof` len | **exact: `proof_len == proof_size(nvin, tree_depth)`** | reject mismatch | `shekyl_fcmp::tree::proof_size` (tree.rs:549; ffi:1225) — both inputs on-wire; canonical-form corollary |
 
-Each is a §7 negative-corpus reject case (a 9-input or 17-output tx must be
-rejected by both impls).
+**Block-level bounds** (not just per-tx):
+
+| Bound | Value | Constant |
+|---|---|---|
+| tx / block | **0x10000000** | `CRYPTONOTE_MAX_TX_PER_BLOCK` (config:45) |
+| block weight | median-window limit (long-term window **100,000**; short-term surge **×50**) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
+
+**Fossil flag (→ economics / block-weight owner, not this doc):**
+`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` has **V1/V2/V5** variants
+(20,000 / 60,000 / 300,000, config:58-60) — Monero-hardfork lineage. A fresh
+genesis has **one** reward zone, not three version-gated ones referencing forks
+that never happened here; freezing V1/V2/V5 would immortalize Monero fork history
+in the block-weight rule. Surfaced in the bounds pass; the arbitration belongs to
+the economics doc.
+
+Each is a §7 negative-corpus reject case (a 9-input / 17-output tx, or an
+over-cap block, must be rejected by both impls).
 
 ## 11. Hashing layer (consensus identities)
 
@@ -493,8 +510,26 @@ rejected by both impls).
 - The block-202612 hash special-case is Monero chain history — a dead pre-genesis
   branch; **shed** ([`60-no-monero-legacy`]); the vendored Rust `block.rs` carries
   it and the clean crate must drop it.
+- **PoW = preimage + seed.** The above pins the PoW *preimage*; PoW determinism
+  also requires the **RandomX seed/epoch** — which block's hash seeds the cache at
+  a given height, the epoch length, and the lag (a verifier on the wrong seed
+  diverges). C++ uses `SEEDHASH_EPOCH_BLOCKS = 2048`, `SEEDHASH_EPOCH_LAG = 64`,
+  `rx_seedheight(height)` with the main/secondary transition
+  (rx-slow-hash.c:137-188). **`shekyl-pow-randomx` owns this freeze** — pin the
+  epoch/lag as deliberate genesis values and **confirm they are intended, not
+  inherited** (RandomX **v2** is a fork; the epoch/lag may differ from stock — a
+  Q7-class "choose, don't inherit" check for the PoW seed).
 
 ## 12. Canonical-form / reject rules (must-reject enumeration)
+
+**The canonical-encoding invariant (the unifier).** A valid blob is **exactly the
+bytes that re-serialize to themselves** — `write(read(b)) == b` — enforced
+**recursively at every nesting boundary**: the tx within the block, and every
+length-prefixed sub-region (a `vec` whose declared length leaves slack, a
+`V(extra_len)` that under-reads). Trailing bytes, non-canonical varints (Q10), and
+the exact proof/Bp+ length (§10) are all **corollaries** of this one rule, not a
+scattered list. The §7 round-trip gate (`write(read(b)) == b`) *is* this invariant;
+state it once, the rest follow. Instances:
 
 - **Inputs strictly ascending by key image** — `memcmp(ki, last) >= 0 → reject`
   (blockchain.cpp:3642-3663). One rule, two guarantees: rejects **unsorted** AND
@@ -525,6 +560,11 @@ Gate = **identical accept/reject** (§7), not round-trip.
   `auth_version == 1` (tx_pqc_verify.cpp:169); `scheme_id ∈ {1 single, 2 multisig}`
   (tx_pqc_verify.cpp:181); **`flags == 0` — unknown bits rejected, not ignored**
   (tx_pqc_verify.cpp:175); serve_credit txs carry **empty** pqc_auths.
+  **Parse vs verify (precise rule):** the EOF-tolerant parse (§9.8) *accepts* the
+  empty (pruned) form, but a spend with empty or partial pqc_auths **fails
+  verification** (`tx_pqc_verify.cpp:159`: `size != vin.size() || empty → reject`).
+  So the rule is *pruned form parses, full form required to verify* — not "empty is
+  invalid everywhere."
 - **referenceBlock window:** `tip − FCMP_REFERENCE_BLOCK_MAX_AGE(100) ≤ ref_height
   ≤ tip − FCMP_REFERENCE_BLOCK_MIN_AGE(5)` (blockchain.cpp:3946-3954). (§2.3
   specifies the field; this is its validity window.)
@@ -535,11 +575,22 @@ Gate = **identical accept/reject** (§7), not round-trip.
 - **Versions:** block `major=1, minor=0`; tx `version=3` (Q12). The format is
   version-frozen — a later format is a hard fork (V4 = lattice-only).
 
-## 14. Round-1 findings (new creation cuts surfaced by the freeze pass)
+## 14. Round-1 adopted refinements (post-ratification 2026-06-20)
 
-1. **Trailing-byte malleability gap** (§12) — close at genesis: the Rust
-   serializer enforces exact consumption; C++ gate-(c) matches.
-2. **`fcmp_proof` has no explicit length cap** (§10) — add one at genesis rather
-   than relying on the 1 MB tx-size bound (a tighter, explicit consensus limit).
+Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 completed:
 
-Both are pre-genesis creation cuts (free now, hard forks later).
+1. **Canonical-encoding invariant (adopted, generalized).** The trailing-byte cut
+   becomes the recursive canonical-form rule (§12): `write(read(b)) == b` at every
+   nesting boundary. Trailing bytes, non-canonical varints (Q10), and exact
+   proof/Bp+ length are all corollaries of this one rule.
+2. **Exact determined lengths (adopted, tighter than a cap).** `fcmp_proof` is
+   `proof_len == proof_size(nvin, tree_depth)` **exactly** (§10) — no cap value, no
+   magic constant; Bp+ byte length is exact by `nout`. Canonical-form corollaries.
+3. **§10 completed** with block-level bounds (`CRYPTONOTE_MAX_TX_PER_BLOCK`,
+   block-weight machinery); the V1/V2/V5 reward-zone fossil handed to the economics
+   owner.
+4. **§11 completed**: PoW = preimage + seed; the RandomX seed/epoch (2048/64,
+   `rx_seedheight`) pinned to `shekyl-pow-randomx`, v2 epoch/lag to be confirmed
+   deliberate.
+
+All free pre-genesis (hard forks later).
