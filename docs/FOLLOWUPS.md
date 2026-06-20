@@ -286,28 +286,26 @@ sustainability is unaffected by the recalibration.
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
 
-- **Real-tree FCMP++ verify (`shekyl_fcmp::proof::verify` over a real
-  multi-layer `assemble_path`) — gated on CT-5 (surfaced PR 2c-1, 2026-06-18).**
-  Target: V3.0, with the CT-5 series. No workspace test verifies an FCMP++
-  membership proof built over a *real multi-layer* assembled path: 2a
-  (`local_keys`) and the FFI `signing_round_trip` both verify a depth-1
-  **synthetic** single-leaf Selene root, and the real-tree transfer KATs
-  (`local_pending_tx::build_then_submit_marks_outputs_spent`,
-  `real_root_membership_proof_builds_and_submits`) only **build and submit** —
-  they never call `verify` locally. PR 2c-1's
-  `join_market_bond_post_fcmp_verify_over_real_tree` is the first to try and
-  currently returns `Err(BatchVerificationFailed)`, despite (a) the prover
-  succeeding over the same path and (b) `assemble_kat` proving the assembled
-  branches re-hash bottom-up to the consensus root. That isolates the gap to the
-  upstream `Fcmp::prove`/`verify` ↔ consensus `hash_grow` consistency over real
-  branch layers — a CT-5 surface, not the bond construction (the construct→prove
-  half, BP+, the RCT balance, and vin/signature accept+reject are all proved by
-  the active 2c-1 KAT). The verify-accept assertion lives as an `#[ignore]`d
-  sibling so it does not fake a pass. **Reopening trigger:** CT-5 lands a
-  real-tree prove→verify roundtrip (any test that `verify`-accepts a proof over
-  a multi-layer `assemble_path`); then drop the `#[ignore]` on
-  `join_market_bond_post_fcmp_verify_over_real_tree`, which closes 2c-1's
-  real-tree milestone.
+- **CT-5 real-tree FCMP++ verify — deeper-tree + pin validation (depth-2 case
+  RESOLVED 2026-06-19).** The real-tree prove→verify roundtrip
+  (`join_market_bond_post_fcmp_verify_over_real_tree`, now un-ignored and
+  passing) was failing `BatchVerificationFailed` because
+  `shekyl-curve-tree::assemble` emits **partial (narrow) branch chunks** for
+  incomplete tree nodes while the FCMP membership circuit requires the full
+  `chunk_width`. Fixed by **zero-padding branch chunks** in
+  `shekyl_fcmp::proof::prove` / `prove_with_sal` — zero scalars vanish in the
+  layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so the **consensus root is
+  unchanged** (no daemon/consensus change, no CT-2 Tier-A regression), and the
+  daemon's `shekyl_fcmp_verify` (the same Rust `verify` via FFI) accepts it.
+  Regression: `ct5_partial_branch_chunk_is_padded_and_verifies` (shekyl-fcmp).
+  **Remaining:** the fix + KAT cover **depth-2** (one Helios branch; the narrow
+  *leaf* chunk verified without padding). Validate **depth-3+** (a Selene branch
+  layer, and whether the leaf chunk needs padding at scale) once larger real-tree
+  fixtures exist (Track-2 regtest / Tier-B). Separately, advance the
+  ~8-week-stale `monero-oxide@3933664d` pin as routine maintenance (ruled out as
+  the cause — the pinned crate's own `test_single_input` passes layers 1-9).
+  **Reopening trigger:** a depth-3+ real-tree verify, or the Tier-B fixture.
+  Target: V3.0 with the CT-5 series.
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future
