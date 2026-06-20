@@ -48,6 +48,23 @@ pub(crate) fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 
     }
 }
 
+/// Canonical entry-gap **window** (in blocks) for the funding standoff draw.
+///
+/// This is the single source of truth for the `window` argument to
+/// [`draw_entry_gap`]: the published golden vector (`tests/golden_vector.rs`)
+/// freezes its `(spread, bond_first)` reference at this window, and the wallet
+/// draws at this window (`shekyl-engine-core`'s
+/// `stake_timing::DEFAULT_ENTRY_GAP_WINDOW` wraps this value in the typed
+/// `NetworkGap`). Single-sourcing the *value* — not just the
+/// [`draw_entry_gap`] *function* — closes the otherwise-unguarded drift between
+/// "the window the RNG is certified at" and "the window the wallet draws at":
+/// change this const and the golden vector re-draws and fails until re-frozen,
+/// so the certified window can never silently diverge from the operational one.
+///
+/// `600` blocks is the multi-event entry/announce/bond-post horizon
+/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 / `ARCHIVAL_TIMING_CONSTANTS.md` §7).
+pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600;
+
 /// Conformance-correct entry-seam draw. At the private intent, draw the gap
 /// directly `s ~ U[0, window]` (unbiased integer) and flip a fair order-coin;
 /// returns `(spread_blocks, bond_first)`. Uniform separation, fair inversion,

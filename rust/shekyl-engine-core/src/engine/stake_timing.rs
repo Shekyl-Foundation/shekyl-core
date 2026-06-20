@@ -111,16 +111,26 @@ pub(crate) struct EconomicSpacing(pub SebSpan);
 
 /// Default block-count window for the archival bond entry-gap draw (B6).
 ///
-/// Matches the golden-vector constant (`GOLDEN_WINDOW = 600` in
-/// `shekyl-standoff`'s conformance tests and `golden_vector.rs:19`).
-/// Named here so the `SignBond` handler and tests do not carry unnamed
-/// magic-number literals; 2c-2b closes the B6 open item from §4.
-pub(crate) const DEFAULT_ENTRY_GAP_WINDOW: NetworkGap = NetworkGap(BlockSpan(600));
+/// The raw value is **single-sourced** from
+/// [`shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`] (the canonical scheme window
+/// the golden vector is frozen at); this const only wraps it in the typed
+/// [`NetworkGap`] so the `SignBond` handler and tests carry no unnamed literal.
+/// Because the wallet draws at the same const the golden vector certifies,
+/// "what we validated is what ships" holds by construction — there is no
+/// separate `600` literal to drift (B6 reconciliation, R0-D2). 2c-2b closes the
+/// B6 open item from §4.
+pub(crate) const DEFAULT_ENTRY_GAP_WINDOW: NetworkGap =
+    NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW));
 
 #[allow(dead_code)] // inert until cold-start spacing check is wired
 /// Minimum economic spacing for cold-start principal→`P` funding (SP-2.d).
 ///
 /// At least 1 Settlement Epoch Boundary must elapse between the principal's
-/// generic seed transfer to `P` and `P`'s bond post. Named here as the
-/// design-now anchor; the real elapsed check wires in cold-start wiring.
+/// generic seed transfer to `P` and `P`'s bond post — i.e. `≥ 1 settlement
+/// epoch` per `ARCHIVAL_TIMING_CONSTANTS.md` §7 ("Min spacing join-Market ↔
+/// principal spend", gate-6 R4). The SEB *length* is consensus
+/// (`config/consensus_constants.json` `settlement_epoch_blocks = 10000`); this
+/// const is the wallet-policy *count* (1 SEB). The real elapsed check —
+/// `SebSpan → blocks` via `settlement_epoch_blocks` — wires in cold-start
+/// wiring (B6b reconciliation, R0-D3).
 pub(crate) const MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSpan(1));
