@@ -3,7 +3,7 @@
 **Status:** Round 0 **approved** 2026-06-20. Freeze-gate (§6) **resolved for
 Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_key`
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
-on the Wave-2 `bond_post` arm, no Wave-1 impact) and merged into Q4; Q12 resolved
+on the `bond_post` arm, no spend-surface impact) and merged into Q4; Q12 resolved
 (genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
 **Round-1 / Wave-1 freeze RATIFIED 2026-06-20** (§9–§14): byte tables, bounds
 (per-tx + block-level), hashing (preimage + RandomX seed), the recursive
@@ -11,9 +11,11 @@ canonical-encoding invariant + reject rules, domain constraints. Both creation
 cuts adopted in stronger form (canonical-encoding invariant; exact determined
 proof/Bp+ length). **Design phase complete — the genesis Wave-1 wire format is
 frozen.** Next is implementation (rebase onto current dev → the clean crate).
-Settled surface = `gen`+`fcmp` inputs, `tagged_key` output, ct, header, pow-blob,
-tx `version=3`. Deferred: **Wave 2** (the `P`-model staking-archival arms), which
-freezes later with the staking-archival workstream by design. **This document, once ratified, IS the genesis freeze** for the binary
+Frozen surface (single wave) = `gen`+`fcmp`+`serve_credit`+`bond_post` inputs,
+`tagged_key` output, ct, header, pow-blob, tx `version=3`. The archival arms
+(`bond_post` JoinMarket-only, `serve_credit`) are **frozen with the rest** (fields
+final per gate-4/#165; **rule-21 reopen** = a testnet-revealed change, pre-genesis
+free) — there is **no separate Wave 2**. **This document, once ratified, IS the genesis freeze** for the binary
 block/tx wire format: the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
 match it where we deliberately diverge. **Process:** multi-round design
@@ -92,14 +94,12 @@ gate-(c) cut (C++ `VARIANT_TAG`s + the ct type enum flip with Rust atomically,
 §5/§7). *(Exact assignments below are the proposed scheme; ratified at Round 1.)*
 
 ```text
-Wave-1 frozen (settled surface):
-  Input arm        Output arm         ct type
-  0x00  gen        0x00  tagged_key   0x00  Null (coinbase)
-  0x01  fcmp                          0x01  Fcmp (spend)
-
-Wave-2 (P-model staking-archival; tags finalized at the Wave-2 freeze):
-  0x02  archival_serve_credit_response   # gate-2 serve-credit
-  0x03  archival_bond_post               # gate-4 join-Market/bond (carries P)
+Genesis tags (single-wave freeze):
+  Input arm                    Output arm         ct type
+  0x00  gen                    0x00  tagged_key   0x00  Null (coinbase)
+  0x01  fcmp                                      0x01  Fcmp (spend)
+  0x02  archival_serve_credit  (gate-2 serve-credit; non-spending)
+  0x03  archival_bond_post     (gate-4 join-Market/bond; carries P; JoinMarket-only at genesis)
 
 Shed entirely (no genesis producer — removed from the tag space):
   txin/txout script + scripthash; plain txout_to_key;
@@ -113,7 +113,7 @@ cleartext claim wire is **deleted** for genesis, and cleartext `txout_to_staked_
 `PHASE_2B_FSM_RETOOL.md:94`). What the privacy model actually is:
 
 - **A public bond floor *is* on the wire — necessarily.** The `bond_post` arm
-  (Wave 2) carries `bonded_total_atomic == bond_credit == bond_floor(holdings)`
+  carries `bonded_total_atomic == bond_credit == bond_floor(holdings)`
   (cleartext; `==`, not `≥`), riding the CT balance
   (`Σ pseudoOuts = Σ out_masks + fee + bond_credit`,
   `rust/shekyl-archival-bond-builder/src/lib.rs`). Consensus must verify the bond
@@ -128,14 +128,14 @@ cleartext claim wire is **deleted** for genesis, and cleartext `txout_to_staked_
   :471-516). The `cover` is an ordinary confidential `tagged_key` output — **no
   special wire field**; `CoverAmount` orchestration ships inert and lands with 2d
   bond-tx assembly (genesis-adjacent).
-  - **Wave-2 security crux (not a wire item):** the cover defense reduces entirely
-    to the **entropy of the cover draw** (`:479-480` is "requires guessing the
-    cover"). There is a built-in tension — `P` holds the cover as *working capital*
-    (`:472`), and an amount chosen for operational utility pulls toward
+  - **Security crux (off-wire, genesis-adjacent):** the cover defense reduces
+    entirely to the **entropy of the cover draw** (`:479-480` is "requires guessing
+    the cover"). There is a built-in tension — `P` holds the cover as *working
+    capital* (`:472`), and an amount chosen for operational utility pulls toward
     predictability (correlated with `P`'s activity), while the correlation defense
     wants high entropy. The `shekyl-standoff` entry-draw exists to arbitrate
-    exactly this. It is a Wave-2 / `CoverAmount` property to pin (genesis-adjacent,
-    2C2B:625) — it does **not** touch the Wave-1 surface, but it is the security
+    exactly this. It is a `CoverAmount` property to pin (genesis-adjacent,
+    2C2B:625) — it does **not** touch the wire surface, but it is the security
     crux of the cover model and must be pinned before the bond-tx assembly lands.
 - Admission + reward outputs are otherwise ordinary main-tree stealth
   (`tagged_key`, confidential); reward emission is membership-only with **no
@@ -159,8 +159,8 @@ appear on the consensus blob (confirmed: no wire usage) — not a genesis surfac
 | `0x01` | `txin_to_scripthash` (:148,852) | **Shed** | idem. |
 | `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** (Q1 resolved) | Genesis `txin_fcmp` = `k_image[32]` **only**. `key_offsets` is consensus-**required empty** for FCMP++ inputs (`blockchain.cpp:3715`); `amount` is `0` and unused — FCMP++ membership is `shekyl_fcmp_verify` against the curve-tree root, not the legacy ring path (`scan_outputkeys_for_indexes`/`get_output_key` by amount+offsets). Both vestigial → dropped. |
 | `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`, `PHASE_2B_SECTION7_DRAFT.md:288`). No `txin_stake_claim` on the genesis wire. |
-| `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (Wave 2; coordinate w/ archival track) | `p_canonical_id[32] VARINT(shard_id) VARINT(settlement_epoch) segment_subroot_rk[32] leaf_index_in_segment(u32 LE) leaf_bytes[ARCHIVAL_LEAF_BYTES] path{c1_layers,c2_layers : vec<vec<hash>>} hybrid_signature(varint+bytes)`. |
-| `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (Wave 2; unrepresented in Rust today) | `hybrid_public_key(varint+bytes) p_canonical_id[32] post_kind(u8) holdings{kind_u8, [shard_ids vec if ShardSetCompact]} VARINT(bonded_total_atomic) VARINT(bond_credit) VARINT(bond_debit)`. |
+| `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify (frozen)** (gate-2; non-spending) | `p_canonical_id[32] VARINT(shard_id) VARINT(settlement_epoch) segment_subroot_rk[32] leaf_index_in_segment(u32 LE) leaf_bytes[ARCHIVAL_LEAF_BYTES] path{c1_layers,c2_layers : vec<vec<hash>>} hybrid_signature(varint+bytes)`. |
+| `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY (frozen)** (gate-4; JoinMarket-only at genesis) | `hybrid_public_key(varint+bytes) p_canonical_id[32] post_kind(u8) holdings{kind_u8, [shard_ids vec if ShardSetCompact]} VARINT(bonded_total_atomic) VARINT(bond_credit) VARINT(bond_debit)`. |
 
 The archival arms (`serve_credit` 0x04, `bond_post` 0x05) **are** the genesis
 staking-archival mechanism (the `P` model): `bond_post` is the gate-4 join-Market
@@ -168,9 +168,10 @@ event carrying `P`'s `hybrid_public_key` + `p_canonical_id`
 (`ARCHIVAL_BOND_GATE4.md`, `PHASE_2B_FSM_RETOOL.md` §9); `serve_credit` is the
 gate-2 serve-credit response. Shekyl-native, no spec outside
 C++/`shekyl-archival-*` — this table is their only human-readable definition and
-the highest load-bearing corpus cells. They freeze in **Wave 2** (§6 Q4, §8)
-under a **single combined wire+semantics sign-off** with the staking-archival
-workstream — which now subsumes Q11 (staking has no separate wire surface).
+the highest load-bearing corpus cells. They are **frozen with the rest** (single
+wave, §6 Q4); fields final per gate-4 §3 + certify_draw (#165). Rule-21 reopen = a
+testnet-revealed change (pre-genesis free). Genesis constraint: `bond_post ⇒
+JoinMarket` (§13). (Q11 has no separate wire surface — staking rides these arms.)
 
 ### 2.2 Output arms (`tx_out`)
 
@@ -241,7 +242,7 @@ Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
 BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
 Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
-Input            := tag(1) ...        # Wave-1: 00 gen | 01 fcmp.  Wave-2 (P-model): 02 serve_credit | 03 bond_post.  (stake_claim shed)
+Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (stake_claim shed; bond_post = JoinMarket-only at genesis)
 Output           := V(amount) tag(1) ...   # 00 tagged_key — sole genesis output (staked_key + plain key shed; view_tag mandatory)
 Ct               := ct_type(1) ...          # 00 Null (coinbase) | 01 Fcmp (spend)
   if Null  (coinbase, exactly one output):  enc_amounts[1×9]  enc_labels[1×9]  outPk[1×32]
@@ -295,7 +296,7 @@ format:
    `txin_to_script`/`txin_to_scripthash`/`txout_to_script`/`txout_to_scripthash`
    (CryptoNote), plain `txout_to_key` (Q3), and **`txout_to_staked_key` +
    `txin_stake_claim`** (Q11 — cleartext staking retired; genesis uses the `P`
-   model). The archival arms (`serve_credit`/`bond_post`) stay (Wave 2).
+   model). The archival arms (`serve_credit`/`bond_post`) stay (frozen, single wave).
 2. **Renumber the surviving tags to the §2.0 dense scheme** — input/output
    variant tags + the ct type enum (`Null=0x00`, `Fcmp=0x01`). One pervasive
    atomic flip (C++ `VARIANT_TAG` values + Rust), so the corpus re-pins on the
@@ -326,15 +327,17 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   coinbase + the Rust tx-builder (`wire.rs:94-98`) emit tagged_key; the only
   `txout_to_key` site is legacy `wallet2.cpp:13220` (synthetic-local, retiring).
   **`view_tag` becomes mandatory** (§2.2).
-- **Q4 — archival / staking-archival arm finality.** *(RESOLVED → two-wave freeze)*
-  Wave 1 = settled surface (`gen`+`fcmp` inputs; `tagged_key` output; ct; header;
-  pow-blob) — stand up the crate + corpus green on these. Wave 2 = the **P-model
-  staking-archival arms** (`serve_credit` 0x02, `bond_post` 0x03 — now incl. Q11's
-  staking surface) once the staking-archival workstream signs off, under a
-  **single combined wire+semantics sign-off** (don't recreate the two-owner split
-  that produced the `shekyl-oxide` confusion). The workstream is in flux
-  (`STAKER_ARCHIVAL_SIM` iter 3; `certify_draw` track), so these tags are **not**
-  Wave-1 frozen.
+- **Q4 — archival arm finality.** *(RESOLVED → single-wave freeze)* The archival
+  arms (`serve_credit` 0x02, `bond_post` 0x03) are **frozen with the rest** — their
+  wire fields are final per gate-4 §3 + the certify_draw work (#165), no WIP
+  markers in the wire source. **Reopen clause (rule-21):** if testnet reveals a
+  needed change it lands then (pre-genesis = free). `bond_post` is
+  **JoinMarket-only at genesis** (`bond_post.rs:44` rejects other `post_kind`s;
+  Rebond/Unbond/HoldingsUpdate are post-genesis). The still-moving parts
+  (cover-entropy `shekyl-standoff` draw; bond magnitude/duration) are **off-wire**
+  (cover = a confidential output; magnitude/duration = constants that fill
+  `bonded_total`/`bond_credit`), so they don't touch the bytes. *(Collapses the
+  earlier two-wave split — there is no separate Wave 2.)*
 - **Q5 — crate scope.** *(RESOLVED → yes)* Own block header + PoW hashing-blob +
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
@@ -367,16 +370,16 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 - **Q11 — staked amount vs cover model.** *(RESOLVED → public floor + cover + `P`;
   merged into Q4)* Cleartext `txout_to_staked_key` + `txin_stake_claim` are shed,
   but genesis staking is **not** amount-less on the wire: the `bond_post` arm
-  (Wave 2) carries a **public bond floor** (`bonded_total == bond_credit ==
+  carries a **public bond floor** (`bonded_total == bond_credit ==
   bond_floor`, `==` not `≥`), necessarily clear because consensus must verify the
   bond meets the floor. Privacy is **`P` dissociation + cover**, not a hidden
   floor: the principal sends `bond_floor + cover`; the `cover` is a confidential
   change-to-`P` output, so correlating a known principal spend to the public post
   requires guessing it (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §SP-2.d:471-516). `==`
   closes the over-bond Sybil fingerprint (`PHASE_2B_SECTION7_DRAFT.md:84`). The
-  cover is ordinary CT (no wire field) → **no Wave-1 impact**; the `bond_post`
-  floor freezes with Q4 in Wave 2. *(Corrects an earlier "no public amount"
-  framing.)*
+  cover is ordinary CT (no wire field) → **no impact on the spend surface**; the
+  `bond_post` floor is frozen with Q4 (single wave). *(Corrects an earlier "no
+  public amount" framing.)*
 - **Q12 — transaction version value.** *(RESOLVED → keep `3`, deliberately)*
   Applying Q7 ("choose, don't inherit-by-default") lands on **keep `version = 3`** —
   the *opposite* of the tag renumber, because the number `3` carries real Shekyl
@@ -408,21 +411,21 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 
 ## 8. Sequencing
 
-1. Round 0 (this doc) → **approved**.
-2. Q1–Q10 + Q5 closed (Q1 resolved at source). **Remaining before the Wave-1
-   freeze:** your **Q11** call (staked amount vs cover) + **Q4 Wave-2** archival
-   sign-off. A spend blob is captured later as a positive-corpus item, not a
-   blocker.
-3. **Round 1 (Wave 1):** freeze the settled byte tables (gen, fcmp, stake,
-   outputs, ct, header, pow-blob), pin the varint, reference the proof/BpPlus
-   freeze (Q6).
-4. Stand up the clean crate to the Wave-1 spec; positive + **negative** corpus
-   green vs the (gate-(c)-adjusted) oracle.
-5. Migrate consumers; delete `shekyl-oxide` block/tx — **sequenced to avoid
-   colliding with in-flight wallet-rewrite work**.
-6. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip).
-7. **Wave 2:** freeze archival `0x4`/`0x5` under the combined wire+semantics
-   sign-off; extend the crate + corpus.
+1. Round 0 → **approved**; Round 1 → **ratified** (single-wave freeze, §9–§14).
+2. **Implementation** (next): rebase the worktree onto current `dev` + relocate
+   Decision-4 to the slice-2 plan; capture a spend blob + the archival-arm blobs
+   as positive-corpus items.
+3. Stand up the clean crate to the frozen spec; positive + **negative** corpus
+   green vs the (gate-(c)-adjusted) oracle (incl. the §12 canonical-form rejects).
+4. Migrate the ~58 consumers; delete `shekyl-oxide` block/tx — **sequenced to
+   avoid colliding with in-flight wallet-rewrite work**.
+5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): tag
+   renumber, `txin_fcmp` reshape, shed dead/staking arms, single-output coinbase,
+   exact-consumption + exact-proof-length, reward-zone de-gating.
+
+Off-doc handoffs: the reward-zone *value* → economics (§14.3 has the sized
+starting number); RandomX v2 epoch/lag → `shekyl-pow-randomx` at the Stage-3
+cutover (deliberate-by-construction, our fork).
 
 ---
 
@@ -454,6 +457,8 @@ pre-renumber tags until recapture.)*
   the `enc_label` indistinguishability invariant (§2.3) is binding.
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
 **9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
+**9.10 `archival_serve_credit` (0x02)** — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[ARCHIVAL_LEAF_BYTES] · path{ c1_layers, c2_layers : each vec(vec(hash[32])) } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths.
+**9.11 `archival_bond_post` (0x03)** — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · holdings{ kind(1), [vec(V shard_id) if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis** (`post_kind==JoinMarket`); `bonded_total == bond_credit == bond_floor`, `bond_debit==0` (§13).
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -575,6 +580,12 @@ Gate = **identical accept/reject** (§7), not round-trip.
   `verRctSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
   blockchain.cpp:4125). The general spend rule (the bond floor §2.0 is the
   bond-post case of this).
+- **Archival arms (single-wave, frozen):** `bond_post` is **JoinMarket-only at
+  genesis** (`post_kind==JoinMarket`, else reject — `bond_post.rs:44`); for
+  JoinMarket `bonded_total == bond_credit == bond_floor(holdings)` and
+  `bond_debit==0` (`bond_post.rs`). `serve_credit` is **non-spending** (empty
+  pqc_auths; hybrid_signature on the vin; gate-2 retention proof). **Reopen
+  (rule-21):** testnet may force a wire change pre-genesis (free).
 - **Versions:** block `major=1, minor=0`; tx `version=3` (Q12). The format is
   version-frozen — a later format is a hard fork (V4 = lattice-only).
 
@@ -590,8 +601,15 @@ Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 complet
    `proof_len == proof_size(nvin, tree_depth)` **exactly** (§10) — no cap value, no
    magic constant; Bp+ byte length is exact by `nout`. Canonical-form corollaries.
 3. **§10 completed** with block-level bounds (`CRYPTONOTE_MAX_TX_PER_BLOCK`,
-   block-weight machinery); the V1/V2/V5 reward-zone fossil handed to the economics
-   owner.
+   block-weight machinery). **Reward-zone (resolved):** shed the V1/V2/V5 fork-era
+   gating (fossil — the live code already uses only `_V5`) → **one** genesis
+   penalty-free zone, **sized for Shekyl tx weight, not transcribed 300 K**. Math:
+   a 1-in/2-out Shekyl transfer ≈ **~9 KB** (PQC pk 1,996 + sig 3,385 + FCMP++
+   ~2.5 K + Bp+ ~0.7 K + outputs/base ~0.5 K) ≈ ~5–6× a Monero tx; to hold a
+   comparable ~175–225 tx/block at the floor → **≈ 2,000,000 B (2 MB)**. It is a
+   **soft floor** (penalty above; median grows; ≥ 2× `MAX_TX_SIZE`), so economics
+   owns the final number — this is the sized starting value, not freeze-critical,
+   and lives in `config`/block-weight, **not** this wire-format doc.
 4. **§11 completed**: PoW = preimage + seed; the seed is **RandomX v2's** (Shekyl's
    fork — `external/randomx-v2` + `shekyl-pow-randomx`, genesis PoW landing at the
    Stage-3 RPC cutover), owned by `shekyl-pow-randomx` per `RANDOMX_V2_PHASE2F_PLAN`
