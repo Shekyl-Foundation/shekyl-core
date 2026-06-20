@@ -369,19 +369,15 @@ pub(crate) enum StakeEngineError {
     /// fallback to a weaker source. The cause may be **transient** (very early
     /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
     /// seccomp policy or permission restriction blocking the `getrandom` syscall);
-    /// the captured `detail` is the underlying source error so an operator can
-    /// tell which — the prior message presumed a transient cause and wrongly
-    /// implied a retry would always help.
+    /// the underlying `rand_core::Error` is retained as the error `source()` so an
+    /// operator can tell which — the prior message presumed a transient cause and
+    /// wrongly implied a retry would always help.
     #[error(
-        "entry-gap draw failed: the OS entropy source is unavailable ({detail}); \
+        "entry-gap draw failed: the OS entropy source is unavailable ({0}); \
          cause may be transient (early boot) or persistent (sandbox/seccomp or \
          permission restriction) — a retry helps only in the transient case"
     )]
-    RngSourceFailed {
-        /// The underlying source error (`rand_core::Error` rendered via `Display`),
-        /// captured rather than discarded so the real cause is diagnosable.
-        detail: String,
-    },
+    RngSourceFailed(#[source] rand_core::Error),
 
     /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
     /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
@@ -749,11 +745,9 @@ impl Message<SignBond> for StakeEngine {
         //    on a weaker source.
         {
             let mut probe = [0u8; 8];
-            rand_core::OsRng.try_fill_bytes(&mut probe).map_err(|e| {
-                StakeEngineError::RngSourceFailed {
-                    detail: e.to_string(),
-                }
-            })?;
+            rand_core::OsRng
+                .try_fill_bytes(&mut probe)
+                .map_err(StakeEngineError::RngSourceFailed)?;
             let _ = probe; // consumed; used only to exercise the source
         }
 
@@ -764,7 +758,7 @@ impl Message<SignBond> for StakeEngine {
         let mut rng = OsRngGapAdapter;
         let (_spread, _bond_first) =
             draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
-                .map_err(|()| StakeEngineError::RngDegeneracy)?;
+                .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
         // TODO(S6): session-level `certify_draw` self-cert over `OsRngGapAdapter`
         // (gated; runs at session start, not per-draw).
         // TODO(2d): wire `_spread` and `_bond_first` into the broadcast timing
@@ -799,16 +793,28 @@ struct OsRngGapAdapter;
 
 impl GapRng for OsRngGapAdapter {
     fn next_u64(&mut self) -> u64 {
-        use rand_core::RngCore as _;
+        // `RngCore` (for `next_u64`) is in scope via the module-level import.
         rand_core::OsRng.next_u64()
     }
 }
+
+/// The entry-gap degeneracy guard fired: two consecutive draws produced equal
+/// spreads (the double-jitter-trap signature).
+///
+/// A named zero-sized type rather than `()` so the failure reads at the
+/// signature and the single call site maps it explicitly. It is deliberately
+/// **not** an enum: there is exactly one way this guard fails, and a multi-variant
+/// "in case we add more later" error would be pre-provisioned flexibility
+/// (`21-reversion-clause-discipline.mdc`) — add a variant (or a new error type)
+/// when a second failure mode actually exists.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DegenerateDraw;
 
 /// Draw an entry gap and check for the double-jitter-trap degeneracy pattern
 /// (S5, Round 3 — per-draw guard, float-free, integer-only).
 ///
 /// Draws twice from `rng`. If the two `spread` values are equal, the guard
-/// fires and `Err(())` is returned — the caller maps this to
+/// fires and [`DegenerateDraw`] is returned — the caller maps this to
 /// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's
 /// `(spread, bond_first)` is returned; the probe draw is consumed and
 /// discarded.
@@ -844,7 +850,7 @@ impl GapRng for OsRngGapAdapter {
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
-) -> Result<(u64, bool), ()> {
+) -> Result<(u64, bool), DegenerateDraw> {
     debug_assert!(
         window > 0,
         "entry-gap window must be > 0: a zero-width standoff provides no \
@@ -854,7 +860,7 @@ pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     let (spread_draw, bond_first) = draw_entry_gap(window, rng);
     let (spread_probe, _) = draw_entry_gap(window, rng);
     if spread_draw == spread_probe {
-        return Err(());
+        return Err(DegenerateDraw);
     }
     Ok((spread_draw, bond_first))
 }

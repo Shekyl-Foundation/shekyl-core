@@ -53,9 +53,9 @@ pub(crate) fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 
 /// This is the single source of truth for the `window` argument to
 /// [`draw_entry_gap`]: the published golden vector (`tests/golden_vector.rs`)
 /// freezes its `(spread, bond_first)` reference at this window, and the wallet
-/// draws at this window (`shekyl-engine-core`'s
-/// `stake_timing::DEFAULT_ENTRY_GAP_WINDOW` wraps this value in the typed
-/// `NetworkGap`). Single-sourcing the *value* — not just the
+/// draws at this window (`shekyl-engine-core`'s `stake_timing::DEFAULT_ENTRY_GAP`
+/// wraps this value in the typed `NetworkGap`). Single-sourcing the *value* — not
+/// just the
 /// [`draw_entry_gap`] *function* — closes the otherwise-unguarded drift between
 /// "the window the RNG is certified at" and "the window the wallet draws at":
 /// change this const and the golden vector re-draws and fails until re-frozen,

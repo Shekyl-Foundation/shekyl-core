@@ -88,7 +88,10 @@ shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", def
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 multiexp = "0.4"
-rand_core = "0.6"
+# `std` is required for `rand_core::Error: std::error::Error` (the `#[source]` of
+# `StakeEngineError::RngSourceFailed`); declared explicitly rather than relying on
+# transitive feature unification from sibling crypto deps.
+rand_core = { version = "0.6", features = ["std"] }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
