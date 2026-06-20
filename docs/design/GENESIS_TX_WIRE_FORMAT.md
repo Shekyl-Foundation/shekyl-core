@@ -1,7 +1,10 @@
 # Shekyl Genesis Transaction / Block Wire Format — Specification
 
-**Status:** Round 0 **approved** 2026-06-20; assembling the Round-1 freeze-gate
-list (§6). **This document, once ratified, IS the genesis freeze** for the binary
+**Status:** Round 0 **approved** 2026-06-20; freeze-gate (§6) mostly resolved —
+the code-resolvable items (Q2 single-output coinbase, Q3 shed plain key, Q6
+proof/Bp+ location, Q7 clean tag renumber, Q10 varint) and Q4/Q5 are closed; only
+**Q1** (`txin_fcmp` minimal fields — needs a spend blob) and **Q11** (staked
+amount vs cover model — a staking call) remain before the Round-1 / Wave-1 freeze. **This document, once ratified, IS the genesis freeze** for the binary
 block/tx wire format: the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
 match it where we deliberately diverge. **Process:** multi-round design
@@ -70,6 +73,29 @@ just tidiness.
 
 Source cites are `src/cryptonote_basic/cryptonote_basic.h` unless noted.
 
+### 2.0 Genesis tag scheme (Q7 resolved — clean renumber)
+
+**Decision:** Monero is a proven *pattern*, not a *basis*. We will never meet the
+old chain on-wire, so we number tags as Shekyl needs them — dense from `0x00`,
+not the inherited values. The `§2.1`/`§2.2` "Tag" columns below are the **C++
+source** values; the **genesis** values are this scheme. The renumber is a
+gate-(c) cut (C++ `VARIANT_TAG`s + the rct type enum flip with Rust atomically,
+§5/§7). *(Exact assignments below are the proposed scheme; ratified at Round 1.)*
+
+```
+Input arm tag        Output arm tag       rct type
+  0x00  gen             0x00  tagged_key    0x00  Null (coinbase)
+  0x01  fcmp            0x01  staked_key    0x01  Fcmp (spend)
+  0x02  stake_claim     (plain key shed)
+  0x03  archival_serve_credit
+  0x04  archival_bond_post
+```
+
+The dead `script`/`scripthash` arms are gone from the tag space entirely (not
+holes); the surviving arms pack densely. The top-level C++ `transaction=0xcc` /
+`block=0xbb` variant tags never appear on the consensus blob (confirmed: no
+wire usage) — they are not a genesis surface and carry no tag-scheme decision.
+
 ### 2.1 Input arms (`txin_v`, :316)
 
 | Tag | C++ arm | Disposition | Rationale / layout |
@@ -93,12 +119,15 @@ combined wire+semantics sign-off with the archival workstream.
 |---|---|---|---|
 | `0x00` | `txout_to_script` (:857) | **Shed** | dead. |
 | `0x01` | `txout_to_scripthash` (:858) | **Shed** | dead. |
-| `0x02` | `txout_to_key` (:859) | **OPEN (§6 Q3)** | `key[32]`. Shed if no producer (coinbase + spends use tagged/staked). |
-| `0x03` | `txout_to_tagged_key` (:860) | **Ratify** | `key[32] view_tag(1)`. |
-| `0x04` | `txout_to_staked_key` (:861) | **Ratify** | `key[32] view_tag(1) lock_tier(1)`. |
+| `0x02` | `txout_to_key` (:859) | **Shed (Q3 resolved)** | No genesis producer — coinbase emits tagged_key; the Rust tx-builder always sets a `view_tag` (`shekyl-tx-builder/src/wire.rs:94-98` → tagged_key); the only `txout_to_key` site is legacy `wallet2.cpp:13220` building a *synthetic local* tx prefix (retiring), not an on-chain producer. **`view_tag` becomes mandatory** — every transfer output is tagged_key. |
+| `0x03` | `txout_to_tagged_key` (:860) | **Ratify** (genesis `0x00`) | `key[32] view_tag(1)`. The sole transfer/coinbase output type. |
+| `0x04` | `txout_to_staked_key` (:861) | **Ratify** (genesis `0x01`) | `key[32] view_tag(1) lock_tier(1)`. |
 
 Each output is preceded by `VARINT(amount)` (cleartext for coinbase/staked; `0`
-for confidential spend outputs).
+for confidential spend outputs). With plain `txout_to_key` shed, the output type
+shape carries a `view_tag` unconditionally — the Rust `Output` type makes
+`view_tag` non-optional (no `Option<u8>`), so a view-tag-less output is
+unrepresentable.
 
 **`view_tag` (1 byte) — RATIFY, rationale recorded.** Not Monero vestige: it is
 the view-tag fast-reject *rederived into Shekyl's hybrid X25519 path* —
@@ -135,7 +164,7 @@ The genesis freeze nails it shut. Sources:
 
 | Element | Source | Disposition |
 |---|---|---|
-| dust / power-of-10 chunking (`decompose_amount_into_digits`) | tx_utils.cpp:155-166 | **Shed (likely).** Ring-era decoy-uniformity heritage; pointless once coinbase outputs are committed. Captured regtest coinbases already have `vout=1`. **OPEN (§6 Q2):** confirm `max_outs`/decomposition never yields >1 output in genesis params; if so, formalize "coinbase = single output." |
+| dust / power-of-10 chunking (`decompose_amount_into_digits`) | tx_utils.cpp:155-166 | **Shed (Q2 resolved).** The block template hardcodes `max_outs = 1` (`blockchain.cpp:1900`), so the decompose-then-merge loop *always* collapses the reward to a **single output** — the chunking is already dead weight. Formalize "coinbase = exactly one output"; the genesis serializer need not represent multi-output coinbases. |
 
 ## 3. Canonical genesis layout (post-arbitration)
 
@@ -147,10 +176,10 @@ Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
 BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
 Transaction      := V(version=3)  TxPrefix  Rct
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
-Input            := tag(1) ...        # tags: ff gen | 02 fcmp | 03 stake_claim | 04 serve_credit | 05 bond_post   (00/01 SHED; numbering = Q7)
-Output           := V(amount) tag(1) ...   # tags: 03 tagged_key | 04 staked_key   (00/01 SHED; 02 OPEN)
-Rct              := rct_type(1) ...
-  if Null  (coinbase):  enc_amounts[nout×9]  enc_labels[nout×9]  outPk[nout×32]
+Input            := tag(1) ...        # genesis tags: 00 gen | 01 fcmp | 02 stake_claim | 03 serve_credit | 04 bond_post
+Output           := V(amount) tag(1) ...   # genesis tags: 00 tagged_key | 01 staked_key   (plain key shed; view_tag mandatory)
+Rct              := rct_type(1) ...         # 00 Null (coinbase) | 01 Fcmp (spend)
+  if Null  (coinbase, exactly one output):  enc_amounts[1×9]  enc_labels[1×9]  outPk[1×32]
   if Fcmp  (spend):     V(fee) referenceBlock[32] enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]
                         PqcAuths  Prunable
 PqcAuths         := nvin × { auth_version(1) scheme_id(1) flags(u16 LE) vec(u8) vec(u8) }   # EOF-tolerant (pruned form omits)
@@ -198,10 +227,16 @@ inherited cruft ([`60-no-monero-legacy`]) so the oracle emits the arbitrated
 format:
 
 1. Remove `txin_to_script`/`txin_to_scripthash`/`txout_to_script`/
-   `txout_to_scripthash` from `txin_v`/`tx_out` + the `VARIANT_TAG` lists.
-2. Reshape `txin_to_key` → drop `key_offsets` (pending Q1).
-3. Force single-output coinbase / remove dust decomposition (pending Q2).
-4. Any tag renumbering decided in Q7.
+   `txout_to_scripthash` **and plain `txout_to_key`** from `txin_v`/`tx_out` + the
+   `VARIANT_TAG` lists (Q3: no genesis producer of plain key).
+2. **Renumber the surviving tags to the §2.0 dense scheme** — input/output
+   variant tags + the rct type enum (`Null=0x00`, `Fcmp=0x01`). One pervasive
+   atomic flip (C++ `VARIANT_TAG` values + Rust), so the corpus re-pins on the
+   post-renumber bytes.
+3. Reshape `txin_to_key` → `txin_fcmp`, drop `key_offsets` (pending Q1).
+4. Remove the `decompose_amount_into_digits` machinery — `max_outs=1` already
+   forces a single coinbase output (Q2 resolved), so the decomposition is dead
+   code; formalize the single-output invariant.
 
 Each lands as its own change with C++ + Rust + a locked vector, byte-identity
 re-verified against the *new* oracle. Until a given cut lands, the corpus pins
@@ -213,11 +248,13 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 
 - **Q1 — `txin_fcmp` minimal fields.** *(OPEN, needs spend blob + source)* Does the
   daemon FCMP++ verify read `amount`/`key_offsets` at all, or only `key_image`?
-- **Q2 — coinbase output count.** *(OPEN, source-resolvable)* Does
-  `decompose_amount_into_digits` + `max_outs` ever yield >1 coinbase output under
-  genesis params? If never, formalize single-output and shed the chunking.
-- **Q3 — `txout_to_key`(0x2) producer.** *(OPEN, source-resolvable)* Anything emit
-  plain (non-tagged, non-staked) outputs? If not, shed.
+- **Q2 — coinbase output count.** *(RESOLVED)* `max_outs=1` (`blockchain.cpp:1900`)
+  always collapses the reward to **one** output; shed the decompose machinery and
+  formalize single-output (§2.4, §5).
+- **Q3 — `txout_to_key`(0x2) producer.** *(RESOLVED → shed)* No genesis producer:
+  coinbase + the Rust tx-builder (`wire.rs:94-98`) emit tagged_key; the only
+  `txout_to_key` site is legacy `wallet2.cpp:13220` (synthetic-local, retiring).
+  **`view_tag` becomes mandatory** (§2.2).
 - **Q4 — archival arm finality.** *(RESOLVED → two-wave freeze)* Freeze in **two
   waves**: Wave 1 = settled surface (gen, fcmp, stake, outputs, rct) — stand up
   the crate + corpus green on these. Wave 2 = `0x4`/`0x5` once the archival
@@ -226,37 +263,32 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 - **Q5 — crate scope.** *(RESOLVED → yes)* Own block header + PoW hashing-blob +
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
-- **Q6 — proof / Bp+ canonical-serialization coverage.** *(OPEN — the freeze is
-  incomplete without it)* `fcmp_pp_proof` and `nbp×BpPlus` are the largest, most
-  complex consensus bytes, genesis-frozen (prover and verifier must agree
-  byte-for-byte), and they live in the kept-vendored `crypto/fcmps` /
-  generalized-bulletproofs crates — a genesis-frozen surface *outside this spec*.
-  The freeze must cover it **by reference**: "the proof / BpPlus canonical byte
-  layout is part of this freeze, defined at `<fcmps location>`, frozen at
-  `<commit>`." **Cross-link:** the 4 Shekyl-stamped crypto files flagged for
-  crypto-crate triage may be exactly the proof-serialization divergence (recon /
-  root-hash-convention) — meaning the kept-vendored set carries genesis-frozen
-  *format*, which raises the bar on that triage.
-- **Q7 — tag-numbering decision.** *(OPEN, your call)* We shed the dead arms but
-  kept Monero's tag *values* (`gen=0xff`, spends at `0x2`, holes at `0x0`/`0x1`).
-  Decide deliberately: renumber densely (`gen=0x0, fcmp=0x1, stake=0x2,
-  serve_credit=0x3, bond_post=0x4`) **or** keep inherited values with a stated
-  reason. Same for the **rct type value** (`Fcmp=7` is "next after Monero's six";
-  clean-sheet would be `1`) and the **top-level variant tags**
-  `transaction=0xcc` / `block=0xbb` (basic.h:862-863) — confirm those aren't a
-  frozen wire surface, or arbitrate them too. Keep-by-default is the
-  half-transcription §0 rejects; it's a freeze either way.
+- **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
+  reference)* The wire layer length-prefixes the proof as opaque bytes
+  (`fcmp.rs:191`); the canonical interiors are defined in
+  `rust/shekyl-oxide/crypto/fcmps/src/lib.rs` (FCMP++) and
+  `rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/lib.rs` (Bp+). Round 1
+  cites these + the pinned commit as part of the freeze. **Cross-link stands:**
+  these kept-vendored crates carry genesis-frozen *format*, raising the bar on the
+  crypto-crate triage (the 4 Shekyl-stamped files may be exactly this — recon /
+  root-hash-convention).
+- **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
+  proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
+  (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, rct `Null=0x00`/`Fcmp=0x01`); dead
+  arms gone from the tag space, not held as holes. Top-level `transaction=0xcc` /
+  `block=0xbb` (basic.h:862-863) confirmed **not on any consensus-wire surface**,
+  so no decision needed. Lands as a gate-(c) atomic flip (§5).
 - **Q8 — `enc_label` indistinguishability invariant.** *(RESOLVED → §2.3)*
   Recorded as a binding serializer rule (fixed-size every output, real-or-zero,
   never elided). Listed here so the freeze gate carries it.
 - **Q9 — `view_tag` rationale.** *(RESOLVED → §2.2)* Ratify w/ recorded
   rationale (X25519 scan prefilter; accepted 1-byte scan-correlation cost).
-- **Q10 — varint format.** *(OPEN — Round-1 must)* §3 uses `V(x)` everywhere but
-  never pins the encoding; "corpus is spec" can't rest on the most fundamental
-  primitive being unwritten. Proposed pin: the LEB128-style little-endian
+- **Q10 — varint format.** *(RESOLVED — pinned)* LEB128-style little-endian
   base-128 varint — 7 data bits/byte, MSB = continuation, **canonical** (no
   redundant trailing-zero byte; over-long encodings rejected) — as implemented in
   `rust/shekyl-oxide/shekyl-oxide/io/src/lib.rs` (`read_varint`/`write_varint`).
+  This is the `V(x)` of §3; non-canonical varints are a negative-corpus reject
+  case (§7).
 - **Q11 — staked-output cleartext amount vs cover model.** *(OPEN, privacy —
   coordinate w/ staking)* Cleartext is consistent with public bonds, but net flow
   is *stake + cover*, not clean bond — verify the on-chain amount doesn't leak
@@ -282,8 +314,9 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 ## 8. Sequencing
 
 1. Round 0 (this doc) → **approved**.
-2. Resolve §6 OPEN items at source (Q1–Q3, Q6 location, Q10) + **capture a spend
-   blob**; bring Q7/Q11 (+ Q4 Wave-2) to you for the calls.
+2. Code-resolvable items closed (Q2/Q3/Q6/Q7/Q10 + Q4/Q5). **Remaining before
+   freeze:** capture a spend blob → resolve **Q1** (`txin_fcmp` minimal fields);
+   your calls on **Q11** (staked amount vs cover) + **Q4 Wave-2** archival sign-off.
 3. **Round 1 (Wave 1):** freeze the settled byte tables (gen, fcmp, stake,
    outputs, rct, header, pow-blob), pin the varint, reference the proof/BpPlus
    freeze (Q6).
