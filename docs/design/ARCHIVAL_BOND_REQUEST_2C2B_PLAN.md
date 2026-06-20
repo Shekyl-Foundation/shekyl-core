@@ -13,8 +13,8 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
-**Status:** **OPEN — scoping pre-flight closed; design rounds 1–4 closed
-(2026-06-19); rounds 5–6 and impl-time pre-flight (R0-D#) pending.**
+**Status:** **OPEN — scoping pre-flight closed; design rounds 1–5 closed
+(2026-06-19); round 6 (closure) and impl-time pre-flight (R0-D#) pending.**
 
 ---
 
@@ -58,10 +58,10 @@ inert by 2c-2a.
 
 | # | Scope item | Source anchor | Consumes / produces (substrate at pin) |
 | --- | --- | --- | --- |
-| S1 | **Parallel StakeEngine JoinMarket bond request type** — a typed-separate request to the StakeEngine actor, *not* a `TxRequest` variant, so bond construction never threads the `LedgerEngine` transfer pipeline (cross-assignment unrepresentable). | §11.1 Q3 (CLOSED, lines 766–780); §9.6/§10.1 | New message on `StakeEngine` alongside `MintPersonaHandle` / `ActivatePersona` (`stake_engine.rs:488,521`). Consumes `PersonaHandle` (`stake_engine.rs:241`). Drives `build_join_market_vin` (`shekyl-archival-bond-builder/src/lib.rs:109`). |
-| S2 | **`sign_bond(ticket: PersistedBondTicket, …)`** — the consumer half of the persist-before-use typestate; sign-before-persist is uncallable (no ticket to pass). | §10.2 typed contract #1 (lines 567–582); `stake_persist.rs:25–27,70` | Consumes `PersistedBondTicket` **by value** (`stake_persist.rs:70`, `!Clone`). Producer `Engine::persist_bond_record` (`stake_persist.rs:125`) is already landed + tested, inert. |
+| S1 | **Parallel StakeEngine JoinMarket bond request type** — a typed-separate request to the StakeEngine actor, *not* a `TxRequest` variant, so bond construction never threads the `LedgerEngine` transfer pipeline (cross-assignment unrepresentable). | §11.1 Q3 (CLOSED, lines 766–780); §9.6/§10.1 | `SignBond` message on `StakeEngine` (`stake_engine.rs:662`, landed) alongside `MintPersonaHandle` / `ActivatePersona` (`stake_engine.rs:539,572`). Consumes `PersonaHandle` (`stake_engine.rs:247`). Drives `build_join_market_vin` (`shekyl-archival-bond-builder/src/lib.rs:109`). *(Round-5 re-pin §3.5(b)/(c).)* |
+| S2 | **`sign_bond(ticket: PersistedBondTicket, …)`** — the consumer half of the persist-before-use typestate; sign-before-persist is uncallable (no ticket to pass). | §10.2 typed contract #1 (lines 567–582); `stake_persist.rs:22–27,70` | Consumes `PersistedBondTicket` **by value** (`stake_persist.rs:70`, `!Clone`) via `SignBond.ticket` (`stake_engine.rs:662`). Producer `Engine::persist_bond_record` (`stake_persist.rs:138`) landed + tested. *(Round-5 re-pin §3.5(b).)* |
 | S3 | **Funding-selection *design* (design-now / wire-later)** — settle the two-regime split: cold-start = principal-funded, ≥ 1-SEB-spaced + standoff-decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). **The genesis-adjacent firewall *logic* lands now; neither real funding source is wired** (principal-output access and `P`-scanning both deferred — SP-2.d / SP-2.e). Selection logic is **fixture-validated** over Bond-PR 2c-1's `funded_ledger_and_tree`, not real sources. | §10 (lines 454–456); `ARCHIVAL_TIMING_CONSTANTS.md` §7 (lines 253, 256) | `verify_credit_funding` (`builder/src/lib.rs:173`) is the amount-level invariant the selection must satisfy. Consumes economics SEB/epoch constants (B6, §4). |
-| S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the unbond slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **New types — none exist yet** (verified: no `NetworkGap`/`EconomicSpacing`/`BlockSpan`/`SebSpan` in tree). `BlockSpan` likely rests on `shekyl-types::BlockCount` (`shekyl-types/src/lib.rs:181–247`, Instant/Duration algebra); `SebSpan` has no home (rule-18 placement). |
+| S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the unbond slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:72`, `SebSpan:81`, `NetworkGap:94`, `EconomicSpacing:110`, `DEFAULT_ENTRY_GAP_WINDOW:118`, `MIN_COLD_START_SPACING:126`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
 | S5 | **Live RNG degeneracy check (float-free, fail-loud)** — the cheap integer-only guard, distinct from the statistical self-cert. | §10 (lines 457–462); FOLLOWUPS (line 917–918) | Runs against `draw_entry_gap` output (`shekyl-standoff/src/draw.rs:57`). Negative-control shapes already exist: `draw_entry_gap_double_jitter_trap` (`conformance.rs:135`), `correlated_walk` (`conformance.rs:208`). |
 | S6 | **`certify_draw` self-cert against the shipping wallet's CSPRNG (gated)** — proves the *shipping wallet's RNG* produces conformant draws, not merely the reference. | §10 (lines 457–462) | `certify_draw` (`conformance.rs:377`) over a `GapRng` (`draw.rs:13`) adapter on `rand_core::OsRng` (the shipping CSPRNG — `shekyl-tx-builder/src/sign.rs:17`, `engine/sign_bridge.rs:14`). |
 | S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** `trybuild` **compile-fail** tests proving the unrepresentability claims — `sign_bond` without a `PersistedBondTicket`, a `PersonaHandle` for an unheld slot — do not compile. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path (`builder/Cargo.toml` `[dev-dependencies]` — currently empty, to wire). `trybuild` dev-dep to add. |
@@ -73,9 +73,9 @@ inert by 2c-2a.
 | Broadcast / re-anchor wiring | Activates the CT-5d persona-pin (re-sign on fee/change drift). 2c-2b lands **no submission** — §10.2 CT-5d note (lines 650–667): "2c-2 lands no submission, so this does not execute yet." | FOLLOWUPS lines 954–955; `CT5D_REANCHOR.md` |
 | `arti-client` `P`-isolated outbound transport | §11.1 Q3's residual: shared connection links `P` to principal at the network layer "regardless of the request enum" (lines 682–694). The request type isolates *construction*; transport isolation is a separate security-critical pre-flight. | FOLLOWUPS lines 925–928 |
 | **`P`-scan layer** (the `P.view_sk` sweep; SP-2.e) | Not 2c-2b-sized — it is the scan-layer firewall (StakeEngine owns `P.view_sk`). The capability exists (`archival_p.rs:332`) but no pipeline is built. **One sweep, two readers**: steady-state funding-output discovery **and** the reconcile below. | **Bond-PR 2d-1** (arc §2 / §3.6) |
-| 2d full-scan reconciliation of `bonded_slots` / `p_slot` | Chicken-and-egg: the reconcile needs personas derived first (scan posted + `consumer_held`), so it is post-derive — **it sits on top of the 2d-1 `P`-scan above** (cannot reconcile bonds it has not scanned for). `bonded_slots` stays a reconcilable hint; **no second `STAKING_BLOCK_VERSION` bump** (`stake_engine.rs:166–168`). | **Bond-PR 2d-2** (depends on 2d-1); FOLLOWUPS lines 945–953 (rule-21 reopen) |
+| 2d full-scan reconciliation of `bonded_slots` / `p_slot` | Chicken-and-egg: the reconcile needs personas derived first (scan posted + `consumer_held`), so it is post-derive — **it sits on top of the 2d-1 `P`-scan above** (cannot reconcile bonds it has not scanned for). `bonded_slots` stays a reconcilable hint; **no second `STAKING_BLOCK_VERSION` bump** (`stake_engine.rs:173`). | **Bond-PR 2d-2** (depends on 2d-1); FOLLOWUPS lines 945–953 (rule-21 reopen) |
 | Exit timing seam (unbond) | S4 ships the **entry** seam only. | §10 (line 457–462) |
-| Intra-call parallel keygen across the `k`-bounded union | Perf follow-up, not correctness — derivation cost relocated to `assemble()` (`lifecycle.rs:867–873`). | §10.2 perf note (lines 669–680) |
+| Intra-call parallel keygen across the `k`-bounded union | Perf follow-up, not correctness — derivation cost relocated to `assemble()` (`lifecycle.rs:689`; derive-forward loop `:909`). | §10.2 perf note (lines 669–680) |
 
 ### 1.3 Scope-boundary disposition (`A4` reversion clause)
 
@@ -96,7 +96,7 @@ at build time (persist-before-use, correct); but 2c-2b lands **no broadcast**, s
 any bond it builds is `consumer_held` **forever-until-2d**. If the request path
 were user-invocable, those entries would be real **phantoms** — persisted, never
 broadcastable, **growing the derive-forward set on every flagged-staker open**
-until 2d's reconciliation/GC exists (`stake_engine.rs:166–168`,
+until 2d's reconciliation/GC exists (`stake_engine.rs:173`,
 `spawn_stake_engine_if_staker` `lifecycle.rs:879`) — and a construct-but-can't-
 broadcast bond is a half-working feature besides. Pinning inert is the explicit
 reading of §10.2's "2c-2 lands no submission" and **closes the 2c-2b→2d
@@ -510,6 +510,81 @@ as the design-now provision. The type gates the bond-request orchestration
 layer (2d), not `SignBond` (the bond VIN carries `bond_floor` only; cover is a
 P-change output in the surrounding transaction). `CoverAmount::ZERO` is the
 stake-only constant for callers that do not cover.
+
+---
+
+### 3.5 Round 5 findings — audit-against-actual-code (`A2`) — CLOSED (2026-06-19)
+
+The code now exists (`feat/archival-bond-request` at `783d77db9`). This round
+re-pins every plan-row citation to the round-5 substrate and records the
+deltas. **Method:** `grep -nE` each cited symbol at HEAD, compared to the
+design-time pin. No claim is restated from memory.
+
+**(a) Cross-crate pins — UNCHANGED.** 2c-2b touched only `shekyl-engine-core`,
+so every citation into `shekyl-archival-bond-builder`, `shekyl-standoff`, and
+`shekyl-archival-retention` holds at its design-time line:
+
+| Symbol | Pin | Status |
+| --- | --- | --- |
+| `build_join_market_vin` | `builder/src/lib.rs:109` | ✓ unchanged |
+| `verify_credit_funding` | `builder/src/lib.rs:173` | ✓ unchanged |
+| `JoinMarketVin` | `builder/src/lib.rs:68` | ✓ unchanged |
+| `draw_entry_gap` | `shekyl-standoff/src/draw.rs:57` | ✓ unchanged |
+| `GapRng` | `shekyl-standoff/src/draw.rs:13` | ✓ unchanged |
+| `draw_entry_gap_double_jitter_trap` | `conformance.rs:135` | ✓ unchanged |
+| `correlated_walk` | `conformance.rs:208` | ✓ unchanged |
+| `certify_draw` | `conformance.rs:377` | ✓ unchanged |
+| tolerance math `8/sqrt(n)` | `conformance.rs:301–309` | ✓ (plan said 300–310) |
+| `OsRng` (tx-builder) | `shekyl-tx-builder/src/sign.rs:17` | ✓ unchanged |
+| `OsRng` (sign_bridge) | `engine/sign_bridge.rs:14` | ✓ unchanged |
+| `HoldingsDescriptor` / `HoldingsKind` | `retention/src/bond_wire.rs:64,48` | ✓ (precise pin) |
+
+**(b) Engine-core pins — SHIFTED by 2c-2b insertions.** Re-pinned to HEAD:
+
+| Symbol | Design-time pin (2c-2a) | Round-5 pin |
+| --- | --- | --- |
+| `PersonaHandle` | `stake_engine.rs:241` | `stake_engine.rs:247` |
+| `MintPersonaHandle` | `stake_engine.rs:488` | `stake_engine.rs:539` |
+| `ActivatePersona` | `stake_engine.rs:521` | `stake_engine.rs:572` |
+| `bonded_slots` reconcilable-hint note | `stake_engine.rs:173` | `stake_engine.rs:173,393` |
+| `PersistedBondTicket` typestate doc | `stake_persist.rs:25–27` | `stake_persist.rs:22–27` |
+| `PersistedBondTicket` struct | `stake_persist.rs:70` | `stake_persist.rs:70` (✓) |
+| `Engine::persist_bond_record` | `stake_persist.rs:125` | `stake_persist.rs:138` |
+| `assemble()` derive-forward loop (perf note) | `lifecycle.rs:867–873` | `lifecycle.rs:689` (fn), `:909` (derive loop) |
+
+**(c) New code created by 2c-2b — plan rows that said "none exist yet / to
+wire" now have substrate.** Pin them here so the doc is no longer forward-
+looking on these:
+
+| Symbol | Round-5 pin |
+| --- | --- |
+| `SignBond` message | `stake_engine.rs:662` |
+| `StakeEngineHandle::sign_bond` | `stake_engine.rs:905` |
+| `draw_entry_gap_guarded` helper | `stake_engine.rs:783` |
+| `OsRngGapAdapter` | `stake_engine.rs:750` |
+| `PersistedBondTicket::__test_only_forge` (cfg(test)) | `stake_persist.rs:94` |
+| `BlockSpan` | `stake_timing.rs:72` |
+| `SebSpan` | `stake_timing.rs:81` |
+| `NetworkGap` | `stake_timing.rs:94` |
+| `EconomicSpacing` | `stake_timing.rs:110` |
+| `DEFAULT_ENTRY_GAP_WINDOW` (B6 close) | `stake_timing.rs:118` |
+| `MIN_COLD_START_SPACING` | `stake_timing.rs:126` |
+| `CoverAmount` / `CoverAmount::ZERO` | `stake_timing.rs:57,62` |
+
+**(d) Design-time speculation RETIRED.** S4's row reads "*`BlockSpan` likely
+rests on `shekyl-types::BlockCount` (`shekyl-types/src/lib.rs:181–247`)*." This
+was a placement guess that **Round 2 already overruled**: `BlockSpan` ships as a
+standalone `pub(crate) struct BlockSpan(pub u64)` (`stake_timing.rs:72`), not
+built on `BlockCount`. `BlockCount` does exist (macro-generated in
+`shekyl-types`, the relative-block-span `Duration`-analogue — `lib.rs:31`), but
+`BlockSpan` does not depend on it; the rule-18 placement settled at "crate-local
+newtype, promote on a second consumer" (§3.2). The S4 cell is corrected below.
+
+**(e) Outcome.** No claim in §§1–3 is falsified by the substrate. The only
+correction is the retired S4 placement speculation (d); everything else is a
+pure line-number shift from inserting ~530 lines of new code into
+`stake_engine.rs` / `stake_persist.rs` / `stake_timing.rs`. The §1.1 scope
+table and the §"Process notes" pins are updated in place to the round-5 lines.
 
 ---
 
