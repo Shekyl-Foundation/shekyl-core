@@ -13,8 +13,8 @@ inert — `06-branching.mdc` land-inert-then-branch; 2c-2a substrate is present 
 **Process rule:** `26-sub-pr-design-discipline.mdc` (opt-in; cited here per its
 Scope clause — this is a multi-round per-trait PR on the gate-6 firewall request
 surface with an RNG self-cert).
-**Status:** **OPEN — scoping pre-flight closed; design rounds 1–3 closed
-(2026-06-19); rounds 4–6 and impl-time pre-flight (R0-D#) pending.**
+**Status:** **OPEN — scoping pre-flight closed; design rounds 1–4 closed
+(2026-06-19); rounds 5–6 and impl-time pre-flight (R0-D#) pending.**
 
 ---
 
@@ -437,6 +437,79 @@ float-bearing — `conformance` feature, not shipped into production builds).
 A private struct in `stake_engine.rs` implementing `GapRng` via
 `OsRng::next_u64()`. Single-method, no state. Tests use conformance-module
 degenerate-RNG fixtures via the `draw_entry_gap_guarded` helper directly.
+
+---
+
+### 3.4 Round 4 findings — CLOSED (2026-06-19)
+
+**JoinMarket funding-time mixing — verified at source (R0-D# substrate check).**
+
+Verified `shekyl-archival-bond-builder/src/lib.rs` and
+`ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7:
+
+- `build_join_market_vin` produces a **pure credit path**:
+  `bonded_total_atomic == bond_credit == bond_floor(holdings)`, `bond_debit == 0`.
+- **No mixing occurs at funding time.** JoinMarket is the bond-post type, not a
+  collaborative mixing pool: the `bond_credit` value rides the **cleartext
+  output side** as an `OutputTerm`. Amount concealment occurs only inside the
+  RCT commitment structure (FCMP++ pseudoOuts) at transaction-build time.
+- The "join" in JoinMarket names the archival market entry, not amount-joint
+  obfuscation across stakers' funding inputs.
+
+**Consequence for S3: self-cover IS the primary mechanism (not a fallback).**
+
+JoinMarket does not provide any funding-time amount mixing across stakers, so
+there is nothing structural to route the cold-start principal→`P` funding
+transfer through. Self-cover is therefore the primary — and only — protocol-
+layer amount decorrelation mechanism at the cold-start funding step.
+
+**Cold-start cover architecture — SETTLED (SP-2.d close-out).**
+
+Design: principal sends `bond_floor + cover`, P stakes the floor
+(`bond_credit`), holds the cover as working capital. The change-to-P output
+carries the cover amount; `verify_credit_funding`'s `output_total` parameter
+naturally includes it (no change to the check).
+
+Properties of this design:
+
+1. **Net principal→P flow is never a clean bond value.** Observer sees
+   `bond_floor + cover`, not `bond_floor`. Amount correlation from a known-
+   principal spend to the bond post requires guessing the cover amount.
+2. **No refund stream.** Refunding the cover produces a distinct outbound
+   transfer from P that can be envelope-correlated against the bond-post
+   inbound. Cover-stays-with-P eliminates that correlation surface.
+3. **Cover seeds P's fund-from-earnings pool.** The cover amount becomes P's
+   working capital — the same pool steady-state funding draws on. For a
+   committed staker, "over-fund at bootstrap, excess becomes stake capital" is
+   strictly better than "over-fund, then leak it back in pieces."
+4. **Cover recommendation lives in GUI/CLI.** The engine accepts `CoverAmount`
+   as an input; the recommended random value is computed and presented by the
+   front-end (not by the engine). The engine imposes no floor (zero cover is
+   valid; it is the opt-in stake-only path, see below).
+
+**Opt-in cover recovery — explicit privacy cost, independently timed.**
+
+If a staker wants to recover the cover later ("stake-once-and-recover"), this
+is a legitimate need but must be opt-in and explicitly disclosed:
+
+- **Disclosed privacy cost.** Recovery re-creates the principal→P link: any
+  outbound P→principal transfer is combinable with the original inbound
+  principal→P to reconstruct the net flow, confirming the linkage an observer
+  might have suspected. The GUI/CLI must warn the user at opt-in time.
+- **Independently timed.** The recovery transfer must not be tied to the bond
+  lifecycle (not at bond-post, not at unbond); it must be a separate,
+  independently-timed generic transfer to minimize temporal correlation.
+- **Not the default.** The default path (cover-stays-with-P) never produces a
+  recovery transfer. Opt-in cover recovery is a named, separately gated
+  operation; it does not share code paths with the bond request or unbond.
+
+**`CoverAmount` — design-now type, wire-2d.**
+
+A typed `CoverAmount(u64)` (raw atomic units) is defined in `stake_timing.rs`
+as the design-now provision. The type gates the bond-request orchestration
+layer (2d), not `SignBond` (the bond VIN carries `bond_floor` only; cover is a
+P-change output in the surrounding transaction). `CoverAmount::ZERO` is the
+stake-only constant for callers that do not cover.
 
 ---
 
