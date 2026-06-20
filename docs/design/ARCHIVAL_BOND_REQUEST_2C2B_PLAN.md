@@ -63,7 +63,7 @@ inert by 2c-2a.
 | S1 | **Parallel StakeEngine JoinMarket bond request type** — a typed-separate request to the StakeEngine actor, *not* a `TxRequest` variant, so bond construction never threads the `LedgerEngine` transfer pipeline (cross-assignment unrepresentable). | §11.1 Q3 (CLOSED, lines 766–780); §9.6/§10.1 | `SignBond` message on `StakeEngine` (`stake_engine.rs:662`, landed) alongside `MintPersonaHandle` / `ActivatePersona` (`stake_engine.rs:539,572`). Consumes `PersonaHandle` (`stake_engine.rs:247`). Drives `build_join_market_vin` (`shekyl-archival-bond-builder/src/lib.rs:109`). *(Round-5 re-pin §3.5(b)/(c).)* |
 | S2 | **`sign_bond(ticket: PersistedBondTicket, …)`** — the consumer half of the persist-before-use typestate; sign-before-persist is uncallable (no ticket to pass). | §10.2 typed contract #1 (lines 567–582); `stake_persist.rs:22–27,70` | Consumes `PersistedBondTicket` **by value** (`stake_persist.rs:70`, `!Clone`) via `SignBond.ticket` (`stake_engine.rs:662`). Producer `Engine::persist_bond_record` (`stake_persist.rs:138`) landed + tested. *(Round-5 re-pin §3.5(b).)* |
 | S3 | **Funding-selection *design* (design-now / wire-later)** — settle the two-regime split: cold-start = principal-funded, ≥ 1-SEB-spaced + standoff-decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). **The genesis-adjacent firewall *logic* lands now; neither real funding source is wired** (principal-output access and `P`-scanning both deferred — SP-2.d / SP-2.e). Selection logic is **fixture-validated** over Bond-PR 2c-1's `funded_ledger_and_tree`, not real sources. | §10 (lines 454–456); `ARCHIVAL_TIMING_CONSTANTS.md` §7 (lines 253, 256) | `verify_credit_funding` (`builder/src/lib.rs:173`) is the amount-level invariant the selection must satisfy. Consumes economics SEB/epoch constants (B6, §4). |
-| S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the unbond slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:72`, `SebSpan:81`, `NetworkGap:94`, `EconomicSpacing:110`, `DEFAULT_ENTRY_GAP_WINDOW:118`, `MIN_COLD_START_SPACING:126`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
+| S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the unbond slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:81`, `SebSpan:98`, `NetworkGap:111`, `EconomicSpacing:137`, `DEFAULT_ENTRY_GAP:152` (typed `NetworkGap`; renamed from `…_WINDOW` to avoid collision with raw `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`, PR #163 re-review), `MIN_COLD_START_SPACING:166`; accessors `BlockSpan::as_u64:86` / `NetworkGap::as_blocks:118`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
 | S5 | **Live RNG degeneracy check (float-free, fail-loud)** — the cheap integer-only guard, distinct from the statistical self-cert. | §10 (lines 457–462); FOLLOWUPS (line 917–918) | Runs against `draw_entry_gap` output (`shekyl-standoff/src/draw.rs:57`). Negative-control shapes already exist: `draw_entry_gap_double_jitter_trap` (`conformance.rs:135`), `correlated_walk` (`conformance.rs:208`). |
 | S6 | **`certify_draw` self-cert against the shipping wallet's CSPRNG (gated)** — proves the *shipping wallet's RNG* produces conformant draws, not merely the reference. | §10 (lines 457–462) | `certify_draw` (`conformance.rs:377`) over a `GapRng` (`draw.rs:13`) adapter on `rand_core::OsRng` (the shipping CSPRNG — `shekyl-tx-builder/src/sign.rs:17`, `engine/sign_bridge.rs:14`). |
 | S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** ~~`trybuild` **compile-fail** tests~~ **→ RETIRED, replaced by an in-crate `!Clone` guard (§4.1 `R0-D1`)**: the tokens are `pub(crate)` with module-private fields, so `trybuild` (external crate) cannot reach them without re-exposing firewall internals; the unrepresentability is type-system-enforced unconditionally, and the `!Clone` half is pinned by an always-on `const _` guard verified to bite. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4.1 `R0-D1`; §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path. No `trybuild` dep (retired). |
@@ -383,7 +383,8 @@ this guarantee without additional machinery.
 - `NetworkGap(BlockSpan)` and `EconomicSpacing(SebSpan)` — role-wrapper
   newtypes in `stake_timing`; cross-apply is a compile error (distinct inner
   types).
-- `DEFAULT_ENTRY_GAP_WINDOW: NetworkGap = NetworkGap(BlockSpan(600))` —
+- `DEFAULT_ENTRY_GAP: NetworkGap` (named `…_WINDOW` at design time; renamed in
+  PR #163 re-review to avoid colliding with the raw standoff const) —
   named constant, closes B6 (no unnamed 600 literal in callers).
 - `MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSpan(1))` —
   names the cold-start guard value; real ledger-elapsed check is wire-later.
@@ -507,11 +508,14 @@ is a legitimate need but must be opt-in and explicitly disclosed:
 
 **`CoverAmount` — design-now type, wire-2d.**
 
-A typed `CoverAmount(u64)` (raw atomic units) is defined in `stake_timing.rs`
-as the design-now provision. The type gates the bond-request orchestration
-layer (2d), not `SignBond` (the bond VIN carries `bond_floor` only; cover is a
-P-change output in the surrounding transaction). `CoverAmount::ZERO` is the
-stake-only constant for callers that do not cover.
+A typed `CoverAmount(AtomicUnits)` is defined in `stake_timing.rs` as the
+design-now provision (the inner value is the canonical `shekyl_units::AtomicUnits`
+money newtype, not a bare `u64` — unit-safe and composable with the funding
+path; settled in the PR #163 re-review). The type gates the bond-request
+orchestration layer (2d), not `SignBond` (the bond VIN carries `bond_floor`
+only; cover is a P-change output in the surrounding transaction).
+`CoverAmount::ZERO` (= `AtomicUnits::ZERO`) is the stake-only constant for
+callers that do not cover.
 
 ---
 
@@ -565,13 +569,13 @@ looking on these:
 | `draw_entry_gap_guarded` helper | `stake_engine.rs:783` |
 | `OsRngGapAdapter` | `stake_engine.rs:750` |
 | `PersistedBondTicket::__test_only_forge` (cfg(test)) | `stake_persist.rs:94` |
-| `BlockSpan` | `stake_timing.rs:72` |
-| `SebSpan` | `stake_timing.rs:81` |
-| `NetworkGap` | `stake_timing.rs:94` |
-| `EconomicSpacing` | `stake_timing.rs:110` |
-| `DEFAULT_ENTRY_GAP_WINDOW` (B6 close) | `stake_timing.rs:118` |
-| `MIN_COLD_START_SPACING` | `stake_timing.rs:126` |
-| `CoverAmount` / `CoverAmount::ZERO` | `stake_timing.rs:57,62` |
+| `BlockSpan` (+ `as_u64:86`) | `stake_timing.rs:81` |
+| `SebSpan` | `stake_timing.rs:98` |
+| `NetworkGap` (+ `as_blocks:118`) | `stake_timing.rs:111` |
+| `EconomicSpacing` | `stake_timing.rs:137` |
+| `DEFAULT_ENTRY_GAP` (B6 close; renamed in PR #163 re-review) | `stake_timing.rs:152` |
+| `MIN_COLD_START_SPACING` | `stake_timing.rs:166` |
+| `CoverAmount(AtomicUnits)` / `CoverAmount::ZERO` | `stake_timing.rs:66,71` |
 
 **(d) Design-time speculation RETIRED.** S4's row reads "*`BlockSpan` likely
 rests on `shekyl-types::BlockCount` (`shekyl-types/src/lib.rs:181–247`)*." This
@@ -703,7 +707,8 @@ need is known.
 
 At design time the `600` window was three independent literals
 (`golden_vector.rs:19`, `conformance_grading.rs:175,237`, and the new
-`stake_timing::DEFAULT_ENTRY_GAP_WINDOW`). They agreed at `600`, but nothing
+`stake_timing::DEFAULT_ENTRY_GAP`, named `…_WINDOW` then). They agreed at `600`,
+but nothing
 *enforced* the agreement: the golden vector guards the draw **algorithm**, not
 the wallet-window-vs-certified-window gap — a change to `stake_timing`'s literal
 would not have failed any test. Per `shekyl-standoff`'s own single-source
@@ -713,8 +718,10 @@ import the same `draw_entry_gap`"), the **value** is now single-sourced too:
 - `shekyl-standoff` exports `pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600`
   (`src/draw.rs`), re-exported at the crate face (`src/lib.rs`).
 - `golden_vector.rs` sources `GOLDEN_WINDOW` from the const (not a literal).
-- `stake_timing::DEFAULT_ENTRY_GAP_WINDOW: NetworkGap` wraps the shared const:
-  `NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW))`.
+- `stake_timing::DEFAULT_ENTRY_GAP: NetworkGap` wraps the shared const:
+  `NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW))` (the typed
+  wrapper was renamed off `…_WINDOW` in the PR #163 re-review so it cannot be
+  confused with the raw scheme const it wraps).
 
 **Verified to bite cross-crate:** flipping the const to `601` re-draws and fails
 `golden_vector_is_bit_identical`. Value unchanged (`600`) → frozen vector stays
