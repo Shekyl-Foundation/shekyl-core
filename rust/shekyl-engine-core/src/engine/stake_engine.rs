@@ -455,6 +455,30 @@ pub(crate) struct StakeEngineArgs {
     /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
     /// current slot is in the derive-forward set).
     pub active: Option<PSlot>,
+    /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
+    /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
+    /// tests — which are **not** about the self-cert — do not run a real ~15 ms
+    /// statistical grade in every spawn: that is both slow and, because the
+    /// uniformity chi-square has a nonzero false-positive rate at α=1e-6, an
+    /// occasional-flake source (a stray false-fail kills the actor and cascades
+    /// into unrelated assertions). The dedicated S6 tests opt in explicitly. The
+    /// field does not exist in production builds, where the self-cert always runs.
+    #[cfg(all(test, feature = "conformance"))]
+    pub self_cert: TestSelfCert,
+}
+
+/// Test-only selector for the S6 session self-cert (see [`StakeEngineArgs`]).
+#[cfg(all(test, feature = "conformance"))]
+#[derive(Clone, Copy, Default)]
+pub(crate) enum TestSelfCert {
+    /// Skip the self-cert entirely (default — every stake test that is not about
+    /// the self-cert, so the real grade's α=1e-6 false-positive cannot flake them).
+    #[default]
+    Skip,
+    /// Grade the real `OsRng` adapter (the S6 pass-path test).
+    RealOsRng,
+    /// Grade a degenerate constant source to force fail-stop (the S6 fail test).
+    Degenerate,
 }
 
 /// The `kameo` actor owning the held archival personas (the derive-forward
@@ -599,9 +623,26 @@ impl Actor for StakeEngine {
         // the spawn (and so wallet-open), so a degenerate timing RNG never reaches
         // the gate-6 decorrelation draw. This certifies the real adapter at the
         // real session-start — stronger than the reference-RNG KAT, though it runs
-        // only in a conformance build (S6 §0).
-        #[cfg(feature = "conformance")]
+        // only in a conformance build (S6 §0). Production always grades the real
+        // adapter; the conformance *test* build selects via `args.self_cert`
+        // (default `Skip`, so unrelated tests are neither slowed nor flaked by the
+        // grade's α=1e-6 false-positive).
+        #[cfg(all(feature = "conformance", not(test)))]
         run_session_self_cert(&mut OsRngGapAdapter)?;
+        #[cfg(all(feature = "conformance", test))]
+        match args.self_cert {
+            TestSelfCert::Skip => {}
+            TestSelfCert::RealOsRng => run_session_self_cert(&mut OsRngGapAdapter)?,
+            TestSelfCert::Degenerate => {
+                struct ConstZeroRng;
+                impl GapRng for ConstZeroRng {
+                    fn next_u64(&mut self) -> u64 {
+                        0
+                    }
+                }
+                run_session_self_cert(&mut ConstZeroRng)?;
+            }
+        }
 
         Ok(Self {
             held,
@@ -988,6 +1029,11 @@ impl StakeEngineHandle {
             bundles,
             bonded,
             active,
+            // Production always grades the real OsRng adapter; in test+conformance
+            // the default is `Skip` so unrelated stake tests are not flaked by the
+            // grade. The dedicated S6 tests build args directly with their mode.
+            #[cfg(all(test, feature = "conformance"))]
+            self_cert: TestSelfCert::Skip,
         });
         Self { actor }
     }
@@ -1632,13 +1678,31 @@ mod tests {
             );
         }
 
+        /// Build a handle with an explicit self-cert mode (the bulk-test
+        /// `spawn_over` uses `Skip`; the S6 tests need `RealOsRng`/`Degenerate`).
+        fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
+            let bundles: BTreeMap<PSlot, ArchivalPKeys> =
+                held.iter().map(|&s| (PSlot(s), derive_bundle(s))).collect();
+            let args = StakeEngineArgs {
+                bundles,
+                bonded: BTreeSet::new(),
+                active: None,
+                self_cert: mode,
+            };
+            StakeEngineHandle {
+                actor: StakeEngine::spawn(args),
+            }
+        }
+
         /// The **wiring**: the production `OsRng` adapter grades conformant, so a
         /// freshly spawned StakeEngine starts cleanly and the eager observation
         /// path (`wait_for_self_cert`) returns `Ok`. Multi-thread so the actor
-        /// task keeps running while the test awaits its startup.
+        /// task keeps running while the test awaits its startup. (A single real
+        /// grade per run keeps the α=1e-6 false-positive negligible — the flake
+        /// risk only became real when every spawn graded; see `StakeEngineArgs`.)
         #[tokio::test(flavor = "multi_thread")]
         async fn session_self_cert_passes_over_os_rng_at_spawn() {
-            let handle = spawn_over(&[0], &[], None);
+            let handle = spawn_with_self_cert(&[0], TestSelfCert::RealOsRng);
             let cert = handle.wait_for_self_cert().await;
             assert!(
                 cert.is_ok(),
@@ -1646,6 +1710,31 @@ mod tests {
             );
             // The actor is alive and serving after a passing self-cert.
             assert!(handle.active_persona().await.is_ok());
+        }
+
+        /// The full **fail-stop path** (R0-D# / Round 2): a degenerate self-cert
+        /// source makes `on_start` return `Err`, kameo turns that into a startup
+        /// failure (the actor never enters its message loop), the eager
+        /// observation (`wait_for_self_cert`) surfaces it as `Err`, and the actor
+        /// is dead — any later op collapses to the terminal `StakeActorUnavailable`.
+        /// (At the wallet-open path this same `Err` becomes
+        /// `OpenError::StakeRngSelfCertFailed`.)
+        #[tokio::test(flavor = "multi_thread")]
+        async fn degenerate_self_cert_fail_stops_spawn() {
+            // Force a degenerate source so `on_start` returns Err and the actor
+            // fail-stops (the spawn helper builds args directly with the mode).
+            let handle = spawn_with_self_cert(&[0], TestSelfCert::Degenerate);
+
+            let cert = handle.wait_for_self_cert().await;
+            assert!(
+                cert.is_err(),
+                "a degenerate self-cert source must fail-stop the spawn, got {cert:?}"
+            );
+            // The actor fail-stopped: subsequent ops are terminally unavailable.
+            assert!(matches!(
+                handle.active_persona().await,
+                Err(StakeEngineError::StakeActorUnavailable)
+            ));
         }
     }
 }
