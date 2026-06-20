@@ -155,7 +155,7 @@ pub enum OpenError {
     /// default (non-`conformance`) build — production carries no float/stats
     /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
     #[cfg(feature = "conformance")]
-    #[error("staking disabled: StakeEngine session RNG self-cert failed at startup: {0}")]
+    #[error("wallet open refused: StakeEngine session RNG self-cert failed at startup: {0}")]
     StakeRngSelfCertFailed(String),
 }
 
