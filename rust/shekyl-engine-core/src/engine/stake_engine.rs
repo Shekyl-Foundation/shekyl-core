@@ -108,7 +108,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
-use super::stake_timing::DEFAULT_ENTRY_GAP_WINDOW;
+use super::stake_timing::DEFAULT_ENTRY_GAP;
 
 // ---------------------------------------------------------------------------
 // Typed domain values
@@ -366,13 +366,22 @@ pub(crate) enum StakeEngineError {
     /// The OS entropy source failed to supply bytes for the entry-gap timing draw
     /// (`SignBond`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
     /// a source failure is fail-loud and terminal for this request — no silent
-    /// fallback to a weaker source. Recovery: retry after the system entropy pool
-    /// has initialized (common cause: very early boot or seccomp policy).
+    /// fallback to a weaker source. The cause may be **transient** (very early
+    /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
+    /// seccomp policy or permission restriction blocking the `getrandom` syscall);
+    /// the captured `detail` is the underlying source error so an operator can
+    /// tell which — the prior message presumed a transient cause and wrongly
+    /// implied a retry would always help.
     #[error(
-        "entry-gap draw failed: the OS entropy source is unavailable; \
-         retry after the system entropy pool has initialized"
+        "entry-gap draw failed: the OS entropy source is unavailable ({detail}); \
+         cause may be transient (early boot) or persistent (sandbox/seccomp or \
+         permission restriction) — a retry helps only in the transient case"
     )]
-    RngSourceFailed,
+    RngSourceFailed {
+        /// The underlying source error (`rand_core::Error` rendered via `Display`),
+        /// captured rather than discarded so the real cause is diagnosable.
+        detail: String,
+    },
 
     /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
     /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
@@ -740,9 +749,11 @@ impl Message<SignBond> for StakeEngine {
         //    on a weaker source.
         {
             let mut probe = [0u8; 8];
-            rand_core::OsRng
-                .try_fill_bytes(&mut probe)
-                .map_err(|_| StakeEngineError::RngSourceFailed)?;
+            rand_core::OsRng.try_fill_bytes(&mut probe).map_err(|e| {
+                StakeEngineError::RngSourceFailed {
+                    detail: e.to_string(),
+                }
+            })?;
             let _ = probe; // consumed; used only to exercise the source
         }
 
@@ -752,7 +763,7 @@ impl Message<SignBond> for StakeEngine {
         //    The actual timing draw result is returned on success.
         let mut rng = OsRngGapAdapter;
         let (_spread, _bond_first) =
-            draw_entry_gap_guarded(DEFAULT_ENTRY_GAP_WINDOW.0 .0, &mut rng)
+            draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
                 .map_err(|()| StakeEngineError::RngDegeneracy)?;
         // TODO(S6): session-level `certify_draw` self-cert over `OsRngGapAdapter`
         // (gated; runs at session start, not per-draw).
@@ -825,7 +836,7 @@ impl GapRng for OsRngGapAdapter {
 /// is a **window misconfiguration**, not RNG degeneracy: a zero-width standoff
 /// provides no funding↔bond-post decorrelation, defeating the gate-6 firewall
 /// the draw exists to serve. The operational caller always passes
-/// [`DEFAULT_ENTRY_GAP_WINDOW`] (600), so a zero window is unreachable in
+/// [`DEFAULT_ENTRY_GAP`] (600), so a zero window is unreachable in
 /// production; the `debug_assert` catches any future misuse loudly in test/debug
 /// builds rather than silently mislabelling it as `RngDegeneracy`. (More
 /// generally the guard is only well-behaved for windows large enough that
@@ -838,7 +849,7 @@ pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
         window > 0,
         "entry-gap window must be > 0: a zero-width standoff provides no \
          decorrelation and makes the degeneracy guard fire unconditionally; \
-         pass the operational DEFAULT_ENTRY_GAP_WINDOW"
+         pass the operational DEFAULT_ENTRY_GAP window"
     );
     let (spread_draw, bond_first) = draw_entry_gap(window, rng);
     let (spread_probe, _) = draw_entry_gap(window, rng);

@@ -24,8 +24,10 @@
 //! waits for a second consumer — `21-reversion-clause-discipline.mdc` reopening
 //! criterion: "a downstream crate names one of these types in its public API."
 
-/// An additional amount of value (in raw atomic units) sent with the bond
-/// transaction to decouple the observed transaction amount from `bond_floor`.
+use shekyl_units::AtomicUnits;
+
+/// An additional amount of value sent with the bond transaction to decouple the
+/// observed transaction amount from `bond_floor`.
 ///
 /// The principal sends `bond_floor + cover` to `P`; `P` stakes the floor
 /// (`bond_credit`) and holds the cover as working capital. The cover flows as
@@ -52,14 +54,21 @@
 /// **Design-now / wire-2d.** The bond transaction orchestration layer (2d)
 /// takes `cover: CoverAmount`; the `SignBond` message does not (the VIN
 /// carries `bond_floor` only).
+///
+/// The inner value is [`AtomicUnits`] — the canonical money newtype — not a
+/// bare `u64`, so the cover cannot be accidentally crossed with an unrelated
+/// `u64` (a fee, a block count, an index) and composes directly with the
+/// `AtomicUnits` arithmetic the funding path (`verify_credit_funding`,
+/// transaction outputs) already speaks. `CoverAmount` itself stays a distinct
+/// newtype so "the cover" is never confused with any other amount.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(dead_code)] // inert until 2d bond-transaction orchestration
-pub(crate) struct CoverAmount(pub u64); // raw atomic units
+pub(crate) struct CoverAmount(pub AtomicUnits);
 
 impl CoverAmount {
     /// No cover — stake-only path (opt-in; carries disclosed privacy cost).
     #[allow(dead_code)] // inert until 2d bond-transaction orchestration
-    pub(crate) const ZERO: Self = Self(0);
+    pub(crate) const ZERO: Self = Self(AtomicUnits::ZERO);
 }
 
 /// A span measured in blocks — the inner unit of [`NetworkGap`].
@@ -70,6 +79,14 @@ impl CoverAmount {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct BlockSpan(pub u64);
+
+impl BlockSpan {
+    /// The raw block count, for the `u64`-typed `draw_entry_gap` boundary.
+    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
+    pub(crate) const fn as_u64(self) -> u64 {
+        self.0
+    }
+}
 
 /// A span measured in Settlement Epoch Boundaries — the inner unit of
 /// [`EconomicSpacing`].
@@ -85,13 +102,23 @@ pub(crate) struct SebSpan(pub u64);
 /// §10, `ARCHIVAL_TIMING_CONSTANTS.md` §7).
 ///
 /// Guards: prep-spend / announce / bond-post events within a single
-/// 600-block window (`DEFAULT_ENTRY_GAP_WINDOW`).
+/// 600-block window ([`DEFAULT_ENTRY_GAP`]).
 ///
 /// **Not interchangeable with [`EconomicSpacing`]** — the inner type is
 /// `BlockSpan`, not `SebSpan`, so cross-application is a compile error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct NetworkGap(pub BlockSpan);
+
+impl NetworkGap {
+    /// The window as a raw block count, for the `u64`-typed
+    /// `draw_entry_gap` / `draw_entry_gap_guarded` boundary. Reads
+    /// semantically at the call site instead of a `.0 .0` tuple-index chain.
+    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
+    pub(crate) const fn as_blocks(self) -> u64 {
+        self.0.as_u64()
+    }
+}
 
 /// A timing constraint measured in Settlement Epoch Boundaries — gates the
 /// principal→`P` funding-transfer → bond-post interval for cold-start bonds
@@ -109,17 +136,20 @@ pub(crate) struct NetworkGap(pub BlockSpan);
 #[allow(dead_code)] // inert until cold-start spacing check is wired
 pub(crate) struct EconomicSpacing(pub SebSpan);
 
-/// Default block-count window for the archival bond entry-gap draw (B6).
+/// The default archival-bond entry-gap window, **typed** as a [`NetworkGap`]
+/// (B6).
 ///
-/// The raw value is **single-sourced** from
-/// [`shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`] (the canonical scheme window
-/// the golden vector is frozen at); this const only wraps it in the typed
-/// [`NetworkGap`] so the `SignBond` handler and tests carry no unnamed literal.
-/// Because the wallet draws at the same const the golden vector certifies,
-/// "what we validated is what ships" holds by construction — there is no
-/// separate `600` literal to drift (B6 reconciliation, R0-D2). 2c-2b closes the
-/// B6 open item from §4.
-pub(crate) const DEFAULT_ENTRY_GAP_WINDOW: NetworkGap =
+/// The name deliberately omits `_WINDOW` so it does not collide with the raw
+/// [`shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`] (a `u64`) it wraps: the typed
+/// `NetworkGap` constant and the raw scheme constant are distinguishable at a
+/// glance (and the typed one is used via [`NetworkGap::as_blocks`], never a
+/// `.0 .0` chain). The raw value is **single-sourced** from `shekyl-standoff`
+/// (the canonical scheme window the golden vector is frozen at); this const only
+/// wraps it. Because the wallet draws at the same value the golden vector
+/// certifies, "what we validated is what ships" holds by construction — there is
+/// no separate `600` literal to drift (B6 reconciliation, R0-D2). 2c-2b closes
+/// the B6 open item from §4.
+pub(crate) const DEFAULT_ENTRY_GAP: NetworkGap =
     NetworkGap(BlockSpan(shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW));
 
 #[allow(dead_code)] // inert until cold-start spacing check is wired
