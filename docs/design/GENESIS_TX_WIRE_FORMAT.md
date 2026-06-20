@@ -144,7 +144,7 @@ cleartext claim wire is **deleted** for genesis, and cleartext `txout_to_staked_
 So Q11 resolves: the genesis wire carries a **public, necessarily-clear bond
 floor**, and the staker's real economic position is masked by `P` + cover — not by
 hiding the floor. The cover rides normal CT (no special field), so there is **no
-Wave-1 wire impact**; the `bond_post` floor freezes with Q4 in Wave 2.
+spend-surface impact**; the `bond_post` floor is frozen with Q4 (single wave, §13).
 
 The dead `script`/`scripthash` arms are gone from the tag space entirely (not
 holes). The top-level C++ `transaction=0xcc` / `block=0xbb` variant tags never
