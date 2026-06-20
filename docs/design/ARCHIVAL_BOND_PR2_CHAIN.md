@@ -109,19 +109,30 @@ persist-before-use (#1, the cross-split seam consumed by 2c-2b), operation-scope
 path**. Substrate: `stake_engine.rs`, `stake_persist.rs`,
 `lifecycle.rs::spawn_stake_engine_if_staker` (`:879`).
 
-### 3.5 Bond-PR 2c-2b — JoinMarket request path (not started)
+### 3.5 Bond-PR 2c-2b — JoinMarket request path (in review — PR #163)
 
 Full plan: [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md).
 Consumes the 2c-2a inert surface (`PersistedBondTicket`, `PersonaHandle`); adds
 the parallel request type, `sign_bond`, funding selection with decorrelation
-defaults, the two typed timing seams, the live RNG degeneracy guard +
-`certify_draw` self-cert, and the **request-path composition** milestone KAT
-(§5). Branches off `dev` after 2c-2a. **Lands inert by the chain's own pattern
-(like 2b / 2c-2a):** the request path is wired and KAT-exercised but **not
-user-invocable** until 2d completes broadcast + transport + reconciliation —
-which is also what prevents phantom `bonded_slots` accruing in the 2c-2b→2d
-window (a built-but-unbroadcastable bond is `consumer_held` forever-until-2d; see
-the 2c-2b plan §1.4).
+defaults, `CoverAmount`, the two typed timing seams, the live RNG degeneracy
+guard, and the **request-path composition** milestone KAT (§5). Design rounds
+1–6 + impl-time pre-flight (`R0-D1`–`R0-D4`) closed. Branches off `dev` after
+2c-2a. **Lands inert by the chain's own pattern (like 2b / 2c-2a):** the request
+path is wired and KAT-exercised but **not user-invocable** until 2d completes
+broadcast + transport + reconciliation — which is also what prevents phantom
+`bonded_slots` accruing in the 2c-2b→2d window (a built-but-unbroadcastable bond
+is `consumer_held` forever-until-2d; see the 2c-2b plan §1.4).
+
+#### 3.5.1 S6 follow-on — `certify_draw` session self-cert wiring (planned)
+
+The **`certify_draw` session self-cert** is the one S6 scope item 2c-2b settled
+the *design* for (§3.3) but deferred the *wiring* of (`R0-D#` / FOLLOWUPS): the
+grade is float / x86-only and `shekyl-stats`-bearing, so it cannot live on the
+float-free default-production path. Split into a small **`conformance`-gated**
+follow-on PR (off `dev`, **after #163 merges** — it consumes #163's
+`OsRngGapAdapter` / `on_start` / `DEFAULT_ENTRY_GAP`). Full plan:
+[`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md`](ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md)
+(2-round, tightened — the design is already settled in 2c-2b §3.3).
 
 ### 3.6 Bond-PR 2d — `P`-scan layer (2d-1) + transport/broadcast/reconcile (2d-2)
 
