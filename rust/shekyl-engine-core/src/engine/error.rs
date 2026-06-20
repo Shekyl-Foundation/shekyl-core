@@ -145,6 +145,18 @@ pub enum OpenError {
         /// Capability the stub method represents.
         capability: super::Capability,
     },
+
+    /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
+    /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap
+    /// timing draws (or the entropy source failed mid-draw). A degenerate timing
+    /// RNG defeats the gate-6 decorrelation firewall, so the staker actor refuses
+    /// to start and wallet-open fails loudly rather than staking on a CSPRNG that
+    /// cannot produce unlinkable timing. This variant does not exist in the
+    /// default (non-`conformance`) build — production carries no float/stats
+    /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
+    #[cfg(feature = "conformance")]
+    #[error("staking disabled: StakeEngine session RNG self-cert failed at startup: {0}")]
+    StakeRngSelfCertFailed(String),
 }
 
 // --- Persistence -----------------------------------------------------------

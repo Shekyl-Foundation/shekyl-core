@@ -3401,11 +3401,10 @@ mod tests {
         // `sign_transaction_with_terms` assembled and proved over genuine
         // depth-2 branch layers from the production `CurveTreeClient`. The
         // verify half — `shekyl_fcmp::proof::verify` *accepting* a proof over a
-        // real multi-layer assembled path — is the `#[ignore]`d sibling
-        // `join_market_bond_post_fcmp_verify_over_real_tree`, gated on the CT-5
-        // series closing the upstream FCMP++ prove↔verify roundtrip over real
-        // branch layers (no workspace test verifies a real multi-layer path
-        // today; see FOLLOWUPS.md "real-tree FCMP++ verify").
+        // real multi-layer assembled path — is the live sibling
+        // `join_market_bond_post_fcmp_verify_over_real_tree` (CT-5 closed in #162:
+        // the partial-branch-chunk bug was fixed by zero-padding branch chunks to
+        // circuit width, so that test now runs as a normal `#[tokio::test]`).
 
         // ── RCT balance over PROVER-emitted commitments (recover prime-order) ─
         let inv8 = Scalar::from(8u64).invert();

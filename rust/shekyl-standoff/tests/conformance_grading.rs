@@ -24,6 +24,7 @@ use common::SplitMix64;
 use shekyl_standoff::conformance::{
     certify_draw, chi_square_uniform, correlated_walk, draw_entry_gap_double_jitter_trap,
     grade_sample, lag1_autocorr_u64, max_bin_share, shared_anchor_population, summarize_gaps,
+    CERTIFY_SAMPLE_N,
 };
 use shekyl_standoff::draw_entry_gap;
 use shekyl_stats::{chi_square_upper_crit, Z_ALPHA_1E6};
@@ -34,7 +35,7 @@ fn correct_draw_is_well_distributed() {
     // and balanced in order — well-distributed, not merely within ±window.
     let window = 600u64;
     let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-    let sample: Vec<(u64, bool)> = (0..200_000)
+    let sample: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap(window, &mut rng))
         .collect();
     let st = summarize_gaps(&sample, window);
@@ -67,7 +68,7 @@ fn double_jitter_trap_fails_the_same_check() {
     // zero-peaked; the conformance summary must reject it.
     let window = 600u64;
     let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-    let sample: Vec<(u64, bool)> = (0..200_000)
+    let sample: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let st = summarize_gaps(&sample, window);
@@ -102,10 +103,10 @@ fn chi_square_grades_uniform_at_strict_alpha() {
     let n_bins = 60;
     let crit = chi_square_upper_crit((n_bins - 1) as f64, Z_ALPHA_1E6);
     let mut rng = SplitMix64(0x5EED_1234_ABCD_0001);
-    let good: Vec<(u64, bool)> = (0..200_000)
+    let good: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap(window, &mut rng))
         .collect();
-    let bad: Vec<(u64, bool)> = (0..200_000)
+    let bad: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let chi_good = chi_square_uniform(&good, window, n_bins);
@@ -172,7 +173,7 @@ fn self_cert_passes_reference_rng() {
     // The RNG-generic self-certification a wallet runs against its own CSPRNG:
     // the reference stream passes all three property grades.
     let mut rng = SplitMix64(0x90DE_4242_7777_0001);
-    let report = certify_draw(&mut rng, 600, 200_000);
+    let report = certify_draw(&mut rng, 600, CERTIFY_SAMPLE_N);
     assert!(report.uniform_ok, "uniform grade failed: {report:?}");
     assert!(report.order_balanced, "order grade failed: {report:?}");
     assert!(report.serial_independent, "serial grade failed: {report:?}");
@@ -187,7 +188,7 @@ fn self_cert_rejects_trap_and_correlated_samples() {
     let mut rng = SplitMix64(0x90DE_4242_7777_0002);
 
     // Triangular trap: spread is non-uniform.
-    let trap: Vec<(u64, bool)> = (0..200_000)
+    let trap: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let trap_report = grade_sample(&trap, window);

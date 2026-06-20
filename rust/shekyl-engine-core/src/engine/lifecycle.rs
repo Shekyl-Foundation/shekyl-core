@@ -919,7 +919,33 @@ impl Engine<SoloSigner> {
             staking.bonded_slots.iter().copied().map(PSlot).collect();
 
         // Idle at open: the request path (2c-2b) mints a handle and activates.
-        Ok(Some(StakeEngineHandle::spawn(bundles, bonded, None)))
+        let handle = StakeEngineHandle::spawn(bundles, bonded, None);
+
+        // S6 (conformance build only) — eager observation of the actor's
+        // `on_start` RNG self-cert. Block wallet-open until the grade completes;
+        // a non-conformant CSPRNG surfaces as `OpenError`, failing open loudly
+        // rather than staking on an RNG that cannot produce unlinkable timing.
+        //
+        // This deliberately uses `block_in_place` directly rather than
+        // `drive_persistence`: the awaited work (the actor's `on_start`) runs on
+        // the *ambient* runtime, not inside the future, so `drive_persistence`'s
+        // current-thread fallback (a fresh runtime on a scope thread) would
+        // deadlock — the actor would never be polled while we wait. `block_in_place`
+        // on a multi-thread runtime releases this worker so the actor keeps
+        // running; on a current-thread runtime it *panics* loudly (the
+        // panic-not-deadlock signal). Production wallet-open runs on the
+        // `rt-multi-thread` ambient runtime; conformance tests must use
+        // `#[tokio::test(flavor = "multi_thread")]`.
+        #[cfg(feature = "conformance")]
+        {
+            let rt = tokio::runtime::Handle::current();
+            let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
+            if let Err(detail) = cert {
+                return Err(OpenError::StakeRngSelfCertFailed(detail));
+            }
+        }
+
+        Ok(Some(handle))
     }
 }
 

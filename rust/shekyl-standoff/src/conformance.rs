@@ -370,6 +370,20 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
     }
 }
 
+/// Canonical sample size `n` for the session self-cert draw — the **single
+/// source of truth** for both the reference conformance KAT
+/// (`tests/conformance_grading.rs`) and the wallet's `on_start` self-cert
+/// (`shekyl-engine-core`, which re-exports this through
+/// `stake_timing::CERTIFY_SAMPLE_N`).
+///
+/// It lives here, beside [`certify_draw`] / [`grade_sample`], because the
+/// tolerance contract is the grader's own: [`grade_sample`] grades with tolerance
+/// `8/√n` (`≈ 0.0179` at this `n`), so if the reference grade and the production
+/// grade ever used different `n` the tolerance would fork and the two certs would
+/// stop being comparable. `200_000` is the measured value (2c-2b R0-D4: tolerance
+/// ≈ 0.0179, wall-clock ≈ 14–15 ms debug).
+pub const CERTIFY_SAMPLE_N: usize = 200_000;
+
 /// Draw `n` gaps from the caller's RNG via the reference [`draw_entry_gap`] and
 /// [`grade_sample`] them. A wallet self-certifies its CSPRNG by passing it here
 /// and checking [`CertifyReport::passed`].

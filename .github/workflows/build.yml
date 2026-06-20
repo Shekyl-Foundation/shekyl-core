@@ -674,6 +674,20 @@ jobs:
         # determinism). The aarch64 lane deliberately builds default features
         # only for the same reason.
         run: cargo test --locked -p shekyl-standoff --features conformance
+      - name: shekyl-engine-core conformance suite — StakeEngine RNG self-cert (x86_64 only)
+        working-directory: rust
+        # S6 (ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md): `shekyl-engine-core`'s
+        # `conformance` feature wires `shekyl-standoff`'s `certify_draw` grader
+        # into `StakeEngine::on_start` over the production `OsRngGapAdapter`, so
+        # the staker actor fail-stops on a non-conformant CSPRNG. It is NOT in the
+        # default feature set (the grader is float + pulls `shekyl-stats`;
+        # production stays float-free), so the workspace-wide test above does not
+        # compile or run it. Run it explicitly here. x86_64 only by the same
+        # reason as the standoff lane above — the grade is a float goodness-of-fit,
+        # not bit-identical across arches; a module-level `compile_error!` in
+        # `stake_engine.rs` rejects the `conformance` feature on non-x86 targets so
+        # the skip is loud, never a silent false "conformance passed".
+        run: cargo test --locked -p shekyl-engine-core --features conformance
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip

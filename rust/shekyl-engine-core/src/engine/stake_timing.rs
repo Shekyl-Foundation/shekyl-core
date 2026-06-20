@@ -26,6 +26,17 @@
 
 use shekyl_units::AtomicUnits;
 
+/// Canonical session self-cert sample size (S6), **single-sourced** from
+/// [`shekyl_standoff::conformance::CERTIFY_SAMPLE_N`] — the same `n` the reference
+/// conformance KAT grades at, so the `8/√n` tolerance contract cannot fork between
+/// the reference grade and the wallet's `on_start` self-cert. Re-exported here
+/// (beside [`DEFAULT_ENTRY_GAP`]) for call-site ergonomics, mirroring how
+/// `DEFAULT_ENTRY_GAP` wraps `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW` (source of
+/// truth down in the lower crate, alias up). Only present under `conformance` —
+/// the const lives in standoff's feature-gated grader module.
+#[cfg(feature = "conformance")]
+pub(crate) use shekyl_standoff::conformance::CERTIFY_SAMPLE_N;
+
 /// An additional amount of value sent with the bond transaction to decouple the
 /// observed transaction amount from `bond_floor`.
 ///

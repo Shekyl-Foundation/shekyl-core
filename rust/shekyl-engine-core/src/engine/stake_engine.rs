@@ -98,7 +98,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
-use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
+use kameo::error::{ActorStopReason, PanicError, SendError};
 use kameo::message::{Context, Message};
 
 use rand_core::RngCore as _;
@@ -109,6 +109,22 @@ use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
 use super::stake_timing::DEFAULT_ENTRY_GAP;
+
+// S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
+// is **x86-only**: its goodness-of-fit is float, which is not bit-identical
+// across architectures. Rather than silently compile the self-cert out on
+// aarch64 (which would let a `--features conformance` diagnostic build report
+// "conformance passed" when the grade never ran — false assurance), fail the
+// build loudly: a diagnostic build that cannot run the diagnostic must say so at
+// compile time, not pretend success at runtime. With this guard, `conformance`
+// implies `x86_64`, so the self-cert call below needs only `cfg(feature)`.
+#[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
+compile_error!(
+    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`) \
+     is x86-only — its float goodness-of-fit is not bit-identical across \
+     architectures. Build the `conformance` feature on x86_64 (where the CI \
+     conformance lane runs); do not enable it on other targets."
+);
 
 // ---------------------------------------------------------------------------
 // Typed domain values
@@ -505,9 +521,53 @@ impl StakeEngine {
     }
 }
 
+/// Failure surface of [`StakeEngine`]'s spawn ([`Actor::on_start`]).
+///
+/// The variant set is **designed for the failures known to be incoming, not just
+/// today's** (S6 plan §2.1 / F3): 2d-1's `P`-scan init (scan-store open, cursor
+/// recovery) will add **always-on** variants here, so it *adds a variant* rather
+/// than reshaping the type. Today the **only** variant is the conformance RNG
+/// self-cert, `#[cfg]`-compiled out by default — so in the default build this is
+/// an **empty enum**, `on_start` cannot construct an `Err`, and the failure
+/// branch is zero-cost.
+///
+/// `Debug` satisfies kameo's `ReplyError` bound (blanket `Debug + Send + 'static`);
+/// `Clone` is required by `ActorRef::wait_for_startup_result`, the eager
+/// observation path the spawn site uses (S6 plan §2.1).
+#[derive(Debug, Clone)]
+pub(crate) enum StakeEngineStartError {
+    /// The session RNG self-cert (S6, conformance build only) graded the
+    /// production `OsRng` adapter as **non-conformant**. A degenerate timing RNG
+    /// defeats the gate-6 decorrelation firewall, so the actor refuses to start
+    /// (fail-stop → wallet-open fails loudly with the grade in the report).
+    #[cfg(feature = "conformance")]
+    RngSelfCertFailed(shekyl_standoff::conformance::CertifyReport),
+}
+
+/// S6 — grade `rng` with the session self-cert and decide whether the actor may
+/// start: pass → `Ok(())`, non-conformant → `Err(RngSelfCertFailed(report))`.
+///
+/// Extracted from [`Actor::on_start`] so the **decision** is unit-testable with
+/// an injected degenerate RNG without spawning the actor (the *full* spawn →
+/// fail-stop → `OpenError` path with a degenerate source is the Round-2/`R0-D#`
+/// test). Conformance build only.
+#[cfg(feature = "conformance")]
+fn run_session_self_cert<R: GapRng>(rng: &mut R) -> Result<(), StakeEngineStartError> {
+    let report = shekyl_standoff::conformance::certify_draw(
+        rng,
+        DEFAULT_ENTRY_GAP.as_blocks(),
+        super::stake_timing::CERTIFY_SAMPLE_N,
+    );
+    if report.passed() {
+        Ok(())
+    } else {
+        Err(StakeEngineStartError::RngSelfCertFailed(report))
+    }
+}
+
 impl Actor for StakeEngine {
     type Args = StakeEngineArgs;
-    type Error = Infallible;
+    type Error = StakeEngineStartError;
 
     /// Build the actor from the pre-derived bundles. Tag each bundle
     /// bonded/ephemeral from the `bonded` hint; no derivation happens here (the
@@ -532,6 +592,16 @@ impl Actor for StakeEngine {
         // Defensive: the orchestrator guarantees `active ∈ bundles`. Drop a
         // dangling cursor to idle rather than carry an unresolvable active slot.
         let active = args.active.filter(|slot| held.contains_key(slot));
+
+        // S6 — session RNG self-cert (conformance build only; x86 enforced by the
+        // module-level `compile_error!`). Grade the production `OsRng` adapter
+        // before the actor accepts any work; a non-conformant CSPRNG fail-stops
+        // the spawn (and so wallet-open), so a degenerate timing RNG never reaches
+        // the gate-6 decorrelation draw. This certifies the real adapter at the
+        // real session-start — stronger than the reference-RNG KAT, though it runs
+        // only in a conformance build (S6 §0).
+        #[cfg(feature = "conformance")]
+        run_session_self_cert(&mut OsRngGapAdapter)?;
 
         Ok(Self {
             held,
@@ -759,8 +829,9 @@ impl Message<SignBond> for StakeEngine {
         let (_spread, _bond_first) =
             draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
                 .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
-        // TODO(S6): session-level `certify_draw` self-cert over `OsRngGapAdapter`
-        // (gated; runs at session start, not per-draw).
+        // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
+        // gated, at session start) is wired in `on_start` — see
+        // `run_session_self_cert` and the `conformance` feature.
         // TODO(2d): wire `_spread` and `_bond_first` into the broadcast timing
         // (deferred — 2c-2b lands inert, no submission path).
 
@@ -919,6 +990,27 @@ impl StakeEngineHandle {
             active,
         });
         Self { actor }
+    }
+
+    /// S6 — block until the actor's `on_start` self-cert completes, surfacing a
+    /// non-conformant-RNG (or panic) startup failure as a human-readable string.
+    /// Conformance build only — this is the **eager** observation path
+    /// ([`ActorRef::wait_for_startup_result`], S6 plan §2.1). `Ok(())` means the
+    /// actor started and the production CSPRNG graded conformant.
+    #[cfg(feature = "conformance")]
+    pub(crate) async fn wait_for_self_cert(&self) -> Result<(), String> {
+        use kameo::error::HookError;
+        match self.actor.wait_for_startup_result().await {
+            Ok(()) => Ok(()),
+            Err(HookError::Error(StakeEngineStartError::RngSelfCertFailed(report))) => {
+                Err(format!(
+                    "the OS CSPRNG graded non-conformant for entry-gap timing draws: {report:?}"
+                ))
+            }
+            Err(HookError::Panicked(p)) => Err(format!(
+                "on_start panicked (likely the OS entropy source failed mid-draw): {p:?}"
+            )),
+        }
     }
 
     /// Mint an operation-scoped [`PersonaHandle`] for `p_slot` (the single
@@ -1513,5 +1605,47 @@ mod tests {
             ),
             "expected SlotMismatch(0, 1), got {err:?}"
         );
+    }
+
+    /// S6 — session RNG self-cert wiring (conformance build only).
+    #[cfg(feature = "conformance")]
+    mod s6_self_cert {
+        use super::*;
+
+        /// The **decision**: a stuck RNG (constant output) grades non-conformant,
+        /// so the extracted self-cert returns the typed start error. Proves
+        /// fail-stop *decides* correctly without spawning; the full
+        /// spawn→`OpenError` path with a degenerate source is the Round-2 test.
+        #[test]
+        fn run_session_self_cert_rejects_stuck_rng() {
+            struct ConstRng(u64);
+            impl GapRng for ConstRng {
+                fn next_u64(&mut self) -> u64 {
+                    self.0
+                }
+            }
+            let mut rng = ConstRng(0x42);
+            let result = run_session_self_cert(&mut rng);
+            assert!(
+                matches!(result, Err(StakeEngineStartError::RngSelfCertFailed(_))),
+                "a stuck RNG must fail the session self-cert, got {result:?}"
+            );
+        }
+
+        /// The **wiring**: the production `OsRng` adapter grades conformant, so a
+        /// freshly spawned StakeEngine starts cleanly and the eager observation
+        /// path (`wait_for_self_cert`) returns `Ok`. Multi-thread so the actor
+        /// task keeps running while the test awaits its startup.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn session_self_cert_passes_over_os_rng_at_spawn() {
+            let handle = spawn_over(&[0], &[], None);
+            let cert = handle.wait_for_self_cert().await;
+            assert!(
+                cert.is_ok(),
+                "the production OsRng adapter must pass the session self-cert, got {cert:?}"
+            );
+            // The actor is alive and serving after a passing self-cert.
+            assert!(handle.active_persona().await.is_ok());
+        }
     }
 }

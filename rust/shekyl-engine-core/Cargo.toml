@@ -421,6 +421,15 @@ required-features = ["bench-internals"]
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "hex", "chacha20poly1305", "hkdf", "sha2"]
+# Internal feature (S6): enables the StakeEngine session RNG self-cert. Wires
+# `shekyl-standoff`'s `conformance` grader (`certify_draw`) into
+# `StakeEngine::on_start` over the production `OsRngGapAdapter`, fail-stopping the
+# spawn (and so wallet-open) on a non-conformant CSPRNG. **x86-only** — the grade
+# is float (see `compile_error!` guard in `stake_engine.rs`). NOT in `default`:
+# the grader pulls `shekyl-stats` and float, so production builds stay float-free
+# and stats-free (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0). For CI's x86 lane
+# and opt-in operator diagnostics, not the shipping binary.
+conformance = ["shekyl-standoff/conformance"]
 # Internal feature: re-exports otherwise-`pub(crate)` types under a
 # `__bench_internals` module so external Criterion harnesses can
 # measure them. Not part of the public API; consumers must not depend
