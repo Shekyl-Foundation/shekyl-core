@@ -58,6 +58,13 @@ just tidiness.
    convergence" (that would risk a future re-vendor silently reverting a
    genesis-format decision). Crypto primitives in `shekyl-oxide` remain vendored;
    the block/tx/rct *protocol* code is ours ([`10-shekyl-first`]).
+4. **This PR precedes — and is the first slice of — the broader `shekyl-oxide`
+   un-vendor.** Extracting the protocol serializer here removes the part that was
+   never legitimately vendored, shrinking the remaining vendored surface to the
+   crypto primitives (which un-vendor handles afterward). Sequencing it the other
+   way would rename the block/tx surface only to delete it here — touching the
+   ~58-site surface twice. Recorded in
+   [`../V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-20).
 
 ## 2. The arbitration table
 

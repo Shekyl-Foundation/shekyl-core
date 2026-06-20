@@ -4412,4 +4412,45 @@ tx/rct layout being ported).
 
 ---
 
+## 2026-06-20 — Genesis tx/block serializer extraction precedes the broader `shekyl-oxide` un-vendor (it is the first slice)
+
+**Decision.** The clean-serializer work ([`docs/design/GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md))
+ships **before** any broad "un-vendor and strictly own `shekyl-oxide`" effort.
+The serializer PR extracts the block/tx/rct *protocol* code out of the vendored
+`shekyl-oxide` tree into a clean Shekyl-owned crate and deletes `shekyl-oxide`'s
+block/tx/fcmp serializer; the subsequent un-vendor then handles only the
+remaining **crypto-primitive** crates (`bulletproofs`, `fcmp++`, `io`,
+`primitives`, `generators`, `divisors`/`helioselene`/`fcmps`).
+
+**Rationale.** Less churn, decisively. The serializer PR already rewrites the
+large surface (the block/tx/fcmp serializer + the ~58 `shekyl_oxide::{block,
+transaction}` consumer sites). Un-vendoring *first* would move/rename that same
+surface and update every import path, only for the serializer PR to **delete the
+just-moved protocol crates and re-migrate the 58 sites** — the large surface
+touched twice, with the protocol-crate move pure throwaway. Doing the serializer
+PR first touches that surface once; the later un-vendor touches only the
+crypto-primitive crates (imported in far fewer places). The reframe that makes
+this obvious: per [`10-shekyl-first`] the block/tx protocol code is *already
+ours* and was never legitimately vendored, so **extracting it IS un-vendoring's
+first slice** — it shrinks the remaining vendored surface down to the genuinely-
+vendored crypto primitives, which is where the un-vendor *question* actually
+lives. Secondary: the serializer is genesis-critical (gates the rule freeze) and
+the un-vendor is a maintainability refactor (not critical-path) — don't delay the
+critical path for the refactor, and don't mix a workspace-wide mechanical
+crate-move into a high-stakes consensus diff. The serializer PR's freeze-gate Q6
+also pins *which* crypto crates carry genesis-frozen format (proof/Bp+
+serialization), so the later un-vendor is better-informed about what must be
+owned vs. can stay tracked. The one cost — the new crate's crypto-dependency
+import paths get re-pathed when un-vendor later moves those crates — is a handful
+of `use` lines in one crate (mitigable via thin re-export aliases), trivial next
+to the 58-site double-touch.
+
+**Reference.**
+[`docs/design/GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md)
+(§1 decision, §6 Q6 crypto-crate triage cross-link);
+[`10-shekyl-first`](../.cursor/rules/10-shekyl-first.mdc) (`shekyl-oxide` vendored
+for crypto primitives only; protocol code is ours).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
