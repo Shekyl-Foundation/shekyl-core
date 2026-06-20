@@ -151,7 +151,8 @@ operator diagnostic). No phantom-accrual or user-invocability concern.
   unconstructible and `on_start` cannot fail, so the branch compiles out. *Verify*
   that an empty-by-default error enum + `Result<Self, _>` `on_start` compiles
   clean and warns nowhere (an uninhabited error may need a small shim).
-  **Verify kameo `on_start`-error semantics at source before committing.**
+  Kameo `on_start`-error semantics **RESOLVED 2026-06-20** — see §2.1 below; DQ2
+  is now execution-ready.
 - **DQ3 — x86-only execution must be LOUD, not a silent compile-out (F2).** The
   grade is float / x86-only, so an aarch64 `conformance` build cannot run it. A
   bare `#[cfg(all(feature = "conformance", target_arch = "x86_64"))]` compiles
@@ -170,11 +171,76 @@ operator diagnostic). No phantom-accrual or user-invocability concern.
   Home: `stake_timing.rs`, beside `DEFAULT_ENTRY_GAP` (the timing-constants home).
   Value `200_000` per R0-D4 — unchanged, just named and shared.
 
+### 2.1 Pre-Round-1 substrate findings — kameo `on_start` error semantics (RESOLVED 2026-06-20)
+
+Verified at `kameo-0.20.0` source (the exact-pinned `=0.20.0` this crate uses).
+DQ2/F3 are now execution-ready; Round 1 implements rather than investigates.
+
+1. **Error-type bound is trivial.** `Actor::Error: ReplyError`, and `ReplyError`
+   has a **blanket impl for any `T: Debug + Send + 'static`**
+   (`kameo/src/reply.rs:206–207`). So `StakeEngineStartError` needs only
+   `#[derive(Debug)]` — **no `thiserror` / `std::error::Error`** required (a
+   `Display`/`thiserror` impl is optional polish, not a bound).
+2. **`on_start` *can* fail, in-task.** `on_start(args, ref) -> Result<Self,
+   Error>` runs **inside the spawned actor task** (`kameo/src/actor/spawn.rs:185`);
+   an `Err` is wrapped `PanicError(.., PanicReason::OnStart)` and the actor goes
+   straight to shutdown — it never enters the message loop.
+3. **Two ways to observe the failure:**
+   - **Eager (chosen):** `actor_ref.wait_for_startup_result().await ->
+     Result<(), HookError<A::Error>>` (`kameo/src/actor/actor_ref.rs`) — returns
+     the typed error, **but bounds `A::Error: Clone`**.
+   - **Lazy (rejected):** don't wait; the dead actor makes the first message
+     return `ActorNotRunning` → existing `collapse_send_error` →
+     `StakeActorUnavailable`. Rejected: it **loses the specific reason** at the
+     wallet-open boundary, which defeats a *diagnostic* build whose whole purpose
+     is to say loudly *why* the RNG failed (F2 posture).
+4. **`CertifyReport` is `#[derive(Debug, Clone)]`** (`conformance.rs:276`) — a
+   valid `Clone` payload for the error variant.
+5. **The spawn site is sync.** `Engine::spawn_stake_engine_if_staker`
+   (`lifecycle.rs`) is a **sync** fn returning `OpenError`. Eager observation
+   therefore needs a sync→async bridge to `.await wait_for_startup_result()` —
+   `tokio::task::block_in_place` + `Handle::block_on`, the **same pattern
+   `drive_persistence` already uses** (the crate's `rt-multi-thread` justification,
+   `Cargo.toml`). **Crucially this bridge is needed only under `conformance`** —
+   the default build never waits.
+
+**Resolved DQ2 shape (execution-ready):**
+
+```text
+#[derive(Debug, Clone)]
+enum StakeEngineStartError {
+    #[cfg(feature = "conformance")]
+    RngSelfCertFailed(CertifyReport),   // CertifyReport: Clone ✓
+    // 2d-1 adds always-on variants (ScanStoreOpen, CursorRecovery, …)
+}
+```
+
+- **Default build:** the only variant is `#[cfg]`-compiled out, leaving an
+  **empty enum**. `on_start` always returns `Ok(self)`; `Err` is unconstructible;
+  zero-cost. (Empty enums derive `Debug`/`Clone` vacuously — *verify it compiles
+  warning-free* in Round 1; the F3 "uninhabited-error shim" worry looks
+  unnecessary but is a 5-minute compile check.)
+- **Conformance build:** `on_start` runs the (x86-gated, DQ3) `certify_draw` over
+  `OsRngGapAdapter`; on `!report.passed()` returns
+  `Err(RngSelfCertFailed(report))`. `spawn_stake_engine_if_staker` then
+  `block_in_place`-awaits `wait_for_startup_result()` and maps
+  `HookError::Error(RngSelfCertFailed(_))` → a **new `#[cfg(feature="conformance")]`
+  `OpenError` variant**, so wallet-open fails **loudly with the RNG reason**.
+- The sync→async bridge **and** the `OpenError` widening are **both
+  `conformance`-gated** → zero default-production surface (consistent with §0).
+
+Round-1 first action is now *implementation* of this shape + the empty-enum
+compile check, not investigation.
+
 ### Round plan (rule 26, tightened)
 
-- **Round 1 — gating + failure path (DQ1/DQ2/DQ3).** The load-bearing round:
-  feature wiring, the `on_start` error decision (verified against kameo source),
-  and the x86 cfg. Produces the exact `on_start` shape.
+- **Round 1 — implement the gating + failure path (DQ1/DQ2/DQ3).** DQ2 is now
+  resolved (§2.1) — this round **implements** the `StakeEngineStartError` shape +
+  the conformance `on_start` call + the `block_in_place` startup-result bridge +
+  the `OpenError` widening, and settles DQ3's loud-skip mechanism
+  (`compile_error!` vs runtime marker) and DQ1's feature name. Gate: the
+  empty-enum default build compiles warning-free; the conformance build wires
+  end-to-end.
 - **Round 2 — closure + R0-D# pre-flight.** Audit-against-actual-code once the
   branch exists (#163 merged): re-pin substrate, confirm the conformance build
   compiles + the grade runs + fail-stop bites (inject a degenerate RNG into the
