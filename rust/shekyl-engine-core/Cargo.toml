@@ -19,6 +19,21 @@ serde_json = "1"
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 shekyl-staking = { path = "../shekyl-staking" }
+# `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
+# (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
+# the production `SignBond` message handler calls it directly. No cycle:
+# `shekyl-archival-bond-builder` does not depend on `shekyl-engine-core`.
+shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
+# `HoldingsDescriptor` is the parameter type for the `SignBond.holdings` field
+# (passed through to `build_join_market_vin`). The builder already depends on
+# it; promoting it to a direct dep makes the type's origin explicit at this
+# crate's boundary. `shekyl-archival-retention` is already a dev-dep here and
+# in the workspace lockfile — no new supply-chain surface.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
+# (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
+# feature) is dependency-free; `conformance` is dev/test-only.
+shekyl-standoff = { path = "../shekyl-standoff" }
 # `EconomicsEngine` / `LocalEconomics` (PR 7 §2.7) compose the
 # `shekyl-economics` C2 primitives directly (`base_emission_at`,
 # `calc_burn_pct_from_activity`, `params_digest`) and re-export its
