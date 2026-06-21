@@ -206,10 +206,11 @@ impl SeedFormat {
 // --- derivation network ------------------------------------------------------
 
 /// Shekyl derivation-time network. Distinct from `shekyl_address::Network`
-/// because `Fakechain` is a dev-only network that borrows Testnet's address
-/// encoding but must not share derivation salts with it — a seed that
-/// generated a Fakechain wallet must produce different keys than the same
-/// seed entered on Testnet.
+/// because `Fakechain` mirrors Mainnet's address encoding (see
+/// `to_address_network`) yet must not share derivation salts with Mainnet — a
+/// seed that generated a Fakechain wallet must produce different keys than the
+/// same seed entered on Mainnet (the salt keeps its own `b"fakechain"` label;
+/// see `salt_label`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DerivationNetwork {
     Mainnet,
