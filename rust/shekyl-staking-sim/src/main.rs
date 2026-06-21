@@ -689,7 +689,7 @@ fn print_cover_report() {
         report.marginal_cutoff
     );
     eprintln!(
-        "  past it capital is wasted and §7.6 opt-out makes it harmful. rt<1.0 is the JOINT corner"
+        "  past it capital is wasted and §7.5 opt-out makes it harmful. rt<1.0 is the JOINT corner"
     );
     eprintln!("  (the genesis-pin input); rt=1.0 amount-marginal is only a FLOOR. rch = target reachable.");
     eprintln!(
@@ -711,7 +711,7 @@ fn print_cover_report() {
     }
     eprintln!();
     eprintln!(
-        "Economic participation (§7.6): cover-stays-with-P ⇒ a staker funds cover only if C_max ≤"
+        "Economic participation (§7.5): cover-stays-with-P ⇒ a staker funds cover only if C_max ≤"
     );
     eprintln!(
         "  beta x bond (rung ≥ k/beta); below it they take the cover==0 opt-out. Rung is PUBLIC, so"

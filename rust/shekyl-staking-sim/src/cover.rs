@@ -94,7 +94,7 @@ const THIN_TAIL_TARGET: f64 = 0.02;
 
 /// Marginal-return cutoff for the saturation knee: once a rung of cover buys
 /// fewer than this many set members, the bounded pool is saturating and more
-/// capital is wasted (and, via §7.6 opt-out, harmful). Sets where the dial pins.
+/// capital is wasted (and, via §7.5 opt-out, harmful). Sets where the dial pins.
 const MARGINAL_CUTOFF: f64 = 0.15;
 
 /// Per-staker shard-count spread — the swept pre-testnet assumption (§7.2). The
@@ -427,7 +427,7 @@ pub struct CoverRecommendation {
     /// The **saturation knee**: smallest `k` past which the marginal set gain per
     /// rung of cover falls below `MARGINAL_CUTOFF`. The pin, *not* `knee + step`:
     /// past the knee the bounded pool is saturating, so more cover capital buys
-    /// ~nothing — and §7.3's regressive tax (and the §7.6 opt-out it triggers)
+    /// ~nothing — and §7.3's regressive tax (and the §7.5 opt-out it triggers)
     /// makes over-shooting actively harmful, so err-large pins **at** the knee.
     pub knee_rungs: u64,
     /// Whether `TARGET_ANON_SET` is even reachable here (the joint corner often
@@ -449,7 +449,7 @@ pub struct CoverRecommendation {
 /// cover buys less than `MARGINAL_CUTOFF` of set. Knee, not a mean target —
 /// unlike the standoff's unbounded Poisson decoys the pool saturates at `N_P`,
 /// so a mean target is often unreachable, and *past* the knee the regressive tax
-/// (§7.3) drives the §7.6 opt-out, making over-shoot harmful. So err-large pins
+/// (§7.3) drives the §7.5 opt-out, making over-shoot harmful. So err-large pins
 /// **at** the knee, bounded above by participation rather than below by a tail
 /// target. The joint (timing-intersected) corner is the genesis-pin input — the
 /// amount-marginal `timing_retain = 1.0` is only a floor (§7.4).
@@ -520,7 +520,7 @@ fn recommendation(timing_retain: f64) -> CoverRecommendation {
     }
 }
 
-/// Economic-participation model (§7.6). Cover-stays-with-`P` means the principal
+/// Economic-participation model (§7.5). Cover-stays-with-`P` means the principal
 /// must fund `bond + cover` at the seam; a staker posts cover only if the dial's
 /// max draw (`C_max = k · floor`) is at most `beta ×` their own bond — i.e. rung
 /// `s ≥ k / beta`. Capital-constrained low-rung stakers fall below that and take
@@ -645,7 +645,7 @@ fn run_participation(
 /// Participation sweep at the thin/dispersed corner over the dial, at a
 /// pessimistic willingness-to-pay (`beta`). Shows the realized optimum is *lower*
 /// than the amount-marginal `k`: widening the dial prices more low rungs out, so
-/// the realized payer pool shrinks even as the window grows (§7.6).
+/// the realized payer pool shrinks even as the window grows (§7.5).
 pub fn participation_scan() -> Vec<ParticipationResult> {
     let (_, n_p, mean_shards) = SCENARIOS[0];
     let mut out = Vec::new();
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn participation_prices_out_low_rungs_and_shrinks_the_realized_set() {
         // At a wide dial and tight willingness-to-pay, low rungs opt out, so the
-        // realized payer set is strictly below the honest-uniform set (§7.6).
+        // realized payer set is strictly below the honest-uniform set (§7.5).
         let p = run_participation(17, 9.0, Dispersion::Dispersed, 21, 2.0, 50_000, 7);
         assert!(p.min_paying_rung > 1);
         assert!(p.opt_out_frac > 0.0);
