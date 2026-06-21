@@ -139,17 +139,20 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
         let tag = read_byte(&mut cur)?;
         let field = match tag {
             TX_EXTRA_TAG_PADDING => {
-                let mut rest = Vec::new();
-                cur.read_to_end(&mut rest)?;
-                if rest.iter().any(|&b| b != 0) {
-                    return Err(io::Error::other("tx_extra: non-zero byte in padding"));
-                }
-                let run = 1 + rest.len();
+                // Padding is the rest of `extra` — all-zero, capped at 255 incl. the
+                // tag. Validate the remaining slice **in place** (no copy of
+                // attacker-controlled bytes): check the cap first (O(1)), then scan
+                // for non-zero (bounded to <=254), then consume the remainder.
+                let run = 1 + cur.len();
                 if run > TX_EXTRA_PADDING_MAX_COUNT {
                     return Err(io::Error::other(format!(
                         "tx_extra: padding run {run} exceeds {TX_EXTRA_PADDING_MAX_COUNT}"
                     )));
                 }
+                if cur.iter().any(|&b| b != 0) {
+                    return Err(io::Error::other("tx_extra: non-zero byte in padding"));
+                }
+                cur = &[];
                 TxExtraField::Padding(run)
             }
             TX_EXTRA_TAG_PUBKEY => TxExtraField::PubKey(read_array(&mut cur)?),

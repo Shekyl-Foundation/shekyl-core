@@ -56,7 +56,8 @@ def rpc(url, method, params=None):
 
 
 def main():
-    addr = json.loads(open(GENESIS_RECIPIENTS).read())["recipients"][0]["address"]
+    with open(GENESIS_RECIPIENTS) as f:
+        addr = json.load(f)["recipients"][0]["address"]
     port = free_port()
     workdir = tempfile.mkdtemp(prefix="cbcap_")
     url = f"http://127.0.0.1:{port}/json_rpc"
