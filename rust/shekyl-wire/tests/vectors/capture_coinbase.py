@@ -56,47 +56,50 @@ def rpc(url, method, params=None):
 
 
 def main():
-    addr = json.loads(open(GENESIS_RECIPIENTS).read())["recipients"][0]["address"]
+    with open(GENESIS_RECIPIENTS) as f:
+        addr = json.load(f)["recipients"][0]["address"]
     port = free_port()
-    workdir = tempfile.mkdtemp(prefix="cbcap_")
     url = f"http://127.0.0.1:{port}/json_rpc"
-    log = open(os.path.join(workdir, "daemon.log"), "w")
-    daemon = subprocess.Popen(
-        [SHEKYLD, "--regtest", "--offline", "--non-interactive", "--fixed-difficulty", "1",
-         "--data-dir", workdir, "--rpc-bind-port", str(port), "--log-level", "0"],
-        stdout=log, stderr=subprocess.STDOUT)
-    try:
-        for _ in range(120):
-            try:
-                if rpc(url, "get_info").get("status") == "OK":
-                    break
-            except Exception:
-                time.sleep(0.5)
-        rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
-        hashes = {}
-        for h in CAPTURE_HEIGHTS:
-            blk = rpc(url, "get_block", {"height": h})
-            blob = bytes.fromhex(blk["blob"])
-            out = os.path.join(HERE, f"regtest_coinbase_h{h}.block")
-            with open(out, "wb") as f:
-                f.write(blob)
-            hashes[str(h)] = {
-                "block_hash": blk["block_header"]["hash"],
-                "miner_tx_hash": blk["miner_tx_hash"],
-            }
-            print(f"  h{h}: {len(blob)}B block_hash={hashes[str(h)]['block_hash'][:16]}...",
-                  file=sys.stderr)
-        with open(os.path.join(HERE, "regtest_coinbase_hashes.json"), "w") as f:
-            json.dump(hashes, f, indent=2, sort_keys=True)
-        print("wrote regtest_coinbase_hashes.json", file=sys.stderr)
-    finally:
-        if daemon.poll() is None:
-            daemon.send_signal(signal.SIGINT)
-            try:
-                daemon.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                daemon.kill()
-        log.close()
+    # TemporaryDirectory removes the throwaway regtest DB (and the log file inside
+    # it) on exit even when capture fails; the daemon is stopped first in the
+    # `finally` below, so the dir is free to delete by the time the `with` unwinds.
+    with tempfile.TemporaryDirectory(prefix="cbcap_") as workdir, \
+            open(os.path.join(workdir, "daemon.log"), "w") as log:
+        daemon = subprocess.Popen(
+            [SHEKYLD, "--regtest", "--offline", "--non-interactive", "--fixed-difficulty", "1",
+             "--data-dir", workdir, "--rpc-bind-port", str(port), "--log-level", "0"],
+            stdout=log, stderr=subprocess.STDOUT)
+        try:
+            for _ in range(120):
+                try:
+                    if rpc(url, "get_info").get("status") == "OK":
+                        break
+                except Exception:
+                    time.sleep(0.5)
+            rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
+            hashes = {}
+            for h in CAPTURE_HEIGHTS:
+                blk = rpc(url, "get_block", {"height": h})
+                blob = bytes.fromhex(blk["blob"])
+                out = os.path.join(HERE, f"regtest_coinbase_h{h}.block")
+                with open(out, "wb") as f:
+                    f.write(blob)
+                hashes[str(h)] = {
+                    "block_hash": blk["block_header"]["hash"],
+                    "miner_tx_hash": blk["miner_tx_hash"],
+                }
+                print(f"  h{h}: {len(blob)}B block_hash={hashes[str(h)]['block_hash'][:16]}...",
+                      file=sys.stderr)
+            with open(os.path.join(HERE, "regtest_coinbase_hashes.json"), "w") as f:
+                json.dump(hashes, f, indent=2, sort_keys=True)
+            print("wrote regtest_coinbase_hashes.json", file=sys.stderr)
+        finally:
+            if daemon.poll() is None:
+                daemon.send_signal(signal.SIGINT)
+                try:
+                    daemon.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
 
 
 if __name__ == "__main__":

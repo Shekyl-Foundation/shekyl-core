@@ -13,7 +13,8 @@
 //! rejects are unit-tested in `src/varint.rs`.
 
 use shekyl_wire::transaction::{CT_TYPE_NULL, TAG_INPUT_GEN, TAG_OUTPUT_TAGGED_KEY};
-use shekyl_wire::Block;
+use shekyl_wire::varint::write_varint;
+use shekyl_wire::{Block, Transaction};
 
 /// Build a minimal, fully-controlled coinbase blob (timestamp/nonce/keys zeroed)
 /// so individual fields can be made invalid in isolation.
@@ -105,6 +106,22 @@ fn rejects_unsupported_ct_type() {
     let err = Block::from_bytes(&bytes).expect_err("unsupported ct type must be rejected");
     assert!(
         err.to_string().contains("ct type"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_oversized_input_count() {
+    // A prefix declaring more inputs than the parse cap must be rejected at the
+    // count guard — before any per-input read/allocation (untrusted-input DoS
+    // defense). The tiny blob never has to carry the declared inputs.
+    let mut blob = Vec::new();
+    write_varint(3u64, &mut blob).unwrap(); // version = 3
+    write_varint(0u64, &mut blob).unwrap(); // unlock_time = 0
+    write_varint(2_000_000u64, &mut blob).unwrap(); // n_inputs > READ_LEN_CAP
+    let err = Transaction::from_bytes(&blob).expect_err("oversized input count must be rejected");
+    assert!(
+        err.to_string().contains("input count"),
         "unexpected error: {err}"
     );
 }

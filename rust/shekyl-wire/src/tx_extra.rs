@@ -210,9 +210,16 @@ pub fn serialize(fields: &[TxExtraField]) -> Vec<u8> {
 fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
     match field {
         TxExtraField::Padding(n) => {
-            // `n` zero bytes total (the tag is the first padding byte).
-            let zeros = vec![0u8; *n];
-            w.write_all(&zeros)
+            // `n` zero bytes total (the tag is the first padding byte). Stream
+            // from a fixed buffer rather than allocating an `n`-byte scratch Vec.
+            let zeros = [0u8; 256];
+            let mut remaining = *n;
+            while remaining > 0 {
+                let take = remaining.min(zeros.len());
+                w.write_all(&zeros[..take])?;
+                remaining -= take;
+            }
+            Ok(())
         }
         TxExtraField::PubKey(key) => {
             w.write_all(&[TX_EXTRA_TAG_PUBKEY])?;

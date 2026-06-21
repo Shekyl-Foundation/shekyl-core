@@ -151,14 +151,14 @@ fn read_branch_layers<R: Read>(r: &mut R, kind: &str) -> io::Result<Vec<Vec<[u8;
 
 /// A transaction input.
 ///
-/// Genesis arms modelled here: the coinbase `gen` input and the FCMP++ spend
-/// (`txin_to_key`). The archival arms (`serve_credit`, `bond_post`) and the
-/// deferred emission/membership-only arms land in later slices.
+/// All four genesis arms are modelled: the coinbase `gen` input, the FCMP++
+/// spend (`txin_to_key`), and the archival `serve_credit` / `bond_post` arms.
+/// Tag bytes are the genesis dense scheme (the `TAG_INPUT_*` constants above).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Input {
-    /// Coinbase generation input: the block height.
+    /// Coinbase generation input (`txin_gen`, tag 0x00): the block height.
     Gen(u64),
-    /// FCMP++ spend input (`txin_to_key`, tag 0x02). At genesis `amount == 0` and
+    /// FCMP++ spend input (`txin_to_key`, tag 0x01). At genesis `amount == 0` and
     /// `key_offsets` is empty (membership is via the curve tree, not a ring), but
     /// the current C++ wire still serializes both — round-tripped faithfully.
     ToKey {
@@ -169,9 +169,9 @@ pub enum Input {
         /// Key image (linking tag / nullifier).
         key_image: [u8; 32],
     },
-    /// Archival serve-credit response (`tag 0x04`, gate-2) — non-spending.
+    /// Archival serve-credit response (`tag 0x02`, gate-2) — non-spending.
     ServeCredit(Box<ServeCredit>),
-    /// Archival bond-post (`tag 0x05`, gate-4) — JoinMarket-only at genesis.
+    /// Archival bond-post (`tag 0x03`, gate-4) — JoinMarket-only at genesis.
     BondPost(Box<BondPost>),
 }
 
@@ -682,7 +682,7 @@ impl Prunable {
 pub enum Ct {
     /// Coinbase confidential section (type 0x00): committed base only.
     Null(CtBase),
-    /// FCMP++ spend confidential section (type 0x07).
+    /// FCMP++ spend confidential section (type 0x01).
     Fcmp {
         /// Transaction fee.
         fee: u64,
@@ -786,13 +786,28 @@ impl TxPrefix {
     fn read<R: Read>(r: &mut R) -> io::Result<TxPrefix> {
         let unlock_time = read_varint(r)?;
 
+        // Parse-time DoS guard: a declared count drives per-element reads, so it
+        // is bounded before the loop (the `read_len_prefixed` / `key_offsets`
+        // pattern). This is the loose parse-safety cap; the tight consensus
+        // structural maxima (`MAX_FCMP_INPUTS` / `MAX_OUTPUTS`) — which depend on
+        // the tx type read *after* the prefix — are enforced in `validate()`.
         let n_inputs: usize = read_varint(r)?;
+        if n_inputs > READ_LEN_CAP {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: input count {n_inputs} exceeds parse cap {READ_LEN_CAP}"
+            )));
+        }
         let mut inputs = Vec::new();
         for _ in 0..n_inputs {
             inputs.push(Input::read(r)?);
         }
 
         let n_outputs: usize = read_varint(r)?;
+        if n_outputs > READ_LEN_CAP {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: output count {n_outputs} exceeds parse cap {READ_LEN_CAP}"
+            )));
+        }
         let mut outputs = Vec::new();
         for _ in 0..n_outputs {
             outputs.push(Output::read(r)?);
@@ -935,7 +950,10 @@ impl Transaction {
             )));
         }
         // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
-        let is_coinbase = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
+        // A genuine coinbase is *exactly one* `gen` input; matching only the first
+        // input would let a spend tx prepend a `gen` to dodge the cap.
+        let is_coinbase = self.prefix.inputs.len() == 1
+            && matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
             return Err(io::Error::other(format!(
                 "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",
