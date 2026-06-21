@@ -23,7 +23,12 @@ softest, least-observable input, affordability), so the best single `k` holds on
 distribution** (pin a *function*, not a constant): it dominates the best frozen
 scalar on realized set (up to ~2.6× at the dense end) and its one theoretical leak
 (height-conditioning) is **~0%** at the realistic population drift (timing window ≪
-population epoch). Next: specify the response curve `population(H) → D`.
+population epoch). **But freezing a function *relocates* the genesis risk (§7.8):** it
+inherits a **manipulation** surface a constant never had, so `f` must read a **slow,
+reorg-final, canonical** aggregate (proposal: the settlement-epoch-boundary live-bond
+count, `SETTLEMENT_EPOCH_BLOCKS`, read below `ARCHIVAL_REORG_DEPTH_BLOCKS`) — not a tip
+snapshot — and its **bootstrap boundary** must be pinned deliberately. The statistic
+`f` trusts is now the whole ballgame.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -612,14 +617,84 @@ rather than manage it. Two caveats to carry into that analysis:
   than pinning a *point*, because it responds to the population instead of guessing
   it.
 
-**Verdict and next step.** Feasibility **passes**: the scalar is fragile (§7.6) and
-the function both dominates it and doesn't net-leak. So the genesis object is the
-**response curve `population(H) → D`**, not a frozen `k`. The remaining design work
-is to specify that curve — what public per-height statistic it reads (live-bond
-count and rung occupancy at `H`), and the conservative response (target effective
-set, **capped at the saturation knee** so it never over-taxes into the §7.5 opt-out,
-**floored at the runway `C_min`**). That curve's *parameters* are what get pinned and
-golden-vectored (C4), and being a response they are far more robust than a point.
-Still off-wire, still parallel to the consensus path. (Open: the per-height
-statistic's own definition, and whether `D`'s shape stays uniform — DQ1 — at every
-height or itself adapts.)
+**Verdict.** Feasibility **passes**: the scalar is fragile (§7.6) and the function
+both dominates it and doesn't net-leak. So the genesis object is the **response
+curve `f: population → D`**, not a frozen `k`. The conservative response is target
+effective set, **capped at the saturation knee** (never over-tax into the §7.5
+opt-out) and **floored at `C_min`**; its *parameters* are what get pinned and
+golden-vectored (C4), far more robust than a point because they respond to the
+population instead of guessing it. Off-wire, parallel to the consensus path.
+
+**But freezing a function does not remove the genesis risk — it *relocates* it, into
+a class the scalar was immune to. That relocation is §7.8, and it is now the
+load-bearing decision.**
+
+### 7.8 The statistic is the ballgame — `f` must read a slow, final, canonical aggregate
+
+A constant is **inert and un-manipulable**. A function that reads public chain state
+inherits a failure class the scalar had no surface for: an attacker who can move the
+input can move everyone's cover. The frozen object is the curve, but the load-bearing
+choice inside it is **which statistic the curve reads — and the naive instantaneous
+`population(H)` tip snapshot is the dangerous reading.**
+
+**The pin: `f` reads a *slow, reorg-final, long-window* population aggregate at a
+*canonical* reference height — not a tip snapshot.** One choice closes three distinct
+threats, and the **same `600 ≪ 10_000` timescale separation** that bought the §7.7
+no-net-leak result powers all three:
+
+1. **Manipulation / grinding — the class a constant can't have.** If `f` narrows `D`
+   when the observable population looks sparse, an attacker can *make* it look sparse:
+   withhold or withdraw their own bonds to dip the live-bond count — **targeted**
+   (timed at a victim's draw → victim draws narrow cover → their `A` matches) or
+   **chronic** (suppress the statistic so everyone's cover stays narrow). An
+   instantaneous count is cheap to move (one block); a trailing ~epoch aggregate is
+   **expensive** — the attacker must suppress bonds across the *whole window*,
+   forgoing real staking yield the entire time, and visibly. So the timescale
+   separation buys **manipulation-resistance too — but only if `f` reads the window
+   aggregate, not the tip.** The design metric is the statistic's **manipulation
+   cost** ≈ forgone yield × window × the attacker's share of the stat; maximise it
+   with a long window and an aggregation no single actor dominates.
+2. **Draw-vs-post desync.** The staker draws cover at construction height; the bond
+   posts a few blocks later. A tip-read that moved in between leaves the cover **off
+   the post-height distribution** — and an off-distribution cover is a *distinguishable*
+   cover, the exact fingerprint the whole mechanism exists to kill. A slow aggregate
+   barely moves over a few blocks.
+3. **Reorg desync.** A tip-read can reorg out from under a completed draw — same
+   off-distribution result. Read the statistic **below the reorg horizon**
+   (`ARCHIVAL_REORG_DEPTH_BLOCKS = 720`) so the input is final before any wallet
+   conditions on it.
+
+**Concrete canonical reference (proposal).** Key the statistic to the **most-recent
+settlement-epoch boundary** (`SETTLEMENT_EPOCH_BLOCKS = 10_000`) — already a
+consensus-tracked canonical boundary (`is_multiple_of(SETTLEMENT_EPOCH_BLOCKS)`,
+`consensus_state.rs`). It is **slow** (changes only at epoch boundaries), **final**
+(the boundary is far past the 720 horizon for all but the first 720 blocks of an
+epoch), and **canonical** (every wallet derives the same epoch index from the height),
+so draw and post — a few blocks apart — read the **identical** value almost always.
+This folds slow + final + canonical into one existing constant.
+
+**The bootstrap boundary must be pinned deliberately, not extrapolated.** At genesis
+the live-bond count is ≈ 0, and "narrow-for-sparse" then hands the **earliest** stakers
+the **narrowest** cover — at exactly the moment the anonymity set is smallest and the
+cold-start principal→`P` link is most exposed. That is a guaranteed-to-occur state with
+a real population, **not** a tail to wave at the other seams by default. So `f`'s
+bootstrap behaviour is a deliberate decision: it may be right to **concede the earliest
+stakers to network-isolation + funder-scope** (the firewall carries the thin regime,
+consistent with §7.4/§7.5), but make that call **explicitly** rather than inherit it
+from how the curve happens to extrapolate toward zero. Same care at the **top**: the
+saturation-knee cap is **self-referential** — it is computed from the very statistic
+`f` reads — so it must stay sane and manipulation-robust as that input moves, under the
+same slow-aggregate discipline.
+
+**Smooth and monotone, no cliffs (precautionary).** A step at some population threshold
+is the continuous-space analogue of the cohort split — it sorts bonds into a
+below-threshold and an above-threshold cover-regime, for no reason. A smooth monotone
+response keeps every bond on a continuum where the per-bond conditioning stays the
+lockstep no-net-leak §7.7 measured.
+
+**Net.** The conditioning approach holds and the function genuinely dominates — but the
+win moved the risk from *"what value do I freeze"* to *"what input does the frozen
+function trust,"* and that input is now the whole ballgame. The next pass specifies `f`
+around the **slow / final / canonical** statistic (the epoch-boundary aggregate) and
+the **deliberately-pinned bootstrap boundary**; those are the new un-takebackable
+choices, and the manipulation surface is the one a constant never had.
