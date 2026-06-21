@@ -682,31 +682,60 @@ fn print_cover_report() {
     }
     eprintln!();
     eprintln!(
-        "Err-large pin (smallest k with mean set ≥ {:.0} at the thin/dispersed corner, +1 notch).",
-        report.target_anon_set
+        "Saturation-knee pin (thin/dispersed corner): smallest k past which a rung of cover buys"
     );
     eprintln!(
-        "  rch = mean target reachable (n = pool saturates below it); thin@pin is the RESIDUAL tail"
+        "  < {:.2} set/rung. The pool saturates (satSet = reachable ceiling), so this is the PIN —",
+        0.15
     );
     eprintln!(
-        "  the dial can't close (bar {:.0}%) — firewall-composition, not a sizing knob (§7).",
-        report.thin_tail_target * 100.0
+        "  past it capital is wasted and §7.6 opt-out makes it harmful. rt<1.0 is the JOINT corner"
     );
+    eprintln!("  (the genesis-pin input); rt=1.0 amount-marginal is only a FLOOR. rch = target reachable.");
     eprintln!(
-        "{:>4} {:>8} {:>4} {:>8} {:>8} {:>8} {:>8} {:>7}",
-        "rt", "knee_k", "rch", "pin_k", "covSKL", "wstTax", "setMean", "thin",
+        "{:>4} {:>8} {:>8} {:>4} {:>8} {:>8} {:>8} {:>7}",
+        "rt", "knee_k", "satSet", "rch", "covSKL", "wstTax", "setMean", "thin",
     );
     for rec in &report.recommendations {
         eprintln!(
-            "{:>4.1} {:>8} {:>4} {:>8} {:>8.2} {:>7.0}x {:>8.2} {:>7.3}",
+            "{:>4.1} {:>8} {:>8.2} {:>4} {:>8.2} {:>7.0}x {:>8.2} {:>7.3}",
             rec.timing_retain,
             rec.knee_rungs,
+            rec.saturation_set,
             if rec.mean_target_reached { "Y" } else { "n" },
-            rec.err_large_rungs,
             rec.cover_span_skl,
             rec.worst_tax_multiple,
             rec.anon_set_mean,
             rec.thin_cover_frac,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Economic participation (§7.6): cover-stays-with-P ⇒ a staker funds cover only if C_max ≤"
+    );
+    eprintln!(
+        "  beta x bond (rung ≥ k/beta); below it they take the cover==0 opt-out. Rung is PUBLIC, so"
+    );
+    eprintln!(
+        "  the attacker discounts opt-outs ⇒ realized payer set < honest. optOut = priced-out frac;"
+    );
+    eprintln!(
+        "  pyrSet/pyrThin = realized set/tail for PAYERS; honSet = honest-uniform set (contrast)."
+    );
+    eprintln!(
+        "{:>4} {:>4} {:>7} {:>8} {:>8} {:>8} {:>8}",
+        "beta", "k", "covSKL", "minRung", "optOut", "pyrSet", "honSet",
+    );
+    for p in &report.participation {
+        eprintln!(
+            "{:>4.1} {:>4} {:>7.2} {:>8} {:>8.3} {:>8.2} {:>8.2}",
+            p.beta,
+            p.rungs_blurred,
+            p.cover_span_skl,
+            p.min_paying_rung,
+            p.opt_out_frac,
+            p.payer_set_mean,
+            p.honest_set_mean,
         );
     }
     match serde_json::to_string_pretty(&report) {

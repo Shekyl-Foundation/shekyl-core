@@ -89,6 +89,11 @@ const TARGET_ANON_SET: f64 = 10.0;
 /// irreducible tail floor, so chasing this with `k` runs to the ceiling (§7).
 const THIN_TAIL_TARGET: f64 = 0.02;
 
+/// Marginal-return cutoff for the saturation knee: once a rung of cover buys
+/// fewer than this many set members, the bounded pool is saturating and more
+/// capital is wasted (and, via §7.6 opt-out, harmful). Sets where the dial pins.
+const MARGINAL_CUTOFF: f64 = 0.15;
+
 /// Per-staker shard-count spread — the swept pre-testnet assumption (§7.2). The
 /// mean is pinned by the sim; the *shape* around it is not, and it is what sets
 /// per-rung density, so we bracket it.
@@ -396,43 +401,49 @@ pub fn build_configs() -> Vec<CoverConfig> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CoverRecommendation {
-    /// The pessimistic corner the err-large bound is sized against.
+    /// The pessimistic corner the bound is sized against.
     pub scenario: &'static str,
     pub n_p: u64,
     pub mean_shards: f64,
     pub dispersion: Dispersion,
     pub timing_retain: f64,
-    /// Smallest dial whose **mean** set clears `TARGET_ANON_SET` (standoff parity).
+    /// The reachable set ceiling under this corner (set at the scan max) — the
+    /// bounded (`≤ N_P`) pool saturates here, so the dial can buy no more.
+    pub saturation_set: f64,
+    /// The **saturation knee**: smallest `k` past which the marginal set gain per
+    /// rung of cover falls below `MARGINAL_CUTOFF`. The pin, *not* `knee + step`:
+    /// past the knee the bounded pool is saturating, so more cover capital buys
+    /// ~nothing — and §7.3's regressive tax (and the §7.6 opt-out it triggers)
+    /// makes over-shooting actively harmful, so err-large pins **at** the knee.
     pub knee_rungs: u64,
-    /// Whether the mean target was reachable within the scan — at the thin corner
-    /// the bounded decoy pool (≤ `N_P`) can saturate below it (the §7 finding).
+    /// Whether `TARGET_ANON_SET` is even reachable here (the joint corner often
+    /// saturates below it — the §7 finding).
     pub mean_target_reached: bool,
-    /// The err-large pin: the knee stepped up one notch (§2.5).
-    pub err_large_rungs: u64,
-    /// `C_max − C_min` at the err-large pin, in SKL.
+    /// `C_max − C_min` at the knee, in SKL.
     pub cover_span_skl: f64,
-    /// Worst-case capital tax at the err-large pin (`k / 1` — the rung-1 staker).
+    /// Worst-case capital tax at the knee (`k / 1` — the rung-1 staker).
     pub worst_tax_multiple: f64,
-    /// Achieved mean set at the err-large pin.
+    /// Mean set at the knee.
     pub anon_set_mean: f64,
-    /// Residual thin-cover tail at the pin — it does **not** vanish: the pool is
-    /// bounded by `N_P`, so edge-of-lattice stakers keep a floor the dial can't
-    /// close (firewall-composition, not a sizing knob — §7).
+    /// Residual thin-cover tail at the knee — does **not** vanish (the bounded
+    /// pool leaves an edge-of-lattice floor; firewall-composition, not a knob).
     pub thin_cover_frac: f64,
 }
 
-/// Find the smallest dial whose **mean** set clears `TARGET_ANON_SET` at the
-/// pessimistic corner (thin `N_P`, dispersed, timing-intersected), then step up
-/// one notch — the err-large rule (§2.5). Mean, not tail: unlike the standoff's
-/// unbounded Poisson decoys, the cover pool saturates at `N_P`, so the thin-cover
-/// **tail** has an irreducible floor no affordable `k` closes (the §7 structural
-/// finding) — chasing it runs `k` to the ceiling. We size the dial to the mean
-/// at viable capital and report the residual tail as the firewall's problem.
+/// Size the dial at the **saturation knee** under the pessimistic corner (thin
+/// `N_P`, dispersed, timing-intersected): the smallest `k` past which a rung of
+/// cover buys less than `MARGINAL_CUTOFF` of set. Knee, not a mean target —
+/// unlike the standoff's unbounded Poisson decoys the pool saturates at `N_P`,
+/// so a mean target is often unreachable, and *past* the knee the regressive tax
+/// (§7.3) drives the §7.6 opt-out, making over-shoot harmful. So err-large pins
+/// **at** the knee, bounded above by participation rather than below by a tail
+/// target. The joint (timing-intersected) corner is the genesis-pin input — the
+/// amount-marginal `timing_retain = 1.0` is only a floor (§7.4).
 fn recommendation(timing_retain: f64) -> CoverRecommendation {
     let (scenario, n_p, mean_shards) = SCENARIOS[0];
     let dispersion = Dispersion::Dispersed;
     let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
-    let step = 4u64; // one notch ≈ 3 SKL of cover span.
+    let step = 4u64; // marginal window, ≈ 3 SKL of cover span.
     let scan_max = 48u64;
 
     let scan = |k: u64| {
@@ -447,21 +458,37 @@ fn recommendation(timing_retain: f64) -> CoverRecommendation {
             trials: 50_000,
             seed: 0x5EED_0042 ^ k,
         })
+        .anon_set_mean
     };
 
-    let mut knee = None;
-    for k in 0..=scan_max {
-        if scan(k).anon_set_mean >= TARGET_ANON_SET {
-            knee = Some(k);
+    // Walk in `step`-rung increments; the knee is the first window whose marginal
+    // set gain per rung drops below the cutoff (diminishing return on capital).
+    let mut knee = scan_max;
+    let mut prev = scan(0);
+    let mut k = step;
+    while k <= scan_max {
+        let cur = scan(k);
+        if (cur - prev) / (step as f64) < MARGINAL_CUTOFF {
+            knee = k - step; // the last k before returns died.
             break;
         }
+        prev = cur;
+        k += step;
     }
-    let mean_target_reached = knee.is_some();
-    // If the mean target is unreachable (bounded pool saturates below it), pin at
-    // the scan ceiling — widening further only taxes capital for no set gain.
-    let knee = knee.unwrap_or(scan_max);
-    let err_large = (knee + step).min(scan_max);
-    let pin = scan(err_large);
+    let knee = knee.max(step); // never pin below one marginal window.
+
+    let pin = run(&CoverConfig {
+        name: "reco_pin".into(),
+        axis: "cover_reco",
+        n_p,
+        mean_shards,
+        dispersion,
+        rungs_blurred: knee,
+        timing_retain,
+        trials: 50_000,
+        seed: 0x5EED_00FF,
+    });
+    let saturation_set = scan(scan_max);
 
     CoverRecommendation {
         scenario,
@@ -469,14 +496,151 @@ fn recommendation(timing_retain: f64) -> CoverRecommendation {
         mean_shards,
         dispersion,
         timing_retain,
+        saturation_set,
         knee_rungs: knee,
-        mean_target_reached,
-        err_large_rungs: err_large,
-        cover_span_skl: err_large as f64 * floor_skl,
-        worst_tax_multiple: err_large as f64, // k / 1 for the rung-1 staker.
+        mean_target_reached: saturation_set >= TARGET_ANON_SET,
+        cover_span_skl: knee as f64 * floor_skl,
+        worst_tax_multiple: knee as f64, // k / 1 for the rung-1 staker.
         anon_set_mean: pin.anon_set_mean,
         thin_cover_frac: pin.thin_cover_frac,
     }
+}
+
+/// Economic-participation model (§7.6). Cover-stays-with-`P` means the principal
+/// must fund `bond + cover` at the seam; a staker posts cover only if the dial's
+/// max draw (`C_max = k · floor`) is at most `beta ×` their own bond — i.e. rung
+/// `s ≥ k / beta`. Capital-constrained low-rung stakers fall below that and take
+/// the `cover == 0` opt-out (the §7.3 regressive tax made *economic*). Because the
+/// rung is **public** on the bond-post, the attacker raises the opt-out prior on
+/// low rungs, so opted-out bonds are discounted as the source of a *covered* `A` —
+/// the realized decoy pool for a paying target is other **payers** in the window,
+/// not the honest population. This is what turns the honest-uniform tail into the
+/// realized one.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParticipationResult {
+    pub rungs_blurred: u64,
+    pub cover_span_skl: f64,
+    /// Willingness-to-pay: max cover a staker locks, as a multiple of their bond.
+    pub beta: f64,
+    /// Lowest rung that can still afford the dial (`⌈k / beta⌉`).
+    pub min_paying_rung: u64,
+    /// Fraction of the population priced out into the `cover == 0` opt-out.
+    pub opt_out_frac: f64,
+    /// Realized mean set for a **paying** target (decoys = other payers in window).
+    pub payer_set_mean: f64,
+    /// Realized thin-cover tail among payers.
+    pub payer_thin_frac: f64,
+    /// Honest-uniform mean set (everyone pays) at the same `k`, for contrast.
+    pub honest_set_mean: f64,
+}
+
+fn run_participation(
+    n_p: u64,
+    mean_shards: f64,
+    dispersion: Dispersion,
+    k: u64,
+    beta: f64,
+    trials: u64,
+    seed: u64,
+) -> ParticipationResult {
+    let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
+    // s ≥ k/β to afford C_max = k·floor ≤ β·(s·floor).
+    let min_paying_rung = (k as f64 / beta).ceil().max(1.0) as i64;
+    let kf = k as f64;
+
+    let mut rng = SplitMix64::new(seed);
+    let mut opt_out = 0u64;
+    let mut pop_seen = 0u64;
+    let mut payer_sets: Vec<f64> = Vec::new();
+    let mut honest_sum = 0.0;
+    let mut honest_n = 0u64;
+
+    for _ in 0..trials {
+        let pop: Vec<i64> = (0..n_p)
+            .map(|_| draw_shard_count(&mut rng, mean_shards, dispersion) as i64)
+            .collect();
+        for &s in &pop {
+            pop_seen += 1;
+            if s < min_paying_rung {
+                opt_out += 1;
+            }
+        }
+
+        let target = (rng.next_u64() % n_p) as usize;
+        let s_p = pop[target];
+        let u = rng.unit();
+        let lo = s_p - ((1.0 - u) * kf).floor() as i64;
+        let hi = s_p + (u * kf).floor() as i64;
+
+        // Honest set: all stakers in window count (everyone pays).
+        let honest = 1 + pop
+            .iter()
+            .enumerate()
+            .filter(|(j, &s)| *j != target && s >= lo && s <= hi)
+            .count();
+        honest_sum += honest as f64;
+        honest_n += 1;
+
+        // Realized set: only a PAYING target gets cover, and only PAYING decoys
+        // (rung ≥ min_paying_rung) count — opted-out bonds are discounted.
+        if s_p >= min_paying_rung {
+            let decoys = pop
+                .iter()
+                .enumerate()
+                .filter(|(j, &s)| *j != target && s >= min_paying_rung && s >= lo && s <= hi)
+                .count();
+            payer_sets.push(1.0 + decoys as f64);
+        }
+    }
+
+    let payer_set_mean = if payer_sets.is_empty() {
+        1.0
+    } else {
+        payer_sets.iter().sum::<f64>() / payer_sets.len() as f64
+    };
+    let payer_thin_frac = if payer_sets.is_empty() {
+        1.0
+    } else {
+        payer_sets
+            .iter()
+            .filter(|&&s| s <= THIN_COVER_THRESHOLD)
+            .count() as f64
+            / payer_sets.len() as f64
+    };
+
+    ParticipationResult {
+        rungs_blurred: k,
+        cover_span_skl: k as f64 * floor_skl,
+        beta,
+        min_paying_rung: min_paying_rung as u64,
+        opt_out_frac: opt_out as f64 / pop_seen as f64,
+        payer_set_mean,
+        payer_thin_frac,
+        honest_set_mean: honest_sum / honest_n as f64,
+    }
+}
+
+/// Participation sweep at the thin/dispersed corner over the dial, at a
+/// pessimistic willingness-to-pay (`beta`). Shows the realized optimum is *lower*
+/// than the amount-marginal `k`: widening the dial prices more low rungs out, so
+/// the realized payer pool shrinks even as the window grows (§7.6).
+pub fn participation_scan() -> Vec<ParticipationResult> {
+    let (_, n_p, mean_shards) = SCENARIOS[0];
+    let mut out = Vec::new();
+    for &beta in &[1.0_f64, 2.0] {
+        for &k in &[4u64, 8, 12, 16, 21, 32] {
+            out.push(run_participation(
+                n_p,
+                mean_shards,
+                Dispersion::Dispersed,
+                k,
+                beta,
+                50_000,
+                0x9A11_0000 ^ ((beta as u64) << 8) ^ k,
+            ));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -487,12 +651,13 @@ pub struct CoverReport {
     pub thin_tail_target: f64,
     pub results: Vec<CoverResult>,
     pub recommendations: Vec<CoverRecommendation>,
+    pub participation: Vec<ParticipationResult>,
 }
 
 pub fn run_full_report() -> CoverReport {
     let results: Vec<CoverResult> = build_configs().iter().map(run).collect();
     // Recommend across the timing-intersection brackets — the joint set, not the
-    // amount marginal, is what the genesis bound is sized against.
+    // amount marginal, is what the genesis bound is sized against (§7.4/§7.6).
     let recommendations = [1.0_f64, 0.5, 0.2]
         .iter()
         .map(|&t| recommendation(t))
@@ -504,6 +669,7 @@ pub fn run_full_report() -> CoverReport {
         thin_tail_target: THIN_TAIL_TARGET,
         results,
         recommendations,
+        participation: participation_scan(),
     }
 }
 
@@ -592,9 +758,30 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_steps_up_from_the_knee() {
+    fn recommendation_pins_at_the_saturation_knee() {
+        // The knee is a real interior point (not the scan ceiling), the worst tax
+        // is k/1, and the saturation set never undershoots the pinned set.
         let rec = recommendation(1.0);
-        assert_eq!(rec.err_large_rungs, rec.knee_rungs + 4);
-        assert!((rec.worst_tax_multiple - rec.err_large_rungs as f64).abs() < 1e-9);
+        assert!(rec.knee_rungs >= 4 && rec.knee_rungs < 48);
+        assert!((rec.worst_tax_multiple - rec.knee_rungs as f64).abs() < 1e-9);
+        assert!(rec.saturation_set >= rec.anon_set_mean - 1e-9);
+    }
+
+    #[test]
+    fn participation_prices_out_low_rungs_and_shrinks_the_realized_set() {
+        // At a wide dial and tight willingness-to-pay, low rungs opt out, so the
+        // realized payer set is strictly below the honest-uniform set (§7.6).
+        let p = run_participation(17, 9.0, Dispersion::Dispersed, 21, 2.0, 50_000, 7);
+        assert!(p.min_paying_rung > 1);
+        assert!(p.opt_out_frac > 0.0);
+        assert!(p.payer_set_mean < p.honest_set_mean);
+    }
+
+    #[test]
+    fn wider_dial_prices_out_more() {
+        // More rungs of cover ⇒ a higher affordability floor ⇒ more opt-outs.
+        let narrow = run_participation(17, 9.0, Dispersion::Dispersed, 8, 2.0, 50_000, 9);
+        let wide = run_participation(17, 9.0, Dispersion::Dispersed, 32, 2.0, 50_000, 9);
+        assert!(wide.opt_out_frac > narrow.opt_out_frac);
     }
 }
