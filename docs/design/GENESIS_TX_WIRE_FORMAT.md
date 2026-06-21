@@ -12,30 +12,53 @@ gaps with cites. **Settled Shekyl-native arms are specced here from the design
 docs** — `bond_post` incl. **`bond_spend_pk`** (gate-4 §3.4.1, §9.11),
 `serve_credit` (gate-2 §5.1.1, §9.10), `tagged_key` output + **`tx_extra` 0x06/0x07**
 (FA-6, §9.6a), corrected **`view_tag`** (ml_kem_ss/HKDF, §2.2). The **reward-emission
-+ membership-only** arms are **by reference** to their owning PRs
-(`REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`) — genesis arms not in
-code yet (§2.1). The **inherited Monero-lineage surface** (block/header/hashing/
-coinbase shape/ct framing/bounds/varint) is C++-oracle-validated and stable.
-**Authority:** design docs for Shekyl-native; C++ only for inherited. **Not a
-freeze** until the impl catches up (notably `bond_spend_pk`) and the differential
-corpus proves it.
++ membership-only** arms are a **deferred sub-freeze** — tag + rule-interactions
+pinned here, internal layout owned by their PRs (`REWARD_EMISSION_VIN_PLAN.md` /
+`FCMP_MEMBERSHIP_ONLY.md`), not in code yet (§2.1). The **inherited Monero-lineage
+surface** (block/header/hashing/coinbase shape/ct framing/bounds/varint) is
+C++-oracle-validated and stable. **Authority:** design docs for Shekyl-native; C++
+only for inherited.
 
-~~**Round-1 / Wave-1 freeze RATIFIED 2026-06-20**~~ (§9–§14): byte tables, bounds
-(per-tx + block-level), hashing (preimage + RandomX seed), the recursive
-canonical-encoding invariant + reject rules, domain constraints. Both creation
-cuts adopted in stronger form (canonical-encoding invariant; exact determined
-proof/Bp+ length). **Design phase complete — the genesis Wave-1 wire format is
-frozen.** Next is implementation (rebase onto current dev → the clean crate).
-Frozen surface (single wave) = `gen`+`fcmp`+`serve_credit`+`bond_post` inputs,
-`tagged_key` output, ct, header, pow-blob, tx `version=3`. The archival arms
-(`bond_post` JoinMarket-only, `serve_credit`) are **frozen with the rest** (fields
-final per gate-4/#165; **rule-21 reopen** = a testnet-revealed change, pre-genesis
-free) — there is **no separate Wave 2**. **This document, once ratified, IS the genesis freeze** for the binary
-block/tx wire format: the Rust serializer implements *it* (not C++), the
+**Not a freeze.** Pre-ratification obligations (review 2026-06-20, F1–F6):
+
+1. **Impl catch-up — two pre-genesis blockers.** (a) `bond_spend_pk` (§9.11),
+   missing from `bond_wire.rs` + the C++ struct. (b) **The FA-6 ML-KEM `view_tag`
+   switch in the scanner + builder** (F2): the live scanner still computes the old
+   X25519/keccak path (`shared_key.rs:65`) and FA-6's impl is *"a separate PR after
+   spec review"* (FA-6:13) — so a genesis `view_tag` frozen as ML-KEM-derived
+   against a scanner on the old path makes **every output silently fail to scan**,
+   and the wire byte-corpus round-trips clean and never catches it. Needs a
+   **scan-time KAT** (derive → tag → match), §6 Q13 — not just wire byte-identity.
+2. **Arm taxonomy + generalized §12/§13 (F1).** The frozen ki-ordering and
+   `pqc_auths` rules were written for key-image-bearing fcmp spends; the no-ki arms
+   (serve_credit, bond_post, and the deferred emission/membership-only) don't fit
+   them. §2.5 states the genesis tx shapes + mixing; §12/§13 are generalized across
+   the arm taxonomy so landing a deferred arm doesn't silently move a frozen rule.
+3. **Deferred sub-freezes (F3), not "frozen by reference."** `reward_emission` +
+   membership-only are **not in code yet**, so their layout is a forward promise:
+   genesis **tag pinned here** (emission `0x04` dense / `0x06` C++),
+   rule-interactions pinned (§2.5/§12/§13), internal layout owned by their PRs.
+   Landing those PRs **may refine** these rules — noted, not silent. (It's just the
+   two of us — a deferred sub-freeze we adjust together beats a false "frozen.")
+4. **Differential corpus** green vs the gate-(c) oracle **plus** the scan-time KAT.
+
+Until these close, the **inherited** surface is oracle-stable and the
+**Shekyl-native** surface is spec-grounded; **neither is *ratified*.**
+
+**This document is the genesis freeze instrument** for the binary block/tx wire
+format: once ratified, the Rust serializer implements *it* (not C++), the
 differential corpus proves conformance *to it*, and the C++ daemon is edited to
-match it where we deliberately diverge. **Process:** multi-round design
-([`26-sub-pr-design-discipline`]) — consensus + FFI surface. **Parents:**
-[`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md) (Stage 1d),
+match where we deliberately diverge. **It is not yet ratified** (the four
+obligations above). §9–§14 — byte tables, bounds (per-tx + block-level), hashing
+(preimage + RandomX seed), the recursive canonical-encoding invariant + reject
+rules, domain constraints — **stand for the inherited surface** (C++-oracle-validated)
+and are spec-grounded for the Shekyl-native additions (§9.6a/§9.10/§9.11), pending
+the obligations above. Scope (single wave, **no separate Wave 2**):
+`gen`+`fcmp`+`serve_credit`+`bond_post` inputs (+ deferred `reward_emission` and
+membership-only, §2.1), `tagged_key` output, ct, header, pow-blob, tx `version=3`.
+**rule-21 reopen** (a testnet-revealed change) stays free pre-genesis. **Process:**
+multi-round design ([`26-sub-pr-design-discipline`]) — consensus + FFI surface.
+**Parents:** [`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md) (Stage 1d),
 [`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
 
 **Round-0 review outcome:** direction + both locked decisions approved. Two
@@ -106,7 +129,7 @@ old chain on-wire, so we number tags as Shekyl needs them — dense from `0x00`,
 not the inherited values. The `§2.1`/`§2.2` "Tag" columns below are the **C++
 source** values; the **genesis** values are this scheme. The renumber is a
 gate-(c) cut (C++ `VARIANT_TAG`s + the ct type enum flip with Rust atomically,
-§5/§7). *(Exact assignments below are the proposed scheme; ratified at Round 1.)*
+§5/§7). *(Assignments below are pinned in §2.0/§2.1; ratification pending per the header.)*
 
 ```text
 Genesis tags (single-wave freeze):
@@ -176,8 +199,8 @@ appear on the consensus blob (confirmed: no wire usage) — not a genesis surfac
 | `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`, `PHASE_2B_SECTION7_DRAFT.md:288`). No `txin_stake_claim` on the genesis wire. |
 | `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (gate-2 §5.1.1; non-spending) | Full layout + sig-preimage in **§9.10** (`leaf_bytes[128]`; c1/c2 branch scalars ≤256; preimage le64/le32). |
 | `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (gate-4 §3.4.1; JoinMarket-only) | Full layout + sig-preimage in **§9.11** — **incl. `bond_spend_pk`** (GF-1 debit authorizer, JoinMarket-only, on wire + sig-preimage). **The current C++/Rust impl omits `bond_spend_pk` — must be added.** |
-| *(ref)* | `txin_archival_reward_emission` | **Spec by reference** — owned by `REWARD_EMISSION_VIN_PLAN.md` | Staker reward-emission vin (loud reward, Form-C `reward_P(E)`, dual ML-DSA-65 auth, membership-only backing, per-epoch dedup). Genesis arm, **not in code yet**; frozen by its PR, referenced here (like proof internals, §6 Q6). Genesis tag assigned there. |
-| *(ref)* | membership-only spend | **Spec by reference** — owned by `FCMP_MEMBERSHIP_ONLY.md` | Spend input with **no key_image** (`R_O`/`s_α`/`s_y` Schnorr opening of `O~`); backs emission. Genesis arm, not in code yet; frozen by its PR. |
+| `0x04` (dense) | `txin_archival_reward_emission` | **Deferred sub-freeze** — layout owned by `REWARD_EMISSION_VIN_PLAN.md` | Staker reward-emission vin (loud reward, Form-C `reward_P(E)`; **ML-DSA-65 auth** — single-vs-dual still open, plan §2:231; membership-only backing; per-epoch dedup on the bond record `claimed_settlement_epochs`, **not** a key image). Genesis tag **pinned `0x04` dense / `0x06` C++** (plan:118 "next free binary tag 0x06"). **Not in code yet** → a forward promise, not a freeze (**≠ Q6**, which references *existing* vendored crypto). Rule-interactions pinned §2.5/§12/§13; landing its PR may refine them. |
+| (no own vin tag) | membership-only spend / backing | **Deferred sub-freeze** — owned by `FCMP_MEMBERSHIP_ONLY.md` | An fcmp-class spend input **with no key_image**; authority = the `R_O` Schnorr leg (`R_O`/`s_α`/`s_y`) **inside the SAL proof** (:52,80-82), not a separate vin field or `pqc_auths` slot. Backs emission; anti-replay = the emission per-epoch dedup (the proof does **not** reject duplicate tuples, :397). Likely an fcmp **proof variant**, not a new vin tag (plan:118 reserves only `0x06`); its wire signalling of "no key image" is **owned by its PR** — the genesis format must accommodate a no-ki spend (§9.5/§12 refined on landing). |
 
 The archival arms (`serve_credit` 0x04, `bond_post` 0x05) **are** the genesis
 staking-archival mechanism (the `P` model): `bond_post` is the gate-4 join-Market
@@ -253,6 +276,33 @@ The genesis freeze nails it shut. Sources:
 |---|---|---|
 | dust / power-of-10 chunking (`decompose_amount_into_digits`) | tx_utils.cpp:155-166 | **Shed (Q2 resolved).** The block template hardcodes `max_outs = 1` (`blockchain.cpp:1900`), so the decompose-then-merge loop *always* collapses the reward to a **single output** — the chunking is already dead weight. Formalize "coinbase = exactly one output"; the genesis serializer need not represent multi-output coinbases. |
 
+### 2.5 Genesis tx shapes + arm-mixing (F1 — the freeze obligation by-reference doesn't discharge)
+
+A genesis freeze that admits six input arms must say **which combinations form a
+valid tx** and **how the cross-cutting rules (§12 ordering/dedup, §13 auth) apply
+per arm** — otherwise landing a deferred arm later silently moves a "frozen" rule,
+the exact failure freezing exists to prevent. Arm-mixing **is** expected:
+membership-only backing and full key-image spends share a tx and the same verifiers
+(`FCMP_MEMBERSHIP_ONLY.md:254`). So the resolution is **generalize the rules across
+the arm taxonomy** (not "one arm class per tx"), plus state the shapes:
+
+| Tx shape | Inputs | ct | pqc_auths (§13) | key images (§12) | Status |
+|---|---|---|---|---|---|
+| **Coinbase** | `[gen]` exactly | `Null` | **none** | none | settled |
+| **Spend** (the transfer) | `fcmp×(1..8)` | `Fcmp` | one slot per input | each input, strictly ascending | settled |
+| **Bond-post** | `fcmp×(funding)` + **one `bond_post`** + cover output | `Fcmp` | fcmp slots **+ the bond_post slot** (identity-key credit / `bond_spend_pk` debit, gate-4 §3.4.1:278) | the fcmp inputs only; bond_post has none | settled |
+| **Serve-credit** | one `serve_credit` (non-spending) | n/a | **empty** — sig is **on the vin** (§9.10) | none | settled |
+| **Emission** | `reward_emission` + membership-only backing (no ki) [± fcmp] | per plan | ML-DSA-65 (emission) + `R_O` legs in-proof (backing); **count rule refined by its PR** | fcmp inputs only; no-ki arms exempt — anti-replay = per-epoch dedup | **deferred sub-freeze** |
+
+**Mixing rule (binding for the settled shapes):** within one tx, key-image-bearing
+inputs (`fcmp`) and no-key-image inputs (`gen`/`serve_credit`/`bond_post`/emission/
+membership-only) may coexist only as the table allows; §12 (ki ordering+dedup)
+ranges over the **ki-bearing** subset, and §13 (auth) is **per-arm**. The
+**emission** row is a deferred sub-freeze: its exact input multiset, the emission
+auth count (single/dual ML-DSA), and membership-only's in-tx replay protection are
+owned by `REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md` and **will refine
+this table + §12/§13** — recorded as a forward obligation, not silently assumed.
+
 ## 3. Canonical genesis layout (post-arbitration)
 
 Byte order, top to bottom. `V(x)` = varint (format pinned per §6 Q10); `[n]` = n
@@ -263,7 +313,7 @@ Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
 BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
 Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
-Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (stake_claim shed; bond_post = JoinMarket-only at genesis)
+Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (+ deferred 04 reward_emission, membership-only — §2.5; stake_claim shed; bond_post = JoinMarket-only)
 Output           := V(amount) tag(1) ...   # 00 tagged_key — sole genesis output (staked_key + plain key shed; view_tag mandatory)
 Ct               := ct_type(1) ...          # 00 Null (coinbase) | 01 Fcmp (spend)
   if Null  (coinbase, exactly one output):  enc_amounts[1×9]  enc_labels[1×9]  outPk[1×32]
@@ -412,6 +462,18 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   Monero's v1* (CryptoNote). Tags renumbered because their values were meaningless
   to Shekyl; `version` stays `3` because its value is load-bearing. **No gate-(c)
   change.**
+- **Q13 — `view_tag` scan-time conformance (F2).** *(OPEN — pre-genesis blocker)*
+  §2.2 freezes `view_tag` as **ML-KEM-derived** (FA-6 §4.2; `derivation.rs:263`),
+  but the live scanner + builder still compute the **old X25519/keccak** path
+  (`shared_key.rs:65`) and FA-6's impl is *"a separate PR after spec review; not
+  bundled"* (FA-6:13). A genesis `view_tag` frozen on the new derivation against a
+  scanner on the old one makes **every output silently fail to scan** — and because
+  the bytes round-trip, the §7 **wire corpus stays green and never catches it**.
+  This is *more* insidious than `bond_spend_pk` (which surfaces as a missing field).
+  **Freeze gate:** (a) the FA-6 scanner + builder switch lands pre-genesis (named
+  impl blocker alongside `bond_spend_pk`); (b) a **scan-time KAT** — derive ECDH /
+  ML-KEM → compute `view_tag` → match a captured output — is part of the freeze,
+  **separate from** wire byte-identity. Resolve before ratification.
 
 ## 7. Differential methodology (extends CONSENSUS_PORT_SEQUENCE §3)
 
@@ -432,12 +494,18 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 
 ## 8. Sequencing
 
-1. Round 0 → **approved**; Round 1 → **ratified** (single-wave freeze, §9–§14).
+1. Round 0 → **approved**; Round 1 → **spec-grounded, ratification pending** — the
+   §9–§14 tables stand for the inherited surface; the header's obligations (F1–F6:
+   impl catch-up incl. the FA-6 `view_tag` switch, the §2.5 arm taxonomy, the §2.1
+   deferred sub-freezes, corpus + scan-KAT) gate ratification.
 2. **Implementation** (next): rebase the worktree onto current `dev` + relocate
-   Decision-4 to the slice-2 plan; capture a spend blob + the archival-arm blobs
-   as positive-corpus items.
-3. Stand up the clean crate to the frozen spec; positive + **negative** corpus
-   green vs the (gate-(c)-adjusted) oracle (incl. the §12 canonical-form rejects).
+   Decision-4 to the slice-2 plan; **land the two impl blockers — `bond_spend_pk`
+   (§9.11) and the FA-6 ML-KEM `view_tag` switch in scanner+builder (Q13)**; capture
+   a spend blob + the archival-arm blobs as positive-corpus items.
+3. Stand up the clean crate to the spec-grounded layout; positive + **negative**
+   corpus green vs the (gate-(c)-adjusted) oracle (incl. the §12 canonical-form
+   rejects), **plus the §6 Q13 scan-time `view_tag` KAT** (wire byte-identity alone
+   cannot catch a derivation mismatch).
 4. Migrate the ~58 consumers; delete `shekyl-oxide` block/tx — **sequenced to
    avoid colliding with in-flight wallet-rewrite work**.
 5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): tag
@@ -452,13 +520,15 @@ cutover (deliberate-by-construction, our fork).
 
 # Round 1 — Wave-1 freeze (byte tables + bounds + hashes + reject rules)
 
-**Status:** Round-1 **RATIFIED 2026-06-20** — the genesis Wave-1 wire format is
-frozen. A genesis freeze is not just byte order — it is also the **bounds**, the
-**hashes**, and the **canonical-form/reject rules**, each of which freezes
-identically. All source-confirmed at `dev`. Integers little-endian; `V(x)` = canonical varint
-(§6 Q10); `cn_fast_hash` = keccak-256.
+**Status:** Round-1 **spec-grounded, ratification pending** (per the header's F1–F6
+obligations) — **not yet frozen**. A genesis freeze is not just byte order — it is
+also the **bounds**, the **hashes**, and the **canonical-form/reject rules**, each
+of which freezes identically. The tables below are **C++-oracle-validated for the
+inherited surface** and **spec-grounded for the Shekyl-native additions** (§9.6a /
+§9.10 / §9.11 / the §13 per-arm rules). All source-confirmed at `dev`. Integers
+little-endian; `V(x)` = canonical varint (§6 Q10); `cn_fast_hash` = keccak-256.
 
-## 9. Wave-1 frozen byte layout
+## 9. Wave-1 byte layout (spec-grounded)
 
 Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values until
 the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
@@ -482,7 +552,7 @@ pre-renumber tags until recapture.)*
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
 **9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
 **9.10 `archival_serve_credit` (0x02)** (gate-2 §5.1.1) — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[128] · path{ V(c1_layers) · per-layer[ V(branch_scalars ≤256) · scalar[32]… ], V(c2_layers) · same } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths. **Sig-preimage** (gate-2 §5.2) uses fixed-width `le64`/`le32` (NOT the wire varints), customization `"shekyl/archival-serve-credit-response-v1"`, over the c1+c2 branch sections only.
-**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. *(The current `bond_wire.rs`/C++ struct omit `bond_spend_pk` — the impl must add it.)*
+**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(The current `bond_wire.rs`/C++ struct omit `bond_spend_pk` — the impl must add it.)*
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -565,7 +635,17 @@ state it once, the rest follow. Instances:
 
 - **Inputs strictly ascending by key image** — `memcmp(ki, last) >= 0 → reject`
   (blockchain.cpp:3642-3663). One rule, two guarantees: rejects **unsorted** AND
-  **in-tx duplicate** key images. (fcmp inputs; gen has none.)
+  **in-tx duplicate** key images. **Scoped to key-image-bearing inputs** (`fcmp`
+  spends). The **no-key-image arms** (`gen`, `serve_credit`, `bond_post`, and the
+  deferred `reward_emission` / membership-only backing) carry no key image and are
+  **exempt** from this ordering; their anti-replay is **arm-specific** — coinbase by
+  height; bond_post by the consensus bond record; **emission + membership-only by
+  per-epoch dedup on the bond record (`claimed_settlement_epochs`), NOT a key
+  image** (`FCMP_MEMBERSHIP_ONLY.md:28,397` — the SAL proof does **not** reject
+  duplicate tuples; with no key image, in-tx replay protection is the emission
+  dedup). **Deferred (F1/F3):** how a no-ki input orders *relative to* ki-bearing
+  inputs in a mixed tx, and membership-only's exact in-tx dedup, are owned by the
+  emission/membership-only PRs and will refine this rule.
 - **Non-canonical varints rejected** (Q10).
 - **unlock_time timestamp form rejected** — `unlock_time >=
   CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL (500,000,000) → reject` (blockchain.cpp:3473).
@@ -588,15 +668,31 @@ Gate = **identical accept/reject** (§7), not round-trip.
   `gen.height==block height` (1529); `ct type==Null` (1527); single output
   (`max_outs=1`, 1900); `unlock_time == height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`
   (`=60`, 1535); outputs sum == block reward (`validate_miner_transaction`).
-- **pqc_auths binding:** `count == vin.size()` (blockchain.cpp:3752);
-  `auth_version == 1` (tx_pqc_verify.cpp:169); `scheme_id ∈ {1 single, 2 multisig}`
-  (tx_pqc_verify.cpp:181); **`flags == 0` — unknown bits rejected, not ignored**
-  (tx_pqc_verify.cpp:175); serve_credit txs carry **empty** pqc_auths.
-  **Parse vs verify (precise rule):** the EOF-tolerant parse (§9.8) *accepts* the
-  empty (pruned) form, but a spend with empty or partial pqc_auths **fails
-  verification** (`tx_pqc_verify.cpp:159`: `size != vin.size() || empty → reject`).
-  So the rule is *pruned form parses, full form required to verify* — not "empty is
-  invalid everywhere."
+- **pqc_auths binding (per-arm — F1/F5).** `pqc_auths` is **tx-level**, aligned
+  with `vin[]`; per-slot content and the count rule depend on the input arm:
+  - **fcmp spend** — one slot per input (the spend auth); `auth_version==1`
+    (tx_pqc_verify.cpp:169), `scheme_id ∈ {1 single, 2 multisig}` (:181),
+    **`flags==0`** — unknown bits rejected, not ignored (:175).
+  - **bond_post** — occupies a **tx-level `pqc_auths` slot aligned with its vin
+    index** (gate-4 §3.4.1:278), **not** a sig on the vin body: identity key
+    authorizes credit, `bond_spend_pk` authorizes debit (gate-6 §9.6).
+  - **serve_credit** — carries **empty** `pqc_auths`; its `hybrid_signature` is
+    **on the vin** (§9.10) — the exception to a per-vin slot.
+  - **coinbase (`gen`)** — **no** `pqc_auths`.
+  - **reward_emission** (deferred) — **ML-DSA-65** over a domain-separated vin
+    context (single-vs-dual open, `REWARD_EMISSION_VIN_PLAN.md §2:231`).
+  - **membership-only** (deferred) — authority is the `R_O` Schnorr leg **inside
+    the SAL proof** (`FCMP_MEMBERSHIP_ONLY.md §4`); no `pqc_auths` slot, no ki.
+
+  So the rule is **per-arm**, not a flat `count == vin.size()`. For the common
+  all-`fcmp` spend, `count == vin.size()` holds (blockchain.cpp:3752); a bond-post
+  tx's count includes its bond_post slot; serve_credit/coinbase are the empty/none
+  exceptions. **Parse vs verify (precise):** the EOF-tolerant parse (§9.8) *accepts*
+  the empty (pruned) form, but a spend with empty or partial `pqc_auths` **fails
+  verification** (`tx_pqc_verify.cpp:159`: `size != vin.size() || empty → reject`) —
+  *pruned form parses, full form required to verify*, not "empty invalid
+  everywhere." **Deferred (F3):** the emission auth count (single/dual ML-DSA) and
+  membership-only placement are owned by their PRs and will refine this rule.
 - **referenceBlock (wire = 32 B block hash):** validity window `tip −
   FCMP_REFERENCE_BLOCK_MAX_AGE(100) ≤ ref_height ≤ tip − FCMP_REFERENCE_BLOCK_MIN_AGE(5)`
   (blockchain.cpp:3946-3954). **Canonical selection (CURVE_TREE_CLIENT §5):**
@@ -607,16 +703,18 @@ Gate = **identical accept/reject** (§7), not round-trip.
   `verRctSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
   blockchain.cpp:4125). The general spend rule (the bond floor §2.0 is the
   bond-post case of this).
-- **Archival arms (single-wave, frozen):** `bond_post` is **JoinMarket-only at
-  genesis** (`post_kind==JoinMarket`, else reject — `bond_post.rs:44`); for
+- **Archival arms (single-wave, spec-grounded):** `bond_post` is **JoinMarket-only
+  at genesis** (`post_kind==JoinMarket`, else reject — `bond_post.rs:44`); for
   JoinMarket `bonded_total == bond_credit == bond_floor(holdings)` and
-  `bond_debit==0` (`bond_post.rs`). `serve_credit` is **non-spending** (empty
-  pqc_auths; hybrid_signature on the vin; gate-2 retention proof). **Reopen
-  (rule-21):** testnet may force a wire change pre-genesis (free).
+  `bond_debit==0` (`bond_post.rs`); its **identity signature rides a tx-level
+  `pqc_auths` slot aligned with the vin** (gate-4 §3.4.1:278; F5), not the vin body.
+  `serve_credit` is **non-spending** (empty pqc_auths; `hybrid_signature` **on the
+  vin**; gate-2 retention proof). **Reopen (rule-21):** testnet may force a wire
+  change pre-genesis (free).
 - **Versions:** block `major=1, minor=0`; tx `version=3` (Q12). The format is
   version-frozen — a later format is a hard fork (V4 = lattice-only).
 
-## 14. Round-1 adopted refinements (post-ratification 2026-06-20)
+## 14. Round-1 adopted refinements (2026-06-20)
 
 Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 completed:
 
@@ -644,7 +742,11 @@ Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 complet
 
 All free pre-genesis (hard forks later).
 
-## 15. Design-doc review (2026-06-20) — the freeze is incomplete; corrected scope
+## 15. Design-doc + structural review (2026-06-20) — changelog (applied above)
+
+This section is a **changelog, not a pending plan**: every correction below is
+already reflected in the body (§2–§14). It records *why* the earlier code-derived
+draft was wrong so the reasoning isn't lost.
 
 **Method correction (the root cause).** The genesis format has two layers, and
 they have different authorities:
@@ -676,8 +778,9 @@ they have different authorities:
    X25519 ECDH. Correct the §2.2 rationale.
 5. **Two genesis input arms are absent** — `txin_archival_reward_emission` (loud
    reward; Form-C `reward_P(E)=floor(budget·capped_P/Σwork)`, u128-numerator;
-   per-epoch dedup on the bond record; **dual ML-DSA-65 auth**, a hard merge
-   blocker) and the **membership-only spend** (no key_image; `R_O`/`s_α`/`s_y`
+   per-epoch dedup on the bond record; **ML-DSA-65 auth** (single-vs-dual open,
+   plan §2:231; a hard merge blocker)) and the **membership-only spend** (no
+   key_image; `R_O`/`s_α`/`s_y`
    Schnorr; backs emission). Owned by `REWARD_EMISSION_LEG.md` /
    `REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`; **not in code yet**
    (deferred to the emission-vin PR). The genesis format includes them.
@@ -694,10 +797,32 @@ preimage; coinbase `+60` maturity; `ct` Null/Fcmp values; `enc_amount`/`enc_labe
 (Several agent-flagged "divergences" — reward-hidden, dedup-nullifier, coinbase
 `+10` — were against an *assumed* freeze, not this one, and do not apply.)
 
-**Rewrite plan.** Re-author §2/§9/§13 grounded in the design docs: add
-`bond_spend_pk` + its preimage; pin `tx_extra` 0x06/0x07 internal structure; fix
-the `view_tag` derivation; add the reward-emission + membership-only arms **by
-reference to `REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`** (those PRs
-own them — like proof internals are frozen-by-reference); re-scope the CT rename to
-Phase-5. The inherited surface (§9.1–9.9 minus the PQC-field corrections, §10–§12)
-carries over.
+**Applied (changelog — reflected in the body above, not pending).**
+
+*Pass 1 (gaps 1–7, spec-grounding):* `bond_spend_pk` + preimage → §2.1/§9.11;
+`tx_extra` 0x06/0x07 → §9.6a; `view_tag` derivation → §2.2; reward-emission +
+membership-only → §2.1; CT rename → Phase-5 (§2.3/§5); `referenceBlock` selection →
+§13.
+
+*Pass 2 (structural review F1–F6, 2026-06-20):*
+- **F4** — status scrubbed to one (spec-grounded, **not** ratified): header, §8,
+  §9, §14.
+- **F2** — FA-6 ML-KEM `view_tag` named a pre-genesis impl blocker + a **scan-time
+  KAT** added (because the wire byte-corpus can't catch a derivation mismatch):
+  header, §6 Q13, §8.
+- **F1** — genesis tx-shape + **arm-mixing taxonomy** (§2.5); §12 (ki ordering/dedup
+  scoped to ki-bearing inputs) and §13 (`pqc_auths` per-arm) generalized across the
+  full arm set.
+- **F5** — `bond_post` identity sig placed in a **tx-level `pqc_auths` slot aligned
+  with the vin** (§9.11/§13).
+- **F3** — reward-emission + membership-only relabeled **deferred sub-freeze** (not
+  "frozen by reference"); emission genesis tag pinned (`0x04` dense / `0x06` C++):
+  §2.1, header.
+- **F6** — this section reframed as a changelog.
+
+The inherited surface (§9.1–9.9 framing, §10–§12) carries over unchanged.
+
+**Still open before ratification:** the two impl blockers (`bond_spend_pk`, the
+FA-6 `view_tag` scanner/builder switch), the scan-time `view_tag` KAT, and the
+emission / membership-only **deferred sub-freezes** (which may refine §2.5/§12/§13
+when their PRs land).
