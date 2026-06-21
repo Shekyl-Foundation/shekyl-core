@@ -23,7 +23,9 @@
 //!    `tests/vectors/regtest_spend.tx` (via `tests/vectors/capture_spend.py`)
 //!    and remove the `#[ignore]`.
 
-use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
+use shekyl_wire::{
+    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
+};
 
 /// Build a representative 1-in / 2-out FCMP++ spend. Field *sizes* mirror the
 /// real shape (single-key PQC pk/sig, one Bp+, per-input pseudo-out); the byte
@@ -83,7 +85,7 @@ fn synthetic_spend() -> Transaction {
             reference_block: [0x44; 32],
             base,
             pqc_auths,
-            prunable,
+            prunable: Some(prunable),
         },
     }
 }
@@ -106,6 +108,7 @@ fn fcmp_spend_round_trips_self_consistently() {
             ..
         } => {
             assert_eq!(pqc_auths.len(), parsed.prefix.inputs.len());
+            let prunable = prunable.expect("full spend carries a prunable proof");
             assert_eq!(prunable.pseudo_outs.len(), parsed.prefix.inputs.len());
             assert_eq!(base.commitments.len(), parsed.prefix.outputs.len());
         }
@@ -122,6 +125,53 @@ fn fcmp_spend_rejects_trailing_bytes() {
         err.to_string().contains("trailing"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn fee_only_serve_credit_round_trips_and_validates() {
+    // The non-spend fee-only Fcmp shape (§2.5 serve-credit): one non-spending
+    // serve_credit input, no outputs, empty pqc_auths, no prunable. Ct::read's
+    // EOF-tolerant tail must parse it, and the shape-aware validate() must accept it.
+    let serve_credit = Input::ServeCredit(Box::new(ServeCredit {
+        p_canonical_id: [0x11; 32],
+        shard_id: 7,
+        settlement_epoch: 42,
+        segment_subroot_rk: [0x22; 32],
+        leaf_index_in_segment: 0x0403_0201,
+        leaf_bytes: [0x33; 128],
+        c1_layers: vec![vec![[0x44; 32]]],
+        c2_layers: vec![vec![[0x55; 32]]],
+        hybrid_signature: vec![0x66; 3385],
+    }));
+    let tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![serve_credit],
+            outputs: vec![],
+            extra: vec![],
+        },
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0x44; 32],
+            base: CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            },
+            pqc_auths: vec![],
+            prunable: None,
+        },
+    };
+    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse fee-only serve-credit tx");
+    assert_eq!(parsed, tx, "fee-only form must round-trip");
+    assert!(
+        matches!(parsed.ct, Ct::Fcmp { prunable: None, .. }),
+        "fee-only ct parses with no prunable"
+    );
+    tx.validate()
+        .expect("fee-only serve-credit tx must validate");
+    // Distinct 3-part (no-pqc) hash form — just exercise it (live parity deferred).
+    let _ = tx.hash();
 }
 
 #[test]

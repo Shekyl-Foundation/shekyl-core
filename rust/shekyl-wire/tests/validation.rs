@@ -69,12 +69,12 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
                     hybrid_signature: vec![],
                 })
                 .collect(),
-            prunable: Prunable {
+            prunable: Some(Prunable {
                 bulletproofs: (0..nbp).map(|_| bp()).collect(),
                 tree_depth: 1,
                 fcmp_proof: vec![],
                 pseudo_outs: vec![[0u8; 32]; n_in],
-            },
+            }),
         },
     }
 }

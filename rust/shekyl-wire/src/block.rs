@@ -15,7 +15,7 @@
 //! The miner transaction is embedded inline; `n_tx` counts the *other*
 //! transactions, carried as 32-byte hashes (a coinbase-only block has `n_tx = 0`).
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::cn_fast_hash;
 
@@ -101,7 +101,7 @@ impl Block {
     ///
     /// Use [`Block::from_bytes`] for the common case of a complete in-memory
     /// blob, which additionally enforces exact consumption (§12).
-    pub fn read<R: Read>(r: &mut R) -> io::Result<Block> {
+    pub fn read<R: BufRead>(r: &mut R) -> io::Result<Block> {
         let header = BlockHeader::read(r)?;
         let miner_transaction = Transaction::read(r)?;
 

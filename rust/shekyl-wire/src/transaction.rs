@@ -31,7 +31,7 @@
 //! `BulletproofPlus`), `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`,
 //! tx-level between base and prunable).
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::cn_fast_hash;
 
@@ -715,7 +715,11 @@ impl Prunable {
 pub enum Ct {
     /// Coinbase confidential section (type 0x00): committed base only.
     Null(CtBase),
-    /// FCMP++ spend confidential section (dense ct type `0x01`).
+    /// FCMP++ confidential section (dense ct type `0x01`). Covers the full spend
+    /// (per-input `pqc_auths` + a `prunable` proof) **and** the non-spend fee-only
+    /// shapes (`serve_credit_only`: empty `pqc_auths`, no prunable, §2.5). `pqc_auths`
+    /// is EOF-tolerant on read and `prunable` is [`Option`] — both absent in the
+    /// fee-only form (GENESIS_TX_WIRE_FORMAT.md §9.8 / §4).
     Fcmp {
         /// Transaction fee.
         fee: u64,
@@ -723,10 +727,12 @@ pub enum Ct {
         reference_block: [u8; 32],
         /// Committed base arrays (per output).
         base: CtBase,
-        /// Per-input PQC authentication (count == `nvin`, no length prefix).
+        /// Per-input PQC authentication (count == `nvin`, no length prefix; empty in
+        /// the fee-only / serve-credit form).
         pqc_auths: Vec<PqcAuth>,
-        /// Prunable proof data.
-        prunable: Prunable,
+        /// Prunable proof data — `None` in the fee-only / serve-credit form (no
+        /// bulletproof / fcmp proof / pseudoOuts).
+        prunable: Option<Prunable>,
     },
 }
 
@@ -749,18 +755,24 @@ impl Ct {
                 write_varint(*fee, w)?;
                 w.write_all(reference_block)?;
                 base.write(w)?;
-                // tx-level pqc_auths: count == nvin, no length prefix.
+                // tx-level pqc_auths: count == nvin, no length prefix (empty in the
+                // fee-only / serve-credit form).
                 for auth in pqc_auths {
                     auth.write(w)?;
                 }
-                prunable.write(w)
+                // prunable follows iff present (absent in the fee-only form).
+                if let Some(prunable) = prunable {
+                    prunable.write(w)?;
+                }
+                Ok(())
             }
         }
     }
 
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
-    /// per-input/per-output arrays that carry no length prefix.
-    pub fn read<R: Read>(inputs: usize, outputs: usize, r: &mut R) -> io::Result<Ct> {
+    /// per-input/per-output arrays that carry no length prefix. Takes a [`BufRead`]
+    /// so the EOF-tolerant tail (§9.8) can be detected without consuming bytes.
+    pub fn read<R: BufRead>(inputs: usize, outputs: usize, r: &mut R) -> io::Result<Ct> {
         let ct_type = read_byte(r)?;
         match ct_type {
             CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
@@ -768,20 +780,30 @@ impl Ct {
                 let fee = read_varint(r)?;
                 let reference_block = read_array(r)?;
                 let base = CtBase::read(outputs, r)?;
-                // Full (unpruned) spend form: `nvin` pqc_auths then a full prunable
-                // section. The C++ oracle additionally allows pqc_auths to be EOF-
-                // tolerant (absent at EOF → empty) and the prunable section to be
-                // omitted (pruned / fee-only / serve-credit-only forms,
-                // cryptonote_basic.h:491-530). Modelling those shapes is the deferred
-                // §4 slice (`pqc_auths` EOF-tolerant + `Option<Prunable>` +
-                // `into_full`), which needs slice/`BufRead`-level remaining-byte
-                // awareness this generic `Read` path lacks. Genesis blocks carry only
-                // full txs, so the full form is what the live-oracle corpus exercises.
+                // EOF-tolerant tail (§9.8 / §4). The full spend carries `nvin`
+                // pqc_auths then a prunable proof; the **fee-only / serve-credit**
+                // form ends right after the base — empty pqc_auths, no prunable
+                // (cryptonote_basic.h:491-530; tx_verification_utils.cpp:122-141).
+                // The ct is the last field of a transaction, so no remaining bytes
+                // here means the fee-only form. NOTE: the live-oracle byte/hash
+                // parity for the fee-only/serve-credit shape (and the bond_post
+                // pseudoOuts coupling, a §13 F1/F3 forward obligation) is validated
+                // when those post-genesis blobs are capturable; the round-trip here
+                // proves internal consistency.
+                if r.fill_buf()?.is_empty() {
+                    return Ok(Ct::Fcmp {
+                        fee,
+                        reference_block,
+                        base,
+                        pqc_auths: Vec::new(),
+                        prunable: None,
+                    });
+                }
                 let mut pqc_auths = Vec::new();
                 for _ in 0..inputs {
                     pqc_auths.push(PqcAuth::read(r)?);
                 }
-                let prunable = Prunable::read(inputs, r)?;
+                let prunable = Some(Prunable::read(inputs, r)?);
                 Ok(Ct::Fcmp {
                     fee,
                     reference_block,
@@ -885,7 +907,7 @@ impl Transaction {
     }
 
     /// Read the transaction.
-    pub fn read<R: Read>(r: &mut R) -> io::Result<Transaction> {
+    pub fn read<R: BufRead>(r: &mut R) -> io::Result<Transaction> {
         let version: u64 = read_varint(r)?;
         if version != TX_VERSION {
             return Err(io::Error::other(format!(
@@ -949,23 +971,33 @@ impl Transaction {
                 write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
                 base_buf.extend_from_slice(reference_block);
                 base.write(&mut base_buf).expect("Vec write is infallible");
+                let h_base = cn_fast_hash(&base_buf);
 
-                let mut auth_buf = Vec::new();
-                for auth in pqc_auths {
-                    auth.write(&mut auth_buf).expect("Vec write is infallible");
+                // Per the C++ oracle (format_utils.cpp:1163-1182): **4-part** iff
+                // pqc_auths are present, else **3-part** `{prefix, base, prunable}`.
+                // The prunable component is `H(prunable)` when present, else the null
+                // hash (the fee-only / serve-credit form — its live-oracle hash parity
+                // is pending a captured blob, as for the spend KAT).
+                let h_prunable = match prunable {
+                    Some(prunable) => {
+                        let mut prunable_buf = Vec::new();
+                        prunable
+                            .write(&mut prunable_buf)
+                            .expect("Vec write is infallible");
+                        cn_fast_hash(&prunable_buf)
+                    }
+                    None => [0u8; 32],
+                };
+
+                if pqc_auths.is_empty() {
+                    hash_concat(&[h_prefix, h_base, h_prunable])
+                } else {
+                    let mut auth_buf = Vec::new();
+                    for auth in pqc_auths {
+                        auth.write(&mut auth_buf).expect("Vec write is infallible");
+                    }
+                    hash_concat(&[h_prefix, h_base, cn_fast_hash(&auth_buf), h_prunable])
                 }
-
-                let mut prunable_buf = Vec::new();
-                prunable
-                    .write(&mut prunable_buf)
-                    .expect("Vec write is infallible");
-
-                hash_concat(&[
-                    h_prefix,
-                    cn_fast_hash(&base_buf),
-                    cn_fast_hash(&auth_buf),
-                    cn_fast_hash(&prunable_buf),
-                ])
             }
         }
     }
@@ -981,9 +1013,11 @@ impl Transaction {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
         }
         let n_out = self.prefix.outputs.len();
-        if n_out == 0 || n_out > MAX_OUTPUTS {
+        // Upper bound is structural; the lower bound is shape-aware (a spend/coinbase
+        // has >=1 output, the fee-only serve-credit form has 0) — enforced per-ct below.
+        if n_out > MAX_OUTPUTS {
             return Err(io::Error::other(format!(
-                "shekyl-wire: output count {n_out} not in 1..={MAX_OUTPUTS}"
+                "shekyl-wire: output count {n_out} exceeds {MAX_OUTPUTS}"
             )));
         }
         // §2.5 coinbase shape: a `gen` input is coinbase-only and must be the sole
@@ -1045,49 +1079,91 @@ impl Transaction {
                 ));
             }
         }
-        // Structural length-coupling: the serializer ties these vectors to the
-        // vin/vout counts (no independent length prefix on the wire), so an in-memory
-        // tx with mismatched lengths would not round-trip and would be
-        // consensus-invalid. Verify them here.
-        //
-        // NOTE (scope): the `Fcmp` checks below are the **full-spend-shape**
-        // invariants (every input is a key-image spend → one pqc_auth + one pseudoOut
-        // each, one aggregated Bp+). The §2.5 *non-spend* Fcmp shapes are a deferred
-        // slice and are intentionally not modelled yet: `archival_serve_credit_only`
-        // is a fee-only tx with **empty** pqc_auths / no prunable proof material, and
-        // `bond_post` couples pseudoOuts to the *spend* (key-image) subset rather than
-        // full vin. The pruned form (`pqc_auths` EOF-tolerant + `Option<Prunable>`,
-        // GENESIS_TX_WIRE_FORMAT.md §4) lands with that slice. Until then this crate
-        // models the full coinbase + full spend, so these couplings are exact.
+        // Structural length-coupling: these vectors carry no independent length prefix
+        // on the wire — their counts are tied to vin/vout — so an in-memory tx with
+        // mismatched lengths would not round-trip and would be consensus-invalid.
+        // Shape-aware per §2.5 (full spend / bond-post / fee-only-serve-credit).
+        let n_in = self.prefix.inputs.len();
+        let n_ki = key_images.len(); // key-image (spend) inputs
         let base = match &self.ct {
-            Ct::Null(base) => base,
+            Ct::Null(base) => {
+                if n_out == 0 {
+                    return Err(io::Error::other("shekyl-wire: coinbase has no outputs"));
+                }
+                base
+            }
             Ct::Fcmp {
                 base,
                 pqc_auths,
                 prunable,
                 ..
             } => {
-                // pqc_auths + pseudoOuts are per-input (count == nvin, no prefix).
-                if pqc_auths.len() != self.prefix.inputs.len() {
-                    return Err(io::Error::other(format!(
-                        "shekyl-wire: pqc_auths {} != input count {}",
-                        pqc_auths.len(),
-                        self.prefix.inputs.len()
-                    )));
-                }
-                if prunable.pseudo_outs.len() != self.prefix.inputs.len() {
-                    return Err(io::Error::other(format!(
-                        "shekyl-wire: pseudoOuts {} != input count {}",
-                        prunable.pseudo_outs.len(),
-                        self.prefix.inputs.len()
-                    )));
-                }
-                // §10: exactly one aggregated Bp+ for an Fcmp spend.
-                if prunable.bulletproofs.len() != 1 {
-                    return Err(io::Error::other(format!(
-                        "shekyl-wire: nbp {} != 1",
-                        prunable.bulletproofs.len()
-                    )));
+                match prunable {
+                    // Spend / bond-post: a prunable proof is present.
+                    Some(prunable) => {
+                        if n_out == 0 {
+                            return Err(io::Error::other("shekyl-wire: spend has no outputs"));
+                        }
+                        // pqc_auths are per-input (count == nvin): one slot per input,
+                        // including the bond_post slot (§2.5 / §13).
+                        if pqc_auths.len() != n_in {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: pqc_auths {} != input count {n_in}",
+                                pqc_auths.len()
+                            )));
+                        }
+                        // §10: exactly one aggregated Bp+.
+                        if prunable.bulletproofs.len() != 1 {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: nbp {} != 1",
+                                prunable.bulletproofs.len()
+                            )));
+                        }
+                        // pseudoOuts are per key-image (spend) input. For an all-fcmp
+                        // spend that is exactly nvin; for a mixed bond-post tx the exact
+                        // spend-subset coupling is a §13 (F1/F3) forward obligation
+                        // owned by the emission / membership-only PRs, so it is bounded
+                        // here (<= the spend subset), not pinned.
+                        if n_ki == n_in {
+                            if prunable.pseudo_outs.len() != n_ki {
+                                return Err(io::Error::other(format!(
+                                    "shekyl-wire: pseudoOuts {} != spend input count {n_ki}",
+                                    prunable.pseudo_outs.len()
+                                )));
+                            }
+                        } else if prunable.pseudo_outs.len() > n_ki {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: pseudoOuts {} exceed spend input count {n_ki}",
+                                prunable.pseudo_outs.len()
+                            )));
+                        }
+                    }
+                    // Fee-only / serve-credit: no prunable proof, no outputs, and
+                    // pqc_auths empty (the hybrid signature rides the vin, §9.10).
+                    None => {
+                        if n_out != 0 {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: fee-only ct (no prunable) must have no \
+                                 outputs, found {n_out}"
+                            )));
+                        }
+                        if !pqc_auths.is_empty() {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: fee-only ct (no prunable) must carry empty \
+                                 pqc_auths, found {}",
+                                pqc_auths.len()
+                            )));
+                        }
+                        // No prunable proof ⇒ no key-image (spend) inputs: a spend
+                        // requires a prunable. (The storage-pruned full-spend form —
+                        // ki inputs, prunable dropped, external prunable hash — is
+                        // post-genesis, handled by §4 `into_full`, not the wire parser.)
+                        if n_ki != 0 {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: {n_ki} key-image input(s) but no prunable proof"
+                            )));
+                        }
+                    }
                 }
                 base
             }
