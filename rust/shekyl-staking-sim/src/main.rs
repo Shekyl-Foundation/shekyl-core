@@ -745,6 +745,104 @@ fn print_cover_report() {
     }
 }
 
+fn print_cover_fn_report() {
+    use cover::Dispersion;
+    let disp = |d: Dispersion| match d {
+        Dispersion::Clustered => "clust",
+        Dispersion::Dispersed => "disp",
+    };
+    let report = cover::run_cover_fn_report();
+    eprintln!("shekyl-staking-sim — cover §7.6/§7.7: scalar-robustness vs pin-a-function");
+    eprintln!("Realized PAYER set under the FULL model (timing × participation), thin N_P corner.");
+    eprintln!();
+
+    // (A) Hump robustness across the pessimistic corners.
+    eprintln!(
+        "(A) Hump across corners (density × timing_retain × beta): k* = realized-set-max dial."
+    );
+    eprintln!(
+        "{:>6} {:>5} {:>5} | {:>6} {:>7}",
+        "dens", "rt", "beta", "k*", "peakSet",
+    );
+    for c in &report.hump.corners {
+        eprintln!(
+            "{:>6} {:>5.1} {:>5.1} | {:>6} {:>7.2}",
+            disp(c.density),
+            c.timing_retain,
+            c.beta,
+            c.k_star,
+            c.peak_set,
+        );
+    }
+    eprintln!(
+        "  k* spread across corners = {} rungs; robust k = {} holds {:.0}% of peak at the WORST",
+        report.hump.k_star_spread,
+        report.hump.robust_k,
+        report.hump.worst_corner_ratio * 100.0,
+    );
+    eprintln!(
+        "  corner ⇒ a single frozen scalar is {} the 90%-of-peak bar across all corners.",
+        if report.hump.robust_band_90 {
+            "WITHIN"
+        } else {
+            "OUTSIDE"
+        }
+    );
+    eprintln!();
+
+    // (B) Adaptive (population-conditioned) dial vs the frozen scalar.
+    eprintln!(
+        "(B) Adaptive D (per-density k*) vs frozen scalar k={} across sparse→dense (rt=0.5,b=2):",
+        report.hump.robust_k
+    );
+    eprintln!(
+        "{:>12} {:>4} {:>5} | {:>4} {:>7} {:>8} | {:>7} {:>8}",
+        "level", "n_P", "mean", "ak", "aSet", "aCovSKL", "fSet", "fCovSKL",
+    );
+    for d in &report.adaptive {
+        eprintln!(
+            "{:>12} {:>4} {:>5.0} | {:>4} {:>7.2} {:>8.2} | {:>7.2} {:>8.2}",
+            d.label,
+            d.n_p,
+            d.mean_shards,
+            d.adaptive_k,
+            d.adaptive_set,
+            d.adaptive_cover_skl,
+            d.frozen_set,
+            d.frozen_cover_skl,
+        );
+    }
+    eprintln!("  one frozen scalar can't serve both ends; adaptive sizes to local k* — the gap is");
+    eprintln!(
+        "  the set the frozen scalar leaves on the table (largest where it under-serves dense)."
+    );
+    eprintln!();
+
+    // (C) Net-leak bounding proxy.
+    eprintln!("(C) Net-leak proxy: a height-aware attacker exploiting per-height D drift across a");
+    eprintln!(
+        "  timing window. leak = set stripped. Realistic drift ≈ {:.2} (600-blk window / 10k epoch).",
+        report.realistic_drift
+    );
+    eprintln!(
+        "{:>6} {:>8} {:>9} {:>8}",
+        "drift", "frozSet", "adaptSet", "leak",
+    );
+    for p in &report.leak {
+        eprintln!(
+            "{:>6.2} {:>8.2} {:>9.2} {:>7.1}%",
+            p.drift,
+            p.frozen_set,
+            p.adaptive_set,
+            p.leak_frac * 100.0,
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-fn report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -758,6 +856,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover") {
         print_cover_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-fn") {
+        print_cover_fn_report();
         return;
     }
 

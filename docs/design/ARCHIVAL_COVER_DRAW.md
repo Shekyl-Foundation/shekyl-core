@@ -16,13 +16,14 @@ sizes the *mean* and the worst-case **tail** is a firewall-composition property;
 and (§7.5) economic participation makes `C_max` a **two-sided interior optimum**
 (too-large prices low rungs out — humped, not monotone), realized optimum
 `k ≈ 8–12 (~6–9 SKL)` — **not** the "err-large, go big" the earlier draft assumed
-(retired in §2.5). **The question has now moved (§7.6/§7.7):** with a frozen scalar
-sitting on a hump whose peak slides with the *softest, least-observable* input
-(affordability), the load-bearing question is no longer "where is `k*`" but "is the
-peak robust enough to freeze a scalar at all — or is the honest move a **public,
-height-conditioned distribution** (pin a function, not a constant) that adapts to
-the realized population and never needs freezing." That feasibility (one net-leak
-analysis) is the next pass, and could *dissolve* the freeze rather than manage it.
+(retired in §2.5). **Resolved (§7.6/§7.7, `--cover-fn`):** a frozen scalar is
+**not** the object — `k*` slides 6 → 20 across the input corners (driven by the
+softest, least-observable input, affordability), so the best single `k` holds only
+77% of peak at its worst corner. The genesis object is a **public, height-conditioned
+distribution** (pin a *function*, not a constant): it dominates the best frozen
+scalar on realized set (up to ~2.6× at the dense end) and its one theoretical leak
+(height-conditioning) is **~0%** at the realistic population drift (timing window ≪
+population epoch). Next: specify the response curve `population(H) → D`.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -532,36 +533,58 @@ the centre of that robust band. If `k*` swings across the corners, the honest
 finding is **"no blind scalar pin is safe"** — surface that, don't paper it over
 with a point estimate.
 
-**First signal (existing `β ∈ {1, 2}` participation sweep, §7.5).** Per-`β` the
-hump is *flat-topped* — at `β = 2` the realized payer set is `4.98 / 5.12 / 4.85`
-across `k = 8 / 12 / 16` (within ~5% of peak). But the peak **centre and height
-slide with affordability**: `k* ≈ 8` (set `3.47`) at `β = 1`, `k* ≈ 12` (set
-`5.12`) at `β = 2`. A `k ≈ 10–12` sits within ~90% of peak across both `β`, so the
-scalar may be **less fragile than feared** — but this is two points of *one* input
-at *one* corner, and the absolute set is small (`3–5`). The full three-input
-characterization is what decides it.
+**Measured — the scalar is fragile (`shekyl-staking-sim --cover-fn`, arm A).** The
+full sweep of the realized payer set (timing × participation together) over the
+thin corner across **18 input corners** (density × `timing_retain` × `β`) puts
+`k*` at:
 
-**Affordability deserves its own swept arm.** It is now the **softest** of the
-three inputs — spare capital beyond the bond is the least observable thing in the
-whole model — yet it sets the **right wall** of the hump, so it warrants its own
-sweep (the way density got one), not a single assumed `β` curve.
+| input | `k*` range |
+| --- | --- |
+| `β = 1` (tight affordability) | 6 |
+| `β = 2` | 10–12 |
+| `β = 4` (loose) | 16–20 |
 
-**Pre-genesis blocker (if a scalar is what ships):** the integrated joint ×
-participation × affordability pass, under pessimistic inputs (thin `N_P`, dispersed
-density, low `timing_retain`, tight `β`) — pin the robust-band centre, or report it
-isn't robust. **`C_min`** and the **density confirm** may follow (testnet
-confirm-only). The wiring (C4 — `draw_cover_amount` in `shekyl-standoff`) is
-mechanical once the pin is fixed — *if* a scalar is the right object at all (§7.7).
+`k*` **slides 6 → 20 (a 14-rung spread)**, driven mostly by affordability — the
+softest input. The best single frozen `k` (the worst-corner-maximising `k = 8`)
+holds only **77% of its corners' peaks at the worst corner — *outside* the 90%
+bar**. So the earlier two-point read was optimistic: across the full corner set
+**no blind scalar pin is safe**. That is the §7.6 result, and it is what makes §7.7
+the live path rather than a hedge.
 
-### 7.7 The structural escape — pin a function, not a constant (feasibility, OPEN)
+**Affordability is the softest input yet sets the right wall** — spare capital
+beyond the bond is the least observable thing in the model, and it is exactly what
+moves `k*` from 6 to 20. A frozen scalar is hostage to a quantity no one can
+measure pre-genesis.
+
+**So a scalar pin is *not* recommended.** The integrated pass confirms a scalar
+can't be frozen within the robust band; the pre-genesis work moves to §7.7 (pin a
+function). `C_min` (runway floor) and the density confirm still apply to whatever
+object ships.
+
+### 7.7 The structural escape — pin a function, not a constant (feasibility: PASSES)
 
 The only escape from the blind-scalar bind is to stop pinning a constant and pin a
 **function**: a deterministic, **public-bond-population-conditioned** distribution,
 where every wallet computes the same recommended cover from the same public chain
-state at the draw height `H`. This would **adapt to the realized density** —
-narrowing in sparse periods (where wide cover buys nothing anyway, by saturation,
-and over-taxing only triggers the §7.5 opt-out collapse) and widening where there
-is a crowd to hide in — so it never freezes a fragile peak.
+state at the draw height `H`. It **adapts to the realized density** — sizing to the
+local `k*` — so it never freezes a fragile peak.
+
+**Measured (arm B/C). The function dominates the best frozen scalar, and its one
+theoretical leak is negligible.**
+
+- **Dominance (arm B).** Across a sparse→dense sweep the adaptive dial (each
+  density's own `k*`) **matches or beats** the best frozen scalar (`k = 8`) at
+  *every* level, and the gap is the set the frozen scalar leaves on the table —
+  largest where it under-serves the dense end: realized payer set **14.6 (adaptive)
+  vs 5.7 (frozen)** at the thick corner, `7.9 vs 3.4` at lean. One scalar cannot
+  serve both ends; the function gets both.
+- **No net leak (arm C).** The one real concern — a height-aware attacker
+  sub-localising when `D` drifts across a timing window — is bounded by the
+  **timescale separation**: the entry-gap window (~600 blk) is ≪ the
+  population-change epoch (~10 000 blk), so per-window drift ≈ **1.06**, at which
+  the leak proxy is **0.0%**. Even a 1.5× shock strips < 5%. Height-conditioning
+  reveals nothing the attacker (who already holds the public population) didn't
+  have, and the realized draw stays hidden.
 
 **It preserves DQ5 uniformity in the sense that matters.** All wallets drawing at
 height `H` agree on the distribution, so it adds **no fingerprint beyond the bond
@@ -589,7 +612,14 @@ rather than manage it. Two caveats to carry into that analysis:
   than pinning a *point*, because it responds to the population instead of guessing
   it.
 
-**Sequencing.** Scope this feasibility (the net-leak analysis) **before** investing
-in characterizing and freezing a scalar at a peak §7.6 may show is fragile: if the
-function holds, the scalar's robustness is moot. Still off-wire, still parallel to
-the consensus path.
+**Verdict and next step.** Feasibility **passes**: the scalar is fragile (§7.6) and
+the function both dominates it and doesn't net-leak. So the genesis object is the
+**response curve `population(H) → D`**, not a frozen `k`. The remaining design work
+is to specify that curve — what public per-height statistic it reads (live-bond
+count and rung occupancy at `H`), and the conservative response (target effective
+set, **capped at the saturation knee** so it never over-taxes into the §7.5 opt-out,
+**floored at the runway `C_min`**). That curve's *parameters* are what get pinned and
+golden-vectored (C4), and being a response they are far more robust than a point.
+Still off-wire, still parallel to the consensus path. (Open: the per-height
+statistic's own definition, and whether `D`'s shape stays uniform — DQ1 — at every
+height or itself adapts.)
