@@ -8,7 +8,10 @@ is *not* re-tunable (§2.5):** the anonymity-uniformity requirement genesis-free
 the **whole** distribution — **shape *and* bounds**. So the next step is a genesis
 pin of **shape together with conservative bounds** (err-large; post-testnet
 **confirms** adequacy, it cannot **fix** a too-tight bound) — **not**
-shape-now/bounds-later.
+shape-now/bounds-later. **§7 is the first analytical cut** at the bound: the
+lattice dial derived (`k = W/floor`), the regressive capital tax surfaced, a
+conservative bracket pinned, and the `--cover` harness arm specced as the step
+that measures `k` (the `--standoff` analogue).
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -298,7 +301,9 @@ later either).
   nothing waits on the consensus path. Post-testnet only *confirms* the bounds.
 - **Owns no wire/consensus bytes** — does not gate or touch the genesis freeze.
 - **The substantive work is the sim/analysis pass** (C1), the way the entry-gap
-  window was set by analysis — distinct from wiring the draw.
+  window was set by analysis — distinct from wiring the draw. **First cut: §7**
+  (structure + conservative bracket pinned; `--cover` harness arm specced as the
+  measuring step).
 
 ## 6. Gates (when it lands)
 
@@ -307,3 +312,105 @@ later either).
 behind the `conformance` feature (distribution graded by margin, not asserted
 bit-identical — the entry-gap posture). No `STAKING_BLOCK_VERSION` / wire-format
 bump (off-wire).
+
+---
+
+## 7. C1 first cut — sizing `C_max` / `C_min` (err-large)
+
+First analytical pass (the §5 "substantive sim/analysis pass"). It pins the
+**structure** of the bound and a **conservative genesis bracket**; it lands on a
+`--cover` harness arm as the step that replaces the bracket with measured
+numbers — the analogue of how `window = 600` was set by `--standoff`
+(`STAKER_ARCHIVAL_SIM.md:3471` Monte-Carlo, not a guess).
+
+### 7.1 The lattice dial, derived (`C_max − C_min = k · floor` blurs `k` rungs)
+
+The rung spacing is the per-shard floor: `floor = ARCHIVAL_BOND_FLOOR_ATOMIC =
+750_000_000 atomic = 0.75 SKL` (`consensus_constants.rs:17`,
+`ATOMIC_UNITS_PER_SKL = 1e9`). A staker on rung `s` posts public `bond_floor =
+floor · s` (`s = Σ|holdings|`, the shard count). The attacker, knowing `A =
+floor · s_P + cover`, tests each public bond `Q`:
+
+```text
+Q candidate  ⟺  A − floor · s_Q ∈ [C_min, C_max]
+             ⟺  floor·(s_P − s_Q) + cover ∈ [C_min, C_max]
+```
+
+For the realized `cover`, the candidate rungs form a **contiguous window of
+`k + 1` rungs straddling `s_P`**, where `k = ⌊(C_max − C_min) / floor⌋` and the
+split (how many below `s_P` vs above) slides with the realized draw. So the
+width `W = C_max − C_min`, in units of `floor`, **is** the number of rungs the
+cover blurs across — the §2.3 lattice dial, now exact: `k = W / floor`.
+
+The **effective** anonymity set is not `k + 1` rungs but the
+**posterior-weighted count of *stakers* on those rungs** (the §1.2 IPR). Uniform
+`cover` (DQ1) makes the likelihood flat across the window, so the effective set
+≈ `Σ` stakers occupying the `k + 1` rungs — uniform is exactly the shape that
+denies the attacker concentration on `s_P`.
+
+### 7.2 The binding case is the sparse thin regime
+
+The sim reports per-staker **mean** portfolio, not a per-rung histogram: thin
+`N_P = 17` ⇒ ≈ 9 shards/staker; lean ≈ 60; (`STAKER_ARCHIVAL_SIM.md:676,720`).
+So under the **thin** `N_P` end (§2.5's pessimistic populations) the rung density
+is **below one staker per rung** — ~17 stakers spread over a band roughly
+`[1, ~2·mean]`. Consequence: clearing a target effective set is a problem of
+**accumulating count across rungs**, not landing on a populated one — the cover
+must span most of the occupied band before the thin-cover tail closes. This is
+the same shape `--standoff` found (set mean `1 → 7 → 13 → 25` as the window
+widens, `:3484`); here the x-axis is `k` rungs instead of timing blocks.
+
+### 7.3 The capital tax is regressive (a finding to surface)
+
+`C_max = k · floor` is a **fixed SKL cover** independent of `s`. As a fraction of
+the staker's own bond (`floor · s`) it is `k / s` — **larger for small `s`**. A
+rung-9 staker spanning `k = 12` locks `9 SKL` cover on a `6.75 SKL` bond
+(`1.3×`); a rung-60 staker spanning the same 12 rungs locks `9 SKL` on `45 SKL`
+(`0.2×`). So the §2.5 permanent capital tax **falls hardest on the smallest
+stakers** — precisely the thin-runway cold-start funders the cover most protects.
+This bounds err-large from running away: over-provisioning `C_max` is not free
+insurance, it is a regressive lock that can itself thin the small-staker
+population the metric depends on. The harness must report the tax curve
+alongside the anonymity curve and pick the knee, not the ceiling.
+
+### 7.4 Conservative genesis bracket (to be confirmed, not derived, by testnet)
+
+At `floor = 0.75 SKL` the dial is:
+
+| `k` rungs blurred | `C_max − C_min` |
+| --- | --- |
+| 4 | 3 SKL |
+| 8 | 6 SKL |
+| 12 | 9 SKL |
+| 16 | 12 SKL |
+| 24 | 18 SKL |
+
+Under thin `N_P = 17` (mean ≈ 9, band ≈ `[1, ~18]`), clearing the entry-gap
+analogue (set mean ≈ 13, thin-tail `P(set ≤ 2) = 0`) plausibly needs spanning
+**~the full occupied band**, putting the err-large `C_max` on the order of
+**`k ≈ 16–24` ⇒ 12–18 SKL** of cover. A *calibrated* value would very likely be
+smaller — but per §2.5 it cannot be raised later, so the genesis pin sits at the
+over-provisioned end, with the §7.3 regressive tax named as its cost. `C_min` is
+the runway floor (§2.2): strictly positive (reserves `cover == 0` for the opt-out,
+DQ6), `≥ 1 rung (0.75 SKL)` so the smallest draw still funds non-trivial runway,
+final value pending the 2d-1 earnings-ramp numbers — sized against **pessimistic
+slow early yield**, also un-raisable later.
+
+### 7.5 The substantive step — the `--cover` harness arm
+
+Mirror `shekyl-staking-sim --standoff` (`standoff.rs`): add a `--cover` arm,
+Monte-Carlo (200k trials/scenario, SplitMix64, reproducible) over the discrete
+lattice population, sweeping `k = (C_max − C_min) / floor`, reporting per
+scenario `{lean 79, thick 154, thin 17–62}`:
+
+- candidate-set **mean** and the **thin-cover tail** `P(set ≤ 2)` (the
+  `--standoff` metrics, x-axis = `k`);
+- the §7.3 **regressive-tax curve** (`C_max` as a multiple of bond, by rung);
+- jointly with the entry-gap standoff (§1.1) — the timing intersection shrinks
+  the amount-set, so the harness shares the standoff's decoy model.
+
+Selection rule (err-large, §2.5): take the **smallest `k` that closes the
+thin-tail under the *thin* scenario**, then step up one notch. The harness
+supplies the per-rung populations this doc lacks; until it runs, the genesis pin
+ships from the §7.4 conservative bracket. This is C1's deliverable — the wiring
+(C4) is mechanical once `k` is fixed.
