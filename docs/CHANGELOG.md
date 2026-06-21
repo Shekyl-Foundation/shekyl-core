@@ -14,12 +14,33 @@
   tests never exercise (they always fill to width), and the prover doesn't catch
   (it ignores the root). Fixed by **zero-padding branch chunks to width** in
   `shekyl_fcmp::proof::prove` / `prove_with_sal`: zero scalars vanish in the layer
-  hash, so the **consensus tree root is unchanged** (no daemon/consensus change,
+  hash, so the **consensus tree root is unchanged** (  no daemon/consensus change,
   no CT-2 Tier-A regression), and the daemon's `shekyl_fcmp_verify` — the same
   Rust `verify` via FFI — accepts it. The audited vendored FCMP crypto was sound;
   the bug was first-party (our driving). Closes PR 2c-1's deferred verify half
   and the 2a real-tree milestone; covers depth-2 (deeper trees tracked in
   `FOLLOWUPS.md`). Regression KAT: `ct5_partial_branch_chunk_is_padded_and_verifies`.
+- **wire: real consensus-valid FCMP++ spend round-trip
+  (`shekyl-wire/tests/fcmp_spend_e2e.rs`).** New end-to-end test that builds a
+  *real, consensus-valid* FCMP++ spend entirely in Rust — a depth-3 Selene/Helios
+  curve tree (700 outputs, exercising both `c1` and `c2` branch layers, the
+  multi-layer path that broke the C++ spend), `assemble_path` → `SpendInput` →
+  `sign_transaction` → `sign_pqc_auths` — self-validates it against the Rust
+  consensus rules (`shekyl_fcmp::proof::verify`, `verify_rct_balance`,
+  `Bulletproof::verify`), then proves `shekyl-wire` serializes it
+  byte-identically (`read(write(x)) == x`, deterministic re-emit). The oracle is
+  the consensus verifier itself, not a captured blob.
+- **wire: removed the unsound `#[ignore]`d live-oracle spend KAT**
+  (`regtest_spend_round_trips_byte_identical` in
+  `shekyl-wire/tests/fcmp_spend_roundtrip.rs`) and its capture script
+  (`tests/vectors/capture_spend.py`). The KAT planned to round-trip a "known-good"
+  FCMP++ spend blob captured from the C++ daemon, but the C++ FCMP++ spend path
+  never produced a daemon-accepted transaction — there is no known-good blob to
+  capture, and building one to capture would be constructing the house to draw
+  the blueprint. The byte-identity proof now rides the Rust-built,
+  consensus-validated spend in `fcmp_spend_e2e.rs` (above). The synthetic
+  `read(write(x))` round-trip and structural rejection tests in
+  `fcmp_spend_roundtrip.rs` are unchanged.
 - **wallet: archival StakeEngine lifecycle wiring (Model D) -- inert (PR 2c-2a)
   (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2,
   `feat/archival-stake-wiring`).** Wires the inert 2b StakeEngine into the engine
@@ -282,6 +303,19 @@
   importable ahead of the unbuilt V3.0 funding flow. Docs:
   `ARCHIVAL_FIREWALL_GATE6.md` §10.12, `STAKER_ARCHIVAL_SIM.md`,
   `FOLLOWUPS.md` (funding-seam carry 2 + wallet-wiring + alpha-provenance items).
+
+### Fixed
+
+- **tx-builder: FCMP++ output commitments are the real Pedersen commitment, not
+  cofactor-scaled.** `shekyl-tx-builder::sign` now emits `outPk[i] = C =
+  mask·G + amount·H` (×1) instead of `8·C`. The consensus balance check
+  `sum(pseudoOuts) == sum(outPk) + fee·H` (`verRctSemanticsSimple`) sums these
+  points directly and the pseudo-outs are real `C`, so the output side must
+  match — the prior `8·C` broke balance verification. Surfaced and validated by
+  the new `shekyl-wire/tests/fcmp_spend_e2e.rs` (its `verify_rct_balance`
+  stage). The C++/Rust FFI spend-path debugging that surfaced this was
+  otherwise reverted as out-of-scope C++ debt; the findings are captured in
+  `FOLLOWUPS.md` ("C++ FCMP++ wallet send path incomplete").
 
 ### Changed
 

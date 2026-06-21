@@ -204,6 +204,133 @@ sustainability is unaffected by the recalibration.
   `on_get_curve_tree_path` for another reason (route the new logic through the
   FFI per the rule-20 daemon clause then).
 
+- **FCMP++ spend wire format diverges between `shekyl-tx-builder` (vendored
+  `shekyl-oxide`) and the canonical `shekyl-wire` serializer (surfaced
+  2026-06-21 building the Rust e2e spend round-trip).** Two Rust serializers
+  emit structurally different bytes for the *same* FCMP++ spend:
+  - **`reference_block`** — `shekyl-oxide`
+    ([`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`](../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs)
+    `PrunableProof`, line 182) carries it as a `u64` height varint;
+    `shekyl-wire`
+    ([`rust/shekyl-wire/src/transaction.rs`](../rust/shekyl-wire/src/transaction.rs)
+    `Ct::Fcmp`, line 689) carries it as a 32-byte block hash.
+  - **`pqc_auths`** — `shekyl-oxide` (same file, line 191) carries them as
+    signature-only `Vec<Vec<u8>>` blobs; `shekyl-wire` (`PqcAuth`, line 510)
+    carries the full `auth_version·scheme_id·flags·pubkey·signature` record
+    (the hybrid public key is part of the wire auth, not just the signature).
+
+  `shekyl-wire` is the designated **canonical migration target** (it landed on
+  `dev` as the genesis block/tx serializer, PR #168). The e2e test
+  ([`rust/shekyl-wire/tests/fcmp_spend_e2e.rs`](../rust/shekyl-wire/tests/fcmp_spend_e2e.rs))
+  sidesteps the divergence by assembling the `shekyl-wire` transaction directly
+  from the validated proof fields rather than re-serializing the
+  `shekyl-tx-builder` output, so it does not cross the two formats. This is a
+  **consensus hazard at genesis**: there can be exactly one on-wire FCMP++ spend
+  layout, so `shekyl-tx-builder`'s send path must emit (or round-trip through)
+  the `shekyl-wire` format before genesis, and the `shekyl-oxide` transaction
+  serializer's spend path is then a deletion target per
+  [`60-no-monero-legacy`](../.cursor/rules/60-no-monero-legacy.mdc) /
+  [`10-shekyl-first`](../.cursor/rules/10-shekyl-first.mdc). **Reopening /
+  closure:** lands when `shekyl-tx-builder` is cut over to the `shekyl-wire`
+  encoder and a cross-crate byte-identity assertion (tx-builder output ==
+  `shekyl-wire` round-trip) replaces the assemble-direct shim in the e2e test.
+  Target: **V3.0** (genesis wire-format freeze; one canonical spend layout).
+
+- **Rust/Axum daemon RPC: curve-tree endpoints missing from the FFI dispatch
+  table (404). Surfaced 2026-06-21 debugging the C++ FCMP++ spend capture.**
+  The `on_get_curve_tree_path` / `on_get_curve_tree_info` /
+  `on_get_curve_tree_checkpoint` handlers exist and are registered in the
+  **legacy epee** dispatch (`src/rpc/core_rpc_server.h` ≈ line 193,
+  `MAP_JON_RPC_WE`), but are **not** registered in the Rust/Axum FFI JSON-RPC
+  dispatch table (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`). The Rust
+  RPC server is the **default** transport
+  ([`DAEMON_RPC_RUST.md`](./DAEMON_RPC_RUST.md)), so every `get_curve_tree_path`
+  call to a default-configured daemon returns **404** — this (not the
+  "stale-`.o`" theory in commit `588d8d30f`) is the real reason the live FCMP++
+  spend capture stayed blocked. `DAEMON_RPC_RUST.md` previously claimed these
+  endpoints were "implemented"; corrected 2026-06-21.
+
+  **Handler-side fixes that surfaced alongside (also reverted; same future
+  PR):** in `on_get_curve_tree_path`, (a) an `output_index >= ref_leaf_count`
+  request must **skip** that index (`continue`), not fail the whole batch — a
+  wallet asks for paths for all its unspent outputs and some are still inside
+  the maturity + reorg window, so not yet drained into the reference tree; and
+  (b) the branch-layer emit loop must produce **exactly `depth`** layers
+  (`layer = 1; layer <= depth`) — the parser/signer expect `branch_count =
+  depth`, and `< depth` dropped the top layer (parsed zero layers for a
+  depth-1 tree → "0 C1 layers and 0 C2 layers" from the signer).
+
+  **Disposition.** Wiring the endpoints into the FFI dispatch + the handler
+  fixes is daemon-RPC work for a focused daemon-RPC PR (route new logic through
+  the FFI per [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  §"daemon"), not bundled into the Rust wire KAT-replacement PR
+  ([`15-deletion-and-debt`](../.cursor/rules/15-deletion-and-debt.mdc), scope).
+  Folds with the `on_get_curve_tree_path` `hash_to_p3` Rust-forward item above
+  and the daemon path-assembler migration. **Reopening trigger:** the daemon
+  path-assembler / daemon-RPC PR opens, or the Track-2 regtest harness
+  ([`design/TRACK2_REGTEST_PARITY.md`](./design/TRACK2_REGTEST_PARITY.md)) needs
+  a live `get_curve_tree_path` against a default daemon. **Target: V3.0**
+  (prerequisite for any live wallet↔daemon FCMP++ spend).
+
+- **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging
+  exploration reverted (findings preserved for the Rust send-path).** While
+  attempting to capture a live FCMP++ spend (to un-ignore the wire KAT, since
+  abandoned for the in-process Rust e2e — see the wire-format entry above), a
+  series of C++ `wallet2.cpp` + C++/Rust FFI fixes were prototyped and then
+  **reverted** as out-of-scope C++ debt per the maintainer's "stop paying C++
+  debt" call ([`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  [`15-deletion-and-debt`](../.cursor/rules/15-deletion-and-debt.mdc)). Even
+  with all of them applied the capture still failed at transfer construction
+  (recipient-balance mismatch), so the C++ path is **not** a working oracle.
+  The findings the Rust send-path (`shekyl-tx-builder` / `shekyl-engine-core`,
+  [`design/PHASE_2A_SEND_PATH.md`](./design/PHASE_2A_SEND_PATH.md)) must
+  reproduce:
+  - **FFI signing contract (`shekyl_sign_fcmp_transaction`):** the prover's 4th
+    Selene leaf scalar is `h_pqc = H(pqc_pk)` (the PQC leaf-hash scalar); the
+    key-image generator `Hp(O)` is **recomputed in Rust** from `output_key`,
+    not passed in. The old contract passed `hp_of_O` (an Ed25519 point) and
+    mis-used it as the leaf scalar → "invalid scalar: h_pqc" prove failure.
+    (Masking bug: the FFI round-trip test sent the correct leaf scalar under
+    the name `hp_of_O`, so it passed while production sent the real `Hp(O)` and
+    failed.)
+  - **Branch layers are node *points*, projected to cycle *scalars* in Rust:**
+    `get_curve_tree_path` emits each branch layer as compressed curve-tree node
+    points (C1 = Helios points, C2 = Selene points); the prover consumes the
+    sibling **x-coordinates** as cycle scalars (Helios point → Selene scalar
+    for C1, Selene point → Helios scalar for C2). The projection belongs in
+    Rust at the FFI boundary (rules 20/36), mirroring
+    `CurveTreeClient::assemble_path`.
+  - **Boundary-chunk zero padding must be dropped before projection:** the
+    daemon pads incomplete branch chunks with 32 zero bytes ("absent
+    sibling"). The adapter must drop these and hand `prove` the narrow chunk
+    (which zero-**scalar**-pads to width — zero scalars vanish in the layer
+    multiexp). Projecting a zero-**byte** point to a scalar yields a non-zero
+    x-coordinate that does **not** vanish → wrong branch hash →
+    `BatchVerificationFailed`. Same class as the CT-5 `pad_branch_chunk` fix,
+    now at the C++/Rust boundary.
+  - **Output amounts:** `tx.vout[i].amount` is `0` on the wire for
+    RingCT/FCMP++; the signer needs the real cleartext amounts from
+    `splitted_dsts[i].amount` (vout-aligned after the in-place shuffle).
+  - **Per-tx weight cap:** FCMP++ txs (membership proof + per-input PQC auth)
+    far exceed the legacy `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1` (~20
+    KB) cap, which rejected every spend before build. Cap at half the daemon's
+    `block_weight_limit` (queried once + cached), fallback half the V5 zone.
+  - **Coin-selection spendability gate:** only outputs already drained into the
+    reference tree have a usable membership path; maturity-unlocked-but-not-yet-
+    in-tree outputs must be excluded from selection (else
+    `transfer_selected_rct` fails with "No precomputed FCMP++ tree path").
+  - **`get_curve_tree_path` 64-index batching:** the daemon caps the request at
+    64 indices (DoS guard); a wallet with more unspent outputs must batch.
+
+  The one fix that **graduated** (validated by the Rust e2e test, kept on this
+  branch) is the output-commitment form in `shekyl-tx-builder::sign`: output
+  commitments are the real Pedersen `C = mask·G + amount·H` (×1), **not**
+  cofactor-scaled `8·C` — the consensus balance check
+  `sum(pseudoOuts) == sum(outPk) + fee·H` sums points directly and pseudo-outs
+  are real `C`. **Reopening / closure:** the findings land with the Rust
+  send-path build/sign/encode work (`PHASE_2A_SEND_PATH.md` / Phase 6 regtest).
+  **Target: V3.0** (Rust send-path is the genesis spend constructor).
+
 - **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
   artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
   (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
@@ -5350,6 +5477,45 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
+
+- **FCMP++ sender-side output verification — inherited `wallet2::sanity_check`
+  receipt check is non-functional; cryptographic re-derivation belongs in
+  Rust.** Surfaced 2026-06-21 debugging the C++ FCMP++ spend path. The
+  inherited Monero per-destination receipt check
+  (`get_tx_proof`/`check_tx_proof`) is non-functional in Shekyl: the
+  pre-broadcast overload `get_tx_proof(tx, tx_key, …)` is deprecated and throws
+  unconditionally (`src/wallet/wallet2.cpp`), the live `get_tx_proof(txid, …)`
+  requires the tx on-chain (it is not, during construction), and the mechanism
+  is classic-ECDH only — it cannot reconstruct FCMP++/PQC output secrets
+  (HKDF + ML-KEM). The check is dead per
+  [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc) /
+  [`60-no-monero-legacy`](../.cursor/rules/60-no-monero-legacy.mdc).
+
+  **Current state.** A prototype that replaced the dead receipt check with a
+  cleartext destination-bookkeeping check (constructed tx `dests` + `change`
+  must cover every required recipient amount) was written during the 2026-06-21
+  spend-path debugging but **reverted** as out-of-scope C++ debt (the
+  KAT-replacement PR is Rust-only; see "C++ FCMP++ wallet send path incomplete"
+  above). The inherited dead check therefore **remains** in C++
+  `wallet2::sanity_check` unchanged. The bookkeeping shape is recorded here as
+  the minimum the Rust send-path should adopt: cleartext-bookkeeping at
+  minimum, ideally full cryptographic re-derivation.
+
+  **Disposition.** A proper sender-side output verification — re-derive each
+  output's one-time key, open its commitment to `(amount, mask)`, and verify
+  the amount-encryption against the intended `(address, amount)` — is crypto
+  that belongs in Rust per
+  [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc), in
+  the `shekyl-tx-builder` / `shekyl-engine-core` send path, not in
+  `wallet2.cpp` (scheduled for deletion at the rewrite's Phase 5). The
+  daemon re-verifies the membership proof, key images, and balance on relay
+  — the authoritative oracle — so the wallet self-check is defense-in-depth,
+  not the security boundary.
+
+  **Reopening / closure.** Lands with the Rust send-path verification (or
+  with the `wallet2.cpp` Phase-5 deletion, whichever is first). **Target:
+  V3.1+** (defense-in-depth; no chain-state migration cost; daemon relay is
+  the authoritative validator).
 
 - **`wallet2` has no `generate_from_bip39` entry point — by design;
   do not add one.** Surfaced 2026-05-05 (Bug 4 in

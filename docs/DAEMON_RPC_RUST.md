@@ -71,7 +71,14 @@ In restricted mode (`--restricted-rpc`):
   strings and binary blobs without interpretation.
 - `get_outs` / `get_outs.bin` endpoints are removed — FCMP++ uses
   full-chain membership proofs, so there is no ring member fetching.
-- Curve tree RPC endpoints are implemented:
+- Curve tree RPC endpoints — the C++ `on_get_curve_tree_*` handlers exist and
+  are registered in the **legacy epee** dispatch (`src/rpc/core_rpc_server.h`),
+  but are **not yet registered in this Axum/FFI JSON-RPC dispatch table**
+  (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so under the default Rust
+  RPC server they currently return **404**. Wiring them into the FFI dispatch
+  (plus the `on_get_curve_tree_path` handler fixes that surfaced alongside) is
+  tracked in [`FOLLOWUPS.md`](FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
+  endpoints missing from the FFI dispatch table". The endpoints:
   - `get_curve_tree_path` — retrieve a Merkle path for a given leaf
   - `get_curve_tree_info` — retrieve the current curve tree root hash, depth, and leaf count
   - `get_curve_tree_checkpoint` — retrieve a curve tree snapshot at a given height
