@@ -4365,6 +4365,7 @@ dependencies = [
 name = "shekyl-wire"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
  "shekyl-crypto-hash",
 ]
 

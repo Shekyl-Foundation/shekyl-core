@@ -281,49 +281,54 @@ impl Input {
 }
 
 /// Holdings descriptor for a bond post (`bond_wire.rs` `HoldingsDescriptor`).
+///
+/// The `kind` byte and the shard-id list are coupled on the wire — only the compact
+/// form carries a list — so they are one enum, not a `{ kind, shard_ids }` pair. That
+/// makes the `kind`/list mismatch the wire cannot represent (a complete-tree holding
+/// with a stray shard list, which the old `write` silently dropped) unconstructable.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Holdings {
-    /// Holdings kind byte (`HOLDINGS_SHARD_SET_COMPACT` or `HOLDINGS_COMPLETE_TREE`).
-    pub kind: u8,
-    /// Shard ids (present only for `ShardSetCompact`; empty for `CompleteTree`).
-    pub shard_ids: Vec<u64>,
+pub enum Holdings {
+    /// Compact shard set (`kind` `0x00`) — carries an explicit shard-id list.
+    ShardSetCompact(Vec<u64>),
+    /// Complete tree (`kind` `0x01`) — no shard list on the wire.
+    CompleteTree,
 }
 
 impl Holdings {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_all(&[self.kind])?;
-        if self.kind == HOLDINGS_SHARD_SET_COMPACT {
-            write_varint(self.shard_ids.len(), w)?;
-            for shard in &self.shard_ids {
-                write_varint(*shard, w)?;
+        match self {
+            Holdings::ShardSetCompact(shard_ids) => {
+                w.write_all(&[HOLDINGS_SHARD_SET_COMPACT])?;
+                write_varint(shard_ids.len(), w)?;
+                for shard in shard_ids {
+                    write_varint(*shard, w)?;
+                }
             }
+            Holdings::CompleteTree => w.write_all(&[HOLDINGS_COMPLETE_TREE])?,
         }
         Ok(())
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<Holdings> {
-        let kind = read_byte(r)?;
-        if kind != HOLDINGS_SHARD_SET_COMPACT && kind != HOLDINGS_COMPLETE_TREE {
-            return Err(io::Error::other(format!(
-                "shekyl-wire: invalid holdings kind {kind}"
-            )));
+        match read_byte(r)? {
+            HOLDINGS_SHARD_SET_COMPACT => {
+                let count: usize = read_varint(r)?;
+                if count > MAX_HOLDINGS_SHARDS {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: holdings shard count {count} exceeds {MAX_HOLDINGS_SHARDS}"
+                    )));
+                }
+                let mut shard_ids = Vec::new();
+                for _ in 0..count {
+                    shard_ids.push(read_varint(r)?);
+                }
+                Ok(Holdings::ShardSetCompact(shard_ids))
+            }
+            HOLDINGS_COMPLETE_TREE => Ok(Holdings::CompleteTree),
+            other => Err(io::Error::other(format!(
+                "shekyl-wire: invalid holdings kind {other}"
+            ))),
         }
-        let shard_ids = if kind == HOLDINGS_SHARD_SET_COMPACT {
-            let count: usize = read_varint(r)?;
-            if count > MAX_HOLDINGS_SHARDS {
-                return Err(io::Error::other(format!(
-                    "shekyl-wire: holdings shard count {count} exceeds {MAX_HOLDINGS_SHARDS}"
-                )));
-            }
-            let mut ids = Vec::new();
-            for _ in 0..count {
-                ids.push(read_varint(r)?);
-            }
-            ids
-        } else {
-            Vec::new()
-        };
-        Ok(Holdings { kind, shard_ids })
     }
 }
 
@@ -396,20 +401,40 @@ impl ServeCredit {
     }
 }
 
+/// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
+///
+/// Only the JoinMarket post carries `bond_spend_pk` on the wire (§9.11), so the
+/// coupling lives in the type: `JoinMarket` *always* has the key and `Other` *never*
+/// does. That makes both silent round-trip hazards of the old `{ post_kind: u8,
+/// bond_spend_pk: Option<_> }` shape — a non-JoinMarket post whose `Some` key `write`
+/// dropped, and a JoinMarket post whose missing key `write` errored on — impossible
+/// to construct.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BondPostKind {
+    /// JoinMarket post (`post_kind` `0x00`, the only kind valid at genesis) — carries
+    /// `bond_spend_pk`, the GF-1 debit authorizer (§9.11).
+    JoinMarket {
+        /// The GF-1 debit authorizer hybrid public key.
+        bond_spend_pk: Vec<u8>,
+    },
+    /// Any non-JoinMarket post kind — no `bond_spend_pk` on the wire. The byte must
+    /// not be the JoinMarket tag (`Other` is non-JoinMarket by construction; `write`
+    /// rejects `Other(JOINMARKET)`).
+    Other(u8),
+}
+
 /// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1). JoinMarket-only at
-/// genesis. Includes **`bond_spend_pk`** (the GF-1 debit authorizer, §9.11),
-/// present on the wire iff `post_kind == JOINMARKET` — which the current
-/// `shekyl-archival-retention::bond_wire` omits and the impl must add.
+/// genesis. The `post_kind`/`bond_spend_pk` coupling (§9.11) — which the current
+/// `shekyl-archival-retention::bond_wire` omits and the impl must add — is carried in
+/// [`BondPostKind`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BondPost {
     /// `P`'s canonical hybrid public key.
     pub hybrid_public_key: Vec<u8>,
     /// `P`'s canonical id.
     pub p_canonical_id: [u8; 32],
-    /// Post kind byte (`BOND_POST_KIND_JOINMARKET` at genesis).
-    pub post_kind: u8,
-    /// GF-1 debit authorizer; `Some` iff `post_kind == JOINMARKET`.
-    pub bond_spend_pk: Option<Vec<u8>>,
+    /// The post kind and its coupled `bond_spend_pk` (§9.11).
+    pub kind: BondPostKind,
     /// Holdings served.
     pub holdings: Holdings,
     /// Public bonded total (== `bond_credit` == `bond_floor` for JoinMarket).
@@ -425,13 +450,25 @@ impl BondPost {
         write_varint(self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
-        w.write_all(&[self.post_kind])?;
-        if self.post_kind == BOND_POST_KIND_JOINMARKET {
-            let bspk = self.bond_spend_pk.as_deref().ok_or_else(|| {
-                io::Error::other("shekyl-wire: JoinMarket bond_post requires bond_spend_pk")
-            })?;
-            write_varint(bspk.len(), w)?;
-            w.write_all(bspk)?;
+        match &self.kind {
+            BondPostKind::JoinMarket { bond_spend_pk } => {
+                w.write_all(&[BOND_POST_KIND_JOINMARKET])?;
+                write_varint(bond_spend_pk.len(), w)?;
+                w.write_all(bond_spend_pk)?;
+            }
+            BondPostKind::Other(post_kind) => {
+                // `Other` is non-JoinMarket by contract; reusing the JoinMarket tag
+                // would make `write` emit a `bond_spend_pk`-less blob that `read`
+                // would then try to parse as JoinMarket (consuming the holdings bytes
+                // as the key). Reject the misconstruction rather than emit it.
+                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                    return Err(io::Error::other(
+                        "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
+                         (use BondPostKind::JoinMarket)",
+                    ));
+                }
+                w.write_all(&[*post_kind])?;
+            }
         }
         self.holdings.write(w)?;
         write_varint(self.bonded_total_atomic, w)?;
@@ -444,21 +481,24 @@ impl BondPost {
             read_len_prefixed_bounded(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = read_array(r)?;
         let post_kind = read_byte(r)?;
-        let bond_spend_pk = if post_kind == BOND_POST_KIND_JOINMARKET {
-            Some(read_len_prefixed_bounded(
-                r,
-                "bond_spend_pk",
-                PQC_HYBRID_SINGLE_KEY_LEN,
-            )?)
+        // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
+        // first arm, so the `write` guard above only fires on a hand-built value.
+        let kind = if post_kind == BOND_POST_KIND_JOINMARKET {
+            BondPostKind::JoinMarket {
+                bond_spend_pk: read_len_prefixed_bounded(
+                    r,
+                    "bond_spend_pk",
+                    PQC_HYBRID_SINGLE_KEY_LEN,
+                )?,
+            }
         } else {
-            None
+            BondPostKind::Other(post_kind)
         };
         let holdings = Holdings::read(r)?;
         Ok(BondPost {
             hybrid_public_key,
             p_canonical_id,
-            post_kind,
-            bond_spend_pk,
+            kind,
             holdings,
             bonded_total_atomic: read_varint(r)?,
             bond_credit: read_varint(r)?,
@@ -880,10 +920,14 @@ impl TxPrefix {
             inputs.push(Input::read(r)?);
         }
 
+        // Outputs are capped at the structural maximum (not the loose `READ_LEN_CAP`):
+        // no valid tx exceeds `MAX_OUTPUTS`, and rejecting here bounds the per-output
+        // `CtBase` allocation (`enc_amounts`/`enc_labels`/`commitments`) that follows,
+        // so a hostile count can't drive ~50 B/output of allocation before `validate`.
         let n_outputs: usize = read_varint(r)?;
-        if n_outputs > READ_LEN_CAP {
+        if n_outputs > MAX_OUTPUTS {
             return Err(io::Error::other(format!(
-                "shekyl-wire: output count {n_outputs} exceeds parse cap {READ_LEN_CAP}"
+                "shekyl-wire: output count {n_outputs} exceeds {MAX_OUTPUTS}"
             )));
         }
         let mut outputs = Vec::new();
@@ -939,6 +983,13 @@ impl Transaction {
     }
 
     /// Serialize the transaction to a fresh `Vec<u8>`.
+    ///
+    /// This is a **faithful** encoding of the in-memory value, not a validity gate:
+    /// the I/O is infallible, but a hand-built tx with out-of-range fields (counts
+    /// past the parse caps, oversized PQC blobs, a fee-only/spend shape mismatch) can
+    /// serialize to bytes [`Self::from_bytes`] would then reject. Call
+    /// [`Self::validate`] first when you need a guaranteed-round-trippable blob;
+    /// values obtained from `from_bytes` are already in range and always round-trip.
     pub fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         self.write(&mut out)
@@ -1001,11 +1052,13 @@ impl Transaction {
                 base.write(&mut base_buf).expect("Vec write is infallible");
                 let h_base = cn_fast_hash(&base_buf);
 
-                // Per the C++ oracle (format_utils.cpp:1163-1182): **4-part** iff
-                // pqc_auths are present, else **3-part** `{prefix, base, prunable}`.
-                // The prunable component is `H(prunable)` when present, else the null
-                // hash (the fee-only / serve-credit form — its live-oracle hash parity
-                // is pending a captured blob, as for the spend KAT).
+                // Per the C++ oracle (format_utils.cpp:1137/1163-1182): **4-part**
+                // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
+                // .empty()`, where `has_pqc = version>=3 && vin[0] != gen`; otherwise
+                // **3-part** `{prefix, base, prunable}`. The prunable component is
+                // `H(prunable)` when present, else the null hash (the fee-only /
+                // serve-credit form — its live-oracle hash parity is pending a captured
+                // blob, as for the spend KAT).
                 let h_prunable = match prunable {
                     Some(prunable) => {
                         let mut prunable_buf = Vec::new();
@@ -1017,10 +1070,21 @@ impl Transaction {
                     None => [0u8; 32],
                 };
 
-                if pqc_auths.is_empty() {
+                // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
+                // oracle does — so a `gen` input + `Fcmp` ct hashes 3-part like a
+                // coinbase rather than misclassifying as a spend.
+                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
+                if pqc_auths.is_empty() || first_is_gen {
                     hash_concat(&[h_prefix, h_base, h_prunable])
                 } else {
+                    // The pqc component mirrors the oracle's generic `std::vector`
+                    // serializer (format_utils.cpp:1169), whose `begin_array(cnt)`
+                    // writes the element **count as a leading varint** before the
+                    // entries — unlike the tx *body*, where the count is implicit
+                    // (`vin.size()`, no prefix). Both must match their respective C++
+                    // paths; they legitimately differ.
                     let mut auth_buf = Vec::new();
+                    write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
                     for auth in pqc_auths {
                         auth.write(&mut auth_buf).expect("Vec write is infallible");
                     }
@@ -1115,6 +1179,15 @@ impl Transaction {
         let n_ki = key_images.len(); // key-image (spend) inputs
         let base = match &self.ct {
             Ct::Null(base) => {
+                // §2.5: a `Null` ct carries no proof material and is **coinbase-only**;
+                // a non-coinbase tx must be `Fcmp`. Without this, a tx with `ToKey`
+                // (spend) inputs + a `Null` ct would pass structural validation while
+                // being consensus-invalid.
+                if !is_coinbase {
+                    return Err(io::Error::other(
+                        "shekyl-wire: Null ct is coinbase-only; a non-coinbase tx must be Fcmp (§2.5)",
+                    ));
+                }
                 if n_out == 0 {
                     return Err(io::Error::other("shekyl-wire: coinbase has no outputs"));
                 }
@@ -1126,6 +1199,32 @@ impl Transaction {
                 prunable,
                 ..
             } => {
+                // §2.5: the coinbase is `Null`-only — an `Fcmp` ct on a coinbase (a
+                // `gen` input) is the dual of the check above.
+                if is_coinbase {
+                    return Err(io::Error::other(
+                        "shekyl-wire: coinbase must carry a Null ct, not Fcmp (§2.5)",
+                    ));
+                }
+                // Per-auth blob bounds — consensus accept-parity with the C++
+                // deserialization caps (`PqcAuth::read` rejects oversized blobs on the
+                // wire; `PqcAuth::write` is faithful, so `validate` is the in-memory
+                // gate that keeps a constructed tx from later failing parse). Empty for
+                // the fee-only form, so this is a no-op there.
+                for auth in pqc_auths {
+                    if auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: pqc_auth public key {} exceeds {PQC_MAX_PUBLIC_KEY_BLOB}",
+                            auth.hybrid_public_key.len()
+                        )));
+                    }
+                    if auth.hybrid_signature.len() > PQC_MAX_SIGNATURE_BLOB {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: pqc_auth signature {} exceeds {PQC_MAX_SIGNATURE_BLOB}",
+                            auth.hybrid_signature.len()
+                        )));
+                    }
+                }
                 match prunable {
                     // Spend / bond-post: a prunable proof is present.
                     Some(prunable) => {

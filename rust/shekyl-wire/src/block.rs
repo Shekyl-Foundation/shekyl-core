@@ -21,7 +21,7 @@ use shekyl_crypto_hash::cn_fast_hash;
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
-use crate::transaction::{Input, Transaction};
+use crate::transaction::{Ct, Input, Transaction};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
@@ -90,6 +90,11 @@ impl Block {
     }
 
     /// Serialize the block to a fresh `Vec<u8>`.
+    ///
+    /// A faithful encoding of the in-memory value, not a validity gate: a block whose
+    /// miner tx is not coinbase-shaped serializes fine but [`Self::from_bytes`] would
+    /// reject it (the embedded-tx read requires a `Null` coinbase). A block read via
+    /// `from_bytes` always round-trips.
     pub fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::new();
         self.write(&mut out)
@@ -104,6 +109,24 @@ impl Block {
     pub fn read<R: BufRead>(r: &mut R) -> io::Result<Block> {
         let header = BlockHeader::read(r)?;
         let miner_transaction = Transaction::read(r)?;
+        // The miner tx is the coinbase (§2.5): a sole `gen` input and a `Null` ct.
+        // Enforce it here because the embedded read must be unambiguous —
+        // `Ct::read` discriminates the fee-only / full FCMP++ shapes by end-of-input,
+        // which is only meaningful for a *terminal* field. A `Null` coinbase has no
+        // EOF-tolerant tail, so embedding it before the `n_tx`/hash array is
+        // well-defined; an embedded `Fcmp` tx would instead consume the trailing block
+        // bytes as `pqc_auths`/`prunable`. Rejecting a non-coinbase miner tx closes
+        // that mis-parse and keeps `number()`/`pow_blob()`'s coinbase assumption sound.
+        if !matches!(miner_transaction.prefix.inputs.as_slice(), [Input::Gen(_)]) {
+            return Err(io::Error::other(
+                "shekyl-wire: block miner tx must have a sole gen input (coinbase, §2.5)",
+            ));
+        }
+        if !matches!(miner_transaction.ct, Ct::Null(_)) {
+            return Err(io::Error::other(
+                "shekyl-wire: block miner tx must carry a Null ct (coinbase, §2.5)",
+            ));
+        }
 
         let n_tx: usize = read_varint(r)?;
         if n_tx > READ_LEN_CAP {

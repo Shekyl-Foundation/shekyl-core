@@ -165,3 +165,49 @@ fn mismatched_pqc_auths_length_rejected() {
     let err = tx.validate().unwrap_err();
     assert!(err.to_string().contains("pqc_auths"), "{err}");
 }
+
+#[test]
+fn null_ct_on_non_coinbase_rejected() {
+    // §2.5: a Null ct (no proof material) is coinbase-only; a tx with spend inputs
+    // and a Null ct must reject (it would otherwise pass structural validation).
+    let mut tx = spend(vec![ki(1)], vec![out()], 0, 1);
+    tx.ct = Ct::Null(CtBase {
+        enc_amounts: vec![[0u8; 9]],
+        enc_labels: vec![[0u8; 9]],
+        commitments: vec![[0u8; 32]],
+    });
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("coinbase-only"), "{err}");
+}
+
+#[test]
+fn fcmp_ct_on_coinbase_rejected() {
+    // §2.5 dual: a coinbase (gen input) must carry a Null ct, never Fcmp.
+    let tx = spend(vec![Input::Gen(0)], vec![out()], 0, 1); // gen input + Fcmp ct
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("Null ct"), "{err}");
+}
+
+#[test]
+fn pqc_auth_oversized_blob_rejected() {
+    // validate() is the in-memory gate for the PQC blob caps (write is faithful):
+    // a public key beyond PQC_MAX_PUBLIC_KEY_BLOB must reject.
+    let mut tx = spend(vec![ki(1)], vec![out()], 0, 1);
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths[0].hybrid_public_key =
+            vec![0u8; shekyl_wire::transaction::PQC_MAX_PUBLIC_KEY_BLOB + 1];
+    }
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("public key"), "{err}");
+}
+
+#[test]
+fn block_rejects_non_coinbase_miner_tx() {
+    // The block miner tx must be coinbase-shaped (sole gen input, Null ct): the
+    // embedded EOF-based ct discrimination is only sound for a Null coinbase.
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let mut bad = blk;
+    bad.miner_transaction = spend(vec![ki(1)], vec![out()], 0, 1);
+    let err = Block::from_bytes(&bad.serialize()).unwrap_err();
+    assert!(err.to_string().contains("miner tx"), "{err}");
+}

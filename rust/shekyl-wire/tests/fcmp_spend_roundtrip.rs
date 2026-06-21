@@ -205,3 +205,25 @@ fn regtest_spend_round_trips_byte_identical() {
         "re-serialization must be byte-identical to the C++ oracle blob"
     );
 }
+
+#[test]
+fn synthetic_spend_hash_preimage_is_pinned() {
+    // Regression guard for the 4-part FCMP++ spend hash (§11):
+    //   cn_fast_hash( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
+    // There is no live spend-hash oracle yet (the KAT is deferred), so this pins the
+    // *preimage structure* against accidental drift — most importantly the leading
+    // varint(N) count prefix on the pqc_auths component, which the C++ oracle emits
+    // because the hash uses the generic std::vector serializer (begin_array(cnt) ->
+    // serialize_varint), unlike the prefix-less tx body. If this value changes,
+    // either the layout regressed or the live KAT just landed — confirm against the
+    // daemon before updating.
+    let h: String = synthetic_spend()
+        .hash()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        h, "d6cb346f02830be0a91c395dcf64ba1492b05e47c17e6b2f54f0858735a0d03e",
+        "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
+    );
+}

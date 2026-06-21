@@ -12,5 +12,11 @@ description = "Canonical Shekyl genesis block/tx binary wire format (serializer)
 # the C++ `cn_fast_hash`). The single source for the tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
+[dev-dependencies]
+# Test-only: load the captured oracle hash vectors so the JSON is the single source
+# of truth for the live-oracle hash KAT (no hand-copied hex). Not a runtime
+# dependency of the serializer.
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

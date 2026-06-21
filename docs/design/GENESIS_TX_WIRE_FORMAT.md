@@ -146,6 +146,15 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   present) / 3-part (fee-only) per the C++ oracle; `validate()` is shape-aware.
   Synthetic round-trip validated; live byte/hash parity for these **post-genesis**
   shapes is pending a captured blob (as for the spend KAT).
+- **Self-audit hardening pass** (multi-perspective audit + Copilot round 7) — fixed a
+  latent **consensus hash bug** (the 4-part `H(pqc_auths)` preimage was missing the
+  leading `varint(N)` count prefix the C++ `std::vector` archiver emits — see §11;
+  invisible until the live spend-hash KAT, now pinned by a synthetic golden); enforced
+  **`Null` ct ⟺ coinbase** + **PQC blob caps** in `validate()`; required a
+  **coinbase-shape miner tx** in `Block::read` (so the embedded EOF ct-discrimination
+  is only ever applied to a tail-less `Null`); capped **outputs at parse**; and made
+  the archival `Holdings` / `BondPost.post_kind`-`bond_spend_pk` couplings **enums**
+  so the silent round-trip-to-different-value shapes are unrepresentable.
 
 **Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
 - **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
@@ -644,13 +653,21 @@ over-cap block, must be rejected by both impls).
 
 ## 11. Hashing layer (consensus identities)
 
-- **Tx hash** = `cn_fast_hash` over concatenated component hashes (format_utils.cpp:1200-1252):
+- **Tx hash** = `cn_fast_hash` over concatenated component hashes (format_utils.cpp:1137/1163-1182):
   - coinbase (`Null`, no pqc): **3-part** `H(prefix) · H(base) · null_hash`
-  - spend (`Fcmp`, pqc present): **4-part** `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`
+  - spend (`Fcmp`, pqc present): **4-part** `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`,
+    used iff `has_pqc && !pqc_auths.empty()` where `has_pqc = version≥3 && vin[0] != gen`
+    (a `gen`-first tx hashes 3-part like a coinbase).
 
   where `H(prefix)` = `get_transaction_prefix_hash` (version + prefix fields),
   `H(base)` = hash of `serialize_ct_base`, `H(pqc_auths)` = hash of the serialized
   pqc_auths vec, `H(prunable)` = hash of prunable (`null_hash` for coinbase).
+  ⚠️ The `H(pqc_auths)` preimage is **count-prefixed**: the hash serializes
+  `pqc_auths` with the **generic `std::vector` archiver** (format_utils.cpp:1169 →
+  `begin_array(cnt)` → leading `varint(N)`), so the preimage is `V(N) · auth₀ · … ·
+  auth_{N-1}` — **unlike** the tx *body*, where the count is implicit (`vin.size()`,
+  no prefix; basic.h:505-516). The two C++ paths legitimately differ; the Rust
+  `hash()` must prepend `V(N)` for the hash component only.
 - **Pruning stable (pruned == full).** `pqc_auths` are **unprunable** (kept in the
   pruned form, format_utils.cpp:1204) and `prunable_hash` is retained, so all
   components match → identical tx hash. *(The EOF-tolerant pqc-auths-empty form is

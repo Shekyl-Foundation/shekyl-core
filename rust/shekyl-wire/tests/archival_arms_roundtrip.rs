@@ -12,7 +12,8 @@
 //! `shekyl-archival-retention::{wire,bond_wire}` + GENESIS_TX_WIRE_FORMAT.md
 //! §9.10/§9.11, with `bond_spend_pk` added per §9.11.
 
-use shekyl_wire::{BondPost, Holdings, Input, ServeCredit};
+use shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
+use shekyl_wire::{BondPost, BondPostKind, Holdings, Input, ServeCredit};
 
 fn round_trip(input: &Input) -> Input {
     let mut bytes = Vec::new();
@@ -45,12 +46,10 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; 1996],
         p_canonical_id: [0x77; 32],
-        post_kind: 0, // JoinMarket
-        bond_spend_pk: Some(vec![0xCD; 1996]),
-        holdings: Holdings {
-            kind: 0, // ShardSetCompact
-            shard_ids: vec![1, 2, 3, 9],
+        kind: BondPostKind::JoinMarket {
+            bond_spend_pk: vec![0xCD; 1996],
         },
+        holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,
         bond_credit: 750_000_000 * 4,
         bond_debit: 0,
@@ -59,7 +58,7 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
     assert_eq!(parsed, input);
     // bond_spend_pk survived (the field the current impl omits).
     match parsed {
-        Input::BondPost(bp) => assert!(bp.bond_spend_pk.is_some()),
+        Input::BondPost(bp) => assert!(matches!(bp.kind, BondPostKind::JoinMarket { .. })),
         _ => panic!("expected BondPost"),
     }
 }
@@ -70,12 +69,8 @@ fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; 64],
         p_canonical_id: [0x02; 32],
-        post_kind: 3,
-        bond_spend_pk: None,
-        holdings: Holdings {
-            kind: 1, // CompleteTree — carries no shard list
-            shard_ids: vec![],
-        },
+        kind: BondPostKind::Other(3),
+        holdings: Holdings::CompleteTree, // carries no shard list
         bonded_total_atomic: 12_000_000_000,
         bond_credit: 9_000_000_000,
         bond_debit: 3_000_000_000,
@@ -84,17 +79,17 @@ fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
 }
 
 #[test]
-fn joinmarket_bond_post_without_bond_spend_pk_is_an_error() {
-    // Writing a JoinMarket post without bond_spend_pk must fail (it's required).
+fn bond_post_other_must_not_reuse_joinmarket_tag() {
+    // The JoinMarket coupling is now structural: `JoinMarket` always carries
+    // bond_spend_pk (the old "JoinMarket without bond_spend_pk" state is now
+    // unrepresentable — a compile-time guarantee, not a runtime check). The only
+    // residual misuse — `Other` reusing the JoinMarket tag, which would emit a blob
+    // that re-reads as a JoinMarket post — is rejected at write.
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; 64],
         p_canonical_id: [0x02; 32],
-        post_kind: 0, // JoinMarket
-        bond_spend_pk: None,
-        holdings: Holdings {
-            kind: 1,
-            shard_ids: vec![],
-        },
+        kind: BondPostKind::Other(BOND_POST_KIND_JOINMARKET),
+        holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1,
         bond_credit: 1,
         bond_debit: 0,
@@ -102,9 +97,6 @@ fn joinmarket_bond_post_without_bond_spend_pk_is_an_error() {
     let mut bytes = Vec::new();
     let err = input
         .write(&mut bytes)
-        .expect_err("JoinMarket requires bond_spend_pk");
-    assert!(
-        err.to_string().contains("bond_spend_pk"),
-        "unexpected: {err}"
-    );
+        .expect_err("Other must not use the JoinMarket tag");
+    assert!(err.to_string().contains("JoinMarket"), "unexpected: {err}");
 }
