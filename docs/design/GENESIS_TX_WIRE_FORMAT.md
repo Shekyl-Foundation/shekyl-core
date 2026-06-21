@@ -123,6 +123,31 @@ just tidiness.
    ~58-site surface twice. Recorded in
    [`../V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-20).
 
+### 1.1 Implementation status (2026-06-21)
+
+The clean serializer and the first gate-(c) cut **landed** — PR #168
+(`feat/shekyl-wire` → dev), a consensus atomic-flip PR:
+
+- **`shekyl-wire` crate** — coinbase, FCMP++ spend, archival arms (incl.
+  `bond_spend_pk`), hashing (§11), `tx_extra` (§9.6a), and structural validation
+  (§10/§12). Coinbase block/tx/hash + `tx_extra` are **live-oracle byte-identical**
+  to the daemon; the FCMP++ spend is **synthetic round-trip only** (the live KAT is
+  blocked — see below).
+- **Gate-(c) §5 item 2 — the dense tag renumber** — C++ `VARIANT_TAG`s + the ct type
+  enum (via the `consensus_constants.json` authority + every drift tripwire), with all
+  three nets' `GENESIS_TX` **re-pinned** (the genesis blob embeds the tag bytes, so the
+  old-tag genesis could no longer be hashed). Dead arms are **parked at `0xf0+`**, not
+  yet type-removed — that shed is §5 item 1, deferred. Daemon builds + starts + mines
+  dense coinbases; full Rust workspace green (1724 tests; RandomX excluded per its gate).
+
+**Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
+- **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
+  `feat/shekyl-wire-spend-kat`. Spends are synthetic-validated until it lands.
+- **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
+  (drop `key_offsets`); decompose removal / single-output coinbase.
+- **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx.
+- The F1–F6 freeze obligations and the §2.1 deferred sub-freezes remain.
+
 ## 2. The arbitration table
 
 Source cites are `src/cryptonote_basic/cryptonote_basic.h` unless noted.
@@ -131,10 +156,11 @@ Source cites are `src/cryptonote_basic/cryptonote_basic.h` unless noted.
 
 **Decision:** Monero is a proven *pattern*, not a *basis*. We will never meet the
 old chain on-wire, so we number tags as Shekyl needs them — dense from `0x00`,
-not the inherited values. The `§2.1`/`§2.2` "Tag" columns below are the **C++
-source** values; the **genesis** values are this scheme. The renumber is a
-gate-(c) cut (C++ `VARIANT_TAG`s + the ct type enum flip with Rust atomically,
-§5/§7). *(Assignments below are pinned in §2.0/§2.1; ratification pending per the header.)*
+not the inherited values. The renumber **landed** via PR #168 (§1.1): the C++
+`VARIANT_TAG`s + ct type enum now emit these dense values atomically with Rust and a
+3-net `GENESIS_TX` re-pin (§5 item 2 / §7). The `§2.1`/`§2.2` "Tag" columns below are
+therefore the **pre-renumber C++ source** values — historical, kept for the
+disposition mapping; the live C++ **and** genesis values are this dense scheme.
 
 ```text
 Genesis tags (single-wave freeze):
@@ -368,15 +394,20 @@ These are **genesis-format definition**, not "patching C++" — they *remove*
 inherited cruft ([`60-no-monero-legacy`]) so the oracle emits the arbitrated
 format:
 
+**Status (2026-06-21):** item 2 (the dense renumber) **landed** via PR #168 — with
+the dead arms *parked* at `0xf0+` rather than type-removed, so item 1 stays open.
+Items 1, 3, 4 remain, each its own atomic-flip cut.
+
 1. Remove the dead/shed arms from `txin_v`/`tx_out` + the `VARIANT_TAG` lists:
    `txin_to_script`/`txin_to_scripthash`/`txout_to_script`/`txout_to_scripthash`
    (CryptoNote), plain `txout_to_key` (Q3), and **`txout_to_staked_key` +
    `txin_stake_claim`** (Q11 — cleartext staking retired; genesis uses the `P`
    model). The archival arms (`serve_credit`/`bond_post`) stay (frozen, single wave).
-2. **Renumber the surviving tags to the §2.0 dense scheme** — input/output
-   variant tags + the ct type enum (`Null=0x00`, `Fcmp=0x01`). One pervasive
-   atomic flip (C++ `VARIANT_TAG` values + Rust), so the corpus re-pins on the
-   post-renumber bytes.
+2. **✅ LANDED (PR #168) — Renumber the surviving tags to the §2.0 dense scheme** —
+   input/output variant tags + the ct type enum (`Null=0x00`, `Fcmp=0x01`). One
+   pervasive atomic flip (C++ `VARIANT_TAG` values + Rust + the 3-net genesis
+   re-pin), so the corpus re-pins on the post-renumber bytes. Dead arms parked at
+   `0xf0+` (their full type-removal is item 1, deferred).
 3. Reshape `txin_to_key` → `txin_fcmp`, drop `key_offsets` (pending Q1).
 4. Remove the `decompose_amount_into_digits` machinery — `max_outs=1` already
    forces a single coinbase output (Q2 resolved), so the decomposition is dead
@@ -518,9 +549,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
    the Q13 scan-KAT — 2d-1 P-scan needs this scanner regardless**); delete
    `shekyl-oxide` block/tx — **sequenced to avoid colliding with in-flight
    wallet-rewrite work**.
-5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): tag
-   renumber, `txin_fcmp` reshape, shed dead/staking arms, single-output coinbase,
-   exact-consumption + exact-proof-length, reward-zone de-gating.
+5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): **tag
+   renumber ✅ (PR #168)**; then `txin_fcmp` reshape, shed dead/staking arms,
+   single-output coinbase, exact-consumption + exact-proof-length, reward-zone
+   de-gating (all pending).
 
 Off-doc handoffs: the reward-zone *value* → economics (§14.3 has the sized
 starting number); RandomX v2 epoch/lag → `shekyl-pow-randomx` at the Stage-3
