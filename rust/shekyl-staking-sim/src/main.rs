@@ -20,6 +20,7 @@
 
 mod agent;
 mod audit;
+mod cover;
 mod curve;
 mod failure_confirmation;
 mod fingerprint;
@@ -615,6 +616,105 @@ fn print_standoff_report() {
     }
 }
 
+fn print_cover_report() {
+    use cover::Dispersion;
+    let disp = |d: Dispersion| match d {
+        Dispersion::Clustered => "clust",
+        Dispersion::Dispersed => "disp",
+    };
+    let report = cover::run_full_report();
+    eprintln!(
+        "shekyl-staking-sim — funding-seam cover-amount anonymity (ARCHIVAL_COVER_DRAW.md §7)"
+    );
+    eprintln!(
+        "Charter: hide principal ↔ P via A = bond_floor + cover. The attacker tests A − bond_floor"
+    );
+    eprintln!(
+        "  ∈ [C_min,C_max]; the candidate set is the k+1 rungs straddling s_P (floor = {:.2} SKL/rung).",
+        report.floor_skl
+    );
+    eprintln!(
+        "  Per-rung DENSITY (clustered vs dispersed) is the SWEPT pre-testnet assumption, not a"
+    );
+    eprintln!("  measurement (the cover analogue of the standoff's background rate).");
+    eprintln!();
+    eprintln!(
+        "  set = candidate funders (1 target + in-window, timing-retained decoys); link = 1/set;"
+    );
+    eprintln!(
+        "  thin = P(set ≤ 2); tax = cover span / bond (k/s_P), worst = the rung-1 staker (§7.3);"
+    );
+    eprintln!("  rt = timing-retain (§1.1: 1.0 = amount-marginal upper bound).");
+    eprintln!();
+    eprintln!(
+        "{:<24} {:<16} {:>4} {:>5} {:>5} {:>4} {:>4} | {:>7} {:>6} {:>6} {:>6} | {:>6} {:>6}",
+        "scenario",
+        "axis",
+        "n_P",
+        "mean",
+        "dens",
+        "k",
+        "rt",
+        "covSKL",
+        "setMean",
+        "setP05",
+        "thin",
+        "taxMn",
+        "taxWst",
+    );
+    for r in &report.results {
+        eprintln!(
+            "{:<24} {:<16} {:>4} {:>5.0} {:>5} {:>4} {:>4.1} | {:>7.2} {:>6.2} {:>6.1} {:>6.3} | {:>6.2} {:>6.1}",
+            r.name,
+            r.axis,
+            r.n_p,
+            r.mean_shards,
+            disp(r.dispersion),
+            r.rungs_blurred,
+            r.timing_retain,
+            r.cover_span_skl,
+            r.anon_set_mean,
+            r.anon_set_p05,
+            r.thin_cover_frac,
+            r.tax_mean,
+            r.tax_worst,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Err-large pin (smallest k with mean set ≥ {:.0} at the thin/dispersed corner, +1 notch).",
+        report.target_anon_set
+    );
+    eprintln!(
+        "  rch = mean target reachable (n = pool saturates below it); thin@pin is the RESIDUAL tail"
+    );
+    eprintln!(
+        "  the dial can't close (bar {:.0}%) — firewall-composition, not a sizing knob (§7).",
+        report.thin_tail_target * 100.0
+    );
+    eprintln!(
+        "{:>4} {:>8} {:>4} {:>8} {:>8} {:>8} {:>8} {:>7}",
+        "rt", "knee_k", "rch", "pin_k", "covSKL", "wstTax", "setMean", "thin",
+    );
+    for rec in &report.recommendations {
+        eprintln!(
+            "{:>4.1} {:>8} {:>4} {:>8} {:>8.2} {:>7.0}x {:>8.2} {:>7.3}",
+            rec.timing_retain,
+            rec.knee_rungs,
+            if rec.mean_target_reached { "Y" } else { "n" },
+            rec.err_large_rungs,
+            rec.cover_span_skl,
+            rec.worst_tax_multiple,
+            rec.anon_set_mean,
+            rec.thin_cover_frac,
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -623,6 +723,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--standoff") {
         print_standoff_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover") {
+        print_cover_report();
         return;
     }
 
