@@ -471,6 +471,7 @@ P_canonical_id = cSHAKE256(
 ```text
 ArchivalBondRecord {
   P_pubkey:                 HybridPublicKey,
+  bond_spend_pk:            HybridPublicKey,   // GF-1 debit authorizer; committed at JoinMarket, immutable (gate-4 §4.1, which amends this §6.2 shape)
   holdings:                 HoldingsDescriptor,
   bonded_total_atomic:      u64,       // gate 4 accounting
   good_standing:            bool,

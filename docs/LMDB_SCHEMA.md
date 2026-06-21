@@ -419,17 +419,22 @@ Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 | LMDB name | `"archival_bond"` |
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
-| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
+| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
 | Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
 | Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
 
-v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11):
+v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11; `bond_spend_pk`
+amended in per `ARCHIVAL_BOND_GATE4.md` §4.1, 2026-06-16 — committed at JoinMarket,
+immutable, and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the
+persisted record must carry it. Pre-genesis amendment: no migration, reset
+data-dir per the v4 posture; the field is in the genesis v4, not a v5 bump):
 
 ```text
 u8  version (= 4)
-u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)
+u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)   // P_pubkey (account identity)
+u16 BE bond_spend_pk_len ‖ bond_spend_pk      (≤ 2048)   // GF-1 debit authorizer (gate-4 §4.1); committed at JoinMarket, immutable
 u64 BE join_settlement_epoch
 u64 BE bonded_total_atomic
 u8  holdings_kind (0 = shard set, 1 = CompleteTree)
