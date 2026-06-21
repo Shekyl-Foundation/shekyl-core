@@ -82,11 +82,13 @@ use shekyl_tx_builder::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
-/// Coinbase lock window (`shekyl_oxide::COINBASE_LOCK_WINDOW`): a coinbase
-/// output created at height `h` matures — i.e. drains into the tree — at height
-/// `h + 60`. The genesis (height 0) coinbase is therefore a tree member at any
-/// reference height `>= 60`.
-const COINBASE_LOCK_WINDOW: u64 = 60;
+/// Coinbase lock window: a coinbase output created at height `h` matures — i.e.
+/// drains into the tree — at height `h + COINBASE_LOCK_WINDOW`. The genesis
+/// (height 0) coinbase is therefore a tree member at any reference height `>=
+/// COINBASE_LOCK_WINDOW`. Sourced from the consensus constant
+/// (`shekyl_oxide::COINBASE_LOCK_WINDOW`, a `usize`) so this fixture cannot
+/// drift from the parameter; the `as u64` matches the height arithmetic below.
+const COINBASE_LOCK_WINDOW: u64 = shekyl_oxide::COINBASE_LOCK_WINDOW as u64;
 
 /// Number of outputs in the genesis coinbase. Exceeds the depth-2 capacity
 /// (`SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH = 38 * 18 = 684`), forcing a
