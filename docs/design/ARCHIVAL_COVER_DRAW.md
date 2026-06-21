@@ -2,10 +2,13 @@
 
 **Status:** SCOPING (2026-06-20, review-revised). Design-questions enumerated;
 not yet decided. Off-wire, scanner-independent, un-vendor-independent —
-parallelizable now. The bond-standardization input is **decided in shape**
-(flat `floor × shards`, pinned rung) so C1's *shape* is pinnable now; only C1's
-**magnitudes inherit the staking economics' post-testnet calibration** (§2.3) —
-not a blocked decision.
+parallelizable now (no open upstream decision: the bond-standardization is
+**decided in shape**, flat `floor × shards`, pinned rung — §2.3). **But off-wire
+is *not* re-tunable (§2.5):** the anonymity-uniformity requirement genesis-freezes
+the **whole** distribution — **shape *and* bounds**. So the next step is a genesis
+pin of **shape together with conservative bounds** (err-large; post-testnet
+**confirms** adequacy, it cannot **fix** a too-tight bound) — **not**
+shape-now/bounds-later.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -136,19 +139,17 @@ needed pieces are **decided in *shape*, not open** — not a blocked decision:
   pins shape now and calibrates magnitude later ("post-testnet calibrations of an
   already-understood curve", `:52/:83/:105/:187`).
 
-**Consequence (refines "co-pin first"):** C1 is **not** blocked on an open
-decision — it *inherits* the sim's already-shaped lattice population, and its
-**numbers (the C1 target, `C_max` in rungs) inherit the staking economics'
-post-testnet calibration**, the same class as every other staking magnitude. So
-the cover follows the sim's **own** genesis-pin pattern: **pin the *shape* now**
-(uniform draw, the rung-stepped `C_max` structure) **with a conservative genesis
-constant, calibrate the exact magnitude post-testnet** against the same population
-the sim does. **One sharper-than-wallet-policy twist (§2.4):** because the cover
-must be *uniform across wallets* for the anonymity set, `C_max` is **not** freely
-re-tunable post-genesis the way an off-wire wallet constant normally is — moving
-it splits the anonymity set into old-`C_max` and new-`C_max` cohorts. So `C_max`
-wants a genesis-pin-grade conservative value (over-provision the rung span), not a
-"tune it on testnet" knob — a tension to flag for the genesis-pin pass.
+**Consequence:** C1 is **not** blocked on an open decision — it *inherits* the
+sim's already-shaped lattice population (the rung is pinned, the shard-count
+*shape* is characterized). What it does **not** do is "pin shape now, calibrate
+the magnitude later": the bounds are frozen too — see §2.5. Post-testnet
+population data is the **same class** as every other staking magnitude only for
+*confirming* a conservative genesis bound was adequate; it cannot be the thing
+that *sizes* the bound, because by then the bound is unmovable. The sizing
+criterion is therefore **not** "dominate the realistic spread" (there is no
+realistic spread pre-genesis) but **"clear the target effective anonymity set
+under the *pessimistic* per-rung populations the `N_P` envelope allows"** — the
+**thin** end {17–62}, not the fat end {154}.
 
 ### 2.4 Per-wallet uniformity — necessary but **unenforceable** (state it plainly)
 
@@ -170,6 +171,46 @@ default + override is a **disclosed privacy cost**," not enforcement. A front-en
 override therefore joins the disclosed-opt-out family with `cover == 0` and
 stake-once-recover (§3.2).
 
+### 2.5 The whole distribution is genesis-frozen — off-wire is *not* re-tunable
+
+The anti-fingerprint requirement (§2.4) has a consequence sharper than "pin a
+constant": it freezes the **entire** distribution — **shape *and* both bounds** —
+at genesis, on anti-fingerprint grounds rather than consensus ones. "Off-wire"
+buys freedom from the **wire format**, **not** freedom to **re-tune**.
+
+**A boundary move is inferable even off-wire.** The attacker's test is
+`candidate_cover(bond) = A − bond_floor(bond) ∈ [C_min, C_max]?`. If any boundary
+moves at a known height `H`:
+
+- **widen `C_max`** ⇒ a bond whose candidate cover lands in the newly-opened band
+  is unambiguously **post-`H`** — its set collapses to post-`H` bonds in that band;
+- **narrow `C_max`** ⇒ flags the old wide bonds;
+- **raise `C_min`** ⇒ flags everything below the new floor.
+
+There is **no clean migration**: a past bond carries its old-regime cover forever
+and cannot re-draw. So the cover distribution is effectively **genesis-frozen**.
+
+**The decision rule — err large (asymmetric failure).** The pin is un-revisable
+and sized blind to the populations that would calibrate it, and the two ways to
+be wrong are not symmetric:
+
+- a **too-small** `C_max` is an **un-fixable privacy failure** — the cover spans
+  too few rungs and you cannot widen it;
+- a **too-large** `C_max` **fails safe** — the anonymity set holds; the only cost
+  is that every staker permanently locks more cover capital than a calibrated
+  value would need.
+
+So over-provision. **State the cost plainly:** the conservative bound is a
+**permanent capital tax on every staker**, the insurance premium against the
+population uncertainty being pinned blind to. `C_min` (the runway floor, §2.2)
+freezes identically and so also pins conservatively — against **pessimistic slow
+early yield** (under-funding the runway re-links, and `C_min` can't be raised
+later either).
+
+**Net (the correction to "shape-now/calibrate-later"):** the genesis pin is
+**shape + conservative bounds together**. Post-testnet population data
+*confirms* a conservative bound was adequate; it cannot *fix* one that wasn't.
+
 ---
 
 ## 3. Scope
@@ -178,9 +219,9 @@ stake-once-recover (§3.2).
 
 | # | Item |
 | --- | --- |
-| C1 | **The metric (§1).** A **joint amount × timing, posterior-weighted effective anonymity set** (IPR over the attacker's likelihood) computed over the **discrete `bond_floor` lattice** and the actual shard-count distribution. **Inherits** the bond-standardization / shard-count decision (§2.3) — co-pin first. Target value = the cover analogue of `window = 600`, sized for the worst-case direct funder (§1.3) and **jointly with the entry-gap standoff** (§1.1). |
+| C1 | **The metric (§1).** A **joint amount × timing, posterior-weighted effective anonymity set** (IPR over the attacker's likelihood) over the **discrete `bond_floor` lattice** and shard-count distribution (the latter *inherited* from the sim, §2.3 — not a co-pin). Target = the cover analogue of `window = 600`, sized for the worst-case direct funder (§1.3), **jointly with the entry-gap standoff** (§1.1), and **under the *pessimistic* per-rung populations** (thin `N_P` end, §2.5) since the bound ships genesis-frozen blind to the real population. |
 | C2 | **Distribution shape (DQ1).** Pinned shape; uniform is the expected *result* of the posterior-weighting argument (§4), not a guess. |
-| C3 | **Bounds (DQ2).** `C_min` = **working-capital runway** floor (§2.2; references 2d-1 ramp), strictly positive. `C_max` = the **lattice dial** (§2.3): steps at `floor` multiples; `≥ k × floor` to blur `k` shard-count rungs. Both single-sourced beside `DEFAULT_ENTRY_GAP_WINDOW`. |
+| C3 | **Bounds (DQ2) — genesis-frozen, conservative, err-large (§2.5).** `C_min` = **working-capital runway** floor (§2.2; references 2d-1 ramp), strictly positive, sized against pessimistic slow yield. `C_max` = the **lattice dial** (§2.3): `≥ k × floor` to blur `k` rungs, over-provisioned against the thin-`N_P` end. Both single-sourced beside `DEFAULT_ENTRY_GAP_WINDOW` and **pinned at genesis** (not post-testnet) — the cost is a **permanent capital tax** (§2.5). |
 | C4 | **Mechanism (DQ3).** A `shekyl-standoff` **value draw** (float-free, single-sourced, conformance-graded) reusing `GapRng` + `bounded_uniform`, extending the crate from "entry-standoff timing draw" → "funding-seam decorrelation draws: timing **and** amount." Golden vector + gated conformance grade. |
 | C5 | **Uniformity binding (DQ5) — as a *soft* rule (§2.4).** Single pinned distribution; reference wallet conforms; override is a disclosed cost, **not** enforced. Stated like the `enc_label` caveat, with its enforceability limit explicit. |
 | C6 | **`CoverAmount` follow-through.** `CoverAmount(AtomicUnits)` exists inert (`stake_timing.rs`); the draw produces it. Orchestration (the send + `P`-change threading) stays 2d; the **draw** is pinned here. |
@@ -207,10 +248,13 @@ stake-once-recover (§3.2).
   additionally **leaks shard count** (the scaling is the size signal), rejected on
   the same ground `==` (not `≥`) was chosen for the floor. *Decision: uniform over
   the pinned `[C_min, C_max]`, confirmed by C1's analysis over the lattice.*
-- **DQ2 — bounds.** `C_min` = working-capital runway (§2.2). `C_max` = lattice
-  dial (§2.3), set by how many shard-count rungs the anonymity target (C1) must
-  blur, against acceptable `P` capital lockup. Both **fall out of C1**, which
-  needs the §2.3 co-pin first.
+- **DQ2 — bounds (genesis-frozen, §2.5).** `C_min` = working-capital runway
+  (§2.2). `C_max` = lattice dial (§2.3). Both **ship at genesis, conservative,
+  err-large** — they do **not** wait on post-testnet calibration, because the pin
+  is un-revisable (moving a boundary splits the cohort) and the failure is
+  asymmetric (too-small `C_max` is an un-fixable privacy failure; too-large fails
+  safe at a capital cost). C1's analysis sets the *conservative target* against
+  the pessimistic population; post-testnet *confirms* adequacy, it cannot *fix*.
 - **DQ3 — mechanism home.** Extend `shekyl-standoff` (re-scope its crate doc to
   "funding-seam decorrelation draws: timing + amount") with `draw_cover_amount`
   beside `draw_entry_gap`, sharing `GapRng` / `bounded_uniform` / golden-vector —
@@ -234,21 +278,24 @@ stake-once-recover (§3.2).
 
 ## 5. Sequencing & dependencies
 
-- **Inherit, don't block (refined §2.3):** the bond-standardization is decided in
-  *shape* (flat `floor × shards`, pinned rung; `STAKER_ARCHIVAL_SIM.md`). C1's
-  *shape* (uniform draw, rung-stepped `C_max`) is **pinnable now**; only its
-  *magnitudes* inherit the sim's **post-testnet** calibration — so pin shape now,
-  calibrate magnitude against the same population the sim does. **`C_max` is *not*
-  freely re-tunable post-genesis** (anonymity-set uniformity, §2.4) — it wants a
-  conservative genesis-pin value, not a testnet knob.
+- **No open upstream decision (§2.3):** the bond-standardization is decided in
+  *shape* (flat `floor × shards`, pinned rung; `STAKER_ARCHIVAL_SIM.md`). C1
+  *inherits* it — not a co-pin.
+- **The genesis pin is shape + conservative bounds *together* (§2.5):** off-wire
+  is **not** re-tunable — moving any boundary later splits the anonymity cohort
+  and past bonds can't re-draw, so the bounds are genesis-frozen. They ship
+  conservative (err-large: a too-small `C_max` is un-fixable; too-large fails safe
+  at a permanent capital-tax cost), sized against the **pessimistic** thin-`N_P`
+  population. Post-testnet **confirms** adequacy; it cannot **fix**. This is the
+  correction to "shape-now/bounds-later."
 - **Size jointly with the entry-gap standoff (§1.1):** the standoff width is an
   input to the cover metric; the two draws share the funding seam and trade off.
 - **Prerequisite for:** 2d bond-tx assembly (the `bond_floor + cover` send).
 - **`C_min` references** the steady-state fund-from-earnings ramp (2d-1) — runway
   must outlast cold-start until earnings carry.
 - **Independent of:** the shekyl-oxide un-vendor (off-wire) and the scanner — the
-  *mechanism* (C4) and *uniformity rule* (C5) can be drafted now; the *numbers*
-  (C1/DQ1/DQ2) wait on the co-pin.
+  full **shape + conservative-bounds genesis pin** (C2/C3/C4/C5) can be done now;
+  nothing waits on the consensus path. Post-testnet only *confirms* the bounds.
 - **Owns no wire/consensus bytes** — does not gate or touch the genesis freeze.
 - **The substantive work is the sim/analysis pass** (C1), the way the entry-gap
   window was set by analysis — distinct from wiring the draw.
