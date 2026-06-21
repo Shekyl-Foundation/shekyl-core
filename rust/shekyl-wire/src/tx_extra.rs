@@ -228,16 +228,22 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
 }
 
 /// Re-serialize parsed fields back to the `extra` blob (byte-identical to the
-/// input for a faithfully-parsed blob). Symmetric with [`parse`]: it errors on a
-/// field that would emit a self-invalid blob (padding out of `1..=255` or not last,
-/// nonce over its cap) rather than producing bytes `parse` would later reject.
+/// input for a faithfully-parsed blob).
+///
+/// **Symmetric with [`parse`]** — it never emits bytes `parse` would reject. The
+/// structural padding/nonce constraints are checked up front (clean errors), and a
+/// final round-trip guard (`parse(out) == fields`) catches every remaining cap a
+/// constructed field could exceed — the count caps (`AdditionalPubKeys` /
+/// `PqcOwnership`) and the length-prefixed blobs (`0x06`/`0x07`/…) — without
+/// re-listing each parse bound here. `tx_extra` blobs are small (≤ `MAX_TX_EXTRA`),
+/// so the extra parse is cheap, and the property holds automatically for any field
+/// kind added later.
 pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let last = fields.len().saturating_sub(1);
     for (i, field) in fields.iter().enumerate() {
-        // Reject fields that would emit a blob `parse` cannot accept — keep
-        // serialize/parse inverses so a caller can't produce a self-invalid
-        // `tx_extra` (the public `TxExtraField` allows out-of-range values).
+        // Up-front structural checks (clearer errors than the round-trip guard) for
+        // the canonical-form constraints `parse` enforces positionally.
         match field {
             TxExtraField::Padding(n) => {
                 if *n == 0 || *n > TX_EXTRA_PADDING_MAX_COUNT {
@@ -261,7 +267,18 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
         }
         write_field(&mut out, field).expect("Vec write is infallible");
     }
-    Ok(out)
+    // Round-trip guard: the emitted blob must parse back identically. This makes
+    // serialize a true inverse of `parse` for every field kind — any count/blob that
+    // exceeds a parse cap is caught here rather than producing a self-invalid blob.
+    match parse(&out) {
+        Ok(reparsed) if reparsed == fields => Ok(out),
+        Ok(_) => Err(io::Error::other(
+            "tx_extra: fields do not round-trip (non-canonical encoding)",
+        )),
+        Err(e) => Err(io::Error::other(format!(
+            "tx_extra: serialized fields would not parse back: {e}"
+        ))),
+    }
 }
 
 fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {

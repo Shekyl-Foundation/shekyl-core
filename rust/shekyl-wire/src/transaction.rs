@@ -399,6 +399,35 @@ impl ServeCredit {
             hybrid_signature,
         })
     }
+
+    /// In-memory consensus-bound check — mirrors the per-field `read` caps so a
+    /// hand-built arm passes [`Transaction::validate`] iff it would re-parse (`write`
+    /// is faithful, not a gate).
+    fn validate(&self) -> io::Result<()> {
+        for (which, layers) in [("c1", &self.c1_layers), ("c2", &self.c2_layers)] {
+            if layers.len() > MAX_PATH_LAYERS {
+                return Err(io::Error::other(format!(
+                    "shekyl-wire: serve_credit {which} path layers {} exceed {MAX_PATH_LAYERS}",
+                    layers.len()
+                )));
+            }
+            for layer in layers {
+                if layer.len() > MAX_BRANCH_SCALARS {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: serve_credit {which} branch scalars {} exceed {MAX_BRANCH_SCALARS}",
+                        layer.len()
+                    )));
+                }
+            }
+        }
+        if self.hybrid_signature.len() > PQC_HYBRID_SINGLE_SIG_LEN {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: serve_credit hybrid_signature {} exceeds {PQC_HYBRID_SINGLE_SIG_LEN}",
+                self.hybrid_signature.len()
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
@@ -504,6 +533,46 @@ impl BondPost {
             bond_credit: read_varint(r)?,
             bond_debit: read_varint(r)?,
         })
+    }
+
+    /// In-memory consensus-bound check — mirrors the per-field `read` caps and the
+    /// `write` JoinMarket-tag guard, so a hand-built arm passes
+    /// [`Transaction::validate`] iff it would serialize-and-re-parse intact.
+    fn validate(&self) -> io::Result<()> {
+        if self.hybrid_public_key.len() > PQC_HYBRID_SINGLE_KEY_LEN {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: bond_post hybrid_public_key {} exceeds {PQC_HYBRID_SINGLE_KEY_LEN}",
+                self.hybrid_public_key.len()
+            )));
+        }
+        match &self.kind {
+            BondPostKind::JoinMarket { bond_spend_pk } => {
+                if bond_spend_pk.len() > PQC_HYBRID_SINGLE_KEY_LEN {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: bond_post bond_spend_pk {} exceeds {PQC_HYBRID_SINGLE_KEY_LEN}",
+                        bond_spend_pk.len()
+                    )));
+                }
+            }
+            // `Other` must not reuse the JoinMarket tag — `write` would emit a
+            // bond_spend_pk-less blob that re-parses as JoinMarket (a mis-parse).
+            BondPostKind::Other(post_kind) => {
+                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                    return Err(io::Error::other(
+                        "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag",
+                    ));
+                }
+            }
+        }
+        if let Holdings::ShardSetCompact(shard_ids) = &self.holdings {
+            if shard_ids.len() > MAX_HOLDINGS_SHARDS {
+                return Err(io::Error::other(format!(
+                    "shekyl-wire: bond_post holdings shard count {} exceeds {MAX_HOLDINGS_SHARDS}",
+                    shard_ids.len()
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1169,6 +1238,17 @@ impl Transaction {
                 return Err(io::Error::other(
                     "shekyl-wire: key images not strictly ascending (§12)",
                 ));
+            }
+        }
+        // Per-arm in-memory bound checks for the archival inputs — the consensus caps
+        // that `read` enforces inline (path layers, branch scalars, hybrid blobs,
+        // holdings shard count, the JoinMarket-tag coupling). Without these a hand-built
+        // arm could pass `validate` yet serialize to bytes `from_bytes` rejects.
+        for input in &self.prefix.inputs {
+            match input {
+                Input::ServeCredit(sc) => sc.validate()?,
+                Input::BondPost(bp) => bp.validate()?,
+                _ => {}
             }
         }
         // Structural length-coupling: these vectors carry no independent length prefix

@@ -9,8 +9,33 @@
 //! the consensus layer's and are not exercised here.
 
 use shekyl_wire::{
-    Block, BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+    Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
+    ServeCredit, Transaction, TxPrefix,
 };
+
+/// A minimal fee-only-shaped tx (no outputs, empty pqc, no prunable) wrapping a
+/// single non-spending archival input — enough to reach the per-arm bound checks.
+fn fee_only_with(input: Input) -> Transaction {
+    Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![input],
+            outputs: vec![],
+            extra: vec![],
+        },
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0u8; 32],
+            base: CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            },
+            pqc_auths: vec![],
+            prunable: None,
+        },
+    }
+}
 
 fn out() -> Output {
     Output {
@@ -199,6 +224,44 @@ fn pqc_auth_oversized_blob_rejected() {
     }
     let err = tx.validate().unwrap_err();
     assert!(err.to_string().contains("public key"), "{err}");
+}
+
+#[test]
+fn serve_credit_oversized_signature_rejected() {
+    // validate() mirrors the read caps for the archival arms: an oversized
+    // hybrid_signature must reject (else it would serialize to unparseable bytes).
+    let sc = ServeCredit {
+        p_canonical_id: [0u8; 32],
+        shard_id: 0,
+        settlement_epoch: 0,
+        segment_subroot_rk: [0u8; 32],
+        leaf_index_in_segment: 0,
+        leaf_bytes: [0u8; 128],
+        c1_layers: vec![],
+        c2_layers: vec![],
+        hybrid_signature: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_SIG_LEN + 1],
+    };
+    let err = fee_only_with(Input::ServeCredit(Box::new(sc)))
+        .validate()
+        .unwrap_err();
+    assert!(err.to_string().contains("hybrid_signature"), "{err}");
+}
+
+#[test]
+fn bond_post_oversized_pubkey_rejected() {
+    let bp = BondPost {
+        hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN + 1],
+        p_canonical_id: [0u8; 32],
+        kind: BondPostKind::Other(3),
+        holdings: Holdings::CompleteTree,
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: 0,
+    };
+    let err = fee_only_with(Input::BondPost(Box::new(bp)))
+        .validate()
+        .unwrap_err();
+    assert!(err.to_string().contains("hybrid_public_key"), "{err}");
 }
 
 #[test]

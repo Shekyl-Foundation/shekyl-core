@@ -119,6 +119,18 @@ fn padding_must_be_last_on_serialize() {
 }
 
 #[test]
+fn oversized_blob_field_rejected_on_serialize() {
+    // The round-trip guard makes serialize a true inverse of parse for every field
+    // kind: a length-prefixed blob beyond the parse cap (READ_LEN_CAP = 1_000_000)
+    // serializes structurally but must be rejected (parse would reject it), without
+    // serialize re-listing each per-variant cap.
+    let huge = vec![0u8; 1_000_001];
+    let err = tx_extra::serialize(&[TxExtraField::PqcKemCiphertext(huge)])
+        .expect_err("blob beyond READ_LEN_CAP must be rejected at serialize");
+    assert!(err.to_string().contains("would not parse"), "{err}");
+}
+
+#[test]
 fn oversized_nonce_rejected_before_allocation_on_parse() {
     // A hostile nonce length is rejected at parse before the payload is allocated:
     // tag 0x02, varint(1_000_000), no payload — must error on the length, not EOF.
