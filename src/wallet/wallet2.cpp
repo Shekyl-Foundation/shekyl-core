@@ -323,6 +323,10 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
   const bool regtest = command_line::get_arg(vm, opts.regtest);
+  // --testnet/--stagenet/--regtest are mutually exclusive: reject a conflicting
+  // combination rather than silently resolving it by ternary precedence, so the
+  // derived nettype is never a surprise.
+  THROW_WALLET_EXCEPTION_IF(int(testnet) + int(stagenet) + int(regtest) > 1, tools::error::wallet_internal_error, "Only one of --testnet, --stagenet, --regtest may be specified");
   const network_type nettype = regtest ? FAKECHAIN : testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
   const uint64_t kdf_rounds = command_line::get_arg(vm, opts.kdf_rounds);
   THROW_WALLET_EXCEPTION_IF(kdf_rounds == 0, tools::error::wallet_internal_error, "KDF rounds must not be 0");
@@ -551,6 +555,10 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
   const bool regtest = command_line::get_arg(vm, opts.regtest);
+  // --testnet/--stagenet/--regtest are mutually exclusive: reject a conflicting
+  // combination rather than silently resolving it by ternary precedence, so the
+  // derived nettype is never ambiguous.
+  THROW_WALLET_EXCEPTION_IF(int(testnet) + int(stagenet) + int(regtest) > 1, tools::error::wallet_internal_error, "Only one of --testnet, --stagenet, --regtest may be specified");
   const network_type nettype = regtest ? FAKECHAIN : testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
 
   /* GET_FIELD_FROM_JSON_RETURN_ON_ERROR Is a generic macro that can return
