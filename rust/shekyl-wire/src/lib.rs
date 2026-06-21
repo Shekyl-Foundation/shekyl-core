@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Canonical Shekyl genesis **block/tx binary wire format** — serializer.
 //!
 //! This crate owns the genesis wire format end to end (block, header, the PoW

@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Canonical LEB128 varint — Shekyl's `V(x)` (GENESIS_TX_WIRE_FORMAT.md §6 Q10).
 //!
 //! 7 data bits per byte, MSB = continuation, little-endian. The encoding is

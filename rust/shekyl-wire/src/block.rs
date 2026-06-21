@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! The Shekyl block and block header.
 //!
 //! Layout (GENESIS_TX_WIRE_FORMAT.md §9.1-§9.2):

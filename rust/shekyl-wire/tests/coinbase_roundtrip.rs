@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Live-oracle KAT: real regtest coinbase blocks must round-trip byte-identically.
 //!
 //! The C++ daemon serializer is the genesis wire-format oracle. `Block::from_bytes`
