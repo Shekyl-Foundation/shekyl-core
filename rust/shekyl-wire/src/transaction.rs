@@ -5,17 +5,19 @@
 
 //! The Shekyl transaction (genesis `version = 3`) — coinbase + FCMP++ spend.
 //!
-//! Layout (GENESIS_TX_WIRE_FORMAT.md §9.3-§9.9), in the **current C++ tag values**
-//! (the dense renumber is a later gate-(c) cut):
+//! Layout (GENESIS_TX_WIRE_FORMAT.md §9.3-§9.9), in the **genesis dense tag scheme**
+//! (§2.0; matches the renumbered C++ oracle — landed via PR #168):
 //!
 //! ```text
 //! Transaction := V(version=3) TxPrefix Ct
 //! TxPrefix    := V(unlock_time) vec(Input) vec(Output) V(extra_len) extra[extra_len]
-//! Input(gen)  := 0xff V(height)
-//! Input(spend):= 0x02 V(amount) vec(V key_offset) key_image[32]      # txin_to_key
-//! Output      := V(amount) 0x03 key[32] view_tag(1)                  # tagged_key
+//! Input(gen)       := 0x00 V(height)
+//! Input(spend)     := 0x01 V(amount) vec(V key_offset) key_image[32]   # txin_to_key / fcmp
+//! Input(serve_cr.) := 0x02 ...                                         # archival serve_credit
+//! Input(bond_post) := 0x03 ...                                         # archival bond_post
+//! Output      := V(amount) 0x00 key[32] view_tag(1)                  # tagged_key (sole genesis output)
 //! Ct(Null)    := 0x00 enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]   # coinbase
-//! Ct(Fcmp)    := 0x07 V(fee) referenceBlock[32]
+//! Ct(Fcmp)    := 0x01 V(fee) referenceBlock[32]
 //!                enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]
 //!                PqcAuths(nvin)  Prunable
 //! PqcAuth     := auth_version(1) scheme_id(1) flags(u16 LE) V(pk_len) pk V(sig_len) sig
@@ -36,6 +38,7 @@ use shekyl_crypto_hash::cn_fast_hash;
 use crate::bytes::{read_array, read_byte};
 use crate::hash::hash_concat;
 use crate::varint::{read_varint, write_varint};
+use crate::READ_LEN_CAP;
 
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
 pub const TX_VERSION: u64 = 3;
@@ -86,11 +89,6 @@ pub const MAX_TX_EXTRA: usize = 24_576;
 pub const MAX_TX_SIZE: usize = 1_000_000;
 /// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
 pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
-
-/// Parse-safety bound on length-prefixed reads: a declared length drives an
-/// allocation, so it is capped before reading. Coincides with
-/// `CRYPTONOTE_MAX_TX_SIZE`; the full consensus bounds are the validation slice.
-const READ_LEN_CAP: usize = 1_000_000;
 
 /// Read a varint-length-prefixed opaque byte blob, capped against `READ_LEN_CAP`.
 fn read_len_prefixed<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
@@ -157,9 +155,10 @@ fn read_branch_layers<R: Read>(r: &mut R, kind: &str) -> io::Result<Vec<Vec<[u8;
 pub enum Input {
     /// Coinbase generation input: the block height.
     Gen(u64),
-    /// FCMP++ spend input (`txin_to_key`, tag 0x02). At genesis `amount == 0` and
-    /// `key_offsets` is empty (membership is via the curve tree, not a ring), but
-    /// the current C++ wire still serializes both — round-tripped faithfully.
+    /// FCMP++ spend input (`txin_to_key`, dense tag `0x01`). At genesis `amount == 0`
+    /// and `key_offsets` is empty (membership is via the curve tree, not a ring), but
+    /// the wire still serializes both — round-tripped faithfully (the §5 item-3
+    /// `txin_fcmp` reshape that drops them is a deferred gate-(c) cut).
     ToKey {
         /// Cleartext amount (`0` for FCMP++).
         amount: u64,
@@ -168,9 +167,9 @@ pub enum Input {
         /// Key image (linking tag / nullifier).
         key_image: [u8; 32],
     },
-    /// Archival serve-credit response (`tag 0x04`, gate-2) — non-spending.
+    /// Archival serve-credit response (dense tag `0x02`, gate-2) — non-spending.
     ServeCredit(Box<ServeCredit>),
-    /// Archival bond-post (`tag 0x05`, gate-4) — JoinMarket-only at genesis.
+    /// Archival bond-post (dense tag `0x03`, gate-4) — JoinMarket-only at genesis.
     BondPost(Box<BondPost>),
 }
 
@@ -285,7 +284,7 @@ impl Holdings {
     }
 }
 
-/// Archival serve-credit response payload (`tag 0x04`, gate-2 §5.1.1).
+/// Archival serve-credit response payload (dense tag `0x02`, gate-2 §5.1.1).
 ///
 /// Non-spending: no key image; the `hybrid_signature` is on the vin and the tx
 /// carries empty `pqc_auths`. Layout per
@@ -350,7 +349,7 @@ impl ServeCredit {
     }
 }
 
-/// Archival bond-post payload (`tag 0x05`, gate-4 §3.4.1). JoinMarket-only at
+/// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1). JoinMarket-only at
 /// genesis. Includes **`bond_spend_pk`** (the GF-1 debit authorizer, §9.11),
 /// present on the wire iff `post_kind == JOINMARKET` — which the current
 /// `shekyl-archival-retention::bond_wire` omits and the impl must add.
@@ -681,7 +680,7 @@ impl Prunable {
 pub enum Ct {
     /// Coinbase confidential section (type 0x00): committed base only.
     Null(CtBase),
-    /// FCMP++ spend confidential section (type 0x07).
+    /// FCMP++ spend confidential section (dense ct type `0x01`).
     Fcmp {
         /// Transaction fee.
         fee: u64,
@@ -786,12 +785,22 @@ impl TxPrefix {
         let unlock_time = read_varint(r)?;
 
         let n_inputs: usize = read_varint(r)?;
+        if n_inputs > READ_LEN_CAP {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: input count {n_inputs} exceeds parse cap {READ_LEN_CAP}"
+            )));
+        }
         let mut inputs = Vec::new();
         for _ in 0..n_inputs {
             inputs.push(Input::read(r)?);
         }
 
         let n_outputs: usize = read_varint(r)?;
+        if n_outputs > READ_LEN_CAP {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: output count {n_outputs} exceeds parse cap {READ_LEN_CAP}"
+            )));
+        }
         let mut outputs = Vec::new();
         for _ in 0..n_outputs {
             outputs.push(Output::read(r)?);
@@ -933,8 +942,23 @@ impl Transaction {
                 "shekyl-wire: output count {n_out} not in 1..={MAX_OUTPUTS}"
             )));
         }
+        // §2.5 coinbase shape: a `gen` input is coinbase-only and must be the sole
+        // input. Reject `gen` mixed with any other input — otherwise a tx like
+        // `[Gen, ToKey, …]` would be misclassified as coinbase and skip the
+        // non-coinbase tx_extra cap below.
+        let gen_count = self
+            .prefix
+            .inputs
+            .iter()
+            .filter(|input| matches!(input, Input::Gen(_)))
+            .count();
+        if gen_count > 0 && self.prefix.inputs.len() != 1 {
+            return Err(io::Error::other(
+                "shekyl-wire: gen input must be the sole input (coinbase shape, §2.5)",
+            ));
+        }
+        let is_coinbase = gen_count == 1;
         // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
-        let is_coinbase = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
             return Err(io::Error::other(format!(
                 "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",

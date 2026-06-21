@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Archival input-arm serializer tests (`serve_credit` 0x04, `bond_post` 0x05).
+//! Archival input-arm serializer tests (dense tags: `serve_credit` 0x02, `bond_post` 0x03).
 //!
 //! These arms are **Shekyl-native** — there is no C++ oracle (the C++/`bond_wire`
 //! impl is incomplete; notably it omits `bond_spend_pk`), so the design docs +

@@ -12,15 +12,21 @@
 //! PQC scan fields — `0x06` hybrid KEM ciphertexts (`x25519 ‖ ML-KEM-768` per
 //! output) and `0x07` leaf hashes (`h_pqc` per output).
 //!
-//! Tag grammars are transcribed from `src/cryptonote_basic/tx_extra.h`. Most tags
-//! are `tag · V(len) · blob` (`FIELD(std::string)`); `0x01` is a bare 32-byte key;
-//! `0x04` is `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`;
-//! `0x00` padding is a run of zero bytes to the end of `extra`.
+//! This parses the **Shekyl genesis `tx_extra` tag set** — a deliberate subset of
+//! `src/cryptonote_basic/tx_extra.h`. Tag grammars match that header: most tags are
+//! `tag · V(len) · blob` (`FIELD(std::string)`); `0x01` is a bare 32-byte key; `0x04`
+//! is `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
+//! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
+//! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
+//! minergate" (`0xDE`) — are deliberately **rejected** (shed, per
+//! [`60-no-monero-legacy`]); their removal from the C++ oracle's `tx_extra` variant is
+//! a follow-up shed (cf. the §5 dead-arm cuts).
 
 use std::io::{self, Read, Write};
 
 use crate::bytes::{read_array, read_byte};
 use crate::varint::{read_varint, write_varint};
+use crate::READ_LEN_CAP;
 
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).
 pub const TX_EXTRA_TAG_PADDING: u8 = 0x00;
@@ -52,8 +58,11 @@ pub const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_BYTES;
 /// PQC leaf-hash bytes per output.
 pub const PQC_LEAF_HASH_BYTES: usize = 32;
 
-/// Parse-safety cap on declared lengths/counts.
-const READ_LEN_CAP: usize = 1_000_000;
+/// Max padding run in bytes, **including** the tag byte (`TX_EXTRA_PADDING_MAX_COUNT`,
+/// `tx_extra.h`). The C++ oracle rejects longer padding; matched here for parity.
+pub const TX_EXTRA_PADDING_MAX_COUNT: usize = 255;
+/// Max extra-nonce payload in bytes (`TX_EXTRA_NONCE_MAX_COUNT`, `tx_extra.h`).
+pub const TX_EXTRA_NONCE_MAX_COUNT: usize = 255;
 
 /// A single `0x05` PQC ownership entry.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -135,10 +144,25 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
                 if rest.iter().any(|&b| b != 0) {
                     return Err(io::Error::other("tx_extra: non-zero byte in padding"));
                 }
-                TxExtraField::Padding(1 + rest.len())
+                let run = 1 + rest.len();
+                if run > TX_EXTRA_PADDING_MAX_COUNT {
+                    return Err(io::Error::other(format!(
+                        "tx_extra: padding run {run} exceeds {TX_EXTRA_PADDING_MAX_COUNT}"
+                    )));
+                }
+                TxExtraField::Padding(run)
             }
             TX_EXTRA_TAG_PUBKEY => TxExtraField::PubKey(read_array(&mut cur)?),
-            TX_EXTRA_TAG_NONCE => TxExtraField::Nonce(read_blob(&mut cur, "nonce")?),
+            TX_EXTRA_TAG_NONCE => {
+                let blob = read_blob(&mut cur, "nonce")?;
+                if blob.len() > TX_EXTRA_NONCE_MAX_COUNT {
+                    return Err(io::Error::other(format!(
+                        "tx_extra: nonce {} exceeds {TX_EXTRA_NONCE_MAX_COUNT}",
+                        blob.len()
+                    )));
+                }
+                TxExtraField::Nonce(blob)
+            }
             TX_EXTRA_TAG_ADDITIONAL_PUBKEYS => {
                 let count: usize = read_varint(&mut cur)?;
                 if count > READ_LEN_CAP {

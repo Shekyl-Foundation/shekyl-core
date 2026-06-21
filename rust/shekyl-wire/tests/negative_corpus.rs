@@ -108,3 +108,22 @@ fn rejects_unsupported_ct_type() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn rejects_oversized_input_count() {
+    // DoS guard: an input count beyond the parse cap (READ_LEN_CAP = 1_000_000)
+    // must be rejected before the read loop, not drive unbounded work. Build a
+    // header + tx version + unlock_time, then an oversized input-count varint.
+    let mut blob = vec![0x01u8, 0x00, 0x00]; // major, minor, timestamp
+    blob.extend_from_slice(&[0u8; 32]); // prev_id
+    blob.extend_from_slice(&[0u8; 4]); // nonce (u32 LE)
+    blob.extend_from_slice(&[0u8; 32]); // curve_tree_root
+    blob.push(0x03); // tx version
+    blob.push(0x00); // unlock_time
+    shekyl_wire::varint::write_varint(2_000_000usize, &mut blob).expect("Vec write is infallible");
+    let err = Block::from_bytes(&blob).expect_err("oversized input count must be rejected");
+    assert!(
+        err.to_string().contains("input count"),
+        "unexpected error: {err}"
+    );
+}

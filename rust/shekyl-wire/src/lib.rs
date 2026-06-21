@@ -11,18 +11,24 @@
 //! replacement for the vendored `shekyl-oxide` block/tx/ct serializer (Decision
 //! 1 / §4 of that doc); consumers migrate here and the vendored modules retire.
 //!
-//! ## Scope of this first slice — the coinbase block
+//! ## Scope
 //!
-//! [`BlockHeader`], [`Block`], [`Transaction`] (v3), the `gen` input
-//! ([`Input::Gen`]), the `tagged_key` output ([`Output`]), and the coinbase
-//! `Null` confidential section *with its committed base arrays*
-//! (`enc_amounts` / `enc_labels` / `outPk`, [`CtBase`]). That base is exactly
-//! what the pre-fix `shekyl-oxide` reader skipped — it returned `None` on the
-//! `Null` type byte and never consumed the arrays, so `Block::read` mis-aligned
-//! and failed `UnexpectedEof` on a live coinbase. The round-trip KAT
-//! (`tests/coinbase_roundtrip.rs`) proves the fix against captured daemon blobs.
+//! The full genesis tx/block surface: [`BlockHeader`], [`Block`], [`Transaction`]
+//! (v3); inputs — `gen` ([`Input::Gen`]), the FCMP++ spend ([`Input::ToKey`]), and
+//! the archival arms ([`Input::ServeCredit`] / [`Input::BondPost`]); the
+//! `tagged_key` output ([`Output`]); both confidential sections (`Null` with its
+//! committed base [`CtBase`], and `Fcmp` with tx-level [`PqcAuth`]s + [`Prunable`]);
+//! the consensus hashing identities (tx/block hash + PoW blob); `tx_extra` parsing
+//! ([`tx_extra`]); and structural validation ([`Transaction::validate`]).
 //!
-//! Spend (`Fcmp`) transactions and the archival input arms land in later slices.
+//! The coinbase `Null` section carries its committed base arrays
+//! (`enc_amounts` / `enc_labels` / `outPk`) — exactly what the pre-fix
+//! `shekyl-oxide` reader skipped (it returned `None` on the `Null` type byte and
+//! never consumed the arrays, so `Block::read` mis-aligned and failed
+//! `UnexpectedEof` on a live coinbase). The round-trip + hash KATs prove
+//! byte-identity against captured daemon blobs; the FCMP++ spend is
+//! synthetic-round-trip-validated (its live-oracle KAT is deferred — the daemon
+//! spend path is blocked).
 //!
 //! ## Tag values
 //!
@@ -40,6 +46,12 @@ pub mod varint;
 
 mod bytes;
 mod hash;
+
+/// Parse-safety cap on any varint-declared length or element count read from an
+/// untrusted blob — a DoS guard (bound the work before allocating/looping), **not**
+/// a consensus bound: [`Transaction::validate`] enforces the tight consensus limits.
+/// Shared by every count/length read across the crate so the bound has one source.
+pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
 pub use block::{Block, BlockHeader};
 pub use transaction::{

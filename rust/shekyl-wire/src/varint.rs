@@ -58,10 +58,16 @@ impl VarInt for u64 {
     }
 }
 
+// `to_u64` widens `usize` to `u64`. Guard the assumption at compile time so a
+// hypothetical platform with `usize` wider than 64 bits fails to build rather than
+// silently truncating a consensus-critical length (mirrors the shekyl-oxide varint
+// guard); `<=` keeps the common 16/32/64-bit targets valid.
+const _: () = assert!(usize::BITS <= u64::BITS);
+
 impl VarInt for usize {
     const BITS: u32 = usize::BITS;
     fn to_u64(self) -> u64 {
-        // Widening on every supported platform (`u64 >= usize`): no truncation.
+        // Widening (guarded above by `usize::BITS <= u64::BITS`): no truncation.
         self as u64
     }
     fn from_u64(value: u64) -> Option<Self> {

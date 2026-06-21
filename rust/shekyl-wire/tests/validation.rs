@@ -133,3 +133,13 @@ fn wrong_nbp_rejected() {
     assert!(spend(vec![ki(1)], vec![out()], 0, 2).validate().is_err());
     assert!(spend(vec![ki(1)], vec![out()], 0, 0).validate().is_err());
 }
+
+#[test]
+fn gen_input_must_be_sole_input() {
+    // §2.5 coinbase shape: a `gen` input mixed with any other input is rejected
+    // (otherwise it would be misclassified as coinbase and skip the tx_extra cap).
+    let err = spend(vec![Input::Gen(0), ki(1)], vec![out()], 0, 1)
+        .validate()
+        .unwrap_err();
+    assert!(err.to_string().contains("sole input"), "{err}");
+}

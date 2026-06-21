@@ -23,6 +23,7 @@ use crate::bytes::read_array;
 use crate::hash::merkle_root;
 use crate::transaction::{Input, Transaction};
 use crate::varint::{read_varint, write_varint};
+use crate::READ_LEN_CAP;
 
 /// A Shekyl block header.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -105,6 +106,11 @@ impl Block {
         let miner_transaction = Transaction::read(r)?;
 
         let n_tx: usize = read_varint(r)?;
+        if n_tx > READ_LEN_CAP {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: transaction-hash count {n_tx} exceeds parse cap {READ_LEN_CAP}"
+            )));
+        }
         // No pre-allocation against `n_tx`: push from empty so an oversized count
         // against a finite reader fails on the missing bytes, not on allocation.
         let mut transaction_hashes = Vec::new();

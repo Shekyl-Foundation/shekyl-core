@@ -95,3 +95,16 @@ fn unknown_tag_is_rejected() {
     let err = tx_extra::parse(&[0xFE, 0x01, 0x02]).expect_err("unknown tag must be rejected");
     assert!(err.to_string().contains("unknown tag"), "unexpected: {err}");
 }
+
+#[test]
+fn oversized_padding_and_nonce_rejected() {
+    // Oracle parity: C++ caps padding and nonce at 255 (tx_extra.h). A 256-byte
+    // padding run (tag + 255 zeros) and a 256-byte nonce must both be rejected.
+    let padding = tx_extra::serialize(&[TxExtraField::Padding(256)]);
+    let err = tx_extra::parse(&padding).expect_err("padding > 255 must be rejected");
+    assert!(err.to_string().contains("padding run"), "{err}");
+
+    let nonce = tx_extra::serialize(&[TxExtraField::Nonce(vec![0u8; 256])]);
+    let err = tx_extra::parse(&nonce).expect_err("nonce > 255 must be rejected");
+    assert!(err.to_string().contains("nonce"), "{err}");
+}
