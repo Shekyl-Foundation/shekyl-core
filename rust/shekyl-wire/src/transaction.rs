@@ -733,6 +733,15 @@ impl Ct {
                 let fee = read_varint(r)?;
                 let reference_block = read_array(r)?;
                 let base = CtBase::read(outputs, r)?;
+                // Full (unpruned) spend form: `nvin` pqc_auths then a full prunable
+                // section. The C++ oracle additionally allows pqc_auths to be EOF-
+                // tolerant (absent at EOF → empty) and the prunable section to be
+                // omitted (pruned / fee-only / serve-credit-only forms,
+                // cryptonote_basic.h:491-530). Modelling those shapes is the deferred
+                // §4 slice (`pqc_auths` EOF-tolerant + `Option<Prunable>` +
+                // `into_full`), which needs slice/`BufRead`-level remaining-byte
+                // awareness this generic `Read` path lacks. Genesis blocks carry only
+                // full txs, so the full form is what the live-oracle corpus exercises.
                 let mut pqc_auths = Vec::new();
                 for _ in 0..inputs {
                     pqc_auths.push(PqcAuth::read(r)?);
@@ -1005,6 +1014,16 @@ impl Transaction {
         // vin/vout counts (no independent length prefix on the wire), so an in-memory
         // tx with mismatched lengths would not round-trip and would be
         // consensus-invalid. Verify them here.
+        //
+        // NOTE (scope): the `Fcmp` checks below are the **full-spend-shape**
+        // invariants (every input is a key-image spend → one pqc_auth + one pseudoOut
+        // each, one aggregated Bp+). The §2.5 *non-spend* Fcmp shapes are a deferred
+        // slice and are intentionally not modelled yet: `archival_serve_credit_only`
+        // is a fee-only tx with **empty** pqc_auths / no prunable proof material, and
+        // `bond_post` couples pseudoOuts to the *spend* (key-image) subset rather than
+        // full vin. The pruned form (`pqc_auths` EOF-tolerant + `Option<Prunable>`,
+        // GENESIS_TX_WIRE_FORMAT.md §4) lands with that slice. Until then this crate
+        // models the full coinbase + full spend, so these couplings are exact.
         let base = match &self.ct {
             Ct::Null(base) => base,
             Ct::Fcmp {

@@ -24,8 +24,6 @@ const PAYLOAD: u8 = !CONTINUATION;
 /// Conversions are centralised here (rather than `as` casts at call sites) so the
 /// workspace's deny-by-default cast lints stay satisfied.
 pub trait VarInt: Copy {
-    /// Bit width of the target type — the bound for the overflow-reject check.
-    const BITS: u32;
     /// Widen to the `u64` working type.
     fn to_u64(self) -> u64;
     /// Narrow back, returning `None` if the decoded value does not fit.
@@ -35,7 +33,6 @@ pub trait VarInt: Copy {
 macro_rules! impl_varint_from {
     ($t:ty) => {
         impl VarInt for $t {
-            const BITS: u32 = <$t>::BITS;
             fn to_u64(self) -> u64 {
                 u64::from(self)
             }
@@ -49,7 +46,6 @@ impl_varint_from!(u8);
 impl_varint_from!(u32);
 
 impl VarInt for u64 {
-    const BITS: u32 = u64::BITS;
     fn to_u64(self) -> u64 {
         self
     }
@@ -65,7 +61,6 @@ impl VarInt for u64 {
 const _: () = assert!(usize::BITS <= u64::BITS);
 
 impl VarInt for usize {
-    const BITS: u32 = usize::BITS;
     fn to_u64(self) -> u64 {
         // Widening (guarded above by `usize::BITS <= u64::BITS`): no truncation.
         self as u64
@@ -95,29 +90,35 @@ pub fn write_varint<U: VarInt, W: Write>(value: U, w: &mut W) -> io::Result<()> 
 
 /// Read a canonical varint, rejecting non-canonical encodings and values that
 /// overflow `U`.
+///
+/// The 7-bit groups accumulate into a `u64` working value, then [`VarInt::from_u64`]
+/// narrows (and rejects) per target type. The per-group guard cannot underflow or
+/// panic on hostile input: `shift >= u64::BITS` is checked first and `||`
+/// short-circuits, so the shift below is only evaluated for an in-range `shift`, and
+/// the round-trip-through-shift comparison rejects any group whose high bits would
+/// fall off the `u64`.
 pub fn read_varint<U: VarInt, R: Read>(r: &mut R) -> io::Result<U> {
-    let mut bits: u32 = 0;
     let mut res: u64 = 0;
+    let mut shift: u32 = 0;
     loop {
         let byte = read_byte(r)?;
         // A non-leading terminator of `0x00` is a redundant trailing zero.
-        if bits != 0 && byte == 0 {
+        if shift != 0 && byte == 0 {
             return Err(io::Error::other(
                 "non-canonical varint (redundant trailing zero)",
             ));
         }
-        // Overflow: only checkable once we are within 7 bits of the type width,
-        // where `U::BITS - bits <= 7`, so the shift below stays in range.
-        if (bits + 7) >= U::BITS && byte >= (1u8 << (U::BITS - bits)) {
-            return Err(io::Error::other("varint overflow for target type"));
+        let payload = u64::from(byte & PAYLOAD);
+        if shift >= u64::BITS || (payload << shift) >> shift != payload {
+            return Err(io::Error::other("varint overflow (exceeds u64 width)"));
         }
-        res += u64::from(byte & PAYLOAD) << bits;
-        bits += 7;
+        res |= payload << shift;
+        shift += 7;
         if byte & CONTINUATION != CONTINUATION {
             break;
         }
     }
-    U::from_u64(res).ok_or_else(|| io::Error::other("varint does not fit target type"))
+    U::from_u64(res).ok_or_else(|| io::Error::other("varint overflow for target type"))
 }
 
 #[cfg(test)]
@@ -174,6 +175,14 @@ mod tests {
     fn rejects_overflow_for_narrow_type() {
         // 0x80,0x02 => 0 | (2 << 7) = 256, which does not fit a u8.
         let err = read_varint::<u8, _>(&mut [0x80u8, 0x02].as_slice()).unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err}");
+    }
+
+    #[test]
+    fn rejects_overlong_varint_without_panic() {
+        // 11 continuation bytes is more 7-bit groups than fit in a u64. The shift
+        // guard must return an error, never underflow/panic on this hostile input.
+        let err = read_varint::<u64, _>(&mut [0x80u8; 11].as_slice()).unwrap_err();
         assert!(err.to_string().contains("overflow"), "{err}");
     }
 }

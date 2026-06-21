@@ -146,6 +146,13 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
 - **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
   (drop `key_offsets`); decompose removal / single-output coinbase.
 - **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx.
+- **Pruned form + non-spend Fcmp shapes (§4 / §2.5)** — the crate currently models
+  the full coinbase + full spend ct. The EOF-tolerant `pqc_auths` + `Option<Prunable>`
+  pruned/fee-only form (§4 `into_full`/`FullTransaction`) and the non-spend Fcmp
+  shapes (`serve_credit_only` fee-only with empty `pqc_auths`/no prunable; `bond_post`
+  coupling pseudoOuts to the spend subset) are a deferred slice — they need
+  slice/`BufRead`-aware parsing + the pruned-tx-hash design and are post-genesis tx
+  shapes (the genesis block carries only full txs).
 - The F1–F6 freeze obligations and the §2.1 deferred sub-freezes remain.
 
 ## 2. The arbitration table
