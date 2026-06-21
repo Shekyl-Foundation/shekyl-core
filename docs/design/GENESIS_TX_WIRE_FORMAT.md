@@ -5,17 +5,20 @@ Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
 on the `bond_post` arm, no spend-surface impact) and merged into Q4; Q12 resolved
 (genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
-**⚠️ RETRACTED — NOT a freeze (2026-06-20).** A design-doc review (the
-authoritative specs in `docs/design/`, not the C++/Rust code) found this freeze
-**materially incomplete** for the Shekyl-native surface: it omits the
-`bond_post` `bond_spend_pk` field, the `tx_extra` 0x06/0x07 internal structure,
-the entire archival **reward-emission** + **membership-only** input arms, and uses
-a wrong `view_tag` derivation; see **§15**. The freeze was built code-first from a
-C++/Rust impl that is known-incomplete for these elements. The **inherited
-Monero-lineage surface** (block, header, hashing, coinbase shape, ct base/prunable
-framing, bounds) is correct and survives; the Shekyl-native surface needs a
-**spec-grounded rewrite** before any freeze claim. The text below is preserved for
-the inherited parts + audit trail; treat §2–§14 as superseded where §15 conflicts.
+**Spec-grounded — scope A (2026-06-20).** A design-doc review (the authoritative
+specs in `docs/design/`, **not** the C++/Rust code, which is known-incomplete for
+Shekyl-native elements) corrected the earlier code-derived draft; §15 catalogs the
+gaps with cites. **Settled Shekyl-native arms are specced here from the design
+docs** — `bond_post` incl. **`bond_spend_pk`** (gate-4 §3.4.1, §9.11),
+`serve_credit` (gate-2 §5.1.1, §9.10), `tagged_key` output + **`tx_extra` 0x06/0x07**
+(FA-6, §9.6a), corrected **`view_tag`** (ml_kem_ss/HKDF, §2.2). The **reward-emission
++ membership-only** arms are **by reference** to their owning PRs
+(`REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`) — genesis arms not in
+code yet (§2.1). The **inherited Monero-lineage surface** (block/header/hashing/
+coinbase shape/ct framing/bounds/varint) is C++-oracle-validated and stable.
+**Authority:** design docs for Shekyl-native; C++ only for inherited. **Not a
+freeze** until the impl catches up (notably `bond_spend_pk`) and the differential
+corpus proves it.
 
 ~~**Round-1 / Wave-1 freeze RATIFIED 2026-06-20**~~ (§9–§14): byte tables, bounds
 (per-tx + block-level), hashing (preimage + RandomX seed), the recursive
@@ -171,8 +174,10 @@ appear on the consensus blob (confirmed: no wire usage) — not a genesis surfac
 | `0x01` | `txin_to_scripthash` (:148,852) | **Shed** | idem. |
 | `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** (Q1 resolved) | Genesis `txin_fcmp` = `k_image[32]` **only**. `key_offsets` is consensus-**required empty** for FCMP++ inputs (`blockchain.cpp:3715`); `amount` is `0` and unused — FCMP++ membership is `shekyl_fcmp_verify` against the curve-tree root, not the legacy ring path (`scan_outputkeys_for_indexes`/`get_output_key` by amount+offsets). Both vestigial → dropped. |
 | `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`, `PHASE_2B_SECTION7_DRAFT.md:288`). No `txin_stake_claim` on the genesis wire. |
-| `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify (frozen)** (gate-2; non-spending) | `p_canonical_id[32] VARINT(shard_id) VARINT(settlement_epoch) segment_subroot_rk[32] leaf_index_in_segment(u32 LE) leaf_bytes[ARCHIVAL_LEAF_BYTES] path{c1_layers,c2_layers : vec<vec<hash>>} hybrid_signature(varint+bytes)`. |
-| `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY (frozen)** (gate-4; JoinMarket-only at genesis) | `hybrid_public_key(varint+bytes) p_canonical_id[32] post_kind(u8) holdings{kind_u8, [shard_ids vec if ShardSetCompact]} VARINT(bonded_total_atomic) VARINT(bond_credit) VARINT(bond_debit)`. |
+| `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (gate-2 §5.1.1; non-spending) | Full layout + sig-preimage in **§9.10** (`leaf_bytes[128]`; c1/c2 branch scalars ≤256; preimage le64/le32). |
+| `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (gate-4 §3.4.1; JoinMarket-only) | Full layout + sig-preimage in **§9.11** — **incl. `bond_spend_pk`** (GF-1 debit authorizer, JoinMarket-only, on wire + sig-preimage). **The current C++/Rust impl omits `bond_spend_pk` — must be added.** |
+| *(ref)* | `txin_archival_reward_emission` | **Spec by reference** — owned by `REWARD_EMISSION_VIN_PLAN.md` | Staker reward-emission vin (loud reward, Form-C `reward_P(E)`, dual ML-DSA-65 auth, membership-only backing, per-epoch dedup). Genesis arm, **not in code yet**; frozen by its PR, referenced here (like proof internals, §6 Q6). Genesis tag assigned there. |
+| *(ref)* | membership-only spend | **Spec by reference** — owned by `FCMP_MEMBERSHIP_ONLY.md` | Spend input with **no key_image** (`R_O`/`s_α`/`s_y` Schnorr opening of `O~`); backs emission. Genesis arm, not in code yet; frozen by its PR. |
 
 The archival arms (`serve_credit` 0x04, `bond_post` 0x05) **are** the genesis
 staking-archival mechanism (the `P` model): `bond_post` is the gate-4 join-Market
@@ -202,21 +207,25 @@ Rust `Output` makes `view_tag` non-optional (no `Option<u8>`), so a view-tag-les
 output is unrepresentable. Staking outputs are just `tagged_key` to `P`; their
 commitment + lock metadata live off-wire.
 
-**`view_tag` (1 byte) — RATIFY, rationale recorded.** Not Monero vestige: it is
-the view-tag fast-reject *rederived into Shekyl's hybrid X25519 path* —
-`keccak256("view_tag" ‖ output_derivation)[0]` off the X25519 ECDH output
-(`rust/shekyl-scanner/src/shared_key.rs:65`), used as the scan prefilter
-(`bench_fixtures.rs`, `first_output_exits_via_view_tag_mismatch`). **Accepted
-tradeoff (binding):** a deliberately-accepted 1-byte scan-correlation cost in
-exchange for the prefilter; recorded here as an *accepted* cost, not a silently
-inherited one.
+**`view_tag` (1 byte) — RATIFY, derivation corrected from the spec.** A scan
+fast-reject prefilter, but per **FA-6 §4.2** (the authoritative spec) it is keyed
+on the **ML-KEM** shared secret, not X25519:
+`view_tag = HKDF-SHA512(ikm = ml_kem_ss, salt = "shekyl-view-tag-prefilter-v1",
+info = "shekyl-view-tag-prefilter" ‖ output_index_le64)[0]`
+(`rust/shekyl-crypto-pq/src/derivation.rs:263`). The scanner does **universal
+ML-KEM decap → view_tag compare → X25519 on match** (FA-6 §4.7). **Accepted
+tradeoff (binding):** a deliberately-accepted 1-byte scan-correlation cost for the
+prefilter. *(Corrects an earlier keccak/X25519 derivation that cited a stale path.)*
 
 ### 2.3 CT section
 
 **Terminology:** *CT = confidential transaction.* There is no RingCT — Monero's
-rings/decoys are gone — so this PR says **CT**, not RCT. The C++ `rct*` source
-names (`rctTypes.h`, `rct_signatures`) are cited as-is here and rename to `ct*`
-via the gate-(c) JSON change (§5; `CONSENSUS_PORT_SEQUENCE.md` Pin A).
+rings/decoys are gone — so this PR says **CT**, not RCT in prose. Per
+`CT_SURFACE_NAMING_PIN.md`, renaming the C++ `rct*` source symbols (`rctTypes.h`,
+`rct_signatures`) to `ct*` is **deferred to Phase 5** (wallet2 retirement),
+**not** a genesis change: the wire **tags + type values are already
+genesis-locked**, and `binary_archive` is positional (ignores names), so the
+rename has **no genesis-wire effect**.
 
 | Element | Source | Disposition |
 |---|---|---|
@@ -461,6 +470,9 @@ pre-renumber tags until recapture.)*
 **9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.
 **9.5 Inputs** — `gen 0x00`: `tag(1) · V(height)`. `fcmp 0x01`: `tag(1) · key_image[32]` (no `amount`/`key_offsets`, Q1).
 **9.6 Outputs** — `tagged_key 0x00` (sole type): `V(amount) · tag(1) · key[32] · view_tag(1)` (amount cleartext for coinbase, `0` for confidential spend outputs).
+**9.6a `tx_extra` PQC fields** (inside `extra` of §9.4 — genesis-pinned internal structure, not opaque; FA-6 / POST_QUANTUM_CRYPTOGRAPHY / CT2 §3.1):
+- **`0x06` KEM ciphertext** — **per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each).
+- **`0x07` PQC leaf hashes** — **per tx**: `h_pqc[32] × n_outputs` concatenated in vout order (`h_pqc = Blake2b(pqc_pk)`); **not self-describing** — consensus parses `32·n_outputs` (n from `vout`). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
 **9.7 Ct** — `ct_type(1)` then:
 - `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
 - `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
@@ -469,8 +481,8 @@ pre-renumber tags until recapture.)*
   the `enc_label` indistinguishability invariant (§2.3) is binding.
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
 **9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
-**9.10 `archival_serve_credit` (0x02)** — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[ARCHIVAL_LEAF_BYTES] · path{ c1_layers, c2_layers : each vec(vec(hash[32])) } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths.
-**9.11 `archival_bond_post` (0x03)** — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · holdings{ kind(1), [vec(V shard_id) if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis** (`post_kind==JoinMarket`); `bonded_total == bond_credit == bond_floor`, `bond_debit==0` (§13).
+**9.10 `archival_serve_credit` (0x02)** (gate-2 §5.1.1) — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[128] · path{ V(c1_layers) · per-layer[ V(branch_scalars ≤256) · scalar[32]… ], V(c2_layers) · same } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths. **Sig-preimage** (gate-2 §5.2) uses fixed-width `le64`/`le32` (NOT the wire varints), customization `"shekyl/archival-serve-credit-response-v1"`, over the c1+c2 branch sections only.
+**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. *(The current `bond_wire.rs`/C++ struct omit `bond_spend_pk` — the impl must add it.)*
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -585,9 +597,12 @@ Gate = **identical accept/reject** (§7), not round-trip.
   verification** (`tx_pqc_verify.cpp:159`: `size != vin.size() || empty → reject`).
   So the rule is *pruned form parses, full form required to verify* — not "empty is
   invalid everywhere."
-- **referenceBlock window:** `tip − FCMP_REFERENCE_BLOCK_MAX_AGE(100) ≤ ref_height
-  ≤ tip − FCMP_REFERENCE_BLOCK_MIN_AGE(5)` (blockchain.cpp:3946-3954). (§2.3
-  specifies the field; this is its validity window.)
+- **referenceBlock (wire = 32 B block hash):** validity window `tip −
+  FCMP_REFERENCE_BLOCK_MAX_AGE(100) ≤ ref_height ≤ tip − FCMP_REFERENCE_BLOCK_MIN_AGE(5)`
+  (blockchain.cpp:3946-3954). **Canonical selection (CURVE_TREE_CLIENT §5):**
+  `reference_height = tip − 6` (REF_ANCHOR_AGE; wallet-uniform to prevent
+  fingerprinting — distinct from `SPENDABLE_AGE=10`), with proactive re-anchor at
+  `+50` (REBUILD_AT) before the MAX_AGE cutoff.
 - **CT balance:** `Σ pseudoOuts == Σ outPk + fee` (+ `bond_credit` for bond-post) —
   `verRctSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
   blockchain.cpp:4125). The general spend rule (the bond floor §2.0 is the
