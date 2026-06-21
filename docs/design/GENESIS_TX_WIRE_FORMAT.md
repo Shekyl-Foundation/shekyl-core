@@ -139,6 +139,13 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   old-tag genesis could no longer be hashed). Dead arms are **parked at `0xf0+`**, not
   yet type-removed — that shed is §5 item 1, deferred. Daemon builds + starts + mines
   dense coinbases; full Rust workspace green (1724 tests; RandomX excluded per its gate).
+- **EOF-tolerant pruned / fee-only ct shape (§4 / §9.8 / §2.5)** — `Ct::Fcmp.prunable`
+  is `Option<Prunable>` and `Ct::read` is `BufRead` + EOF-tolerant: the full spend
+  carries nvin `pqc_auths` + a prunable proof; the fee-only / serve-credit form ends
+  right after the base (empty `pqc_auths`, no prunable). `hash()` is 4-part (pqc
+  present) / 3-part (fee-only) per the C++ oracle; `validate()` is shape-aware.
+  Synthetic round-trip validated; live byte/hash parity for these **post-genesis**
+  shapes is pending a captured blob (as for the spend KAT).
 
 **Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
 - **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
@@ -146,13 +153,13 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
 - **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
   (drop `key_offsets`); decompose removal / single-output coinbase.
 - **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx.
-- **Pruned form + non-spend Fcmp shapes (§4 / §2.5)** — the crate currently models
-  the full coinbase + full spend ct. The EOF-tolerant `pqc_auths` + `Option<Prunable>`
-  pruned/fee-only form (§4 `into_full`/`FullTransaction`) and the non-spend Fcmp
-  shapes (`serve_credit_only` fee-only with empty `pqc_auths`/no prunable; `bond_post`
-  coupling pseudoOuts to the spend subset) are a deferred slice — they need
-  slice/`BufRead`-aware parsing + the pruned-tx-hash design and are post-genesis tx
-  shapes (the genesis block carries only full txs).
+- **Non-spend Fcmp residuals** — the EOF-tolerant fee-only form (above) is in; what
+  remains is the **`bond_post` pseudoOuts↔spend-subset exact coupling** (a §13 F1/F3
+  forward obligation owned by the emission / membership-only PRs — `validate()` bounds
+  it, doesn't pin it), the **§4 `into_full`/`FullTransaction`** ergonomic (lands with
+  the §8 consumer migration), and the live byte/hash parity for the fee-only / bond_post
+  shapes. True storage-pruned txs (prunable dropped + external prunable hash) stay
+  post-genesis / p2p scope.
 - The F1–F6 freeze obligations and the §2.1 deferred sub-freezes remain.
 
 ## 2. The arbitration table
