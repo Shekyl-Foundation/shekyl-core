@@ -136,6 +136,9 @@ impl Block {
     pub fn number(&self) -> Option<u64> {
         match self.miner_transaction.prefix.inputs.first()? {
             Input::Gen(height) => Some(*height),
+            // A well-formed coinbase's first input is always Gen; anything else
+            // is not a block number.
+            _ => None,
         }
     }
 }

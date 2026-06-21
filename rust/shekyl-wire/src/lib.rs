@@ -40,4 +40,6 @@ pub mod varint;
 mod bytes;
 
 pub use block::{Block, BlockHeader};
-pub use transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
+pub use transaction::{
+    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+};
