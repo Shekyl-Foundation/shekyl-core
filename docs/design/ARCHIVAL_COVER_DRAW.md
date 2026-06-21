@@ -8,10 +8,13 @@ is *not* re-tunable (§2.5):** the anonymity-uniformity requirement genesis-free
 the **whole** distribution — **shape *and* bounds**. So the next step is a genesis
 pin of **shape together with conservative bounds** (err-large; post-testnet
 **confirms** adequacy, it cannot **fix** a too-tight bound) — **not**
-shape-now/bounds-later. **§7 is the first analytical cut** at the bound: the
-lattice dial derived (`k = W/floor`), the regressive capital tax surfaced, a
-conservative bracket pinned, and the `--cover` harness arm specced as the step
-that measures `k` (the `--standoff` analogue).
+shape-now/bounds-later. **§7 is the analytical cut** at the bound: the lattice
+dial derived (`k = W/floor`), the regressive capital tax surfaced, and the
+`--cover` harness **built and run** (`shekyl-staking-sim --cover`). Its headline
+finding (§7.4): the cover decoy pool is **bounded by `N_P` and saturates**, so the
+dial sizes the *mean* set (err-large pin **`k = 21 ≈ 15.75 SKL`**) while the
+worst-case thin-cover **tail** is a firewall-composition property, not a sizing
+knob.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -301,9 +304,10 @@ later either).
   nothing waits on the consensus path. Post-testnet only *confirms* the bounds.
 - **Owns no wire/consensus bytes** — does not gate or touch the genesis freeze.
 - **The substantive work is the sim/analysis pass** (C1), the way the entry-gap
-  window was set by analysis — distinct from wiring the draw. **First cut: §7**
-  (structure + conservative bracket pinned; `--cover` harness arm specced as the
-  measuring step).
+  window was set by analysis — distinct from wiring the draw. **Done (first cut):
+  §7** — the `--cover` harness is built and run; §7.4 has the measured dial, the
+  err-large pin (`k = 21`), and the bounded-pool saturation finding. Open: the
+  per-rung density (testnet), the full joint timing × amount pass, and `C_min`.
 
 ## 6. Gates (when it lands)
 
@@ -355,10 +359,12 @@ The sim reports per-staker **mean** portfolio, not a per-rung histogram: thin
 So under the **thin** `N_P` end (§2.5's pessimistic populations) the rung density
 is **below one staker per rung** — ~17 stakers spread over a band roughly
 `[1, ~2·mean]`. Consequence: clearing a target effective set is a problem of
-**accumulating count across rungs**, not landing on a populated one — the cover
-must span most of the occupied band before the thin-cover tail closes. This is
-the same shape `--standoff` found (set mean `1 → 7 → 13 → 25` as the window
-widens, `:3484`); here the x-axis is `k` rungs instead of timing blocks.
+**accumulating count across rungs**, not landing on a populated one. But the pool
+the cover accumulates from is **bounded by `N_P`** — unlike `--standoff`'s
+unbounded background traffic — so it **saturates**, and the thin-cover tail does
+*not* simply close the way the standoff's did (§7.4 measures this). The mean-set
+shape still tracks the standoff (`1 → 7 → 13 → 25` there, `:3484`), with `k` rungs
+on the x-axis instead of timing blocks.
 
 ### 7.3 The capital tax is regressive (a finding to surface)
 
@@ -373,44 +379,68 @@ insurance, it is a regressive lock that can itself thin the small-staker
 population the metric depends on. The harness must report the tax curve
 alongside the anonymity curve and pick the knee, not the ceiling.
 
-### 7.4 Conservative genesis bracket (to be confirmed, not derived, by testnet)
+### 7.4 What the harness measured (built: `shekyl-staking-sim --cover`)
 
-At `floor = 0.75 SKL` the dial is:
+The `--cover` arm (`cover.rs`) runs the metric over the lattice — 200k trials,
+SplitMix64, four arms (dial / `N_P` scenario / density bracket / timing
+intersection) + an err-large recommendation. The dial sweep at the pessimistic
+corner (thin `N_P = 17`, dispersed, amount-marginal):
 
-| `k` rungs blurred | `C_max − C_min` |
-| --- | --- |
-| 4 | 3 SKL |
-| 8 | 6 SKL |
-| 12 | 9 SKL |
-| 16 | 12 SKL |
-| 24 | 18 SKL |
+| `k` | `C_max − C_min` | mean set | thin-tail `P(set ≤ 2)` | worst tax |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | 1.9 | 0.75 | 0× |
+| 8 | 6 SKL | 6.7 | 0.136 | 8× |
+| 16 | 12 SKL | 9.8 | 0.068 | 16× |
+| 24 | 18 SKL | 11.7 | 0.045 | 24× |
+| 32 | 24 SKL | 12.9 | 0.034 | 32× |
 
-Under thin `N_P = 17` (mean ≈ 9, band ≈ `[1, ~18]`), clearing the entry-gap
-analogue (set mean ≈ 13, thin-tail `P(set ≤ 2) = 0`) plausibly needs spanning
-**~the full occupied band**, putting the err-large `C_max` on the order of
-**`k ≈ 16–24` ⇒ 12–18 SKL** of cover. A *calibrated* value would very likely be
-smaller — but per §2.5 it cannot be raised later, so the genesis pin sits at the
-over-provisioned end, with the §7.3 regressive tax named as its cost. `C_min` is
-the runway floor (§2.2): strictly positive (reserves `cover == 0` for the opt-out,
-DQ6), `≥ 1 rung (0.75 SKL)` so the smallest draw still funds non-trivial runway,
-final value pending the 2d-1 earnings-ramp numbers — sized against **pessimistic
-slow early yield**, also un-raisable later.
+Three findings change the §7.1 picture:
 
-### 7.5 The substantive step — the `--cover` harness arm
+1. **The decoy pool is bounded by `N_P` and saturates.** Unlike `--standoff`'s
+   unbounded Poisson background, the cover's candidates come from the `≤ N_P` live
+   stakers, so the **mean** set climbs toward `N_P` and plateaus (ceiling 17) but
+   the **thin-cover tail does not close** at any viable `k` (still `0.034` at
+   `k = 32`). The tail floor is set by **edge-of-lattice stakers no window can
+   surround** — a **firewall-composition** property (the worst-case staker leans
+   on timing + network isolation + the direct-funder-only scope, §1.3), **not** a
+   cover-sizing knob. Chasing it with `k` runs to a runaway tax (the routine needs
+   `k = 48`, 36 SKL, 48× tax). So the dial is sized to the **mean** (`--standoff`
+   `TARGET_ANON_SET = 10` parity) and the residual tail is handed to the firewall
+   — §7.3's regressive tax is exactly what stops the chase.
+2. **Per-rung density dominates, and it's unmeasured.** Clustered vs dispersed at
+   `k = 16`: thin-tail `2.1%` vs `6.8%`, mean `13.8` vs `9.8`. The *spread* of
+   shard counts (not the mean the sim pins) is the load-bearing input — swept, not
+   measured, the cover analogue of `--standoff`'s rate. Err-large sizes against
+   **dispersed**; the real `min(capital, storage)` archetype likely sits nearer
+   clustered.
+3. **The timing intersection is costly at the thin corner.** As the standoff thins
+   the amount-set (§1.1), the **joint** set shrinks below target: at
+   `timing_retain ≤ 0.5` the thin/dispersed corner **cannot reach mean 10 at all**
+   (it saturates lower). The two seams fight the same tiny `N_P`, confirming they
+   must be **sized jointly**.
 
-Mirror `shekyl-staking-sim --standoff` (`standoff.rs`): add a `--cover` arm,
-Monte-Carlo (200k trials/scenario, SplitMix64, reproducible) over the discrete
-lattice population, sweeping `k = (C_max − C_min) / floor`, reporting per
-scenario `{lean 79, thick 154, thin 17–62}`:
+**First-cut pin (to confirm, not derive — §2.5).** At the amount-marginal upper
+bound the mean clears 10 at `k = 17`; err-large +1 notch ⇒ **`k = 21`,
+`C_max − C_min ≈ 15.75 SKL`**, residual thin-tail ~5%, worst-case tax 21× (the
+rung-1 staker). Under timing intersection the firewall, not more `k`, carries the
+gap. `C_min` stays the runway floor (§2.2), `≥ 1 rung (0.75 SKL)`, reserving
+`cover == 0` for the DQ6 opt-out — which the harness shows still gets **same-rung
+cover** (`k = 0` set `≈ 1.9`, not 1: same-`bond_floor` stakers are
+indistinguishable). Pending the 2d-1 ramp for its final value. These are the
+err-large numbers under **pessimistic** assumptions; narrowing the density bracket
+(testnet) is what would let them shrink — but they ship conservative now and can
+only be *confirmed*, not lowered, later.
 
-- candidate-set **mean** and the **thin-cover tail** `P(set ≤ 2)` (the
-  `--standoff` metrics, x-axis = `k`);
-- the §7.3 **regressive-tax curve** (`C_max` as a multiple of bond, by rung);
-- jointly with the entry-gap standoff (§1.1) — the timing intersection shrinks
-  the amount-set, so the harness shares the standoff's decoy model.
+### 7.5 What the harness leaves open
 
-Selection rule (err-large, §2.5): take the **smallest `k` that closes the
-thin-tail under the *thin* scenario**, then step up one notch. The harness
-supplies the per-rung populations this doc lacks; until it runs, the genesis pin
-ships from the §7.4 conservative bracket. This is C1's deliverable — the wiring
-(C4) is mechanical once `k` is fixed.
+- **The per-rung density** (clustered ↔ dispersed) — the dominant lever, swept
+  here, resolved only by measuring the seating archetype's realized shard-count
+  spread on testnet.
+- **The full joint timing × amount sizing** — modeled here via `timing_retain`;
+  the end-to-end joint pass couples the `--cover` and `--standoff` decoy models
+  (a follow-on across the two crates).
+- **`C_min`** — needs the 2d-1 earnings-ramp numbers to size the runway.
+
+C3 ships from §7.4's conservative err-large numbers; testnet **confirms** adequacy
+(§2.5). The wiring (C4 — `draw_cover_amount` in `shekyl-standoff`) is mechanical
+once `k` and `C_min` are fixed.
