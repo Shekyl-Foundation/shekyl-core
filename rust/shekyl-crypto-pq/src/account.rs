@@ -244,16 +244,20 @@ impl DerivationNetwork {
         }
     }
 
-    /// Map to the address-layer network. Fakechain addresses reuse the
-    /// Testnet HRPs; this is consistent with legacy Monero fakechain
-    /// behavior and keeps block-explorer tooling simple.
+    /// Map to the address-layer network. Fakechain **mirrors Mainnet** addressing:
+    /// it is a testing/simulation chain meant to behave like mainnet, and the C++
+    /// daemon already shares the Mainnet bech32m prefix for FAKECHAIN
+    /// (`cryptonote_basic_impl.cpp` `nettype_to_ffi_network`), so the Rust address
+    /// layer must agree — a regtest wallet's address has to parse on the FAKECHAIN
+    /// daemon. (Distinct from the derivation salt, where Fakechain keeps its own
+    /// `b"fakechain"` label — see `salt_label`.)
     #[must_use]
     pub fn to_address_network(self) -> shekyl_address::Network {
         match self {
-            DerivationNetwork::Mainnet => shekyl_address::Network::Mainnet,
-            DerivationNetwork::Testnet | DerivationNetwork::Fakechain => {
-                shekyl_address::Network::Testnet
+            DerivationNetwork::Mainnet | DerivationNetwork::Fakechain => {
+                shekyl_address::Network::Mainnet
             }
+            DerivationNetwork::Testnet => shekyl_address::Network::Testnet,
             DerivationNetwork::Stagenet => shekyl_address::Network::Stagenet,
         }
     }
