@@ -630,7 +630,7 @@ fn print_cover_report() {
         "Charter: hide principal ↔ P via A = bond_floor + cover. The attacker tests A − bond_floor"
     );
     eprintln!(
-        "  ∈ [C_min,C_max]; the candidate set is the k+1 rungs straddling s_P (floor = {:.2} SKL/rung).",
+        "  ∈ [C_min,C_max]; the candidate set is the k rungs straddling s_P (floor = {:.2} SKL/rung).",
         report.floor_skl
     );
     eprintln!(
@@ -686,7 +686,7 @@ fn print_cover_report() {
     );
     eprintln!(
         "  < {:.2} set/rung. The pool saturates (satSet = reachable ceiling), so this is the PIN —",
-        0.15
+        report.marginal_cutoff
     );
     eprintln!(
         "  past it capital is wasted and §7.6 opt-out makes it harmful. rt<1.0 is the JOINT corner"
@@ -723,18 +723,19 @@ fn print_cover_report() {
         "  pyrSet/pyrThin = realized set/tail for PAYERS; honSet = honest-uniform set (contrast)."
     );
     eprintln!(
-        "{:>4} {:>4} {:>7} {:>8} {:>8} {:>8} {:>8}",
-        "beta", "k", "covSKL", "minRung", "optOut", "pyrSet", "honSet",
+        "{:>4} {:>4} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "beta", "k", "covSKL", "minRung", "optOut", "pyrSet", "pyrThin", "honSet",
     );
     for p in &report.participation {
         eprintln!(
-            "{:>4.1} {:>4} {:>7.2} {:>8} {:>8.3} {:>8.2} {:>8.2}",
+            "{:>4.1} {:>4} {:>7.2} {:>8} {:>8.3} {:>8.2} {:>8.3} {:>8.2}",
             p.beta,
             p.rungs_blurred,
             p.cover_span_skl,
             p.min_paying_rung,
             p.opt_out_frac,
             p.payer_set_mean,
+            p.payer_thin_frac,
             p.honest_set_mean,
         );
     }

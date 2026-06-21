@@ -233,6 +233,11 @@ fn draw_shard_count(rng: &mut SplitMix64, mean: f64, dispersion: Dispersion) -> 
 fn run(cfg: &CoverConfig) -> CoverResult {
     assert!(cfg.trials > 0, "cover::run requires trials > 0");
     assert!(cfg.n_p > 0, "cover::run requires n_p > 0");
+    assert!(
+        cfg.timing_retain.is_finite() && (0.0..=1.0).contains(&cfg.timing_retain),
+        "cover::run requires timing_retain in [0, 1], got {}",
+        cfg.timing_retain
+    );
 
     let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL; // 0.75 SKL
     let cover_span_skl = cfg.rungs_blurred as f64 * floor_skl;
@@ -243,13 +248,18 @@ fn run(cfg: &CoverConfig) -> CoverResult {
     let mut link_sum = 0.0;
     let mut thin = 0u64;
     let mut tax_sum = 0.0;
+    // Reused across trials (clear + refill) — same draw order as a fresh Vec, so
+    // bit-identical results, without 200k allocations.
+    let mut pop: Vec<i64> = Vec::with_capacity(cfg.n_p as usize);
 
     for _ in 0..cfg.trials {
         // Fresh population each trial integrates over population realizations
         // (the standoff draws fresh Poisson decoys per trial for the same reason).
-        let pop: Vec<i64> = (0..cfg.n_p)
-            .map(|_| draw_shard_count(&mut rng, cfg.mean_shards, cfg.dispersion) as i64)
-            .collect();
+        pop.clear();
+        pop.extend(
+            (0..cfg.n_p)
+                .map(|_| draw_shard_count(&mut rng, cfg.mean_shards, cfg.dispersion) as i64),
+        );
 
         let target = (rng.next_u64() % cfg.n_p) as usize;
         let s_p = pop[target];
@@ -547,6 +557,13 @@ fn run_participation(
     trials: u64,
     seed: u64,
 ) -> ParticipationResult {
+    assert!(trials > 0, "cover::run_participation requires trials > 0");
+    assert!(n_p > 0, "cover::run_participation requires n_p > 0");
+    assert!(
+        beta.is_finite() && beta > 0.0,
+        "cover::run_participation requires beta > 0, got {beta}"
+    );
+
     let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
     // s ≥ k/β to afford C_max = k·floor ≤ β·(s·floor).
     let min_paying_rung = (k as f64 / beta).ceil().max(1.0) as i64;
@@ -558,11 +575,12 @@ fn run_participation(
     let mut payer_sets: Vec<f64> = Vec::new();
     let mut honest_sum = 0.0;
     let mut honest_n = 0u64;
+    // Reused across trials (clear + refill) — same draw order, bit-identical.
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
 
     for _ in 0..trials {
-        let pop: Vec<i64> = (0..n_p)
-            .map(|_| draw_shard_count(&mut rng, mean_shards, dispersion) as i64)
-            .collect();
+        pop.clear();
+        pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean_shards, dispersion) as i64));
         for &s in &pop {
             pop_seen += 1;
             if s < min_paying_rung {
@@ -653,6 +671,8 @@ pub struct CoverReport {
     pub floor_skl: f64,
     pub target_anon_set: f64,
     pub thin_tail_target: f64,
+    /// The saturation-knee marginal-return cutoff (single source: `MARGINAL_CUTOFF`).
+    pub marginal_cutoff: f64,
     pub results: Vec<CoverResult>,
     pub recommendations: Vec<CoverRecommendation>,
     pub participation: Vec<ParticipationResult>,
@@ -671,6 +691,7 @@ pub fn run_full_report() -> CoverReport {
         floor_skl: ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL,
         target_anon_set: TARGET_ANON_SET,
         thin_tail_target: THIN_TAIL_TARGET,
+        marginal_cutoff: MARGINAL_CUTOFF,
         results,
         recommendations,
         participation: participation_scan(),
