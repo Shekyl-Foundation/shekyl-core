@@ -12,5 +12,28 @@ description = "Canonical Shekyl genesis block/tx binary wire format (serializer)
 # the C++ `cn_fast_hash`). The single source for the tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
+[dev-dependencies]
+# End-to-end FCMP++ spend oracle (`tests/fcmp_spend_e2e.rs`). Rather than
+# capturing a "known-good" transaction blob from the C++ daemon — whose FCMP++
+# spend path never produced a daemon-accepted transaction, so there is nothing
+# valid to capture — the test BUILDS a consensus-valid spend in Rust and
+# self-validates it against `shekyl_fcmp::proof::verify` (the exact function the
+# daemon's `shekyl_fcmp_verify` FFI calls, i.e. the consensus rule itself).
+# These deps are dev-only: `shekyl-wire` has no runtime dependents, so the test
+# fixture cannot leak into the serializer's dependency surface.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-units = { path = "../shekyl-units" }
+# Consensus checks composed alongside FCMP membership: RingCT cleartext balance
+# (`sum(pseudoOuts) == sum(outPk) + fee*H`) and Bp+ range-proof verification.
+shekyl-rct-balance = { path = "../shekyl-rct-balance" }
+shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+rand_core = { version = "0.6", features = ["std"] }
+
 [lints]
 workspace = true

@@ -5,23 +5,22 @@
 
 //! FCMP++ spend serializer tests.
 //!
-//! Two layers:
+//! **Synthetic round-trip**: a full-shape `Ct::Fcmp` transaction (spend input,
+//! tagged_key outputs, committed base, tx-level pqc_auths, prunable with a
+//! Bulletproof+) is written and re-read, proving the serializer is internally
+//! consistent (`read(write(x)) == x`) across every FCMP++ field with arbitrary
+//! byte values. The byte layout is transcribed from the C++ oracle source
+//! (`rctTypes.h` `serialize_rctsig_base`/`serialize_rctsig_prunable`,
+//! `cryptonote_basic.h` `pqc_authentication`) — see `src/transaction.rs`.
 //!
-//! 1. **Synthetic round-trip** (active): a full-shape `Ct::Fcmp` transaction
-//!    (spend input, tagged_key outputs, committed base, tx-level pqc_auths,
-//!    prunable with a Bulletproof+) is written and re-read, proving the
-//!    serializer is internally consistent (`read(write(x)) == x`) across every
-//!    FCMP++ field. The byte layout is transcribed from the C++ oracle source
-//!    (`rctTypes.h` `serialize_rctsig_base`/`serialize_rctsig_prunable`,
-//!    `cryptonote_basic.h` `pqc_authentication`) — see `src/transaction.rs`.
-//!
-//! 2. **Live-oracle byte-identity** (`#[ignore]`d): the real proof — a captured
-//!    regtest FCMP++ spend blob must round-trip byte-for-byte. The blob is not
-//!    yet capturable: the wallet↔daemon `get_curve_tree_path` RPC dispatch is
-//!    broken (see `feat/regtest-wallet-harness`), so `precompute_fcmp_paths`
-//!    fails and no spend can be built. Once that lands, drop the blob at
-//!    `tests/vectors/regtest_spend.tx` (via `tests/vectors/capture_spend.py`)
-//!    and remove the `#[ignore]`.
+//! The byte-identity proof on a *real, consensus-valid* spend lives in
+//! `tests/fcmp_spend_e2e.rs` (stage 11). It supersedes the former
+//! `#[ignore]`d "live-oracle" KAT, which planned to capture a known-good
+//! transaction blob from the C++ daemon — unsound, because the C++ FCMP++
+//! spend path never produced a daemon-accepted transaction, so there was no
+//! known-good blob to capture. The e2e test builds the spend in Rust and
+//! self-validates it against `shekyl_fcmp::proof::verify` (the consensus rule),
+//! then round-trips it through this serializer.
 
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -121,23 +120,5 @@ fn fcmp_spend_rejects_trailing_bytes() {
     assert!(
         err.to_string().contains("trailing"),
         "unexpected error: {err}"
-    );
-}
-
-#[test]
-#[ignore = "live regtest FCMP++ spend blob not captured yet — blocked on the \
-            wallet<->daemon get_curve_tree_path RPC dispatch (feat/regtest-wallet-harness). \
-            Drop tests/vectors/regtest_spend.tx and un-ignore to prove byte-identity."]
-fn regtest_spend_round_trips_byte_identical() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/vectors/regtest_spend.tx"
-    );
-    let blob = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let tx = Transaction::from_bytes(&blob).expect("parse live FCMP++ spend tx");
-    assert_eq!(
-        tx.serialize(),
-        blob,
-        "re-serialization must be byte-identical to the C++ oracle blob"
     );
 }

@@ -22,11 +22,13 @@ the pre-fix vendored reader skipped, which this crate consumes.
 SHEKYLD_BIN=<build>/bin/shekyld \
 GENESIS_RECIPIENTS=<shekyl-dev>/tools/genesis_builder/genesis_recipients.mainnet.json \
   python3 capture_coinbase.py
-
-# an FCMP++ spend tx blob (needs the regtest wallet harness; see
-# feat/regtest-wallet-harness — currently blocked on the daemon RPC dispatch):
-SHEKYLD_BIN=... WALLET_RPC_BIN=... python3 capture_spend.py
 ```
+
+The FCMP++ spend byte-identity proof needs no captured blob: `../fcmp_spend_e2e.rs`
+builds a real, consensus-valid spend in Rust, self-validates it against
+`shekyl_fcmp::proof::verify` (the consensus rule), and round-trips it through this
+crate's serializer. There is no C++ spend oracle to capture from — the C++ FCMP++
+spend path never produced a daemon-accepted transaction.
 
 Blobs carry per-block randomness, so a regenerated blob differs byte-for-byte from
 the committed one — the round-trip invariant holds for any valid blob, and
