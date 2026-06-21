@@ -5,7 +5,19 @@ Wave 1**: Q11 resolved (staking is the `P` model — cleartext `txout_to_staked_
 + `txin_stake_claim` shed; the bond floor is *public-but-covered-and-dissociated*
 on the `bond_post` arm, no spend-surface impact) and merged into Q4; Q12 resolved
 (genesis tx **`version = 3`**, kept deliberately — `V4` = future lattice-only).
-**Round-1 / Wave-1 freeze RATIFIED 2026-06-20** (§9–§14): byte tables, bounds
+**⚠️ RETRACTED — NOT a freeze (2026-06-20).** A design-doc review (the
+authoritative specs in `docs/design/`, not the C++/Rust code) found this freeze
+**materially incomplete** for the Shekyl-native surface: it omits the
+`bond_post` `bond_spend_pk` field, the `tx_extra` 0x06/0x07 internal structure,
+the entire archival **reward-emission** + **membership-only** input arms, and uses
+a wrong `view_tag` derivation; see **§15**. The freeze was built code-first from a
+C++/Rust impl that is known-incomplete for these elements. The **inherited
+Monero-lineage surface** (block, header, hashing, coinbase shape, ct base/prunable
+framing, bounds) is correct and survives; the Shekyl-native surface needs a
+**spec-grounded rewrite** before any freeze claim. The text below is preserved for
+the inherited parts + audit trail; treat §2–§14 as superseded where §15 conflicts.
+
+~~**Round-1 / Wave-1 freeze RATIFIED 2026-06-20**~~ (§9–§14): byte tables, bounds
 (per-tx + block-level), hashing (preimage + RandomX seed), the recursive
 canonical-encoding invariant + reject rules, domain constraints. Both creation
 cuts adopted in stronger form (canonical-encoding invariant; exact determined
@@ -616,3 +628,61 @@ Both §14 cuts **adopted**, each stronger than first proposed; §10/§11 complet
    — a deliberate Shekyl genesis value by construction, **not** stock `rx-slow-hash.c`.
 
 All free pre-genesis (hard forks later).
+
+## 15. Design-doc review (2026-06-20) — the freeze is incomplete; corrected scope
+
+**Method correction (the root cause).** The genesis format has two layers, and
+they have different authorities:
+- **Inherited Monero-lineage** (block, header, tx-prefix framing, varint,
+  hashing, coinbase shape, ct base/prunable framing, bounds): the C++ daemon is a
+  *complete* oracle (validated against a live blob). §9–§14 hold for these.
+- **Shekyl-native** (archival arms, the per-output PQC scan fields, the
+  reward-emission economy, the membership-only spend): the **design docs +
+  Rust impl are the authority**; the **C++ is incomplete** (e.g. it omits
+  `bond_spend_pk`). Differential-testing these against C++ is invalid. §2/§9 were
+  built code-first and are wrong/incomplete here.
+
+**Gaps found (spec-grounded, cited):**
+
+1. **`bond_post` omits `bond_spend_pk`** — gate-4 §3.4.1 puts it on the wire
+   (JoinMarket-conditional, `varint len + canonical bytes`) **and** in the
+   cSHAKE256 sig-preimage (`encode_bond_spend_commitment`); it is the GF-1
+   debit-authorizer (gate-6 §9.6, 2026-06-16) that keeps `P_pubkey` identity-only.
+   Both `bond_wire.rs` and the C++ struct omit it. **Security-critical.**
+2. **`tx_extra` 0x06 (PQC KEM ct) is not opaque** — per output:
+   `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B)
+   (FA-6 / POST_QUANTUM_CRYPTOGRAPHY §Phase 2; `extra.rs` `PqcKemCiphertext`).
+3. **`tx_extra` 0x07 (PQC leaf hashes)** = per-tx `h_pqc[32] × n_outputs`
+   concatenated (vout order), **not self-describing** — parsed by output count
+   (FA-6 §3.1; CT2_DRAIN_ORDER §3.1; `h_pqc = Blake2b(pqc_pk)`).
+4. **`view_tag` derivation is wrong in §2.2** — it is `HKDF-SHA512(ml_kem_ss,
+   salt=shekyl-view-tag-prefilter-v1, label‖output_index_le64)[0]`, off the
+   **ML-KEM** shared secret (FA-6 §4.2; `derivation.rs:263`), *not* keccak off the
+   X25519 ECDH. Correct the §2.2 rationale.
+5. **Two genesis input arms are absent** — `txin_archival_reward_emission` (loud
+   reward; Form-C `reward_P(E)=floor(budget·capped_P/Σwork)`, u128-numerator;
+   per-epoch dedup on the bond record; **dual ML-DSA-65 auth**, a hard merge
+   blocker) and the **membership-only spend** (no key_image; `R_O`/`s_α`/`s_y`
+   Schnorr; backs emission). Owned by `REWARD_EMISSION_LEG.md` /
+   `REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`; **not in code yet**
+   (deferred to the emission-vin PR). The genesis format includes them.
+6. **CT rename is Phase-5** (wallet2 retirement), **not** a genesis gate-(c)
+   change (`CT_SURFACE_NAMING_PIN.md`); wire tags + type values are already
+   genesis-locked. Fix the §2.3/§5 framing.
+7. **`referenceBlock`** wire is 32 B (correct), but the canonical *selection* is
+   `reference_height = tip − 6` with proactive rebuild at `+50`
+   (`CURVE_TREE_CLIENT.md §5`); §13 had only the 5–100 validity window.
+
+**Confirmed correct** (no change): block-hash `varint(len)` prepend; PoW
+preimage; coinbase `+60` maturity; `ct` Null/Fcmp values; `enc_amount`/`enc_label`
+9 B; `serve_credit` sig-preimage (le64/le32 fixed-width); `nbp==1`; the §10 bounds.
+(Several agent-flagged "divergences" — reward-hidden, dedup-nullifier, coinbase
+`+10` — were against an *assumed* freeze, not this one, and do not apply.)
+
+**Rewrite plan.** Re-author §2/§9/§13 grounded in the design docs: add
+`bond_spend_pk` + its preimage; pin `tx_extra` 0x06/0x07 internal structure; fix
+the `view_tag` derivation; add the reward-emission + membership-only arms **by
+reference to `REWARD_EMISSION_VIN_PLAN.md` / `FCMP_MEMBERSHIP_ONLY.md`** (those PRs
+own them — like proof internals are frozen-by-reference); re-scope the CT rename to
+Phase-5. The inherited surface (§9.1–9.9 minus the PQC-field corrections, §10–§12)
+carries over.
