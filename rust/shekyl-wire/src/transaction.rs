@@ -48,6 +48,25 @@ pub const TAG_OUTPUT_TAGGED_KEY: u8 = 0x03;
 pub const CT_TYPE_NULL: u8 = 0x00;
 /// `FcmpPlusPlusPqc` confidential-transaction type — the spend ct (current C++ value).
 pub const CT_TYPE_FCMP: u8 = 0x07;
+/// `txin_archival_serve_credit_response` tag (current C++ value; gate-2, non-spending).
+pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x04;
+/// `txin_archival_bond_post` tag (current C++ value; gate-4, JoinMarket-only at genesis).
+pub const TAG_INPUT_BOND_POST: u8 = 0x05;
+
+/// `post_kind` value for a JoinMarket bond post (the only kind valid at genesis).
+/// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
+pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
+/// `holdings.kind` for a compact shard-set (carries an explicit shard list).
+pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
+/// `holdings.kind` for the complete tree (carries no shard list).
+pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
+
+/// Consensus bound: max shards in a compact holdings set (`bond_wire.rs`).
+const MAX_HOLDINGS_SHARDS: usize = 4096;
+/// Consensus bound: max branch scalars per path layer (`wire.rs`).
+const MAX_BRANCH_SCALARS: usize = 256;
+/// Consensus bound: max path layers per curve (`wire.rs`).
+const MAX_PATH_LAYERS: usize = 64;
 
 /// Parse-safety bound on length-prefixed reads: a declared length drives an
 /// allocation, so it is capped before reading. Coincides with
@@ -76,6 +95,40 @@ fn read_points<R: Read>(r: &mut R, count: usize) -> io::Result<Vec<[u8; 32]>> {
     Ok(v)
 }
 
+/// Write segment-path branch layers: `V(n_layers) · per-layer[ V(width) · scalar[32]… ]`
+/// (matches `shekyl-archival-retention::wire::write_branch_layers`).
+fn write_branch_layers<W: Write>(w: &mut W, layers: &[Vec<[u8; 32]>]) -> io::Result<()> {
+    write_varint(layers.len(), w)?;
+    for branch in layers {
+        write_varint(branch.len(), w)?;
+        for scalar in branch {
+            w.write_all(scalar)?;
+        }
+    }
+    Ok(())
+}
+
+/// Read segment-path branch layers (bounds match the source reader).
+fn read_branch_layers<R: Read>(r: &mut R, kind: &str) -> io::Result<Vec<Vec<[u8; 32]>>> {
+    let n_layers: usize = read_varint(r)?;
+    if n_layers > MAX_PATH_LAYERS {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: {kind} layer count {n_layers} exceeds {MAX_PATH_LAYERS}"
+        )));
+    }
+    let mut layers = Vec::new();
+    for _ in 0..n_layers {
+        let width: usize = read_varint(r)?;
+        if width > MAX_BRANCH_SCALARS {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: {kind} branch width {width} exceeds {MAX_BRANCH_SCALARS}"
+            )));
+        }
+        layers.push(read_points(r, width)?);
+    }
+    Ok(layers)
+}
+
 /// A transaction input.
 ///
 /// Genesis arms modelled here: the coinbase `gen` input and the FCMP++ spend
@@ -96,6 +149,10 @@ pub enum Input {
         /// Key image (linking tag / nullifier).
         key_image: [u8; 32],
     },
+    /// Archival serve-credit response (`tag 0x04`, gate-2) — non-spending.
+    ServeCredit(Box<ServeCredit>),
+    /// Archival bond-post (`tag 0x05`, gate-4) — JoinMarket-only at genesis.
+    BondPost(Box<BondPost>),
 }
 
 impl Input {
@@ -118,6 +175,14 @@ impl Input {
                     write_varint(*offset, w)?;
                 }
                 w.write_all(key_image)
+            }
+            Input::ServeCredit(sc) => {
+                w.write_all(&[TAG_INPUT_SERVE_CREDIT])?;
+                sc.write(w)
+            }
+            Input::BondPost(bp) => {
+                w.write_all(&[TAG_INPUT_BOND_POST])?;
+                bp.write(w)
             }
         }
     }
@@ -145,10 +210,190 @@ impl Input {
                     key_image: read_array(r)?,
                 })
             }
+            TAG_INPUT_SERVE_CREDIT => Ok(Input::ServeCredit(Box::new(ServeCredit::read(r)?))),
+            TAG_INPUT_BOND_POST => Ok(Input::BondPost(Box::new(BondPost::read(r)?))),
             other => Err(io::Error::other(format!(
                 "shekyl-wire: unsupported input tag {other:#04x}"
             ))),
         }
+    }
+}
+
+/// Holdings descriptor for a bond post (`bond_wire.rs` `HoldingsDescriptor`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Holdings {
+    /// Holdings kind byte (`HOLDINGS_SHARD_SET_COMPACT` or `HOLDINGS_COMPLETE_TREE`).
+    pub kind: u8,
+    /// Shard ids (present only for `ShardSetCompact`; empty for `CompleteTree`).
+    pub shard_ids: Vec<u64>,
+}
+
+impl Holdings {
+    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_all(&[self.kind])?;
+        if self.kind == HOLDINGS_SHARD_SET_COMPACT {
+            write_varint(self.shard_ids.len(), w)?;
+            for shard in &self.shard_ids {
+                write_varint(*shard, w)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn read<R: Read>(r: &mut R) -> io::Result<Holdings> {
+        let kind = read_byte(r)?;
+        if kind != HOLDINGS_SHARD_SET_COMPACT && kind != HOLDINGS_COMPLETE_TREE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: invalid holdings kind {kind}"
+            )));
+        }
+        let shard_ids = if kind == HOLDINGS_SHARD_SET_COMPACT {
+            let count: usize = read_varint(r)?;
+            if count > MAX_HOLDINGS_SHARDS {
+                return Err(io::Error::other(format!(
+                    "shekyl-wire: holdings shard count {count} exceeds {MAX_HOLDINGS_SHARDS}"
+                )));
+            }
+            let mut ids = Vec::new();
+            for _ in 0..count {
+                ids.push(read_varint(r)?);
+            }
+            ids
+        } else {
+            Vec::new()
+        };
+        Ok(Holdings { kind, shard_ids })
+    }
+}
+
+/// Archival serve-credit response payload (`tag 0x04`, gate-2 §5.1.1).
+///
+/// Non-spending: no key image; the `hybrid_signature` is on the vin and the tx
+/// carries empty `pqc_auths`. Layout per
+/// `shekyl-archival-retention::wire::ArchivalServeCreditResponse`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ServeCredit {
+    /// The serving `P`'s canonical id.
+    pub p_canonical_id: [u8; 32],
+    /// Shard being served.
+    pub shard_id: u64,
+    /// Settlement epoch this response covers.
+    pub settlement_epoch: u64,
+    /// Frozen segment sub-root `R_k`.
+    pub segment_subroot_rk: [u8; 32],
+    /// Leaf index within the segment.
+    pub leaf_index_in_segment: u32,
+    /// Challenged leaf bytes (4 scalars × 32).
+    pub leaf_bytes: [u8; 128],
+    /// Selene (`c1`) branch layers, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios (`c2`) branch layers, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
+    /// Canonical hybrid signature bytes.
+    pub hybrid_signature: Vec<u8>,
+}
+
+impl ServeCredit {
+    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_all(&self.p_canonical_id)?;
+        write_varint(self.shard_id, w)?;
+        write_varint(self.settlement_epoch, w)?;
+        w.write_all(&self.segment_subroot_rk)?;
+        w.write_all(&self.leaf_index_in_segment.to_le_bytes())?;
+        w.write_all(&self.leaf_bytes)?;
+        write_branch_layers(w, &self.c1_layers)?;
+        write_branch_layers(w, &self.c2_layers)?;
+        write_varint(self.hybrid_signature.len(), w)?;
+        w.write_all(&self.hybrid_signature)
+    }
+
+    fn read<R: Read>(r: &mut R) -> io::Result<ServeCredit> {
+        let p_canonical_id = read_array(r)?;
+        let shard_id = read_varint(r)?;
+        let settlement_epoch = read_varint(r)?;
+        let segment_subroot_rk = read_array(r)?;
+        let leaf_index_in_segment = u32::from_le_bytes(read_array::<4, _>(r)?);
+        let leaf_bytes = read_array::<128, _>(r)?;
+        let c1_layers = read_branch_layers(r, "c1")?;
+        let c2_layers = read_branch_layers(r, "c2")?;
+        let hybrid_signature = read_len_prefixed(r, "serve_credit hybrid_signature")?;
+        Ok(ServeCredit {
+            p_canonical_id,
+            shard_id,
+            settlement_epoch,
+            segment_subroot_rk,
+            leaf_index_in_segment,
+            leaf_bytes,
+            c1_layers,
+            c2_layers,
+            hybrid_signature,
+        })
+    }
+}
+
+/// Archival bond-post payload (`tag 0x05`, gate-4 §3.4.1). JoinMarket-only at
+/// genesis. Includes **`bond_spend_pk`** (the GF-1 debit authorizer, §9.11),
+/// present on the wire iff `post_kind == JOINMARKET` — which the current
+/// `shekyl-archival-retention::bond_wire` omits and the impl must add.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BondPost {
+    /// `P`'s canonical hybrid public key.
+    pub hybrid_public_key: Vec<u8>,
+    /// `P`'s canonical id.
+    pub p_canonical_id: [u8; 32],
+    /// Post kind byte (`BOND_POST_KIND_JOINMARKET` at genesis).
+    pub post_kind: u8,
+    /// GF-1 debit authorizer; `Some` iff `post_kind == JOINMARKET`.
+    pub bond_spend_pk: Option<Vec<u8>>,
+    /// Holdings served.
+    pub holdings: Holdings,
+    /// Public bonded total (== `bond_credit` == `bond_floor` for JoinMarket).
+    pub bonded_total_atomic: u64,
+    /// Public bond credit.
+    pub bond_credit: u64,
+    /// Public bond debit (`0` for JoinMarket).
+    pub bond_debit: u64,
+}
+
+impl BondPost {
+    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        write_varint(self.hybrid_public_key.len(), w)?;
+        w.write_all(&self.hybrid_public_key)?;
+        w.write_all(&self.p_canonical_id)?;
+        w.write_all(&[self.post_kind])?;
+        if self.post_kind == BOND_POST_KIND_JOINMARKET {
+            let bspk = self.bond_spend_pk.as_deref().ok_or_else(|| {
+                io::Error::other("shekyl-wire: JoinMarket bond_post requires bond_spend_pk")
+            })?;
+            write_varint(bspk.len(), w)?;
+            w.write_all(bspk)?;
+        }
+        self.holdings.write(w)?;
+        write_varint(self.bonded_total_atomic, w)?;
+        write_varint(self.bond_credit, w)?;
+        write_varint(self.bond_debit, w)
+    }
+
+    fn read<R: Read>(r: &mut R) -> io::Result<BondPost> {
+        let hybrid_public_key = read_len_prefixed(r, "bond_post hybrid_public_key")?;
+        let p_canonical_id = read_array(r)?;
+        let post_kind = read_byte(r)?;
+        let bond_spend_pk = if post_kind == BOND_POST_KIND_JOINMARKET {
+            Some(read_len_prefixed(r, "bond_spend_pk")?)
+        } else {
+            None
+        };
+        let holdings = Holdings::read(r)?;
+        Ok(BondPost {
+            hybrid_public_key,
+            p_canonical_id,
+            post_kind,
+            bond_spend_pk,
+            holdings,
+            bonded_total_atomic: read_varint(r)?,
+            bond_credit: read_varint(r)?,
+            bond_debit: read_varint(r)?,
+        })
     }
 }
 

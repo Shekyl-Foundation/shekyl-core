@@ -41,5 +41,6 @@ mod bytes;
 
 pub use block::{Block, BlockHeader};
 pub use transaction::{
-    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+    BondPost, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable, ServeCredit,
+    Transaction, TxPrefix,
 };
