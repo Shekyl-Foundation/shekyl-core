@@ -607,9 +607,10 @@ mod tests {
         // u8 wire value via runtime `From` (not const-evaluable), so
         // the const-evaluated `assert!` block at the top of the
         // module can't reach it. This runtime check is the
-        // next-cheapest tripwire: if anyone edits the `ProofType => 7`
-        // arms in shekyl-oxide without also updating
-        // `config/consensus_constants.json`, this test fires.
+        // next-cheapest tripwire: if anyone edits shekyl-oxide's
+        // `FCMP_PLUS_PLUS_PQC_WIRE_VALUE` / `ProofType` mapping (now dense-tagged
+        // to `1`) without also updating `config/consensus_constants.json`, this
+        // test fires.
         // shekyl-oxide is the disposable Monero fork (per
         // `10-shekyl-first.mdc`); the consensus authority lives in the
         // Shekyl-core JSON, and shekyl-oxide must follow.

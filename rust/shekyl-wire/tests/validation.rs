@@ -143,3 +143,25 @@ fn gen_input_must_be_sole_input() {
         .unwrap_err();
     assert!(err.to_string().contains("sole input"), "{err}");
 }
+
+#[test]
+fn mismatched_ct_base_length_rejected() {
+    // The committed base arrays are per-output; a length != vout must reject.
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1); // 2 outputs
+    if let Ct::Fcmp { base, .. } = &mut tx.ct {
+        base.enc_amounts.pop();
+    }
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("ct base arrays"), "{err}");
+}
+
+#[test]
+fn mismatched_pqc_auths_length_rejected() {
+    // pqc_auths are per-input (count == nvin); a length != vin must reject.
+    let mut tx = spend(vec![ki(1), ki(2)], vec![out()], 0, 1); // 2 inputs
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.pop();
+    }
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("pqc_auths"), "{err}");
+}

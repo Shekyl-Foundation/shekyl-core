@@ -1001,14 +1001,55 @@ impl Transaction {
                 ));
             }
         }
-        // §10: exactly one Bp+ for an Fcmp spend.
-        if let Ct::Fcmp { prunable, .. } = &self.ct {
-            if prunable.bulletproofs.len() != 1 {
-                return Err(io::Error::other(format!(
-                    "shekyl-wire: nbp {} != 1",
-                    prunable.bulletproofs.len()
-                )));
+        // Structural length-coupling: the serializer ties these vectors to the
+        // vin/vout counts (no independent length prefix on the wire), so an in-memory
+        // tx with mismatched lengths would not round-trip and would be
+        // consensus-invalid. Verify them here.
+        let base = match &self.ct {
+            Ct::Null(base) => base,
+            Ct::Fcmp {
+                base,
+                pqc_auths,
+                prunable,
+                ..
+            } => {
+                // pqc_auths + pseudoOuts are per-input (count == nvin, no prefix).
+                if pqc_auths.len() != self.prefix.inputs.len() {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: pqc_auths {} != input count {}",
+                        pqc_auths.len(),
+                        self.prefix.inputs.len()
+                    )));
+                }
+                if prunable.pseudo_outs.len() != self.prefix.inputs.len() {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: pseudoOuts {} != input count {}",
+                        prunable.pseudo_outs.len(),
+                        self.prefix.inputs.len()
+                    )));
+                }
+                // §10: exactly one aggregated Bp+ for an Fcmp spend.
+                if prunable.bulletproofs.len() != 1 {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: nbp {} != 1",
+                        prunable.bulletproofs.len()
+                    )));
+                }
+                base
             }
+        };
+        // The committed base arrays are per-output (count == nvout).
+        if base.enc_amounts.len() != n_out
+            || base.enc_labels.len() != n_out
+            || base.commitments.len() != n_out
+        {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: ct base arrays (enc_amounts={}, enc_labels={}, \
+                 commitments={}) must each equal output count {n_out}",
+                base.enc_amounts.len(),
+                base.enc_labels.len(),
+                base.commitments.len()
+            )));
         }
         Ok(())
     }
