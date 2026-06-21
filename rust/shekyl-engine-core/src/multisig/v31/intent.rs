@@ -61,8 +61,8 @@ const _: () = assert!(
     "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel"
 );
 const _: () = assert!(
-    RCT_TYPE_FCMP_PLUS_PLUS_PQC == 7,
-    "RCT_TYPE_FCMP_PLUS_PLUS_PQC diverged from baseline (7); changing the wire type number is a consensus rule change"
+    RCT_TYPE_FCMP_PLUS_PLUS_PQC == 1,
+    "RCT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
 );
 
 /// Maximum recipients per intent (bounds allocation from untrusted input).
@@ -598,7 +598,7 @@ mod tests {
         // authority closes the drift class.
         assert_eq!(FCMP_REFERENCE_BLOCK_MIN_AGE, 5);
         assert_eq!(FCMP_REFERENCE_BLOCK_MAX_AGE, 100);
-        assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 7);
+        assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 1);
     }
 
     #[test]

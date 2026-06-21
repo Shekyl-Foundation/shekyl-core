@@ -3,7 +3,7 @@
 
   "fcmp_reference_block_min_age": 5,
   "fcmp_reference_block_max_age": 100,
-  "rct_type_fcmp_plus_plus_pqc": 7,
+  "rct_type_fcmp_plus_plus_pqc": 1,
 
   "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter.",
   "daa_window_n": 90,

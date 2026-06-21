@@ -71,22 +71,32 @@ impl EncryptedLabel {
     }
 }
 
+/// FCMP++ confidential-transaction wire type value (genesis dense scheme,
+/// `GENESIS_TX_WIRE_FORMAT.md` §2.0). The single consensus authority is
+/// `config/consensus_constants.json` (`rct_type_fcmp_plus_plus_pqc`); this crate is
+/// **upstream** of the generated `RCT_TYPE_FCMP_PLUS_PLUS_PQC` constant so it cannot
+/// import it without inverting the dependency — instead this local constant is the
+/// single in-crate definition, pinned to the authority by the runtime tripwire
+/// `shekyl_oxide_proof_type_matches_consensus_authority` in shekyl-engine-core.
+pub const FCMP_PLUS_PLUS_PQC_WIRE_VALUE: u8 = 1;
+
 /// The proof type used by a transaction.
 ///
-/// Shekyl only accepts `FcmpPlusPlusPqc` from genesis. Legacy Monero types (MLSAG, Borromean,
-/// CLSAG, Bulletproof-only) have been removed. Wire values 1-6 are permanently rejected.
+/// Shekyl only accepts `FcmpPlusPlusPqc` from genesis. Legacy Monero types (MLSAG,
+/// Borromean, CLSAG, Bulletproof-only) have been removed; every wire value other
+/// than [`FCMP_PLUS_PLUS_PQC_WIRE_VALUE`] is permanently rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub enum ProofType {
-    /// FCMP++ membership proof with per-output PQC keys and Bulletproof+ range proofs.
-    ///
-    /// Wire value 7. The only ProofType accepted by Shekyl consensus.
+    /// FCMP++ membership proof with per-output PQC keys and Bulletproof+ range
+    /// proofs. Wire value is [`FCMP_PLUS_PLUS_PQC_WIRE_VALUE`] — the only
+    /// `ProofType` accepted by Shekyl consensus.
     FcmpPlusPlusPqc,
 }
 
 impl From<ProofType> for u8 {
     fn from(proof_type: ProofType) -> u8 {
         match proof_type {
-            ProofType::FcmpPlusPlusPqc => 7,
+            ProofType::FcmpPlusPlusPqc => FCMP_PLUS_PLUS_PQC_WIRE_VALUE,
         }
     }
 }
@@ -95,7 +105,7 @@ impl TryFrom<u8> for ProofType {
     type Error = ();
     fn try_from(byte: u8) -> Result<Self, ()> {
         match byte {
-            7 => Ok(ProofType::FcmpPlusPlusPqc),
+            FCMP_PLUS_PLUS_PQC_WIRE_VALUE => Ok(ProofType::FcmpPlusPlusPqc),
             _ => Err(()),
         }
     }
