@@ -35,6 +35,7 @@
 
 pub mod block;
 pub mod transaction;
+pub mod tx_extra;
 pub mod varint;
 
 mod bytes;

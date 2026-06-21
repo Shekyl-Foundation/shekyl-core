@@ -790,6 +790,12 @@ impl TxPrefix {
             extra,
         })
     }
+
+    /// Parse the opaque `extra` blob into structured `tx_extra` fields (§9.6a).
+    /// `extra` is kept opaque for round-trip; this is the additive structured view.
+    pub fn parse_extra(&self) -> io::Result<Vec<crate::tx_extra::TxExtraField>> {
+        crate::tx_extra::parse(&self.extra)
+    }
 }
 
 /// A Shekyl transaction (version 3).
