@@ -100,8 +100,8 @@ fn rejects_unknown_input_tag() {
 
 #[test]
 fn rejects_unsupported_ct_type() {
-    // 0x07 = Fcmp (spend) — a later slice; the coinbase path must reject it for now.
-    let bytes = minimal_coinbase(TAG_INPUT_GEN, 0x07, false);
+    // 0x05 is neither Null (0x00) nor Fcmp (0x07) — an unknown ct type must reject.
+    let bytes = minimal_coinbase(TAG_INPUT_GEN, 0x05, false);
     let err = Block::from_bytes(&bytes).expect_err("unsupported ct type must be rejected");
     assert!(
         err.to_string().contains("ct type"),
