@@ -89,29 +89,42 @@ pub fn write_varint<U: VarInt, W: Write>(value: U, w: &mut W) -> io::Result<()> 
 
 /// Read a canonical varint, rejecting non-canonical encodings and values that
 /// overflow `U`.
+///
+/// Decoding accumulates into the `u64` working type with **checked shifts**, so
+/// every rejection path is one the compiler proves panic-free: there is no
+/// width-dependent subtraction that could underflow (the failure mode raised
+/// against the prior hand-rolled `U::BITS - bits` guard) and no shift that could
+/// exceed the operand width. The accepted byte-set and decoded values are
+/// identical to the C++/`shekyl-oxide` consensus encoding (canonical LEB128, no
+/// redundant trailing zero, value must fit `U`); only the rejection *mechanism*
+/// changes, so this is not a wire-format change.
 pub fn read_varint<U: VarInt, R: Read>(r: &mut R) -> io::Result<U> {
-    let mut bits: u32 = 0;
     let mut res: u64 = 0;
+    let mut shift: u32 = 0;
     loop {
         let byte = read_byte(r)?;
         // A non-leading terminator of `0x00` is a redundant trailing zero.
-        if bits != 0 && byte == 0 {
+        if shift != 0 && byte == 0 {
             return Err(io::Error::other(
                 "non-canonical varint (redundant trailing zero)",
             ));
         }
-        // Overflow: only checkable once we are within 7 bits of the type width,
-        // where `U::BITS - bits <= 7`, so the shift below stays in range.
-        if (bits + 7) >= U::BITS && byte >= (1u8 << (U::BITS - bits)) {
-            return Err(io::Error::other("varint overflow for target type"));
-        }
-        res += u64::from(byte & PAYLOAD) << bits;
-        bits += 7;
+        // Place the 7 payload bits at `shift`. `checked_shl` yields `None` once
+        // `shift >= 64` (an over-long encoding); the `placed >> shift` guard then
+        // rejects a value whose high bits would fall off the 64-bit top
+        // (`checked_shl` does not itself detect dropped bits). Either way the
+        // encoding is rejected before it can corrupt `res`.
+        let payload = u64::from(byte & PAYLOAD);
+        res |= match payload.checked_shl(shift) {
+            Some(placed) if placed >> shift == payload => placed,
+            _ => return Err(io::Error::other("varint overflow (over-long encoding)")),
+        };
+        shift += 7;
         if byte & CONTINUATION != CONTINUATION {
             break;
         }
     }
-    U::from_u64(res).ok_or_else(|| io::Error::other("varint does not fit target type"))
+    U::from_u64(res).ok_or_else(|| io::Error::other("varint value overflows target type"))
 }
 
 #[cfg(test)]
@@ -168,6 +181,16 @@ mod tests {
     fn rejects_overflow_for_narrow_type() {
         // 0x80,0x02 => 0 | (2 << 7) = 256, which does not fit a u8.
         let err = read_varint::<u8, _>(&mut [0x80u8, 0x02].as_slice()).unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err}");
+    }
+
+    #[test]
+    fn rejects_over_long_encoding() {
+        // Eleven all-continuation bytes (payload 0) never terminate within the
+        // 64-bit working width. The checked-shift guard must reject this rather
+        // than under/overflowing — and the zero payload defeats any naive
+        // `payload != 0` shortcut, so it exercises the `checked_shl == None` arm.
+        let err = read_varint::<u64, _>(&mut [0x80u8; 11].as_slice()).unwrap_err();
         assert!(err.to_string().contains("overflow"), "{err}");
     }
 }

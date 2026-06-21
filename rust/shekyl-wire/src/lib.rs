@@ -11,18 +11,23 @@
 //! replacement for the vendored `shekyl-oxide` block/tx/ct serializer (Decision
 //! 1 / §4 of that doc); consumers migrate here and the vendored modules retire.
 //!
-//! ## Scope of this first slice — the coinbase block
+//! ## Scope
 //!
-//! [`BlockHeader`], [`Block`], [`Transaction`] (v3), the `gen` input
-//! ([`Input::Gen`]), the `tagged_key` output ([`Output`]), and the coinbase
-//! `Null` confidential section *with its committed base arrays*
-//! (`enc_amounts` / `enc_labels` / `outPk`, [`CtBase`]). That base is exactly
-//! what the pre-fix `shekyl-oxide` reader skipped — it returned `None` on the
-//! `Null` type byte and never consumed the arrays, so `Block::read` mis-aligned
-//! and failed `UnexpectedEof` on a live coinbase. The round-trip KAT
-//! (`tests/coinbase_roundtrip.rs`) proves the fix against captured daemon blobs.
+//! The full genesis block + transaction surface: [`BlockHeader`], [`Block`],
+//! [`Transaction`] (v3); the `gen` input ([`Input::Gen`]), the `tagged_key`
+//! output ([`Output`]), and the coinbase `Null` confidential section *with its
+//! committed base arrays* (`enc_amounts` / `enc_labels` / `outPk`, [`CtBase`]);
+//! the FCMP++ spend ([`Ct::Fcmp`] with [`PqcAuth`] + [`Prunable`]); and the
+//! archival input arms ([`Input::ServeCredit`], [`Input::BondPost`]).
 //!
-//! Spend (`Fcmp`) transactions and the archival input arms land in later slices.
+//! The committed `Null` base is exactly what the pre-fix `shekyl-oxide` reader
+//! skipped — it returned `None` on the `Null` type byte and never consumed the
+//! arrays, so `Block::read` mis-aligned and failed `UnexpectedEof` on a live
+//! coinbase; this crate is its clean replacement. Coinbase round-trip and
+//! consensus-hash identities are proven against captured daemon blobs
+//! (`tests/coinbase_roundtrip.rs`, `tests/coinbase_hash.rs`); the FCMP++ spend
+//! is built from real crypto and self-validated against the consensus verifier
+//! before its serializer round-trip (`tests/fcmp_spend_e2e.rs`).
 //!
 //! ## Tag values
 //!

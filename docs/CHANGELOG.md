@@ -14,7 +14,7 @@
   tests never exercise (they always fill to width), and the prover doesn't catch
   (it ignores the root). Fixed by **zero-padding branch chunks to width** in
   `shekyl_fcmp::proof::prove` / `prove_with_sal`: zero scalars vanish in the layer
-  hash, so the **consensus tree root is unchanged** (  no daemon/consensus change,
+  hash, so the **consensus tree root is unchanged** (no daemon/consensus change,
   no CT-2 Tier-A regression), and the daemon's `shekyl_fcmp_verify` — the same
   Rust `verify` via FFI — accepts it. The audited vendored FCMP crypto was sound;
   the bug was first-party (our driving). Closes PR 2c-1's deferred verify half

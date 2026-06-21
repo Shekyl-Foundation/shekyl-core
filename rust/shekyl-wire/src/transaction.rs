@@ -5,17 +5,18 @@
 
 //! The Shekyl transaction (genesis `version = 3`) — coinbase + FCMP++ spend.
 //!
-//! Layout (GENESIS_TX_WIRE_FORMAT.md §9.3-§9.9), in the **current C++ tag values**
-//! (the dense renumber is a later gate-(c) cut):
+//! Layout (GENESIS_TX_WIRE_FORMAT.md §9.3-§9.9), in the **genesis dense tag
+//! scheme** (the gate-(c) renumber — these match the renumbered C++ oracle
+//! `VARIANT_TAG`s and the ct enum, and the constants below):
 //!
 //! ```text
 //! Transaction := V(version=3) TxPrefix Ct
 //! TxPrefix    := V(unlock_time) vec(Input) vec(Output) V(extra_len) extra[extra_len]
-//! Input(gen)  := 0xff V(height)
-//! Input(spend):= 0x02 V(amount) vec(V key_offset) key_image[32]      # txin_to_key
-//! Output      := V(amount) 0x03 key[32] view_tag(1)                  # tagged_key
+//! Input(gen)  := 0x00 V(height)                                     # txin_gen
+//! Input(spend):= 0x01 V(amount) vec(V key_offset) key_image[32]     # txin_to_key
+//! Output      := V(amount) 0x00 key[32] view_tag(1)                 # tagged_key
 //! Ct(Null)    := 0x00 enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]   # coinbase
-//! Ct(Fcmp)    := 0x07 V(fee) referenceBlock[32]
+//! Ct(Fcmp)    := 0x01 V(fee) referenceBlock[32]
 //!                enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]
 //!                PqcAuths(nvin)  Prunable
 //! PqcAuth     := auth_version(1) scheme_id(1) flags(u16 LE) V(pk_len) pk V(sig_len) sig

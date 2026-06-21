@@ -130,12 +130,14 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
         let tag = read_byte(&mut cur)?;
         let field = match tag {
             TX_EXTRA_TAG_PADDING => {
-                let mut rest = Vec::new();
-                cur.read_to_end(&mut rest)?;
-                if rest.iter().any(|&b| b != 0) {
+                // Padding runs to the end of `extra` and must be all-zero. Scan
+                // the remaining slice in place (no allocation/copy), then drain.
+                if cur.iter().any(|&b| b != 0) {
                     return Err(io::Error::other("tx_extra: non-zero byte in padding"));
                 }
-                TxExtraField::Padding(1 + rest.len())
+                let field = TxExtraField::Padding(1 + cur.len());
+                cur = &[];
+                field
             }
             TX_EXTRA_TAG_PUBKEY => TxExtraField::PubKey(read_array(&mut cur)?),
             TX_EXTRA_TAG_NONCE => TxExtraField::Nonce(read_blob(&mut cur, "nonce")?),
