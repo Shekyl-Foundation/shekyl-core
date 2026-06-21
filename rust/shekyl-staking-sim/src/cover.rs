@@ -698,6 +698,371 @@ pub fn run_full_report() -> CoverReport {
     }
 }
 
+// ===========================================================================
+// §7.6 / §7.7 pass — is the scalar peak robust enough to freeze, or pin a
+// function? Three analyses: (A) characterize the hump's shape and the
+// sensitivity of k* across the pessimistic-input corners (density ×
+// timing_retain × affordability); (B) compare an adaptive, population-
+// conditioned dial against the best frozen scalar; (C) a bounding proxy for the
+// one real net-leak concern — a height-aware attacker sub-localizing when the
+// per-height distribution drifts across a timing window.
+// ===========================================================================
+
+/// One realized-set sample under the FULL model — timing intersection (§1.1) AND
+/// participation opt-out (§7.5) together. A paying target (rung ≥ `min_paying_rung`)
+/// counts only paying decoys that also survive the timing draw. `None` if the
+/// target itself opted out (so the mean is over *payers*, the §7.5 metric).
+fn realized_payer_sample(
+    rng: &mut SplitMix64,
+    pop: &[i64],
+    target: usize,
+    k: f64,
+    timing_retain: f64,
+    min_paying_rung: i64,
+) -> Option<f64> {
+    let s_p = pop[target];
+    if s_p < min_paying_rung {
+        return None;
+    }
+    let u = rng.unit();
+    let lo = s_p - ((1.0 - u) * k).floor() as i64;
+    let hi = s_p + (u * k).floor() as i64;
+    let mut decoys = 0u64;
+    for (j, &s) in pop.iter().enumerate() {
+        if j == target || s < min_paying_rung || s < lo || s > hi {
+            continue;
+        }
+        if timing_retain >= 1.0 || rng.unit() < timing_retain {
+            decoys += 1;
+        }
+    }
+    Some(1.0 + decoys as f64)
+}
+
+/// Mean realized payer set at one `(corner, k)` — the metric the genesis pin
+/// maximizes (full timing × participation model).
+#[allow(clippy::too_many_arguments)]
+fn realized_payer_set_mean(
+    n_p: u64,
+    mean: f64,
+    dispersion: Dispersion,
+    k: u64,
+    timing_retain: f64,
+    beta: f64,
+    trials: u64,
+    seed: u64,
+) -> f64 {
+    let min_paying_rung = (k as f64 / beta).ceil().max(1.0) as i64;
+    let kf = k as f64;
+    let mut rng = SplitMix64::new(seed);
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+    let mut sum = 0.0;
+    let mut count = 0u64;
+    for _ in 0..trials {
+        pop.clear();
+        pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean, dispersion) as i64));
+        let target = (rng.next_u64() % n_p) as usize;
+        if let Some(set) =
+            realized_payer_sample(&mut rng, &pop, target, kf, timing_retain, min_paying_rung)
+        {
+            sum += set;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        1.0
+    } else {
+        sum / count as f64
+    }
+}
+
+/// The dial values the robustness/adaptive sweeps walk.
+fn dial_grid() -> Vec<u64> {
+    (2..=32).step_by(2).collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CornerHump {
+    pub density: Dispersion,
+    pub timing_retain: f64,
+    pub beta: f64,
+    /// The realized-set-maximizing dial at this corner.
+    pub k_star: u64,
+    pub peak_set: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HumpRobustness {
+    pub corners: Vec<CornerHump>,
+    /// The single `k` maximizing the worst-corner fraction of peak.
+    pub robust_k: u64,
+    /// At `robust_k`, the worst corner's set as a fraction of its own peak.
+    pub worst_corner_ratio: f64,
+    /// Whether one frozen `k` holds ≥ 90% of peak across **every** corner.
+    pub robust_band_90: bool,
+    /// How far `k*` slides across the corners (`max − min`) — the fragility signal.
+    pub k_star_spread: u64,
+}
+
+/// (A) Characterize the hump across the pessimistic corners (§7.6). At the thin
+/// `N_P` corner, sweep the dial for every (density × timing_retain × β) and ask:
+/// does a single frozen `k` stay within 90% of each corner's peak?
+fn hump_robustness() -> HumpRobustness {
+    let densities = [Dispersion::Clustered, Dispersion::Dispersed];
+    let timings = [1.0_f64, 0.5, 0.2];
+    let betas = [1.0_f64, 2.0, 4.0];
+    let ks = dial_grid();
+    let (_, n_p, mean) = SCENARIOS[0]; // thin N_P — the pessimistic population.
+    let trials = 20_000u64;
+
+    let mut corners = Vec::new();
+    let mut curves: Vec<Vec<f64>> = Vec::new();
+    let mut seed = 0xF00D_0001u64;
+    for &density in &densities {
+        for &timing_retain in &timings {
+            for &beta in &betas {
+                let curve: Vec<f64> = ks
+                    .iter()
+                    .map(|&k| {
+                        seed += 1;
+                        realized_payer_set_mean(
+                            n_p,
+                            mean,
+                            density,
+                            k,
+                            timing_retain,
+                            beta,
+                            trials,
+                            seed,
+                        )
+                    })
+                    .collect();
+                let (best_i, &peak) = curve
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                    .unwrap();
+                corners.push(CornerHump {
+                    density,
+                    timing_retain,
+                    beta,
+                    k_star: ks[best_i],
+                    peak_set: peak,
+                });
+                curves.push(curve);
+            }
+        }
+    }
+
+    // Robust k: the one maximizing the worst corner's fraction of its own peak.
+    let mut robust_k = ks[0];
+    let mut best_min_ratio = 0.0;
+    for (ki, &k) in ks.iter().enumerate() {
+        let min_ratio = corners
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| curves[ci][ki] / c.peak_set)
+            .fold(f64::INFINITY, f64::min);
+        if min_ratio > best_min_ratio {
+            best_min_ratio = min_ratio;
+            robust_k = k;
+        }
+    }
+    let k_star_min = corners.iter().map(|c| c.k_star).min().unwrap();
+    let k_star_max = corners.iter().map(|c| c.k_star).max().unwrap();
+
+    HumpRobustness {
+        corners,
+        robust_k,
+        worst_corner_ratio: best_min_ratio,
+        robust_band_90: best_min_ratio >= 0.90,
+        k_star_spread: k_star_max - k_star_min,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DensityResponse {
+    pub label: &'static str,
+    pub n_p: u64,
+    pub mean_shards: f64,
+    /// The adaptive (population-conditioned) dial = this density's own `k*`.
+    pub adaptive_k: u64,
+    pub adaptive_set: f64,
+    pub adaptive_cover_skl: f64,
+    /// The frozen scalar (the §7.6 robust-band centre), applied everywhere.
+    pub frozen_k: u64,
+    pub frozen_set: f64,
+    pub frozen_cover_skl: f64,
+}
+
+/// (B) Adaptive vs frozen (§7.7). Across a sparse→dense sweep, the adaptive dial
+/// is each density's own `k*` (what a public, population-conditioned `D` would
+/// compute); the frozen dial is the single `robust_k`. The function should match
+/// or beat the scalar on set while spending **less** cover capital where wide
+/// cover buys nothing (sparse periods).
+fn adaptive_vs_frozen(robust_k: u64) -> Vec<DensityResponse> {
+    let levels: [(&str, u64, f64); 4] = [
+        ("sparse-thin", 17, 9.0),
+        ("mid", 40, 20.0),
+        ("lean", 79, 60.0),
+        ("dense-thick", 154, 60.0),
+    ];
+    let timing_retain = 0.5; // joint corner
+    let beta = 2.0; // moderate affordability
+    let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
+    let ks = dial_grid();
+    let trials = 20_000u64;
+    let mut seed = 0xADA9_0001u64;
+
+    levels
+        .iter()
+        .map(|&(label, n_p, mean)| {
+            let (adaptive_k, adaptive_set) = ks
+                .iter()
+                .map(|&k| {
+                    seed += 1;
+                    (
+                        k,
+                        realized_payer_set_mean(
+                            n_p,
+                            mean,
+                            Dispersion::Dispersed,
+                            k,
+                            timing_retain,
+                            beta,
+                            trials,
+                            seed,
+                        ),
+                    )
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
+            seed += 1;
+            let frozen_set = realized_payer_set_mean(
+                n_p,
+                mean,
+                Dispersion::Dispersed,
+                robust_k,
+                timing_retain,
+                beta,
+                trials,
+                seed,
+            );
+            DensityResponse {
+                label,
+                n_p,
+                mean_shards: mean,
+                adaptive_k,
+                adaptive_set,
+                adaptive_cover_skl: adaptive_k as f64 * floor_skl,
+                frozen_k: robust_k,
+                frozen_set,
+                frozen_cover_skl: robust_k as f64 * floor_skl,
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LeakPoint {
+    /// Ratio of `D`-width across the timing window (1.0 = no drift = frozen `D`).
+    pub drift: f64,
+    pub frozen_set: f64,
+    pub adaptive_set: f64,
+    /// `(frozen − adaptive) / frozen` — the set a height-aware attacker strips off
+    /// by exploiting the per-height width difference. The net-leak proxy.
+    pub leak_frac: f64,
+}
+
+/// (C) Net-leak bounding proxy (§7.7). The one real concern: under an adaptive,
+/// height-conditioned `D`, a height-aware attacker knows each candidate's window
+/// width, so if `D` drifts across a timing window a candidate at the
+/// narrower-`D` edge is excluded when its rung offset exceeds the narrowed width.
+/// We model a window where a fraction of candidates sit in the other regime
+/// (`D`-width narrowed by `drift`) and measure how much of the set the attacker
+/// strips. NOT a full attacker model — a bound: leak is 0 at no drift and grows
+/// with drift, and drift is structurally tiny (the timing window ≈ 600 blk is
+/// ≪ the population-change epoch ≈ 10_000 blk, so per-window drift ≈ 6%).
+fn leak_shock_check() -> Vec<LeakPoint> {
+    let (n_p, mean) = (79u64, 60.0f64); // a dense corner so the set is non-trivial.
+    let k = 16u64;
+    let frac_other = 0.5; // half the window sits in the other density regime.
+    let drifts = [1.0_f64, 1.06, 1.2, 1.5, 2.0, 3.0];
+    let trials = 40_000u64;
+    let kf = k as f64;
+
+    drifts
+        .iter()
+        .map(|&drift| {
+            let mut rng = SplitMix64::new(0x1EAC_0000 ^ (drift.to_bits()));
+            let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+            let mut frozen_sum = 0.0;
+            let mut adaptive_sum = 0.0;
+            for _ in 0..trials {
+                pop.clear();
+                pop.extend(
+                    (0..n_p)
+                        .map(|_| draw_shard_count(&mut rng, mean, Dispersion::Dispersed) as i64),
+                );
+                let target = (rng.next_u64() % n_p) as usize;
+                let s_p = pop[target];
+                let u = rng.unit();
+                let lo = s_p - ((1.0 - u) * kf).floor() as i64;
+                let hi = s_p + (u * kf).floor() as i64;
+                let narrowed = kf / drift;
+                let mut frozen = 1.0;
+                let mut adaptive = 1.0;
+                for (j, &s) in pop.iter().enumerate() {
+                    if j == target || s < lo || s > hi {
+                        continue;
+                    }
+                    frozen += 1.0;
+                    // A candidate in the other (narrower-D) regime survives only if
+                    // its rung offset fits the narrowed width.
+                    let in_other = rng.unit() < frac_other;
+                    if !in_other || ((s - s_p).unsigned_abs() as f64) <= narrowed {
+                        adaptive += 1.0;
+                    }
+                }
+                frozen_sum += frozen;
+                adaptive_sum += adaptive;
+            }
+            let frozen_set = frozen_sum / trials as f64;
+            let adaptive_set = adaptive_sum / trials as f64;
+            LeakPoint {
+                drift,
+                frozen_set,
+                adaptive_set,
+                leak_frac: (frozen_set - adaptive_set) / frozen_set,
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FnReport {
+    pub floor_skl: f64,
+    /// Structural per-window `D`-drift: timing window / population-change epoch.
+    pub realistic_drift: f64,
+    pub hump: HumpRobustness,
+    pub adaptive: Vec<DensityResponse>,
+    pub leak: Vec<LeakPoint>,
+}
+
+pub fn run_cover_fn_report() -> FnReport {
+    let hump = hump_robustness();
+    let adaptive = adaptive_vs_frozen(hump.robust_k);
+    // 600-block entry-gap window over the 10_000-block settlement epoch.
+    let realistic_drift = 1.0 + 600.0 / 10_000.0;
+    FnReport {
+        floor_skl: ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL,
+        realistic_drift,
+        hump,
+        adaptive,
+        leak: leak_shock_check(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,5 +1173,40 @@ mod tests {
         let narrow = run_participation(17, 9.0, Dispersion::Dispersed, 8, 2.0, 50_000, 9);
         let wide = run_participation(17, 9.0, Dispersion::Dispersed, 32, 2.0, 50_000, 9);
         assert!(wide.opt_out_frac > narrow.opt_out_frac);
+    }
+
+    #[test]
+    fn hump_robustness_reports_a_band_and_a_spread() {
+        let h = hump_robustness();
+        // robust_k is a real grid point; the worst-corner ratio is a fraction.
+        assert!(h.robust_k >= 2 && h.robust_k <= 32);
+        assert!(h.worst_corner_ratio > 0.0 && h.worst_corner_ratio <= 1.0 + 1e-9);
+        assert_eq!(h.robust_band_90, h.worst_corner_ratio >= 0.90);
+        // Every corner's peak is at least the same-rung baseline.
+        assert!(h.corners.iter().all(|c| c.peak_set >= 1.0));
+    }
+
+    #[test]
+    fn adaptive_never_underperforms_the_frozen_scalar() {
+        // The adaptive dial is each density's own argmax over the grid, and the
+        // frozen k is one grid point, so adaptive ≥ frozen on set at every level.
+        let h = hump_robustness();
+        for d in adaptive_vs_frozen(h.robust_k) {
+            assert!(d.adaptive_set >= d.frozen_set - 1e-9, "level {}", d.label);
+        }
+    }
+
+    #[test]
+    fn leak_is_zero_at_no_drift_and_grows_with_drift() {
+        let pts = leak_shock_check();
+        let at_one = pts.iter().find(|p| (p.drift - 1.0).abs() < 1e-9).unwrap();
+        assert!(at_one.leak_frac.abs() < 1e-9, "no drift ⇒ no leak");
+        let at_three = pts.iter().find(|p| (p.drift - 3.0).abs() < 1e-9).unwrap();
+        assert!(
+            at_three.leak_frac > at_one.leak_frac,
+            "leak grows with drift"
+        );
+        // And it stays bounded — even a 3× shock strips less than the whole set.
+        assert!(at_three.leak_frac < 1.0);
     }
 }
