@@ -112,10 +112,17 @@ pub struct KemCiphertext {
 }
 
 fn read_blob<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
+    read_blob_bounded(r, what, READ_LEN_CAP)
+}
+
+/// Read a `V(len)·blob`, rejecting (before allocating) any declared length above
+/// `max`. Use a tag-specific `max` (e.g. the nonce's 255) so a hostile length can't
+/// drive a large allocation that the tag's own cap would reject anyway.
+fn read_blob_bounded<R: Read>(r: &mut R, what: &str, max: usize) -> io::Result<Vec<u8>> {
     let len: usize = read_varint(r)?;
-    if len > READ_LEN_CAP {
+    if len > max {
         return Err(io::Error::other(format!(
-            "tx_extra: {what} length {len} exceeds cap {READ_LEN_CAP}"
+            "tx_extra: {what} length {len} exceeds cap {max}"
         )));
     }
     let mut buf = vec![0u8; len];
@@ -157,14 +164,12 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             }
             TX_EXTRA_TAG_PUBKEY => TxExtraField::PubKey(read_array(&mut cur)?),
             TX_EXTRA_TAG_NONCE => {
-                let blob = read_blob(&mut cur, "nonce")?;
-                if blob.len() > TX_EXTRA_NONCE_MAX_COUNT {
-                    return Err(io::Error::other(format!(
-                        "tx_extra: nonce {} exceeds {TX_EXTRA_NONCE_MAX_COUNT}",
-                        blob.len()
-                    )));
-                }
-                TxExtraField::Nonce(blob)
+                // Reject `> TX_EXTRA_NONCE_MAX_COUNT` before allocating the payload.
+                TxExtraField::Nonce(read_blob_bounded(
+                    &mut cur,
+                    "nonce",
+                    TX_EXTRA_NONCE_MAX_COUNT,
+                )?)
             }
             TX_EXTRA_TAG_ADDITIONAL_PUBKEYS => {
                 let count: usize = read_varint(&mut cur)?;
@@ -223,13 +228,40 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
 }
 
 /// Re-serialize parsed fields back to the `extra` blob (byte-identical to the
-/// input for a faithfully-parsed blob).
-pub fn serialize(fields: &[TxExtraField]) -> Vec<u8> {
+/// input for a faithfully-parsed blob). Symmetric with [`parse`]: it errors on a
+/// field that would emit a self-invalid blob (padding out of `1..=255` or not last,
+/// nonce over its cap) rather than producing bytes `parse` would later reject.
+pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
-    for field in fields {
+    let last = fields.len().saturating_sub(1);
+    for (i, field) in fields.iter().enumerate() {
+        // Reject fields that would emit a blob `parse` cannot accept — keep
+        // serialize/parse inverses so a caller can't produce a self-invalid
+        // `tx_extra` (the public `TxExtraField` allows out-of-range values).
+        match field {
+            TxExtraField::Padding(n) => {
+                if *n == 0 || *n > TX_EXTRA_PADDING_MAX_COUNT {
+                    return Err(io::Error::other(format!(
+                        "tx_extra: padding run {n} not in 1..={TX_EXTRA_PADDING_MAX_COUNT}"
+                    )));
+                }
+                if i != last {
+                    return Err(io::Error::other(
+                        "tx_extra: padding must be the last field (it consumes to end)",
+                    ));
+                }
+            }
+            TxExtraField::Nonce(blob) if blob.len() > TX_EXTRA_NONCE_MAX_COUNT => {
+                return Err(io::Error::other(format!(
+                    "tx_extra: nonce {} exceeds {TX_EXTRA_NONCE_MAX_COUNT}",
+                    blob.len()
+                )));
+            }
+            _ => {}
+        }
         write_field(&mut out, field).expect("Vec write is infallible");
     }
-    out
+    Ok(out)
 }
 
 fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {

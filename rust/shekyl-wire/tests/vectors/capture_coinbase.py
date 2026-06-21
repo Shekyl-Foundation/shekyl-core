@@ -72,7 +72,14 @@ def main():
                 if rpc(url, "get_info").get("status") == "OK":
                     break
             except Exception:
-                time.sleep(0.5)
+                pass
+            time.sleep(0.5)
+        else:
+            # Loop exhausted without ever reaching status OK — fail loudly rather
+            # than calling generateblocks against a daemon that never came up.
+            raise RuntimeError(
+                f"shekyld RPC at {url} not ready after ~60s; "
+                f"see {os.path.join(workdir, 'daemon.log')}")
         rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
         hashes = {}
         for h in CAPTURE_HEIGHTS:

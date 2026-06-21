@@ -136,6 +136,25 @@ fn read_points<R: Read>(r: &mut R, count: usize) -> io::Result<Vec<[u8; 32]>> {
     Ok(v)
 }
 
+/// A `Write` sink that discards its input and only tallies the byte count — lets
+/// [`Transaction::serialized_len`] measure the wire size without materializing the
+/// blob (the `MAX_TX_SIZE` check would otherwise allocate up to ~1 MiB per call).
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.bytes += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Write segment-path branch layers: `V(n_layers) · per-layer[ V(width) · scalar[32]… ]`
 /// (matches `shekyl-archival-retention::wire::write_branch_layers`).
 fn write_branch_layers<W: Write>(w: &mut W, layers: &[Vec<[u8; 32]>]) -> io::Result<()> {
@@ -927,6 +946,15 @@ impl Transaction {
         out
     }
 
+    /// The serialized byte length, measured **without allocating** the blob (writes
+    /// into a counting sink). Used for the `MAX_TX_SIZE` bound in [`Self::validate`].
+    pub fn serialized_len(&self) -> usize {
+        let mut counter = CountingWriter::default();
+        self.write(&mut counter)
+            .expect("counting write is infallible");
+        counter.bytes
+    }
+
     /// Parse a transaction from a complete blob, requiring **exact consumption**
     /// (GENESIS_TX_WIRE_FORMAT.md §12 — trailing bytes are rejected).
     pub fn from_bytes(blob: &[u8]) -> io::Result<Transaction> {
@@ -1043,7 +1071,7 @@ impl Transaction {
                 self.prefix.extra.len()
             )));
         }
-        let size = self.serialize().len();
+        let size = self.serialized_len();
         if size > MAX_TX_SIZE {
             return Err(io::Error::other(format!(
                 "shekyl-wire: tx size {size} exceeds {MAX_TX_SIZE}"

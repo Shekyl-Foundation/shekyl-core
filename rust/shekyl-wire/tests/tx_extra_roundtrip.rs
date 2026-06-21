@@ -11,7 +11,7 @@
 
 use shekyl_wire::tx_extra::{
     self, PqcOwnershipEntry, TxExtraField, HYBRID_KEM_CT_BYTES, ML_KEM_768_CT_BYTES,
-    PQC_LEAF_HASH_BYTES,
+    PQC_LEAF_HASH_BYTES, TX_EXTRA_TAG_NONCE,
 };
 use shekyl_wire::Block;
 
@@ -23,7 +23,7 @@ fn coinbase_tx_extra_round_trips_and_splits_per_output() {
 
     let fields = tx_extra::parse(extra).expect("parse coinbase tx_extra");
     assert_eq!(
-        tx_extra::serialize(&fields),
+        tx_extra::serialize(&fields).expect("re-serialize coinbase tx_extra"),
         *extra,
         "tx_extra must re-serialize byte-identically to the oracle blob"
     );
@@ -77,7 +77,7 @@ fn synthetic_tx_extra_field_kinds_round_trip() {
         // padding is last (consumes to end)
         TxExtraField::Padding(5),
     ];
-    let bytes = tx_extra::serialize(&fields);
+    let bytes = tx_extra::serialize(&fields).expect("serialize valid field kinds");
     assert_eq!(
         tx_extra::parse(&bytes).unwrap(),
         fields,
@@ -97,14 +97,33 @@ fn unknown_tag_is_rejected() {
 }
 
 #[test]
-fn oversized_padding_and_nonce_rejected() {
-    // Oracle parity: C++ caps padding and nonce at 255 (tx_extra.h). A 256-byte
-    // padding run (tag + 255 zeros) and a 256-byte nonce must both be rejected.
-    let padding = tx_extra::serialize(&[TxExtraField::Padding(256)]);
-    let err = tx_extra::parse(&padding).expect_err("padding > 255 must be rejected");
+fn oversized_padding_and_nonce_rejected_on_serialize() {
+    // Oracle parity: C++ caps padding and nonce at 255 (tx_extra.h). serialize() is
+    // symmetric with parse() — it rejects a self-invalid field rather than emitting a
+    // blob parse would reject.
+    let err = tx_extra::serialize(&[TxExtraField::Padding(256)])
+        .expect_err("padding > 255 must be rejected at serialize");
     assert!(err.to_string().contains("padding run"), "{err}");
 
-    let nonce = tx_extra::serialize(&[TxExtraField::Nonce(vec![0u8; 256])]);
-    let err = tx_extra::parse(&nonce).expect_err("nonce > 255 must be rejected");
+    let err = tx_extra::serialize(&[TxExtraField::Nonce(vec![0u8; 256])])
+        .expect_err("nonce > 255 must be rejected at serialize");
+    assert!(err.to_string().contains("nonce"), "{err}");
+}
+
+#[test]
+fn padding_must_be_last_on_serialize() {
+    // Padding consumes to end on parse, so a non-last padding field is self-invalid.
+    let err = tx_extra::serialize(&[TxExtraField::Padding(2), TxExtraField::PubKey([0u8; 32])])
+        .expect_err("non-last padding must be rejected");
+    assert!(err.to_string().contains("last field"), "{err}");
+}
+
+#[test]
+fn oversized_nonce_rejected_before_allocation_on_parse() {
+    // A hostile nonce length is rejected at parse before the payload is allocated:
+    // tag 0x02, varint(1_000_000), no payload — must error on the length, not EOF.
+    let mut blob = vec![TX_EXTRA_TAG_NONCE];
+    shekyl_wire::varint::write_varint(1_000_000usize, &mut blob).unwrap();
+    let err = tx_extra::parse(&blob).expect_err("oversized nonce length must be rejected");
     assert!(err.to_string().contains("nonce"), "{err}");
 }
