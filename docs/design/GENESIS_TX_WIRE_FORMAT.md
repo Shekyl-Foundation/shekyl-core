@@ -21,14 +21,19 @@ only for inherited.
 
 **Not a freeze.** Pre-ratification obligations (review 2026-06-20, F1–F6):
 
-1. **Impl catch-up — two pre-genesis blockers.** (a) `bond_spend_pk` (§9.11),
-   missing from `bond_wire.rs` + the C++ struct. (b) **The FA-6 ML-KEM `view_tag`
-   switch in the scanner + builder** (F2): the live scanner still computes the old
-   X25519/keccak path (`shared_key.rs:65`) and FA-6's impl is *"a separate PR after
-   spec review"* (FA-6:13) — so a genesis `view_tag` frozen as ML-KEM-derived
-   against a scanner on the old path makes **every output silently fail to scan**,
-   and the wire byte-corpus round-trips clean and never catches it. Needs a
-   **scan-time KAT** (derive → tag → match), §6 Q13 — not just wire byte-identity.
+1. **Impl catch-up — absorbed by the §4 clean-crate build + scanner migration, not
+   standalone pre-work.** (a) `bond_spend_pk`: the **GF-1 key derivation already
+   exists + is KAT'd** (`archival_p.rs:120-123,235`; `kat_archival_p_derive_v1.rs`) —
+   what is open is only its **wire / consensus-record / sig-preimage surfacing**,
+   which the clean crate encodes per §9.11. **Do not patch the current
+   `bond_wire.rs`:** §4 retires that encoder into the clean crate, so patching it now
+   is throwaway. (b) **FA-6 ML-KEM `view_tag`** (F2): the scanner+builder switch off
+   the old X25519/keccak path (`shared_key.rs:65`; FA-6 impl is *"a separate PR"*,
+   FA-6:13) **rides the ~58-consumer scanner migration** (§8) — 2d-1 (P-scan) is a
+   scan pipeline that needs that scanner anyway. A `view_tag` frozen as ML-KEM
+   against a scanner still on X25519 makes **every output silently fail to scan**,
+   and the wire byte-corpus round-trips clean and never catches it → needs the
+   **scan-time KAT** (§6 Q13), separate from byte-identity.
 2. **Arm taxonomy + generalized §12/§13 (F1).** The frozen ki-ordering and
    `pqc_auths` rules were written for key-image-bearing fcmp spends; the no-ki arms
    (serve_credit, bond_post, and the deferred emission/membership-only) don't fit
@@ -499,15 +504,20 @@ Format: **ID — item.** *(status)* disposition / what's needed.
    impl catch-up incl. the FA-6 `view_tag` switch, the §2.5 arm taxonomy, the §2.1
    deferred sub-freezes, corpus + scan-KAT) gate ratification.
 2. **Implementation** (next): rebase the worktree onto current `dev` + relocate
-   Decision-4 to the slice-2 plan; **land the two impl blockers — `bond_spend_pk`
-   (§9.11) and the FA-6 ML-KEM `view_tag` switch in scanner+builder (Q13)**; capture
-   a spend blob + the archival-arm blobs as positive-corpus items.
-3. Stand up the clean crate to the spec-grounded layout; positive + **negative**
-   corpus green vs the (gate-(c)-adjusted) oracle (incl. the §12 canonical-form
-   rejects), **plus the §6 Q13 scan-time `view_tag` KAT** (wire byte-identity alone
-   cannot catch a derivation mismatch).
-4. Migrate the ~58 consumers; delete `shekyl-oxide` block/tx — **sequenced to
-   avoid colliding with in-flight wallet-rewrite work**.
+   Decision-4 to the slice-2 plan; capture a spend blob + the archival-arm blobs as
+   positive-corpus items. *(The two "blockers" are **not** a discrete pre-step —
+   `bond_spend_pk`'s wire surfacing lands in the clean crate (step 3); the FA-6
+   `view_tag` switch rides the scanner migration (step 4). Don't patch the
+   to-be-retired `bond_wire.rs`.)*
+3. Stand up the clean crate to the spec-grounded layout (**incl. `bond_spend_pk` per
+   §9.11 — derivation already done, this is the wire encoding**); positive +
+   **negative** corpus green vs the (gate-(c)-adjusted) oracle (incl. the §12
+   canonical-form rejects), **plus the §6 Q13 scan-time `view_tag` KAT** (wire
+   byte-identity alone cannot catch a derivation mismatch).
+4. Migrate the ~58 consumers (**incl. the scanner's FA-6 ML-KEM `view_tag` switch +
+   the Q13 scan-KAT — 2d-1 P-scan needs this scanner regardless**); delete
+   `shekyl-oxide` block/tx — **sequenced to avoid colliding with in-flight
+   wallet-rewrite work**.
 5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): tag
    renumber, `txin_fcmp` reshape, shed dead/staking arms, single-output coinbase,
    exact-consumption + exact-proof-length, reward-zone de-gating.
@@ -552,7 +562,7 @@ pre-renumber tags until recapture.)*
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
 **9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
 **9.10 `archival_serve_credit` (0x02)** (gate-2 §5.1.1) — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[128] · path{ V(c1_layers) · per-layer[ V(branch_scalars ≤256) · scalar[32]… ], V(c2_layers) · same } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths. **Sig-preimage** (gate-2 §5.2) uses fixed-width `le64`/`le32` (NOT the wire varints), customization `"shekyl/archival-serve-credit-response-v1"`, over the c1+c2 branch sections only.
-**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(The current `bond_wire.rs`/C++ struct omit `bond_spend_pk` — the impl must add it.)*
+**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(The GF-1 `bond_spend` **key derivation already exists** (`archival_p.rs:120-123`, KAT'd); only the **wire/record/sig-preimage surfacing** is open, and it lands in the clean crate (§4) — the current `bond_wire.rs` encoder is **retired, not patched**.)*
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -765,7 +775,9 @@ they have different authorities:
    (JoinMarket-conditional, `varint len + canonical bytes`) **and** in the
    cSHAKE256 sig-preimage (`encode_bond_spend_commitment`); it is the GF-1
    debit-authorizer (gate-6 §9.6, 2026-06-16) that keeps `P_pubkey` identity-only.
-   Both `bond_wire.rs` and the C++ struct omit it. **Security-critical.**
+   The **key derivation already exists** (`archival_p.rs:120-123`, KAT'd); only the
+   **wire/record/sig-preimage surfacing** is open and lands in the clean crate (§4),
+   **not** by patching the to-be-retired `bond_wire.rs`. **Security-critical.**
 2. **`tx_extra` 0x06 (PQC KEM ct) is not opaque** — per output:
    `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B)
    (FA-6 / POST_QUANTUM_CRYPTOGRAPHY §Phase 2; `extra.rs` `PqcKemCiphertext`).
