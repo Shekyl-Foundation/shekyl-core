@@ -17,7 +17,10 @@
 
 use std::io::{self, Read, Write};
 
+use shekyl_crypto_hash::cn_fast_hash;
+
 use crate::bytes::read_array;
+use crate::hash::merkle_root;
 use crate::transaction::{Input, Transaction};
 use crate::varint::{read_varint, write_varint};
 
@@ -140,5 +143,36 @@ impl Block {
             // is not a block number.
             _ => None,
         }
+    }
+
+    /// The block-hash / PoW preimage (without the leading length varint):
+    /// `BlockHeader · tx_tree_hash · V(tx_count + 1)`, where `tx_tree_hash` is the
+    /// Merkle tree-hash over `[miner_tx_hash, transaction_hashes…]` (§11). This is
+    /// exactly the **PoW** preimage; the block hash adds a length prefix (below).
+    pub fn pow_blob(&self) -> Vec<u8> {
+        let mut blob = Vec::new();
+        self.header
+            .write(&mut blob)
+            .expect("Vec write is infallible");
+        let mut leaves = Vec::with_capacity(1 + self.transaction_hashes.len());
+        leaves.push(self.miner_transaction.hash());
+        leaves.extend_from_slice(&self.transaction_hashes);
+        let tree_hash = merkle_root(leaves).expect("the miner tx is always present");
+        blob.extend_from_slice(&tree_hash);
+        write_varint(self.transaction_hashes.len() + 1, &mut blob)
+            .expect("Vec write is infallible");
+        blob
+    }
+
+    /// The consensus block hash: `cn_fast_hash(V(len) · pow_blob)` (§11). The
+    /// length-varint prefix is what distinguishes the block-hash preimage from the
+    /// PoW preimage (which omits it). The Monero block-202612 special case is shed
+    /// (dead pre-genesis chain history).
+    pub fn hash(&self) -> [u8; 32] {
+        let blob = self.pow_blob();
+        let mut preimage = Vec::new();
+        write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
+        preimage.extend_from_slice(&blob);
+        cn_fast_hash(&preimage)
     }
 }

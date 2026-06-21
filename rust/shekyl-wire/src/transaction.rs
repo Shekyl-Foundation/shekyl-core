@@ -31,7 +31,10 @@
 
 use std::io::{self, Read, Write};
 
+use shekyl_crypto_hash::cn_fast_hash;
+
 use crate::bytes::{read_array, read_byte};
+use crate::hash::hash_concat;
 use crate::varint::{read_varint, write_varint};
 
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
@@ -839,5 +842,56 @@ impl Transaction {
             )));
         }
         Ok(tx)
+    }
+
+    /// The consensus transaction hash (`cn_fast_hash` over component hashes,
+    /// GENESIS_TX_WIRE_FORMAT.md §11): **3-part** for the coinbase (`Null`) —
+    /// `H(prefix) · H(base) · null_hash`; **4-part** for an FCMP++ spend —
+    /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
+    /// the version varint (the first field of the C++ `transaction_prefix`).
+    pub fn hash(&self) -> [u8; 32] {
+        let mut prefix_buf = Vec::new();
+        write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
+        self.prefix
+            .write(&mut prefix_buf)
+            .expect("Vec write is infallible");
+        let h_prefix = cn_fast_hash(&prefix_buf);
+
+        match &self.ct {
+            Ct::Null(base) => {
+                let mut base_buf = vec![CT_TYPE_NULL];
+                base.write(&mut base_buf).expect("Vec write is infallible");
+                hash_concat(&[h_prefix, cn_fast_hash(&base_buf), [0u8; 32]])
+            }
+            Ct::Fcmp {
+                fee,
+                reference_block,
+                base,
+                pqc_auths,
+                prunable,
+            } => {
+                let mut base_buf = vec![CT_TYPE_FCMP];
+                write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
+                base_buf.extend_from_slice(reference_block);
+                base.write(&mut base_buf).expect("Vec write is infallible");
+
+                let mut auth_buf = Vec::new();
+                for auth in pqc_auths {
+                    auth.write(&mut auth_buf).expect("Vec write is infallible");
+                }
+
+                let mut prunable_buf = Vec::new();
+                prunable
+                    .write(&mut prunable_buf)
+                    .expect("Vec write is infallible");
+
+                hash_concat(&[
+                    h_prefix,
+                    cn_fast_hash(&base_buf),
+                    cn_fast_hash(&auth_buf),
+                    cn_fast_hash(&prunable_buf),
+                ])
+            }
+        }
     }
 }

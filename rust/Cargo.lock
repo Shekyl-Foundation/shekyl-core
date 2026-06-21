@@ -4364,6 +4364,9 @@ dependencies = [
 [[package]]
 name = "shekyl-wire"
 version = "3.1.0"
+dependencies = [
+ "shekyl-crypto-hash",
+]
 
 [[package]]
 name = "shlex"

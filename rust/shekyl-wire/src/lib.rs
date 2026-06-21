@@ -38,6 +38,7 @@ pub mod transaction;
 pub mod varint;
 
 mod bytes;
+mod hash;
 
 pub use block::{Block, BlockHeader};
 pub use transaction::{
