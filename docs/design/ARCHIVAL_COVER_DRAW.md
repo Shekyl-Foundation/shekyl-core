@@ -343,16 +343,20 @@ Q candidate  ⟺  A − floor · s_Q ∈ [C_min, C_max]
              ⟺  floor·(s_P − s_Q) + cover ∈ [C_min, C_max]
 ```
 
-For the realized `cover`, the candidate rungs form a **contiguous window of
-`k + 1` rungs straddling `s_P`**, where `k = ⌊(C_max − C_min) / floor⌋` and the
-split (how many below `s_P` vs above) slides with the realized draw. So the
-width `W = C_max − C_min`, in units of `floor`, **is** the number of rungs the
-cover blurs across — the §2.3 lattice dial, now exact: `k = W / floor`.
+For the realized `cover`, the candidate rungs form a **contiguous window of `k`
+rungs straddling `s_P`**, where `k = ⌊(C_max − C_min) / floor⌋`: the consistency
+condition pins `s_Q` to a real interval of length `k` (in rung units), which
+contains `k` integer rungs almost always — `k + 1` only when `cover` lands exactly
+on a floor multiple (measure-zero for a continuous, atomic-grained cover). The
+split slides with the draw: a high `cover` (near `C_max`) must be matched by a
+*higher* rung, so the window opens mostly **above** `s_P`; a low `cover` opens it
+below. So the width `W = C_max − C_min`, in units of `floor`, **is** the number of
+rungs the cover blurs across — the §2.3 lattice dial, now exact: `k = W / floor`.
 
-The **effective** anonymity set is not `k + 1` rungs but the
+The **effective** anonymity set is not the rung *count* but the
 **posterior-weighted count of *stakers* on those rungs** (the §1.2 IPR). Uniform
 `cover` (DQ1) makes the likelihood flat across the window, so the effective set
-≈ `Σ` stakers occupying the `k + 1` rungs — uniform is exactly the shape that
+≈ `Σ` stakers occupying the window's rungs — uniform is exactly the shape that
 denies the attacker concentration on `s_P`.
 
 ### 7.2 The binding case is the sparse thin regime

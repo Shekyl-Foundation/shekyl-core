@@ -22,10 +22,13 @@
 //!
 //! Rungs sit at `bond_floor = floor · s` where `s = Σ|holdings|` is the shard
 //! count and `floor = ARCHIVAL_BOND_FLOOR_ATOMIC = 0.75 SKL`. For a *realized*
-//! cover the attacker's candidate set is the **contiguous window of `k+1` rungs
-//! straddling the true rung `s_P`**, with its split (rungs below vs above `s_P`)
-//! sliding with the draw: a cover near `C_max` opens the window mostly *below*
-//! `s_P`, near `C_min` mostly *above*. Uniform cover (DQ1) makes the
+//! cover the attacker's candidate set is the **contiguous window of `k` rungs
+//! straddling the true rung `s_P`** — a length-`k` rung interval, which includes
+//! `s_P`'s own rung and contains `k` integer rungs almost always (`k+1` only when
+//! the cover lands exactly on a floor multiple, measure-zero for a continuous
+//! cover). Its split (rungs below vs above `s_P`) slides with the draw: a cover
+//! near `C_max` opens the window mostly *above* `s_P` (it must be matched by a
+//! *higher* rung), near `C_min` mostly *below*. Uniform cover (DQ1) makes the
 //! per-candidate likelihood flat, so the **effective** anonymity set equals the
 //! raw count of stakers in the window (the §1.2 inverse-participation-ratio
 //! collapses to a count) — which is *why* uniform is the answer, not merely a
@@ -146,7 +149,8 @@ pub struct CoverResult {
     pub link_prob_mean: f64,
     /// Mean capital tax `k / s_P` — cover span as a multiple of the staker's bond.
     pub tax_mean: f64,
-    /// Worst-case tax `k / min s_P` — the smallest staker, who pays the most (§7.3).
+    /// Worst-case tax = the rung-1 staker's `k / 1 = k` — a deterministic bound on
+    /// the smallest staker's burden (§7.3), not a sample-dependent max.
     pub tax_worst: f64,
 }
 
@@ -239,7 +243,6 @@ fn run(cfg: &CoverConfig) -> CoverResult {
     let mut link_sum = 0.0;
     let mut thin = 0u64;
     let mut tax_sum = 0.0;
-    let mut tax_worst = 0.0;
 
     for _ in 0..cfg.trials {
         // Fresh population each trial integrates over population realizations
@@ -251,9 +254,11 @@ fn run(cfg: &CoverConfig) -> CoverResult {
         let target = (rng.next_u64() % cfg.n_p) as usize;
         let s_p = pop[target];
 
-        // Realized cover slides the k+1-rung window: a draw u∈[0,1) puts
-        // ⌊(1−u)·k⌋ rungs below s_P and ⌊u·k⌋ above (sum k−1 or k; +1 with the
-        // target's own rung ⇒ ≈ k+1 rungs total, §7.1).
+        // Realized cover slides the window: u∈[0,1) maps cover from C_min (u=0)
+        // to C_max (u=1), placing ⌊(1−u)·k⌋ rungs below s_P and ⌊u·k⌋ above — so a
+        // high cover (u→1) opens the window *above* s_P, a low cover *below*. The
+        // window spans k rungs (⌊(1−u)k⌋ + ⌊uk⌋ + 1 = k for non-aligned u; k+1 only
+        // when u·k is integral — measure-zero for a continuous cover), §7.1.
         let u = rng.unit();
         let lo = s_p - ((1.0 - u) * k).floor() as i64;
         let hi = s_p + (u * k).floor() as i64;
@@ -278,11 +283,7 @@ fn run(cfg: &CoverConfig) -> CoverResult {
         if set <= THIN_COVER_THRESHOLD {
             thin += 1;
         }
-        let tax = k / s_p as f64;
-        tax_sum += tax;
-        if tax > tax_worst {
-            tax_worst = tax;
-        }
+        tax_sum += k / s_p as f64;
     }
 
     sets.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -304,7 +305,10 @@ fn run(cfg: &CoverConfig) -> CoverResult {
         thin_cover_frac: thin as f64 / n as f64,
         link_prob_mean: link_sum / n as f64,
         tax_mean: tax_sum / n as f64,
-        tax_worst,
+        // The rung-1 staker's tax, `k / 1 = k` — the worst *possible* burden, a
+        // deterministic bound (not the sample max, which is seed/trials-dependent
+        // and under-reports when no rung-1 staker is sampled).
+        tax_worst: cfg.rungs_blurred as f64,
     }
 }
 
@@ -739,11 +743,11 @@ mod tests {
 
     #[test]
     fn tax_is_regressive_worst_at_rung_one() {
-        // The worst-case tax is k / (smallest sampled rung); with a dispersed
-        // population a rung-1 staker is sampled, so it approaches k exactly.
+        // tax_worst is the deterministic rung-1 bound (k/1 = k), strictly above the
+        // mean tax (k / mean_rung) — the regressive burden the smallest staker bears.
         let r = run(&base(16));
-        assert!(r.tax_worst > r.tax_mean);
         assert!((r.tax_worst - 16.0).abs() < 1e-9);
+        assert!(r.tax_worst > r.tax_mean);
     }
 
     #[test]
