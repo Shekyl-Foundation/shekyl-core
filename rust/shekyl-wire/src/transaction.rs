@@ -71,6 +71,20 @@ const MAX_BRANCH_SCALARS: usize = 256;
 /// Consensus bound: max path layers per curve (`wire.rs`).
 const MAX_PATH_LAYERS: usize = 64;
 
+// §10 resource bounds (structural; the chain-context rules of §13 — double-spend,
+// CT balance, referenceBlock window, per-arm pqc_auths semantics — are the
+// consensus layer's job, not the wire serializer's).
+/// Max key-image (fcmp) inputs per tx (`FCMP_MAX_INPUTS_PER_TX`).
+pub const MAX_FCMP_INPUTS: usize = 8;
+/// Max outputs per tx (`BULLETPROOF_PLUS_MAX_OUTPUTS`).
+pub const MAX_OUTPUTS: usize = 16;
+/// Max `tx_extra` bytes for a non-coinbase tx (`MAX_TX_EXTRA_SIZE`).
+pub const MAX_TX_EXTRA: usize = 24_576;
+/// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`).
+pub const MAX_TX_SIZE: usize = 1_000_000;
+/// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
+pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
+
 /// Parse-safety bound on length-prefixed reads: a declared length drives an
 /// allocation, so it is capped before reading. Coincides with
 /// `CRYPTONOTE_MAX_TX_SIZE`; the full consensus bounds are the validation slice.
@@ -899,5 +913,77 @@ impl Transaction {
                 ])
             }
         }
+    }
+
+    /// Structural / canonical-form validation (GENESIS_TX_WIRE_FORMAT.md §10 + the
+    /// context-free parts of §12): resource bounds, key-image ordering, the
+    /// `unlock_time` block-height form, and `nbp == 1`. **Out of scope** (the
+    /// consensus layer's job — needs arm-context or chain state): per-arm
+    /// `pqc_auths` semantics (§13), coinbase domain rules, CT balance,
+    /// double-spend, and the referenceBlock window.
+    pub fn validate(&self) -> io::Result<()> {
+        if self.prefix.inputs.is_empty() {
+            return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
+        }
+        let n_out = self.prefix.outputs.len();
+        if n_out == 0 || n_out > MAX_OUTPUTS {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: output count {n_out} not in 1..={MAX_OUTPUTS}"
+            )));
+        }
+        // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
+        let is_coinbase = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
+        if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",
+                self.prefix.extra.len()
+            )));
+        }
+        let size = self.serialize().len();
+        if size > MAX_TX_SIZE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: tx size {size} exceeds {MAX_TX_SIZE}"
+            )));
+        }
+        if self.prefix.unlock_time >= UNLOCK_TIME_BLOCK_SENTINEL {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: unlock_time {} is the timestamp form (block-height only)",
+                self.prefix.unlock_time
+            )));
+        }
+        // §12: key-image-bearing inputs strictly ascending — rejects both unsorted
+        // and in-tx duplicate key images. Also enforces the fcmp input cap.
+        let key_images: Vec<&[u8; 32]> = self
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::ToKey { key_image, .. } => Some(key_image),
+                _ => None,
+            })
+            .collect();
+        if key_images.len() > MAX_FCMP_INPUTS {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: {} fcmp inputs exceed {MAX_FCMP_INPUTS}",
+                key_images.len()
+            )));
+        }
+        for pair in key_images.windows(2) {
+            if pair[0] >= pair[1] {
+                return Err(io::Error::other(
+                    "shekyl-wire: key images not strictly ascending (§12)",
+                ));
+            }
+        }
+        // §10: exactly one Bp+ for an Fcmp spend.
+        if let Ct::Fcmp { prunable, .. } = &self.ct {
+            if prunable.bulletproofs.len() != 1 {
+                return Err(io::Error::other(format!(
+                    "shekyl-wire: nbp {} != 1",
+                    prunable.bulletproofs.len()
+                )));
+            }
+        }
+        Ok(())
     }
 }
