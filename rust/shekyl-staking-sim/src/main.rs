@@ -20,6 +20,7 @@
 
 mod agent;
 mod audit;
+mod cover;
 mod curve;
 mod failure_confirmation;
 mod fingerprint;
@@ -615,6 +616,135 @@ fn print_standoff_report() {
     }
 }
 
+fn print_cover_report() {
+    use cover::Dispersion;
+    let disp = |d: Dispersion| match d {
+        Dispersion::Clustered => "clust",
+        Dispersion::Dispersed => "disp",
+    };
+    let report = cover::run_full_report();
+    eprintln!(
+        "shekyl-staking-sim — funding-seam cover-amount anonymity (ARCHIVAL_COVER_DRAW.md §7)"
+    );
+    eprintln!(
+        "Charter: hide principal ↔ P via A = bond_floor + cover. The attacker tests A − bond_floor"
+    );
+    eprintln!(
+        "  ∈ [C_min,C_max]; the candidate set is the k rungs straddling s_P (floor = {:.2} SKL/rung).",
+        report.floor_skl
+    );
+    eprintln!(
+        "  Per-rung DENSITY (clustered vs dispersed) is the SWEPT pre-testnet assumption, not a"
+    );
+    eprintln!("  measurement (the cover analogue of the standoff's background rate).");
+    eprintln!();
+    eprintln!(
+        "  set = candidate funders (1 target + in-window, timing-retained decoys); link = 1/set;"
+    );
+    eprintln!(
+        "  thin = P(set ≤ 2); tax = cover span / bond (k/s_P), worst = the rung-1 staker (§7.3);"
+    );
+    eprintln!("  rt = timing-retain (§1.1: 1.0 = amount-marginal upper bound).");
+    eprintln!();
+    eprintln!(
+        "{:<24} {:<16} {:>4} {:>5} {:>5} {:>4} {:>4} | {:>7} {:>6} {:>6} {:>6} | {:>6} {:>6}",
+        "scenario",
+        "axis",
+        "n_P",
+        "mean",
+        "dens",
+        "k",
+        "rt",
+        "covSKL",
+        "setMean",
+        "setP05",
+        "thin",
+        "taxMn",
+        "taxWst",
+    );
+    for r in &report.results {
+        eprintln!(
+            "{:<24} {:<16} {:>4} {:>5.0} {:>5} {:>4} {:>4.1} | {:>7.2} {:>6.2} {:>6.1} {:>6.3} | {:>6.2} {:>6.1}",
+            r.name,
+            r.axis,
+            r.n_p,
+            r.mean_shards,
+            disp(r.dispersion),
+            r.rungs_blurred,
+            r.timing_retain,
+            r.cover_span_skl,
+            r.anon_set_mean,
+            r.anon_set_p05,
+            r.thin_cover_frac,
+            r.tax_mean,
+            r.tax_worst,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Saturation-knee pin (thin/dispersed corner): smallest k past which a rung of cover buys"
+    );
+    eprintln!(
+        "  < {:.2} set/rung. The pool saturates (satSet = reachable ceiling), so this is the PIN —",
+        report.marginal_cutoff
+    );
+    eprintln!(
+        "  past it capital is wasted and §7.5 opt-out makes it harmful. rt<1.0 is the JOINT corner"
+    );
+    eprintln!("  (the genesis-pin input); rt=1.0 amount-marginal is only a FLOOR. rch = target reachable.");
+    eprintln!(
+        "{:>4} {:>8} {:>8} {:>4} {:>8} {:>8} {:>8} {:>7}",
+        "rt", "knee_k", "satSet", "rch", "covSKL", "wstTax", "setMean", "thin",
+    );
+    for rec in &report.recommendations {
+        eprintln!(
+            "{:>4.1} {:>8} {:>8.2} {:>4} {:>8.2} {:>7.0}x {:>8.2} {:>7.3}",
+            rec.timing_retain,
+            rec.knee_rungs,
+            rec.saturation_set,
+            if rec.mean_target_reached { "Y" } else { "n" },
+            rec.cover_span_skl,
+            rec.worst_tax_multiple,
+            rec.anon_set_mean,
+            rec.thin_cover_frac,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Economic participation (§7.5): cover-stays-with-P ⇒ a staker funds cover only if C_max ≤"
+    );
+    eprintln!(
+        "  beta x bond (rung ≥ k/beta); below it they take the cover==0 opt-out. Rung is PUBLIC, so"
+    );
+    eprintln!(
+        "  the attacker discounts opt-outs ⇒ realized payer set < honest. optOut = priced-out frac;"
+    );
+    eprintln!(
+        "  pyrSet/pyrThin = realized set/tail for PAYERS; honSet = honest-uniform set (contrast)."
+    );
+    eprintln!(
+        "{:>4} {:>4} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "beta", "k", "covSKL", "minRung", "optOut", "pyrSet", "pyrThin", "honSet",
+    );
+    for p in &report.participation {
+        eprintln!(
+            "{:>4.1} {:>4} {:>7.2} {:>8} {:>8.3} {:>8.2} {:>8.3} {:>8.2}",
+            p.beta,
+            p.rungs_blurred,
+            p.cover_span_skl,
+            p.min_paying_rung,
+            p.opt_out_frac,
+            p.payer_set_mean,
+            p.payer_thin_frac,
+            p.honest_set_mean,
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -623,6 +753,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--standoff") {
         print_standoff_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover") {
+        print_cover_report();
         return;
     }
 

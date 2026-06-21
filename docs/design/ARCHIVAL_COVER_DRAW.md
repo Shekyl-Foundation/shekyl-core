@@ -6,12 +6,16 @@ parallelizable now (no open upstream decision: the bond-standardization is
 **decided in shape**, flat `floor × shards`, pinned rung — §2.3). **But off-wire
 is *not* re-tunable (§2.5):** the anonymity-uniformity requirement genesis-freezes
 the **whole** distribution — **shape *and* bounds**. So the next step is a genesis
-pin of **shape together with conservative bounds** (err-large; post-testnet
-**confirms** adequacy, it cannot **fix** a too-tight bound) — **not**
-shape-now/bounds-later. **§7 is the first analytical cut** at the bound: the
-lattice dial derived (`k = W/floor`), the regressive capital tax surfaced, a
-conservative bracket pinned, and the `--cover` harness arm specced as the step
-that measures `k` (the `--standoff` analogue).
+pin of **shape together with bounds sized against pessimistic inputs**; post-testnet
+**confirms** adequacy, it cannot **fix** a mis-pinned bound — **not**
+shape-now/bounds-later. **§7 is the analytical cut** at the bound: the lattice dial
+derived (`k = W/floor`), the regressive capital tax surfaced, and the `--cover`
+harness **built and run** (`shekyl-staking-sim --cover`). Two headline findings:
+(§7.4) the cover decoy pool is **bounded by `N_P` and saturates**, so the dial
+sizes the *mean* and the worst-case **tail** is a firewall-composition property;
+and (§7.5) economic participation makes `C_max` a **two-sided interior optimum**
+(too-large prices low rungs out), realized optimum `k ≈ 8–12 (~6–9 SKL)` — **not**
+the "err-large, go big" the earlier draft assumed (corrected in §2.5).
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -193,22 +197,21 @@ moves at a known height `H`:
 There is **no clean migration**: a past bond carries its old-regime cover forever
 and cannot re-draw. So the cover distribution is effectively **genesis-frozen**.
 
-**The decision rule — err large (asymmetric failure).** The pin is un-revisable
-and sized blind to the populations that would calibrate it, and the two ways to
-be wrong are not symmetric:
-
-- a **too-small** `C_max` is an **un-fixable privacy failure** — the cover spans
-  too few rungs and you cannot widen it;
-- a **too-large** `C_max` **fails safe** — the anonymity set holds; the only cost
-  is that every staker permanently locks more cover capital than a calibrated
-  value would need.
-
-So over-provision. **State the cost plainly:** the conservative bound is a
-**permanent capital tax on every staker**, the insurance premium against the
-population uncertainty being pinned blind to. `C_min` (the runway floor, §2.2)
-freezes identically and so also pins conservatively — against **pessimistic slow
-early yield** (under-funding the runway re-links, and `C_min` can't be raised
-later either).
+**The decision rule — *not* "err large"; an interior optimum (corrected by §7.5).**
+An earlier framing here said over-provision, on the reasoning that too-small
+`C_max` is an un-fixable privacy failure while too-large merely **fails safe** at a
+capital cost. The first half holds: a **too-small** `C_max` spans too few rungs and
+**cannot be widened**. The second half does **not** — the participation analysis
+(§7.5) shows a **too-large** `C_max` does *not* fail safe: its regressive capital
+tax prices the low-rung stakers out into the `cover == 0` opt-out, and because the
+rung is **public** that opt-out is inferable, so an over-large bound **shrinks** the
+realized anonymity set rather than holding it. So **both** directions are
+un-fixable failures (you can neither widen nor narrow post-freeze), and the genesis
+pin must hit an **interior optimum** — which *raises* the bar on the pre-freeze
+analysis rather than letting "just go big" stand in for it. `C_min` (the runway
+floor, §2.2) is the one bound that is still one-sided-conservative — pinned against
+**pessimistic slow early yield** (under-funding re-links, and it can't be raised
+later) — but `C_max` is a two-sided pin.
 
 **Net (the correction to "shape-now/calibrate-later"):** the genesis pin is
 **shape + conservative bounds together**. Post-testnet population data
@@ -224,7 +227,7 @@ later either).
 | --- | --- |
 | C1 | **The metric (§1).** A **joint amount × timing, posterior-weighted effective anonymity set** (IPR over the attacker's likelihood) over the **discrete `bond_floor` lattice** and shard-count distribution (the latter *inherited* from the sim, §2.3 — not a co-pin). Target = the cover analogue of `window = 600`, sized for the worst-case direct funder (§1.3), **jointly with the entry-gap standoff** (§1.1), and **under the *pessimistic* per-rung populations** (thin `N_P` end, §2.5) since the bound ships genesis-frozen blind to the real population. |
 | C2 | **Distribution shape (DQ1).** Pinned shape; uniform is the expected *result* of the posterior-weighting argument (§4), not a guess. |
-| C3 | **Bounds (DQ2) — genesis-frozen, conservative, err-large (§2.5).** `C_min` = **working-capital runway** floor (§2.2; references 2d-1 ramp), strictly positive, sized against pessimistic slow yield. `C_max` = the **lattice dial** (§2.3): `≥ k × floor` to blur `k` rungs, over-provisioned against the thin-`N_P` end. Both single-sourced beside `DEFAULT_ENTRY_GAP_WINDOW` and **pinned at genesis** (not post-testnet) — the cost is a **permanent capital tax** (§2.5). |
+| C3 | **Bounds (DQ2) — genesis-frozen, sized against pessimistic inputs (§2.5/§7.5).** `C_min` = **working-capital runway** floor (§2.2; references 2d-1 ramp), strictly positive, one-sided-conservative against pessimistic slow yield. `C_max` = the **lattice dial** (§2.3), `k × floor` to blur `k` rungs — **not** "as large as possible": §7.5 makes it a **two-sided interior optimum** (too-small under-blurs, too-large prices low rungs out), sized at the realized optimum under the pessimistic corner. Both single-sourced beside `DEFAULT_ENTRY_GAP_WINDOW` and **pinned at genesis** (not post-testnet). |
 | C4 | **Mechanism (DQ3).** A `shekyl-standoff` **value draw** (float-free, single-sourced, conformance-graded) reusing `GapRng` + `bounded_uniform`, extending the crate from "entry-standoff timing draw" → "funding-seam decorrelation draws: timing **and** amount." Golden vector + gated conformance grade. |
 | C5 | **Uniformity binding (DQ5) — as a *soft* rule (§2.4).** Single pinned distribution; reference wallet conforms; override is a disclosed cost, **not** enforced. Stated like the `enc_label` caveat, with its enforceability limit explicit. |
 | C6 | **`CoverAmount` follow-through.** `CoverAmount(AtomicUnits)` exists inert (`stake_timing.rs`); the draw produces it. Orchestration (the send + `P`-change threading) stays 2d; the **draw** is pinned here. |
@@ -251,13 +254,13 @@ later either).
   additionally **leaks shard count** (the scaling is the size signal), rejected on
   the same ground `==` (not `≥`) was chosen for the floor. *Decision: uniform over
   the pinned `[C_min, C_max]`, confirmed by C1's analysis over the lattice.*
-- **DQ2 — bounds (genesis-frozen, §2.5).** `C_min` = working-capital runway
-  (§2.2). `C_max` = lattice dial (§2.3). Both **ship at genesis, conservative,
-  err-large** — they do **not** wait on post-testnet calibration, because the pin
-  is un-revisable (moving a boundary splits the cohort) and the failure is
-  asymmetric (too-small `C_max` is an un-fixable privacy failure; too-large fails
-  safe at a capital cost). C1's analysis sets the *conservative target* against
-  the pessimistic population; post-testnet *confirms* adequacy, it cannot *fix*.
+- **DQ2 — bounds (genesis-frozen, §2.5/§7.5).** `C_min` = working-capital runway
+  (§2.2). `C_max` = lattice dial (§2.3). Both **ship at genesis** (not
+  post-testnet), because the pin is un-revisable (moving a boundary splits the
+  cohort). `C_min` is one-sided-conservative (slow-yield). `C_max` is **two-sided**:
+  too-small under-blurs (un-widenable), too-large prices low rungs out (§7.5 —
+  un-narrowable), so it pins at the **realized interior optimum** sized against the
+  pessimistic corner. Post-testnet *confirms* adequacy, it cannot *fix*.
 - **DQ3 — mechanism home.** Extend `shekyl-standoff` (re-scope its crate doc to
   "funding-seam decorrelation draws: timing + amount") with `draw_cover_amount`
   beside `draw_entry_gap`, sharing `GapRng` / `bounded_uniform` / golden-vector —
@@ -284,26 +287,30 @@ later either).
 - **No open upstream decision (§2.3):** the bond-standardization is decided in
   *shape* (flat `floor × shards`, pinned rung; `STAKER_ARCHIVAL_SIM.md`). C1
   *inherits* it — not a co-pin.
-- **The genesis pin is shape + conservative bounds *together* (§2.5):** off-wire
-  is **not** re-tunable — moving any boundary later splits the anonymity cohort
-  and past bonds can't re-draw, so the bounds are genesis-frozen. They ship
-  conservative (err-large: a too-small `C_max` is un-fixable; too-large fails safe
-  at a permanent capital-tax cost), sized against the **pessimistic** thin-`N_P`
-  population. Post-testnet **confirms** adequacy; it cannot **fix**. This is the
-  correction to "shape-now/bounds-later."
-- **Size jointly with the entry-gap standoff (§1.1):** the standoff width is an
-  input to the cover metric; the two draws share the funding seam and trade off.
+- **The genesis pin is shape + bounds *together* (§2.5/§7.5):** off-wire is
+  **not** re-tunable — moving any boundary later splits the anonymity cohort and
+  past bonds can't re-draw, so the bounds are genesis-frozen. `C_max` is a
+  **two-sided interior optimum** (too-small un-widenable; too-large prices low
+  rungs out, §7.5, un-narrowable), sized against the **pessimistic** corner —
+  *not* "err-large, go big." Post-testnet **confirms** adequacy; it cannot **fix**.
+  This is the correction to "shape-now/bounds-later."
+- **The integrated joint × participation pass is a pre-genesis blocker (§7.6):**
+  amount-marginal (§7.4), timing intersection (§7.4 finding 3), and participation
+  (§7.5) move the pin in conflicting directions and must be sized **together**
+  before the freeze — not a testnet follow-on.
 - **Prerequisite for:** 2d bond-tx assembly (the `bond_floor + cover` send).
 - **`C_min` references** the steady-state fund-from-earnings ramp (2d-1) — runway
   must outlast cold-start until earnings carry.
 - **Independent of:** the shekyl-oxide un-vendor (off-wire) and the scanner — the
-  full **shape + conservative-bounds genesis pin** (C2/C3/C4/C5) can be done now;
+  **shape + pessimistic-input bounds genesis pin** (C2/C3/C4/C5) can be done now;
   nothing waits on the consensus path. Post-testnet only *confirms* the bounds.
 - **Owns no wire/consensus bytes** — does not gate or touch the genesis freeze.
 - **The substantive work is the sim/analysis pass** (C1), the way the entry-gap
-  window was set by analysis — distinct from wiring the draw. **First cut: §7**
-  (structure + conservative bracket pinned; `--cover` harness arm specced as the
-  measuring step).
+  window was set by analysis — distinct from wiring the draw. **Done (first cut):
+  §7** — the `--cover` harness is built and run; §7.4–§7.6 have the measured dial,
+  the bounded-pool saturation finding, and the participation correction (realized
+  optimum `k ≈ 8–12`, not the amount-marginal `k = 21` floor). Open: the integrated
+  pre-freeze pass, per-rung density (testnet-confirm), and `C_min` (2d-1 ramp).
 
 ## 6. Gates (when it lands)
 
@@ -315,7 +322,7 @@ bump (off-wire).
 
 ---
 
-## 7. C1 first cut — sizing `C_max` / `C_min` (err-large)
+## 7. C1 first cut — sizing `C_max` / `C_min` (pessimistic-input, interior optimum)
 
 First analytical pass (the §5 "substantive sim/analysis pass"). It pins the
 **structure** of the bound and a **conservative genesis bracket**; it lands on a
@@ -336,16 +343,20 @@ Q candidate  ⟺  A − floor · s_Q ∈ [C_min, C_max]
              ⟺  floor·(s_P − s_Q) + cover ∈ [C_min, C_max]
 ```
 
-For the realized `cover`, the candidate rungs form a **contiguous window of
-`k + 1` rungs straddling `s_P`**, where `k = ⌊(C_max − C_min) / floor⌋` and the
-split (how many below `s_P` vs above) slides with the realized draw. So the
-width `W = C_max − C_min`, in units of `floor`, **is** the number of rungs the
-cover blurs across — the §2.3 lattice dial, now exact: `k = W / floor`.
+For the realized `cover`, the candidate rungs form a **contiguous window of `k`
+rungs straddling `s_P`**, where `k = ⌊(C_max − C_min) / floor⌋`: the consistency
+condition pins `s_Q` to a real interval of length `k` (in rung units), which
+contains `k` integer rungs almost always — `k + 1` only when `cover` lands exactly
+on a floor multiple (measure-zero for a continuous, atomic-grained cover). The
+split slides with the draw: a high `cover` (near `C_max`) must be matched by a
+*higher* rung, so the window opens mostly **above** `s_P`; a low `cover` opens it
+below. So the width `W = C_max − C_min`, in units of `floor`, **is** the number of
+rungs the cover blurs across — the §2.3 lattice dial, now exact: `k = W / floor`.
 
-The **effective** anonymity set is not `k + 1` rungs but the
+The **effective** anonymity set is not the rung *count* but the
 **posterior-weighted count of *stakers* on those rungs** (the §1.2 IPR). Uniform
 `cover` (DQ1) makes the likelihood flat across the window, so the effective set
-≈ `Σ` stakers occupying the `k + 1` rungs — uniform is exactly the shape that
+≈ `Σ` stakers occupying the window's rungs — uniform is exactly the shape that
 denies the attacker concentration on `s_P`.
 
 ### 7.2 The binding case is the sparse thin regime
@@ -355,10 +366,12 @@ The sim reports per-staker **mean** portfolio, not a per-rung histogram: thin
 So under the **thin** `N_P` end (§2.5's pessimistic populations) the rung density
 is **below one staker per rung** — ~17 stakers spread over a band roughly
 `[1, ~2·mean]`. Consequence: clearing a target effective set is a problem of
-**accumulating count across rungs**, not landing on a populated one — the cover
-must span most of the occupied band before the thin-cover tail closes. This is
-the same shape `--standoff` found (set mean `1 → 7 → 13 → 25` as the window
-widens, `:3484`); here the x-axis is `k` rungs instead of timing blocks.
+**accumulating count across rungs**, not landing on a populated one. But the pool
+the cover accumulates from is **bounded by `N_P`** — unlike `--standoff`'s
+unbounded background traffic — so it **saturates**, and the thin-cover tail does
+*not* simply close the way the standoff's did (§7.4 measures this). The mean-set
+shape still tracks the standoff (`1 → 7 → 13 → 25` there, `:3484`), with `k` rungs
+on the x-axis instead of timing blocks.
 
 ### 7.3 The capital tax is regressive (a finding to surface)
 
@@ -373,44 +386,135 @@ insurance, it is a regressive lock that can itself thin the small-staker
 population the metric depends on. The harness must report the tax curve
 alongside the anonymity curve and pick the knee, not the ceiling.
 
-### 7.4 Conservative genesis bracket (to be confirmed, not derived, by testnet)
+### 7.4 What the harness measured (built: `shekyl-staking-sim --cover`)
 
-At `floor = 0.75 SKL` the dial is:
+The `--cover` arm (`cover.rs`) runs the metric over the lattice — 200k trials,
+SplitMix64, four arms (dial / `N_P` scenario / density bracket / timing
+intersection) + a saturation-knee recommendation. The dial sweep at the
+pessimistic corner (thin `N_P = 17`, dispersed, amount-marginal):
 
-| `k` rungs blurred | `C_max − C_min` |
-| --- | --- |
-| 4 | 3 SKL |
-| 8 | 6 SKL |
-| 12 | 9 SKL |
-| 16 | 12 SKL |
-| 24 | 18 SKL |
+| `k` | `C_max − C_min` | mean set | thin-tail `P(set ≤ 2)` | worst tax |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | 1.9 | 0.75 | 0× |
+| 8 | 6 SKL | 6.7 | 0.136 | 8× |
+| 16 | 12 SKL | 9.8 | 0.068 | 16× |
+| 24 | 18 SKL | 11.7 | 0.045 | 24× |
+| 32 | 24 SKL | 12.9 | 0.034 | 32× |
 
-Under thin `N_P = 17` (mean ≈ 9, band ≈ `[1, ~18]`), clearing the entry-gap
-analogue (set mean ≈ 13, thin-tail `P(set ≤ 2) = 0`) plausibly needs spanning
-**~the full occupied band**, putting the err-large `C_max` on the order of
-**`k ≈ 16–24` ⇒ 12–18 SKL** of cover. A *calibrated* value would very likely be
-smaller — but per §2.5 it cannot be raised later, so the genesis pin sits at the
-over-provisioned end, with the §7.3 regressive tax named as its cost. `C_min` is
-the runway floor (§2.2): strictly positive (reserves `cover == 0` for the opt-out,
-DQ6), `≥ 1 rung (0.75 SKL)` so the smallest draw still funds non-trivial runway,
-final value pending the 2d-1 earnings-ramp numbers — sized against **pessimistic
-slow early yield**, also un-raisable later.
+Three findings change the §7.1 picture:
 
-### 7.5 The substantive step — the `--cover` harness arm
+1. **The decoy pool is bounded by `N_P` and saturates.** Unlike `--standoff`'s
+   unbounded Poisson background, the cover's candidates come from the `≤ N_P` live
+   stakers, so the **mean** set climbs toward `N_P` and plateaus (ceiling 17) but
+   the **thin-cover tail does not close** at any viable `k` (still `0.034` at
+   `k = 32`). The tail floor is set by **edge-of-lattice stakers no window can
+   surround** — a **firewall-composition** property, **not** a cover-sizing knob.
+   The two seams that cover it are the **`N_P`-independent** ones: **network
+   isolation** (denies the correlation channel entirely — population-independent)
+   and the **direct-funder-only scope** (§1.3 — any intermediate handling voids
+   the amount attack regardless of set size). **Timing is *not* one of them** —
+   finding 3 shows timing intersects-and-*shrinks* the amount-set over the same
+   `N_P`; it fights the tail, it does not rescue it. So the dial is sized to the
+   **mean**, and the residual tail is handed to network-isolation + funder-scope.
+2. **Per-rung density dominates, and it's unmeasured.** Clustered vs dispersed at
+   `k = 16`: thin-tail `2.1%` vs `6.8%`, mean `13.8` vs `9.8`. The *spread* of
+   shard counts (not the mean the sim pins) is the load-bearing input — swept, not
+   measured, the cover analogue of `--standoff`'s rate. Err-large sizes against
+   **dispersed**, which **already includes the isolated-outlier** shape (a lone
+   staker on a sparse high rung has set `≈ 1` at any `k`) — that *is* the
+   irreducible tail. The bond **plateau-cap** anti-whale likely bunches the *top*
+   rungs at the cap band (built-in same-rung cover the cover-draw can't supply),
+   which would give a clean structural division — **cap → top, cover → middle,
+   network + funder-scope → thin bottom** (DQ: confirm the cap bunches the top).
+3. **The timing intersection is costly — the joint set saturates *low*.** The
+   saturation-knee scan (smallest `k` past which a rung of cover buys `< 0.15`
+   set/rung): amount-marginal `rt = 1.0` knees at `k = 28` (set `14.2`); but the
+   **joint** corner saturates far lower — `rt = 0.5` knees at `k = 16` (set
+   **`7.6`**), `rt = 0.2` at `k = 4` (set **`3.6`**). The two seams fight the same
+   `N_P`, so they **must be sized jointly** — and the joint corner, not the
+   amount-marginal, is the genesis-pin input.
 
-Mirror `shekyl-staking-sim --standoff` (`standoff.rs`): add a `--cover` arm,
-Monte-Carlo (200k trials/scenario, SplitMix64, reproducible) over the discrete
-lattice population, sweeping `k = (C_max − C_min) / floor`, reporting per
-scenario `{lean 79, thick 154, thin 17–62}`:
+**The "pin" is a FLOOR, not a number — §7.5 and the joint pass move it.** The
+amount-marginal saturation knee (`k = 28`, `21 SKL`) is computed blind to *two*
+forces that both bind harder: the joint timing intersection (finding 3 — set
+saturates at `7.6` not `14`), and **economic participation (§7.5)**, which prices
+low rungs out and pushes the realized optimum **down to `k ≈ 8–12` (`6–9 SKL`)**.
+So `k = 21–28` is a first-cut **floor on the blur**, not the pin; the genesis pin
+is the realized optimum of the integrated joint × participation pass (§7.6), which
+the freeze forbids approximating. `C_min` stays the runway floor (§2.2), `≥ 1 rung
+(0.75 SKL)`, reserving `cover == 0` for the DQ6 opt-out — which the harness shows
+still gets **same-rung cover** (`k = 0` set `≈ 1.9`, not 1: same-`bond_floor`
+stakers are indistinguishable). Pending the 2d-1 ramp for its final value.
 
-- candidate-set **mean** and the **thin-cover tail** `P(set ≤ 2)` (the
-  `--standoff` metrics, x-axis = `k`);
-- the §7.3 **regressive-tax curve** (`C_max` as a multiple of bond, by rung);
-- jointly with the entry-gap standoff (§1.1) — the timing intersection shrinks
-  the amount-set, so the harness shares the standoff's decoy model.
+### 7.5 Economic participation — the honest tail is worse than the uniform one
 
-Selection rule (err-large, §2.5): take the **smallest `k` that closes the
-thin-tail under the *thin* scenario**, then step up one notch. The harness
-supplies the per-rung populations this doc lacks; until it runs, the genesis pin
-ships from the §7.4 conservative bracket. This is C1's deliverable — the wiring
-(C4) is mechanical once `k` is fixed.
+§7.4's sets assume **uniform cover over an honest population**. But the §7.3
+regressive tax does not fail randomly — it fails **by rung**, and modelling that
+(the `--cover` participation arm) turns the honest tail into the realized one.
+
+Cover-stays-with-`P` means the principal must fund `bond + cover` at the seam. A
+staker posts cover only if the dial's max draw `C_max = k · floor` is at most
+`β ×` their own bond — i.e. rung `s ≥ k / β`. Capital-constrained low-rung stakers
+fall below that and take the `cover == 0` opt-out. Two things then bite that the
+honest model misses, and they **interlock**:
+
+- the opted-out stakers **leave the low-rung cover pool**, shrinking everyone's
+  set down there; and
+- the rung is **public** on the bond-post, so the attacker raises the `cover == 0`
+  prior on exactly the low rungs, reads `A ≈ bond_floor`, and matches — the forced
+  opt-out is **inferable from a public field**.
+
+The measured cost (thin/dispersed, `β` = willingness-to-pay as a multiple of bond):
+
+| `k` | `C_max` | opt-out (`β = 1`) | opt-out (`β = 2`) | realized payer set (`β = 2`) |
+| --- | --- | --- | --- | --- |
+| 8 | 6 SKL | 56% | 30% | 4.98 |
+| 12 | 9 SKL | 73% | 45% | **5.12** |
+| 16 | 12 SKL | 83% | 56% | 4.85 |
+| 21 | 15.75 SKL | 90% | 69% | 4.11 |
+| 32 | 24 SKL | 97% | 83% | 3.01 |
+
+Two consequences:
+
+1. **The realized optimum is interior and *low*.** The payer set **peaks at
+   `k ≈ 12` and falls as `k` grows** — past the peak, widening the dial prices out
+   more low rungs than the wider window gathers. So the realized-set-maximising
+   dial is `k ≈ 8–12` (`6–9 SKL`), **well below** §7.4's amount-marginal `k = 21`.
+   Participation pulls the pin **down**, joint-timing pushes it up, and at the thin
+   corner **participation dominates**. This **bounds err-large on *both* sides**
+   (refining §2.5): too-small under-blurs, too-large prices-out — so the freeze
+   must hit an **interior optimum**, raising (not lowering) the bar on getting the
+   integrated pass right *before* the freeze.
+2. **The cover is a mid-to-high-rung defense.** Even at the optimum the realized
+   payer set is only `~3–5` in the pessimistic corner, and the rung-1 population is
+   **structurally priced out** — its anonymity comes from network-isolation +
+   funder-scope, not the cover. And the regressivity is **non-negotiable**: a flat
+   cover range is uniform-but-regressive, a stake-proportional one is
+   progressive-but-magnitude-leaking (the rejected floor-relative DQ1) — you cannot
+   tune it out without breaking the uniformity invariant (§2.4).
+
+(`β` and the discount-opted-out-decoys rule are themselves modelling assumptions,
+swept like density; testnet measures the real funding-budget distribution.)
+
+### 7.6 What must precede the freeze, and what may follow it
+
+**Pre-genesis blockers** (the freeze makes a partial-model pin un-revisable, §2.5):
+
+- **The integrated joint × participation pass.** §7.4 (amount-marginal) and §7.5
+  (participation) and finding 3 (timing) each move the pin materially and in
+  conflicting directions; the genesis `k` is the realized optimum of all three
+  **together**, under pessimistic inputs (thin `N_P`, dispersed density, low
+  `timing_retain`, tight `β`). This couples the `--cover` and `--standoff` decoy
+  models end-to-end — it is **not** a testnet-deferred follow-on (the earlier
+  filing was wrong): pin it conservatively pre-freeze or it cannot be pinned.
+
+**May follow (confirm-only, can't move an un-widenable bound):**
+
+- **Per-rung density** (clustered ↔ dispersed) — the dominant lever; testnet
+  measures the seating archetype's realized spread, but the bound ships sized
+  against **dispersed** and testnet only *confirms*.
+- **`C_min`** — needs the 2d-1 earnings-ramp numbers to size the runway floor.
+
+C3 ships from the integrated pass's conservative interior optimum; testnet
+**confirms** adequacy (§2.5). The wiring (C4 — `draw_cover_amount` in
+`shekyl-standoff`) is mechanical once `k` and `C_min` are fixed.
