@@ -125,6 +125,20 @@ fn fcmp_spend_rejects_trailing_bytes() {
 }
 
 #[test]
+fn fcmp_spend_rejects_oversized_pqc_blob() {
+    // Consensus parity: a pqc_auths public key beyond PQC_MAX_PUBLIC_KEY_BLOB must be
+    // rejected at parse, matching the C++ oracle's deserialization bound.
+    let mut tx = synthetic_spend();
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths[0].hybrid_public_key =
+            vec![0u8; shekyl_wire::transaction::PQC_MAX_PUBLIC_KEY_BLOB + 1];
+    }
+    let err = Transaction::from_bytes(&tx.serialize())
+        .expect_err("oversized pqc public key must be rejected");
+    assert!(err.to_string().contains("hybrid_public_key"), "{err}");
+}
+
+#[test]
 #[ignore = "live regtest FCMP++ spend blob not captured yet — blocked on the \
             wallet<->daemon get_curve_tree_path RPC dispatch (feat/regtest-wallet-harness). \
             Drop tests/vectors/regtest_spend.tx and un-ignore to prove byte-identity."]

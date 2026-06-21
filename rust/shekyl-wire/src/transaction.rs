@@ -90,12 +90,36 @@ pub const MAX_TX_SIZE: usize = 1_000_000;
 /// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
 pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 
+// PQC blob bounds — consensus accept/reject parity with the C++ oracle
+// (`src/cryptonote_config.h`). A hybrid public key / signature is `x25519 ‖ ML-DSA-65`;
+// the tx-level `pqc_auths` blobs may aggregate up to `MAX_MULTISIG_PARTICIPANTS` of
+// them. These are tighter than `READ_LEN_CAP` and are the values the daemon rejects
+// above, so the parser must match.
+/// Single hybrid public-key length (`PQC_HYBRID_SINGLE_KEY_LEN`).
+pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
+/// Single hybrid signature length (`PQC_HYBRID_SINGLE_SIG_LEN`).
+pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
+/// Max multisig participants (`MAX_MULTISIG_PARTICIPANTS`).
+const MAX_MULTISIG_PARTICIPANTS: usize = 7;
+/// Max tx-level `pqc_auths` public-key blob (`PQC_MAX_PUBLIC_KEY_BLOB`).
+pub const PQC_MAX_PUBLIC_KEY_BLOB: usize =
+    2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_KEY_LEN;
+/// Max tx-level `pqc_auths` signature blob (`PQC_MAX_SIGNATURE_BLOB`).
+pub const PQC_MAX_SIGNATURE_BLOB: usize = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
+
 /// Read a varint-length-prefixed opaque byte blob, capped against `READ_LEN_CAP`.
 fn read_len_prefixed<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
+    read_len_prefixed_bounded(r, what, READ_LEN_CAP)
+}
+
+/// Read a varint-length-prefixed opaque byte blob, rejecting (before allocating) any
+/// declared length above `max`. Use a consensus-specific `max` for fields the C++
+/// oracle bounds tighter than `READ_LEN_CAP` — e.g. the PQC key/sig blobs.
+fn read_len_prefixed_bounded<R: Read>(r: &mut R, what: &str, max: usize) -> io::Result<Vec<u8>> {
     let len: usize = read_varint(r)?;
-    if len > READ_LEN_CAP {
+    if len > max {
         return Err(io::Error::other(format!(
-            "shekyl-wire: {what} length {len} exceeds parse cap {READ_LEN_CAP}"
+            "shekyl-wire: {what} length {len} exceeds cap {max}"
         )));
     }
     let mut buf = vec![0u8; len];
@@ -334,7 +358,11 @@ impl ServeCredit {
         let leaf_bytes = read_array::<128, _>(r)?;
         let c1_layers = read_branch_layers(r, "c1")?;
         let c2_layers = read_branch_layers(r, "c2")?;
-        let hybrid_signature = read_len_prefixed(r, "serve_credit hybrid_signature")?;
+        let hybrid_signature = read_len_prefixed_bounded(
+            r,
+            "serve_credit hybrid_signature",
+            PQC_HYBRID_SINGLE_SIG_LEN,
+        )?;
         Ok(ServeCredit {
             p_canonical_id,
             shard_id,
@@ -393,11 +421,16 @@ impl BondPost {
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<BondPost> {
-        let hybrid_public_key = read_len_prefixed(r, "bond_post hybrid_public_key")?;
+        let hybrid_public_key =
+            read_len_prefixed_bounded(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = read_array(r)?;
         let post_kind = read_byte(r)?;
         let bond_spend_pk = if post_kind == BOND_POST_KIND_JOINMARKET {
-            Some(read_len_prefixed(r, "bond_spend_pk")?)
+            Some(read_len_prefixed_bounded(
+                r,
+                "bond_spend_pk",
+                PQC_HYBRID_SINGLE_KEY_LEN,
+            )?)
         } else {
             None
         };
@@ -533,8 +566,10 @@ impl PqcAuth {
         let auth_version = read_byte(r)?;
         let scheme_id = read_byte(r)?;
         let flags = u16::from_le_bytes(read_array::<2, _>(r)?);
-        let hybrid_public_key = read_len_prefixed(r, "pqc hybrid_public_key")?;
-        let hybrid_signature = read_len_prefixed(r, "pqc hybrid_signature")?;
+        let hybrid_public_key =
+            read_len_prefixed_bounded(r, "pqc hybrid_public_key", PQC_MAX_PUBLIC_KEY_BLOB)?;
+        let hybrid_signature =
+            read_len_prefixed_bounded(r, "pqc hybrid_signature", PQC_MAX_SIGNATURE_BLOB)?;
         Ok(PqcAuth {
             auth_version,
             scheme_id,
