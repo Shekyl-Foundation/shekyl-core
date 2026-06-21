@@ -11,6 +11,7 @@ Usage:  python3 capture_spend.py   [SHEKYLD_BIN / WALLET_RPC_BIN env override pa
 """
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -140,6 +141,10 @@ def main():
         if not txs:
             raise RuntimeError("get_transactions returned nothing")
         as_hex = txs[0].get("as_hex") or txs[0].get("pruned_as_hex")
+        if not as_hex:
+            raise RuntimeError(
+                "get_transactions response has neither 'as_hex' nor 'pruned_as_hex'; "
+                f"keys present: {sorted(txs[0].keys())}")
         blob = bytes.fromhex(as_hex)
         out = os.path.join(HERE, "regtest_spend.tx")
         with open(out, "wb") as f:
@@ -159,6 +164,12 @@ def main():
                     p.kill()
         dlog.close()
         wlog.close()
+        # Clean up the throwaway regtest dirs unless asked to keep them for debugging.
+        if os.environ.get("KEEP_WORKDIR"):
+            print(f"kept workdirs: {ddir} {wdir}", file=sys.stderr)
+        else:
+            shutil.rmtree(ddir, ignore_errors=True)
+            shutil.rmtree(wdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

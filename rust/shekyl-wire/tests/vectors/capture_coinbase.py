@@ -13,6 +13,7 @@ Usage: python3 capture_coinbase.py   [SHEKYLD_BIN / GENESIS_RECIPIENTS env overr
 """
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -105,6 +106,11 @@ def main():
             except subprocess.TimeoutExpired:
                 daemon.kill()
         log.close()
+        # Clean up the throwaway regtest dir unless asked to keep it for debugging.
+        if os.environ.get("KEEP_WORKDIR"):
+            print(f"kept workdir: {workdir}", file=sys.stderr)
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
