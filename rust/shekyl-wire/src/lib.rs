@@ -22,16 +22,16 @@
 //! and failed `UnexpectedEof` on a live coinbase. The round-trip KAT
 //! (`tests/coinbase_roundtrip.rs`) proves the fix against captured daemon blobs.
 //!
-//! Spend (`Fcmp`) transactions, the archival input arms, and the gate-(c) dense
-//! tag renumber land in later slices.
+//! Spend (`Fcmp`) transactions and the archival input arms land in later slices.
 //!
 //! ## Tag values
 //!
-//! Tags here are the **current C++ values** (`gen = 0xff`, `tagged_key = 0x03`,
-//! ct `Null = 0x00`) so the serializer round-trips the live daemon corpus
-//! byte-for-byte. The dense genesis renumber (GENESIS_TX_WIRE_FORMAT.md §2.0) is
-//! a later atomic gate-(c) cut that flips these constants and recaptures the
-//! corpus together.
+//! Tags are the **genesis dense scheme** (GENESIS_TX_WIRE_FORMAT.md §2.0):
+//! `gen = 0x00`, `fcmp = 0x01`, `serve_credit = 0x02`, `bond_post = 0x03`;
+//! `tagged_key = 0x00`; ct `Null = 0x00`, `Fcmp = 0x01`. These match the renumbered
+//! C++ oracle (the gate-(c) atomic cut — `VARIANT_TAG`s + the ct enum + the
+//! regenerated genesis blocks), and the live-oracle corpus is captured on these
+//! post-renumber bytes.
 
 pub mod block;
 pub mod transaction;

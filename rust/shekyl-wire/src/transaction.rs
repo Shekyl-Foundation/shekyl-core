@@ -40,21 +40,23 @@ use crate::varint::{read_varint, write_varint};
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
 pub const TX_VERSION: u64 = 3;
 
-/// `txin_gen` tag — coinbase generation input (current C++ value).
-pub const TAG_INPUT_GEN: u8 = 0xff;
-/// `txin_to_key` tag — the FCMP++ spend input (current C++ value; the dense
-/// `txin_fcmp` reshape is a later gate-(c) cut).
-pub const TAG_INPUT_TO_KEY: u8 = 0x02;
-/// `txout_to_tagged_key` tag — the sole genesis output type (current C++ value).
-pub const TAG_OUTPUT_TAGGED_KEY: u8 = 0x03;
+// Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
+// numbered dense from 0x00; matches the renumbered C++ oracle VARIANT_TAGs and ct enum.
+/// `txin_gen` tag — coinbase generation input.
+pub const TAG_INPUT_GEN: u8 = 0x00;
+/// `txin_to_key`/`txin_fcmp` tag — the FCMP++ spend input (the `key_offsets`-drop
+/// reshape is a separate gate-(c) cut; the tag is dense here).
+pub const TAG_INPUT_TO_KEY: u8 = 0x01;
+/// `txout_to_tagged_key` tag — the sole genesis output type.
+pub const TAG_OUTPUT_TAGGED_KEY: u8 = 0x00;
 /// `Null` confidential-transaction type — the coinbase ct (carries a committed base).
 pub const CT_TYPE_NULL: u8 = 0x00;
-/// `FcmpPlusPlusPqc` confidential-transaction type — the spend ct (current C++ value).
-pub const CT_TYPE_FCMP: u8 = 0x07;
-/// `txin_archival_serve_credit_response` tag (current C++ value; gate-2, non-spending).
-pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x04;
-/// `txin_archival_bond_post` tag (current C++ value; gate-4, JoinMarket-only at genesis).
-pub const TAG_INPUT_BOND_POST: u8 = 0x05;
+/// `FcmpPlusPlusPqc` confidential-transaction type — the spend ct.
+pub const CT_TYPE_FCMP: u8 = 0x01;
+/// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
+pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
+/// `txin_archival_bond_post` tag (gate-4, JoinMarket-only at genesis).
+pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 
 /// `post_kind` value for a JoinMarket bond post (the only kind valid at genesis).
 /// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).

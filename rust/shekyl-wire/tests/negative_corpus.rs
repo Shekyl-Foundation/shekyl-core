@@ -12,7 +12,7 @@
 //! truncation, and unknown tags (parser-differential surface). Canonical-varint
 //! rejects are unit-tested in `src/varint.rs`.
 
-use shekyl_wire::transaction::{CT_TYPE_NULL, TAG_INPUT_GEN};
+use shekyl_wire::transaction::{CT_TYPE_NULL, TAG_INPUT_GEN, TAG_OUTPUT_TAGGED_KEY};
 use shekyl_wire::Block;
 
 /// Build a minimal, fully-controlled coinbase blob (timestamp/nonce/keys zeroed)
@@ -33,10 +33,10 @@ fn minimal_coinbase(input_tag: u8, ct_type: u8, include_null_base: bool) -> Vec<
     b.push(0x01);
     b.push(input_tag);
     b.push(0x00);
-    // outputs: count=1, amount=0, tagged_key(0x03), key[32], view_tag=0.
+    // outputs: count=1, amount=0, tagged_key, key[32], view_tag=0.
     b.push(0x01);
     b.push(0x00);
-    b.push(0x03);
+    b.push(TAG_OUTPUT_TAGGED_KEY);
     b.extend_from_slice(&[0u8; 32]);
     b.push(0x00);
     // extra: len=0.
@@ -100,7 +100,7 @@ fn rejects_unknown_input_tag() {
 
 #[test]
 fn rejects_unsupported_ct_type() {
-    // 0x05 is neither Null (0x00) nor Fcmp (0x07) — an unknown ct type must reject.
+    // 0x05 is neither Null (0x00) nor Fcmp (0x01) — an unknown ct type must reject.
     let bytes = minimal_coinbase(TAG_INPUT_GEN, 0x05, false);
     let err = Block::from_bytes(&bytes).expect_err("unsupported ct type must be rejected");
     assert!(
