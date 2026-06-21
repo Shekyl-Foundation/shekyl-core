@@ -42,6 +42,12 @@ shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }
+# Deterministic, seedable CSPRNG for the e2e fixture draw. The workspace's
+# canonical deterministic-test RNG (also used by `shekyl-engine-core`,
+# `shekyl-crypto-pq`, `shekyl-fcmp`); a fixed seed makes a CI failure of the
+# heavy single-case spend oracle replayable, rather than depending on the OS
+# entropy draw of that run.
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true

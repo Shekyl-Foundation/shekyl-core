@@ -63,11 +63,14 @@
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
 };
-use rand_core::OsRng;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
-use shekyl_crypto_pq::output::{compute_output_key_image, construct_output, recover_combined_ss};
+use shekyl_crypto_pq::output::{
+    compute_output_key_image, construct_output, recover_combined_ss, OutputData,
+};
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
     TargetKind, TxLeafInputs,
@@ -96,6 +99,23 @@ const COINBASE_LOCK_WINDOW: u64 = shekyl_oxide::COINBASE_LOCK_WINDOW as u64;
 /// (`c2`) internal branch layer.
 const TREE_OUTPUTS: usize = 700;
 
+/// Fixed seed for the fixture RNG. This is a heavy *single-case* integration
+/// oracle (it builds a 700-output depth-3 tree and runs the full
+/// prove/verify/balance pipeline once), not a multi-case property test — the
+/// algebraic-relation coverage that samples unfamiliar values lives in the
+/// dedicated `shekyl-fcmp` / `shekyl-crypto-pq` `proptest` suites
+/// (`50-testing.mdc`). For one expensive case, a fixed seed makes a CI failure
+/// replayable, which a per-run `OsRng` draw would not. The seed only fixes the
+/// witness *scalars* (spend key, decoy points, tx/dest secrets); the hybrid KEM
+/// keypair and the prover's zero-knowledge randomness remain OS-drawn, but by
+/// proof completeness they cannot change the accept/reject outcome for a fixed,
+/// valid witness — so the pass/fail result is fully determined by this seed.
+///
+/// Reversion criterion (`21-reversion-clause-discipline.mdc`): if this oracle is
+/// ever promoted to a multi-case `proptest`, drop the fixed seed and let the
+/// proptest harness drive the witness draw per case.
+const RNG_SEED: u64 = 0x5368_656b_796c_3031; // "Shekyl01"
+
 /// A minimal spendable wallet: an Ed25519 spend keypair (`b`, `B = b*G`) plus a
 /// hybrid X25519 + ML-KEM-768 KEM keypair. The typed (non-FFI) analogue of the
 /// wallet in `shekyl-ffi`'s `signing_round_trip` test.
@@ -110,8 +130,8 @@ struct Wallet {
     ml_kem_dk: Vec<u8>,
 }
 
-fn random_wallet() -> Wallet {
-    let b = Scalar::random(&mut OsRng);
+fn random_wallet(rng: &mut ChaCha20Rng) -> Wallet {
+    let b = Scalar::random(rng);
     let spend_public = (ED25519_BASEPOINT_POINT * b).compress().to_bytes();
     let (pk, sk) = HybridX25519MlKem
         .keypair_generate()
@@ -131,8 +151,8 @@ fn random_wallet() -> Wallet {
 /// A random valid prime-order compressed Ed25519 point (`r*G`). Used for decoy
 /// tree members: only the *spent* output needs recoverable secrets — the rest
 /// just have to be well-formed leaves so the tree builds to depth 3.
-fn random_point() -> [u8; 32] {
-    (ED25519_BASEPOINT_POINT * Scalar::random(&mut OsRng))
+fn random_point(rng: &mut ChaCha20Rng) -> [u8; 32] {
+    (ED25519_BASEPOINT_POINT * Scalar::random(rng))
         .compress()
         .to_bytes()
 }
@@ -184,7 +204,10 @@ fn bp_plus_from_blob(blob: &[u8]) -> BpPlus {
 #[test]
 fn fcmp_spend_real_tree_verifies_against_consensus() {
     // ── 1. Wallet + the output we will spend ─────────────────────────────
-    let wallet = random_wallet();
+    // One seeded RNG threaded through every fixture draw so the witness (and
+    // therefore the accept/reject result) is reproducible — see `RNG_SEED`.
+    let mut rng = ChaCha20Rng::seed_from_u64(RNG_SEED);
+    let wallet = random_wallet(&mut rng);
     let input_amount: u64 = 1_000_000_000;
     let fee: u64 = 1_000_000;
     let output_amount: u64 = input_amount - fee;
@@ -192,7 +215,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // Construct the spent output to our own wallet (a self-spend), then recover
     // the per-output secrets the prover needs as the recipient would.
-    let tx_secret = Scalar::random(&mut OsRng).to_bytes();
+    let tx_secret = Scalar::random(&mut rng).to_bytes();
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -234,8 +257,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     genesis_blob.extend_from_slice(&spent.h_pqc);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(),
-            commitment: Some(random_point()),
+            output_key: random_point(&mut rng),
+            commitment: Some(random_point(&mut rng)),
             target: TargetKind::TaggedKey,
         });
         genesis_blob.extend_from_slice(&spent.h_pqc);
@@ -245,8 +268,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // per filler block keeps each block well-formed. Filler outputs are created
     // after genesis, so none mature by the reference height — they never enter
     // the tree we prove against.
-    let filler_key = random_point();
-    let filler_commitment = random_point();
+    let filler_key = random_point(&mut rng);
+    let filler_commitment = random_point(&mut rng);
     // A coinbase at height `h` matures at `h + 60` and drains at `h + 61`
     // (`drained_through(H) = H - 1`, filtered `maturity <= drained_through`).
     // The genesis coinbase therefore drains at reference height 61; fillers
@@ -338,31 +361,53 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         c2_layers: path.c2_layers.clone(),
     };
 
-    // ── 5. A destination output to a fresh recipient ──────────────────────
-    let recipient = random_wallet();
-    let dest_secret = Scalar::random(&mut OsRng).to_bytes();
-    let dest = construct_output(
+    // ── 5. Two destination outputs: a payment + change ────────────────────
+    // Consensus (§12) rejects a single-output spend — a real spend always
+    // carries a payment and a change output — so split the spendable amount
+    // into a payment to a fresh recipient (output 0) and change back to the
+    // spender (output 1). Both derive from one tx key with distinct output
+    // indices, the canonical one-tx-key-per-transaction derivation.
+    let recipient = random_wallet(&mut rng);
+    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let payment_amount = output_amount / 2;
+    let change_amount = output_amount - payment_amount;
+    let payment = construct_output(
         &dest_secret,
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
-        output_amount,
+        payment_amount,
         0,
     )
-    .expect("construct destination output");
-    let mut enc_amount = [0u8; 9];
-    enc_amount[..8].copy_from_slice(&dest.enc_amount);
-    enc_amount[8] = dest.amount_tag;
-    let mut enc_label = [0u8; 9];
-    enc_label[..8].copy_from_slice(&dest.enc_label);
-    enc_label[8] = dest.label_tag;
-    let output_info = OutputInfo {
-        dest_key: dest.output_key,
-        amount: AtomicUnits::from_raw(output_amount),
-        commitment_mask: dest.z,
-        enc_amount,
-        enc_label,
+    .expect("construct payment output");
+    let change = construct_output(
+        &dest_secret,
+        &wallet.x25519_pk,
+        &wallet.ml_kem_ek,
+        &wallet.spend_public,
+        change_amount,
+        1,
+    )
+    .expect("construct change output");
+    let pack_output_info = |out: &OutputData, amount: u64| -> OutputInfo {
+        let mut enc_amount = [0u8; 9];
+        enc_amount[..8].copy_from_slice(&out.enc_amount);
+        enc_amount[8] = out.amount_tag;
+        let mut enc_label = [0u8; 9];
+        enc_label[..8].copy_from_slice(&out.enc_label);
+        enc_label[8] = out.label_tag;
+        OutputInfo {
+            dest_key: out.output_key,
+            amount: AtomicUnits::from_raw(amount),
+            commitment_mask: out.z,
+            enc_amount,
+            enc_label,
+        }
     };
+    let outputs = [
+        pack_output_info(&payment, payment_amount),
+        pack_output_info(&change, change_amount),
+    ];
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
@@ -374,7 +419,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     let signed = sign_transaction(
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
-        std::slice::from_ref(&output_info),
+        &outputs,
         AtomicUnits::from_raw(fee),
         &tree_ctx,
     )
@@ -436,7 +481,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         .map(|c| CompressedPoint::from(CompressedEdwardsY(*c)))
         .collect();
     assert!(
-        bp.verify(&mut OsRng, &bp_commitments),
+        bp.verify(&mut rng, &bp_commitments),
         "Bulletproof+ range proof must verify over the output commitments"
     );
 
@@ -463,11 +508,18 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                 key_offsets: Vec::new(),
                 key_image: *ki.key_image.as_bytes(),
             }],
-            outputs: vec![Output {
-                amount: 0,
-                key: dest.output_key,
-                view_tag: dest.view_tag_prefilter,
-            }],
+            outputs: vec![
+                Output {
+                    amount: 0,
+                    key: payment.output_key,
+                    view_tag: payment.view_tag_prefilter,
+                },
+                Output {
+                    amount: 0,
+                    key: change.output_key,
+                    view_tag: change.view_tag_prefilter,
+                },
+            ],
             extra: Vec::new(),
         },
         ct: Ct::Fcmp {
@@ -488,12 +540,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     hybrid_signature: auth.signature.clone(),
                 })
                 .collect(),
-            prunable: Prunable {
+            prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
                 tree_depth: u64::from(signed.tree_depth),
                 fcmp_proof: signed.fcmp_proof.clone(),
                 pseudo_outs: signed.pseudo_outs.clone(),
-            },
+            }),
         },
     };
 

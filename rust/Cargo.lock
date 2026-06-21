@@ -4364,8 +4364,21 @@ dependencies = [
 name = "shekyl-wire"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
  "serde_json",
+ "shekyl-bulletproofs",
  "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-curve-tree",
+ "shekyl-fcmp",
+ "shekyl-generators",
+ "shekyl-io",
+ "shekyl-oxide",
+ "shekyl-rct-balance",
+ "shekyl-tx-builder",
+ "shekyl-units",
 ]
 
 [[package]]
