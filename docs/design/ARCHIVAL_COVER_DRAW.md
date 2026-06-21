@@ -14,8 +14,15 @@ harness **built and run** (`shekyl-staking-sim --cover`). Two headline findings:
 (§7.4) the cover decoy pool is **bounded by `N_P` and saturates**, so the dial
 sizes the *mean* and the worst-case **tail** is a firewall-composition property;
 and (§7.5) economic participation makes `C_max` a **two-sided interior optimum**
-(too-large prices low rungs out), realized optimum `k ≈ 8–12 (~6–9 SKL)` — **not**
-the "err-large, go big" the earlier draft assumed (corrected in §2.5).
+(too-large prices low rungs out — humped, not monotone), realized optimum
+`k ≈ 8–12 (~6–9 SKL)` — **not** the "err-large, go big" the earlier draft assumed
+(retired in §2.5). **The question has now moved (§7.6/§7.7):** with a frozen scalar
+sitting on a hump whose peak slides with the *softest, least-observable* input
+(affordability), the load-bearing question is no longer "where is `k*`" but "is the
+peak robust enough to freeze a scalar at all — or is the honest move a **public,
+height-conditioned distribution** (pin a function, not a constant) that adapts to
+the realized population and never needs freezing." That feasibility (one net-leak
+analysis) is the next pass, and could *dissolve* the freeze rather than manage it.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -205,13 +212,26 @@ capital cost. The first half holds: a **too-small** `C_max` spans too few rungs 
 (§7.5) shows a **too-large** `C_max` does *not* fail safe: its regressive capital
 tax prices the low-rung stakers out into the `cover == 0` opt-out, and because the
 rung is **public** that opt-out is inferable, so an over-large bound **shrinks** the
-realized anonymity set rather than holding it. So **both** directions are
-un-fixable failures (you can neither widen nor narrow post-freeze), and the genesis
-pin must hit an **interior optimum** — which *raises* the bar on the pre-freeze
-analysis rather than letting "just go big" stand in for it. `C_min` (the runway
-floor, §2.2) is the one bound that is still one-sided-conservative — pinned against
-**pessimistic slow early yield** (under-funding re-links, and it can't be raised
-later) — but `C_max` is a two-sided pin.
+realized anonymity set rather than holding it. The "fails safe" reasoning rested on
+anonymity being **monotone** in the dial — bigger range, bigger set — which is true
+only for the honest-uniform population, the very assumption participation falsifies.
+The set as a function of `k` is **humped, not monotone**.
+
+And the high side is a *genuine* failure, not mere foregone anonymity, because
+opt-out is **affordability-driven, not anonymity-rational**. If stakers opted out by
+reasoning "paying makes me *more* distinctive here," the realized set would floor at
+the same-rung baseline (`≈ 1.9`) — nobody pays to be more exposed. But a staker
+**cannot** reason that way: they observe neither `N_P` nor the realized rung density,
+so they pay whatever the pinned recommendation says if they can afford it. At high
+`k` the affordable-but-unlucky payer pays into a pool most of the population has
+abandoned *for affordability*, lands in a sparse payer set, and can end up **below
+the same-rung baseline** — *worse than posting no cover* — without ever being able to
+see it coming. So **both** directions are un-fixable failures (you can neither widen
+nor narrow post-freeze), and the genesis pin must hit an **interior optimum** — which
+*raises* the bar on the pre-freeze analysis rather than letting "just go big" stand
+in for it. `C_min` (the runway floor, §2.2) is the one bound that is still
+one-sided-conservative — pinned against **pessimistic slow early yield** (under-funding
+re-links, and it can't be raised later) — but `C_max` is a two-sided pin.
 
 **Net (the correction to "shape-now/calibrate-later"):** the genesis pin is
 **shape + conservative bounds together**. Post-testnet population data
@@ -496,25 +516,80 @@ Two consequences:
 (`β` and the discount-opted-out-decoys rule are themselves modelling assumptions,
 swept like density; testnet measures the real funding-budget distribution.)
 
-### 7.6 What must precede the freeze, and what may follow it
+### 7.6 The question has moved: is the peak robust enough to freeze a scalar?
 
-**Pre-genesis blockers** (the freeze makes a partial-model pin un-revisable, §2.5):
+A two-sided interior optimum (§2.5) frozen as a blind scalar relocates the
+load-bearing question. It is no longer *"where is `k*`"* but **how stable is `k*`,
+and how broad is the plateau around it, across the pessimistic ranges of every
+input** — density, `timing_retain`, and now affordability (`β`). A broad
+flat-topped hump is safe to freeze: a range of `k` sit near peak and a mis-pin
+costs little either way. A sharp peak whose location slides with the inputs is
+fragile both ways and un-fixable both ways. So the harness's next job is **not** to
+locate `k*` more precisely — it is to **characterize the hump's shape and the
+sensitivity of `k*` to the pessimistic-input corners**, and report whether a single
+frozen `k` stays within (say) **90% of peak across all of them**. If it does, freeze
+the centre of that robust band. If `k*` swings across the corners, the honest
+finding is **"no blind scalar pin is safe"** — surface that, don't paper it over
+with a point estimate.
 
-- **The integrated joint × participation pass.** §7.4 (amount-marginal) and §7.5
-  (participation) and finding 3 (timing) each move the pin materially and in
-  conflicting directions; the genesis `k` is the realized optimum of all three
-  **together**, under pessimistic inputs (thin `N_P`, dispersed density, low
-  `timing_retain`, tight `β`). This couples the `--cover` and `--standoff` decoy
-  models end-to-end — it is **not** a testnet-deferred follow-on (the earlier
-  filing was wrong): pin it conservatively pre-freeze or it cannot be pinned.
+**First signal (existing `β ∈ {1, 2}` participation sweep, §7.5).** Per-`β` the
+hump is *flat-topped* — at `β = 2` the realized payer set is `4.98 / 5.12 / 4.85`
+across `k = 8 / 12 / 16` (within ~5% of peak). But the peak **centre and height
+slide with affordability**: `k* ≈ 8` (set `3.47`) at `β = 1`, `k* ≈ 12` (set
+`5.12`) at `β = 2`. A `k ≈ 10–12` sits within ~90% of peak across both `β`, so the
+scalar may be **less fragile than feared** — but this is two points of *one* input
+at *one* corner, and the absolute set is small (`3–5`). The full three-input
+characterization is what decides it.
 
-**May follow (confirm-only, can't move an un-widenable bound):**
+**Affordability deserves its own swept arm.** It is now the **softest** of the
+three inputs — spare capital beyond the bond is the least observable thing in the
+whole model — yet it sets the **right wall** of the hump, so it warrants its own
+sweep (the way density got one), not a single assumed `β` curve.
 
-- **Per-rung density** (clustered ↔ dispersed) — the dominant lever; testnet
-  measures the seating archetype's realized spread, but the bound ships sized
-  against **dispersed** and testnet only *confirms*.
-- **`C_min`** — needs the 2d-1 earnings-ramp numbers to size the runway floor.
+**Pre-genesis blocker (if a scalar is what ships):** the integrated joint ×
+participation × affordability pass, under pessimistic inputs (thin `N_P`, dispersed
+density, low `timing_retain`, tight `β`) — pin the robust-band centre, or report it
+isn't robust. **`C_min`** and the **density confirm** may follow (testnet
+confirm-only). The wiring (C4 — `draw_cover_amount` in `shekyl-standoff`) is
+mechanical once the pin is fixed — *if* a scalar is the right object at all (§7.7).
 
-C3 ships from the integrated pass's conservative interior optimum; testnet
-**confirms** adequacy (§2.5). The wiring (C4 — `draw_cover_amount` in
-`shekyl-standoff`) is mechanical once `k` and `C_min` are fixed.
+### 7.7 The structural escape — pin a function, not a constant (feasibility, OPEN)
+
+The only escape from the blind-scalar bind is to stop pinning a constant and pin a
+**function**: a deterministic, **public-bond-population-conditioned** distribution,
+where every wallet computes the same recommended cover from the same public chain
+state at the draw height `H`. This would **adapt to the realized density** —
+narrowing in sparse periods (where wide cover buys nothing anyway, by saturation,
+and over-taxing only triggers the §7.5 opt-out collapse) and widening where there
+is a crowd to hide in — so it never freezes a fragile peak.
+
+**It preserves DQ5 uniformity in the sense that matters.** All wallets drawing at
+height `H` agree on the distribution, so it adds **no fingerprint beyond the bond
+height `H`** — which is already public on-chain. The "frozen" object becomes the
+deterministic mapping `population(H) → D`, a consensus-uniform *algorithm*, not a
+magic number guessed blind.
+
+**The single deciding question (the feasibility analysis):** does conditioning on
+per-height public population ever **net-leak** to a height-aware attacker more than
+it helps the staker, given both condition on the *same* public data? First-order
+intuition is **no net leak** — the attacker already has the population, `D` is a
+public function of it, and the realized draw stays hidden — but that is the analysis
+that decides it, and it is the one thing that could **dissolve the freeze entirely**
+rather than manage it. Two caveats to carry into that analysis:
+
+- **Affordability still isn't observable.** The function conditions on public
+  population, not the staker's private spare capital, so the affordability opt-out
+  does not vanish. But the adaptive `D` *reduces the pressure*: it narrows exactly
+  where wide cover would over-tax (sparse periods), so it stops manufacturing the
+  high-`k` opt-out collapse the frozen scalar risks.
+- **It is a freeze of a function, not freedom from freezing.** The response curve
+  `population(H) → D` is itself genesis-frozen (all wallets, all time, must agree),
+  so its *parameters* still need pinning — but pinning a conservative *response*
+  (e.g. "target set, capped at saturation, floored at runway") is far more robust
+  than pinning a *point*, because it responds to the population instead of guessing
+  it.
+
+**Sequencing.** Scope this feasibility (the net-leak analysis) **before** investing
+in characterizing and freezing a scalar at a peak §7.6 may show is fragile: if the
+function holds, the scalar's robustness is moot. Still off-wire, still parallel to
+the consensus path.
