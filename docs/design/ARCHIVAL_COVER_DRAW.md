@@ -2,8 +2,10 @@
 
 **Status:** SCOPING (2026-06-20, review-revised). Design-questions enumerated;
 not yet decided. Off-wire, scanner-independent, un-vendor-independent —
-parallelizable now, **but C1 is gated on the bond-standardization / shard-count
-co-pin (§2.3)**.
+parallelizable now. The bond-standardization input is **decided in shape**
+(flat `floor × shards`, pinned rung) so C1's *shape* is pinnable now; only C1's
+**magnitudes inherit the staking economics' post-testnet calibration** (§2.3) —
+not a blocked decision.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -117,12 +119,36 @@ cover's anonymity contribution a **step function of `C_max`**:
 
 So DQ2's "entropy ↔ capital" dial has *specific structure* — it steps at
 multiples of `floor`. **C1's population analysis must run over the discrete
-lattice and the actual shard-count distribution, not a smooth spread.** That
-shard-count distribution is **last round's bond-standardization / max-stake
-decision** (`STAKER_ARCHIVAL_SIM.md`) wearing a cover hat: **C1 cannot be finished
-without co-pinning it.** This doc *inherits* the `bond_floor` population structure
-as an explicit input; settle the coupling first and DQ1/DQ2 fall out of the
-population analysis rather than being guessed.
+lattice and the actual shard-count distribution, not a smooth spread.**
+
+**Status of that input (checked `STAKER_ARCHIVAL_SIM.md`, 2026-06-20):** the
+needed pieces are **decided in *shape*, not open** — not a blocked decision:
+
+- **Lattice rung is pinned.** Bond magnitude is **flat, `floor × shards`**
+  ("L4 resolved: keep flat bond magnitude", `:218`; `bonded = bond_floor ×
+  Σ|holdings|`, `:493`), with `ARCHIVAL_BOND_FLOOR_ATOMIC = 750_000_000` gate-4
+  pinned. So the rung size is fixed.
+- **Distribution shape is characterized**, not chosen ad-hoc: heterogeneous
+  archetypes (capacity/capital-bounded, `min(⌊capital/bond⌋, ⌊storage/shard⌋)`),
+  a banded plateau-cap anti-whale (`:252/:339`), `N_P` envelope {lean 79 / thick
+  154 / fee-era 17–62}.
+- **But the distribution's *magnitudes* are post-testnet** — the sim repeatedly
+  pins shape now and calibrates magnitude later ("post-testnet calibrations of an
+  already-understood curve", `:52/:83/:105/:187`).
+
+**Consequence (refines "co-pin first"):** C1 is **not** blocked on an open
+decision — it *inherits* the sim's already-shaped lattice population, and its
+**numbers (the C1 target, `C_max` in rungs) inherit the staking economics'
+post-testnet calibration**, the same class as every other staking magnitude. So
+the cover follows the sim's **own** genesis-pin pattern: **pin the *shape* now**
+(uniform draw, the rung-stepped `C_max` structure) **with a conservative genesis
+constant, calibrate the exact magnitude post-testnet** against the same population
+the sim does. **One sharper-than-wallet-policy twist (§2.4):** because the cover
+must be *uniform across wallets* for the anonymity set, `C_max` is **not** freely
+re-tunable post-genesis the way an off-wire wallet constant normally is — moving
+it splits the anonymity set into old-`C_max` and new-`C_max` cohorts. So `C_max`
+wants a genesis-pin-grade conservative value (over-provision the rung span), not a
+"tune it on testnet" knob — a tension to flag for the genesis-pin pass.
 
 ### 2.4 Per-wallet uniformity — necessary but **unenforceable** (state it plainly)
 
@@ -208,10 +234,13 @@ stake-once-recover (§3.2).
 
 ## 5. Sequencing & dependencies
 
-- **Co-pin first (the blocker):** the bond-standardization / shard-count
-  distribution decision (`STAKER_ARCHIVAL_SIM.md`, §2.3). C1's lattice analysis
-  cannot complete without it — and DQ1/DQ2 fall out of C1, so they cannot be
-  guessed ahead of it.
+- **Inherit, don't block (refined §2.3):** the bond-standardization is decided in
+  *shape* (flat `floor × shards`, pinned rung; `STAKER_ARCHIVAL_SIM.md`). C1's
+  *shape* (uniform draw, rung-stepped `C_max`) is **pinnable now**; only its
+  *magnitudes* inherit the sim's **post-testnet** calibration — so pin shape now,
+  calibrate magnitude against the same population the sim does. **`C_max` is *not*
+  freely re-tunable post-genesis** (anonymity-set uniformity, §2.4) — it wants a
+  conservative genesis-pin value, not a testnet knob.
 - **Size jointly with the entry-gap standoff (§1.1):** the standoff width is an
   input to the cover metric; the two draws share the funding seam and trade off.
 - **Prerequisite for:** 2d bond-tx assembly (the `bond_floor + cover` send).
