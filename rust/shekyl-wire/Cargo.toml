@@ -1,0 +1,13 @@
+[package]
+name = "shekyl-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Canonical Shekyl genesis block/tx binary wire format (serializer). See docs/design/GENESIS_TX_WIRE_FORMAT.md."
+
+[dependencies]
+
+[lints]
+workspace = true

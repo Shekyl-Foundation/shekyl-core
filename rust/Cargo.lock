@@ -4362,6 +4362,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wire"
+version = "3.1.0"
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

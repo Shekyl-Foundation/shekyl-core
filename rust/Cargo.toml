@@ -6,6 +6,11 @@ members = [
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
     "shekyl-consensus",
+
+    # Canonical genesis block/tx binary wire-format serializer — the clean,
+    # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
+    # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
+    "shekyl-wire",
     "shekyl-economics",
     "shekyl-staking",
     "shekyl-economics-sim",
