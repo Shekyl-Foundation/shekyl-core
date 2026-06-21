@@ -14,7 +14,7 @@
   tests never exercise (they always fill to width), and the prover doesn't catch
   (it ignores the root). Fixed by **zero-padding branch chunks to width** in
   `shekyl_fcmp::proof::prove` / `prove_with_sal`: zero scalars vanish in the layer
-  hash, so the **consensus tree root is unchanged** (  no daemon/consensus change,
+  hash, so the **consensus tree root is unchanged** (no daemon/consensus change,
   no CT-2 Tier-A regression), and the daemon's `shekyl_fcmp_verify` — the same
   Rust `verify` via FFI — accepts it. The audited vendored FCMP crypto was sound;
   the bug was first-party (our driving). Closes PR 2c-1's deferred verify half
@@ -315,7 +315,14 @@
   the new `shekyl-wire/tests/fcmp_spend_e2e.rs` (its `verify_rct_balance`
   stage). The C++/Rust FFI spend-path debugging that surfaced this was
   otherwise reverted as out-of-scope C++ debt; the findings are captured in
-  `FOLLOWUPS.md` ("C++ FCMP++ wallet send path incomplete").
+  `FOLLOWUPS.md` ("C++ FCMP++ wallet send path incomplete"). The wire/scanner
+  contract already required real `C` — the production scanner recomputes
+  `z·G + amount·H` and byte-compares it against the on-wire commitment, and
+  `sign_bridge` copies `SignedProofs.commitments` straight onto the wire — so
+  the fix aligned the builder with the rest of the stack. The downstream
+  documentation and the two `shekyl-engine-core` bond-post round-trip test
+  helpers (which had compensated for the old encoding by multiplying by
+  `8⁻¹`) were reconciled to feed the real `C` directly.
 
 ### Changed
 
