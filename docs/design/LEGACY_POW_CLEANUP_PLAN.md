@@ -31,8 +31,38 @@ and have hard dependency blockers. The rules-correct decomposition is:
 |---|------|---------|
 | **C1** | **Delete the RPC-payment subsystem in its entirety** — files + all daemon/wallet/rpc wiring + the two `CMakeLists`. | Truly orphaned dead code (no users; `RANDOMX_V2_RUST.md` §15 Phase-0 "delete in its entirety"). Single validation surface: wholesale dead-code removal, **zero consensus impact**. Removes the two surviving RPC-payment `RX_BLOCK_VERSION` guards and their `cn_slow_hash` / `rx_slow_hash` calls (`rpc_payment.cpp:237,245`, `wallet_rpc_payments.cpp:156,163`). |
 
-That is the whole PR. It is substantial and coherent on its own (~6 files
-deleted wholesale + wiring across ~15 files + 2 `CMakeLists`).
+That is the whole PR. **Verified magnitude (much larger than the task's "6
+files + wiring" framing):** RPC-payment is woven into the daemon↔wallet RPC
+wire contract and every daemon RPC handler. Source counts (2026-06-22):
+
+| Surface | Evidence | Scale |
+|---------|----------|-------|
+| Wholesale-delete files | `rpc_payment.{cpp,h}`, `rpc_payment_costs.h`, `rpc_payment_signature.{cpp,h}`, `wallet_rpc_payments.cpp`, `wallet_rpc_helpers.h` | 7 files |
+| Daemon per-handler pay-gate | `core_rpc_server.cpp` `CHECK_PAYMENT*` macro + invocations | **105 match-lines**, ~50+ handler sites |
+| Wire contract collapse | `rpc_access_request_base`/`rpc_access_response_base` (`client`/`credits`/`top_hash`) → plain bases; ~30 endpoints inherit via `KV_SERIALIZE_PARENT` | ~30 endpoint structs in `core_rpc_server_commands_defs.h` |
+| RPC-payment endpoints | `COMMAND_RPC_ACCESS_{INFO,SUBMIT_NONCE,PAY,TRACKING,DATA,ACCOUNT}` structs + handlers + dispatch maps (`core_rpc_server.{h,cpp}`, `core_rpc_ffi.cpp`) | 6 endpoints × (struct+decl+impl+map) |
+| Wallet call-site wrappers | `wallet2.cpp` `pre_call_credits`/`req.client=get_client_signature()`/`check_rpc_cost(...)` | ~20 sites + 1 macro |
+| Wallet proxy wrappers | `node_rpc_proxy.{cpp,h}` (ctor param, cache members, `get_rpc_payment_info`) | ~6 sites |
+| Daemon CLI + glue | `daemon/command_server.cpp`, `command_parser_executor.{h,cpp}`, `rpc_command_executor.{h,cpp}`, `bootstrap_daemon.{h,cpp}`, `rpc_args.{h,cpp}`, `wallet_args.cpp`, `wallet_errors.h`, 2 `CMakeLists` | ~12 files |
+
+Net: **~1000–1500 lines deleted across ~20 files**, including a daemon↔wallet
+RPC wire-format change (in-tree clients only, pre-genesis → safe per
+`60-no-monero-legacy.mdc` / `15-deletion-and-debt.mdc`). This is the inherent
+size of "delete the RPC-payment subsystem in its entirety"; RPC-payment is a
+known ~1500-line woven Monero subsystem.
+
+**False-positive guards (do NOT delete):**
+- `wallet_rpc_server.cpp:2041-2133` — local `wallet_rpc::payment_details rpc_payment`
+  is a *received on-chain payment* (payment-id/amount), unrelated to pay-for-RPC.
+- `RPC_TRACKER`/`RPCTracker` — dual-purpose (perf logging + `tracker.pay()`).
+  Keep the tracker; remove only its payment members and the `CHECK_PAYMENT*`
+  macros that call `tracker.pay()`.
+
+**Execution mechanism (daemon):** delete the `check_payment()` member
+(`core_rpc_server.cpp:~440-465`, calls `verify_rpc_payment_signature` +
+`m_rpc_payment->pay()`), the `CHECK_PAYMENT*` macro definitions + all
+invocations, the `m_rpc_payment` / `m_rpc_payment_allow_free_loopback` members
++ init, and collapse the wire bases. Keep `RPC_TRACKER` for timing.
 
 ### 1.2 RECOMMENDED DEFERRALS (with reasons + reopen criteria)
 
