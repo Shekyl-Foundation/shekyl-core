@@ -29,11 +29,14 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/hash-ops.h"
 #include "crypto/pow_registry.h"
 #include "cryptonote_config.h"
@@ -41,6 +44,22 @@
 
 namespace
 {
+
+// Lowercase hex of a 32-byte hash (self-contained; avoids an epee string_tools
+// include for one call site).
+std::string hex32(const crypto::hash& h)
+{
+  static const char digits[] = "0123456789abcdef";
+  std::string s;
+  s.reserve(64);
+  for (size_t i = 0; i < 32; ++i)
+  {
+    const unsigned char b = static_cast<unsigned char>(h.data[i]);
+    s.push_back(digits[b >> 4]);
+    s.push_back(digits[b & 0x0f]);
+  }
+  return s;
+}
 
 TEST(mining_parity, release_multiplier_scales_reward)
 {
@@ -131,6 +150,57 @@ TEST(mining_parity, randomx_schema_routes_through_v2_ffi)
               blob.size(),
               reinterpret_cast<uint8_t (*)[32]>(via_ffi.data)));
   ASSERT_EQ(via_ffi, via_schema);
+}
+
+TEST(mining_parity, genesis_identity_is_pow_independent)
+{
+  // RANDOMX_V2_PHASE3_PLAN.md §3.2 / §8.3. The genesis block is mined at
+  // difficulty 1, so find_nonce_for_given_block accepts the very first nonce
+  // tried (GENESIS_NONCE) regardless of which PoW algorithm computes the
+  // longhash, and the block id is Keccak(serialized header) — independent of the
+  // longhash entirely. The RandomX v2 cutover (genesis longhash CryptoNight ->
+  // RandomX, and the calculate_block_hash block-202612 fossil drop in c1611f4be)
+  // therefore cannot move the genesis nonce or id. This also exercises
+  // generate_genesis_block through the v2 verifier — the path Blockchain::init
+  // runs on every daemon boot.
+  //
+  // frozen_id is a regression anchor. If a *legitimate* pre-genesis change to
+  // GENESIS_TX or a header field moves it, set frozen_id to "" to re-capture the
+  // printed value, then re-pin it. The mainnet id is independently anchored: it
+  // equals the height-0 block_hash in
+  // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json, captured from
+  // the daemon by capture_coinbase.py before this cutover — two independent
+  // derivations of the same PoW-independent genesis id.
+  struct NetCase
+  {
+    cryptonote::network_type net;
+    const char* name;
+    const char* frozen_id;
+  };
+  const NetCase nets[] = {
+    { cryptonote::MAINNET,  "mainnet",  "919f8db5a0696c4969af09755c1acc42ae95e4ec573cab0a095c2e7849a144c4" },
+    { cryptonote::TESTNET,  "testnet",  "21b163229fc1a33c52d46452160ca4668d06bba54a72555d3978e04093a6e4a3" },
+    { cryptonote::STAGENET, "stagenet", "a0cfacd95a96004935b450f1230336f280afd0d793357ef358430b9c0bce88bb" },
+  };
+
+  for (const NetCase& nc : nets)
+  {
+    const cryptonote::config_t& cfg = cryptonote::get_config(nc.net);
+    cryptonote::block bl{};
+    ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
+      << nc.name << ": generate_genesis_block failed";
+    EXPECT_EQ(cfg.GENESIS_NONCE, bl.nonce)
+      << nc.name << ": genesis nonce moved (difficulty-1 invariant broken)";
+
+    crypto::hash id{};
+    ASSERT_TRUE(cryptonote::get_block_hash(bl, id)) << nc.name << ": get_block_hash failed";
+    const std::string got = hex32(id);
+    if (std::string(nc.frozen_id).empty())
+      std::printf("[genesis] %-8s nonce=%u id=%s  (CAPTURE: paste into frozen_id)\n",
+                  nc.name, static_cast<unsigned>(bl.nonce), got.c_str());
+    else
+      EXPECT_EQ(std::string(nc.frozen_id), got) << nc.name << ": genesis block id changed";
+  }
 }
 
 } // anonymous namespace
