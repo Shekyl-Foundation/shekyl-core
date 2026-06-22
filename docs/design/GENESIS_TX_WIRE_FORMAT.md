@@ -27,13 +27,13 @@ only for inherited.
    what is open is only its **wire / consensus-record / sig-preimage surfacing**,
    which the clean crate encodes per §9.11. **Do not patch the current
    `bond_wire.rs`:** §4 retires that encoder into the clean crate, so patching it now
-   is throwaway. (b) **FA-6 ML-KEM `view_tag`** (F2): the scanner+builder switch off
-   the old X25519/keccak path (`shared_key.rs:65`; FA-6 impl is *"a separate PR"*,
-   FA-6:13) **rides the ~58-consumer scanner migration** (§8) — 2d-1 (P-scan) is a
-   scan pipeline that needs that scanner anyway. A `view_tag` frozen as ML-KEM
-   against a scanner still on X25519 makes **every output silently fail to scan**,
-   and the wire byte-corpus round-trips clean and never catches it → needs the
-   **scan-time KAT** (§6 Q13), separate from byte-identity.
+   is throwaway. (b) **FA-6 ML-KEM `view_tag`** (F2): **done.** The builder
+   (`construct_output`) and scanner (`scan_output_recover_with_ml_kem_dk`) already
+   derive `view_tag` via `derive_view_tag_prefilter` (ML-KEM/HKDF); the old
+   X25519/keccak `shared_key.rs` path was dead code and is **deleted**. A `view_tag`
+   frozen as ML-KEM against a stale scanner would make **every output silently fail to
+   scan** while the wire byte-corpus round-trips clean — so the **scan-time KAT** (§6
+   Q13) is landed and drift-validated, closing that gap.
 2. **Arm taxonomy + generalized §12/§13 (F1).** The frozen ki-ordering and
    `pqc_auths` rules were written for key-image-bearing fcmp spends; the no-ki arms
    (serve_credit, bond_post, and the deferred emission/membership-only) don't fit
@@ -536,18 +536,24 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   Monero's v1* (CryptoNote). Tags renumbered because their values were meaningless
   to Shekyl; `version` stays `3` because its value is load-bearing. **No gate-(c)
   change.**
-- **Q13 — `view_tag` scan-time conformance (F2).** *(OPEN — pre-genesis blocker)*
-  §2.2 freezes `view_tag` as **ML-KEM-derived** (FA-6 §4.2; `derivation.rs:263`),
-  but the live scanner + builder still compute the **old X25519/keccak** path
-  (`shared_key.rs:65`) and FA-6's impl is *"a separate PR after spec review; not
-  bundled"* (FA-6:13). A genesis `view_tag` frozen on the new derivation against a
-  scanner on the old one makes **every output silently fail to scan** — and because
-  the bytes round-trip, the §7 **wire corpus stays green and never catches it**.
-  This is *more* insidious than `bond_spend_pk` (which surfaces as a missing field).
-  **Freeze gate:** (a) the FA-6 scanner + builder switch lands pre-genesis (named
-  impl blocker alongside `bond_spend_pk`); (b) a **scan-time KAT** — derive ECDH /
-  ML-KEM → compute `view_tag` → match a captured output — is part of the freeze,
-  **separate from** wire byte-identity. Resolve before ratification.
+- **Q13 — `view_tag` scan-time conformance (F2).** *(RESOLVED — switch was already
+  implemented; pinned scan-time KAT landed)* §2.2 freezes `view_tag` as
+  **ML-KEM-derived** (FA-6 §4.2: `derive_view_tag_prefilter`, HKDF-SHA512 over
+  `ml_kem_ss`, `derivation.rs:263`). **Both sides already compute it that way** — the
+  builder in `construct_output` (`output.rs:94`) and the scanner in
+  `scan_output_recover_with_ml_kem_dk` → `ml_kem_decap_prefilter` (`output.rs:509`,
+  reached from `scan.rs`). The earlier "live scanner + builder still on the old
+  X25519/keccak path" reading was **stale**: that `shared_key.rs` path was *dead code*
+  (no live caller) and is **deleted**; FA-6's own re-audit recorded the switch
+  "Verified — re-keyed" (2026-06-07). **Gate (a) done.** A genesis `view_tag` frozen
+  on the new derivation against a scanner on the old one would make **every output
+  silently fail to scan** while the §7 byte-corpus round-trips clean — so **gate (b)
+  done** too: a pinned **scan-time KAT** (`shekyl-crypto-pq/tests/scan_output_kat.rs`
+  + `docs/test_vectors/PQC_SCAN_OUTPUT_KAT.json`) re-runs `construct_output` against a
+  *captured* output (byte-identical, `view_tag` included) and re-runs the scanner's
+  decap-from-ciphertext + recover, asserting the committed amount + spend pubkey. It
+  is drift-validated (perturbing the HKDF salt/label fails it), catching exactly the
+  silent-scan failure wire byte-identity cannot.
 
 ## 7. Differential methodology (extends CONSENSUS_PORT_SEQUENCE §3)
 
@@ -576,17 +582,18 @@ Format: **ID — item.** *(status)* disposition / what's needed.
    Decision-4 to the slice-2 plan; capture a spend blob + the archival-arm blobs as
    positive-corpus items. *(The two "blockers" are **not** a discrete pre-step —
    `bond_spend_pk`'s wire surfacing lands in the clean crate (step 3); the FA-6
-   `view_tag` switch rides the scanner migration (step 4). Don't patch the
-   to-be-retired `bond_wire.rs`.)*
+   `view_tag` switch is **already done** (Q13 resolved — scan-KAT landed). Don't patch
+   the to-be-retired `bond_wire.rs`.)*
 3. Stand up the clean crate to the spec-grounded layout (**incl. `bond_spend_pk` per
    §9.11 — derivation already done, this is the wire encoding**); positive +
    **negative** corpus green vs the (gate-(c)-adjusted) oracle (incl. the §12
-   canonical-form rejects), **plus the §6 Q13 scan-time `view_tag` KAT** (wire
-   byte-identity alone cannot catch a derivation mismatch).
-4. Migrate the ~58 consumers (**incl. the scanner's FA-6 ML-KEM `view_tag` switch +
-   the Q13 scan-KAT — 2d-1 P-scan needs this scanner regardless**); delete
-   `shekyl-oxide` block/tx — **sequenced to avoid colliding with in-flight
-   wallet-rewrite work**.
+   canonical-form rejects). *(The **§6 Q13 scan-time `view_tag` KAT** is already
+   landed — `shekyl-crypto-pq/tests/scan_output_kat.rs`; wire byte-identity alone
+   cannot catch a derivation mismatch.)*
+4. Migrate the ~58 consumers (the scanner's FA-6 ML-KEM `view_tag` switch + the Q13
+   scan-KAT are **already done** — this step is the block/tx *type* migration; 2d-1
+   P-scan needs this scanner regardless); delete `shekyl-oxide` block/tx —
+   **sequenced to avoid colliding with in-flight wallet-rewrite work**.
 5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): **tag
    renumber ✅ (PR #168)**; then `txin_fcmp` reshape, shed dead/staking arms,
    single-output coinbase, exact-consumption + exact-proof-length, reward-zone
@@ -915,7 +922,7 @@ membership-only → §2.1; CT rename → Phase-5 (§2.3/§5); `referenceBlock` s
 
 The inherited surface (§9.1–9.9 framing, §10–§12) carries over unchanged.
 
-**Still open before ratification:** the two impl blockers (`bond_spend_pk`, the
-FA-6 `view_tag` scanner/builder switch), the scan-time `view_tag` KAT, and the
+**Still open before ratification:** the `bond_spend_pk` wire surfacing, and the
 emission / membership-only **deferred sub-freezes** (which may refine §2.5/§12/§13
-when their PRs land).
+when their PRs land). *(The FA-6 `view_tag` scanner/builder switch + scan-time KAT are
+**resolved** — §6 Q13.)*
