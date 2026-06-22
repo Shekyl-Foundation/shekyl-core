@@ -103,7 +103,7 @@ any normal workflow.
 
 ### 2.2 Plaintext TOML with HMAC
 
-Cosmetic, operational, device, RPC, and lookahead settings. Users edit
+Cosmetic, operational, device, and lookahead settings. Users edit
 through the GUI, through `shekyl-cli config …`, or by hand with a text
 editor.
 
@@ -238,14 +238,6 @@ where no pre-fork output set exists. Per rule
 |---------------------------|----------|-----------|
 | `device_name`             | `""`     | HW-wallet routing hint; tampering re-derives different keys, but envelope AAD's `expected_classical_address` cross-check catches the mismatch at open. |
 | `device_derivation_path`  | `""`     | Same as above. |
-
-#### RPC (Bucket 5)
-
-| Field                                | Default | Rationale |
-|--------------------------------------|---------|-----------|
-| `persistent_rpc_client_id`           | random  | Stable client identifier for RPC payments; tampering merely breaks RPC pay, not funds. |
-| `auto_mine_for_rpc_payment_threshold`| `0`     | If enabled, bounded auto-mine for RPC credits. |
-| `credits_target`                     | `0`     | RPC credit balance target. |
 
 #### Display-only identity
 
