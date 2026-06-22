@@ -1497,11 +1497,10 @@ mod tests {
             );
 
             // ── Verifier acceptance: Bulletproof+ ───────────────
-            // BP+ verify takes the un-cofactored commitment
-            // points (`mask*G + amount*H` without the factor-8
-            // multiplication tx_builder applies for the
-            // SignedProofs.commitments echo). Recompute from
-            // OutputInfo to ensure we feed the right shape.
+            // BP+ verify takes the real prime-order commitment
+            // points (`mask*G + amount*H`), which is exactly the
+            // form `SignedProofs.commitments` now carries. Recompute
+            // from OutputInfo to ensure we feed the right shape.
             let bp_commitments: Vec<CompressedPoint> = outputs
                 .iter()
                 .map(|out| {
@@ -1587,11 +1586,12 @@ mod tests {
     ///
     /// `SignedProofs.pseudo_outs` are the raw FCMP++ `C_tilde` points
     /// (prime-order `a_i*G + amount*H`, with `sum(a_i) == sum(out_masks)` by the
-    /// prover's pseudo-out balancing). `SignedProofs.commitments` are `8*C` —
-    /// the subgroup-safety cofactor multiplication `sign.rs` applies on the
-    /// wire. The RCT balance equation (`shekyl-rct-balance`) is defined over the
-    /// prime-order `C`, so the test recovers `C = (8*C) * 8^{-1}` before feeding
-    /// the balance check; both sides then carry genuine prover output.
+    /// prover's pseudo-out balancing). `SignedProofs.commitments` are the real
+    /// prime-order `C = mask*G + amount*H` — the form `sign.rs` emits and
+    /// consensus stores in `outPk[i].mask`. The RCT balance equation
+    /// (`shekyl-rct-balance`) is defined over prime-order `C`, so the
+    /// prover-emitted commitments feed the balance check directly; both sides
+    /// then carry genuine prover output.
     ///
     /// # Accept *and* reject
     ///
@@ -1620,8 +1620,6 @@ mod tests {
         use shekyl_io::CompressedPoint;
         use shekyl_primitives::Commitment;
         use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
-
-        use curve25519_dalek::edwards::CompressedEdwardsY;
 
         // Wallet keys fund the transaction; the bond persona `P` is a separate
         // identity that authorizes the post (credit paths sign under P_pubkey).
@@ -1812,21 +1810,11 @@ mod tests {
         );
 
         // ── RCT cleartext balance over the PROVER-emitted commitments ────
-        // Recover prime-order C from the wire's 8*C (see docstring) so the
-        // balance equation and the prover output share an encoding.
-        let inv8 = Scalar::from(8u64).invert();
+        // `signed.commitments` are the real prime-order `C` (see docstring),
+        // the encoding the balance equation is defined over, so they feed the
+        // check directly alongside the prover's pseudo-outs.
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
-        let out_masks_flat: Vec<u8> = signed
-            .commitments
-            .iter()
-            .flat_map(|c| {
-                let cofactored = CompressedEdwardsY::from_slice(c)
-                    .expect("commitment is 32 bytes")
-                    .decompress()
-                    .expect("emitted commitment is on-curve");
-                (cofactored * inv8).compress().to_bytes()
-            })
-            .collect();
+        let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
         verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
             .expect("bond-post RCT balance closes over prover-emitted commitments");
 

@@ -3325,10 +3325,11 @@ mod tests {
     /// # Commitment encoding
     ///
     /// `SignedProofs.pseudo_outs` are the prime-order FCMP++ `C_tilde` points;
-    /// `SignedProofs.commitments` are `8*C` (the subgroup-safety cofactor
-    /// `sign.rs` applies on the wire). The RCT balance equation is defined over
-    /// prime-order `C`, so the test recovers `C = (8*C) * 8^{-1}` before the
-    /// balance check (see 2a's docstring for the full rationale).
+    /// `SignedProofs.commitments` are the real prime-order `C = mask*G +
+    /// amount*H` (the form `sign.rs` emits and consensus stores in
+    /// `outPk[i].mask`). The RCT balance equation is defined over prime-order
+    /// `C`, so the prover-emitted commitments feed the balance check directly
+    /// (see 2a's docstring for the full rationale).
     ///
     /// # Accept *and* reject
     ///
@@ -3348,7 +3349,6 @@ mod tests {
         use shekyl_io::CompressedPoint;
         use shekyl_primitives::Commitment;
 
-        use curve25519_dalek::edwards::CompressedEdwardsY;
         use curve25519_dalek::scalar::Scalar;
 
         // Shared real-tree setup: assemble the real depth-2 membership path and
@@ -3406,20 +3406,9 @@ mod tests {
         // the partial-branch-chunk bug was fixed by zero-padding branch chunks to
         // circuit width, so that test now runs as a normal `#[tokio::test]`).
 
-        // ── RCT balance over PROVER-emitted commitments (recover prime-order) ─
-        let inv8 = Scalar::from(8u64).invert();
+        // ── RCT balance over PROVER-emitted commitments (real prime-order C) ─
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
-        let out_masks_flat: Vec<u8> = signed
-            .commitments
-            .iter()
-            .flat_map(|c| {
-                let cofactored = CompressedEdwardsY::from_slice(c)
-                    .expect("commitment is 32 bytes")
-                    .decompress()
-                    .expect("emitted commitment is on-curve");
-                (cofactored * inv8).compress().to_bytes()
-            })
-            .collect();
+        let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
         verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
             .expect("bond-post RCT balance closes over the real-tree prover output");
 

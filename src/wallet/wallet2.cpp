@@ -268,6 +268,7 @@ struct wallet_args_options {
   const command_line::arg_descriptor<bool> daemon_ssl_allow_chained = {"daemon-ssl-allow-chained", tools::wallet2::tr("Allow user (via --daemon-ssl-ca-certificates) chain certificates"), false};
   const command_line::arg_descriptor<bool> testnet = {"testnet", tools::wallet2::tr("For testnet. Daemon must also be launched with --testnet flag"), false};
   const command_line::arg_descriptor<bool> stagenet = {"stagenet", tools::wallet2::tr("For stagenet. Daemon must also be launched with --stagenet flag"), false};
+  const command_line::arg_descriptor<bool> regtest = {"regtest", tools::wallet2::tr("For regtest/fakechain (testing & simulation; addressing mirrors mainnet). Daemon must also be launched with --regtest"), false};
   const command_line::arg_descriptor<uint64_t> kdf_rounds = {"kdf-rounds", tools::wallet2::tr("Number of rounds for the key derivation function"), 1};
   const command_line::arg_descriptor<std::string> hw_device = {"hw-device", tools::wallet2::tr("HW device to use"), ""};
   const command_line::arg_descriptor<std::string> hw_device_derivation_path = {"hw-device-deriv-path", tools::wallet2::tr("HW device wallet derivation path (e.g., SLIP-10)"), ""};
@@ -321,7 +322,12 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
-  const network_type nettype = testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
+  const bool regtest = command_line::get_arg(vm, opts.regtest);
+  // --testnet/--stagenet/--regtest are mutually exclusive: reject a conflicting
+  // combination rather than silently resolving it by ternary precedence, so the
+  // derived nettype is never a surprise.
+  THROW_WALLET_EXCEPTION_IF(int(testnet) + int(stagenet) + int(regtest) > 1, tools::error::wallet_internal_error, "Only one of --testnet, --stagenet, --regtest may be specified");
+  const network_type nettype = regtest ? FAKECHAIN : testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
   const uint64_t kdf_rounds = command_line::get_arg(vm, opts.kdf_rounds);
   THROW_WALLET_EXCEPTION_IF(kdf_rounds == 0, tools::error::wallet_internal_error, "KDF rounds must not be 0");
 
@@ -548,7 +554,12 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
-  const network_type nettype = testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
+  const bool regtest = command_line::get_arg(vm, opts.regtest);
+  // --testnet/--stagenet/--regtest are mutually exclusive: reject a conflicting
+  // combination rather than silently resolving it by ternary precedence, so the
+  // derived nettype is never ambiguous.
+  THROW_WALLET_EXCEPTION_IF(int(testnet) + int(stagenet) + int(regtest) > 1, tools::error::wallet_internal_error, "Only one of --testnet, --stagenet, --regtest may be specified");
+  const network_type nettype = regtest ? FAKECHAIN : testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
 
   /* GET_FIELD_FROM_JSON_RETURN_ON_ERROR Is a generic macro that can return
   false. Gcc will coerce this into unique_ptr(nullptr), but clang correctly
@@ -1439,6 +1450,7 @@ void wallet2::init_options(boost::program_options::options_description& desc_par
   command_line::add_arg(desc_params, opts.daemon_ssl_allow_chained);
   command_line::add_arg(desc_params, opts.testnet);
   command_line::add_arg(desc_params, opts.stagenet);
+  command_line::add_arg(desc_params, opts.regtest);
   command_line::add_arg(desc_params, opts.kdf_rounds);
   command_line::add_arg(desc_params, opts.hw_device);
   command_line::add_arg(desc_params, opts.hw_device_derivation_path);
@@ -3137,6 +3149,12 @@ void wallet2::process_new_blockchain_entry(const cryptonote::block& b, const cry
 //----------------------------------------------------------------------------------------------------
 void wallet2::precompute_fcmp_paths()
 {
+  // Tree-path precompute is a daemon-backed optimization; with no daemon there is
+  // nothing to fetch. Mirror refresh()'s offline early-return rather than letting
+  // the RPC below fail to connect.
+  if (m_offline)
+    return;
+
   std::vector<uint64_t> output_indices;
   const uint64_t current_height = get_blockchain_current_height();
   for (size_t i = 0; i < m_transfers.size(); ++i)
@@ -3157,10 +3175,17 @@ void wallet2::precompute_fcmp_paths()
   cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
   req.output_indices = std::move(output_indices);
 
-  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
-  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for FCMP++ tree path");
-  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
-  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+  // Serialize daemon access on the shared m_http_client like every other RPC
+  // site here: the refresh thread and foreground calls both touch this client,
+  // and m_daemon_rpc_mutex (recursive) is what makes that safe. Held only across
+  // the network call + status checks, released before the CPU-bound path parse.
+  {
+    const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
+    bool r = epee::net_utils::invoke_http_json_rpc("/json_rpc", "get_curve_tree_path", req, res, *m_http_client, rpc_timeout);
+    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for FCMP++ tree path");
+    THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+    THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+  }
 
   crypto::hash ref_block{};
   if (!res.reference_block.empty())
@@ -3213,6 +3238,10 @@ void wallet2::precompute_fcmp_paths()
 //----------------------------------------------------------------------------------------------------
 void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
 {
+  // Daemon-backed optimization: skip when offline (see precompute_fcmp_paths).
+  if (m_offline)
+    return;
+
   if (new_height <= m_fcmp_last_precompute_height)
     return;
 
@@ -3249,10 +3278,15 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
   req.output_indices = std::move(stale_indices);
 
-  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
-  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for incremental FCMP++ path update");
-  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
-  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+  // Same shared-client serialization as precompute_fcmp_paths: lock only across
+  // the network call + status checks, release before the path reconciliation.
+  {
+    const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
+    bool r = epee::net_utils::invoke_http_json_rpc("/json_rpc", "get_curve_tree_path", req, res, *m_http_client, rpc_timeout);
+    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for incremental FCMP++ path update");
+    THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+    THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+  }
 
   crypto::hash ref_block{};
   if (!res.reference_block.empty())

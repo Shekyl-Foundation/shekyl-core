@@ -26,9 +26,14 @@
 //! `shekyl-oxide` reader skipped (it returned `None` on the `Null` type byte and
 //! never consumed the arrays, so `Block::read` mis-aligned and failed
 //! `UnexpectedEof` on a live coinbase). The round-trip + hash KATs prove
-//! byte-identity against captured daemon blobs; the FCMP++ spend is
-//! synthetic-round-trip-validated (its live-oracle KAT is deferred — the daemon
-//! spend path is blocked).
+//! byte-identity against captured daemon blobs; the FCMP++ spend is validated
+//! end-to-end, in-process, by `tests/fcmp_spend_e2e.rs` — it builds a real
+//! multi-layer-tree spend and self-validates every field against the consensus
+//! verifier (`shekyl_fcmp::proof::verify`, CT balance, and the
+//! Bulletproof+) before round-tripping it through this serializer. There is no
+//! C++ spend oracle to capture: the daemon FCMP++ spend path never produced a
+//! daemon-accepted transaction, so the authoritative oracle is the Rust
+//! verifier itself, not a captured blob (see that test's module docs).
 //!
 //! ## Tag values
 //!

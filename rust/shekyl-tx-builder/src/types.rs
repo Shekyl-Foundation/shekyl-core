@@ -351,7 +351,13 @@ pub struct SignedProofs {
     /// Serialized Bulletproof+ range proof.
     #[serde(with = "hex_blob")]
     pub bulletproof_plus: Vec<u8>,
-    /// Per-output Pedersen commitments (compressed points, scalarmult8 applied).
+    /// Per-output Pedersen commitments: the real prime-order `C = mask*G +
+    /// amount*H` (compressed points, **no** cofactor scaling). This is the form
+    /// consensus stores in `outPk[i].mask` and the form the wallet scanner
+    /// recomputes and byte-compares against
+    /// (`shekyl-crypto-pq` `scan_output_recover_with_ml_kem_dk`), so it must
+    /// not be `8*C`. The Bulletproof+ `V` vector carries the cofactored `C/8`
+    /// form internally; the two are reconciled inside the BP+ verifier.
     #[serde(with = "hex_vec32")]
     pub commitments: Vec<[u8; 32]>,
     /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).

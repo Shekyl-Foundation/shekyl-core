@@ -157,6 +157,32 @@ vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
 (2) and (3) edit vendored `shekyl-oxide` RPC code (protocol code, ours per rule
 10) and diverge from the stale `monero-oxide@3933664d` pin.
 
+4. **`get_curve_tree_path` returns 404 under the Rust/Axum daemon RPC.** The
+   C++ `on_get_curve_tree_*` handlers exist and are registered in the legacy
+   epee dispatch but are missing from the Axum/FFI JSON-RPC dispatch table
+   (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so the wallet's
+   curve-tree path fetch 404s when the daemon runs the default Rust RPC server.
+   Handler-side bugs also surfaced (immature outputs must be skipped, not
+   errored; branch-layer count loop is `<= tree_depth`). Surfaced 2026-06-21
+   debugging the C++ FCMP++ spend path; the exploration was reverted as
+   out-of-scope C++ debt. Both the dispatch gap and the spend-path findings the
+   Rust send-path must reproduce are tracked in
+   [`FOLLOWUPS.md`](../FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
+   endpoints missing from the FFI dispatch table" and "C++ FCMP++ wallet send
+   path incomplete".
+
+### In-process Rust FCMP++ spend validation (no daemon)
+
+Independent of this daemon-parity harness, `shekyl-wire/tests/fcmp_spend_e2e.rs`
+now builds a full FCMP++ spend from real crypto (depth-3 curve tree, FCMP++
+proof, CT balance, Bulletproof+ range proof, PQC auths) entirely in-process
+and asserts byte-identical `shekyl-wire` serialization round-trip. It replaced
+the unsound C++-oracle byte-identity KAT (which depended on a spend blob the
+non-functional C++ spend path could never emit). This validates the Rust
+consensus + wire stack without a running daemon; the daemon-parity gap above is
+what still needs the RPC dispatch wiring before an end-to-end wallet→daemon
+spend can run.
+
 ## 7. Verification
 
 From `rust/`, with `shekyld` built from current dev:
