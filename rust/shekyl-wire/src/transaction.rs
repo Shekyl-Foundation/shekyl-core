@@ -1085,7 +1085,18 @@ impl Transaction {
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**
     /// (GENESIS_TX_WIRE_FORMAT.md §12 — trailing bytes are rejected).
+    ///
+    /// Rejects blobs larger than `MAX_TX_SIZE` up front, so this entry point is a
+    /// DoS-bounded decode (no allocation proportional to an over-cap input). This is
+    /// the size guard only — full consensus validity (shape couplings, key-image
+    /// order, arm rules) is still [`Self::validate`]'s job.
     pub fn from_bytes(blob: &[u8]) -> io::Result<Transaction> {
+        if blob.len() > MAX_TX_SIZE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: tx blob {} exceeds {MAX_TX_SIZE}",
+                blob.len()
+            )));
+        }
         let mut cursor = blob;
         let tx = Transaction::read(&mut cursor)?;
         if !cursor.is_empty() {

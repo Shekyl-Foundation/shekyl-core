@@ -231,20 +231,18 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
 /// Re-serialize parsed fields back to the `extra` blob (byte-identical to the
 /// input for a faithfully-parsed blob).
 ///
-/// **Symmetric with [`parse`]** — it never emits bytes `parse` would reject. The
-/// structural padding/nonce constraints are checked up front (clean errors), and a
-/// final round-trip guard (`parse(out) == fields`) catches every remaining cap a
-/// constructed field could exceed — the count caps (`AdditionalPubKeys` /
-/// `PqcOwnership`) and the length-prefixed blobs (`0x06`/`0x07`/…) — without
-/// re-listing each parse bound here. `tx_extra` blobs are small (≤ `MAX_TX_EXTRA`),
-/// so the extra parse is cheap, and the property holds automatically for any field
-/// kind added later.
+/// **Symmetric with [`parse`]** — it never emits bytes `parse` would reject. Each
+/// field's parse-cap is checked **up front, O(n)** — padding (`1..=255` + last), the
+/// nonce cap, the `AdditionalPubKeys`/`PqcOwnership` counts, and the length-prefixed
+/// blobs (`0x06`/`0x07`/…) against `READ_LEN_CAP`. A `debug_assert!` round-trip backs
+/// this up in debug/test builds (free in release), so a future field kind that forgets
+/// its cap check is caught in CI rather than silently emitting a self-invalid blob.
 pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let last = fields.len().saturating_sub(1);
     for (i, field) in fields.iter().enumerate() {
-        // Up-front structural checks (clearer errors than the round-trip guard) for
-        // the canonical-form constraints `parse` enforces positionally.
+        // Reject any field that would emit bytes `parse` rejects (keep serialize/parse
+        // inverses — the public `TxExtraField` admits out-of-range values).
         match field {
             TxExtraField::Padding(n) => {
                 if *n == 0 || *n > TX_EXTRA_PADDING_MAX_COUNT {
@@ -264,22 +262,41 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
                     blob.len()
                 )));
             }
+            TxExtraField::AdditionalPubKeys(keys) if keys.len() > READ_LEN_CAP => {
+                return Err(io::Error::other(format!(
+                    "tx_extra: additional_pubkeys count {} exceeds cap {READ_LEN_CAP}",
+                    keys.len()
+                )));
+            }
+            TxExtraField::PqcOwnership(entries) if entries.len() > READ_LEN_CAP => {
+                return Err(io::Error::other(format!(
+                    "tx_extra: pqc_ownership count {} exceeds cap {READ_LEN_CAP}",
+                    entries.len()
+                )));
+            }
+            TxExtraField::PqcKemCiphertext(b)
+            | TxExtraField::PqcLeafHashes(b)
+            | TxExtraField::MultisigMigration(b)
+            | TxExtraField::PqcViewTagHints(b)
+            | TxExtraField::PqcSpendAuthPubkeys(b)
+                if b.len() > READ_LEN_CAP =>
+            {
+                return Err(io::Error::other(format!(
+                    "tx_extra: field blob {} exceeds cap {READ_LEN_CAP}",
+                    b.len()
+                )));
+            }
             _ => {}
         }
         write_field(&mut out, field).expect("Vec write is infallible");
     }
-    // Round-trip guard: the emitted blob must parse back identically. This makes
-    // serialize a true inverse of `parse` for every field kind — any count/blob that
-    // exceeds a parse cap is caught here rather than producing a self-invalid blob.
-    match parse(&out) {
-        Ok(reparsed) if reparsed == fields => Ok(out),
-        Ok(_) => Err(io::Error::other(
-            "tx_extra: fields do not round-trip (non-canonical encoding)",
-        )),
-        Err(e) => Err(io::Error::other(format!(
-            "tx_extra: serialized fields would not parse back: {e}"
-        ))),
-    }
+    // Future-proofing (debug/test only, compiled out in release): the emitted blob must
+    // parse back identically — catches a new field kind whose cap check was forgotten.
+    debug_assert!(
+        parse(&out).map(|p| p == fields).unwrap_or(false),
+        "tx_extra: serialize/parse asymmetry — a field kind is missing its up-front cap check"
+    );
+    Ok(out)
 }
 
 fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {

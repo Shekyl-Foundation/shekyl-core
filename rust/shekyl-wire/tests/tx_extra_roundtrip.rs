@@ -127,7 +127,7 @@ fn oversized_blob_field_rejected_on_serialize() {
     let huge = vec![0u8; 1_000_001];
     let err = tx_extra::serialize(&[TxExtraField::PqcKemCiphertext(huge)])
         .expect_err("blob beyond READ_LEN_CAP must be rejected at serialize");
-    assert!(err.to_string().contains("would not parse"), "{err}");
+    assert!(err.to_string().contains("exceeds cap"), "{err}");
 }
 
 #[test]

@@ -56,31 +56,52 @@ def rpc(url, method, params=None):
     return res["result"]
 
 
-def main():
-    with open(GENESIS_RECIPIENTS) as f:
-        addr = json.load(f)["recipients"][0]["address"]
-    port = free_port()
-    workdir = tempfile.mkdtemp(prefix="cbcap_")
-    url = f"http://127.0.0.1:{port}/json_rpc"
-    log = open(os.path.join(workdir, "daemon.log"), "w")
-    daemon = subprocess.Popen(
-        [SHEKYLD, "--regtest", "--offline", "--non-interactive", "--fixed-difficulty", "1",
-         "--data-dir", workdir, "--rpc-bind-port", str(port), "--log-level", "0"],
-        stdout=log, stderr=subprocess.STDOUT)
-    try:
+def start_daemon(workdir, attempts=5):
+    """Launch shekyld, retrying on a fresh port if it dies before its RPC is ready.
+
+    `free_port()` has an inherent TOCTOU race — the port can be claimed between the
+    probe and shekyld's bind — which surfaces as the daemon exiting early. Detect that
+    (and a plain readiness timeout) and retry on a new port instead of failing the whole
+    capture. Returns (daemon, url, log); raises if every attempt fails.
+    """
+    last = "unknown"
+    for attempt in range(attempts):
+        port = free_port()
+        url = f"http://127.0.0.1:{port}/json_rpc"
+        log = open(os.path.join(workdir, f"daemon.{attempt}.log"), "w")
+        daemon = subprocess.Popen(
+            [SHEKYLD, "--regtest", "--offline", "--non-interactive", "--fixed-difficulty", "1",
+             "--data-dir", workdir, "--rpc-bind-port", str(port), "--log-level", "0"],
+            stdout=log, stderr=subprocess.STDOUT)
         for _ in range(120):
+            if daemon.poll() is not None:
+                last = (f"daemon exited early (rc={daemon.returncode}) on port {port} "
+                        "— likely a port conflict")
+                break
             try:
                 if rpc(url, "get_info").get("status") == "OK":
-                    break
+                    return daemon, url, log
             except Exception:
                 pass
             time.sleep(0.5)
         else:
-            # Loop exhausted without ever reaching status OK — fail loudly rather
-            # than calling generateblocks against a daemon that never came up.
-            raise RuntimeError(
-                f"shekyld RPC at {url} not ready after ~60s; "
-                f"see {os.path.join(workdir, 'daemon.log')}")
+            last = f"daemon RPC not ready after ~60s on port {port} (see {log.name})"
+        if daemon.poll() is None:
+            daemon.send_signal(signal.SIGINT)
+            try:
+                daemon.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                daemon.kill()
+        log.close()
+    raise RuntimeError(f"shekyld failed to start after {attempts} attempts: {last}")
+
+
+def main():
+    with open(GENESIS_RECIPIENTS) as f:
+        addr = json.load(f)["recipients"][0]["address"]
+    workdir = tempfile.mkdtemp(prefix="cbcap_")
+    daemon, url, log = start_daemon(workdir)
+    try:
         rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
         hashes = {}
         for h in CAPTURE_HEIGHTS:
