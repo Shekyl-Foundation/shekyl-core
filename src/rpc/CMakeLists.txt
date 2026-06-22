@@ -28,7 +28,6 @@
 
 set(rpc_base_sources
   rpc_args.cpp
-  rpc_payment_signature.cpp
   rpc_handler.cpp)
 
 set(rpc_sources
@@ -41,7 +40,6 @@ set(rpc_sources
 
 set(rpc_base_headers
   rpc_args.h
-  rpc_payment_signature.h
   rpc_handler.h)
 
 set(rpc_headers
