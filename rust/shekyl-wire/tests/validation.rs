@@ -178,8 +178,23 @@ fn timestamp_unlock_time_rejected() {
 
 #[test]
 fn wrong_nbp_rejected() {
-    assert!(spend(vec![ki(1)], vec![out()], 0, 2).validate().is_err());
-    assert!(spend(vec![ki(1)], vec![out()], 0, 0).validate().is_err());
+    // 2 outputs so the >=2-output rule passes and we reach the nbp check.
+    assert!(spend(vec![ki(1)], vec![out(), out()], 0, 2)
+        .validate()
+        .is_err());
+    assert!(spend(vec![ki(1)], vec![out(), out()], 0, 0)
+        .validate()
+        .is_err());
+}
+
+#[test]
+fn spend_requires_at_least_two_outputs() {
+    // The C++ oracle rejects a non-coinbase, non-serve_credit tx with < 2 outputs
+    // (blockchain.cpp:3601, the RingCT anti-deanonymization rule).
+    let err = spend(vec![ki(1)], vec![out()], 0, 1)
+        .validate()
+        .unwrap_err();
+    assert!(err.to_string().contains("needs >= 2"), "{err}");
 }
 
 #[test]
@@ -206,8 +221,8 @@ fn mismatched_ct_base_length_rejected() {
 #[test]
 fn mismatched_pqc_auths_length_rejected() {
     // pqc_auths are per-input (count == nvin); a length != vin must reject. Key images
-    // descending so the ordering check passes and we reach the pqc-length check.
-    let mut tx = spend(vec![ki(2), ki(1)], vec![out()], 0, 1); // 2 inputs
+    // descending (ordering passes) + 2 outputs (>=2 rule passes) to reach the pqc check.
+    let mut tx = spend(vec![ki(2), ki(1)], vec![out(), out()], 0, 1); // 2 inputs
     if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
         pqc_auths.pop();
     }
@@ -307,7 +322,66 @@ fn serve_credit_must_not_mix_with_a_spend() {
         },
     };
     let err = tx.validate().unwrap_err();
-    assert!(err.to_string().contains("Serve-credit shape"), "{err}");
+    assert!(err.to_string().contains("must not mix"), "{err}");
+}
+
+#[test]
+fn multiple_serve_credits_allowed() {
+    // The oracle allows *multiple* serve_credit inputs (it only rejects mixing with
+    // other arms; check_inputs_types_supported). A 2-serve_credit fee-only tx validates.
+    let sc = || {
+        Input::ServeCredit(Box::new(ServeCredit {
+            p_canonical_id: [0u8; 32],
+            shard_id: 0,
+            settlement_epoch: 0,
+            segment_subroot_rk: [0u8; 32],
+            leaf_index_in_segment: 0,
+            leaf_bytes: [0u8; 128],
+            c1_layers: vec![],
+            c2_layers: vec![],
+            hybrid_signature: vec![],
+        }))
+    };
+    let tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![sc(), sc()],
+            outputs: vec![],
+            extra: vec![],
+        },
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0u8; 32],
+            base: CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            },
+            pqc_auths: vec![],
+            prunable: None,
+        },
+    };
+    tx.validate().expect("multiple serve_credits must validate");
+}
+
+#[test]
+fn two_bond_posts_rejected() {
+    // At most one bond_post per tx (check_inputs_types_supported:726).
+    let bp = || {
+        Input::BondPost(Box::new(BondPost {
+            hybrid_public_key: vec![],
+            p_canonical_id: [0u8; 32],
+            kind: BondPostKind::Other(3),
+            holdings: Holdings::CompleteTree,
+            bonded_total_atomic: 0,
+            bond_credit: 0,
+            bond_debit: 0,
+        }))
+    };
+    let mut tx = fee_only_with(bp());
+    tx.prefix.inputs.push(bp());
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("one bond_post"), "{err}");
 }
 
 #[test]

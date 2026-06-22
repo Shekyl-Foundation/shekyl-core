@@ -1172,11 +1172,32 @@ impl Transaction {
     }
 
     /// Structural / canonical-form validation (GENESIS_TX_WIRE_FORMAT.md §10 + the
-    /// context-free parts of §12): resource bounds, key-image ordering, the
-    /// `unlock_time` block-height form, and `nbp == 1`. **Out of scope** (the
-    /// consensus layer's job — needs arm-context or chain state): per-arm
-    /// `pqc_auths` semantics (§13), coinbase domain rules, CT balance,
-    /// double-spend, and the referenceBlock window.
+    /// context-free parts of §12/§13).
+    ///
+    /// This mirrors the **context-free** rejects of the C++ oracle's
+    /// `core::check_tx_semantic` + `Blockchain::check_tx_inputs` +
+    /// `check_inputs_types_supported` (verified by a differential read, 2026-06-21):
+    /// resource bounds (§10), the arm-mixing matrix (gen sole / coinbase, serve_credit
+    /// all-or-none + fee-only, ≤1 bond_post), `Null` ct iff coinbase, empty
+    /// `key_offsets`, strictly-descending key images (rejecting in-tx duplicates),
+    /// `pqc_auths`/`pseudoOuts` per-shape coupling, `nbp == 1`, `>= 2` outputs for a
+    /// spend, and the `unlock_time` block-height form.
+    ///
+    /// **Out of scope** — deferred to the consensus/crypto layer because they need
+    /// elliptic-curve math (which this crate intentionally has no dependency for) or
+    /// chain state:
+    /// - key-image **domain** validity — `ki != identity`, in the prime-order subgroup
+    ///   (`check_tx_inputs_keyimages_domain`);
+    /// - output public-key / commitment-mask validity (`check_outs_valid`,
+    ///   `check_commitment_mask_valid`) — curve checks;
+    /// - the FCMP++ membership proof, CT balance, double-spend, the referenceBlock
+    ///   window, and the coinbase reward / exact `unlock_time` / height (all chain-state);
+    /// - money-overflow sums — trivial here (FCMP++ input/output amounts are 0; the
+    ///   coinbase reward balance is the consensus layer's `validate_miner_transaction`).
+    ///
+    /// The bond_post `pseudoOuts` coupling is a §13 (F1/F3) **forward obligation** the
+    /// oracle itself leaves unchecked (`is_archival_bond_post_tx` exempt) — so it is
+    /// left unchecked here too, by design.
     pub fn validate(&self) -> io::Result<()> {
         if self.prefix.inputs.is_empty() {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
@@ -1205,33 +1226,51 @@ impl Transaction {
             ));
         }
         let is_coinbase = gen_count == 1;
-        // §2.5 Serve-credit shape (settled): a `serve_credit` is non-spending and is
-        // the *entire* tx — a sole serve_credit input, no outputs, and a fee-only
-        // `Fcmp` ct (empty pqc_auths, no prunable). The settled mixing table has no row
-        // combining serve_credit with any other arm, so reject every mixed form here.
-        // (Without this, a serve_credit beside a spend slips through the spend branch's
-        // intentionally-lenient pseudoOuts coupling below.)
-        if self
+        // §2.5 / C++ `check_inputs_types_supported` — the (context-free) arm-mixing
+        // matrix. Mirror the oracle's rejects exactly, no stricter:
+        let serve_credit_count = self
             .prefix
             .inputs
             .iter()
-            .any(|input| matches!(input, Input::ServeCredit(_)))
-        {
-            let is_serve_credit_shape =
-                matches!(self.prefix.inputs.as_slice(), [Input::ServeCredit(_)])
-                    && self.prefix.outputs.is_empty()
-                    && matches!(
-                        &self.ct,
-                        Ct::Fcmp { pqc_auths, prunable, .. }
-                            if pqc_auths.is_empty() && prunable.is_none()
-                    );
-            if !is_serve_credit_shape {
+            .filter(|i| matches!(i, Input::ServeCredit(_)))
+            .count();
+        let bond_post_count = self
+            .prefix
+            .inputs
+            .iter()
+            .filter(|i| matches!(i, Input::BondPost(_)))
+            .count();
+        // serve_credit is non-spending — it must not mix with any spend/bond/gen arm.
+        // The oracle allows **multiple** serve_credits, only rejecting the *mixing*
+        // (check_inputs_types_supported:720), so the rule is "all-or-none", not
+        // "exactly one". The serve-credit tx is fee-only: no outputs, empty pqc_auths,
+        // no prunable (its hybrid sig rides the vin, §9.10).
+        if serve_credit_count > 0 {
+            if self.prefix.inputs.len() != serve_credit_count {
                 return Err(io::Error::other(
-                    "shekyl-wire: a serve_credit input requires the fee-only Serve-credit \
-                     shape — a sole non-spending input, no outputs, empty pqc_auths, no \
-                     prunable (§2.5); it does not mix with any other arm",
+                    "shekyl-wire: serve_credit must not mix with other input arms (§2.5)",
                 ));
             }
+            let fee_only = self.prefix.outputs.is_empty()
+                && matches!(
+                    &self.ct,
+                    Ct::Fcmp { pqc_auths, prunable, .. }
+                        if pqc_auths.is_empty() && prunable.is_none()
+                );
+            if !fee_only {
+                return Err(io::Error::other(
+                    "shekyl-wire: serve_credit tx must be fee-only — no outputs, empty \
+                     pqc_auths, no prunable (§2.5)",
+                ));
+            }
+        }
+        // At most one bond_post per tx (check_inputs_types_supported:726). bond_post may
+        // share a tx with fcmp spends (the bond-post shape) but not serve_credit — the
+        // latter is already rejected by the all-serve_credit rule above.
+        if bond_post_count > 1 {
+            return Err(io::Error::other(
+                "shekyl-wire: at most one bond_post input per tx (§2.5)",
+            ));
         }
         // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
@@ -1362,8 +1401,13 @@ impl Transaction {
                 match prunable {
                     // Spend / bond-post: a prunable proof is present.
                     Some(prunable) => {
-                        if n_out == 0 {
-                            return Err(io::Error::other("shekyl-wire: spend has no outputs"));
+                        // A non-coinbase, non-serve_credit tx requires >= 2 outputs
+                        // (the standard RingCT anti-deanonymization rule;
+                        // blockchain.cpp:3599-3602, `vout.size() < 2 → reject`).
+                        if n_out < 2 {
+                            return Err(io::Error::other(format!(
+                                "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= 2"
+                            )));
                         }
                         // pqc_auths are per-input (count == nvin): one slot per input,
                         // including the bond_post slot (§2.5 / §13).
@@ -1380,21 +1424,17 @@ impl Transaction {
                                 prunable.bulletproofs.len()
                             )));
                         }
-                        // pseudoOuts are per key-image (spend) input. For an all-fcmp
-                        // spend that is exactly nvin; for a mixed bond-post tx the exact
-                        // spend-subset coupling is a §13 (F1/F3) forward obligation
-                        // owned by the emission / membership-only PRs, so it is bounded
-                        // here (<= the spend subset), not pinned.
-                        if n_ki == n_in {
-                            if prunable.pseudo_outs.len() != n_ki {
-                                return Err(io::Error::other(format!(
-                                    "shekyl-wire: pseudoOuts {} != spend input count {n_ki}",
-                                    prunable.pseudo_outs.len()
-                                )));
-                            }
-                        } else if prunable.pseudo_outs.len() > n_ki {
+                        // pseudoOuts: for a pure fcmp spend (every input key-image-
+                        // bearing) the oracle pins `pseudoOuts == num_inputs`
+                        // (blockchain.cpp:3762). For a bond-post tx it **exempts** the
+                        // count entirely (`is_archival_bond_post_tx` branch) — the exact
+                        // coupling is a §13 (F1/F3) forward obligation owned by the
+                        // emission / membership-only PRs. Mirror the oracle: pin the pure
+                        // spend, leave bond-post unchecked (a `bond_post` input makes
+                        // n_ki < n_in).
+                        if n_ki == n_in && prunable.pseudo_outs.len() != n_in {
                             return Err(io::Error::other(format!(
-                                "shekyl-wire: pseudoOuts {} exceed spend input count {n_ki}",
+                                "shekyl-wire: pseudoOuts {} != input count {n_in}",
                                 prunable.pseudo_outs.len()
                             )));
                         }

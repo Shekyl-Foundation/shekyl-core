@@ -155,6 +155,21 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   is only ever applied to a tail-less `Null`); capped **outputs at parse**; and made
   the archival `Holdings` / `BondPost.post_kind`-`bond_spend_pk` couplings **enums**
   so the silent round-trip-to-different-value shapes are unrepresentable.
+- **`validate()` ⇄ oracle differential pass** (2026-06-21) — a full read of the C++
+  `core::check_tx_semantic` + `Blockchain::check_tx_inputs` + `check_inputs_types_supported`
+  enumerating every reject, classified context-free (mirror) vs context-dependent
+  (defer), to stop discovering parity gaps one review round at a time. Fixed a real
+  **consensus bug** — key-image ordering was **reversed** (oracle requires strictly
+  *descending*, `memcmp(ki,last)>=0→reject`; we'd required ascending; the §12 prose +
+  §2.5 table were mislabeled too) — plus enforced **empty `key_offsets`**, the input
+  cap on **total `vin.size()`** (not just the key-image subset), the arm-mixing matrix
+  (**serve_credit all-or-none + fee-only** — the oracle allows *multiple*, so the
+  earlier "exactly one" was over-strict; **≤1 bond_post**), and **≥2 outputs** for a
+  spend. Two earlier over-strict guesses were **relaxed to match the oracle**: the
+  bond_post `pseudoOuts` count is left **unchecked** (the oracle exempts it — an F1/F3
+  forward obligation), and multiple serve_credits are accepted. The curve checks
+  (key-image domain, output-key / commitment-mask validity) and chain-state checks stay
+  deferred — see the `Transaction::validate` doc for the full mirrored/deferred split.
 
 **Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
 - **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
@@ -343,9 +358,9 @@ the arm taxonomy** (not "one arm class per tx"), plus state the shapes:
 | Tx shape | Inputs | ct | pqc_auths (§13) | key images (§12) | Status |
 |---|---|---|---|---|---|
 | **Coinbase** | `[gen]` exactly | `Null` | **none** | none | settled |
-| **Spend** (the transfer) | `fcmp×(1..8)` | `Fcmp` | one slot per input | each input, strictly descending (§12) | settled |
+| **Spend** (the transfer) | `fcmp×(1..8)`, **≥2 outputs** | `Fcmp` | one slot per input | each input, strictly descending (§12) | settled |
 | **Bond-post** | `fcmp×(funding)` + **one `bond_post`** + cover output | `Fcmp` | fcmp slots **+ the bond_post slot** (identity-key credit / `bond_spend_pk` debit, gate-4 §3.4.1:278) | the fcmp inputs only; bond_post has none | settled |
-| **Serve-credit** | one `serve_credit` (non-spending) | n/a | **empty** — sig is **on the vin** (§9.10) | none | settled |
+| **Serve-credit** | **one-or-more** `serve_credit` (non-spending), no other arm, no outputs | n/a | **empty** — sig is **on the vin** (§9.10) | none | settled |
 | **Emission** | `reward_emission` + membership-only backing (no ki) [± fcmp] | per plan | ML-DSA-65 (emission) + `R_O` legs in-proof (backing); **count rule refined by its PR** | fcmp inputs only; no-ki arms exempt — anti-replay = per-epoch dedup | **deferred sub-freeze** |
 
 **Mixing rule (binding for the settled shapes):** within one tx, key-image-bearing
