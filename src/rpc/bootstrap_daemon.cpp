@@ -58,6 +58,11 @@ namespace cryptonote
 
     if (res.status != CORE_RPC_STATUS_OK)
     {
+      // Peer is reachable but not serving a usable /getinfo. Transport-level
+      // failure is already penalized inside invoke_http_json; this branch
+      // catches the reachable-but-bad-status case, so rotate the peer here too
+      // and let the selector move on rather than re-pick an unusable node.
+      handle_result(false);
       return std::nullopt;
     }
 
