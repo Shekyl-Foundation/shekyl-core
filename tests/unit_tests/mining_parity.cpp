@@ -29,12 +29,15 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "crypto/hash-ops.h"
 #include "crypto/pow_registry.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace
 {
@@ -73,47 +76,61 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   ASSERT_EQ(base_reward, release_reward);
 }
 
-TEST(mining_parity, pow_registry_selects_expected_schema)
+TEST(mining_parity, pow_registry_is_randomx_only)
 {
-  const cryptonote::IPowSchema& cn_schema = cryptonote::get_pow_for_height(100, 11);
-  const cryptonote::IPowSchema& rx_schema = cryptonote::get_pow_for_height(100, RX_BLOCK_VERSION);
-  ASSERT_STREQ("Cryptonight", cn_schema.name());
-  ASSERT_STREQ("RandomX", rx_schema.name());
+  // Phase 3b collapsed get_pow_for_height to RandomX for every block version
+  // (CryptoNight is deleted, rule 60). The dispatch is RandomX regardless of
+  // the version argument now.
+  ASSERT_STREQ("RandomX", cryptonote::get_pow_for_height(100, 11).name());
+  ASSERT_STREQ("RandomX", cryptonote::get_pow_for_height(100, RX_BLOCK_VERSION).name());
 }
 
-TEST(mining_parity, cryptonight_schema_hash_matches_legacy)
+TEST(mining_parity, randomx_schema_routes_through_v2_ffi)
 {
-  std::array<uint8_t, 80> blob{};
-  for (size_t i = 0; i < blob.size(); ++i)
-    blob[i] = static_cast<uint8_t>((i * 17) & 0xff);
+  // Reuse the Phase 3a Hole-1 canonical KAT (tests/randomx_v2_parity/
+  // randomx_v2_full_parity.cpp): seed 0x01..0x20 over a fixed ASCII blob has
+  // this pinned RandomX v2 light-cache hash. The release-gate parity test
+  // anchors the value against the C v2 full dataset; here we assert that the
+  // registry-dispatched RandomX schema reproduces it, proving the C++ schema
+  // wrapper routes through the v2 verifier (the same expected value also
+  // appears in randomx_v2_full_parity.cpp's kFrozenKatHashHex — a drift in
+  // either fails both).
+  static const char* const kCanonicalKatHex =
+    "34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651";
 
-  const uint64_t height = 424242;
-  const uint8_t major_version = 11; // Cryptonight variant path
-  const int variant = cryptonote::get_cryptonight_variant_for_block(major_version);
-
-  crypto::hash expected = crypto::null_hash;
-  crypto::cn_slow_hash(blob.data(), blob.size(), expected, variant, height);
-
-  crypto::hash actual = crypto::null_hash;
-  const cryptonote::IPowSchema& schema = cryptonote::get_pow_for_height(height, major_version);
-  ASSERT_TRUE(schema.hash(blob.data(), blob.size(), height, nullptr, 0, actual));
-  ASSERT_EQ(expected, actual);
-}
-
-TEST(mining_parity, randomx_schema_hash_matches_legacy)
-{
-  std::vector<uint8_t> blob(120, 0x42);
   crypto::hash seed = crypto::null_hash;
   for (size_t i = 0; i < sizeof(seed.data); ++i)
-    seed.data[i] = static_cast<unsigned char>(i);
+    seed.data[i] = static_cast<unsigned char>(i + 1); // 0x01..0x20
 
-  crypto::hash expected = crypto::null_hash;
-  crypto::rx_slow_hash(seed.data, blob.data(), blob.size(), expected.data);
+  const std::string blob_ascii =
+    "Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";
+  const std::vector<uint8_t> blob(blob_ascii.begin(), blob_ascii.end());
 
-  crypto::hash actual = crypto::null_hash;
-  const cryptonote::IPowSchema& schema = cryptonote::get_pow_for_height(500000, RX_BLOCK_VERSION);
-  ASSERT_TRUE(schema.hash(blob.data(), blob.size(), 500000, &seed, 0, actual));
-  ASSERT_EQ(expected, actual);
+  std::array<uint8_t, 32> expected{};
+  for (size_t i = 0; i < expected.size(); ++i)
+    expected[i] = static_cast<uint8_t>(std::stoul(
+      std::string(kCanonicalKatHex + 2 * i, 2), nullptr, 16));
+
+  // The registry-dispatched RandomX schema (routes through the v2 FFI under
+  // the cutover).
+  crypto::hash via_schema = crypto::null_hash;
+  const cryptonote::IPowSchema& schema =
+    cryptonote::get_pow_for_height(500000, RX_BLOCK_VERSION);
+  ASSERT_STREQ("RandomX", schema.name());
+  ASSERT_TRUE(schema.hash(blob.data(), blob.size(), 500000, &seed, 0, via_schema));
+  ASSERT_EQ(0, std::memcmp(via_schema.data, expected.data(), expected.size()));
+
+  // A direct v2 FFI call must produce the same bytes, cross-checking the
+  // verifier is reachable from this binary and the schema wrapper marshals
+  // its arguments correctly.
+  crypto::hash via_ffi = crypto::null_hash;
+  ASSERT_EQ(SHEKYL_POW_RANDOMX_V2_OK,
+            shekyl_pow_randomx_v2_hash(
+              reinterpret_cast<const uint8_t (*)[32]>(seed.data),
+              blob.data(),
+              blob.size(),
+              reinterpret_cast<uint8_t (*)[32]>(via_ffi.data)));
+  ASSERT_EQ(via_ffi, via_schema);
 }
 
 } // anonymous namespace

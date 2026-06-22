@@ -70,7 +70,6 @@ endif()
 set(crypto_cpp_sources
   crypto.cpp
   generators.cpp
-  pow_cryptonight.cpp
   pow_randomx.cpp
   pow_registry.cpp)
 
