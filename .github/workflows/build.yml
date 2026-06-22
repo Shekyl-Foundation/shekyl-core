@@ -69,14 +69,18 @@ jobs:
           # otherwise be scanned as production. The `#[cfg(test)] mod tests;`
           # declaration is the out-of-file equivalent of the in-file
           # `#[cfg(test)]` gate the scan already honors; both mean "test code,
-          # debug macros allowed".
+          # debug macros allowed". The scan keys on BOTH the outer `#[cfg(test)]`
+          # (gating a lower test module/fn) and the module-level inner
+          # `#![cfg(test)]` (whole-file test modules, e.g. the engine's
+          # `regtest_e2e.rs` harness) — so such files self-declare as test code and
+          # need no per-name exclusion here.
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
                      ! -path '*/src/bin/*' \
                      ! -name 'tests.rs' ! -path '*/tests/*' \
                      ! -path '*/shekyl-cli/*'); do
-            TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
+            TEST_LINE=$(grep -n '#!\?\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
               HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
                      | sed 's|//.*||' \
