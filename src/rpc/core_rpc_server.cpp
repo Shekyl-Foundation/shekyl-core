@@ -1962,12 +1962,9 @@ namespace cryptonote
     crypto::hash seed_hash, next_seed_hash;
     if (!get_block_template(info.address, req.prev_block.empty() ? NULL : &prev_block, blob_reserve, reserved_offset, wdiff, res.height, res.expected_reward, b, res.seed_height, seed_hash, next_seed_hash, error_resp))
       return false;
-    if (b.major_version >= RX_BLOCK_VERSION)
-    {
-      res.seed_hash = string_tools::pod_to_hex(seed_hash);
-      if (seed_hash != next_seed_hash)
-        res.next_seed_hash = string_tools::pod_to_hex(next_seed_hash);
-    }
+    res.seed_hash = string_tools::pod_to_hex(seed_hash);
+    if (seed_hash != next_seed_hash)
+      res.next_seed_hash = string_tools::pod_to_hex(next_seed_hash);
 
     res.reserved_offset = reserved_offset;
     store_difficulty(wdiff, res.difficulty, res.wide_difficulty, res.difficulty_top64);
@@ -2028,20 +2025,7 @@ namespace cryptonote
       error_resp.message = "Wrong block blob";
       return false;
     }
-    if (req.major_version == HF_VERSION_CRYPTONIGHT_VARIANT_1 && req.major_version < RX_BLOCK_VERSION)
-    {
-      try
-      {
-        crypto::cn_variant1_check(blockblob.size(), /*variant=*/1);
-      }
-      catch(const std::exception& e)
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE;
-        error_resp.message = "Block blob size is too small for CryptoNight v1, rejecting block";
-        return false;
-      }
-    }
-    
+
     if(!m_core.check_incoming_block_size(blockblob))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE;
@@ -2306,7 +2290,7 @@ namespace cryptonote
       }
       b.nonce = req.starting_nonce;
       crypto::hash seed_hash = crypto::null_hash;
-      if (b.major_version >= RX_BLOCK_VERSION && !epee::string_tools::hex_to_pod(template_res.seed_hash, seed_hash))
+      if (!epee::string_tools::hex_to_pod(template_res.seed_hash, seed_hash))
       {
         error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
         error_resp.message = "Error converting seed hash";
@@ -3531,12 +3515,9 @@ namespace cryptonote
     }
     res.hashing_blob = epee::string_tools::buff_to_hex_nodelimer(hashing_blob);
     res.top_hash = epee::string_tools::pod_to_hex(top_hash);
-    if (hashing_blob[0] >= RX_BLOCK_VERSION)
-    {
-      res.seed_hash = string_tools::pod_to_hex(seed_hash);
-      if (seed_hash != next_seed_hash)
-        res.next_seed_hash = string_tools::pod_to_hex(next_seed_hash);
-    }
+    res.seed_hash = string_tools::pod_to_hex(seed_hash);
+    if (seed_hash != next_seed_hash)
+      res.next_seed_hash = string_tools::pod_to_hex(next_seed_hash);
 
     res.status = CORE_RPC_STATUS_OK;
     return true;

@@ -875,29 +875,20 @@ namespace cryptonote
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
   {
-    if (pbc != NULL && major_version >= RX_BLOCK_VERSION)
-    {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-      return true;
-    }
     const IPowSchema& pow_schema = get_pow_for_height(height, major_version);
     const crypto::hash* resolved_seed_hash = seed_hash;
     crypto::hash resolved_seed = crypto::null_hash;
 
-    if (major_version >= RX_BLOCK_VERSION)
+    if (pbc != NULL)
     {
-      if (pbc != NULL)
-      {
-        const uint64_t seed_height = rx_seedheight(height);
-        resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-        resolved_seed_hash = &resolved_seed;
-      }
-      else
-      {
-        memset(&resolved_seed, 0, sizeof(resolved_seed));
-        resolved_seed_hash = &resolved_seed;
-      }
+      const uint64_t seed_height = rx_seedheight(height);
+      resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
+      resolved_seed_hash = &resolved_seed;
+    }
+    else
+    {
+      memset(&resolved_seed, 0, sizeof(resolved_seed));
+      resolved_seed_hash = &resolved_seed;
     }
 
     return pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res);

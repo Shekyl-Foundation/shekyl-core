@@ -1473,33 +1473,16 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   crypto::hash get_block_longhash(const blobdata_ref block_hashing_blob,
-    const uint64_t height,
-    const uint8_t major_version,
+    const uint64_t /*height*/,
+    const uint8_t /*major_version*/,
     const crypto::hash &seed_hash)
   {
     crypto::hash res;
-
-    if (height == 202612) // block 202612 bug workaround
-    {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-    }
-    else if (major_version >= RX_BLOCK_VERSION) // RandomX
-    {
-      shekyl_pow_randomx_v2_hash(
-        reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
-        reinterpret_cast<const uint8_t*>(block_hashing_blob.data()),
-        block_hashing_blob.size(),
-        reinterpret_cast<uint8_t (*)[32]>(res.data));
-    }
-    else // CryptoNight
-    {
-      static_assert(HF_VERSION_CRYPTONIGHT_VARIANT_1 >= 1);
-      const int pow_variant = major_version >= HF_VERSION_CRYPTONIGHT_VARIANT_1
-        ? major_version - (HF_VERSION_CRYPTONIGHT_VARIANT_1 - 1) : 0;
-      crypto::cn_slow_hash(block_hashing_blob.data(), block_hashing_blob.size(), res, pow_variant, height);
-    }
-
+    shekyl_pow_randomx_v2_hash(
+      reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+      reinterpret_cast<const uint8_t*>(block_hashing_blob.data()),
+      block_hashing_blob.size(),
+      reinterpret_cast<uint8_t (*)[32]>(res.data));
     return res;
   }
   //---------------------------------------------------------------
