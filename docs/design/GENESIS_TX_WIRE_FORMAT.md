@@ -173,7 +173,11 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
 
 **Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
 - **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
-  `feat/shekyl-wire-spend-kat`. Spends are synthetic-validated until it lands.
+  `feat/shekyl-wire-spend-kat`. Spends are synthetic-validated until it lands. The
+  C++↔shekyl-wire spend serialization + PQC signing-preimage layout (and the four
+  ways the current shekyl-oxide-based tx-builder encoder diverges from the daemon) is
+  pinned in [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md); the
+  live oracle here is its end-to-end residual.
 - **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
   (drop `key_offsets`); decompose removal / single-output coinbase.
 - **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx.
