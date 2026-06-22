@@ -21,17 +21,15 @@ namespace cryptonote
   public:
     bootstrap_daemon(
       std::function<std::map<std::string, bool>()> get_public_nodes,
-      bool rpc_payment_enabled,
       const std::string &proxy);
     bootstrap_daemon(
       const std::string &address,
       std::optional<epee::net_utils::http::login> credentials,
-      bool rpc_payment_enabled,
       const std::string &proxy);
 
     std::string address() const noexcept;
     std::optional<std::pair<uint64_t, uint64_t>> get_height();
-    bool handle_result(bool success, const std::string &status);
+    bool handle_result(bool success);
 
     template <class t_request, class t_response>
     bool invoke_http_json(const boost::string_ref uri, const t_request &out_struct, t_response &result_struct)
@@ -42,7 +40,7 @@ namespace cryptonote
       }
 
       const bool result = epee::net_utils::invoke_http_json(uri, out_struct, result_struct, m_http_client);
-      return handle_result(result, result_struct.status);
+      return handle_result(result);
     }
 
     template <class t_request, class t_response>
@@ -54,7 +52,7 @@ namespace cryptonote
       }
 
       const bool result = epee::net_utils::invoke_http_bin(uri, out_struct, result_struct, m_http_client);
-      return handle_result(result, result_struct.status);
+      return handle_result(result);
     }
 
     template <class t_request, class t_response>
@@ -71,7 +69,7 @@ namespace cryptonote
         out_struct,
         result_struct,
         m_http_client);
-      return handle_result(result, result_struct.status);
+      return handle_result(result);
     }
 
     void set_proxy(const std::string &address);
@@ -82,7 +80,6 @@ namespace cryptonote
 
   private:
     net::http::client m_http_client;
-    const bool m_rpc_payment_enabled;
     const std::unique_ptr<bootstrap_node::selector> m_selector;
     boost::mutex m_selector_mutex;
   };

@@ -409,12 +409,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
         DJRPC_WE("get_staking_info",       on_get_staking_info,           COMMAND_RPC_GET_STAKING_INFO),
         DJRPC_WE("estimate_claim_reward",  on_estimate_claim_reward,      COMMAND_RPC_ESTIMATE_CLAIM_REWARD),
-        DJRPC_WE("rpc_access_info",        on_rpc_access_info,            COMMAND_RPC_ACCESS_INFO),
-        DJRPC_WE("rpc_access_submit_nonce", on_rpc_access_submit_nonce,   COMMAND_RPC_ACCESS_SUBMIT_NONCE),
-        DJRPC_WE("rpc_access_pay",         on_rpc_access_pay,             COMMAND_RPC_ACCESS_PAY),
-        DJRPC_WE("rpc_access_tracking",    on_rpc_access_tracking,        COMMAND_RPC_ACCESS_TRACKING),
-        DJRPC_WE("rpc_access_data",        on_rpc_access_data,            COMMAND_RPC_ACCESS_DATA),
-        DJRPC_WE("rpc_access_account",     on_rpc_access_account,         COMMAND_RPC_ACCESS_ACCOUNT),
     };
     return t;
 }
