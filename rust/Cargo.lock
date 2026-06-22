@@ -4141,7 +4141,6 @@ dependencies = [
  "hex-literal",
  "serde",
  "serde_json",
- "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
@@ -4359,6 +4358,14 @@ dependencies = [
  "serde",
  "serde_json",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-wire"
+version = "3.1.0"
+dependencies = [
+ "serde_json",
+ "shekyl-crypto-hash",
 ]
 
 [[package]]

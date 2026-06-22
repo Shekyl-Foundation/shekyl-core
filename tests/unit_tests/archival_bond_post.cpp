@@ -60,7 +60,7 @@ txin_archival_bond_post make_join_market_vin()
 
 } // namespace
 
-TEST(archival_bond_post, vin_deserializes_with_tag_0x05)
+TEST(archival_bond_post, vin_deserializes_with_tag_0x03)
 {
   txin_v vin = make_join_market_vin();
 
@@ -69,7 +69,7 @@ TEST(archival_bond_post, vin_deserializes_with_tag_0x05)
   ASSERT_TRUE(::do_serialize(oar, vin));
   const std::string wire = oss.str();
   ASSERT_FALSE(wire.empty());
-  EXPECT_EQ(static_cast<uint8_t>(wire[0]), 0x05u);
+  EXPECT_EQ(static_cast<uint8_t>(wire[0]), 0x03u);
 
   txin_v decoded;
   binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});

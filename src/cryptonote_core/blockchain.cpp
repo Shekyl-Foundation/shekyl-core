@@ -4820,7 +4820,9 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
   const std::string wire = oss.str();
-  if (wire.empty() || wire[0] != 0x04)
+  // Must match VARIANT_TAG(binary_archive, txin_archival_serve_credit_response) — the
+  // dense genesis scheme is 0x02 (§2.0; renumbered from the legacy 0x04 in PR #168).
+  if (wire.empty() || static_cast<uint8_t>(wire[0]) != 0x02)
   {
     MERROR_VER("Archival serve-credit: unexpected vin wire tag");
     return false;

@@ -27,7 +27,6 @@ shekyl-generators = { path = "generators", version = "0.4", default-features = f
 shekyl-primitives = { path = "primitives", version = "0.1", default-features = false }
 shekyl-bulletproofs = { path = "fcmp/bulletproofs", version = "0.1", default-features = false }
 shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
-shekyl-archival-retention = { path = "../../shekyl-archival-retention", default-features = false }
 
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 

@@ -163,9 +163,10 @@ namespace rct {
     // RCT type tags:
     //  RCTTypeNull = coinbase (no confidential data)
     //  RCTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
+    // Genesis dense ct type scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
     enum {
       RCTTypeNull = 0,
-      RCTTypeFcmpPlusPlusPqc = 7,
+      RCTTypeFcmpPlusPlusPqc = 1,
     };
     struct rctSigBase {
         uint8_t type;

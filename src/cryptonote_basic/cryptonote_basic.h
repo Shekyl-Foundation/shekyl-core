@@ -260,7 +260,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // Gate-4 §3.4.1 — archival bond-post vin (tag 0x05).
+  // Gate-4 §3.4.1 — archival bond-post vin (dense tag 0x03; see VARIANT_TAG below).
   struct txin_archival_bond_post
   {
     std::vector<uint8_t> hybrid_public_key;
@@ -286,7 +286,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // Gate-2 §5.1 — archival serve-credit response vin (tag 0x04).
+  // Gate-2 §5.1 — archival serve-credit response vin (dense tag 0x02; see VARIANT_TAG below).
   struct txin_archival_serve_credit_response
   {
     crypto::hash p_canonical_id;
@@ -847,18 +847,24 @@ BLOB_SERIALIZER(cryptonote::txout_to_key);
 BLOB_SERIALIZER(cryptonote::txout_to_scripthash);
 BLOB_SERIALIZER(cryptonote::archival_leaf_bytes);
 
-VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0xff);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0x0);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0x1);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x2);
-VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0x3);
-VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x4);
-VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x5);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0x0);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0x1);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0x2);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x3);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_staked_key, 0x4);
+// Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
+// Surviving genesis arms are numbered dense from 0x00; the shed CryptoNote/legacy
+// arms (no genesis producer) are parked at 0xf0+ so they never collide with the
+// active low tag space. Full type-removal of the parked arms is §5 item 1 — its
+// own rule-60 cut (heavy consensus refactor; the dead types stay compile-present
+// but off-wire until then).
+VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0x00);
+VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0xf0);          // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0xf1);      // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x01);             // fcmp spend
+VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0xf2);        // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x02);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x03);
+VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0xf0);         // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0xf1);     // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0xf2);            // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x00);     // sole genesis output
+VARIANT_TAG(binary_archive, cryptonote::txout_to_staked_key, 0xf3);     // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::transaction, 0xcc);
 VARIANT_TAG(binary_archive, cryptonote::block, 0xbb);
 
