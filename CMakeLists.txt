@@ -558,6 +558,28 @@ if(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS AND NOT BUILD_RANDOMX_V2_MINER_LIB)
     FORCE)
 endif()
 
+# Phase 3a consensus PoW-verification cutover flag.
+# ON (default): the three consensus rx_slow_hash sites and the four
+# rx_set_main_seedhash sites route through the Rust RandomX v2
+# light-cache verifier (shekyl_pow_randomx_v2_hash /
+# shekyl_pow_randomx_v2_set_canonical via shekyl-ffi) instead of the
+# inherited C RandomX v1 path. The >= RX_BLOCK_VERSION guards stay
+# intact in 3a, so this is consensus-neutral implementation-swap-only
+# (no live chain to diverge, pre-genesis); 3b drops the guards to make
+# the cutover consensus-live and deletes this flag.
+# OFF: retains the v1 legacy calls (#else branches) so the daemon is
+# buildable both ways for the 3a review window.
+#
+# The definition is applied target-scoped (PRIVATE) on exactly the
+# three libraries whose .cpp files carry the swapped sites
+# (obj_cncrypto_cpp, cryptonote_basic, cryptonote_core) rather than
+# globally via add_definitions, so flipping the flag during the review
+# window does not invalidate the entire src/ compile graph.
+# See docs/design/RANDOMX_V2_PHASE3_PLAN.md §6.1.
+option(SHEKYL_RANDOMX_V2_VERIFY
+  "Route consensus PoW verification through the Rust RandomX v2 light-cache verifier (Phase 3a). Default ON."
+  ON)
+
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(DEFAULT_BUILD_DEBUG_UTILITIES ON)
 else()

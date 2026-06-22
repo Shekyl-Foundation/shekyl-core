@@ -866,7 +866,15 @@ namespace cryptonote
   void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
+#ifdef SHEKYL_RANDOMX_V2_VERIFY
+    shekyl_pow_randomx_v2_hash(
+      reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+      reinterpret_cast<const uint8_t*>(bd.data()),
+      bd.size(),
+      reinterpret_cast<uint8_t (*)[32]>(res.data));
+#else
     rx_slow_hash(seed_hash.data, bd.data(), bd.size(), res.data);
+#endif
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)

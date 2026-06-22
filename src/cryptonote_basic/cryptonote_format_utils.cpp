@@ -38,6 +38,7 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
+#include "shekyl/shekyl_ffi.h"
 #include "fcmp/rctSigs.h"
 
 using namespace epee;
@@ -1485,7 +1486,15 @@ namespace cryptonote
     }
     else if (major_version >= RX_BLOCK_VERSION) // RandomX
     {
+#ifdef SHEKYL_RANDOMX_V2_VERIFY
+      shekyl_pow_randomx_v2_hash(
+        reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+        reinterpret_cast<const uint8_t*>(block_hashing_blob.data()),
+        block_hashing_blob.size(),
+        reinterpret_cast<uint8_t (*)[32]>(res.data));
+#else
       crypto::rx_slow_hash(seed_hash.data, block_hashing_blob.data(), block_hashing_blob.size(), res.data);
+#endif
     }
     else // CryptoNight
     {
