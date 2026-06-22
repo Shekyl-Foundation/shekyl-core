@@ -707,7 +707,12 @@ void Blockchain::pop_blocks(uint64_t nblocks)
 
   {
     const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
-    shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
+    // Mirror the init() guard: get_block_id_by_height() returns null_hash for a
+    // nonexistent height, and an unwound/degraded chain can hit that here.
+    // Pinning the all-zero seedhash would derive and stick a 256 MiB canonical
+    // cache for a garbage epoch. Skip set_canonical on a null seedhash.
+    if (seedhash != crypto::null_hash)
+      shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
   }
 }
 //------------------------------------------------------------------
