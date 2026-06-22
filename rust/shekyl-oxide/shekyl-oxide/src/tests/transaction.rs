@@ -93,6 +93,6 @@ fn real_mainnet_genesis_tx_parses_as_v3() {
     );
     assert!(
         prefix.outputs[0].view_tag.is_some(),
-        "genesis output is a txout_to_tagged_key (tag 3)",
+        "genesis output is a txout_to_tagged_key (dense tag 0x00)",
     );
 }

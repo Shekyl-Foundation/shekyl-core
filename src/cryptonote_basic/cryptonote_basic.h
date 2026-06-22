@@ -260,7 +260,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // Gate-4 §3.4.1 — archival bond-post vin (tag 0x05).
+  // Gate-4 §3.4.1 — archival bond-post vin (dense tag 0x03; see VARIANT_TAG below).
   struct txin_archival_bond_post
   {
     std::vector<uint8_t> hybrid_public_key;
@@ -286,7 +286,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // Gate-2 §5.1 — archival serve-credit response vin (tag 0x04).
+  // Gate-2 §5.1 — archival serve-credit response vin (dense tag 0x02; see VARIANT_TAG below).
   struct txin_archival_serve_credit_response
   {
     crypto::hash p_canonical_id;

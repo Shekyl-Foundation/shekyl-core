@@ -30,7 +30,7 @@ SHEKYLD_BIN=... WALLET_RPC_BIN=... python3 capture_spend.py
 
 Blobs carry per-block randomness, so a regenerated blob differs byte-for-byte from
 the committed one — the round-trip invariant holds for any valid blob, and
-`capture_coinbase.py` rewrites the blobs and their hashes together (so update the
-hex in `coinbase_hash.rs` if you re-run it). The committed blobs are pinned so the
-KATs are deterministic without a daemon. See
-`docs/design/GENESIS_TX_WIRE_FORMAT.md`.
+`capture_coinbase.py` rewrites the `*.block` blobs and `regtest_coinbase_hashes.json`
+together. `coinbase_hash.rs` loads the expected hashes from that JSON at test time, so
+re-running the script needs no hand-edits. The committed blobs are pinned so the KATs
+are deterministic without a daemon. See `docs/design/GENESIS_TX_WIRE_FORMAT.md`.
