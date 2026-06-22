@@ -324,6 +324,53 @@
   helpers (which had compensated for the old encoding by multiplying by
   `8⁻¹`) were reconciled to feed the real `C` directly.
 
+### Removed
+
+- **rpc: delete the RPC-payment subsystem in its entirety (legacy-PoW cleanup,
+  2026-06, `chore/rpc-payment-deletion`).** The Monero-inherited *pay-for-RPC*
+  subsystem — clients hash RandomX/CryptoNight to earn "credits" they spend on
+  daemon RPC calls — is removed across the daemon, the legacy wallet, the
+  daemon↔wallet wire contract, and the Rust wallet's persisted prefs. It was
+  orphaned dead code (the Phase-0 "delete in its entirety" decision,
+  [`RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §15) and the named blocker
+  for the deferred Phase 3c/4 PoW C-core cleanup
+  ([`FOLLOWUPS.md`](FOLLOWUPS.md)); this PR unblocks that cluster. Plan:
+  [`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](design/LEGACY_POW_CLEANUP_PLAN.md).
+  Net ≈1000–1500 lines across ~20 files; **consensus-inert** (RPC access
+  control, not block validation — the parity/mining gates are untouched).
+  - **Wholesale-deleted files:** `src/rpc/rpc_payment.{cpp,h}`,
+    `src/rpc/rpc_payment_costs.h`, `src/rpc/rpc_payment_signature.{cpp,h}`,
+    `src/wallet/wallet_rpc_payments.cpp`, `src/wallet/wallet_rpc_helpers.h`.
+  - **Daemon:** removed `core_rpc_server::check_payment()`, the `CHECK_PAYMENT*`
+    macros and all per-handler pay-gates, the `m_rpc_payment` /
+    `m_rpc_payment_allow_free_loopback` members + `init()` plumbing, the
+    `COMMAND_RPC_ACCESS_{INFO,SUBMIT_NONCE,PAY,TRACKING,DATA,ACCOUNT}` endpoints
+    (structs + handlers + `core_rpc_ffi.cpp` dispatch), the `rpc_payments` CLI
+    command (`command_server`/`command_parser_executor`/`rpc_command_executor`),
+    and the payment parameters from `bootstrap_daemon`. `RPC_TRACKER` is kept as
+    pure perf timing (its `RPCTracker` payment-tracking class is gone).
+  - **Wire contract:** `rpc_access_request_base` / `rpc_access_response_base`
+    (the `client` / `credits` / `top_hash` fields) collapse into the plain
+    `rpc_request_base` / `rpc_response_base`; `CORE_RPC_VERSION_MINOR` `15 → 16`
+    (backward-incompatible, but in-tree clients only, pre-genesis —
+    `60-no-monero-legacy.mdc` / `15-deletion-and-debt.mdc`).
+  - **Legacy wallet:** removed the pay-for-RPC client wiring from
+    `wallet2.{cpp,h}`, `node_rpc_proxy.{cpp,h}`, `wallet_args.{h,cpp}`,
+    `wallet_rpc_server.cpp`, and the `payment_required` error (`wallet_errors.h`).
+  - **Rust wallet:** removed the orphaned `RpcPrefs` persisted-prefs bucket
+    (`persistent_rpc_client_id`, `auto_mine_for_rpc_payment_threshold`,
+    `credits_target`) from `shekyl-engine-prefs` — it had no reader or writer;
+    `PREFS_SCHEMA_VERSION` `2 → 3` (pre-genesis: `rm -rf ~/.shekyl`, no migration
+    owed). `shekyl-daemon-rpc` drops the three `rpc_access_*` restricted-method
+    names; the Python RPC test framework drops its six `rpc_access_*` wrappers.
+  - **Out of scope (still deferred, tracked in `FOLLOWUPS.md`):** RandomX **v1**
+    (`rx-slow-hash.c`) is retained as the consensus rollback hatch; CryptoNight
+    `slow-hash.c` stays (live legacy C++ KDF callers — `chacha.h`,
+    `cryptonote_format_utils.cpp` — migrate to argon2id first); the
+    `RX_BLOCK_VERSION` `#define` stays (still referenced by `mining_parity.cpp` /
+    `chaingen.cpp` on the PoW-dispatch surface); the `IPowSchema` / `pow_registry`
+    / `shekyl-consensus` abstraction layer stays.
+
 ### Changed
 
 - **consensus: collapse the Proof-of-Work path to RandomX v2; remove

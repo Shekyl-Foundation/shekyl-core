@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | ACCEPTED — **Plan A** (RPC-payment-only this PR); execution in progress. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-19-cleanest cut (Plan A) is taken. |
+| **Status** | EXECUTED — **Plan A** (RPC-payment-only this PR), on `chore/rpc-payment-deletion`. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-19-cleanest cut (Plan A) was taken. During execution an orphaned Rust `RpcPrefs` persisted-prefs bucket surfaced; per the "delete in its entirety" mandate the maintainer approved folding it in as a self-contained Commit 4 (distinct persisted-schema validation surface, `19-validation-surface-discipline.mdc`). See §6 for the as-built commit list. |
 | **Author** | (maintainer-reviewed) |
 | **Date** | 2026-06-22 |
 | **Parent** | [`RANDOMX_V2_PHASE3_PLAN.md`](./RANDOMX_V2_PHASE3_PLAN.md) (Phase 3 consensus cutover, landed PR #171 `6c3b86484`) |
@@ -264,6 +264,33 @@ daemon-built unaffected), **then daemon-side** (removes the daemon's references
 > still one logical unit (one subsystem), per `90-commits.mdc` scope rule.
 
 Plan A adds **no** `RX_BLOCK_VERSION` commit (deferred to D2).
+
+### 6.1 As-built commit list (`chore/rpc-payment-deletion`)
+
+The build-green seam split the daemon-side work into a wiring commit and a
+wire-contract commit (collapsing `rpc_access_*_base` + deleting
+`rpc_payment_signature.{cpp,h}` / `rpc_payment_costs.h` is a distinct logical
+unit from removing the daemon handler wiring), and the orphaned Rust prefs
+bucket became its own commit (separate persisted-schema validation surface):
+
+0. `docs: add legacy-PoW cleanup plan (RPC-payment deletion)` + `docs: record
+   verified RPC-payment audit in cleanup plan` — this plan doc.
+1. `wallet: remove RPC-payment client subsystem` — wallet-side client wiring +
+   `wallet_rpc_payments.cpp` / `wallet_rpc_helpers.h` deletion. Build-green.
+2. `rpc: remove daemon-side RPC-payment subsystem` — daemon handler wiring,
+   `check_payment`/`CHECK_PAYMENT*`, `COMMAND_RPC_ACCESS_*` handlers + FFI
+   dispatch, CLI command, `bootstrap_daemon` params, `rpc_payment.{cpp,h}`
+   deletion; plus the Rust `shekyl-daemon-rpc` restricted-method names and the
+   Python framework wrappers. Build-green.
+3. `rpc: collapse RPC-payment wire contract` — `rpc_access_*_base` →
+   `rpc_request_base`/`rpc_response_base`, delete the `COMMAND_RPC_ACCESS_*`
+   structs, delete `rpc_payment_signature.{cpp,h}` + `rpc_payment_costs.h`,
+   `CORE_RPC_VERSION_MINOR` 15→16, update `src/rpc/CMakeLists.txt`. Build-green.
+4. `wallet-prefs: remove orphaned RPC-payment prefs bucket` — delete `RpcPrefs`
+   from `shekyl-engine-prefs`, `PREFS_SCHEMA_VERSION` 2→3, update
+   `docs/WALLET_PREFS.md`. (Maintainer-approved scope addition; see Status.)
+5. `docs: …` (this commit) — CHANGELOG `### Removed` entry, FOLLOWUPS cluster
+   re-split (v1 reversion clause), and this plan's as-built update.
 
 ---
 

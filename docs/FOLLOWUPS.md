@@ -3602,44 +3602,71 @@ sustainability is unaffected by the recalibration.
   RandomX-only; CryptoNight, `RX_BLOCK_VERSION` guards, and the longhash
   `202612` fossils removed; `pow_cryptonight.cpp` + `get_cryptonight_*`
   deleted) but left the *implementation* C and the now-unused abstraction
-  layer in place, because deleting them is tangled with the RPC-payment
+  layer in place, because deleting them was tangled with the RPC-payment
   subsystem and the `wallet2.cpp` PoW touchpoints
   ([`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15;
   [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
-  §13). One tangled deletion cluster, dependency-ordered:
+  §13).
 
-  1. **Delete the RPC-payment subsystem** (`src/wallet/wallet_rpc_payments.cpp`,
-     `src/rpc/rpc_payment.*` and the daemon/wallet wiring) — the Phase 0
-     "delete in its entirety" decision (`RANDOMX_V2_RUST.md` §15). It is
-     the sole wallet-tree PoW touchpoint; removing it unblocks (2)–(3).
-     **Target V3.0** (pre-genesis; no users to migrate).
-  2. **Delete `src/crypto/rx-slow-hash.c` + `src/crypto/slow-hash.c`**
-     (the RandomX v1 stateful core + the CryptoNight slow-hash) and drop
-     the `cncrypto` RandomX C linkage. Blocked by (1): the C files have
-     live callers in `wallet2.cpp` / `wallet_rpc_payments.cpp` until the
-     RPC-payment subsystem is gone. **Target V3.0 / Phase 3c.**
-  3. **Export `shekyl_pow_randomx_v2_seedheight` + add the
-     `shekyl-pow-randomx::consensus` module** (`SEEDHASH_EPOCH_BLOCKS =
-     2048`, `SEEDHASH_EPOCH_LAG = 64`, power-of-2 `const _` assertion,
-     spec §16) with the epoch-boundary spec-vector test. Deferred because
-     the C `rx_seedheight` cleanly serves every caller until
-     `rx-slow-hash.c` is deleted (`RANDOMX_V2_PHASE3_PLAN.md` §5 reopen
-     criterion). **Target V3.0 / Phase 3c** (lands with (2)).
-  4. **Delete the `RX_BLOCK_VERSION` `#define`** (`src/crypto/hash-ops.h`).
-     The consensus *guards* are gone (3b); the bare `#define 12` is dead,
-     with residual references only in the RPC-payment files, so it bundles
-     with (1). **Target V3.0 / Phase 4.**
-  5. **Delete the PoW abstraction layer** — `pow_schema.h` (`IPowSchema`),
-     `pow_registry.{h,cpp}`, and the `rust/shekyl-consensus` crate
-     (`70-modular-consensus.mdc`), folding the consensus types into
-     `shekyl-pow-randomx`. No implementation files remain to delete (3b
-     handled those); pure abstraction cleanup. **Target V3.0 / Phase 4.**
+  **Status (2026-06-22): partially resolved + re-split.** Sub-item (1) (the
+  RPC-payment subsystem) **landed** on `chore/rpc-payment-deletion`, removing
+  the wallet-tree PoW touchpoints and unblocking the rest. The cluster is
+  re-split per
+  [`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](./design/LEGACY_POW_CLEANUP_PLAN.md)
+  to **separate RandomX v1 (retained — rollback hatch) from CryptoNight
+  (deletable)** — the prior item (2) wrongly bundled them — and to re-home the
+  `RX_BLOCK_VERSION` `#define` onto the PoW-dispatch surface where its surviving
+  references actually live. Remaining work, dependency-ordered:
+
+  1. ~~**Delete the RPC-payment subsystem**~~ **DONE (V3.0,
+     `chore/rpc-payment-deletion`).** Wholesale-deleted `rpc_payment.{cpp,h}`,
+     `rpc_payment_costs.h`, `rpc_payment_signature.{cpp,h}`,
+     `wallet_rpc_payments.cpp`, `wallet_rpc_helpers.h` + all daemon/wallet
+     wiring; collapsed the `rpc_access_*_base` wire contract
+     (`CORE_RPC_VERSION_MINOR` 15→16); removed the orphaned Rust `RpcPrefs`
+     bucket (`PREFS_SCHEMA_VERSION` 2→3). This removed the two surviving
+     RPC-payment `RX_BLOCK_VERSION` guards and their
+     `cn_slow_hash`/`rx_slow_hash` calls. See the `[Unreleased]` `### Removed`
+     changelog entry.
+  2. **Wallet KDF → Rust (argon2id) migration, then delete CryptoNight
+     `src/crypto/slow-hash.c`** + the `cn_slow_hash` / `cn_slow_hash_prehashed`
+     / `cn_variant1_check` decls (`hash.h`, `hash-ops.h`) + the CryptoNight
+     tests. Blocked by **live, non-PoW C++ KDF callers** that survive (1):
+     `src/crypto/chacha.h` (`generate_chacha_key`) and
+     `src/cryptonote_basic/cryptonote_format_utils.cpp:1452,1460` (passphrase
+     `encrypt_key`/`decrypt_key`). Replacing the `cn_slow_hash`-KDF with
+     argon2id is a crypto-contract change touching secrets → Rust, own design
+     doc + review (`20-rust-vs-cpp-policy.mdc`; `36-secret-locality.mdc`).
+     **Target V3.0.**
+  3. **PoW-abstraction collapse** — delete `pow_schema.h` (`IPowSchema`),
+     `pow_registry.{h,cpp}`, the `rust/shekyl-consensus` crate
+     (`70-modular-consensus.mdc`), and the dead `shekyl_rust_init` /
+     `shekyl_active_consensus_module` FFI exports, inlining RandomX into the
+     **live** dispatch sites (`miner.cpp:582`, `cryptonote_tx_utils.cpp:886`).
+     **Includes deleting the `RX_BLOCK_VERSION` `#define`** (`hash-ops.h:95`):
+     after (1), its only surviving references are
+     `tests/unit_tests/mining_parity.cpp:104,137` and
+     `tests/core_tests/chaingen.cpp:465` — the PoW-dispatch/test surface, *not*
+     the RPC-payment files the prior cluster assumed, so it is removed here
+     (one touch of those test files) rather than with (1). **Target V3.0.**
+  4. **RandomX v1 retention (reversion clause,
+     `21-reversion-clause-discipline.mdc`).** `src/crypto/rx-slow-hash.c`, the
+     `rx_slow_hash` / `rx_seedheight` / `rx_seedheights` /
+     `rx_slow_hash_allocate_state` / `rx_set_main_seedhash` C surface
+     (`hash-ops.h`), the `cncrypto` RandomX linkage, **and** the deferred
+     `shekyl_pow_randomx_v2_seedheight` export + `shekyl-pow-randomx::consensus`
+     module are **kept** — v1 is the consensus rollback escape hatch, and the C
+     `rx_seedheight` cleanly serves every caller while v1 stays. **Reopen
+     deletion only when the v2 rollback window formally closes** — concretely,
+     after **N consecutive stable releases on RandomX v2 with no rollback
+     invocation** (N to be ratified; suggest 2–3 tagged stable releases) — at
+     which point the `rx_*` core, the cncrypto linkage, and the `seedheight`
+     export land together. This is a **retention** entry, not deletion debt; it
+     carries no deletion target version.
 
   The `aes`-crate symbol-surface check and the verifier-linked `shekyld`
   `nm` symbol-isolation invariant are tracked as the separate Phase 3c
-  item above. **Why grouped:** splitting (1)–(5) into independent
-  FOLLOWUPS items would hide the deletion ordering that makes them
-  tractable.
+  item above.
 
   **Cross-references.**
   [`docs/design/RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
