@@ -78,7 +78,6 @@ namespace cryptonote
 #define CORE_RPC_STATUS_OK   "OK"
 #define CORE_RPC_STATUS_BUSY   "BUSY"
 #define CORE_RPC_STATUS_NOT_MINING "NOT MINING"
-#define CORE_RPC_STATUS_PAYMENT_REQUIRED "PAYMENT REQUIRED"
 
 // When making *any* change here, bump minor
 // If the change is incompatible, then bump major and set minor to 0
