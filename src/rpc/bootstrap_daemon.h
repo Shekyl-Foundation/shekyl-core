@@ -29,7 +29,12 @@ namespace cryptonote
 
     std::string address() const noexcept;
     std::optional<std::pair<uint64_t, uint64_t>> get_height();
+    // Record an RPC outcome and rotate away from the current peer on failure.
+    // The status-aware overload treats a non-OK RPC-layer status as a failure
+    // too, so every invoke_http_* path rotates unusable peers without each call
+    // site repeating the check; the bool-only overload forces a failure result.
     bool handle_result(bool success);
+    bool handle_result(bool success, const std::string &status);
 
     template <class t_request, class t_response>
     bool invoke_http_json(const boost::string_ref uri, const t_request &out_struct, t_response &result_struct)
@@ -40,7 +45,7 @@ namespace cryptonote
       }
 
       const bool result = epee::net_utils::invoke_http_json(uri, out_struct, result_struct, m_http_client);
-      return handle_result(result);
+      return handle_result(result, result_struct.status);
     }
 
     template <class t_request, class t_response>
@@ -52,7 +57,7 @@ namespace cryptonote
       }
 
       const bool result = epee::net_utils::invoke_http_bin(uri, out_struct, result_struct, m_http_client);
-      return handle_result(result);
+      return handle_result(result, result_struct.status);
     }
 
     template <class t_request, class t_response>
@@ -69,7 +74,7 @@ namespace cryptonote
         out_struct,
         result_struct,
         m_http_client);
-      return handle_result(result);
+      return handle_result(result, result_struct.status);
     }
 
     void set_proxy(const std::string &address);

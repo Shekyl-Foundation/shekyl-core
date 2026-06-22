@@ -58,11 +58,8 @@ namespace cryptonote
 
     if (res.status != CORE_RPC_STATUS_OK)
     {
-      // Peer is reachable but not serving a usable /getinfo. Transport-level
-      // failure is already penalized inside invoke_http_json; this branch
-      // catches the reachable-but-bad-status case, so rotate the peer here too
-      // and let the selector move on rather than re-pick an unusable node.
-      handle_result(false);
+      // Peer reachable but /getinfo unusable. invoke_http_json already rotated
+      // the peer via handle_result (non-OK status), so just report no height.
       return std::nullopt;
     }
 
@@ -71,7 +68,16 @@ namespace cryptonote
 
   bool bootstrap_daemon::handle_result(bool success)
   {
-    const bool failed = !success;
+    return handle_result(success, CORE_RPC_STATUS_OK);
+  }
+
+  bool bootstrap_daemon::handle_result(bool success, const std::string &status)
+  {
+    // A peer that is reachable but answers with a non-OK RPC status is unusable;
+    // treat it as a failure so the selector rotates away from it, not just on
+    // transport errors. Centralizing this here keeps every invoke_http_* path
+    // consistent without repeating the status check at each call site.
+    const bool failed = !success || status != CORE_RPC_STATUS_OK;
     if (failed && m_selector)
     {
       const std::string current_address = address();

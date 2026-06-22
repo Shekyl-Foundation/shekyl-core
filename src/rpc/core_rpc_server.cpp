@@ -2250,11 +2250,8 @@ namespace cryptonote
 
     if (r && res.status != CORE_RPC_STATUS_OK)
     {
+      // invoke_http_* already rotated the peer on the non-OK status; fail locally.
       MINFO("Failing RPC " << command_name << " due to peer return status " << res.status);
-      // Transport succeeded but the peer is unusable at the RPC layer. invoke_http_*
-      // only penalizes transport-level failures, so rotate the peer here too and let
-      // the selector move on rather than re-pick it.
-      m_bootstrap_daemon->handle_result(false);
       r = false;
     }
     res.untrusted = true;
