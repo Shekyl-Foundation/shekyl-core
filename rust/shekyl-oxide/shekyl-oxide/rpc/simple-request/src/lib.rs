@@ -151,7 +151,7 @@ impl SimpleRequestRpc {
         // requires a request Content-Type and rejects the request before any
         // handler runs without one. JSON-RPC and JSON routes are
         // `application/json`; the EPEE binary routes (`*.bin`, e.g.
-        // `get_o_indexes`, `get_blocks.bin`) are `application/octet-stream`.
+        // `get_o_indexes.bin`, `get_blocks.bin`) are `application/octet-stream`.
         let content_type = if route.ends_with(".bin") {
             "application/octet-stream"
         } else {

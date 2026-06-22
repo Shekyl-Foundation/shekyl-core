@@ -97,17 +97,13 @@ impl RegtestDaemon {
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     async fn start() -> RegtestDaemon {
-        // Serialize across the whole test binary: no two daemons race on a port,
-        // and the stale-daemon sweep below is safe (no concurrent test daemon).
+        // Serialize across this test binary so no two in-process daemons race on
+        // a port. Each instance uses a unique ephemeral port + temp datadir and
+        // kills its own child (+ removes its datadir) on Drop, so no global daemon
+        // sweep is needed. A `pkill -f shekyl-regtest-` would also kill a
+        // concurrent `cargo test` *process*'s daemon — the in-process lock can't
+        // serialize across processes — so it is deliberately not done here.
         let serial = serial_lock().lock_owned().await;
-
-        // Best-effort sweep of daemons leaked by a SIGKILL'd prior runner. Scoped
-        // to our temp-dir prefix so it never touches a real user daemon.
-        drop(
-            Command::new("pkill")
-                .args(["-f", "shekyl-regtest-"])
-                .status(),
-        );
 
         let bin = Self::binary();
         let rpc_port = Self::free_port();

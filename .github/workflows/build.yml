@@ -69,12 +69,15 @@ jobs:
           # otherwise be scanned as production. The `#[cfg(test)] mod tests;`
           # declaration is the out-of-file equivalent of the in-file
           # `#[cfg(test)]` gate the scan already honors; both mean "test code,
-          # debug macros allowed".
+          # debug macros allowed". `regtest_e2e.rs` (the engine's regtest/fakechain
+          # harness, gated at the parent via `#[cfg(test)] mod regtest_e2e;`) is the
+          # same case: a parent-gated test module with no in-file marker, whose
+          # `eprintln!` diagnostics are legitimate test output (`--nocapture`).
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
                      ! -path '*/src/bin/*' \
-                     ! -name 'tests.rs' ! -path '*/tests/*' \
+                     ! -name 'tests.rs' ! -name 'regtest_e2e.rs' ! -path '*/tests/*' \
                      ! -path '*/shekyl-cli/*'); do
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
