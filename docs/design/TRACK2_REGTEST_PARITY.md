@@ -175,7 +175,7 @@ vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
 
 Independent of this daemon-parity harness, `shekyl-wire/tests/fcmp_spend_e2e.rs`
 now builds a full FCMP++ spend from real crypto (depth-3 curve tree, FCMP++
-proof, RingCT balance, Bulletproof+ range proof, PQC auths) entirely in-process
+proof, CT balance, Bulletproof+ range proof, PQC auths) entirely in-process
 and asserts byte-identical `shekyl-wire` serialization round-trip. It replaced
 the unsound C++-oracle byte-identity KAT (which depended on a spend blob the
 non-functional C++ spend path could never emit). This validates the Rust

@@ -38,7 +38,7 @@
 //! # What the later stages cover
 //!
 //! Stage 2 extends the same spend to full consensus-valid amount checks:
-//! RingCT cleartext balance (`sum(pseudoOuts) == sum(outPk) + fee·H`, via
+//! CT cleartext balance (`sum(pseudoOuts) == sum(outPk) + fee·H`, via
 //! [`shekyl_rct_balance::verify_rct_balance`]) and the Bulletproof+ range proof
 //! (via [`Bulletproof::verify`]).
 //!
@@ -80,7 +80,8 @@ use shekyl_fcmp::PqcLeafScalar;
 use shekyl_io::CompressedPoint;
 use shekyl_rct_balance::verify_rct_balance;
 use shekyl_tx_builder::{
-    sign_pqc_auths, sign_transaction, LeafEntry, OutputInfo, SpendInput, TreeContext,
+    sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
+    TreeContext,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
@@ -415,7 +416,23 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
-    let tx_prefix_hash = [0xCD; 32];
+    // Bind the proof + PQC auths to the *real* transaction prefix, exactly as
+    // the production send path does (`sign_bridge.rs` via
+    // `tx_prefix_hash_from_parts`): the FCMP++ signable hash is the Keccak hash
+    // over the prefix fields assembled into `wire_tx` below — the key image, the
+    // two output keys + view tags, and the (empty) extra. Deriving it from the
+    // constructed parts rather than a fixed constant means mutating any of those
+    // prefix fields would invalidate the proof, so this oracle actually
+    // exercises the prefix-binding consensus rule (not just self-consistency).
+    let tx_prefix_hash = tx_prefix_hash_from_parts(
+        &[*ki.key_image.as_bytes()],
+        &[payment.output_key, change.output_key],
+        &[
+            Some(payment.view_tag_prefilter),
+            Some(change.view_tag_prefilter),
+        ],
+        &[],
+    );
     let signed = sign_transaction(
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
@@ -453,7 +470,40 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
          shekyl_fcmp::proof::verify (the consensus rule)"
     );
 
-    // ── 8. RingCT cleartext balance ───────────────────────────────────────
+    // Prefix-binding is load-bearing, not cosmetic: the proof commits to
+    // `tx_prefix_hash`, so re-verifying against a prefix hash that differs in
+    // even one bit — here a flipped output-key byte, i.e. paying a different
+    // destination — must be rejected. This is the property a hard-coded hash
+    // could never exercise: with a fixed constant a caller could mutate the
+    // prefix and still verify.
+    let mut mutated_output_keys = [payment.output_key, change.output_key];
+    mutated_output_keys[0][0] ^= 0x01;
+    let mutated_prefix_hash = tx_prefix_hash_from_parts(
+        &[*ki.key_image.as_bytes()],
+        &mutated_output_keys,
+        &[
+            Some(payment.view_tag_prefilter),
+            Some(change.view_tag_prefilter),
+        ],
+        &[],
+    );
+    let mutated_result = proof::verify(
+        &verifier_proof,
+        &key_images,
+        &signed.pseudo_outs,
+        &pqc_pk_hashes,
+        &tree_root,
+        signed.tree_depth,
+        mutated_prefix_hash,
+    );
+    assert!(
+        !matches!(mutated_result, Ok(true)),
+        "proof must NOT verify against a prefix hash derived from mutated output \
+         keys — the FCMP++ proof binds to the transaction prefix (got \
+         {mutated_result:?})"
+    );
+
+    // ── 8. CT cleartext balance ───────────────────────────────────────────
     // `sum(pseudoOuts) == sum(outPk) + fee*H`. `sign_transaction` constrains
     // the last pseudo-out mask so the G-components cancel, and the amounts
     // satisfy `input_amount == output_amount + fee`, so the real-×1 points on
@@ -467,7 +517,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &[],
         &[],
     )
-    .expect("RingCT cleartext balance must hold (sum pseudoOuts == sum outPk + fee*H)");
+    .expect("CT cleartext balance must hold (sum pseudoOuts == sum outPk + fee*H)");
 
     // ── 9. Bulletproof+ range proof ───────────────────────────────────────
     // Deserialize the serialized blob and verify it over the real output

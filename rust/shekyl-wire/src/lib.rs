@@ -29,7 +29,7 @@
 //! byte-identity against captured daemon blobs; the FCMP++ spend is validated
 //! end-to-end, in-process, by `tests/fcmp_spend_e2e.rs` — it builds a real
 //! multi-layer-tree spend and self-validates every field against the consensus
-//! verifier (`shekyl_fcmp::proof::verify`, RingCT balance, and the
+//! verifier (`shekyl_fcmp::proof::verify`, CT balance, and the
 //! Bulletproof+) before round-tripping it through this serializer. There is no
 //! C++ spend oracle to capture: the daemon FCMP++ spend path never produced a
 //! daemon-accepted transaction, so the authoritative oracle is the Rust

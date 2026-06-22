@@ -34,7 +34,7 @@ shekyl-units = { path = "../shekyl-units" }
 # (`COINBASE_LOCK_WINDOW`) the e2e fixture references, rather than duplicating
 # the literal `60` and risking silent drift if the parameter ever changes.
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
-# Consensus checks composed alongside FCMP membership: RingCT cleartext balance
+# Consensus checks composed alongside FCMP membership: CT cleartext balance
 # (`sum(pseudoOuts) == sum(outPk) + fee*H`) and Bp+ range-proof verification.
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }

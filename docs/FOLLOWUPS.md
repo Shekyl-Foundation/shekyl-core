@@ -309,7 +309,7 @@ sustainability is unaffected by the recalibration.
     `BatchVerificationFailed`. Same class as the CT-5 `pad_branch_chunk` fix,
     now at the C++/Rust boundary.
   - **Output amounts:** `tx.vout[i].amount` is `0` on the wire for
-    RingCT/FCMP++; the signer needs the real cleartext amounts from
+    FCMP++ (confidential amounts); the signer needs the real cleartext amounts from
     `splitted_dsts[i].amount` (vout-aligned after the in-place shuffle).
   - **Per-tx weight cap:** FCMP++ txs (membership proof + per-input PQC auth)
     far exceed the legacy `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1` (~20
