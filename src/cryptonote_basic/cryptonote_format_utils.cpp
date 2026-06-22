@@ -38,7 +38,6 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "shekyl/shekyl_ffi.h"
 #include "fcmp/rctSigs.h"
 
 using namespace epee;
