@@ -18,8 +18,8 @@
 //! is `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
 //! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
 //! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
-//! minergate" (`0xDE`) — are deliberately **rejected** (shed, per
-//! [`60-no-monero-legacy`]); their removal from the C++ oracle's `tx_extra` variant is
+//! minergate" (`0xDE`) — are deliberately **rejected** (shed, per the
+//! `60-no-monero-legacy` rule); their removal from the C++ oracle's `tx_extra` variant is
 //! a follow-up shed (cf. the §5 dead-arm cuts).
 
 use std::io::{self, Read, Write};
