@@ -91,8 +91,8 @@ std::vector<uint8_t> bytes_from_hex(const std::string& hex)
 txin_archival_bond_post load_join_bond_vin(const std::string& wire_hex)
 {
   const std::vector<uint8_t> wire = bytes_from_hex(wire_hex);
-  if (wire.empty() || wire[0] != 0x05)
-    throw std::runtime_error("expected bond-post vin tag 0x05");
+  if (wire.empty() || wire[0] != 0x03)
+    throw std::runtime_error("expected bond-post vin tag 0x03");
   txin_v vin;
   binary_archive<false> iar({wire.data(), wire.size()});
   if (!::do_serialize(iar, vin) || !std::holds_alternative<txin_archival_bond_post>(vin))

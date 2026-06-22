@@ -28,7 +28,11 @@ use crate::challenge::SERVE_CREDIT_RESPONSE_CUSTOMIZATION;
 use crate::path::SegmentPathOpening;
 
 /// Vin type tag: `txin_archival_serve_credit_response` (gate-2 §5.1).
-pub const VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE: u8 = 4;
+///
+/// Dense genesis tag scheme (§2.0, PR #168): `0x02`. Must equal the C++ oracle's
+/// `VARIANT_TAG(txin_archival_serve_credit_response)` and shekyl-wire's
+/// `TAG_INPUT_SERVE_CREDIT` — the same consensus discriminant.
+pub const VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE: u8 = 0x02;
 
 /// DoS guard: segment paths are shallow (segment subtree level); full tree depth
 /// is bounded by FCMP++ design but this cap is consensus-load-bearing.
