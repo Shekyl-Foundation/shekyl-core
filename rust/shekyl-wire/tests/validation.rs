@@ -114,7 +114,8 @@ fn valid_coinbase_validates() {
 
 #[test]
 fn valid_spend_validates() {
-    spend(vec![ki(1), ki(2)], vec![out(), out()], 0, 1)
+    // Key images strictly descending in byte order (memcmp), per the C++ oracle.
+    spend(vec![ki(2), ki(1)], vec![out(), out()], 0, 1)
         .validate()
         .expect("a well-formed spend must validate");
 }
@@ -127,10 +128,11 @@ fn too_many_outputs_rejected() {
 
 #[test]
 fn unsorted_key_images_rejected() {
-    let err = spend(vec![ki(2), ki(1)], vec![out()], 0, 1)
+    // Ascending order is the *unsorted* case now — the oracle requires descending.
+    let err = spend(vec![ki(1), ki(2)], vec![out()], 0, 1)
         .validate()
         .unwrap_err();
-    assert!(err.to_string().contains("ascending"), "{err}");
+    assert!(err.to_string().contains("descending"), "{err}");
 }
 
 #[test]
@@ -141,9 +143,30 @@ fn duplicate_key_images_rejected() {
 }
 
 #[test]
-fn too_many_fcmp_inputs_rejected() {
-    let ins: Vec<Input> = (1u8..=9).map(ki).collect(); // 9 > MAX_FCMP_INPUTS (8)
-    assert!(spend(ins, vec![out()], 0, 1).validate().is_err());
+fn nonempty_key_offsets_rejected() {
+    // FCMP++ spend inputs carry no ring offsets — the C++ oracle rejects a non-empty
+    // key_offsets (blockchain.cpp:3715); the field is vestigial until §5 removes it.
+    let tx = spend(
+        vec![Input::ToKey {
+            amount: 0,
+            key_offsets: vec![1],
+            key_image: [1u8; 32],
+        }],
+        vec![out()],
+        0,
+        1,
+    );
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("key_offsets"), "{err}");
+}
+
+#[test]
+fn too_many_inputs_rejected() {
+    // The cap is on total inputs (C++ caps vin.size()); 9 descending key images
+    // (so the ordering check passes) must be rejected by the input-count cap alone.
+    let ins: Vec<Input> = (1u8..=9).rev().map(ki).collect(); // 9 > MAX_FCMP_INPUTS (8)
+    let err = spend(ins, vec![out()], 0, 1).validate().unwrap_err();
+    assert!(err.to_string().contains("inputs exceed"), "{err}");
 }
 
 #[test]
@@ -182,8 +205,9 @@ fn mismatched_ct_base_length_rejected() {
 
 #[test]
 fn mismatched_pqc_auths_length_rejected() {
-    // pqc_auths are per-input (count == nvin); a length != vin must reject.
-    let mut tx = spend(vec![ki(1), ki(2)], vec![out()], 0, 1); // 2 inputs
+    // pqc_auths are per-input (count == nvin); a length != vin must reject. Key images
+    // descending so the ordering check passes and we reach the pqc-length check.
+    let mut tx = spend(vec![ki(2), ki(1)], vec![out()], 0, 1); // 2 inputs
     if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
         pqc_auths.pop();
     }

@@ -1252,27 +1252,45 @@ impl Transaction {
                 self.prefix.unlock_time
             )));
         }
-        // §12: key-image-bearing inputs strictly ascending — rejects both unsorted
-        // and in-tx duplicate key images. Also enforces the fcmp input cap.
-        let key_images: Vec<&[u8; 32]> = self
-            .prefix
-            .inputs
-            .iter()
-            .filter_map(|input| match input {
-                Input::ToKey { key_image, .. } => Some(key_image),
-                _ => None,
-            })
-            .collect();
-        if key_images.len() > MAX_FCMP_INPUTS {
+        // §10 input cap — the C++ bound (`FCMP_MAX_INPUTS_PER_TX`) is on the **total**
+        // `vin.size()`, not just the key-image subset (blockchain.cpp:3618), so a
+        // bond_post's funding inputs + the post input all count. Coinbase (`[gen]`) is
+        // a single input and uses the non-fcmp path, so scope this to non-coinbase.
+        if !is_coinbase && self.prefix.inputs.len() > MAX_FCMP_INPUTS {
             return Err(io::Error::other(format!(
-                "shekyl-wire: {} fcmp inputs exceed {MAX_FCMP_INPUTS}",
-                key_images.len()
+                "shekyl-wire: {} inputs exceed {MAX_FCMP_INPUTS}",
+                self.prefix.inputs.len()
             )));
         }
+        // §12 canonical-form on the spend (`txin_to_key` / fcmp) inputs, matching the
+        // C++ oracle (blockchain.cpp check_tx_inputs):
+        //  - `key_offsets` MUST be empty — FCMP++ carries no ring offsets; the field is
+        //    vestigial until the §5 reshape removes it (blockchain.cpp:3715/3700).
+        //  - key-image-bearing inputs strictly **descending** by key image:
+        //    `memcmp(ki, last) >= 0 → reject` (blockchain.cpp:3656). One rule, two
+        //    guarantees — rejects unsorted AND in-tx duplicate key images. No-key-image
+        //    arms (`gen`/`serve_credit`/`bond_post`) carry no key image and are exempt.
+        let mut key_images: Vec<&[u8; 32]> = Vec::new();
+        for input in &self.prefix.inputs {
+            if let Input::ToKey {
+                key_offsets,
+                key_image,
+                ..
+            } = input
+            {
+                if !key_offsets.is_empty() {
+                    return Err(io::Error::other(
+                        "shekyl-wire: spend input has non-empty key_offsets \
+                         (FCMP++ has no ring offsets; §12)",
+                    ));
+                }
+                key_images.push(key_image);
+            }
+        }
         for pair in key_images.windows(2) {
-            if pair[0] >= pair[1] {
+            if pair[0] <= pair[1] {
                 return Err(io::Error::other(
-                    "shekyl-wire: key images not strictly ascending (§12)",
+                    "shekyl-wire: key images not strictly descending (§12)",
                 ));
             }
         }

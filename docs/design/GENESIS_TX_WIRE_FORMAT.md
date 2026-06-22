@@ -343,7 +343,7 @@ the arm taxonomy** (not "one arm class per tx"), plus state the shapes:
 | Tx shape | Inputs | ct | pqc_auths (§13) | key images (§12) | Status |
 |---|---|---|---|---|---|
 | **Coinbase** | `[gen]` exactly | `Null` | **none** | none | settled |
-| **Spend** (the transfer) | `fcmp×(1..8)` | `Fcmp` | one slot per input | each input, strictly ascending | settled |
+| **Spend** (the transfer) | `fcmp×(1..8)` | `Fcmp` | one slot per input | each input, strictly descending (§12) | settled |
 | **Bond-post** | `fcmp×(funding)` + **one `bond_post`** + cover output | `Fcmp` | fcmp slots **+ the bond_post slot** (identity-key credit / `bond_spend_pk` debit, gate-4 §3.4.1:278) | the fcmp inputs only; bond_post has none | settled |
 | **Serve-credit** | one `serve_credit` (non-spending) | n/a | **empty** — sig is **on the vin** (§9.10) | none | settled |
 | **Emission** | `reward_emission` + membership-only backing (no ki) [± fcmp] | per plan | ML-DSA-65 (emission) + `R_O` legs in-proof (backing); **count rule refined by its PR** | fcmp inputs only; no-ki arms exempt — anti-replay = per-epoch dedup | **deferred sub-freeze** |
@@ -706,9 +706,12 @@ the exact proof/Bp+ length (§10) are all **corollaries** of this one rule, not 
 scattered list. The §7 round-trip gate (`write(read(b)) == b`) *is* this invariant;
 state it once, the rest follow. Instances:
 
-- **Inputs strictly ascending by key image** — `memcmp(ki, last) >= 0 → reject`
-  (blockchain.cpp:3642-3663). One rule, two guarantees: rejects **unsorted** AND
-  **in-tx duplicate** key images. **Scoped to key-image-bearing inputs** (`fcmp`
+- **Inputs strictly descending by key image** — `memcmp(ki, last) >= 0 → reject`
+  (blockchain.cpp:3642-3663): each key image must be `< ` the previous, so the
+  key-image sequence is strictly **decreasing** in `memcmp`/byte order. One rule, two
+  guarantees: rejects **unsorted** AND **in-tx duplicate** key images. (Earlier drafts
+  of this line said "ascending" — a prose error; the cited `memcmp >= 0 → reject` rule
+  is and always was descending.) **Scoped to key-image-bearing inputs** (`fcmp`
   spends). The **no-key-image arms** (`gen`, `serve_credit`, `bond_post`, and the
   deferred `reward_emission` / membership-only backing) carry no key image and are
   **exempt** from this ordering; their anti-replay is **arm-specific** — coinbase by
