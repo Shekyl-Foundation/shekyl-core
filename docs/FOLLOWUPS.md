@@ -3429,6 +3429,46 @@ sustainability is unaffected by the recalibration.
   [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
   §7.2 #3.
 
+- **CryptoNote fossil — hardcoded key-image fixup for Monero blocks
+  202612 / 685498** (surfaced 2026-06-22, RandomX v2 Phase 3b consensus
+  cutover).
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `BlockchainDB::fixup()` carries two arrays of hardcoded key images
+  (`key_images_202612`, 511 entries; `key_images_685498`, 13 entries) for
+  two inherited Monero mainnet blocks whose output-less transactions
+  tripped an upstream spent-key-image accounting bug. The whole block is
+  gated on `get_block_hash_from_height(0) == mainnet_genesis_hash`, where
+  `mainnet_genesis_hex` is Monero's genesis hash — never true on Shekyl,
+  so the fixup is unreachable dead code. Pure CryptoNote fossil under
+  `60-no-monero-legacy.mdc`.
+
+  **Why deferred from Phase 3.** Out of the cutover PR's enumerated scope:
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §2.5 names only the two block-202612 *longhash* fossils (both deleted in
+  the cutover). The sibling block-202612 *block-id* fossil in
+  `cryptonote_format_utils.cpp` `calculate_block_hash` was deleted
+  opportunistically as same-file "leave it better" cleanup
+  (`15-deletion-and-debt.mdc`), but `blockchain_db.cpp` is not otherwise
+  touched by the cutover, so its deletion is a separate scope per the same
+  rule's "while we're here is the enemy."
+
+  **Scope when picked up.** Delete the `key_images_202612` /
+  `key_images_685498` arrays, the `mainnet_genesis_hex` constant +
+  `mainnet_genesis_hash` resolution, and the
+  `if (get_block_hash_from_height(0) == mainnet_genesis_hash)` /
+  `if (height() > 202612|685498)` fixup branches; confirm no other
+  `fixup()` logic depends on the batch transaction opened around them.
+
+  **Target.** V3.0 (Monero-legacy deletion, cheap pre-genesis per the
+  `15-deletion-and-debt.mdc` pre-genesis discount). Not load-bearing — the
+  code is inert on Shekyl, so it does not block the genesis freeze; if it
+  slips, it is a clean follow-up deletion at any later version.
+
+  **Cross-references.**
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `fixup()`;
+  [`.cursor/rules/60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc).
+
 - **Promote 2c-emergent sub-PR design disciplines to project-level
   documentation** — **Closed (V3.0).** Landed in
   [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
