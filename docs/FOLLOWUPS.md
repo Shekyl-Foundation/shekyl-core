@@ -142,6 +142,23 @@ sustainability is unaffected by the recalibration.
   `proof=FcmpPlusPlusPqc`. The `V2`/`ringct` naming is a clarity wart, not a
   protocol-version defect.
 
+- **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
+  confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
+  proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT
+  split, no V1 tx — yet the inherited CryptoNote surface still carries `rct` naming
+  throughout (`transaction.rct_signatures`, `rct::rctSig*`, `RCTTypeFcmpPlusPlusPqc`,
+  the `rct::` C++ namespace, plus assorted Rust residue). **Naming-only — no
+  wire-format / consensus / behavior change** (the wire carries a `ct_type`
+  discriminant byte, never the string "rct"; `shekyl-wire` already uses the correct
+  `Ct` / `CT_TYPE_*` vocabulary, which is the target). Scope: sweep the residue to
+  `CT`/`ct` across C++ + Rust; the `ScannableBlock.output_index_for_first_ringct_output`
+  rename (the entry above) is one instance of this umbrella. **Standing rule until the
+  sweep lands: do NOT introduce new `rct`/`RCT`/`RingCT` names — new code uses `CT`, so
+  the debt does not grow.** Public-surface renames (RPC/FFI types, enum variants) are
+  free pre-genesis and breaking after, so the public-API portion belongs in V3.0; the
+  bulk internal rename can ride V3.1+. Not genesis-blocking. Target: V3.0 (public API) /
+  V3.1+ (internal).
+
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
   2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
