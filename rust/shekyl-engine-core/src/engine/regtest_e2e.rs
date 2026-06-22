@@ -285,3 +285,129 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     );
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
 }
+
+/// `get_curve_tree_path` was registered only in the legacy epee dispatch, so on the
+/// default Rust/Axum transport it returned 404 — blocking a wallet from fetching a
+/// spend membership path. This drives the live endpoint end-to-end: mine until early
+/// coinbase outputs mature + drain into the reference tree, then fetch the path for the
+/// first leaf and assert a well-formed, non-404 response (the call the send path makes).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn e2e_get_curve_tree_path_returns_valid_path() {
+    use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
+    use super::{DaemonClient, Engine, SoloSigner};
+    use shekyl_address::Network;
+    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::wallet_envelope::KdfParams;
+    use shekyl_engine_file::SafetyOverrides;
+    use shekyl_engine_prefs::WalletPrefs;
+
+    let daemon = RegtestDaemon::start().await;
+
+    // The endpoint answering at all (not 404) is the fix this PR proves: the
+    // curve-tree handlers are now in the Rust/Axum FFI dispatch, not only the
+    // legacy epee map. This holds even on a fresh, empty tree.
+    let info: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call("get_curve_tree_info", None)
+        .await
+        .expect("get_curve_tree_info must not 404 (curve-tree endpoints wired into FFI dispatch)");
+    eprintln!("curve_tree_info (fresh): {info}");
+
+    // Mine enough for early coinbase outputs to mature + drain into the reference tree.
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc");
+    let tmp = tempfile::tempdir().expect("wallet tempdir");
+    let wallet_path = tmp.path().join("wallet");
+    let seed = [0x22u8; MASTER_SEED_BYTES];
+    let creds = Credentials::password_only(b"track2-curve-tree");
+    let params = EngineCreateParams {
+        base_path: &wallet_path,
+        credentials: &creds,
+        network: Network::Mainnet,
+        capability: CapabilityInput::Full {
+            master_seed_64: &seed,
+            seed_format: SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: SafetyOverrides::none(),
+        prefs: WalletPrefs::default(),
+    };
+    let wallet =
+        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let address = wallet.primary_address().encode().expect("encode address");
+
+    // Mine in 10-block batches (a single ~80-block call exceeds the RPC client
+    // timeout) until coinbase outputs mature + drain into the reference tree.
+    let mut leaf_count = 0u64;
+    let mut mined = 0u64;
+    for _ in 0..24 {
+        daemon.generate_blocks(10, &address).await;
+        mined += 10;
+        let info: serde_json::Value = daemon
+            .rpc
+            .json_rpc_call("get_curve_tree_info", None)
+            .await
+            .expect("get_curve_tree_info must not 404");
+        leaf_count = info
+            .get("leaf_count")
+            .and_then(serde_json::Value::as_u64)
+            .expect("leaf_count field");
+        if leaf_count > 0 {
+            eprintln!("reference tree populated after {mined} blocks: leaf_count={leaf_count}");
+            break;
+        }
+    }
+    assert!(
+        leaf_count > 0,
+        "reference tree should populate within {mined} blocks; got leaf_count={leaf_count}"
+    );
+
+    // Fetch the membership path for the first leaf.
+    let path: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call(
+            "get_curve_tree_path",
+            Some(json!({ "output_indices": [0u64] })),
+        )
+        .await
+        .expect("get_curve_tree_path must not 404");
+    eprintln!("curve_tree_path([0]): {path}");
+
+    let root = path
+        .get("curve_tree_root")
+        .and_then(serde_json::Value::as_str)
+        .expect("curve_tree_root field");
+    assert_eq!(
+        root.len(),
+        64,
+        "curve_tree_root must be 32-byte hex; got {root:?}"
+    );
+    let paths = path
+        .get("paths")
+        .and_then(serde_json::Value::as_array)
+        .expect("paths array");
+    assert!(
+        !paths.is_empty(),
+        "output 0 should have a membership path in the reference tree"
+    );
+    assert_eq!(
+        paths[0]
+            .get("output_index")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "first path entry must be for output_index 0"
+    );
+    let path_blob = paths[0]
+        .get("path_blob")
+        .and_then(serde_json::Value::as_str)
+        .expect("path_blob field");
+    assert!(!path_blob.is_empty(), "path_blob must be non-empty");
+}
