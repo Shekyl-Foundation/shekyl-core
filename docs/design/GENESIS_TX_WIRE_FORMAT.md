@@ -540,9 +540,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   implemented; pinned scan-time KAT landed)* §2.2 freezes `view_tag` as
   **ML-KEM-derived** (FA-6 §4.2: `derive_view_tag_prefilter`, HKDF-SHA512 over
   `ml_kem_ss`, `derivation.rs:263`). **Both sides already compute it that way** — the
-  builder in `construct_output` (`output.rs:94`) and the scanner in
-  `scan_output_recover_with_ml_kem_dk` → `ml_kem_decap_prefilter` (`output.rs:509`,
-  reached from `scan.rs`). The earlier "live scanner + builder still on the old
+  builder in `construct_output` (`output.rs:193`; the `derive_view_tag_prefilter`
+  call at `:278`) and the scanner in `scan_output_recover_with_ml_kem_dk`
+  (`output.rs:811`) → `ml_kem_decap_prefilter_with_parsed_dk` (`output.rs:523`),
+  reached from `scan.rs`. The earlier "live scanner + builder still on the old
   X25519/keccak path" reading was **stale**: that `shared_key.rs` path was *dead code*
   (no live caller) and is **deleted**; FA-6's own re-audit recorded the switch
   "Verified — re-keyed" (2026-06-07). **Gate (a) done.** A genesis `view_tag` frozen
