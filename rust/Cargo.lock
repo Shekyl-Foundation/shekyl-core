@@ -4079,6 +4079,7 @@ dependencies = [
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
  "shekyl-logging",
+ "shekyl-pow-randomx",
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",

@@ -24,6 +24,12 @@ shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
+# (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
+# verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default
+# features only; the `internal-pool-bench` / `test-internals` features are
+# never enabled in production builds.
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
