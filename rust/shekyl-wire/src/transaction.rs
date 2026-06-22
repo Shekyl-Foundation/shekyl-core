@@ -128,8 +128,16 @@ fn read_len_prefixed_bounded<R: Read>(r: &mut R, what: &str, max: usize) -> io::
 }
 
 /// Read `count` fixed 32-byte points (no per-element length prefix).
+///
+/// The speculative pre-allocation is **clamped**: `count` reaches here validated only
+/// loosely on some paths (Bp+ `L`/`R` are capped at `READ_LEN_CAP`, not their exact
+/// log-sized length), so reserving `count` up front would be a hostile-input
+/// pre-alloc DoS (~32 MiB for a declared 1M). Every legitimate point vector is
+/// `<= MAX_BRANCH_SCALARS`, so the clamp right-sizes real inputs while bounding the
+/// reserve; the loop still pushes from a finite reader, so an oversized `count` fails
+/// on the missing bytes rather than on allocation.
 fn read_points<R: Read>(r: &mut R, count: usize) -> io::Result<Vec<[u8; 32]>> {
-    let mut v = Vec::new();
+    let mut v = Vec::with_capacity(count.min(MAX_BRANCH_SCALARS));
     for _ in 0..count {
         v.push(read_array::<32, _>(r)?);
     }
@@ -1197,6 +1205,34 @@ impl Transaction {
             ));
         }
         let is_coinbase = gen_count == 1;
+        // §2.5 Serve-credit shape (settled): a `serve_credit` is non-spending and is
+        // the *entire* tx — a sole serve_credit input, no outputs, and a fee-only
+        // `Fcmp` ct (empty pqc_auths, no prunable). The settled mixing table has no row
+        // combining serve_credit with any other arm, so reject every mixed form here.
+        // (Without this, a serve_credit beside a spend slips through the spend branch's
+        // intentionally-lenient pseudoOuts coupling below.)
+        if self
+            .prefix
+            .inputs
+            .iter()
+            .any(|input| matches!(input, Input::ServeCredit(_)))
+        {
+            let is_serve_credit_shape =
+                matches!(self.prefix.inputs.as_slice(), [Input::ServeCredit(_)])
+                    && self.prefix.outputs.is_empty()
+                    && matches!(
+                        &self.ct,
+                        Ct::Fcmp { pqc_auths, prunable, .. }
+                            if pqc_auths.is_empty() && prunable.is_none()
+                    );
+            if !is_serve_credit_shape {
+                return Err(io::Error::other(
+                    "shekyl-wire: a serve_credit input requires the fee-only Serve-credit \
+                     shape — a sole non-spending input, no outputs, empty pqc_auths, no \
+                     prunable (§2.5); it does not mix with any other arm",
+                ));
+            }
+        }
         // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
             return Err(io::Error::other(format!(

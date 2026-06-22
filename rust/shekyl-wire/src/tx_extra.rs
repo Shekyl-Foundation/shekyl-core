@@ -107,8 +107,9 @@ pub enum TxExtraField {
 pub struct KemCiphertext {
     /// Ephemeral X25519 ciphertext.
     pub x25519: [u8; 32],
-    /// ML-KEM-768 ciphertext (1088 bytes).
-    pub ml_kem: Vec<u8>,
+    /// ML-KEM-768 ciphertext — fixed size by spec, so a wrong length is
+    /// unrepresentable (and the split avoids a per-output heap allocation).
+    pub ml_kem: [u8; ML_KEM_768_CT_BYTES],
 }
 
 fn read_blob<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
@@ -346,10 +347,9 @@ pub fn pqc_kem_per_output(blob: &[u8]) -> io::Result<Vec<KemCiphertext>> {
         .map(|chunk| {
             let mut x25519 = [0u8; 32];
             x25519.copy_from_slice(&chunk[..X25519_CT_BYTES]);
-            KemCiphertext {
-                x25519,
-                ml_kem: chunk[X25519_CT_BYTES..].to_vec(),
-            }
+            let mut ml_kem = [0u8; ML_KEM_768_CT_BYTES];
+            ml_kem.copy_from_slice(&chunk[X25519_CT_BYTES..]);
+            KemCiphertext { x25519, ml_kem }
         })
         .collect())
 }

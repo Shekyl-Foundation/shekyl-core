@@ -248,6 +248,45 @@ fn serve_credit_oversized_signature_rejected() {
 }
 
 #[test]
+fn serve_credit_must_not_mix_with_a_spend() {
+    // §2.5: serve_credit is the entire tx. Mixed with a key-image spend it would
+    // otherwise pass the spend branch's lenient pseudoOuts coupling — reject the shape.
+    let sc = ServeCredit {
+        p_canonical_id: [0u8; 32],
+        shard_id: 0,
+        settlement_epoch: 0,
+        segment_subroot_rk: [0u8; 32],
+        leaf_index_in_segment: 0,
+        leaf_bytes: [0u8; 128],
+        c1_layers: vec![],
+        c2_layers: vec![],
+        hybrid_signature: vec![],
+    };
+    let tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::ServeCredit(Box::new(sc)), ki(1)],
+            outputs: vec![out()],
+            extra: vec![],
+        },
+        // Counts here are irrelevant: the shape check rejects before the ct coupling.
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0u8; 32],
+            base: CtBase {
+                enc_amounts: vec![[0u8; 9]],
+                enc_labels: vec![[0u8; 9]],
+                commitments: vec![[0u8; 32]],
+            },
+            pqc_auths: vec![],
+            prunable: None,
+        },
+    };
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("Serve-credit shape"), "{err}");
+}
+
+#[test]
 fn bond_post_oversized_pubkey_rejected() {
     let bp = BondPost {
         hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN + 1],
