@@ -899,7 +899,19 @@ namespace cryptonote
       resolved_seed_hash = &resolved_seed;
     }
 
-    return pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res);
+    if (!pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res))
+    {
+      // Fail closed: on a verifier failure pow_schema.hash() leaves res
+      // unwritten, and the hash-returning overload below pre-seeds res to
+      // null_hash (0x00..00) — the numerically minimum 256-bit value, which
+      // check_hash() accepts for ANY difficulty. Several callers ignore the
+      // returned bool, so a soft failure must never surface as an accepted
+      // PoW. Writing the maximum 256-bit value guarantees check_hash() rejects
+      // it. Matches the fail-closed sentinel in get_altblock_longhash().
+      memset(res.data, 0xff, sizeof(res.data));
+      return false;
+    }
+    return true;
   }
 
   bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash, const int miners)
