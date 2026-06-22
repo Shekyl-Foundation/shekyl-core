@@ -92,6 +92,15 @@ pub mod engine_file_ffi;
 // (Phase 3 onward) by the daemon's difficulty path.
 pub mod difficulty_ffi;
 
+// RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
+// (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
+// PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
+// pin/eager-derive entry point (`shekyl_pow_randomx_v2_set_canonical`).
+// Replaces the inherited C RandomX v1 path (`crypto::rx_slow_hash` /
+// `rx_set_main_seedhash`) on the daemon block-verification boundary per
+// `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
+pub mod pow_randomx_ffi;
+
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 

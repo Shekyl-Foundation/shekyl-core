@@ -338,7 +338,7 @@ The decay is multiplicative per year, causing the emission share to decline expo
 
 - **No new coins created.** The emission share redirects a portion of each block's reward from the miner to stakers. Total emission per block is unchanged. The `2^32` ceiling is unaffected.
 - **Self-retiring.** At 15% initial share with 10%/year decay: year 1 = 15%, year 5 = 8.9%, year 10 = 5.2%, year 20 = 1.8%. The subsidy naturally fades, transitioning staker income to fee-based sources.
-- **Modest miner impact.** At peak (year 0), miners receive 85% of emission instead of 100%. By year 10, they receive ~95%. With multiple PoW algorithms fragmenting hash power, the effective per-miner impact is further diluted.
+- **Modest miner impact.** At peak (year 0), miners receive 85% of emission instead of 100%. By year 10, they receive ~95%, so the long-run effect on mining incentives is small.
 - **Bridges the yield gap.** Produces 1.7% staker yield at year 10 under baseline conditions, and 4–6% during years 1–5, making staking genuinely attractive from launch.
 
 #### Staker yield composition over time

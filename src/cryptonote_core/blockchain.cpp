@@ -584,11 +584,10 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
       return false;
   }
 
-  if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
   {
     const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)
-      rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
+      shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
   }
 
   return true;
@@ -706,10 +705,14 @@ void Blockchain::pop_blocks(uint64_t nblocks)
   if (stop_batch)
     m_db->batch_stop();
 
-  if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
   {
     const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
+    // Mirror the init() guard: get_block_id_by_height() returns null_hash for a
+    // nonexistent height, and an unwound/degraded chain can hit that here.
+    // Pinning the all-zero seedhash would derive and stick a 256 MiB canonical
+    // cache for a garbage epoch. Skip set_canonical on a null seedhash.
+    if (seedhash != crypto::null_hash)
+      shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
   }
 }
 //------------------------------------------------------------------
@@ -1414,8 +1417,7 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     }
   }
 
-  if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
+  shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
 
   MGINFO_GREEN("REORGANIZE SUCCESS! on height: " << split_height << ", new blockchain size: " << m_db->height());
   return true;
@@ -1762,7 +1764,6 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       CHECK_AND_ASSERT_MES(get_block_by_hash(*from_block, prev_block), false, "From block not found"); // TODO
       uint64_t from_block_height = cryptonote::get_block_height(prev_block);
       height = from_block_height + 1;
-      if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
       {
         uint64_t next_height;
         crypto::rx_seedheights(height, &seed_height, &next_height);
@@ -1824,7 +1825,6 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     median_weight = m_current_block_cumul_weight_limit / 2;
     diffic = get_difficulty_for_next_block();
     already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
-    if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
     {
       uint64_t next_height;
       crypto::rx_seedheights(height, &seed_height, &next_height);
@@ -1981,8 +1981,6 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
 
   major_version = m_hardfork->get_ideal_version(height);
 
-  seed_hash = crypto::null_hash;
-  if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
   {
     uint64_t seed_height, next_height;
     crypto::rx_seedheights(height, &seed_height, &next_height);
@@ -2317,7 +2315,6 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     CHECK_AND_ASSERT_MES(current_diff, false, "!!!!!!! DIFFICULTY OVERHEAD !!!!!!!");
     crypto::hash proof_of_work;
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
-    if (b.major_version >= RX_BLOCK_VERSION)
     {
       crypto::hash seedhash = null_hash;
       uint64_t seedheight = rx_seedheight(bei.height);
@@ -2337,9 +2334,6 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         seedhash = get_block_id_by_height(seedheight);
       }
       get_altblock_longhash(bei.bl, proof_of_work, seedhash);
-    } else
-    {
-      get_block_longhash(this, bei.bl, proof_of_work, bei.height, 0);
     }
     if(!check_hash(proof_of_work, current_diff))
     {
@@ -5586,8 +5580,7 @@ leave:
   for (const auto& notifier: m_block_notifiers)
     notifier(new_height - 1, {std::addressof(bl), 1});
 
-  if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
+  shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
 
   return true;
 }

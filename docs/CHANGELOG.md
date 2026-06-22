@@ -326,6 +326,51 @@
 
 ### Changed
 
+- **consensus: collapse the Proof-of-Work path to RandomX v2; remove
+  CryptoNight and RandomX v1 (RandomX v2 genesis cutover, 2026-06,
+  `feat/randomx-v2-genesis-cutover`).** Every block — genesis included —
+  now verifies through the Rust RandomX **v2** light-cache verifier
+  (`shekyl_pow_randomx_v2_hash`, exported from `shekyl-ffi`); miners run
+  the v2 C library (`external/randomx-v2`, full-dataset fast mode). The
+  permanent C-JIT-for-mining / Rust-interpreter-for-verification split is
+  sound because v2's light-cache hash equals its full-dataset hash; the
+  release-gate **Hole-1 differential test**
+  (`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`) proves
+  C-full ≡ Rust-light over a corpus + a frozen in-process full-dataset KAT
+  (a separate-process miner-run KAT is deferred; see FOLLOWUPS),
+  **halt-on-red**. See
+  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md),
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md), and
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](design/RANDOMX_V2_PHASE3_PLAN.md).
+  - **Removed from the consensus path** (`60-no-monero-legacy.mdc`):
+    `src/crypto/pow_cryptonight.cpp` and the `get_cryptonight_*` schema;
+    `get_pow_for_height` collapsed to RandomX for every block version; all
+    `RX_BLOCK_VERSION` consensus guards; both block-`202612` *longhash*
+    fossils plus the sibling block-id-`202612` fossil in
+    `calculate_block_hash` (whose vestigial `blob` param was dropped); the
+    dead CryptoNight RPC branch; and the transient
+    `SHEKYL_RANDOMX_V2_VERIFY` build flag (the v2 path is now
+    unconditional). Seed-hash resolution is unconditional.
+  - **New FFI surface:** `shekyl_pow_randomx_v2_hash` and
+    `shekyl_pow_randomx_v2_set_canonical` (the synchronous,
+    off-hot-path canonical-cache pin that delivers the ratified
+    sticky-eviction DoS mitigation — `RANDOMX_V2_RUST.md` §5/§6).
+  - **Genesis identity is unchanged, and now gated.** Genesis mines at
+    difficulty 1, so the first nonce tried (`GENESIS_NONCE`) wins
+    regardless of the longhash algorithm, and the block id is
+    `Keccak(header)` — PoW-independent. `mining_parity.cpp`'s
+    `genesis_identity_is_pow_independent` freezes the per-net genesis
+    nonce + block id (mainnet `919f8db5…`, cross-checked against the
+    daemon-captured height-0 hash in
+    `rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json`); the
+    frozen coinbase/block-hash vectors needed no regeneration.
+  - **Deferred to Phase 3c/4** (blocked by the RPC-payment subsystem
+    deletion + `wallet2.cpp` touchpoints; tracked in
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md)): deleting `rx-slow-hash.c` /
+    `slow-hash.c`, the `seedheight` export + `shekyl-pow-randomx::consensus`
+    module, the `RX_BLOCK_VERSION` `#define`, and the `IPowSchema` /
+    `pow_registry` / `shekyl-consensus` abstraction layer.
+
 - **wallet: cut the spend path over to real FCMP++ membership proofs; delete the
   synthetic placeholders (CT-5c assembler cutover, 2026-06-18,
   `feat/ct-5c-assembler-cutover`).** The send path now assembles the real

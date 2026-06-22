@@ -866,37 +866,52 @@ namespace cryptonote
   void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    rx_slow_hash(seed_hash.data, bd.data(), bd.size(), res.data);
+    if (shekyl_pow_randomx_v2_hash(
+          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+          reinterpret_cast<const uint8_t*>(bd.data()),
+          bd.size(),
+          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    {
+      // Fail closed: a longhash the verifier could not compute must never
+      // satisfy a difficulty target. 0xff..ff is the numerically maximum
+      // 256-bit value, which check_hash() rejects for any difficulty > 1.
+      // Matches the fail-closed sentinel the alt-block caller pre-seeds in
+      // blockchain.cpp.
+      memset(res.data, 0xff, sizeof(res.data));
+    }
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
   {
-    if (pbc != NULL && major_version >= RX_BLOCK_VERSION)
-    {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-      return true;
-    }
     const IPowSchema& pow_schema = get_pow_for_height(height, major_version);
     const crypto::hash* resolved_seed_hash = seed_hash;
     crypto::hash resolved_seed = crypto::null_hash;
 
-    if (major_version >= RX_BLOCK_VERSION)
+    if (pbc != NULL)
     {
-      if (pbc != NULL)
-      {
-        const uint64_t seed_height = rx_seedheight(height);
-        resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-        resolved_seed_hash = &resolved_seed;
-      }
-      else
-      {
-        memset(&resolved_seed, 0, sizeof(resolved_seed));
-        resolved_seed_hash = &resolved_seed;
-      }
+      const uint64_t seed_height = rx_seedheight(height);
+      resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
+      resolved_seed_hash = &resolved_seed;
+    }
+    else
+    {
+      memset(&resolved_seed, 0, sizeof(resolved_seed));
+      resolved_seed_hash = &resolved_seed;
     }
 
-    return pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res);
+    if (!pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res))
+    {
+      // Fail closed: on a verifier failure pow_schema.hash() leaves res
+      // unwritten, and the hash-returning overload below pre-seeds res to
+      // null_hash (0x00..00) — the numerically minimum 256-bit value, which
+      // check_hash() accepts for ANY difficulty. Several callers ignore the
+      // returned bool, so a soft failure must never surface as an accepted
+      // PoW. Writing the maximum 256-bit value guarantees check_hash() rejects
+      // it. Matches the fail-closed sentinel in get_altblock_longhash().
+      memset(res.data, 0xff, sizeof(res.data));
+      return false;
+    }
+    return true;
   }
 
   bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash, const int miners)

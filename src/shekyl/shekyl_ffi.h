@@ -1887,6 +1887,66 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
+// ---------------------------------------------------------------------------
+// RandomX v2 light-cache PoW verification FFI surface
+//
+// Two functions wrap the `shekyl-pow-randomx` verifier crate (via
+// `shekyl-ffi`'s `pow_randomx_ffi` module): the consensus PoW hash and
+// the canonical-seedhash pin/eager-derive entry point. They replace the
+// inherited C RandomX v1 path (`crypto::rx_slow_hash` /
+// `rx_set_main_seedhash`) on the daemon's block-verification boundary
+// per `docs/design/RANDOMX_V2_PHASE3_PLAN.md` §4 and `RANDOMX_V2_RUST.md`
+// §5/§17/§18.
+//
+// The 32-byte `seedhash`/`out_hash` arguments use the pointer-to-array
+// form `const uint8_t (*)[32]` / `uint8_t (*)[32]` rather than a decayed
+// `const uint8_t*`: the fixed length is part of the type, so a
+// wrong-sized buffer at a call site is a compile error rather than a
+// silent out-of-bounds access (Round-5 hardening, `RANDOMX_V2_PLAN.md`
+// §5; supersedes the decayed form in `RANDOMX_V2_RUST.md` §5).
+//
+// Under the Rust workspace's `panic = "abort"` profile,
+// `SHEKYL_POW_RANDOMX_V2_ERR_CACHE_DERIVE_FAILED` and
+// `SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL` are reserved and never returned:
+// a derivation OOM or panic aborts the process. They are declared for
+// wire-stable ABI/taxonomy parity with `RANDOMX_V2_RUST.md` §17.
+// ---------------------------------------------------------------------------
+
+/// Compute the RandomX v2 PoW hash of `data[0..data_len]` under
+/// `*seedhash`.
+///
+/// On success writes exactly 32 bytes to `*out_hash` and returns
+/// `SHEKYL_POW_RANDOMX_V2_OK` (0). The per-seedhash 256 MiB cache is
+/// derived lazily on first use and memoized internally; the daemon
+/// removes first-use latency on the canonical seedhash by calling
+/// `shekyl_pow_randomx_v2_set_canonical` at tip advance.
+///
+/// `seedhash` and `out_hash` must be non-null. The `data`/`data_len`
+/// pairing follows `RANDOMX_V2_RUST.md` §17: `data == NULL` is valid iff
+/// `data_len == 0` (empty input); `data == NULL && data_len > 0` returns
+/// `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR`. On any non-zero return
+/// `*out_hash` is untouched and must not be read.
+int32_t shekyl_pow_randomx_v2_hash(
+    const uint8_t (*seedhash)[32],
+    const uint8_t* data,
+    size_t data_len,
+    uint8_t (*out_hash)[32]);
+
+/// Pin `*seedhash` as the canonical verification cache and eagerly
+/// derive it.
+///
+/// Called at tip advance (replacing `crypto::rx_set_main_seedhash`).
+/// Performs the synchronous ~150-200 ms / 256 MiB cache derivation
+/// off the per-block validation hot path, then pins the result so a
+/// flood of transient-seedhash lookups cannot evict it (the DoS
+/// protection of `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7). Idempotent:
+/// re-pinning the already-canonical seedhash is a no-op.
+///
+/// `seedhash` must be non-null. Returns `SHEKYL_POW_RANDOMX_V2_OK` (0)
+/// on success, `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR` (-1) if null.
+int32_t shekyl_pow_randomx_v2_set_canonical(
+    const uint8_t (*seedhash)[32]);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
@@ -1906,6 +1966,23 @@ int32_t shekyl_difficulty_lwma1_next(
 /// Rust workspace runs `panic = "abort"` so any panic terminates the
 /// process before reaching the return path.
 #define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
+
+/// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
+/// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
+#define SHEKYL_POW_RANDOMX_V2_OK                       0
+/// A required pointer (`seedhash`/`out_hash`, or `data` when
+/// `data_len > 0`) was null. `*out_hash` is not written.
+#define SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR            -1
+/// `data_len` exceeds the verifier's hashing-blob bound (2 MiB).
+/// `*out_hash` is not written.
+#define SHEKYL_POW_RANDOMX_V2_ERR_DATA_TOO_LARGE      -2
+/// Reserved for a structured cache-derivation failure. Not currently
+/// emitted: cache derivation uses infallible allocation that aborts on
+/// OOM under `panic = "abort"`. See `RANDOMX_V2_RUST.md` §17.
+#define SHEKYL_POW_RANDOMX_V2_ERR_CACHE_DERIVE_FAILED -3
+/// Reserved for a panic crossing the FFI boundary. Not currently
+/// emitted; `panic = "abort"` terminates the process first.
+#define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL            -4
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

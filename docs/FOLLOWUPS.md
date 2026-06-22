@@ -3485,6 +3485,169 @@ sustainability is unaffected by the recalibration.
   zero `randomx_*` matches and aes-crate symbols visibly present
   per the expected disposition.
 
+- **RandomX v2 — vendored C library static-destructor double-free at
+  process teardown** (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1
+  parity gate). `external/randomx-v2`'s global
+  `SuperscalarInstructionInfo` objects double-free their
+  `std::vector<MacroOp>` members when `librandomx` is unloaded at
+  process exit, confirmed by a gdb backtrace through `_dl_fini` ->
+  `__do_global_dtors_aux` ->
+  `randomx::SuperscalarInstructionInfo::~SuperscalarInstructionInfo`.
+  The abort fires **only at teardown**, after any hash result has been
+  computed and returned, so it is independent of PoW correctness.
+
+  **Current disposition (worked around, not fixed).** The Phase 3a
+  parity harness
+  ([`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp))
+  exits via `std::_Exit` to bypass the broken static destructors so the
+  abort cannot mask the parity verdict. No consumer of a *result* is
+  affected: the Rust consensus verifier does not link the C library,
+  and a long-running miner reaches teardown only at clean shutdown,
+  after its work is done.
+
+  **Why deferred from Phase 3a.** Patching the vendored `external/
+  randomx-v2` C++ is outside the consensus-cutover PR's scope
+  (`15-deletion-and-debt.mdc` "while we're here is the enemy"); the
+  defect is teardown-only and the gate already has a clean, documented
+  workaround.
+
+  **Reopening / discharge criterion.** Reopen if the double-free is
+  ever observed to fire *before* teardown (i.e. where it could corrupt
+  a live result), or if the miner's clean-shutdown abort proves
+  operationally relevant. Discharge by either (a) fixing the vendored
+  library's static-object lifetime and removing the `std::_Exit`
+  workaround, or (b) recording an explicit "benign-at-teardown,
+  won't-fix" disposition citing the gdb evidence. Target: V3.0
+  (disposition decision before genesis, since the miner lib ships at
+  genesis; the decision may legitimately be "document as benign").
+
+  **Cross-references.**
+  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
+  header ("Library teardown bug");
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §7.
+
+- **RandomX v2 — separate-process miner-run full-dataset KAT**
+  (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1 parity gate). The
+  frozen `kFrozenKatHashHex` in the Phase 3a parity harness is captured
+  from the harness's own **in-process** full-dataset computation, not
+  from an actual v2 mining run in a separate process. It is an honest
+  regression anchor against library / flag drift, but the live
+  C-full == Rust-light comparison the harness runs on every invocation
+  already proves the cutover invariant; the frozen KAT is a regression
+  belt over those suspenders.
+
+  **Why deferred from Phase 3a.** Standing up a separate-process miner
+  run to source the KAT is harness scope beyond proving the parity
+  invariant, which the in-process comparison already does. The
+  in-process KAT carries its proxy nature documented at the capture
+  site in the meantime.
+
+  **Reopening / discharge criterion.** Discharge by capturing a hash
+  from an actual RandomX v2 mining run (separate process, full dataset)
+  at the pinned commit and replacing — or cross-checking —
+  `kFrozenKatHashHex` with it. Target: V3.0 (close before the genesis
+  freeze gate so the cutover's KAT carries end-to-end miner
+  provenance).
+
+  **Cross-references.**
+  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
+  header ("KAT provenance caveat");
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §7.2 #3.
+
+- **CryptoNote fossil — hardcoded key-image fixup for Monero blocks
+  202612 / 685498** (surfaced 2026-06-22, RandomX v2 Phase 3b consensus
+  cutover).
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `BlockchainDB::fixup()` carries two arrays of hardcoded key images
+  (`key_images_202612`, 511 entries; `key_images_685498`, 13 entries) for
+  two inherited Monero mainnet blocks whose output-less transactions
+  tripped an upstream spent-key-image accounting bug. The whole block is
+  gated on `get_block_hash_from_height(0) == mainnet_genesis_hash`, where
+  `mainnet_genesis_hex` is Monero's genesis hash — never true on Shekyl,
+  so the fixup is unreachable dead code. Pure CryptoNote fossil under
+  `60-no-monero-legacy.mdc`.
+
+  **Why deferred from Phase 3.** Out of the cutover PR's enumerated scope:
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §2.5 names only the two block-202612 *longhash* fossils (both deleted in
+  the cutover). The sibling block-202612 *block-id* fossil in
+  `cryptonote_format_utils.cpp` `calculate_block_hash` was deleted
+  opportunistically as same-file "leave it better" cleanup
+  (`15-deletion-and-debt.mdc`), but `blockchain_db.cpp` is not otherwise
+  touched by the cutover, so its deletion is a separate scope per the same
+  rule's "while we're here is the enemy."
+
+  **Scope when picked up.** Delete the `key_images_202612` /
+  `key_images_685498` arrays, the `mainnet_genesis_hex` constant +
+  `mainnet_genesis_hash` resolution, and the
+  `if (get_block_hash_from_height(0) == mainnet_genesis_hash)` /
+  `if (height() > 202612|685498)` fixup branches; confirm no other
+  `fixup()` logic depends on the batch transaction opened around them.
+
+  **Target.** V3.0 (Monero-legacy deletion, cheap pre-genesis per the
+  `15-deletion-and-debt.mdc` pre-genesis discount). Not load-bearing — the
+  code is inert on Shekyl, so it does not block the genesis freeze; if it
+  slips, it is a clean follow-up deletion at any later version.
+
+  **Cross-references.**
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `fixup()`;
+  [`.cursor/rules/60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc).
+
+- **RandomX v2 Phase 3c / Phase 4 — PoW C-core + abstraction deletion**
+  (deferred from the Phase 3 consensus cutover, 2026-06). The cutover
+  collapsed the *consensus* PoW path to RandomX v2 (registry
+  RandomX-only; CryptoNight, `RX_BLOCK_VERSION` guards, and the longhash
+  `202612` fossils removed; `pow_cryptonight.cpp` + `get_cryptonight_*`
+  deleted) but left the *implementation* C and the now-unused abstraction
+  layer in place, because deleting them is tangled with the RPC-payment
+  subsystem and the `wallet2.cpp` PoW touchpoints
+  ([`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §13). One tangled deletion cluster, dependency-ordered:
+
+  1. **Delete the RPC-payment subsystem** (`src/wallet/wallet_rpc_payments.cpp`,
+     `src/rpc/rpc_payment.*` and the daemon/wallet wiring) — the Phase 0
+     "delete in its entirety" decision (`RANDOMX_V2_RUST.md` §15). It is
+     the sole wallet-tree PoW touchpoint; removing it unblocks (2)–(3).
+     **Target V3.0** (pre-genesis; no users to migrate).
+  2. **Delete `src/crypto/rx-slow-hash.c` + `src/crypto/slow-hash.c`**
+     (the RandomX v1 stateful core + the CryptoNight slow-hash) and drop
+     the `cncrypto` RandomX C linkage. Blocked by (1): the C files have
+     live callers in `wallet2.cpp` / `wallet_rpc_payments.cpp` until the
+     RPC-payment subsystem is gone. **Target V3.0 / Phase 3c.**
+  3. **Export `shekyl_pow_randomx_v2_seedheight` + add the
+     `shekyl-pow-randomx::consensus` module** (`SEEDHASH_EPOCH_BLOCKS =
+     2048`, `SEEDHASH_EPOCH_LAG = 64`, power-of-2 `const _` assertion,
+     spec §16) with the epoch-boundary spec-vector test. Deferred because
+     the C `rx_seedheight` cleanly serves every caller until
+     `rx-slow-hash.c` is deleted (`RANDOMX_V2_PHASE3_PLAN.md` §5 reopen
+     criterion). **Target V3.0 / Phase 3c** (lands with (2)).
+  4. **Delete the `RX_BLOCK_VERSION` `#define`** (`src/crypto/hash-ops.h`).
+     The consensus *guards* are gone (3b); the bare `#define 12` is dead,
+     with residual references only in the RPC-payment files, so it bundles
+     with (1). **Target V3.0 / Phase 4.**
+  5. **Delete the PoW abstraction layer** — `pow_schema.h` (`IPowSchema`),
+     `pow_registry.{h,cpp}`, and the `rust/shekyl-consensus` crate
+     (`70-modular-consensus.mdc`), folding the consensus types into
+     `shekyl-pow-randomx`. No implementation files remain to delete (3b
+     handled those); pure abstraction cleanup. **Target V3.0 / Phase 4.**
+
+  The `aes`-crate symbol-surface check and the verifier-linked `shekyld`
+  `nm` symbol-isolation invariant are tracked as the separate Phase 3c
+  item above. **Why grouped:** splitting (1)–(5) into independent
+  FOLLOWUPS items would hide the deletion ordering that makes them
+  tractable.
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+  `phase3-cutover` / `phase4-delete-abstractions` tasks;
+  [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §13, §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §5, §11, §13.
+
 - **Promote 2c-emergent sub-PR design disciplines to project-level
   documentation** — **Closed (V3.0).** Landed in
   [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
