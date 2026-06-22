@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Active plan document (Round 0 substrate capture + 3a/3b design). Implementation pending. |
+| Status | Phase 3a + 3b **landed** (2026-06; see §13). Phase 3c and the Phase 4 abstraction deletions remain **deferred** (§15, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)). This doc is now the record of the landed cutover plus the deferred-work tracker, not an open design. |
 | Parent plan | [`docs/design/RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — Track B Phase 3 (`phase3-*` todos). |
 | Spec authority | [`docs/design/RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §5 (FFI surface), §6 (no-prewarm), §13 (non-goals), §16 (genesis seedhash), §17 (error taxonomy). This doc **cites**; it does not re-derive. |
 | Sibling plans | [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §5.11.6 (typed-array-pointer FFI), §5.11.7 (sticky-eviction DoS), §14 Round 5 (C-header form); [`RANDOMX_V2_PHASE2G_PLAN.md`](./RANDOMX_V2_PHASE2G_PLAN.md) (differential harness — light-vs-light only). |
