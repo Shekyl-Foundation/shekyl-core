@@ -3469,6 +3469,58 @@ sustainability is unaffected by the recalibration.
   `fixup()`;
   [`.cursor/rules/60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc).
 
+- **RandomX v2 Phase 3c / Phase 4 — PoW C-core + abstraction deletion**
+  (deferred from the Phase 3 consensus cutover, 2026-06). The cutover
+  collapsed the *consensus* PoW path to RandomX v2 (registry
+  RandomX-only; CryptoNight, `RX_BLOCK_VERSION` guards, and the longhash
+  `202612` fossils removed; `pow_cryptonight.cpp` + `get_cryptonight_*`
+  deleted) but left the *implementation* C and the now-unused abstraction
+  layer in place, because deleting them is tangled with the RPC-payment
+  subsystem and the `wallet2.cpp` PoW touchpoints
+  ([`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §13). One tangled deletion cluster, dependency-ordered:
+
+  1. **Delete the RPC-payment subsystem** (`src/wallet/wallet_rpc_payments.cpp`,
+     `src/rpc/rpc_payment.*` and the daemon/wallet wiring) — the Phase 0
+     "delete in its entirety" decision (`RANDOMX_V2_RUST.md` §15). It is
+     the sole wallet-tree PoW touchpoint; removing it unblocks (2)–(3).
+     **Target V3.0** (pre-genesis; no users to migrate).
+  2. **Delete `src/crypto/rx-slow-hash.c` + `src/crypto/slow-hash.c`**
+     (the RandomX v1 stateful core + the CryptoNight slow-hash) and drop
+     the `cncrypto` RandomX C linkage. Blocked by (1): the C files have
+     live callers in `wallet2.cpp` / `wallet_rpc_payments.cpp` until the
+     RPC-payment subsystem is gone. **Target V3.0 / Phase 3c.**
+  3. **Export `shekyl_pow_randomx_v2_seedheight` + add the
+     `shekyl-pow-randomx::consensus` module** (`SEEDHASH_EPOCH_BLOCKS =
+     2048`, `SEEDHASH_EPOCH_LAG = 64`, power-of-2 `const _` assertion,
+     spec §16) with the epoch-boundary spec-vector test. Deferred because
+     the C `rx_seedheight` cleanly serves every caller until
+     `rx-slow-hash.c` is deleted (`RANDOMX_V2_PHASE3_PLAN.md` §5 reopen
+     criterion). **Target V3.0 / Phase 3c** (lands with (2)).
+  4. **Delete the `RX_BLOCK_VERSION` `#define`** (`src/crypto/hash-ops.h`).
+     The consensus *guards* are gone (3b); the bare `#define 12` is dead,
+     with residual references only in the RPC-payment files, so it bundles
+     with (1). **Target V3.0 / Phase 4.**
+  5. **Delete the PoW abstraction layer** — `pow_schema.h` (`IPowSchema`),
+     `pow_registry.{h,cpp}`, and the `rust/shekyl-consensus` crate
+     (`70-modular-consensus.mdc`), folding the consensus types into
+     `shekyl-pow-randomx`. No implementation files remain to delete (3b
+     handled those); pure abstraction cleanup. **Target V3.0 / Phase 4.**
+
+  The `aes`-crate symbol-surface check and the verifier-linked `shekyld`
+  `nm` symbol-isolation invariant are tracked as the separate Phase 3c
+  item above. **Why grouped:** splitting (1)–(5) into independent
+  FOLLOWUPS items would hide the deletion ordering that makes them
+  tractable.
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+  `phase3-cutover` / `phase4-delete-abstractions` tasks;
+  [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §13, §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §5, §11, §13.
+
 - **Promote 2c-emergent sub-PR design disciplines to project-level
   documentation** — **Closed (V3.0).** Landed in
   [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)

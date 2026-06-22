@@ -582,3 +582,48 @@ Per [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-af
 - `docs/FOLLOWUPS.md` — the §11 deferred items, each with a target
   version.
 - `USER_GUIDE` / `DESIGN_CONCEPTS` PoW sections — only if touched.
+
+## 13. Status — landed (2026-06)
+
+The consensus PoW cutover (3a + 3b) is complete. 3c is deferred.
+
+**3a — FFI export + Hole-1 gate (flag-gated):**
+- `shekyl-pow-randomx` dep + `pow_randomx_ffi.rs`; `shekyl_ffi.h` decls
+  for `…_hash` and `…_set_canonical` (Round-5 pointer-to-array shape).
+- Flag-gated (`SHEKYL_RANDOMX_V2_VERIFY`) coherent swap at the hash site
+  + 4 `set_canonical` sites; legacy v1 path stayed buildable.
+- Hole-1 differential gate (`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`):
+  C v2 full-dataset ≡ Rust v2 light-cache over a corpus + a
+  miner-produced full-dataset frozen KAT; halt-on-red. Worked around the
+  vendored-library teardown double-free (`_Exit`, tracked in FOLLOWUPS).
+
+**3b — collapse to RandomX-only (consensus cutover):**
+- `383b560f1` — `get_pow_for_height` collapsed to RandomX for every
+  version; `pow_cryptonight.cpp` + CMake + `get_cryptonight_*` deleted;
+  `mining_parity.cpp` rewritten (CN tests dropped, RandomX routed via the
+  v2 FFI against the Hole-1 KAT).
+- `1e9389e19` — `SHEKYL_RANDOMX_V2_VERIFY` flag removed (unconditional v2).
+- `1a7650c29` — all `RX_BLOCK_VERSION` consensus guards removed; both
+  longhash-`202612` fossils + the dead-CN RPC branch deleted; seed
+  resolution made unconditional. `get_block_longhash` collapsed to a
+  direct v2 call.
+- `c1611f4be` (same-file cleanup) — `calculate_block_hash`
+  block-id-`202612` fossil removed; vestigial `blob` param dropped.
+- `6ae9c0643` — **genesis identity gate.** §3.2 verified empirically, not
+  assumed: per-net `nonce == GENESIS_NONCE` (difficulty-1 invariant) and
+  frozen genesis block ids (mainnet `919f8db5…`, cross-checked against the
+  daemon-captured height-0 `block_hash` in
+  `rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json`). The
+  Rust `coinbase_hash` / `coinbase_roundtrip` frozen vectors needed **no**
+  regeneration — the feared frozen-genesis E2E rework was unnecessary.
+
+**Gate status (§9):** Genesis identity — **met** (`6ae9c0643`). Hole-1
+parity — armed (release gate). The Phase-3c-only gates (symbol-isolation
+`nm`, seedheight spec-vector) remain deferred with the C-file deletions.
+
+**3c — deferred** (blocked by RPC-payment subsystem deletion +
+`wallet2.cpp` PoW touchpoints; tracked in `docs/FOLLOWUPS.md`): delete
+`rx-slow-hash.c` + `slow-hash.c`, drop the `cncrypto` randomx C linkage,
+export `shekyl_pow_randomx_v2_seedheight` + add the
+`shekyl-pow-randomx::consensus` module (`SEEDHASH_EPOCH_BLOCKS`/`_LAG`),
+and add the CI symbol-isolation invariant.
