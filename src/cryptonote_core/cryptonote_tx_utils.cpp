@@ -866,11 +866,19 @@ namespace cryptonote
   void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    shekyl_pow_randomx_v2_hash(
-      reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
-      reinterpret_cast<const uint8_t*>(bd.data()),
-      bd.size(),
-      reinterpret_cast<uint8_t (*)[32]>(res.data));
+    if (shekyl_pow_randomx_v2_hash(
+          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+          reinterpret_cast<const uint8_t*>(bd.data()),
+          bd.size(),
+          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    {
+      // Fail closed: a longhash the verifier could not compute must never
+      // satisfy a difficulty target. 0xff..ff is the numerically maximum
+      // 256-bit value, which check_hash() rejects for any difficulty > 1.
+      // Matches the fail-closed sentinel the alt-block caller pre-seeds in
+      // blockchain.cpp.
+      memset(res.data, 0xff, sizeof(res.data));
+    }
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)

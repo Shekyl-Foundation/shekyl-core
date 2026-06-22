@@ -29,6 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <atomic>
+#include <cstring>
 #include "common/string_util.h"
 #include "wipeable_string.h"
 #include "string_tools.h"
@@ -1438,11 +1439,17 @@ namespace cryptonote
     const crypto::hash &seed_hash)
   {
     crypto::hash res;
-    shekyl_pow_randomx_v2_hash(
-      reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
-      reinterpret_cast<const uint8_t*>(block_hashing_blob.data()),
-      block_hashing_blob.size(),
-      reinterpret_cast<uint8_t (*)[32]>(res.data));
+    if (shekyl_pow_randomx_v2_hash(
+          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+          reinterpret_cast<const uint8_t*>(block_hashing_blob.data()),
+          block_hashing_blob.size(),
+          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    {
+      // Fail closed: see get_altblock_longhash(). The FFI contract leaves
+      // *out_hash untouched on a non-OK return, so res would otherwise be
+      // read uninitialized. 0xff..ff is the maximum hash and never passes PoW.
+      memset(res.data, 0xff, sizeof(res.data));
+    }
     return res;
   }
   //---------------------------------------------------------------
