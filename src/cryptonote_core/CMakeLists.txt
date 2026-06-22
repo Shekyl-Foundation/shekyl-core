@@ -64,11 +64,3 @@ target_link_libraries(cryptonote_core
   PRIVATE
     ${SHEKYL_FFI_LINK_LIBS}
     ${EXTRA_LIBRARIES})
-
-if(SHEKYL_RANDOMX_V2_VERIFY)
-  # Phase 3a: blockchain.cpp (four set_canonical sites) and
-  # cryptonote_tx_utils.cpp (get_altblock_longhash) route through the Rust
-  # v2 verifier. Scoped to this target rather than a global add_definitions
-  # per RANDOMX_V2_PHASE3_PLAN.md §6.1.
-  target_compile_definitions(cryptonote_core PRIVATE SHEKYL_RANDOMX_V2_VERIFY)
-endif()

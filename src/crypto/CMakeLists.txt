@@ -97,14 +97,6 @@ foreach(_group hash ops slowhash rx jit cpp)
   list(APPEND _cncrypto_obj_targets $<TARGET_OBJECTS:${_target}>)
 endforeach()
 
-if(SHEKYL_RANDOMX_V2_VERIFY)
-  # Phase 3a: pow_randomx.cpp's RandomXPowSchema::hash routes through the
-  # Rust v2 verifier (shekyl_pow_randomx_v2_hash). obj_cncrypto_cpp is the
-  # OBJECT-library group carrying pow_randomx.cpp; scope the flag there
-  # rather than via a global add_definitions per RANDOMX_V2_PHASE3_PLAN.md §6.1.
-  target_compile_definitions(obj_cncrypto_cpp PRIVATE SHEKYL_RANDOMX_V2_VERIFY)
-endif()
-
 add_library(cncrypto ${_cncrypto_obj_targets})
 set_property(TARGET cncrypto PROPERTY FOLDER "libs")
 

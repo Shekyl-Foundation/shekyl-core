@@ -80,11 +80,3 @@ target_link_libraries(cryptonote_basic
   PRIVATE
     ${SHEKYL_FFI_LINK_LIBS}
     ${EXTRA_LIBRARIES})
-
-if(SHEKYL_RANDOMX_V2_VERIFY)
-  # Phase 3a: cryptonote_format_utils.cpp's get_block_longhash routes the
-  # RandomX branch through the Rust v2 verifier (shekyl_pow_randomx_v2_hash).
-  # Scoped to this target rather than a global add_definitions per
-  # RANDOMX_V2_PHASE3_PLAN.md §6.1.
-  target_compile_definitions(cryptonote_basic PRIVATE SHEKYL_RANDOMX_V2_VERIFY)
-endif()

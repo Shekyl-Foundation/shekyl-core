@@ -588,11 +588,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   {
     const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)
-#ifdef SHEKYL_RANDOMX_V2_VERIFY
       shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
-#else
-      rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
-#endif
   }
 
   return true;
@@ -713,11 +709,7 @@ void Blockchain::pop_blocks(uint64_t nblocks)
   if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
   {
     const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
-#ifdef SHEKYL_RANDOMX_V2_VERIFY
     shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
-#else
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
-#endif
   }
 }
 //------------------------------------------------------------------
@@ -1423,11 +1415,7 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   }
 
   if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
-#ifdef SHEKYL_RANDOMX_V2_VERIFY
     shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
-#else
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
-#endif
 
   MGINFO_GREEN("REORGANIZE SUCCESS! on height: " << split_height << ", new blockchain size: " << m_db->height());
   return true;
@@ -5599,11 +5587,7 @@ leave:
     notifier(new_height - 1, {std::addressof(bl), 1});
 
   if (m_hardfork->get_current_version() >= RX_BLOCK_VERSION)
-#ifdef SHEKYL_RANDOMX_V2_VERIFY
     shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
-#else
-    rx_set_main_seedhash(seedhash.data, tools::get_max_concurrency());
-#endif
 
   return true;
 }
