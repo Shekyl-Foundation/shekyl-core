@@ -155,7 +155,18 @@ impl RegtestDaemon {
     async fn await_ready(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last_err = String::new();
+        let log_path = self.data_dir.join("daemon.log");
         while Instant::now() < deadline {
+            // Fail fast if the daemon process already exited (bad SHEKYLD_BIN,
+            // missing runtime deps, port-bind failure): polling for the full 60s
+            // would only delay an unhelpful timeout. Point at the captured log so
+            // the real cause is one `cat` away.
+            if let Ok(Some(status)) = self.child.try_wait() {
+                panic!(
+                    "daemon exited early ({status}) before RPC became ready; see {}",
+                    log_path.display()
+                );
+            }
             match self
                 .rpc
                 .json_rpc_call::<GetInfoResp>("get_info", None)
@@ -167,8 +178,9 @@ impl RegtestDaemon {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         panic!(
-            "daemon RPC never became ready (port {}): {last_err}",
-            self.rpc_port
+            "daemon RPC never became ready (port {}) after 60s: {last_err}; see {}",
+            self.rpc_port,
+            log_path.display()
         );
     }
 
