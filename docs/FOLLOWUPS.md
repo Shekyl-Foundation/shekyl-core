@@ -3358,6 +3358,77 @@ sustainability is unaffected by the recalibration.
   zero `randomx_*` matches and aes-crate symbols visibly present
   per the expected disposition.
 
+- **RandomX v2 — vendored C library static-destructor double-free at
+  process teardown** (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1
+  parity gate). `external/randomx-v2`'s global
+  `SuperscalarInstructionInfo` objects double-free their
+  `std::vector<MacroOp>` members when `librandomx` is unloaded at
+  process exit, confirmed by a gdb backtrace through `_dl_fini` ->
+  `__do_global_dtors_aux` ->
+  `randomx::SuperscalarInstructionInfo::~SuperscalarInstructionInfo`.
+  The abort fires **only at teardown**, after any hash result has been
+  computed and returned, so it is independent of PoW correctness.
+
+  **Current disposition (worked around, not fixed).** The Phase 3a
+  parity harness
+  ([`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp))
+  exits via `std::_Exit` to bypass the broken static destructors so the
+  abort cannot mask the parity verdict. No consumer of a *result* is
+  affected: the Rust consensus verifier does not link the C library,
+  and a long-running miner reaches teardown only at clean shutdown,
+  after its work is done.
+
+  **Why deferred from Phase 3a.** Patching the vendored `external/
+  randomx-v2` C++ is outside the consensus-cutover PR's scope
+  (`15-deletion-and-debt.mdc` "while we're here is the enemy"); the
+  defect is teardown-only and the gate already has a clean, documented
+  workaround.
+
+  **Reopening / discharge criterion.** Reopen if the double-free is
+  ever observed to fire *before* teardown (i.e. where it could corrupt
+  a live result), or if the miner's clean-shutdown abort proves
+  operationally relevant. Discharge by either (a) fixing the vendored
+  library's static-object lifetime and removing the `std::_Exit`
+  workaround, or (b) recording an explicit "benign-at-teardown,
+  won't-fix" disposition citing the gdb evidence. Target: V3.0
+  (disposition decision before genesis, since the miner lib ships at
+  genesis; the decision may legitimately be "document as benign").
+
+  **Cross-references.**
+  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
+  header ("Library teardown bug");
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §7.
+
+- **RandomX v2 — separate-process miner-run full-dataset KAT**
+  (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1 parity gate). The
+  frozen `kFrozenKatHashHex` in the Phase 3a parity harness is captured
+  from the harness's own **in-process** full-dataset computation, not
+  from an actual v2 mining run in a separate process. It is an honest
+  regression anchor against library / flag drift, but the live
+  C-full == Rust-light comparison the harness runs on every invocation
+  already proves the cutover invariant; the frozen KAT is a regression
+  belt over those suspenders.
+
+  **Why deferred from Phase 3a.** Standing up a separate-process miner
+  run to source the KAT is harness scope beyond proving the parity
+  invariant, which the in-process comparison already does. The
+  in-process KAT carries its proxy nature documented at the capture
+  site in the meantime.
+
+  **Reopening / discharge criterion.** Discharge by capturing a hash
+  from an actual RandomX v2 mining run (separate process, full dataset)
+  at the pinned commit and replacing — or cross-checking —
+  `kFrozenKatHashHex` with it. Target: V3.0 (close before the genesis
+  freeze gate so the cutover's KAT carries end-to-end miner
+  provenance).
+
+  **Cross-references.**
+  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
+  header ("KAT provenance caveat");
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §7.2 #3.
+
 - **Promote 2c-emergent sub-PR design disciplines to project-level
   documentation** — **Closed (V3.0).** Landed in
   [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)

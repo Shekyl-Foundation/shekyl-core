@@ -78,6 +78,14 @@ else ()
   add_subdirectory(block_weight)
   add_subdirectory(hash)
   add_subdirectory(net_load_tests)
+  # Phase 3a Hole-1 gate (RANDOMX_V2_PHASE3_PLAN.md §7): the C full-dataset
+  # vs Rust light-cache PoW parity harness. Needs the imported
+  # `shekyl_randomx_v2` target, which only exists when the full-dataset C
+  # miner library is built. Release-gate only (label randomx_v2_full_parity),
+  # so it is deliberately excluded from the `enabled_tests` per-PR aggregate.
+  if(BUILD_RANDOMX_V2_MINER_LIB)
+    add_subdirectory(randomx_v2_parity)
+  endif()
 endif()
 
 
