@@ -295,7 +295,8 @@
   sound because v2's light-cache hash equals its full-dataset hash; the
   release-gate **Hole-1 differential test**
   (`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`) proves
-  C-full ≡ Rust-light over a corpus + a frozen miner-dataset KAT,
+  C-full ≡ Rust-light over a corpus + a frozen in-process full-dataset KAT
+  (a separate-process miner-run KAT is deferred; see FOLLOWUPS),
   **halt-on-red**. See
   [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md),
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md), and

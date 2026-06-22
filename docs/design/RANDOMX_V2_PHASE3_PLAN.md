@@ -472,6 +472,9 @@ which links `external/randomx-v2` @ `aaafe71`):
    as a vector. This closes the in-process-proxy gap — it proves
    "blocks real miners produce validate under the Rust verifier," not
    just "two in-process computations agree."
+   **(Status: deferred.** The landed harness pins an in-process full-dataset
+   KAT (`kFrozenKatHashHex`) instead; the separate-process miner-run KAT is
+   tracked in FOLLOWUPS and targeted before the genesis freeze — see §13.)
 
 Gating: a ctest label (e.g. `randomx_v2_full_parity`) in the
 release-gate suite, **not** the per-PR fast gate (the full dataset is
@@ -593,9 +596,12 @@ The consensus PoW cutover (3a + 3b) is complete. 3c is deferred.
 - Flag-gated (`SHEKYL_RANDOMX_V2_VERIFY`) coherent swap at the hash site
   + 4 `set_canonical` sites; legacy v1 path stayed buildable.
 - Hole-1 differential gate (`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`):
-  C v2 full-dataset ≡ Rust v2 light-cache over a corpus + a
-  miner-produced full-dataset frozen KAT; halt-on-red. Worked around the
-  vendored-library teardown double-free (`_Exit`, tracked in FOLLOWUPS).
+  C v2 full-dataset ≡ Rust v2 light-cache over a corpus + an **in-process**
+  full-dataset frozen KAT (`kFrozenKatHashHex`); halt-on-red. The frozen KAT
+  is captured from the harness's own full-dataset computation, **not** from a
+  separate-process mining run; that end-to-end miner-provenance KAT is deferred
+  (tracked in FOLLOWUPS, targeted before the genesis freeze). Worked around the
+  vendored-library teardown double-free (`_Exit`, also tracked in FOLLOWUPS).
 
 **3b — collapse to RandomX-only (consensus cutover):**
 - `383b560f1` — `get_pow_for_height` collapsed to RandomX for every
