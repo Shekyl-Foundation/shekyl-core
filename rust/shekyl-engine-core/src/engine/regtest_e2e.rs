@@ -434,6 +434,94 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
     assert!(!path_blob.is_empty(), "path_blob must be non-empty");
 }
 
+/// Acceptance gate for the §8 step-4 scanner migration (shekyl-oxide → shekyl-wire
+/// block/tx parse). Mine coinbase blocks to the wallet's own address, drive the
+/// production [`Engine::start_refresh`] against the live daemon, and assert the
+/// wallet reflects a real, matured (unlocked) coinbase balance.
+///
+/// This is the *refresh half* of [`e2e_fcmp_spend_accepted_by_daemon`], isolated so
+/// it can pass independently of the (separate) tx-builder→shekyl-wire format work the
+/// spend half still needs. Run before this migration, `start_refresh` failed at block
+/// fetch with `RpcError::InvalidNode("invalid block")`: the legacy shekyl-oxide parse
+/// dropped the coinbase `Null` committed base, so live daemon blocks would not
+/// deserialize. Routing the fetch through the daemon-KAT'd shekyl-wire parse
+/// (`DaemonEngine::fetch_scannable_block`) is what makes this green.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn e2e_refresh_scans_coinbase_balance() {
+    use super::refresh::RefreshOptions;
+    use super::{DaemonClient, Engine, SoloSigner};
+    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_units::AtomicUnits;
+
+    let daemon = RegtestDaemon::start().await;
+
+    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc");
+    let tmp = tempfile::tempdir().expect("wallet tempdir");
+    let wallet_path = tmp.path().join("wallet");
+    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let creds = super::lifecycle::Credentials::password_only(b"track2-refresh");
+    let params = super::lifecycle::EngineCreateParams {
+        base_path: &wallet_path,
+        credentials: &creds,
+        network: shekyl_address::Network::Mainnet,
+        capability: super::lifecycle::CapabilityInput::Full {
+            master_seed_64: &seed,
+            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: shekyl_engine_file::SafetyOverrides::none(),
+        prefs: shekyl_engine_prefs::WalletPrefs::default(),
+    };
+    let wallet =
+        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let address = wallet.primary_address().encode().expect("encode address");
+
+    // Mine in batches past coinbase maturity, refreshing after each batch. The
+    // `.expect("start_refresh")` / `.expect("refresh joins")` below are the load-bearing
+    // assertions for this gate: that is where the pre-migration `InvalidNode` surfaced.
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24; // ~240 blocks; well past the coinbase unlock window
+
+    let arc = Arc::new(RwLock::new(wallet));
+    let mut unlocked = AtomicUnits::ZERO;
+    let mut total_height = 0u64;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh")
+            .join()
+            .await
+            .expect("refresh joins");
+        {
+            let g = arc.read().await;
+            let ledger = g.ledger();
+            total_height = ledger.ledger.height();
+            unlocked = ledger.ledger.balance(total_height).unlocked;
+        }
+        if unlocked > AtomicUnits::ZERO {
+            break;
+        }
+    }
+
+    assert!(
+        unlocked > AtomicUnits::ZERO,
+        "wallet must reflect a matured coinbase balance after mining + refresh \
+         (was InvalidNode pre-migration); got {unlocked:?} at height {total_height}"
+    );
+    eprintln!("scanned unlocked coinbase balance: {unlocked:?} at height {total_height}");
+}
+
 /// The §1.1 closure: a real FCMP++ spend built by the production Engine, submitted to a
 /// live shekyld, and accepted by its consensus verify. submit_pending_tx returning Ok is
 /// the proof — the daemon's mempool verify ran the FCMP++ membership/SAL proof, the PQC
