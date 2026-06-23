@@ -180,6 +180,8 @@ What exists today, and why it's misleading:
   `rust/shekyl-oxide/` path. So **there is no automated check that the local
   vendored copy matches the pin** — which is exactly why the `divisors` drift
   went undetected. The gate everyone assumes exists (local copy == pin) does not.
+  *(Addressed by A1 — a content-integrity gate now runs on push/PR; see §6 Track A.
+  Drift-from-snapshot today, byte-exact-vs-pin after A0.)*
 - **Three "upstreams" are named in one tree:**
   - all 14 crate `repository` fields → `Shekyl-Foundation/shekyl-oxide`;
   - the vendoring doc + pin file + CI → `Shekyl-Foundation/monero-oxide@fcmp++`;
@@ -221,11 +223,32 @@ priority track.
   vendoring workflow applied retroactively to drift that bypassed step 1.
   *(Requires a push to `Shekyl-Foundation/monero-oxide` — gated on explicit
   authorization per [`06-branching`].)*
-- **A1 — add the gate everyone assumed existed.** A **local-copy-vs-pin content
-  check** (`git archive <pin>` content == the vendored crypto tree) running on
-  push/PR. Re-scope the weekly staleness canary to the crypto crates only. After
-  A0+A1, "vendored = pristine" is both *true* and *enforced* — and the EC review
-  + Q6 freeze get a clean, bounded, diffable subtree.
+- **A1 — add the gate everyone assumed existed. [content gate landed; canary
+  re-scoped]** A content-integrity gate now runs on push/PR
+  (`.github/workflows/vendored-crypto-content.yml` →
+  `scripts/ci/check_vendored_crypto_manifest.sh`): the vendored crypto subtree is
+  verified byte-for-byte against a checked-in manifest
+  (`rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256`), so an in-place edit that
+  bypasses the fork workflow — the `divisors` failure mode — fails CI. The weekly
+  staleness canary is re-scoped/clarified (`shekyl-oxide-divergence.yml`, now
+  "vendored crypto staleness"): commit-hash staleness only, explicitly distinct from
+  the content gate.
+  - **Caveat — this is the *drift-from-snapshot* form, not yet local==pin.** The
+    local subtree currently diverges from the pin by rustfmt reflow + Shekyl stamps +
+    the `divisors` drift (measured: even rustfmt-normalized, residual diffs remain
+    across every crate), so a literal byte-exact-vs-pin gate cannot be green until
+    **A0** re-syncs the subtree to a clean fork baseline. After A0, regenerate the
+    manifest from the pristine tree (then snapshot == pin) and the gate is effectively
+    byte-exact-vs-pin. Until then it already closes the actual hole — *silent local
+    edits* — which is what bit `divisors`.
+  - **Fmt-isolation deferred to A0.** Keeping `cargo fmt` off the subtree via a
+    workspace `exclude` is the stable-compatible mechanism (rustfmt `ignore` is
+    nightly-only), but excluding the crates requires de-inheriting
+    `[lints] workspace = true` from each Cargo.toml — which A0's re-sync replaces
+    wholesale, so it rides A0. Meanwhile the toolchain pin (1.94, `chore/pin-rust-
+    toolchain`) keeps the subtree fmt-stable, so routine work does not trip the
+    manifest; a deliberate toolchain bump that reflows the subtree regenerates the
+    manifest in the same PR (per `rust-toolchain.toml`'s bump policy).
 
 ### Track B — Residual un-vendor + rename (gated after slice 1)
 

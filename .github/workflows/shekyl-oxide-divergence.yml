@@ -1,4 +1,13 @@
-name: shekyl-oxide divergence
+name: vendored crypto staleness
+
+# Staleness canary for the vendored crypto subtree: is the pinned snapshot commit
+# (rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT) behind the monero-oxide@fcmp++ fork
+# tip? It compares COMMIT HASHES only (via git ls-remote) and does NOT inspect file
+# contents — local-content integrity is the separate, push/PR-blocking
+# vendored-crypto-content.yml gate. Weekly; a red run means "consider re-syncing the
+# crypto subtree", not a build failure. (Scope is the kept-vendored crypto: that is
+# what the pin tracks; the residual application crates under shekyl-oxide/ are being
+# un-vendored and are no longer tracked against upstream.)
 
 on:
   schedule:
@@ -7,7 +16,7 @@ on:
 
 jobs:
   compare-upstream-tip:
-    name: Compare vendored snapshot to fork tip
+    name: Compare vendored crypto snapshot to fork tip
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
