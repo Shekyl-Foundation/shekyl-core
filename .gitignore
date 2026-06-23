@@ -150,6 +150,9 @@ artifacts/
 release/
 *.tar.gz
 *.sha256
+# ...except the vendored-crypto content manifest: a tracked source-of-truth (the
+# integrity baseline for rust/shekyl-oxide/crypto/), not a release checksum artifact.
+!rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256
 
 # Environment files (may contain secrets)
 .env
