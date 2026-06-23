@@ -3434,11 +3434,26 @@ namespace cryptonote
       entry.output_index = output_idx;
       entry.tree_depth = depth;
 
+      if (output_idx >= tip_leaf_count)
+      {
+        // Beyond the entire tree: the wallet only knows outputs up to the tip, so this
+        // is a malformed request, not a timing race. Hard-fail (WRONG_PARAM) so a client
+        // bug surfaces instead of being silently omitted like the not-yet-drained case.
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "output_index " + std::to_string(output_idx) +
+                             " >= tip_leaf_count " + std::to_string(tip_leaf_count);
+        return false;
+      }
       if (output_idx >= ref_leaf_count)
       {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "output_index " + std::to_string(output_idx) + " >= ref_leaf_count " + std::to_string(ref_leaf_count);
-        return false;
+        // In the tree but not yet drained into the *reference* tree (still inside the
+        // maturity + reorg window): skip this index rather than failing the whole batch.
+        // A wallet legitimately requests paths for all its unspent outputs and matches
+        // the returned paths by output_index, waiting for the rest. The omission is
+        // unambiguous: an out-of-tree index hard-fails above, and a genuine fault (e.g.
+        // the leaf read below) still `return false`s the whole call, so a missing index
+        // in a *successful* response means only "not yet in the reference tree".
+        continue;
       }
 
       std::string path_hex;
@@ -3489,7 +3504,9 @@ namespace cryptonote
       entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
         std::string(reinterpret_cast<const char*>(chunk_output_bytes.data()), chunk_output_bytes.size()));
 
-      // Layers 1..depth-1: collect sibling hashes with boundary-chunk trimming
+      // Layers 1..depth: collect sibling hashes with boundary-chunk trimming.
+      // The loop emits exactly `depth` branch layers (branch_count == depth), the
+      // count the wallet's path parser / FCMP++ signer expect.
       uint64_t ref_nodes_at_prev_layer = ref_leaf_count;
       uint64_t cur_nodes_at_prev_layer = tip_leaf_count;
       uint64_t child_chunk = chunk_idx;
