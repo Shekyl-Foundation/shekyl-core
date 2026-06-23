@@ -393,40 +393,14 @@ mod tests {
 
     #[test]
     fn parse_pruned_tx_round_trips_and_rejects_trailing() {
-        // Pruned non-miner spend shape: a ToKey (key-image) input, version · prefix ·
-        // ct(0x01 fee referenceBlock base) then EOF (prunable proof + pqc_auths dropped).
-        let tx = Transaction {
-            prefix: TxPrefix {
-                unlock_time: 0,
-                inputs: vec![Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: [0x42u8; 32],
-                }],
-                outputs: vec![Output {
-                    amount: 0,
-                    key: [1u8; 32],
-                    view_tag: 0,
-                }],
-                extra: vec![],
-            },
-            ct: Ct::Fcmp {
-                fee: 0,
-                reference_block: [0u8; 32],
-                base: CtBase {
-                    enc_amounts: vec![[0u8; 9]],
-                    enc_labels: vec![[0u8; 9]],
-                    commitments: vec![[2u8; 32]],
-                },
-                pqc_auths: vec![],
-                prunable: None,
-            },
-        };
+        // A pruned non-miner spend: ToKey (key-image) input, 2 outputs (the anti-deanon
+        // minimum), prunable proof + pqc_auths dropped — round-trips through from_bytes.
+        let tx = pruned_spend_tx(0);
         let mut bytes = Vec::new();
         tx.write(&mut bytes).expect("Vec write is infallible");
         let hexed = hex::encode(&bytes);
         let parsed = parse_pruned_tx(&hexed, "").expect("pruned tx round trips");
-        assert_eq!(parsed.prefix.outputs.len(), 1);
+        assert_eq!(parsed.prefix.outputs.len(), 2);
 
         let mut trailing = bytes.clone();
         trailing.push(0xAB);
@@ -507,38 +481,70 @@ mod tests {
         ));
     }
 
-    /// Hex of a valid pruned non-miner tx (a ToKey spend, prunable dropped) that
-    /// `parse_pruned_tx` accepts; its hash is irrelevant to these batch tests (the
-    /// pruned form is associated by the requested `tx_hash` label, not by re-hashing).
-    fn pruned_tx_hex() -> String {
-        let tx = Transaction {
+    #[test]
+    fn parse_pruned_tx_rejects_single_output_spend() {
+        // A non-miner spend (key-image input) must have >= 2 outputs (anti-deanon,
+        // GENESIS §10); a 1-output spend is non-canonical, so the untrusted-daemon
+        // ingestion boundary rejects it rather than handing the scanner phantom state.
+        let mut tx = pruned_spend_tx(0);
+        tx.prefix.outputs.truncate(1);
+        if let Ct::Fcmp { base, .. } = &mut tx.ct {
+            base.enc_amounts.truncate(1);
+            base.enc_labels.truncate(1);
+            base.commitments.truncate(1);
+        }
+        assert!(matches!(
+            parse_pruned_tx(&hex::encode(tx.serialize()), ""),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    /// A valid pruned non-miner spend: a `ToKey` key-image input, **2 outputs** (the
+    /// anti-deanonymization minimum the ingestion validator enforces), with the prunable
+    /// proof + pqc_auths dropped. The shared fixture for the `parse_pruned_tx` /
+    /// `parse_tx_batch` tests; `unlock_time` is varied for the block-height-only gate.
+    fn pruned_spend_tx(unlock_time: u64) -> Transaction {
+        Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time,
                 inputs: vec![Input::ToKey {
                     amount: 0,
                     key_offsets: vec![],
                     key_image: [0x42u8; 32],
                 }],
-                outputs: vec![Output {
-                    amount: 0,
-                    key: [1u8; 32],
-                    view_tag: 0,
-                }],
+                outputs: vec![
+                    Output {
+                        amount: 0,
+                        key: [1u8; 32],
+                        view_tag: 0,
+                    },
+                    Output {
+                        amount: 0,
+                        key: [3u8; 32],
+                        view_tag: 1,
+                    },
+                ],
                 extra: vec![],
             },
             ct: Ct::Fcmp {
                 fee: 0,
                 reference_block: [0u8; 32],
                 base: CtBase {
-                    enc_amounts: vec![[0u8; 9]],
-                    enc_labels: vec![[0u8; 9]],
-                    commitments: vec![[2u8; 32]],
+                    enc_amounts: vec![[0u8; 9], [0u8; 9]],
+                    enc_labels: vec![[0u8; 9], [0u8; 9]],
+                    commitments: vec![[2u8; 32], [3u8; 32]],
                 },
                 pqc_auths: vec![],
                 prunable: None,
             },
-        };
-        hex::encode(tx.serialize())
+        }
+    }
+
+    /// Hex of a valid pruned non-miner tx that `parse_pruned_tx` accepts; its hash is
+    /// irrelevant to the batch tests (the pruned form is associated by the requested
+    /// `tx_hash` label, not by re-hashing).
+    fn pruned_tx_hex() -> String {
+        hex::encode(pruned_spend_tx(0).serialize())
     }
 
     fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> Value {
@@ -615,37 +621,10 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    /// A valid pruned non-miner tx (a ToKey spend, prunable dropped) with the given
-    /// `unlock_time`, hex-encoded — for the block-height-only ingestion gate tests.
+    /// Hex of a valid pruned non-miner spend with the given `unlock_time` — for the
+    /// block-height-only ingestion gate tests.
     fn pruned_tx_hex_with_unlock_time(unlock_time: u64) -> String {
-        let tx = Transaction {
-            prefix: TxPrefix {
-                unlock_time,
-                inputs: vec![Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: [0x42u8; 32],
-                }],
-                outputs: vec![Output {
-                    amount: 0,
-                    key: [1u8; 32],
-                    view_tag: 0,
-                }],
-                extra: vec![],
-            },
-            ct: Ct::Fcmp {
-                fee: 0,
-                reference_block: [0u8; 32],
-                base: CtBase {
-                    enc_amounts: vec![[0u8; 9]],
-                    enc_labels: vec![[0u8; 9]],
-                    commitments: vec![[2u8; 32]],
-                },
-                pqc_auths: vec![],
-                prunable: None,
-            },
-        };
-        hex::encode(tx.serialize())
+        hex::encode(pruned_spend_tx(unlock_time).serialize())
     }
 
     #[test]

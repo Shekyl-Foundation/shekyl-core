@@ -1427,6 +1427,17 @@ impl Transaction {
                 base.commitments.len()
             )));
         }
+        // §10 anti-deanonymization: a spend (a key-image-bearing tx) must have >= 2
+        // outputs (blockchain.cpp:3599-3602). Pruned-safe — outputs survive pruning and
+        // the spend is identified by its key-image inputs, not the dropped prunable proof
+        // — so it is enforced at ingestion, not only in `validate`. Checked after the ct
+        // shape so a malformed-ct error still surfaces first. Coinbase / fee-only forms
+        // carry no key image (exempt); a bond_post's >= 2 rule is prunable-coupled.
+        if !key_images.is_empty() && n_out < 2 {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: spend has {n_out} output(s), needs >= 2"
+            )));
+        }
         Ok(())
     }
 
@@ -1463,8 +1474,10 @@ impl Transaction {
             match prunable {
                 // Spend / bond-post: a prunable proof is present.
                 Some(prunable) => {
-                    // A non-coinbase, non-serve_credit tx requires >= 2 outputs (the
-                    // standard anti-deanonymization rule; blockchain.cpp:3599-3602).
+                    // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
+                    // Spends are already gated in `validate_context_free_pruned` (keyed
+                    // on key-image inputs, pruned-safe); this guards a bond_post, whose
+                    // >= 2 rule is prunable-coupled (a fee-only bond_post is 0-output).
                     if n_out < 2 {
                         return Err(io::Error::other(format!(
                             "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= 2"
