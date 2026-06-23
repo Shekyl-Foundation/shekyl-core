@@ -174,21 +174,22 @@ sustainability is unaffected by the recalibration.
     are brought native off `shekyl-oxide` (the application-layer un-vendor), define
     `Timelock` as block-height-only (`None`/`Block`) so the dead variant cannot be
     constructed at all and the lifter becomes total without an unreachable arm.
-  - **A pruned-safe context-free ingestion validator belongs in `shekyl-wire`, called
-    from `block_fetch.rs`.** The wallet ingests *pruned* transactions, and
-    `Transaction::validate()` cannot run on them: its no-prunable branch rejects a
-    key-image-bearing spend whose prunable proof has been dropped *by design* (the
-    pruned full-spend form is reconstructed via §4 `into_full`, not validated by the
-    wire parser). So today `block_fetch.rs` enforces only the *stateless subset that is
-    pruned-safe* — `reject_timestamp_unlock_time` (block-height-only), the
-    `2*MAX_TX_SIZE` DoS pre-bound, strict `missed_tx`, and `parse_tx_batch` order-pinning
-    — and the rest of the context-free reject set (arm-mixing, key-image ordering,
-    output-count) lives only as the scanner's defense-in-depth gates
-    (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` + timestamp-form gates). The clean
-    end-state is a dedicated `shekyl-wire` pruned-safe context-free validator (e.g.
-    `validate_context_free_pruned`) that enforces the full pruned-safe subset at the
-    ingestion boundary uniformly, retiring the scattered scanner gates to true
-    belt-and-suspenders.
+  - **[Done 2026-06-23, this slice] A pruned-safe context-free ingestion validator now
+    lives in `shekyl-wire`, called from `block_fetch.rs`.**
+    `Transaction::validate_context_free_pruned` enforces the full context-free reject set
+    that is safe on a *pruned* tx — resource bounds, the §2.5 coinbase shape + arm-mixing
+    matrix, the §12 key-image canonical form, block-height-only `unlock_time`, and the
+    committed-base arity — i.e. everything except the prunable-coupled checks (`nbp == 1`,
+    the per-input `pqc_auths` / `pseudoOuts` counts, `>= 2` outputs for a spend, the
+    fee-only no-prunable shape), which stay in `Transaction::validate` (the complete-tx
+    validator) because the wallet ingests pruned txs (the prunable proof dropped).
+    `parse_block_blob` (coinbase) and `parse_pruned_tx` (non-miner) both call it, and
+    `parse_pruned_tx` additionally rejects a coinbase-shaped tx (`Transaction::is_coinbase`)
+    on the `get_transactions` path — the coinbase belongs in the block blob, never here.
+    The scattered ad-hoc checks (the standalone `unlock_time` reject) are retired into the
+    validator. **Remaining:** retire the scanner's now-redundant defense-in-depth gates
+    (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates) to true
+    belt-and-suspenders when the application-layer un-vendor lands.
   - **Daemon-side enforcement.** A canonical daemon should reject timestamp-form
     `unlock_time` at consensus so it can never *serve* one; the wallet's ingestion
     reject is then pure defense against a buggy/adversarial node. (User: "bring the
@@ -196,10 +197,11 @@ sustainability is unaffected by the recalibration.
     consensus-side companion to the wallet-side gate and rides the daemon's own
     block-height-only audit.
 
-  Not genesis-blocking (the scan path is already safe end-to-end). **Target: V3.x**,
-  landing with the rest of the `shekyl-oxide` application-layer un-vendor. Reopen-now
-  criterion: when the native `WalletOutput`/`Timelock` types land, or when `shekyl-wire`
-  grows a pruned-safe context-free validator — fold all three sub-items into that work.
+  Not genesis-blocking (the scan path is already safe end-to-end; the pruned-safe
+  validator above now enforces the full context-free reject set at ingestion). **Target:
+  V3.x**, landing with the rest of the `shekyl-oxide` application-layer un-vendor.
+  Reopen-now criterion: when the native `WalletOutput`/`Timelock` types land — fold the
+  two remaining sub-items (native `Timelock`, daemon-side enforcement) into that work.
 
 - **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership

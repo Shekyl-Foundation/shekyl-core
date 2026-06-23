@@ -36,31 +36,33 @@
 //! # Ingestion validation (untrusted daemon)
 //!
 //! The daemon is untrusted, so this boundary rejects non-canonical responses
-//! rather than forwarding them to the scanner: oversized hex blobs (DoS
-//! pre-bounds ahead of the `MAX_BLOCK_BLOB_SIZE` / `MAX_TX_SIZE` guards in
+//! rather than forwarding them to the scanner. Every block- and transaction-blob
+//! is run through the canonical, pruned-safe context-free validator
+//! [`shekyl_wire::Transaction::validate_context_free_pruned`] — the consensus-parity
+//! reject set (resource bounds, the §2.5 coinbase shape + arm-mixing matrix, the §12
+//! key-image canonical form, block-height-only `unlock_time`, committed-base arity)
+//! minus the prunable-coupled checks, which cannot run on the *pruned* transactions
+//! the wallet ingests (the prunable proof is dropped, and the full
+//! [`shekyl_wire::Transaction::validate`] rejects a key-image-bearing spend without it
+//! by design). This is the single ingestion gate; it replaces the scattered ad-hoc
+//! checks (the standalone `unlock_time` reject, etc.) that accumulated here.
+//!
+//! On top of the validator, [`parse_pruned_tx`] rejects a coinbase-shaped tx in a
+//! `get_transactions` response ([`shekyl_wire::Transaction::is_coinbase`]) — the
+//! coinbase is embedded in the block blob and parsed there, never served as a
+//! non-miner tx — and the transport-shape checks guard the framing: oversized-hex
+//! DoS pre-bounds (ahead of the `MAX_BLOCK_BLOB_SIZE` / `MAX_TX_SIZE` guards in
 //! [`shekyl_wire::Block::from_bytes`] / [`shekyl_wire::Transaction::from_bytes`]),
-//! reordered / mismatched `get_transactions` results
-//! ([`parse_tx_batch`]), malformed `missed_tx` entries, and the **timestamp
-//! form** of `unlock_time` ([`reject_timestamp_unlock_time`]). The latter is
-//! the *pruned-safe, stateless* subset of [`shekyl_wire::Transaction::validate`]
-//! — Shekyl is block-height-only (`GENESIS_TX_WIRE_FORMAT.md` §9 "creation
-//! cut"). The full `validate()` cannot run here because the wallet ingests
-//! *pruned* transactions (the prunable proof dropped) and `validate()`'s
-//! no-prunable branch rejects a key-image-bearing spend without its prunable
-//! by design. Wiring a dedicated pruned-safe context-free validator into this
-//! boundary (so the full context-free reject set — arm-mixing, key-image
-//! order, output-count — is enforced at ingestion, not just in the scanner's
-//! defense-in-depth gates) is a shekyl-oxide-cutover follow-up tracked in
+//! reordered / mismatched batches ([`parse_tx_batch`]), and malformed `missed_tx`
+//! entries. Retiring the scanner's now-redundant defense-in-depth gates
+//! (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates) to true
+//! belt-and-suspenders is a shekyl-oxide-cutover follow-up tracked in
 //! `docs/FOLLOWUPS.md`.
 
 use serde_json::{json, Value};
 use shekyl_rpc::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_wire::{
-    block::MAX_BLOCK_BLOB_SIZE,
-    transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL},
-    Block, Transaction,
-};
+use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
 /// restricted RPC (`core_rpc_server.cpp`); batch accordingly.
@@ -116,10 +118,14 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
             "different block than requested (number)".to_string(),
         ));
     }
-    // Block-height-only: a canonical coinbase carries `unlock_time = height +
-    // CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (block form). Reject the timestamp
-    // form here too (defense-in-depth; it would also fail consensus).
-    reject_timestamp_unlock_time(block.miner_transaction.prefix.unlock_time)?;
+    // Canonical-shape gate for the embedded coinbase, via the same pruned-safe
+    // context-free validator used for non-miner txs. `Block::from_bytes` already pins
+    // the gen/Null coinbase shape; this adds the field-level canonical checks
+    // (block-height-only `unlock_time`, output count, committed-base arity).
+    block
+        .miner_transaction
+        .validate_context_free_pruned()
+        .map_err(|_| RpcError::InvalidNode("non-canonical coinbase".to_string()))?;
     Ok(block)
 }
 
@@ -142,31 +148,21 @@ fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, R
     let bytes = hex::decode(pruned_hex)
         .map_err(|_| RpcError::InvalidNode("pruned tx blob wasn't hex".to_string()))?;
     let tx = Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))?;
-    // Block-height-only ingestion gate (see `reject_timestamp_unlock_time`):
-    // stop a timestamp-form tx before it reaches the scanner.
-    reject_timestamp_unlock_time(tx.prefix.unlock_time)?;
-    Ok(tx)
-}
-
-/// Reject the CryptoNote/Monero **timestamp form** of `unlock_time` at the
-/// ingestion boundary. Shekyl is **block-height-only**: `unlock_time >=
-/// `[`UNLOCK_TIME_BLOCK_SENTINEL`] is a deleted inheritance — a "creation cut"
-/// per `GENESIS_TX_WIRE_FORMAT.md` §9 — that [`shekyl_wire::Transaction::validate`]
-/// rejects. The wallet ingests *pruned* transactions, on which the full
-/// `validate()` cannot run (its no-prunable branch rejects a key-image-bearing
-/// spend whose prunable proof has been dropped, by design), so this is the
-/// pruned-safe, stateless subset of that contract: it stops a malicious or
-/// buggy daemon from feeding the scanner a transaction consensus would reject
-/// (which would otherwise surface phantom, never-spendable balance). Reported
-/// as [`RpcError::InvalidNode`] — the node served non-canonical data.
-fn reject_timestamp_unlock_time(unlock_time: u64) -> Result<(), RpcError> {
-    if unlock_time >= UNLOCK_TIME_BLOCK_SENTINEL {
-        return Err(RpcError::InvalidNode(format!(
-            "unlock_time {unlock_time} is the timestamp form; Shekyl is block-height-only \
-             (GENESIS_TX_WIRE_FORMAT.md §9 creation cut)"
-        )));
+    // Canonical-shape gate: the daemon is untrusted, so reject any tx that is not a
+    // well-formed, block-height-only Shekyl transaction before it reaches the scanner.
+    // This is the pruned-safe context-free subset of the consensus-parity validator
+    // (the wallet ingests pruned txs, so `validate()`'s prunable-coupled branch cannot
+    // run — see `shekyl_wire::Transaction::validate_context_free_pruned`).
+    tx.validate_context_free_pruned()
+        .map_err(|_| invalid_tx_error(tx_hash_hex))?;
+    // `get_transactions` returns only NON-miner txs — the coinbase is embedded in the
+    // block blob and parsed there. A coinbase-shaped tx in this response is the daemon
+    // serving something it never should; reject it so a misplaced coinbase (with its
+    // cleartext `gen` reward output) can never be fed to the scanner.
+    if tx.is_coinbase() {
+        return Err(invalid_tx_error(tx_hash_hex));
     }
-    Ok(())
+    Ok(tx)
 }
 
 /// Build the error for a pruned-tx parse failure, preferring the daemon-named
@@ -316,6 +312,7 @@ async fn compute_first_output_index<R: Rpc>(
 mod tests {
     use super::*;
 
+    use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
     use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
 
     /// A coinbase-only block at `number` with one tagged-key output whose
@@ -396,12 +393,16 @@ mod tests {
 
     #[test]
     fn parse_pruned_tx_round_trips_and_rejects_trailing() {
-        // Fee-only Fcmp = the pruned spend shape: version · prefix · ct(0x01 fee
-        // referenceBlock base) then EOF (empty pqc_auths, no prunable).
+        // Pruned non-miner spend shape: a ToKey (key-image) input, version · prefix ·
+        // ct(0x01 fee referenceBlock base) then EOF (prunable proof + pqc_auths dropped).
         let tx = Transaction {
             prefix: TxPrefix {
                 unlock_time: 0,
-                inputs: vec![Input::Gen(0)],
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: [0x42u8; 32],
+                }],
                 outputs: vec![Output {
                     amount: 0,
                     key: [1u8; 32],
@@ -443,14 +444,81 @@ mod tests {
         ));
     }
 
-    /// Hex of a valid pruned tx (fee-only Fcmp shape) that `parse_pruned_tx`
-    /// accepts; its hash is irrelevant to these batch tests (the pruned form is
-    /// associated by the requested `tx_hash` label, not by re-hashing).
+    #[test]
+    fn parse_pruned_tx_rejects_coinbase_shaped() {
+        // `get_transactions` returns only non-miner txs (the coinbase is embedded in
+        // the block blob and parsed there). A coinbase served here — whether a clean
+        // `[gen] + Null` coinbase or the non-canonical `gen + Fcmp` mix — must be
+        // rejected, never fed to the scanner (it would otherwise carry a cleartext
+        // `gen` reward output the wallet has no business ingesting from this path).
+        let real_coinbase = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(7)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![[0u8; 9]],
+                enc_labels: vec![[0u8; 9]],
+                commitments: vec![[2u8; 32]],
+            }),
+        };
+        // A valid coinbase passes the context-free validator, then is_coinbase rejects it.
+        assert!(real_coinbase.validate_context_free_pruned().is_ok());
+        assert!(matches!(
+            parse_pruned_tx(&hex::encode(real_coinbase.serialize()), ""),
+            Err(RpcError::InvalidNode(_))
+        ));
+
+        // The non-canonical `gen + Fcmp` mix is rejected by the validator itself
+        // (a coinbase must carry a Null ct, §2.5).
+        let gen_fcmp = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(7)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0u8; 32],
+                base: CtBase {
+                    enc_amounts: vec![[0u8; 9]],
+                    enc_labels: vec![[0u8; 9]],
+                    commitments: vec![[2u8; 32]],
+                },
+                pqc_auths: vec![],
+                prunable: None,
+            },
+        };
+        assert!(gen_fcmp.validate_context_free_pruned().is_err());
+        assert!(matches!(
+            parse_pruned_tx(&hex::encode(gen_fcmp.serialize()), ""),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    /// Hex of a valid pruned non-miner tx (a ToKey spend, prunable dropped) that
+    /// `parse_pruned_tx` accepts; its hash is irrelevant to these batch tests (the
+    /// pruned form is associated by the requested `tx_hash` label, not by re-hashing).
     fn pruned_tx_hex() -> String {
         let tx = Transaction {
             prefix: TxPrefix {
                 unlock_time: 0,
-                inputs: vec![Input::Gen(0)],
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: [0x42u8; 32],
+                }],
                 outputs: vec![Output {
                     amount: 0,
                     key: [1u8; 32],
@@ -547,13 +615,17 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    /// A valid pruned tx (fee-only Fcmp shape) with the given `unlock_time`,
-    /// hex-encoded — for the block-height-only ingestion gate tests.
+    /// A valid pruned non-miner tx (a ToKey spend, prunable dropped) with the given
+    /// `unlock_time`, hex-encoded — for the block-height-only ingestion gate tests.
     fn pruned_tx_hex_with_unlock_time(unlock_time: u64) -> String {
         let tx = Transaction {
             prefix: TxPrefix {
                 unlock_time,
-                inputs: vec![Input::Gen(0)],
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: [0x42u8; 32],
+                }],
                 outputs: vec![Output {
                     amount: 0,
                     key: [1u8; 32],
@@ -574,18 +646,6 @@ mod tests {
             },
         };
         hex::encode(tx.serialize())
-    }
-
-    #[test]
-    fn reject_timestamp_unlock_time_boundary() {
-        // Block form (below the sentinel) is accepted; the sentinel itself and
-        // anything above it is the rejected timestamp form.
-        assert!(reject_timestamp_unlock_time(0).is_ok());
-        assert!(reject_timestamp_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1).is_ok());
-        assert!(matches!(
-            reject_timestamp_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL),
-            Err(RpcError::InvalidNode(_))
-        ));
     }
 
     #[test]
