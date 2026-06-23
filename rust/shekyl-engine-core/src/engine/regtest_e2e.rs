@@ -37,7 +37,7 @@ use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc::Rpc;
 use shekyl_simple_request_rpc::SimpleRequestRpc;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
 /// races on the RPC port and is resource-heavy (each mines blocks). Serialize all
@@ -416,4 +416,129 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
         .and_then(serde_json::Value::as_str)
         .expect("path_blob field");
     assert!(!path_blob.is_empty(), "path_blob must be non-empty");
+}
+
+/// The §1.1 closure: a real FCMP++ spend built by the production Engine, submitted to a
+/// live shekyld, and accepted by its consensus verify. submit_pending_tx returning Ok is
+/// the proof — the daemon's mempool verify ran the FCMP++ membership/SAL proof, the PQC
+/// auths, and the CT balance against the wallet-built, wire-serialized spend. This is the
+/// live oracle the spec (FCMP_SPEND_SIGNING_PREIMAGE.md §5) names as the residual: it
+/// validates the tx-builder→shekyl-wire serialization + PQC signing-preimage byte-for-byte
+/// against the C++ daemon (no other test crosses the wallet→daemon spend boundary).
+///
+/// NORTH STAR (gated) — committed as the acceptance gate, but it cannot pass yet. Run
+/// today it fails at `refresh`: the scanner parses daemon blocks via shekyl-oxide, which
+/// the daemon's blocks reject (`InvalidNode("invalid block")`). It goes green once (1) the
+/// §8 step-4 shekyl-oxide→shekyl-wire scanner migration routes block parsing through the
+/// daemon-KAT'd shekyl-wire parser, and (2) the tx-builder→shekyl-wire format migration
+/// makes the submitted bytes daemon-valid. Each migration lands as its own PR; this test
+/// is their joint acceptance gate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + the shekyl-oxide scanner + tx-builder migrations (currently blocks at refresh)"]
+async fn e2e_fcmp_spend_accepted_by_daemon() {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::refresh::RefreshOptions;
+    use super::{DaemonClient, Engine, SoloSigner};
+    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_units::AtomicUnits;
+
+    let daemon = RegtestDaemon::start().await;
+
+    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc");
+    let tmp = tempfile::tempdir().expect("wallet tempdir");
+    let wallet_path = tmp.path().join("wallet");
+    let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
+    let params = super::lifecycle::EngineCreateParams {
+        base_path: &wallet_path,
+        credentials: &creds,
+        network: shekyl_address::Network::Mainnet,
+        capability: super::lifecycle::CapabilityInput::Full {
+            master_seed_64: &seed,
+            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: shekyl_engine_file::SafetyOverrides::none(),
+        prefs: shekyl_engine_prefs::WalletPrefs::default(),
+    };
+    let wallet =
+        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let address = wallet.primary_address().encode().expect("encode address");
+
+    // Fund: mine in batches past coinbase maturity + tree drain so an output is spendable.
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+
+    // refresh + balance + build + submit go through Arc<RwLock<Engine>> (start_refresh
+    // owns the wallet for the async scan).
+    let arc = Arc::new(RwLock::new(wallet));
+    let mut unlocked = AtomicUnits::ZERO;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh")
+            .join()
+            .await
+            .expect("refresh joins");
+        unlocked = {
+            let g = arc.read().await;
+            let ledger = g.ledger();
+            ledger.ledger.balance(ledger.ledger.height()).unlocked
+        };
+        if unlocked > AtomicUnits::ZERO {
+            break;
+        }
+    }
+    assert!(
+        unlocked > AtomicUnits::ZERO,
+        "a matured coinbase must be spendable after mining + refresh; got {unlocked:?}"
+    );
+    eprintln!("spendable balance: {unlocked:?}");
+
+    // Build a real FCMP++ spend (self-send half the balance; the engine adds change + fee).
+    let request = TxRequest {
+        recipients: vec![TxRecipient {
+            address: address.clone(),
+            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+        }],
+        priority: FeePriority::Standard,
+    };
+    let pending = {
+        let mut g = arc.write().await;
+        g.build_pending_tx(&request)
+            .expect("build pending FCMP++ spend")
+    };
+    eprintln!(
+        "built spend: fee={:?}, tx_bytes={} B",
+        pending.fee_atomic_units,
+        pending.tx_bytes.len()
+    );
+    assert!(
+        !pending.tx_bytes.is_empty(),
+        "spend must serialize to bytes"
+    );
+
+    // Submit to the live daemon. Ok == the daemon's consensus verify ACCEPTED the spend
+    // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
+    let tx_hash = {
+        let mut g = arc.write().await;
+        g.submit_pending_tx(pending.id, pending.content_gen)
+            .expect("daemon must accept the FCMP++ spend (consensus verify)")
+    };
+    eprintln!("daemon accepted spend: {tx_hash:?}");
+
+    // Block-accept: mine one block; the spend must confirm (separate verify path).
+    daemon.generate_blocks(1, &address).await;
+    let after = daemon.height().await;
+    eprintln!("mined confirming block; height now {after}");
 }
