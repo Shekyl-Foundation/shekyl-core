@@ -24,8 +24,14 @@ env:
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
   APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  # Install the toolchain pinned by rust/rust-toolchain.toml up front. The daemon
+  # build runs many cargo processes in parallel (cmake -j over BuildRust targets);
+  # pre-installing the pinned channel + its components serially here means those
+  # parallel cargos find it already present instead of racing to auto-install it
+  # (which corrupts ~/.rustup/downloads — "component download failed ... could not
+  # rename"). Keep this version in sync with rust/rust-toolchain.toml on a bump.
   INSTALL_RUST: |
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
     echo "$HOME/.cargo/bin" >> $GITHUB_PATH
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
@@ -169,7 +175,9 @@ jobs:
           brew uninstall cmake
           brew update
           brew install --quiet cmake boost hidapi openssl unbound libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
+      # auto-install race in the daemon build). Bump both together.
+      - uses: dtolnay/rust-toolchain@1.94.0
       - name: build
         run: |
           ${{env.CCACHE_SETTINGS}}
@@ -330,7 +338,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
+      # auto-install race in the daemon build). Bump both together.
+      - uses: dtolnay/rust-toolchain@1.94.0
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
         id: vcpkg-cache
