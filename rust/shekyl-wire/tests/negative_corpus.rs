@@ -110,6 +110,19 @@ fn rejects_unsupported_ct_type() {
 }
 
 #[test]
+fn rejects_oversized_block_blob() {
+    // DoS up-front bound (parity with `Transaction::from_bytes`'s `MAX_TX_SIZE`
+    // check): a blob beyond `MAX_BLOCK_BLOB_SIZE` is rejected by length, before
+    // any structured parsing. Content is irrelevant — the size guard fires first.
+    let oversized = vec![0u8; shekyl_wire::block::MAX_BLOCK_BLOB_SIZE + 1];
+    let err = Block::from_bytes(&oversized).expect_err("oversized block blob must be rejected");
+    assert!(
+        err.to_string().contains("exceeds"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn rejects_oversized_input_count() {
     // DoS guard: an input count beyond the parse cap (READ_LEN_CAP = 1_000_000)
     // must be rejected before the read loop, not drive unbounded work. Build a

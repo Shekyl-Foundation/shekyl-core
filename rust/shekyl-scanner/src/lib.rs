@@ -74,8 +74,8 @@ pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
 pub use output::WalletOutput;
 pub use scan::{
-    GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, Scanner, Timelocked,
-    MAX_OUTPUTS,
+    GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, ScannableBlock, Scanner,
+    Timelocked, MAX_OUTPUTS,
 };
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 

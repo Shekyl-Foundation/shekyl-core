@@ -67,19 +67,6 @@ pub enum RpcError {
     InvalidPriority,
 }
 
-/// A block which is able to be scanned.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ScannableBlock {
-    /// The block which is being scanned.
-    pub block: Block,
-    /// The non-miner transactions within this block.
-    pub transactions: Vec<Transaction<Pruned>>,
-    /// The output index for the first confidential (zero-amount) output within this block.
-    ///
-    /// None if there are no confidential outputs within this block, Some otherwise.
-    pub output_index_for_first_ringct_output: Option<u64>,
-}
-
 /// A struct containing a fee rate.
 ///
 /// The fee rate is defined as a per-weight cost, along with a mask for rounding purposes.
@@ -665,102 +652,6 @@ pub trait Rpc: Sync + Clone {
                     "block's miner_transaction didn't have an input of kind Input::Gen".to_string(),
                 )),
             }
-        }
-    }
-
-    /// Get a block's scannable form.
-    fn get_scannable_block(
-        &self,
-        block: Block,
-    ) -> impl Send + Future<Output = Result<ScannableBlock, RpcError>> {
-        async move {
-            let transactions = self.get_pruned_transactions(&block.transactions).await?;
-
-            /*
-              Requesting the output index for each output we sucessfully scan would cause a loss of
-              privacy. We could instead request the output indexes for all outputs we scan, yet this
-              would notably increase the amount of RPC calls we make.
-
-              We solve this by requesting the output index for the first RingCT output in the block, which
-              should be within the miner transaction. Then, as we scan transactions, we update the output
-              index ourselves.
-
-              We only scan v2+ transaction outputs (RCT commitment-based), tracking the global
-              RCT output index. Pre-RCT (v1) outputs are not relevant for Shekyl.
-
-              We bound ourselves to only scanning RingCT outputs by only scanning v2 transactions. This is
-              safe and correct since:
-
-              1) v1 transactions cannot create RingCT outputs.
-
-                 https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
-                   /src/cryptonote_basic/cryptonote_format_utils.cpp#L866-L869
-
-              2) v2 miner transactions implicitly create RingCT outputs.
-
-                 https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
-                   /src/blockchain_db/blockchain_db.cpp#L232-L241
-
-              3) v2 transactions must create RingCT outputs.
-
-                 https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c45
-                   /src/cryptonote_core/blockchain.cpp#L3055-L3065
-
-                 That does bound on the hard fork version being >= 3, yet all v2 TXs have a hard fork
-                 version > 3.
-
-                 https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
-                   /src/cryptonote_core/blockchain.cpp#L3417
-            */
-
-            // Get the index for the first output
-            let mut output_index_for_first_ringct_output = None;
-            let miner_tx_hash = block.miner_transaction().hash();
-            let miner_tx = Transaction::<Pruned>::from(block.miner_transaction().clone());
-            for (hash, tx) in core::iter::once((&miner_tx_hash, &miner_tx))
-                .chain(block.transactions.iter().zip(&transactions))
-            {
-                // If this isn't a RingCT output, or there are no outputs, move to the next TX
-                if (!matches!(tx, Transaction::V3 { .. })) || tx.prefix().outputs.is_empty() {
-                    continue;
-                }
-
-                let index = *self.get_o_indexes(*hash).await?.first().ok_or_else(|| {
-                    RpcError::InvalidNode(
-                        "requested output indexes for a TX with outputs and got none".to_string(),
-                    )
-                })?;
-                output_index_for_first_ringct_output = Some(index);
-                break;
-            }
-
-            Ok(ScannableBlock {
-                block,
-                transactions,
-                output_index_for_first_ringct_output,
-            })
-        }
-    }
-
-    /// Get a block's scannable form by its hash.
-    // TODO(shekyl): Implement bulk block fetch via get_blocks.bin for sync performance.
-    // Single-block fetch is correct but slow; bulk fetch is a performance optimization.
-    fn get_scannable_block_by_hash(
-        &self,
-        hash: [u8; 32],
-    ) -> impl Send + Future<Output = Result<ScannableBlock, RpcError>> {
-        async move { self.get_scannable_block(self.get_block(hash).await?).await }
-    }
-
-    /// Get a block's scannable form by its number.
-    // TODO(shekyl): Implement bulk height-based fetch via get_blocks_by_height.bin for sync performance.
-    fn get_scannable_block_by_number(
-        &self,
-        number: usize,
-    ) -> impl Send + Future<Output = Result<ScannableBlock, RpcError>> {
-        async move {
-            self.get_scannable_block(self.get_block_by_number(number).await?)
-                .await
         }
     }
 

@@ -232,7 +232,16 @@ priority track.
 - **B0 — re-inventory the residual.** Once slice 1 dissolves the main crate,
   confirm what io / primitives / generators / bulletproofs / fcmp++ / rpc
   actually remain and what the wire crate absorbed (esp. the Q10 varint, today in
-  `shekyl-oxide/io/src/lib.rs`).
+  `shekyl-oxide/io/src/lib.rs`). The residual also includes the **wallet-domain
+  types** `shekyl-scanner` still imports from `shekyl_oxide::transaction`
+  (`Timelock`, `StakingMeta`) and `primitives`/`io` (`Commitment`,
+  `CompressedPoint`); B1 names their native home. When `Timelock` is brought
+  native, define it **block-height-only** (drop the CryptoNote `Time` variant) —
+  the scan/refresh slice already maps the timestamp form to `None` and rejects it
+  at ingestion, so the variant is dead on chain data; this plus a pruned-safe
+  context-free ingestion validator and daemon-side enforcement are tracked
+  together in [`../FOLLOWUPS.md`](../FOLLOWUPS.md) ("Block-height-only
+  `unlock_time`").
 - **B1 — settle the final names** against the post-sweep namespace (§7), per
   [`25-rust-architecture`].
 - **B2 — relocate + rename** the residual support crates; provenance-stamp each

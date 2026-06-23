@@ -12,6 +12,10 @@
 //! on [`ScanResult`](crate::scan::ScanResult) and the merge feeds to the
 //! [`CurveTreeActor`](super::curve_tree_actor) for ingest.
 //!
+//! Inputs are [`shekyl_wire`] types — the canonical, spec-faithful wire parse
+//! (`GENESIS_TX_WIRE_FORMAT.md`). The leaf extraction is the same access the
+//! [`shekyl_scanner`] scan path uses, so the two cannot diverge.
+//!
 //! # Consensus drain order (highest inheritance-risk surface — R1-Q3)
 //!
 //! The decode reproduces the daemon's leaf-insertion order exactly
@@ -20,18 +24,22 @@
 //! outputs within each in `vout` order. Per-output facts mirror the proven
 //! scanner primitives rather than re-deriving consensus rules:
 //!
-//! - **`output_key`** is the on-chain compressed key verbatim
-//!   (`Output::key`); the client's `construct_leaf` is the shared FFI
-//!   primitive that decides validity, so x-extraction cannot diverge from the
-//!   daemon (`CT2_DRAIN_ORDER.md` §3.2).
-//! - **`commitment`** is `proofs.base.commitments[o]` — the same access
-//!   [`shekyl_scanner`]'s `scan_transaction` uses (`scan.rs`). `None` when the
-//!   output has no commitment slot, which makes it leaf-ineligible (the C++
-//!   skip (b), `recon::try_build_leaf`).
-//! - **`target`** is classified from the on-chain output tag exactly as
-//!   `Output::write` emits it (staked_key > tagged_key > key); the parser
-//!   admits only those three tags, so [`TargetKind::Other`] is unreachable
-//!   here (it exists only for daemon leaf-set parity).
+//! - **`output_key`** is the on-chain one-time key verbatim
+//!   ([`shekyl_wire::Output::key`]); the client's `construct_leaf` is the
+//!   shared FFI primitive that decides validity, so x-extraction cannot
+//!   diverge from the daemon (`CT2_DRAIN_ORDER.md` §3.2).
+//! - **`commitment`** is `base.commitments[o]`. The committed base
+//!   ([`CtBase`](shekyl_wire::CtBase)) is present for **both** the coinbase
+//!   ([`Ct::Null`](shekyl_wire::Ct::Null)) and spends
+//!   ([`Ct::Fcmp`](shekyl_wire::Ct::Fcmp)) — the coinbase `Null` ct carries a
+//!   real committed base (`enc_amounts`/`enc_labels`/`outPk`, GENESIS §9.6/§9.9),
+//!   which the legacy parse dropped — so commitment access is uniform. `None`
+//!   per output (slot absent) makes that output leaf-ineligible (the C++ skip
+//!   (b), `recon::try_build_leaf`).
+//! - **`target`** is [`TargetKind::TaggedKey`] for every output: genesis admits
+//!   only `txout_to_tagged_key` ([`shekyl_wire`]'s sole [`Output`] shape,
+//!   GENESIS §9.5), so the other [`TargetKind`]s are unreachable here (they
+//!   exist in [`shekyl_curve_tree`] only for daemon leaf-set parity).
 //! - **`leaf_hash_blob`** is the `tx_extra 0x07` payload verbatim; a
 //!   malformed/absent extra yields `None`, which the client resolves to the
 //!   zero `h_pqc` fallback per the daemon's `extract_leaf_hashes` `{}` path
@@ -49,9 +57,8 @@
 //! by tests.
 
 use shekyl_curve_tree::{RawOutput, TargetKind};
-use shekyl_oxide::transaction::{Output, Pruned, Transaction};
-use shekyl_rpc::ScannableBlock;
-use shekyl_scanner::{Extra, MAX_OUTPUTS};
+use shekyl_scanner::{Extra, ScannableBlock, MAX_OUTPUTS};
+use shekyl_wire::{Ct, Output, Transaction};
 
 use crate::scan::OwnedTxLeaves;
 
@@ -78,16 +85,14 @@ pub(crate) enum DecodeError {
 /// Decode a parsed block into its full per-block leaf set, in consensus drain
 /// order (coinbase first, then non-miner transactions in block-list order).
 ///
-/// Mirrors the scanner's pruning conversion of the coinbase
-/// (`scan.rs`: `Transaction::<Pruned>::from(block.miner_transaction())`) so
-/// commitment access is uniform across the coinbase and the already-pruned
-/// non-miner transactions.
+/// The committed base is present on the coinbase ([`Ct::Null`]) and on spends
+/// ([`Ct::Fcmp`]) alike, so commitment access is uniform across the miner
+/// transaction and the non-miner transactions.
 pub(crate) fn decode_block_leaves(
     scannable: &ScannableBlock,
 ) -> Result<Vec<OwnedTxLeaves>, DecodeError> {
-    let miner = Transaction::<Pruned>::from(scannable.block.miner_transaction().clone());
     let mut txs = Vec::with_capacity(1 + scannable.transactions.len());
-    txs.push(decode_tx(&miner, true)?);
+    txs.push(decode_tx(&scannable.block.miner_transaction, true)?);
     for tx in &scannable.transactions {
         txs.push(decode_tx(tx, false)?);
     }
@@ -95,8 +100,8 @@ pub(crate) fn decode_block_leaves(
 }
 
 /// Decode one transaction's leaf inputs in `vout` order.
-fn decode_tx(tx: &Transaction<Pruned>, is_miner: bool) -> Result<OwnedTxLeaves, DecodeError> {
-    let prefix = tx.prefix();
+fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeError> {
+    let prefix = &tx.prefix;
 
     // X7: bound the per-tx leaf buffer by the consensus output ceiling
     // *before* allocating it, not by the daemon's blob length.
@@ -116,15 +121,12 @@ fn decode_tx(tx: &Transaction<Pruned>, is_miner: bool) -> Result<OwnedTxLeaves, 
             .and_then(|extra| extra.pqc_leaf_hashes().map(<[u8]>::to_vec))
     };
 
-    // On-chain commitments live in `proofs.base` (uniform across pruned/full —
-    // the same access the scanner uses). `None` per output (slot absent) makes
-    // that output leaf-ineligible (`recon::try_build_leaf` (b)).
-    let commitments = match tx {
-        Transaction::V3 {
-            proofs: Some(proofs),
-            ..
-        } => Some(&proofs.base.commitments),
-        _ => None,
+    // On-chain commitments live in the committed base, present uniformly across
+    // the coinbase (`Ct::Null`) and spends (`Ct::Fcmp`) — the same access the
+    // scanner uses. `None` per output (slot absent) makes that output
+    // leaf-ineligible (`recon::try_build_leaf` (b)).
+    let commitments = match &tx.ct {
+        Ct::Null(base) | Ct::Fcmp { base, .. } => &base.commitments,
     };
 
     let outputs = prefix
@@ -132,8 +134,8 @@ fn decode_tx(tx: &Transaction<Pruned>, is_miner: bool) -> Result<OwnedTxLeaves, 
         .iter()
         .enumerate()
         .map(|(o, output)| RawOutput {
-            output_key: output.key.to_bytes(),
-            commitment: commitments.and_then(|c| c.get(o)).map(|c| c.0),
+            output_key: output.key,
+            commitment: commitments.get(o).copied(),
             target: classify_target(output),
         })
         .collect();
@@ -145,53 +147,29 @@ fn decode_tx(tx: &Transaction<Pruned>, is_miner: bool) -> Result<OwnedTxLeaves, 
     })
 }
 
-/// Classify an output's target exactly as the on-chain tag was written
-/// (`transaction.rs` `Output::write`): staked_key (tag 4) takes precedence,
-/// then tagged_key (tag 3, has a view tag), else key (tag 2).
+/// Classify an output's curve-tree target.
 ///
-/// The parser admits only tags 2/3/4, so [`TargetKind::Other`] is unreachable
-/// from a parsed block — it exists in [`shekyl_curve_tree`] only for daemon
-/// leaf-set parity if the daemon ever indexes an unknown target.
-fn classify_target(output: &Output) -> TargetKind {
-    if let Some(meta) = output.staking {
-        // Tier B (CT-5d). `lock_blocks` is resolved against `shekyl-staking`
-        // (the single source of truth for the tier table) — mirroring the FFI
-        // `shekyl_stake_lock_blocks`: an out-of-range tier resolves to `0`,
-        // the daemon's invalid-tier fallback.
-        let lock_blocks = shekyl_staking::tiers::tier_by_id(meta.lock_tier)
-            .map(|t| t.lock_blocks)
-            .unwrap_or(0);
-        TargetKind::StakedKey { lock_blocks }
-    } else if output.view_tag.is_some() {
-        TargetKind::TaggedKey
-    } else {
-        TargetKind::Key
-    }
+/// `GENESIS_TX_WIRE_FORMAT.md` §9.5: `txout_to_tagged_key`
+/// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::TAG_OUTPUT_TAGGED_KEY)) is the
+/// **sole** genesis output type, so every parsed [`Output`] classifies as a
+/// tagged key. [`TargetKind::Key`], [`TargetKind::StakedKey`], and
+/// [`TargetKind::Other`] remain in [`shekyl_curve_tree`] only for daemon
+/// leaf-set parity.
+///
+/// Reversion clause (`21-reversion-clause-discipline.mdc`): if a future hard
+/// fork reintroduces a staked-key or bare-key output tag to the wire format,
+/// [`shekyl_wire::Output`] grows a tag discriminant and this function
+/// dispatches on it again.
+fn classify_target(_output: &Output) -> TargetKind {
+    TargetKind::TaggedKey
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use shekyl_oxide::block::{Block, BlockHeader};
-    use shekyl_oxide::fcmp::{EncryptedAmount, EncryptedLabel, ProofBase, PrunedProofs};
-    use shekyl_oxide::io::CompressedPoint;
-    use shekyl_oxide::transaction::{Input, StakingMeta, Timelock, TransactionPrefix};
     use shekyl_scanner::ExtraField;
-
-    fn zero_enc_amount() -> EncryptedAmount {
-        EncryptedAmount {
-            amount: [0u8; 8],
-            amount_tag: 0,
-        }
-    }
-
-    fn zero_enc_label() -> EncryptedLabel {
-        EncryptedLabel {
-            label: [0u8; 8],
-            label_tag: 0,
-        }
-    }
+    use shekyl_wire::{Block, BlockHeader, CtBase, Input, TxPrefix};
 
     fn hex_to_vec(s: &str) -> Vec<u8> {
         assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
@@ -209,42 +187,45 @@ mod tests {
         a
     }
 
-    /// Build a `txout_to_tagged_key` (tag 3) RCT output for the given key.
+    /// Build a `txout_to_tagged_key` output for the given key (the sole genesis
+    /// output shape).
     fn tagged_output(key: [u8; 32]) -> Output {
         Output {
-            amount: None,
-            key: CompressedPoint(key),
-            view_tag: Some(0),
-            staking: None,
+            amount: 0,
+            key,
+            view_tag: 0,
         }
     }
 
-    /// Build a pruned V3 transaction carrying `outputs`, a `0x07` leaf-hash
-    /// blob, and one commitment per supplied `commitments` entry.
-    fn pruned_tx(
+    /// Build a transaction carrying `outputs`, a `0x07` leaf-hash blob, and the
+    /// supplied `commitments` in its committed base.
+    ///
+    /// Uses the coinbase [`Ct::Null`] shape: the decode reads only the
+    /// committed base, which `Null` and `Fcmp` share, so this exercises the
+    /// uniform-base extraction without constructing a full FCMP++ prunable
+    /// proof. `enc_amounts`/`enc_labels` are sized to the output count (the
+    /// decode ignores them); `commitments` is passed through verbatim so a
+    /// short vector exercises the absent-slot path.
+    fn null_tx(
         outputs: Vec<Output>,
         commitments: Vec<[u8; 32]>,
         leaf_hash_blob: Option<Vec<u8>>,
-    ) -> Transaction<Pruned> {
+    ) -> Transaction {
         let n = outputs.len();
         let extra = leaf_hash_blob
             .map(|blob| ExtraField::PqcLeafHashes(blob).serialize())
             .unwrap_or_default();
-        let prefix = TransactionPrefix {
-            additional_timelock: Timelock::None,
-            inputs: vec![Input::Gen(0)],
-            outputs,
-            extra,
-        };
-        Transaction::V3 {
-            prefix,
-            proofs: Some(PrunedProofs {
-                base: ProofBase {
-                    fee: 0,
-                    encrypted_amounts: (0..n).map(|_| zero_enc_amount()).collect(),
-                    encrypted_labels: (0..n).map(|_| zero_enc_label()).collect(),
-                    commitments: commitments.into_iter().map(CompressedPoint).collect(),
-                },
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(0)],
+                outputs,
+                extra,
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![[0u8; 9]; n],
+                enc_labels: vec![[0u8; 9]; n],
+                commitments,
             }),
         }
     }
@@ -278,18 +259,14 @@ mod tests {
                 let mut commitments = Vec::new();
                 for row in rows {
                     let key = hex_to_32(row["output_key"].as_str().expect("O hex"));
+                    // Genesis wire models only `txout_to_tagged_key`; the
+                    // Tier-A oracle is all tagged-key coinbase outputs.
                     let target = row["target"].as_str().expect("target");
-                    let out = match target {
-                        "tagged_key" => tagged_output(key),
-                        "key" => Output {
-                            amount: None,
-                            key: CompressedPoint(key),
-                            view_tag: None,
-                            staking: None,
-                        },
-                        other => panic!("unexpected Tier-A target kind: {other}"),
-                    };
-                    outputs.push(out);
+                    assert_eq!(
+                        target, "tagged_key",
+                        "chain {name}: genesis wire models only txout_to_tagged_key",
+                    );
+                    outputs.push(tagged_output(key));
                     // Tier-A coinbase outputs all carry commitments (no slot
                     // gaps), so the commitment vec aligns 1:1 with outputs.
                     let c = row["commitment"]
@@ -298,7 +275,7 @@ mod tests {
                     commitments.push(hex_to_32(c));
                 }
 
-                let tx = pruned_tx(outputs, commitments.clone(), Some(blob.clone()));
+                let tx = null_tx(outputs, commitments.clone(), Some(blob.clone()));
                 let decoded = decode_tx(&tx, true).expect("coinbase decodes");
 
                 assert!(decoded.is_miner, "coinbase is_miner");
@@ -318,14 +295,13 @@ mod tests {
                     assert_eq!(
                         got.commitment,
                         Some(commitments[i]),
-                        "chain {name} out {i}: commitment from proofs.base",
+                        "chain {name} out {i}: commitment from committed base",
                     );
-                    let expect_target = match row["target"].as_str().unwrap() {
-                        "tagged_key" => TargetKind::TaggedKey,
-                        "key" => TargetKind::Key,
-                        _ => unreachable!(),
-                    };
-                    assert_eq!(got.target, expect_target, "chain {name} out {i}: target");
+                    assert_eq!(
+                        got.target,
+                        TargetKind::TaggedKey,
+                        "chain {name} out {i}: target",
+                    );
                 }
                 blocks_checked += 1;
             }
@@ -334,35 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn classify_target_matches_on_chain_tag() {
-        // tag 2: no view tag, no staking -> Key.
-        let key = Output {
-            amount: None,
-            key: CompressedPoint([1u8; 32]),
-            view_tag: None,
-            staking: None,
-        };
-        assert_eq!(classify_target(&key), TargetKind::Key);
-
-        // tag 3: view tag present -> TaggedKey.
+    fn classify_target_is_tagged_key_at_genesis() {
+        // Genesis wire models only `txout_to_tagged_key`, so every output
+        // classifies as a tagged key regardless of its key/view_tag/amount
+        // content.
         assert_eq!(
-            classify_target(&tagged_output([2u8; 32])),
+            classify_target(&tagged_output([1u8; 32])),
             TargetKind::TaggedKey
         );
-
-        // tag 4: staking present -> StakedKey with the tier-resolved lock.
-        let staked = Output {
-            amount: Some(100),
-            key: CompressedPoint([3u8; 32]),
-            view_tag: Some(0),
-            staking: Some(StakingMeta { lock_tier: 0 }),
-        };
-        let expected = shekyl_staking::tiers::tier_by_id(0).unwrap().lock_blocks;
         assert_eq!(
-            classify_target(&staked),
-            TargetKind::StakedKey {
-                lock_blocks: expected
-            },
+            classify_target(&Output {
+                amount: 100,
+                key: [3u8; 32],
+                view_tag: 7,
+            }),
+            TargetKind::TaggedKey,
         );
     }
 
@@ -371,7 +333,7 @@ mod tests {
         // Two outputs, one commitment: the second output has no slot, so its
         // decoded commitment is None (the C++ skip (b)).
         let outputs = vec![tagged_output([4u8; 32]), tagged_output([5u8; 32])];
-        let tx = pruned_tx(outputs, vec![[9u8; 32]], None);
+        let tx = null_tx(outputs, vec![[9u8; 32]], None);
         let decoded = decode_tx(&tx, false).expect("decodes");
         assert_eq!(decoded.outputs[0].commitment, Some([9u8; 32]));
         assert_eq!(decoded.outputs[1].commitment, None);
@@ -379,7 +341,7 @@ mod tests {
 
     #[test]
     fn malformed_or_absent_extra_yields_no_blob() {
-        let tx = pruned_tx(vec![tagged_output([6u8; 32])], vec![[1u8; 32]], None);
+        let tx = null_tx(vec![tagged_output([6u8; 32])], vec![[1u8; 32]], None);
         let decoded = decode_tx(&tx, true).expect("decodes");
         assert_eq!(decoded.leaf_hash_blob, None);
     }
@@ -392,7 +354,7 @@ mod tests {
         // Key content is irrelevant: the X7 gate rejects on count before any
         // per-output work, so a constant key keeps the test free of casts.
         let outputs: Vec<Output> = (0..n).map(|_| tagged_output([0u8; 32])).collect();
-        let tx = pruned_tx(outputs, vec![[0u8; 32]; n], None);
+        let tx = null_tx(outputs, vec![[0u8; 32]; n], None);
         assert_eq!(
             decode_tx(&tx, false),
             Err(DecodeError::ExcessiveOutputs {
@@ -404,31 +366,26 @@ mod tests {
 
     #[test]
     fn block_decode_orders_coinbase_first() {
-        // Coinbase (proofs: None, one output) then one non-miner pruned tx.
+        // Coinbase (one output) then one non-miner tx.
         let header = BlockHeader {
-            hardfork_version: 1,
-            hardfork_signal: 0,
+            major_version: 1,
+            minor_version: 0,
             timestamp: 1,
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
         };
-        let miner_prefix = TransactionPrefix {
-            additional_timelock: Timelock::None,
-            inputs: vec![Input::Gen(1)],
-            outputs: vec![tagged_output([7u8; 32])],
-            extra: vec![],
+        let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);
+        let block = Block {
+            header,
+            miner_transaction: miner_tx,
+            transaction_hashes: vec![],
         };
-        let miner_tx = Transaction::V3 {
-            prefix: miner_prefix,
-            proofs: None,
-        };
-        let block = Block::new(header, miner_tx, vec![]).expect("coinbase-only block");
-        let non_miner = pruned_tx(vec![tagged_output([8u8; 32])], vec![[3u8; 32]], None);
+        let non_miner = null_tx(vec![tagged_output([8u8; 32])], vec![[3u8; 32]], None);
         let scannable = ScannableBlock {
             block,
             transactions: vec![non_miner],
-            output_index_for_first_ringct_output: None,
+            first_output_index: None,
         };
 
         let decoded = decode_block_leaves(&scannable).expect("decodes");

@@ -18,6 +18,13 @@ serde_json = "1"
 [dependencies]
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
+# Canonical, spec-faithful block/transaction parse (`GENESIS_TX_WIRE_FORMAT.md`).
+# Backs `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`) and the
+# `ScannableBlock` decode (`engine/curve_tree_decode.rs`), replacing the legacy
+# shekyl-oxide block parse that dropped the coinbase `Null` committed base. First-
+# party Shekyl crate; its third-party edges (`shekyl-crypto-hash`) are already in
+# the workspace lockfile, so no new supply-chain surface (`17-dependency-discipline`).
+shekyl-wire = { path = "../shekyl-wire" }
 shekyl-staking = { path = "../shekyl-staking" }
 # `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
 # (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
@@ -109,7 +116,12 @@ serde = { version = "1", features = ["derive"], optional = true }
 # third-party crate (`17-dependency-discipline.mdc`). It is therefore no
 # longer listed under the `multisig` feature.
 serde_json = "1"
-hex = { version = "0.4", optional = true }
+# Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
+# native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
+# workspace lockfile (shekyl-rpc, shekyl-wire deps + this crate's multisig path),
+# so promoting it to a direct non-optional dependency adds no third-party crate
+# (`17-dependency-discipline.mdc`). No longer listed under the `multisig` feature.
+hex = "0.4"
 thiserror = "2"
 tracing = "0.1"
 # `produce_scan_result` (the snapshot-merge producer driving
@@ -420,7 +432,7 @@ required-features = ["bench-internals"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "hex", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "chacha20poly1305", "hkdf", "sha2"]
 # Internal feature (S6): enables the StakeEngine session RNG self-cert. Wires
 # `shekyl-standoff`'s `conformance` grader (`certify_draw`) into
 # `StakeEngine::on_start` over the production `OsRngGapAdapter`, fail-stopping the

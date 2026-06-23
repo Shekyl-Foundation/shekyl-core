@@ -157,9 +157,9 @@
 use std::time::Duration;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use shekyl_oxide::transaction::Input;
-use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
-use shekyl_scanner::{ScanError, ScanOutcome, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_rpc::RpcError;
+use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_wire::Input;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -698,8 +698,8 @@ impl RefreshEngine for LocalRefresh {
                 // hypothesis (per-tx scan-budget inflation) rather
                 // than relying on the scanner-side InvalidScannableBlock
                 // catch-all.
-                let miner_tx = scannable.block.miner_transaction();
-                if miner_tx.prefix().outputs.len() > MAX_OUTPUTS {
+                let miner_tx = &scannable.block.miner_transaction;
+                if miner_tx.prefix.outputs.len() > MAX_OUTPUTS {
                     emit_state.try_emit(
                         diagnostics,
                         RefreshDiagnostic::DaemonMalformed {
@@ -709,7 +709,7 @@ impl RefreshEngine for LocalRefresh {
                     return Err(LocalRefreshError::Malformed);
                 }
                 for tx in &scannable.transactions {
-                    if tx.prefix().outputs.len() > MAX_OUTPUTS {
+                    if tx.prefix.outputs.len() > MAX_OUTPUTS {
                         emit_state.try_emit(
                             diagnostics,
                             RefreshDiagnostic::DaemonMalformed {
@@ -728,28 +728,24 @@ impl RefreshEngine for LocalRefresh {
                 // owned-output set; we do not pre-filter here
                 // because the snapshot deliberately does not carry
                 // the wallet's owned-output index.
-                for input in &miner_tx.prefix().inputs {
-                    if let Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } =
-                        input
-                    {
+                for input in &miner_tx.prefix.inputs {
+                    if let Input::ToKey { key_image, .. } = input {
                         spent_key_images.push(KeyImageObserved {
                             block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
-                                key_image.0,
+                                *key_image,
                             ),
                         });
                     }
                 }
                 for tx in &scannable.transactions {
-                    for input in &tx.prefix().inputs {
-                        if let Input::ToKey { key_image, .. }
-                        | Input::StakeClaim { key_image, .. } = input
-                        {
+                    for input in &tx.prefix.inputs {
+                        if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
                                 block_height: h,
                                 key_image:
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
-                                        key_image.0,
+                                        *key_image,
                                     ),
                             });
                         }
@@ -908,44 +904,50 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
 ///
 /// # Refresh-reachable mapping
 ///
-/// The five [`ProtocolErrorKind`] variants enumerate the
-/// refresh-reachable upstream subset confirmed by the Round 4
-/// call-site audit (`get_height` + `get_scannable_block_by_number`
-/// are the only refresh-issued RPCs):
+/// Refresh issues `get_height` and `fetch_scannable_block`, the
+/// latter composing the `Rpc` transport primitives `get_block` /
+/// `get_transactions` / `get_o_indexes` (the §8 step-4 `shekyl-wire`
+/// migration replaced the single-call `get_scannable_block_by_number`
+/// the Round 4 audit was written against). The refresh-reachable
+/// upstream variants and their tags:
 ///
 /// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
 /// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
 /// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
 /// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
 /// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
+/// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
+///   (reachable via the `get_transactions` leg of the block fetch: a
+///   daemon that names transaction hashes in a block and then reports
+///   them missing is internally inconsistent, which from the refresh
+///   path is the "unexpected envelope" `InvalidNode` signal).
 ///
 /// # Defensive mapping for non-refresh-reachable variants
 ///
-/// `RpcError::TransactionsNotFound` / `RpcError::InvalidFee` /
-/// `RpcError::InvalidPriority` are not reachable from
-/// `get_height` / `get_scannable_block_by_number` per the
-/// Round 4 audit — they belong to the future `PendingTxEngine`
-/// send-tx path. If they nonetheless surface from this site
-/// (e.g., upstream RPC client behavior change), the defensive
-/// classification is [`ProtocolErrorKind::InvalidNode`] — "the
-/// daemon returned an envelope the producer did not expect from
-/// this RPC method." [`ProtocolErrorKind`] is
-/// `#[non_exhaustive]`; PR 5's `PendingTxEngine` extraction may
-/// grow the variant set additively.
+/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` are not
+/// reachable from refresh — they belong to the future
+/// `PendingTxEngine` send-tx path. If they nonetheless surface from
+/// this site (e.g., upstream RPC client behavior change), the
+/// defensive classification is [`ProtocolErrorKind::InvalidNode`] —
+/// "the daemon returned an envelope the producer did not expect from
+/// this RPC method." [`ProtocolErrorKind`] is `#[non_exhaustive]`;
+/// PR 5's `PendingTxEngine` extraction may grow the variant set
+/// additively.
 ///
 /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 //
-// `clippy::match_same_arms` would have us merge the audit-
-// confirmed `InvalidNode(_)` arm with the defensive
+// `clippy::match_same_arms` would have us merge the
+// `InvalidNode(_)` arm with the
 // `TransactionsNotFound | InvalidFee | InvalidPriority` arm
-// because both map to `ProtocolErrorKind::InvalidNode`. The
-// separation is the load-bearing discipline here: the first arm
-// is the Round-4-audit-confirmed mapping for a refresh-reachable
-// variant; the second is the defensive fallback for variants
-// that the audit confirmed are NOT refresh-reachable. Merging
-// them would lose the audit boundary that the rustdoc records
-// and that future maintainers need to see when PR 5's
-// `PendingTxEngine` extraction reaches this site.
+// because both map to `ProtocolErrorKind::InvalidNode`. Keeping
+// them separate preserves the rustdoc's reachability boundary:
+// the grouped arm carries `TransactionsNotFound` (refresh-reachable
+// via the block fetch's `get_transactions` leg — an inconsistent
+// daemon, mapped to `InvalidNode`) alongside the genuinely
+// non-refresh-reachable `InvalidFee` / `InvalidPriority` defensive
+// fallbacks (send-tx path). Merging would lose that boundary, which
+// future maintainers need when PR 5's `PendingTxEngine` extraction
+// reaches this site.
 #[allow(clippy::match_same_arms)]
 const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
     match err {
@@ -954,10 +956,10 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
         RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
         RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
         RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
-        // Non-refresh-reachable upstream variants
-        // (`TransactionsNotFound` / `InvalidFee` /
-        // `InvalidPriority`) defensively classify as
-        // `InvalidNode`; see rustdoc.
+        // All map to `InvalidNode`: `TransactionsNotFound` is
+        // refresh-reachable (block fetch's `get_transactions` leg;
+        // inconsistent daemon), while `InvalidFee` / `InvalidPriority`
+        // are non-refresh-reachable defensive fallbacks. See rustdoc.
         RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
             ProtocolErrorKind::InvalidNode
         }
@@ -977,7 +979,7 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
 /// classification so producer-side `DaemonProtocolError` events
 /// emit under the per-block ceiling + F13-S latch discipline
 /// during reorg-walk traversal.
-async fn find_fork_point<R: Rpc>(
+async fn find_fork_point<R: DaemonEngine>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
     from_height: u64,
@@ -1023,7 +1025,7 @@ async fn find_fork_point<R: Rpc>(
 /// ceiling + F13-S latch (§5.4.8 #5) close the
 /// emission-cadence covert channel when the retry budget triggers
 /// many emissions in a single block window.
-async fn fetch_block_with_retry<R: Rpc>(
+async fn fetch_block_with_retry<R: DaemonEngine>(
     rpc: &R,
     height: u64,
     cancel: &CancellationToken,
@@ -1039,7 +1041,7 @@ async fn fetch_block_with_retry<R: Rpc>(
             return Err(LocalRefreshError::Cancelled);
         }
 
-        match rpc.get_scannable_block_by_number(height_usize).await {
+        match rpc.fetch_scannable_block(height_usize).await {
             Ok(b) => return Ok(b),
             Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
@@ -1426,7 +1428,7 @@ mod producer_property_tests {
     /// `chain[h].block.header.previous = chain[h-1].block.hash()`.
     /// `chain[0]`'s parent is `[0u8; 32]`. Real-daemon convention:
     /// `chain[h] = block at height h`.
-    fn linear_chain(n: u64) -> Vec<shekyl_rpc::ScannableBlock> {
+    fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
         let mut parent = [0u8; 32];

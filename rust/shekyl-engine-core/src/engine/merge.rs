@@ -286,7 +286,7 @@ impl<
     /// # Errors
     ///
     /// - Daemon transport failure during the backfill fetch
-    ///   (`get_scannable_block_by_number`) → [`RefreshError::Io`]
+    ///   (`fetch_scannable_block`) → [`RefreshError::Io`]
     ///   (`IoError::Daemon`).
     /// - A `block_leaves` height missing from the producer range →
     ///   [`RefreshError::MalformedScanResult`] (a producer-contract defect,
@@ -545,14 +545,11 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
                 context: "backfill height exceeds usize",
                 recoverable_by_respawn: false,
             })?;
-            let block = daemon
-                .get_scannable_block_by_number(number)
-                .await
-                .map_err(|e| {
-                    RefreshError::Io(IoError::Daemon {
-                        detail: e.to_string(),
-                    })
-                })?;
+            let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
+                RefreshError::Io(IoError::Daemon {
+                    detail: e.to_string(),
+                })
+            })?;
             let leaves =
                 Arc::new(curve_tree_decode::decode_block_leaves(&block).map_err(|_| {
                     RefreshError::CurveTreeIngest {

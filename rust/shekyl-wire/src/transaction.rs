@@ -1182,17 +1182,28 @@ impl Transaction {
         }
     }
 
-    /// Structural / canonical-form validation (GENESIS_TX_WIRE_FORMAT.md §10 + the
-    /// context-free parts of §12/§13).
+    /// Structural / canonical-form validation for an ingested **pruned** transaction:
+    /// the context-free reject set that does **not** depend on the prunable proof
+    /// section being present (GENESIS_TX_WIRE_FORMAT.md §10 + the pruned-safe parts of
+    /// §12/§13).
     ///
-    /// This mirrors the **context-free** rejects of the C++ oracle's
+    /// This is the single ingestion gate the scan/refresh boundary
+    /// (`shekyl-engine-core::engine::block_fetch`) runs on every block/transaction blob
+    /// an untrusted daemon serves. The wallet fetches *pruned* transactions (the
+    /// prunable proof — Bp+, fcmp_proof, pseudoOuts — dropped), so the full
+    /// [`Self::validate`] cannot run here: its prunable-coupled branch rejects a
+    /// key-image-bearing spend whose prunable has been dropped, by design.
+    ///
+    /// It mirrors the **context-free** rejects of the C++ oracle's
     /// `core::check_tx_semantic` + `Blockchain::check_tx_inputs` +
     /// `check_inputs_types_supported` (verified by a differential read, 2026-06-21):
     /// resource bounds (§10), the arm-mixing matrix (gen sole / coinbase, serve_credit
     /// all-or-none + fee-only, ≤1 bond_post), `Null` ct iff coinbase, empty
     /// `key_offsets`, strictly-descending key images (rejecting in-tx duplicates),
-    /// `pqc_auths`/`pseudoOuts` per-shape coupling, `nbp == 1`, `>= 2` outputs for a
-    /// spend, and the `unlock_time` block-height form.
+    /// per-arm archival bounds, the committed-base arity, and the `unlock_time`
+    /// block-height form. The prunable-coupled checks — `nbp == 1`, the per-input
+    /// `pqc_auths` / `pseudoOuts` counts, `>= 2` outputs for a spend, and the fee-only
+    /// no-prunable shape — are [`Self::validate`]-only; they need the complete tx.
     ///
     /// **Out of scope** — deferred to the consensus/crypto layer because they need
     /// elliptic-curve math (which this crate intentionally has no dependency for) or
@@ -1205,11 +1216,7 @@ impl Transaction {
     ///   window, and the coinbase reward / exact `unlock_time` / height (all chain-state);
     /// - money-overflow sums — trivial here (FCMP++ input/output amounts are 0; the
     ///   coinbase reward balance is the consensus layer's `validate_miner_transaction`).
-    ///
-    /// The bond_post `pseudoOuts` coupling is a §13 (F1/F3) **forward obligation** the
-    /// oracle itself leaves unchecked (`is_archival_bond_post_tx` exempt) — so it is
-    /// left unchecked here too, by design.
-    pub fn validate(&self) -> io::Result<()> {
+    pub fn validate_context_free_pruned(&self) -> io::Result<()> {
         if self.prefix.inputs.is_empty() {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
         }
@@ -1355,12 +1362,9 @@ impl Transaction {
                 _ => {}
             }
         }
-        // Structural length-coupling: these vectors carry no independent length prefix
-        // on the wire — their counts are tied to vin/vout — so an in-memory tx with
-        // mismatched lengths would not round-trip and would be consensus-invalid.
-        // Shape-aware per §2.5 (full spend / bond-post / fee-only-serve-credit).
-        let n_in = self.prefix.inputs.len();
-        let n_ki = key_images.len(); // key-image (spend) inputs
+        // Committed-base arity is shape-aware per §2.5 (full spend / bond-post /
+        // fee-only-serve-credit); the prunable-coupled length couplings (pqc_auths /
+        // pseudoOuts per input) move to `validate`, which has the complete tx.
         let base = match &self.ct {
             Ct::Null(base) => {
                 // §2.5: a `Null` ct carries no proof material and is **coinbase-only**;
@@ -1378,10 +1382,7 @@ impl Transaction {
                 base
             }
             Ct::Fcmp {
-                base,
-                pqc_auths,
-                prunable,
-                ..
+                base, pqc_auths, ..
             } => {
                 // §2.5: the coinbase is `Null`-only — an `Fcmp` ct on a coinbase (a
                 // `gen` input) is the dual of the check above.
@@ -1392,9 +1393,10 @@ impl Transaction {
                 }
                 // Per-auth blob bounds — consensus accept-parity with the C++
                 // deserialization caps (`PqcAuth::read` rejects oversized blobs on the
-                // wire; `PqcAuth::write` is faithful, so `validate` is the in-memory
-                // gate that keeps a constructed tx from later failing parse). Empty for
-                // the fee-only form, so this is a no-op there.
+                // wire; `PqcAuth::write` is faithful, so this is the in-memory gate that
+                // keeps a constructed tx from later failing parse). Empty for the
+                // fee-only / pruned form, so this is a no-op there. The prunable-coupled
+                // per-input *count* checks live in `validate` (the complete tx).
                 for auth in pqc_auths {
                     if auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB {
                         return Err(io::Error::other(format!(
@@ -1407,74 +1409,6 @@ impl Transaction {
                             "shekyl-wire: pqc_auth signature {} exceeds {PQC_MAX_SIGNATURE_BLOB}",
                             auth.hybrid_signature.len()
                         )));
-                    }
-                }
-                match prunable {
-                    // Spend / bond-post: a prunable proof is present.
-                    Some(prunable) => {
-                        // A non-coinbase, non-serve_credit tx requires >= 2 outputs
-                        // (the standard RingCT anti-deanonymization rule;
-                        // blockchain.cpp:3599-3602, `vout.size() < 2 → reject`).
-                        if n_out < 2 {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= 2"
-                            )));
-                        }
-                        // pqc_auths are per-input (count == nvin): one slot per input,
-                        // including the bond_post slot (§2.5 / §13).
-                        if pqc_auths.len() != n_in {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: pqc_auths {} != input count {n_in}",
-                                pqc_auths.len()
-                            )));
-                        }
-                        // §10: exactly one aggregated Bp+.
-                        if prunable.bulletproofs.len() != 1 {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: nbp {} != 1",
-                                prunable.bulletproofs.len()
-                            )));
-                        }
-                        // pseudoOuts: for a pure fcmp spend (every input key-image-
-                        // bearing) the oracle pins `pseudoOuts == num_inputs`
-                        // (blockchain.cpp:3762). For a bond-post tx it **exempts** the
-                        // count entirely (`is_archival_bond_post_tx` branch) — the exact
-                        // coupling is a §13 (F1/F3) forward obligation owned by the
-                        // emission / membership-only PRs. Mirror the oracle: pin the pure
-                        // spend, leave bond-post unchecked (a `bond_post` input makes
-                        // n_ki < n_in).
-                        if n_ki == n_in && prunable.pseudo_outs.len() != n_in {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: pseudoOuts {} != input count {n_in}",
-                                prunable.pseudo_outs.len()
-                            )));
-                        }
-                    }
-                    // Fee-only / serve-credit: no prunable proof, no outputs, and
-                    // pqc_auths empty (the hybrid signature rides the vin, §9.10).
-                    None => {
-                        if n_out != 0 {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: fee-only ct (no prunable) must have no \
-                                 outputs, found {n_out}"
-                            )));
-                        }
-                        if !pqc_auths.is_empty() {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: fee-only ct (no prunable) must carry empty \
-                                 pqc_auths, found {}",
-                                pqc_auths.len()
-                            )));
-                        }
-                        // No prunable proof ⇒ no key-image (spend) inputs: a spend
-                        // requires a prunable. (The storage-pruned full-spend form —
-                        // ki inputs, prunable dropped, external prunable hash — is
-                        // post-genesis, handled by §4 `into_full`, not the wire parser.)
-                        if n_ki != 0 {
-                            return Err(io::Error::other(format!(
-                                "shekyl-wire: {n_ki} key-image input(s) but no prunable proof"
-                            )));
-                        }
                     }
                 }
                 base
@@ -1493,6 +1427,124 @@ impl Transaction {
                 base.commitments.len()
             )));
         }
+        // §10 anti-deanonymization: a spend (a key-image-bearing tx) must have >= 2
+        // outputs (blockchain.cpp:3599-3602). Pruned-safe — outputs survive pruning and
+        // the spend is identified by its key-image inputs, not the dropped prunable proof
+        // — so it is enforced at ingestion, not only in `validate`. Checked after the ct
+        // shape so a malformed-ct error still surfaces first. Coinbase / fee-only forms
+        // carry no key image (exempt); a bond_post's >= 2 rule is prunable-coupled.
+        if !key_images.is_empty() && n_out < 2 {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: spend has {n_out} output(s), needs >= 2"
+            )));
+        }
         Ok(())
+    }
+
+    /// Full context-free canonical validation: [`Self::validate_context_free_pruned`]
+    /// plus the prunable-proof-coupled checks that require a complete (non-pruned)
+    /// transaction — `nbp == 1`, the per-input `pqc_auths` / `pseudoOuts` counts, the
+    /// `>= 2`-output anti-deanonymization rule for a spend, and the fee-only
+    /// no-prunable shape. Use this on a *complete* tx; the scan/refresh boundary, which
+    /// ingests pruned txs, calls [`Self::validate_context_free_pruned`] instead.
+    ///
+    /// The bond_post `pseudoOuts` coupling is a §13 (F1/F3) **forward obligation** the
+    /// oracle itself leaves unchecked (`is_archival_bond_post_tx` exempt) — so it is
+    /// left unchecked here too, by design.
+    pub fn validate(&self) -> io::Result<()> {
+        self.validate_context_free_pruned()?;
+        // Prunable-coupled checks: spend-proof completeness that needs the full,
+        // non-pruned tx. The pruned ingestion validator above intentionally skips
+        // these — the daemon drops the prunable proof on the wallet's pruned fetch.
+        if let Ct::Fcmp {
+            pqc_auths,
+            prunable,
+            ..
+        } = &self.ct
+        {
+            let n_in = self.prefix.inputs.len();
+            let n_out = self.prefix.outputs.len();
+            // key-image (spend) inputs
+            let n_ki = self
+                .prefix
+                .inputs
+                .iter()
+                .filter(|i| matches!(i, Input::ToKey { .. }))
+                .count();
+            match prunable {
+                // Spend / bond-post: a prunable proof is present.
+                Some(prunable) => {
+                    // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
+                    // Spends are already gated in `validate_context_free_pruned` (keyed
+                    // on key-image inputs, pruned-safe); this guards a bond_post, whose
+                    // >= 2 rule is prunable-coupled (a fee-only bond_post is 0-output).
+                    if n_out < 2 {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= 2"
+                        )));
+                    }
+                    // pqc_auths are per-input (count == nvin): one slot per input,
+                    // including the bond_post slot (§2.5 / §13).
+                    if pqc_auths.len() != n_in {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: pqc_auths {} != input count {n_in}",
+                            pqc_auths.len()
+                        )));
+                    }
+                    // §10: exactly one aggregated Bp+.
+                    if prunable.bulletproofs.len() != 1 {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: nbp {} != 1",
+                            prunable.bulletproofs.len()
+                        )));
+                    }
+                    // pseudoOuts: a pure fcmp spend pins `pseudoOuts == num_inputs`
+                    // (blockchain.cpp:3762); a bond-post tx (n_ki < n_in) is exempt — a
+                    // §13 (F1/F3) forward obligation, mirroring the oracle.
+                    if n_ki == n_in && prunable.pseudo_outs.len() != n_in {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: pseudoOuts {} != input count {n_in}",
+                            prunable.pseudo_outs.len()
+                        )));
+                    }
+                }
+                // Fee-only / serve-credit: no prunable proof, no outputs, pqc_auths
+                // empty (the hybrid signature rides the vin, §9.10).
+                None => {
+                    if n_out != 0 {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: fee-only ct (no prunable) must have no \
+                             outputs, found {n_out}"
+                        )));
+                    }
+                    if !pqc_auths.is_empty() {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: fee-only ct (no prunable) must carry empty \
+                             pqc_auths, found {}",
+                            pqc_auths.len()
+                        )));
+                    }
+                    // No prunable proof ⇒ no key-image (spend) inputs: a spend requires
+                    // a prunable. (The storage-pruned full-spend form — ki inputs,
+                    // prunable dropped, external prunable hash — is post-genesis,
+                    // handled by §4 `into_full`, not the wire parser.)
+                    if n_ki != 0 {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: {n_ki} key-image input(s) but no prunable proof"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this is a coinbase (miner) transaction: a sole `gen` input (§2.5). The
+    /// `Null`-ct coupling is enforced by [`Self::validate_context_free_pruned`]; this is
+    /// the input-shape predicate the block parser and the non-miner ingestion path use
+    /// to classify a tx — e.g. to reject a coinbase served by `get_transactions`, where
+    /// the coinbase is instead embedded in the block blob.
+    pub fn is_coinbase(&self) -> bool {
+        matches!(self.prefix.inputs.as_slice(), [Input::Gen(_)])
     }
 }

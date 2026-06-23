@@ -158,14 +158,11 @@ pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
     let number = usize::try_from(height).map_err(|_| RefreshError::MalformedScanResult {
         reason: "block height exceeds usize",
     })?;
-    let block = daemon
-        .get_scannable_block_by_number(number)
-        .await
-        .map_err(|e| {
-            RefreshError::Io(IoError::Daemon {
-                detail: e.to_string(),
-            })
-        })?;
+    let block = daemon.fetch_scannable_block(number).await.map_err(|e| {
+        RefreshError::Io(IoError::Daemon {
+            detail: e.to_string(),
+        })
+    })?;
     Ok(block.block.hash())
 }
 

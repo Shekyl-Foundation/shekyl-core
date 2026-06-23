@@ -3103,7 +3103,7 @@ mod start_refresh_integration_tests {
     /// [`super::test_support`] but is duplicated here rather than
     /// promoted to `pub(crate)` because the two modules' test
     /// surfaces are otherwise independent.
-    fn linear_chain(n: u64) -> Vec<shekyl_rpc::ScannableBlock> {
+    fn linear_chain(n: u64) -> Vec<shekyl_scanner::ScannableBlock> {
         use crate::engine::test_support::make_synthetic_block;
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));

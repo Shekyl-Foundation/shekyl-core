@@ -93,17 +93,12 @@ use shekyl_crypto_pq::{
     kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN},
     output::construct_output,
 };
-use shekyl_oxide::{
-    block::{Block, BlockHeader},
-    fcmp::{EncryptedAmount, EncryptedLabel, ProofBase, PrunedProofs},
-    io::CompressedPoint,
-    transaction::{Input, Output, Pruned, Timelock, Transaction, TransactionPrefix},
-};
-use shekyl_rpc::ScannableBlock;
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use crate::{
     extra::{Extra, ExtraField},
     view_pair::ViewPair,
+    ScannableBlock,
 };
 
 /// Bytes per X25519 ephemeral public key on the wire. Mirrors the
@@ -253,26 +248,35 @@ fn fake_spend_key_bytes() -> [u8; 32] {
     two_g.compress().to_bytes()
 }
 
-/// Assemble a [`ScannableBlock`] holding a single non-miner v2
-/// transaction whose N outputs were all constructed via
+/// Join a crypto-layer `(value, tag)` amount/label pair into the
+/// `shekyl-wire` `[u8; 9]` on-wire encoding (8-byte value ‖ 1-byte
+/// HKDF tag, GENESIS §9.7) — the inverse of the scanner's `split_enc9`.
+fn join_enc9(value: &[u8; 8], tag: u8) -> [u8; 9] {
+    let mut out = [0u8; 9];
+    out[..8].copy_from_slice(value);
+    out[8] = tag;
+    out
+}
+
+/// Assemble a [`ScannableBlock`] holding a single non-miner
+/// `shekyl-wire` transaction whose N outputs were all constructed via
 /// [`construct_output`] against `recipient_pk`.
 ///
-/// The block contains a minimal miner-tx (Input::Gen with no outputs)
-/// so [`Block::new`] accepts it. The non-miner transaction carries
-/// the per-output `view_tag`, `key`, encrypted amount, and commitment
+/// The block contains a minimal coinbase miner-tx (a sole `gen` input,
+/// a `Null` ct, no outputs). The non-miner transaction carries the
+/// per-output `view_tag`, `key`, encrypted amount, and commitment
 /// fields the scanner reads, plus a `tx_extra` blob carrying the
 /// concatenated KEM ciphertexts behind tag `0x06`.
 ///
-/// `output_index_for_first_ringct_output: Some(0)` is set so the
-/// scanner walks the non-miner transaction's outputs (the value is
-/// not load-bearing for the fixture; the scanner's per-output loop
-/// uses the local index `o`).
+/// `first_output_index: Some(0)` is set so the scanner walks the
+/// non-miner transaction's outputs (the value is not load-bearing for
+/// the fixture; the scanner's per-output loop uses the local index `o`).
 fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey) -> ScannableBlock {
     // Pre-allocate the on-wire fields.
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
-    let mut commitments: Vec<CompressedPoint> = Vec::with_capacity(n_outputs);
-    let mut encrypted_amounts: Vec<EncryptedAmount> = Vec::with_capacity(n_outputs);
-    let mut encrypted_labels: Vec<EncryptedLabel> = Vec::with_capacity(n_outputs);
+    let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
+    let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
+    let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
 
     let spend_key = fake_spend_key_bytes();
@@ -292,20 +296,13 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         );
 
         outputs.push(Output {
-            amount: None,
-            key: CompressedPoint(out.output_key),
-            view_tag: Some(out.view_tag_prefilter),
-            staking: None,
+            amount: 0,
+            key: out.output_key,
+            view_tag: out.view_tag_prefilter,
         });
-        commitments.push(CompressedPoint(out.commitment));
-        encrypted_amounts.push(EncryptedAmount {
-            amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-        });
-        encrypted_labels.push(EncryptedLabel {
-            label: out.enc_label,
-            label_tag: out.label_tag,
-        });
+        commitments.push(out.commitment);
+        enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
+        enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
         // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
         // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
         // and consists of `X25519_CT_BYTES || ML_KEM_768_CT_LEN`.
@@ -329,69 +326,72 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
     // production daemon → scanner path).
     let extra_serialized = Extra(vec![ExtraField::PqcKemCiphertext(kem_ct_blob)]).serialize();
 
-    let tx_prefix = TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs: vec![Input::ToKey {
-            amount: None,
-            key_offsets: vec![1],
-            key_image: CompressedPoint([0u8; 32]),
-        }],
-        outputs,
-        extra: extra_serialized,
-    };
-
-    let tx: Transaction<Pruned> = Transaction::V3 {
-        prefix: tx_prefix,
-        proofs: Some(PrunedProofs {
-            base: ProofBase {
-                fee: 0,
-                encrypted_amounts,
-                encrypted_labels,
+    let tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::ToKey {
+                amount: 0,
+                key_offsets: vec![1],
+                key_image: [0u8; 32],
+            }],
+            outputs,
+            extra: extra_serialized,
+        },
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0u8; 32],
+            base: CtBase {
+                enc_amounts,
+                enc_labels,
                 commitments,
             },
-        }),
+            pqc_auths: vec![],
+            prunable: None,
+        },
     };
 
-    // We need the wire-level tx hash to put into `block.transactions`,
-    // but `Transaction<Pruned>::hash` doesn't exist (only
-    // `Transaction<NotPruned>` has `hash` — pruned txs are
-    // reconstructed from the block-level merkle path in real
-    // operation). For bench-fixture purposes the value of the
-    // tx-hash element of `block.transactions` is not read by
-    // `Scanner::scan` (only the count is, via the structural
-    // invariant in `scan.rs::InternalScanner::scan`), so a
-    // placeholder value is sufficient and structurally invariant
-    // across iterations.
+    // The scanner reads only the *count* of `block.transaction_hashes` (it
+    // must equal `transactions.len()`), never the hash values themselves, so
+    // a placeholder hash is structurally sufficient and invariant across
+    // iterations.
     let placeholder_tx_hash = [0xAAu8; 32];
 
     let header = BlockHeader {
-        hardfork_version: 1,
-        hardfork_signal: 0,
+        major_version: 1,
+        minor_version: 0,
         timestamp: 0,
         previous: [0u8; 32],
         nonce: 0,
         curve_tree_root: [0u8; 32],
     };
 
-    // Minimal miner-tx: v3, single Input::Gen, no outputs (per the
-    // `make_synthetic_block` precedent in engine-core's test_support).
-    let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V3 {
-        prefix: TransactionPrefix {
-            additional_timelock: Timelock::None,
+    // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),
+    // no outputs (per the `make_synthetic_block` precedent in engine-core's
+    // test_support).
+    let miner_tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
             inputs: vec![Input::Gen(0)],
             outputs: vec![],
             extra: vec![],
         },
-        proofs: None,
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![],
+            enc_labels: vec![],
+            commitments: vec![],
+        }),
     };
 
-    let block = Block::new(header, miner_tx, vec![placeholder_tx_hash])
-        .expect("Block::new accepts a v3 miner-tx + one tx hash");
+    let block = Block {
+        header,
+        miner_transaction: miner_tx,
+        transaction_hashes: vec![placeholder_tx_hash],
+    };
 
     ScannableBlock {
         block,
         transactions: vec![tx],
-        output_index_for_first_ringct_output: Some(0),
+        first_output_index: Some(0),
     }
 }
 
@@ -593,7 +593,7 @@ mod tests {
                 "worst-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix().outputs.len(),
+                sb.transactions[0].prefix.outputs.len(),
                 n,
                 "worst-case block's non-miner tx output count must match requested N={n}"
             );
@@ -610,7 +610,7 @@ mod tests {
                 "typical-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix().outputs.len(),
+                sb.transactions[0].prefix.outputs.len(),
                 n,
                 "typical-case block's non-miner tx output count must match requested N={n}"
             );

@@ -102,16 +102,18 @@ sustainability is unaffected by the recalibration.
   helper) to the address-derivation guard. Target: V3.0 (cosmetic/diagnostic;
   not genesis-blocking, but cheap to land before the freeze gate).
 
-- **[Superseded] `ringct` residue rename in `shekyl-oxide` — folded into the §8
-  step-4 cut-away (raised 2026-06-14; superseded 2026-06-22).** The original action
-  was to rename `ScannableBlock.output_index_for_first_ringct_output`
+- **[Done] `ringct` residue rename in `shekyl-oxide` — landed via the §8 step-4
+  scanner slice (raised 2026-06-14; superseded 2026-06-22; **landed 2026-06-23**,
+  `feat/scan-refresh-wire-migration`).** The original action was to rename
+  `ScannableBlock.output_index_for_first_ringct_output`
   (`shekyl-oxide/.../rpc/src/lib.rs`) and drop the vacuous `Transaction::V2` scanner
-  guard (`shekyl-scanner/src/scan.rs`). That is now moot: §8 step-4 replaces
-  shekyl-oxide block/tx with `shekyl-wire`, so the `ScannableBlock` type (and its
-  ringct-named field) is **removed, not renamed** — the scanner picks up
-  `shekyl-wire`'s types in the same migration. No standalone work; subsumed by the
-  umbrella `rct → CT` sweep above. *(Do not repair shekyl-oxide here — it is being
-  cut away.)*
+  guard (`shekyl-scanner/src/scan.rs`). It became moot and is now realized: §8
+  step-4's scanner/refresh slice replaced shekyl-oxide block/tx with `shekyl-wire`, so
+  the legacy `shekyl-rpc` `ScannableBlock` (and its ringct-named field) was **removed,
+  not renamed** — `shekyl-scanner` now owns a `shekyl-wire`-typed `ScannableBlock`
+  whose global-index field is `first_output_index`, and the scanner consumes
+  `shekyl-wire`'s types directly. No standalone work remained; subsumed by the
+  umbrella `rct → CT` sweep above. *(Did not repair shekyl-oxide — it was cut away.)*
 
   *Version-concept disambiguation (kept — **corrects an earlier stale "tx-format=2"
   claim**; recorded so the "is `V2` a protocol bug?" question does not recur).* Shekyl
@@ -132,6 +134,74 @@ sustainability is unaffected by the recalibration.
 
   "V3 at genesis" is realized on-chain as **tx-version=3 + hardfork=1 +
   proof=FcmpPlusPlusPqc**.
+
+- **`get_scannable_block_by_number` → `fetch_scannable_block` name residue in
+  untouched files (flagged 2026-06-23, `feat/scan-refresh-wire-migration`).** The §8
+  step-4 scanner/refresh slice replaced the legacy `Rpc::get_scannable_block_by_number`
+  call with `DaemonEngine::fetch_scannable_block`. Two stale references survive in files
+  the slice did not substantively edit and were therefore held out of its scope (kept
+  tight per `15-deletion-and-debt.mdc` "while we're here"):
+  - `shekyl-engine-core/src/engine/diagnostics.rs` — the `pub enum DaemonOp` carries a
+    `GetScannableBlockByNumber` variant (def + doc at ~160/172/174, one construction site
+    at ~1477). Renaming it to `FetchScannableBlock` is a small refactor across its
+    use/construction sites, not a doc-only edit, so it belongs in its own change. The
+    variant's *meaning* (the per-block fetch op, timeout-classified) is unchanged; only
+    the name is stale.
+  - `shekyl-engine-core/src/engine/refresh.rs:~3218` — a test-module doc comment still
+    names `get_scannable_block_by_number` as the wired per-block fetch.
+
+  Naming-only; no behavior change (the in-scope production docs in `daemon.rs`,
+  `local_refresh.rs`, `merge.rs`, `block_fetch.rs`, `mod.rs` were already corrected, and
+  their remaining `get_scannable_block_by_*` mentions are intentional "this replaces the
+  legacy X" history). Not genesis-blocking. **Target: V3.0** (cheap pre-genesis rename
+  that completes the step-4 deletion cleanly). Reopen-now criterion: fold into any PR
+  that next touches `diagnostics.rs`'s `DaemonOp` for substantive reasons, or land
+  standalone before the genesis freeze gate.
+
+- **Block-height-only `unlock_time`: native `Timelock`, a pruned-safe context-free
+  ingestion validator, and daemon-side enforcement (flagged 2026-06-23,
+  `feat/scan-refresh-wire-migration`).** Shekyl is block-height-only: the
+  CryptoNote/Monero *timestamp* form of `unlock_time` (`>=
+  shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
+  "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
+  `shekyl_wire::Transaction::validate` rejects. The step-4 slice closed the *scan-path*
+  exposure in three layers but left two un-vendor-scoped follow-ups:
+  - **Native `Timelock` should drop the `Time` variant.** The wallet-domain `Timelock`
+    is still imported from `shekyl-oxide` (`None`/`Block`/`Time`).
+    `shekyl-scanner::scan::timelock_from_unlock_time` now maps the timestamp form to
+    `Timelock::None` (never `Timelock::Time`), so the `Time` arm is already dead on
+    chain data — but the *type* still carries it. When the `WalletOutput` domain types
+    are brought native off `shekyl-oxide` (the application-layer un-vendor), define
+    `Timelock` as block-height-only (`None`/`Block`) so the dead variant cannot be
+    constructed at all and the lifter becomes total without an unreachable arm.
+  - **[Done 2026-06-23, this slice] A pruned-safe context-free ingestion validator now
+    lives in `shekyl-wire`, called from `block_fetch.rs`.**
+    `Transaction::validate_context_free_pruned` enforces the full context-free reject set
+    that is safe on a *pruned* tx — resource bounds, the §2.5 coinbase shape + arm-mixing
+    matrix, the §12 key-image canonical form, block-height-only `unlock_time`, and the
+    committed-base arity — i.e. everything except the prunable-coupled checks (`nbp == 1`,
+    the per-input `pqc_auths` / `pseudoOuts` counts, `>= 2` outputs for a spend, the
+    fee-only no-prunable shape), which stay in `Transaction::validate` (the complete-tx
+    validator) because the wallet ingests pruned txs (the prunable proof dropped).
+    `parse_block_blob` (coinbase) and `parse_pruned_tx` (non-miner) both call it, and
+    `parse_pruned_tx` additionally rejects a coinbase-shaped tx (`Transaction::is_coinbase`)
+    on the `get_transactions` path — the coinbase belongs in the block blob, never here.
+    The scattered ad-hoc checks (the standalone `unlock_time` reject) are retired into the
+    validator. **Remaining:** retire the scanner's now-redundant defense-in-depth gates
+    (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates) to true
+    belt-and-suspenders when the application-layer un-vendor lands.
+  - **Daemon-side enforcement.** A canonical daemon should reject timestamp-form
+    `unlock_time` at consensus so it can never *serve* one; the wallet's ingestion
+    reject is then pure defense against a buggy/adversarial node. (User: "bring the
+    daemon just that little bit closer to where it should be.") This is the
+    consensus-side companion to the wallet-side gate and rides the daemon's own
+    block-height-only audit.
+
+  Not genesis-blocking (the scan path is already safe end-to-end; the pruned-safe
+  validator above now enforces the full context-free reject set at ingestion). **Target:
+  V3.x**, landing with the rest of the `shekyl-oxide` application-layer un-vendor.
+  Reopen-now criterion: when the native `WalletOutput`/`Timelock` types land — fold the
+  two remaining sub-items (native `Timelock`, daemon-side enforcement) into that work.
 
 - **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership

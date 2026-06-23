@@ -71,9 +71,9 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
-use shekyl_oxide::block::{Block, BlockHeader};
-use shekyl_oxide::transaction::{Input, Timelock, Transaction, TransactionPrefix};
-use shekyl_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
+use shekyl_rpc::{FeeRate, Rpc, RpcError};
+use shekyl_scanner::ScannableBlock;
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
@@ -153,7 +153,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 /// Locking is `std::sync::Mutex` rather than `tokio::sync::Mutex`
 /// because every guarded critical section is non-`await` (the
 /// state transitions in `get_height`,
-/// `get_scannable_block_by_number`, `submit_transaction`, and
+/// `fetch_scannable_block`, `submit_transaction`, and
 /// `get_fee_estimates` are pure data lookups that drop the guard
 /// before returning the future's result). Holding a
 /// `std::sync::Mutex` across an `await` point would be a defect;
@@ -208,7 +208,7 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
-    /// Per-height error queues for `get_scannable_block_by_number`.
+    /// Per-height error queues for `fetch_scannable_block`.
     /// FIFO; once a height's queue is drained, subsequent fetches
     /// at that height return the canonical block.
     block_errors: HashMap<u64, VecDeque<RpcError>>,
@@ -315,7 +315,7 @@ impl TestDaemon {
     /// the height that becomes valid once it lands). The first
     /// `push_block` against an empty chain should be a genesis-style
     /// block at height 0 if the test downstream calls
-    /// `get_scannable_block_by_number(0)`.
+    /// `fetch_scannable_block(0)`.
     pub(crate) fn push_block(&self, block: ScannableBlock) {
         self.state
             .lock()
@@ -335,7 +335,7 @@ impl TestDaemon {
     /// `fork_height = 0` discards the entire chain (genesis included);
     /// the test then has to install a fresh genesis as `new_blocks[0]`.
     ///
-    /// Subsequent `get_scannable_block_by_number(h)` for
+    /// Subsequent `fetch_scannable_block(h)` for
     /// `h >= fork_height` returns the corresponding entry of
     /// `new_blocks`; `h < fork_height` is unaffected. The reported
     /// daemon height (via `get_height`) becomes
@@ -381,7 +381,7 @@ impl TestDaemon {
     }
 
     /// Inject a one-shot error for the next
-    /// `get_scannable_block_by_number(height)` call. Multiple
+    /// `fetch_scannable_block(height)` call. Multiple
     /// invocations queue multiple errors at the same height (FIFO).
     /// Once the height's queue drains, subsequent fetches at that
     /// height return the canonical block.
@@ -502,8 +502,18 @@ impl Rpc for TestDaemon {
                 .map_err(|_| RpcError::InvalidNode("TestDaemon height exceeded usize".to_string()))
         }
     }
+}
 
-    fn get_scannable_block_by_number(
+impl DaemonEngine for TestDaemon {
+    type Error = RpcError;
+
+    /// Serve the in-memory chain directly, overriding the
+    /// [`block_fetch`](super::block_fetch) default (which would drive the
+    /// real RPC transport `TestDaemon::post` panics on). The body is the
+    /// former `Rpc::fetch_scannable_block` override, now returning the
+    /// `shekyl_wire`-typed [`ScannableBlock`]; the migration moved block
+    /// fetching from the `Rpc` surface to `DaemonEngine::fetch_scannable_block`.
+    fn fetch_scannable_block(
         &self,
         number: usize,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
@@ -539,10 +549,6 @@ impl Rpc for TestDaemon {
             })
         }
     }
-}
-
-impl DaemonEngine for TestDaemon {
-    type Error = RpcError;
 
     fn get_fee_estimates(
         &self,
@@ -593,8 +599,8 @@ impl DaemonEngine for TestDaemon {
 /// their own `ScannableBlock` (see module docs).
 pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
     let header = BlockHeader {
-        hardfork_version: 1,
-        hardfork_signal: 0,
+        major_version: 1,
+        minor_version: 0,
         timestamp: height,
         previous: parent_hash,
         nonce: 0,
@@ -607,30 +613,31 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
     };
 
-    let miner_prefix = TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs: vec![Input::Gen(
-            usize::try_from(height).expect("synthetic block height fits in usize"),
-        )],
-        outputs: vec![],
-        extra: vec![],
+    // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
+    // committed base is empty (one entry per output, zero outputs → empty vecs).
+    // `Scanner::scan` recovers nothing; `Block::hash` is well-defined.
+    let miner_transaction = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::Gen(height)],
+            outputs: vec![],
+            extra: vec![],
+        },
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![],
+            enc_labels: vec![],
+            commitments: vec![],
+        }),
     };
-
-    let miner_tx = Transaction::V3 {
-        prefix: miner_prefix,
-        proofs: None,
-    };
-
-    let block = Block::new(header, miner_tx, vec![]).expect(
-        "Block::new accepts a v3 miner-tx-only block by construction; \
-         the only failure mode is a non-Gen first input or wrong input count, \
-         neither of which applies here",
-    );
 
     ScannableBlock {
-        block,
+        block: Block {
+            header,
+            miner_transaction,
+            transaction_hashes: vec![],
+        },
         transactions: vec![],
-        output_index_for_first_ringct_output: None,
+        first_output_index: None,
     }
 }
 
@@ -675,7 +682,7 @@ mod tests {
         let expected_h2 = chain[2].block.hash();
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
 
-        let block = rpc.get_scannable_block_by_number(2).await.unwrap();
+        let block = rpc.fetch_scannable_block(2).await.unwrap();
         assert_eq!(block.block.hash(), expected_h2);
     }
 
@@ -683,8 +690,8 @@ mod tests {
     async fn parent_hash_chains_correctly() {
         // 3-block chain has heights 0, 1, 2; verify h=2 parents from h=1.
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        let h1 = rpc.get_scannable_block_by_number(1).await.unwrap();
-        let h2 = rpc.get_scannable_block_by_number(2).await.unwrap();
+        let h1 = rpc.fetch_scannable_block(1).await.unwrap();
+        let h2 = rpc.fetch_scannable_block(2).await.unwrap();
         assert_eq!(h2.block.header.previous, h1.block.hash());
     }
 
@@ -692,12 +699,7 @@ mod tests {
     async fn replace_chain_from_truncates_and_extends() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         // Fork at height 3: chain heights 0, 1, 2 survive; replace 3+.
-        let parent_h2 = rpc
-            .get_scannable_block_by_number(2)
-            .await
-            .unwrap()
-            .block
-            .hash();
+        let parent_h2 = rpc.fetch_scannable_block(2).await.unwrap().block.hash();
 
         let mut alt = Vec::new();
         let mut p = parent_h2;
@@ -711,7 +713,7 @@ mod tests {
         rpc.replace_chain_from(3, alt);
 
         assert_eq!(rpc.chain_len(), 5, "keep 3 + 2 new blocks => len 5");
-        let h3 = rpc.get_scannable_block_by_number(3).await.unwrap();
+        let h3 = rpc.fetch_scannable_block(3).await.unwrap();
         assert_eq!(h3.block.header.previous, parent_h2);
         assert_eq!(h3.block.header.timestamp, 9_003);
     }
@@ -738,8 +740,8 @@ mod tests {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flaky".into()));
 
-        assert!(rpc.get_scannable_block_by_number(2).await.is_err());
-        assert!(rpc.get_scannable_block_by_number(2).await.is_ok());
+        assert!(rpc.fetch_scannable_block(2).await.is_err());
+        assert!(rpc.fetch_scannable_block(2).await.is_ok());
     }
 
     #[tokio::test]
@@ -750,12 +752,12 @@ mod tests {
         rpc.set_block_returns_malformed(1);
 
         for _ in 0..3 {
-            let err = rpc.get_scannable_block_by_number(1).await.unwrap_err();
+            let err = rpc.fetch_scannable_block(1).await.unwrap_err();
             assert!(matches!(err, RpcError::InvalidNode(_)));
         }
-        assert!(rpc.get_scannable_block_by_number(0).await.is_ok());
-        assert!(rpc.get_scannable_block_by_number(2).await.is_ok());
-        assert!(rpc.get_scannable_block_by_number(3).await.is_ok());
+        assert!(rpc.fetch_scannable_block(0).await.is_ok());
+        assert!(rpc.fetch_scannable_block(2).await.is_ok());
+        assert!(rpc.fetch_scannable_block(3).await.is_ok());
     }
 
     #[tokio::test]
@@ -777,7 +779,7 @@ mod tests {
         let chain = linear_chain(1);
         let expected = chain[0].block.hash();
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
-        let h0 = rpc.get_scannable_block_by_number(0).await.unwrap();
+        let h0 = rpc.fetch_scannable_block(0).await.unwrap();
         assert_eq!(h0.block.hash(), expected);
     }
 
@@ -785,7 +787,7 @@ mod tests {
     async fn fetching_past_chain_end_is_an_error() {
         // 2-block chain has heights 0, 1; height 2 is past the tip.
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
-        let err = rpc.get_scannable_block_by_number(2).await.unwrap_err();
+        let err = rpc.fetch_scannable_block(2).await.unwrap_err();
         assert!(matches!(err, RpcError::InvalidNode(_)));
     }
 

@@ -35,7 +35,7 @@ use shekyl_scanner::{
         build_typical_case_scannable_block, build_worst_case_scannable_block, make_bench_wallet,
         BenchWalletKeys,
     },
-    Scanner,
+    ScannableBlock, Scanner,
 };
 
 fn fresh_scanner(wallet: &BenchWalletKeys) -> Scanner {
@@ -45,14 +45,14 @@ fn fresh_scanner(wallet: &BenchWalletKeys) -> Scanner {
     )
 }
 
-fn setup_worst_case(n: usize) -> (Scanner, shekyl_rpc::ScannableBlock) {
+fn setup_worst_case(n: usize) -> (Scanner, ScannableBlock) {
     let wallet = make_bench_wallet();
     let scanner = fresh_scanner(&wallet);
     let block = build_worst_case_scannable_block(n, &wallet);
     (scanner, block)
 }
 
-fn setup_typical_case(n: usize) -> (Scanner, shekyl_rpc::ScannableBlock) {
+fn setup_typical_case(n: usize) -> (Scanner, ScannableBlock) {
     let wallet = make_bench_wallet();
     let scanner = fresh_scanner(&wallet);
     let block = build_typical_case_scannable_block(n);
@@ -61,7 +61,7 @@ fn setup_typical_case(n: usize) -> (Scanner, shekyl_rpc::ScannableBlock) {
 
 #[library_benchmark]
 #[benches::with_setup(args = [1, 4, 8, 16], setup = setup_worst_case)]
-fn worst_case_all_view_tags_match(input: (Scanner, shekyl_rpc::ScannableBlock)) -> Scanner {
+fn worst_case_all_view_tags_match(input: (Scanner, ScannableBlock)) -> Scanner {
     let (mut scanner, block) = input;
     let res = scanner
         .scan(black_box(block))
@@ -72,7 +72,7 @@ fn worst_case_all_view_tags_match(input: (Scanner, shekyl_rpc::ScannableBlock)) 
 
 #[library_benchmark]
 #[benches::with_setup(args = [1, 4, 8, 16], setup = setup_typical_case)]
-fn typical_case_view_tag_filtered(input: (Scanner, shekyl_rpc::ScannableBlock)) -> Scanner {
+fn typical_case_view_tag_filtered(input: (Scanner, ScannableBlock)) -> Scanner {
     let (mut scanner, block) = input;
     let res = scanner
         .scan(black_box(block))
