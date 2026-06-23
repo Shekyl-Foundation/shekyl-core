@@ -348,44 +348,58 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
         Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
+    // get_curve_tree_info answers non-404 even on a fresh tree — proves the *info*
+    // endpoint is wired into the FFI dispatch, independent of any leaves existing.
+    let info: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call("get_curve_tree_info", None)
+        .await
+        .expect("get_curve_tree_info must not 404 (FFI dispatch wired)");
+    assert_eq!(
+        info.get("root")
+            .and_then(serde_json::Value::as_str)
+            .map(str::len),
+        Some(64),
+        "get_curve_tree_info.root must be 32-byte hex; got {info}"
+    );
+
     // Mine in small batches (a single ~80-block call exceeds the RPC client timeout)
-    // until coinbase outputs mature + drain into the reference tree.
+    // until output 0 is drained into the *reference* tree (tip − REF_ANCHOR_AGE). Poll
+    // get_curve_tree_path itself rather than get_curve_tree_info.leaf_count: that is the
+    // *tip* leaf count and races ahead of the reference tree the path is built against.
+    // Early on, output 0 is beyond the (empty) tip and the call hard-fails (WRONG_PARAM);
+    // once leaves exist but aren't yet at the reference height it returns empty paths;
+    // both just mean "mine more".
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24; // upper bound ~240 blocks before giving up
-    let mut leaf_count = 0u64;
+    let mut path = serde_json::Value::Null;
     let mut mined = 0u64;
     for _ in 0..MAX_MINE_BATCHES {
         daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
         mined += MINE_BATCH_BLOCKS;
-        let info: serde_json::Value = daemon
+        if let Ok(resp) = daemon
             .rpc
-            .json_rpc_call("get_curve_tree_info", None)
+            .json_rpc_call::<serde_json::Value>(
+                "get_curve_tree_path",
+                Some(json!({ "output_indices": [0u64] })),
+            )
             .await
-            .expect("get_curve_tree_info must not 404");
-        leaf_count = info
-            .get("leaf_count")
-            .and_then(serde_json::Value::as_u64)
-            .expect("leaf_count field");
-        if leaf_count > 0 {
-            eprintln!("reference tree populated after {mined} blocks: leaf_count={leaf_count}");
-            break;
+        {
+            let has_path = resp
+                .get("paths")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|a| !a.is_empty());
+            if has_path {
+                eprintln!("output 0 in reference tree after {mined} blocks: {resp}");
+                path = resp;
+                break;
+            }
         }
     }
     assert!(
-        leaf_count > 0,
-        "reference tree should populate within {mined} blocks; got leaf_count={leaf_count}"
+        !path.is_null(),
+        "output 0 should have a reference-tree membership path within {mined} blocks"
     );
-
-    // Fetch the membership path for the first leaf.
-    let path: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call(
-            "get_curve_tree_path",
-            Some(json!({ "output_indices": [0u64] })),
-        )
-        .await
-        .expect("get_curve_tree_path must not 404");
-    eprintln!("curve_tree_path([0]): {path}");
 
     let root = path
         .get("curve_tree_root")
