@@ -28,7 +28,6 @@
 
 set(rpc_base_sources
   rpc_args.cpp
-  rpc_payment_signature.cpp
   rpc_handler.cpp)
 
 set(rpc_sources
@@ -36,13 +35,11 @@ set(rpc_sources
   bootstrap_node_selector.cpp
   core_rpc_server.cpp
   core_rpc_ffi.cpp
-  rpc_payment.cpp
   instanciations.cpp)
 
 
 set(rpc_base_headers
   rpc_args.h
-  rpc_payment_signature.h
   rpc_handler.h)
 
 set(rpc_headers
@@ -52,7 +49,6 @@ set(rpc_private_headers
   bootstrap_daemon.h
   core_rpc_server.h
   core_rpc_ffi.h
-  rpc_payment.h
   core_rpc_server_commands_defs.h
   core_rpc_server_error_codes.h)
 

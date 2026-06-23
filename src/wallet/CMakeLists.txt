@@ -35,7 +35,6 @@ set(wallet_sources
   wallet2_ffi.cpp
   wallet_args.cpp
   node_rpc_proxy.cpp
-  wallet_rpc_payments.cpp
 )
 
 monero_find_all_headers(wallet_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")

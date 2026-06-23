@@ -21,16 +21,19 @@ namespace cryptonote
   public:
     bootstrap_daemon(
       std::function<std::map<std::string, bool>()> get_public_nodes,
-      bool rpc_payment_enabled,
       const std::string &proxy);
     bootstrap_daemon(
       const std::string &address,
       std::optional<epee::net_utils::http::login> credentials,
-      bool rpc_payment_enabled,
       const std::string &proxy);
 
     std::string address() const noexcept;
     std::optional<std::pair<uint64_t, uint64_t>> get_height();
+    // Record an RPC outcome and rotate away from the current peer on failure.
+    // The status-aware overload treats a non-OK RPC-layer status as a failure
+    // too, so every invoke_http_* path rotates unusable peers without each call
+    // site repeating the check; the bool-only overload forces a failure result.
+    bool handle_result(bool success);
     bool handle_result(bool success, const std::string &status);
 
     template <class t_request, class t_response>
@@ -82,7 +85,6 @@ namespace cryptonote
 
   private:
     net::http::client m_http_client;
-    const bool m_rpc_payment_enabled;
     const std::unique_ptr<bootstrap_node::selector> m_selector;
     boost::mutex m_selector_mutex;
   };

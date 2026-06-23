@@ -269,26 +269,6 @@ pub struct DevicePrefs {
     pub device_derivation_path: String,
 }
 
-/// RPC prefs (Bucket 5). Client-ID and credit-target settings for
-/// the pay-per-call daemon RPC.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RpcPrefs {
-    /// Stable client identifier for RPC payments. Empty string means
-    /// "generate a fresh one on first use".
-    #[serde(default)]
-    pub persistent_rpc_client_id: String,
-
-    /// Auto-mine-for-credits threshold. Zero disables. Non-zero enables
-    /// bounded auto-mining up to the threshold.
-    #[serde(default)]
-    pub auto_mine_for_rpc_payment_threshold: AtomicUnits,
-
-    /// Target RPC credit balance.
-    #[serde(default)]
-    pub credits_target: AtomicUnits,
-}
-
 /// Top-level prefs document. Serialized as a TOML file with one
 /// table per bucket.
 ///
@@ -320,9 +300,6 @@ pub struct WalletPrefs {
     /// Bucket 4.
     #[serde(default)]
     pub device: DevicePrefs,
-    /// Bucket 5.
-    #[serde(default)]
-    pub rpc: RpcPrefs,
 }
 
 impl Default for WalletPrefs {
@@ -333,14 +310,14 @@ impl Default for WalletPrefs {
             cosmetic: CosmeticPrefs::default(),
             operational: OperationalPrefs::default(),
             device: DevicePrefs::default(),
-            rpc: RpcPrefs::default(),
         }
     }
 }
 
 /// Current `prefs.toml` schema version. Bumped when persisted fields
-/// are added or removed (`subaddress_lookahead` deletion → `2`).
-pub const PREFS_SCHEMA_VERSION: u8 = 2;
+/// are added or removed (`subaddress_lookahead` deletion → `2`;
+/// RPC-payment `[rpc]` bucket removal → `3`).
+pub const PREFS_SCHEMA_VERSION: u8 = 3;
 
 fn default_schema_version() -> u8 {
     PREFS_SCHEMA_VERSION
@@ -428,7 +405,7 @@ mod tests {
         let mut prefs = WalletPrefs::default();
         prefs.cosmetic.default_decimal_point = 10;
         prefs.operational.refresh_type = RefreshType::Full;
-        prefs.rpc.credits_target = AtomicUnits::from_raw(1_000_000);
+        prefs.device.device_name = "ledger-nano".to_string();
 
         let encoded = toml::to_string(&prefs).expect("serialize");
         let decoded: WalletPrefs = toml::from_str(&encoded).expect("parse");

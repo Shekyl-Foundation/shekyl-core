@@ -633,3 +633,14 @@ parity — armed (release gate). The Phase-3c-only gates (symbol-isolation
 export `shekyl_pow_randomx_v2_seedheight` + add the
 `shekyl-pow-randomx::consensus` module (`SEEDHASH_EPOCH_BLOCKS`/`_LAG`),
 and add the CI symbol-isolation invariant.
+
+> **Update (2026-06-22): the 3c blocker is gone.** The RPC-payment subsystem
+> was deleted on `chore/rpc-payment-deletion`
+> ([`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](./LEGACY_POW_CLEANUP_PLAN.md);
+> `[Unreleased]` `### Removed`). That re-split the remaining 3c/Phase-4 work and
+> corrected this section's `rx-slow-hash.c` + `slow-hash.c` bundling: **RandomX
+> v1 (`rx-slow-hash.c`) is now retained** as the consensus rollback hatch (with
+> a reversion clause), so the `seedheight` export rides v1 deletion, **not** 3c;
+> only CryptoNight `slow-hash.c` (gated on the C++ KDF→argon2id migration) and
+> the `IPowSchema`/`pow_registry` + `RX_BLOCK_VERSION` `#define` cleanup remain.
+> The updated FOLLOWUPS "Phase 3c / Phase 4" cluster is authoritative.
