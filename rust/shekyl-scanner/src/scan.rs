@@ -841,8 +841,19 @@ impl InternalScanner {
             // Every `shekyl-wire` transaction is v3 with a confidential output
             // set, so the advance is unconditional — the vendored
             // `Transaction::V3` match guard is dead (no other variant exists).
-            first_output_index += u64::try_from(tx.prefix.outputs.len())
+            //
+            // Use `checked_add` (not `+=`), consistent with the per-output
+            // `global_index` computation above: a hostile/buggy daemon could
+            // serve a block whose cumulative output count overflows `u64`, which
+            // would silently wrap in release builds and corrupt every subsequent
+            // `index_on_blockchain`. Surface `InvalidScannableBlock` instead.
+            let tx_output_count = u64::try_from(tx.prefix.outputs.len())
                 .expect("couldn't convert amount of outputs (usize) to u64");
+            first_output_index = first_output_index.checked_add(tx_output_count).ok_or(
+                ScanError::InvalidScannableBlock(
+                    "cumulative output index isn't representable as a u64",
+                ),
+            )?;
         }
 
         // Note: Shekyl V3 dropped the legacy unencrypted PaymentId variant outright.
@@ -1569,6 +1580,66 @@ mod cancel_tests {
             *counter.lock().expect("call-count mutex poisoned"),
             1,
             "outer per-tx-loop check fires exactly once before delegating to the inner helper"
+        );
+    }
+
+    /// The per-tx global-index advance must use `checked_add`, consistent with
+    /// the per-output `global_index` computation: a block whose cumulative
+    /// output count would push the running index past `u64::MAX` surfaces
+    /// `InvalidScannableBlock` rather than silently wrapping (release builds) and
+    /// corrupting subsequent `index_on_blockchain` values.
+    ///
+    /// Shape: `first_output_index = u64::MAX` and a one-output coinbase with an
+    /// empty CT base. Output 0 short-circuits (`enc_amounts.get(0)` is `None`)
+    /// before the per-output `checked_add`, so the only overflow that can fire is
+    /// the per-tx advance (`u64::MAX + 1`).
+    #[test]
+    fn per_tx_index_advance_overflow_is_rejected() {
+        use shekyl_wire::{Block, BlockHeader};
+
+        let mut scanner = placeholder_scanner();
+        let header = BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 0,
+            previous: [0u8; 32],
+            nonce: 0,
+            curve_tree_root: [0u8; 32],
+        };
+        let miner_tx = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(0)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            }),
+        };
+        let scannable = ScannableBlock {
+            block: Block {
+                header,
+                miner_transaction: miner_tx,
+                transaction_hashes: vec![],
+            },
+            transactions: vec![],
+            first_output_index: Some(u64::MAX),
+        };
+
+        let mut never = || false;
+        let err = scanner
+            .scan_with_cancel(scannable, &mut never)
+            .expect_err("cumulative index overflow must surface InvalidScannableBlock");
+        assert!(
+            matches!(err, ScanError::InvalidScannableBlock(_)),
+            "expected InvalidScannableBlock, got {err:?}"
         );
     }
 

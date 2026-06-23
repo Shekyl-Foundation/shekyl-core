@@ -36,9 +36,10 @@
 //! # Ingestion validation (untrusted daemon)
 //!
 //! The daemon is untrusted, so this boundary rejects non-canonical responses
-//! rather than forwarding them to the scanner: oversized hex blobs (a DoS
-//! pre-bound ahead of [`shekyl_wire::Transaction::from_bytes`]'s own
-//! `MAX_TX_SIZE` guard), reordered / mismatched `get_transactions` results
+//! rather than forwarding them to the scanner: oversized hex blobs (DoS
+//! pre-bounds ahead of the `MAX_BLOCK_BLOB_SIZE` / `MAX_TX_SIZE` guards in
+//! [`shekyl_wire::Block::from_bytes`] / [`shekyl_wire::Transaction::from_bytes`]),
+//! reordered / mismatched `get_transactions` results
 //! ([`parse_tx_batch`]), malformed `missed_tx` entries, and the **timestamp
 //! form** of `unlock_time` ([`reject_timestamp_unlock_time`]). The latter is
 //! the *pruned-safe, stateless* subset of [`shekyl_wire::Transaction::validate`]
@@ -56,6 +57,7 @@ use serde_json::{json, Value};
 use shekyl_rpc::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{
+    block::MAX_BLOCK_BLOB_SIZE,
     transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL},
     Block, Transaction,
 };
@@ -94,6 +96,14 @@ pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
 /// `shekyl_wire` canonical-encoding invariant) and that the coinbase `gen`
 /// input's height matches the requested `number`.
 fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, RpcError> {
+    // DoS pre-bound (mirrors `parse_pruned_tx`): bound the hex *input* before
+    // `hex::decode` allocates ~half its length, otherwise a hostile daemon could
+    // force a large allocation that `Block::from_bytes`'s own
+    // `MAX_BLOCK_BLOB_SIZE` guard only catches after the decode. A block blob is
+    // at most `MAX_BLOCK_BLOB_SIZE` bytes ⇒ `2 * MAX_BLOCK_BLOB_SIZE` hex chars.
+    if blob_hex.len() > MAX_BLOCK_BLOB_SIZE.saturating_mul(2) {
+        return Err(RpcError::InvalidNode("block blob too large".to_string()));
+    }
     let bytes = hex::decode(blob_hex)
         .map_err(|_| RpcError::InvalidNode("block blob wasn't hex".to_string()))?;
     let block = Block::from_bytes(&bytes)
@@ -600,6 +610,18 @@ mod tests {
         // length, so only the length gate (not a decode error) can fire.
         let oversized = "0".repeat(MAX_TX_SIZE * 2 + 2);
         assert!(parse_pruned_tx(&oversized, "").is_err());
+    }
+
+    #[test]
+    fn parse_block_blob_rejects_oversized_hex_before_decode() {
+        // DoS pre-bound: a hex string longer than `2 * MAX_BLOCK_BLOB_SIZE` is
+        // rejected by length before `hex::decode` allocates. All-hex chars of
+        // even length, so only the length gate (not a decode error) can fire.
+        let oversized = "0".repeat(MAX_BLOCK_BLOB_SIZE * 2 + 2);
+        assert!(matches!(
+            parse_block_blob(&oversized, 0),
+            Err(RpcError::InvalidNode(_))
+        ));
     }
 
     #[test]

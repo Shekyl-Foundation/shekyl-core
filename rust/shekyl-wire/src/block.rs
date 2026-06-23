@@ -21,9 +21,31 @@ use shekyl_crypto_hash::cn_fast_hash;
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
-use crate::transaction::{Ct, Input, Transaction};
+use crate::transaction::{Ct, Input, Transaction, MAX_TX_SIZE};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
+
+/// Defense-in-depth upper bound on a serialized block blob, mirroring
+/// [`MAX_TX_SIZE`]'s role for a transaction.
+///
+/// A block blob is the header + the embedded coinbase + the non-miner
+/// transaction-*hash* list (the full non-miner txs are fetched separately, as
+/// their own blobs), so its largest parseable form is the sum of what
+/// [`Block::read`]'s caps already accept:
+///
+/// * header — fixed fields with varint slack (`< 128` bytes);
+/// * the coinbase [`Transaction`] — `≤ MAX_TX_SIZE` (a vast over-estimate: a
+///   coinbase is one `gen` input, `≤ MAX_OUTPUTS` outputs, `≤ MAX_TX_EXTRA`
+///   extra, and a `Null` base, i.e. tens of KiB — but `MAX_TX_SIZE` is the
+///   simplest safe ceiling and `Block::read` does not separately bound it);
+/// * the `n_tx` varint + `n_tx × 32`-byte hashes — `≤ READ_LEN_CAP × 32`.
+///
+/// Because the sum is `≥` the largest blob `Block::read` can accept, the guard
+/// never rejects a parseable block; it only stops an unbounded pre-allocation
+/// from a hostile/oversized blob *before* the structured count-caps run (the
+/// same role the up-front `MAX_TX_SIZE` check plays in
+/// [`Transaction::from_bytes`]). It is a DoS bound, **not** a consensus bound.
+pub const MAX_BLOCK_BLOB_SIZE: usize = MAX_TX_SIZE + READ_LEN_CAP * 32 + 128;
 
 /// A Shekyl block header.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -153,6 +175,16 @@ impl Block {
     /// encoding invariant; the genesis serializer closes the C++ oracle's
     /// trailing-byte malleability gap).
     pub fn from_bytes(blob: &[u8]) -> io::Result<Block> {
+        // Up-front DoS bound, parity with `Transaction::from_bytes`'s
+        // `MAX_TX_SIZE` check: reject an over-large blob before parsing. The
+        // bound is `≥` any blob `read` can accept, so it cannot reject a
+        // parseable block (see `MAX_BLOCK_BLOB_SIZE`).
+        if blob.len() > MAX_BLOCK_BLOB_SIZE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: block blob {} exceeds {MAX_BLOCK_BLOB_SIZE}",
+                blob.len()
+            )));
+        }
         let mut cursor = blob;
         let block = Block::read(&mut cursor)?;
         if !cursor.is_empty() {
