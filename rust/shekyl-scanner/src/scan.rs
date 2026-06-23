@@ -17,7 +17,7 @@
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_oxide::{io::CompressedPoint, primitives::Commitment, transaction::Timelock};
-use shekyl_wire::{Block, Ct, Transaction};
+use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, ML_KEM_768_CT_LEN},
@@ -129,19 +129,19 @@ fn split_enc9(bytes: &[u8; 9]) -> ([u8; 8], u8) {
 
 /// Interpret a transaction's raw `unlock_time` varint
 /// (`shekyl_wire::TxPrefix::unlock_time`) as the wallet-domain [`Timelock`].
-/// The CryptoNote-inherited convention (mirrored from the vendored
-/// `Timelock::read`): `0` is no timelock, a value below
-/// `TIMELOCK_BLOCK_THRESHOLD` is a block height, and anything at or above it
-/// is a unix timestamp. `shekyl-wire` keeps the raw varint; lifting it into
-/// the typed [`Timelock`] is a wallet concern, not a wire concern.
+/// The CryptoNote-inherited convention: `0` is no timelock, a value below
+/// [`UNLOCK_TIME_BLOCK_SENTINEL`] is a block height, and anything at or above
+/// it is a unix timestamp. `shekyl-wire` owns the wire-format sentinel and
+/// keeps the raw varint; the scanner binds to that constant (so scanner ↔ wire
+/// unlock-time semantics cannot drift) and lifts the varint into the typed
+/// [`Timelock`] — a wallet concern, not a wire concern.
 fn timelock_from_unlock_time(raw: u64) -> Timelock {
-    const TIMELOCK_BLOCK_THRESHOLD: u64 = 500_000_000;
     if raw == 0 {
         Timelock::None
-    } else if raw < TIMELOCK_BLOCK_THRESHOLD {
+    } else if raw < UNLOCK_TIME_BLOCK_SENTINEL {
         Timelock::Block(
             usize::try_from(raw)
-                .expect("a value below TIMELOCK_BLOCK_THRESHOLD always fits in usize"),
+                .expect("a value below UNLOCK_TIME_BLOCK_SENTINEL always fits in usize"),
         )
     } else {
         Timelock::Time(raw)

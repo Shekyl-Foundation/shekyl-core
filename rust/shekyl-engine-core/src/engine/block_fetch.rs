@@ -10,7 +10,7 @@
 //! (`get_block` / `get_transactions` JSON-RPC, `get_o_indexes` binary RPC) is
 //! still the vendored [`shekyl_rpc::Rpc`] surface, but **parsing moves to the
 //! canonical [`shekyl_wire`] crate**: [`shekyl_wire::Block::from_bytes`] and
-//! [`shekyl_wire::Transaction::read`].
+//! [`shekyl_wire::Transaction::from_bytes`].
 //!
 //! # Why this exists (the coinbase `Null` parse fix)
 //!
@@ -87,21 +87,17 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
     Ok(block)
 }
 
-/// Hex-decode and parse one pruned transaction blob, requiring exact
-/// consumption. Pruned transactions are not re-hashed (the pruned form hashes
-/// differently); the block's `transaction_hashes` are trusted for association,
-/// matching the legacy `get_pruned_transactions` contract.
+/// Hex-decode and parse one pruned transaction blob via the canonical
+/// [`shekyl_wire::Transaction::from_bytes`], which rejects blobs larger than
+/// `MAX_TX_SIZE` up front (the untrusted-daemon DoS bound) and requires exact
+/// consumption (`GENESIS_TX_WIRE_FORMAT.md` §12 — trailing bytes rejected).
+/// The pruned form is not re-hashed (it hashes differently — §11); association
+/// to a block hash is pinned by [`parse_tx_batch`], which checks each returned
+/// `tx_hash` against the requested hash, in order.
 fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
     let bytes = hex::decode(pruned_hex)
         .map_err(|_| RpcError::InvalidNode("pruned tx blob wasn't hex".to_string()))?;
-    let mut buf = bytes.as_slice();
-    let tx = Transaction::read(&mut buf).map_err(|_| invalid_tx_error(tx_hash_hex))?;
-    if !buf.is_empty() {
-        return Err(RpcError::InvalidNode(
-            "pruned transaction had extra bytes after it".to_string(),
-        ));
-    }
-    Ok(tx)
+    Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))
 }
 
 /// Build the error for a pruned-tx parse failure, preferring the daemon-named
@@ -150,26 +146,53 @@ async fn fetch_pruned_transactions<R: Rpc>(
         let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
             RpcError::InvalidNode("get_transactions response missing txs".to_string())
         })?;
-        for t in txs {
-            let pruned_hex = t
-                .get("pruned_as_hex")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
-                })?;
-            let tx_hash_hex = t.get("tx_hash").and_then(Value::as_str).unwrap_or("");
-            transactions.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
-        }
+        transactions.extend(parse_tx_batch(batch, txs)?);
     }
 
-    // The first-output-index zip and the scanner both rely on a 1:1
-    // correspondence with the requested hashes; reject a short/long reply.
-    if transactions.len() != hashes.len() {
+    Ok(transactions)
+}
+
+/// Validate one `get_transactions` batch response against the `batch` of
+/// requested hashes (in order) and parse each pruned tx.
+///
+/// Pure (no transport) so the adversarial-daemon checks are unit-testable
+/// without an RPC mock. Every requested tx must be present (the caller turns a
+/// non-empty `missed_tx` into [`RpcError::TransactionsNotFound`] before calling
+/// here), and the daemon echoes present txs in request order — so the count
+/// must match and each entry's claimed `tx_hash` must equal the requested hash
+/// for its slot. The pruned blob is not re-hashed (it hashes differently —
+/// `GENESIS_TX_WIRE_FORMAT.md` §11), so the `tx_hash` label is the only
+/// association handle; an unchecked reorder or substitution would mis-assign
+/// the running global output index (assigned by walking txs in block order)
+/// and record wrong txids — exactly the failure the untrusted-node model must
+/// reject. Per-batch equality also makes the caller's total length exact, so no
+/// separate cardinality check is needed after batching.
+fn parse_tx_batch(batch: &[[u8; 32]], txs: &[Value]) -> Result<Vec<Transaction>, RpcError> {
+    if txs.len() != batch.len() {
         return Err(RpcError::InvalidNode(
             "daemon returned a different number of transactions than requested".to_string(),
         ));
     }
-    Ok(transactions)
+    let mut out = Vec::with_capacity(batch.len());
+    for (expected_hash, t) in batch.iter().zip(txs) {
+        let tx_hash_hex = t.get("tx_hash").and_then(Value::as_str).unwrap_or("");
+        let claimed = hex::decode(tx_hash_hex)
+            .ok()
+            .and_then(|v| <[u8; 32]>::try_from(v).ok());
+        if claimed.as_ref() != Some(expected_hash) {
+            return Err(RpcError::InvalidNode(
+                "daemon returned a transaction whose hash did not match the request".to_string(),
+            ));
+        }
+        let pruned_hex = t
+            .get("pruned_as_hex")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
+            })?;
+        out.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
+    }
+    Ok(out)
 }
 
 /// Request the global output index of the block's first output (the coinbase's,
@@ -325,5 +348,109 @@ mod tests {
             parse_pruned_tx("zz", ""),
             Err(RpcError::InvalidNode(_))
         ));
+    }
+
+    /// Hex of a valid pruned tx (fee-only Fcmp shape) that `parse_pruned_tx`
+    /// accepts; its hash is irrelevant to these batch tests (the pruned form is
+    /// associated by the requested `tx_hash` label, not by re-hashing).
+    fn pruned_tx_hex() -> String {
+        let tx = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(0)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0u8; 32],
+                base: CtBase {
+                    enc_amounts: vec![[0u8; 9]],
+                    enc_labels: vec![[0u8; 9]],
+                    commitments: vec![[2u8; 32]],
+                },
+                pqc_auths: vec![],
+                prunable: None,
+            },
+        };
+        hex::encode(tx.serialize())
+    }
+
+    fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> Value {
+        json!({ "tx_hash": tx_hash_hex, "pruned_as_hex": pruned_hex })
+    }
+
+    #[test]
+    fn parse_tx_batch_accepts_in_order() {
+        let (h0, h1) = ([3u8; 32], [4u8; 32]);
+        let blob = pruned_tx_hex();
+        let txs = vec![
+            tx_entry(&hex::encode(h0), &blob),
+            tx_entry(&hex::encode(h1), &blob),
+        ];
+        let out = parse_tx_batch(&[h0, h1], &txs).expect("in-order batch parses");
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn parse_tx_batch_rejects_reordered_hashes() {
+        // The daemon returns both requested txs but with their `tx_hash` labels
+        // in swapped slots. Running global-output-index assignment depends on
+        // block order, so a reorder must be rejected even though each tx is
+        // individually valid (the adversarial-daemon mis-association case).
+        let (h0, h1) = ([3u8; 32], [4u8; 32]);
+        let blob = pruned_tx_hex();
+        let txs = vec![
+            tx_entry(&hex::encode(h1), &blob),
+            tx_entry(&hex::encode(h0), &blob),
+        ];
+        assert!(matches!(
+            parse_tx_batch(&[h0, h1], &txs),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_tx_batch_rejects_count_mismatch() {
+        let (h0, h1) = ([3u8; 32], [4u8; 32]);
+        let blob = pruned_tx_hex();
+        let txs = vec![tx_entry(&hex::encode(h0), &blob)];
+        assert!(matches!(
+            parse_tx_batch(&[h0, h1], &txs),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_tx_batch_rejects_absent_or_unparseable_hash() {
+        // No `tx_hash` field → no association handle → reject (a daemon that
+        // omits the label cannot be order-pinned).
+        let h0 = [3u8; 32];
+        let blob = pruned_tx_hex();
+        let txs = vec![json!({ "pruned_as_hex": blob })];
+        assert!(matches!(
+            parse_tx_batch(&[h0], &txs),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_tx_batch_rejects_missing_pruned_blob() {
+        let h0 = [3u8; 32];
+        let txs = vec![json!({ "tx_hash": hex::encode(h0) })];
+        assert!(matches!(
+            parse_tx_batch(&[h0], &txs),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_tx_batch_empty_is_ok() {
+        let out = parse_tx_batch(&[], &[]).expect("empty batch parses");
+        assert!(out.is_empty());
     }
 }
