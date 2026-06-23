@@ -245,10 +245,10 @@ priority track.
     workspace `exclude` is the stable-compatible mechanism (rustfmt `ignore` is
     nightly-only), but excluding the crates requires de-inheriting
     `[lints] workspace = true` from each Cargo.toml — which A0's re-sync replaces
-    wholesale, so it rides A0. Meanwhile the toolchain pin (1.94, `chore/pin-rust-
-    toolchain`) keeps the subtree fmt-stable, so routine work does not trip the
-    manifest; a deliberate toolchain bump that reflows the subtree regenerates the
-    manifest in the same PR (per `rust-toolchain.toml`'s bump policy).
+    wholesale, so it rides A0. Meanwhile the toolchain pin
+    (1.94, `chore/pin-rust-toolchain`) keeps the subtree fmt-stable, so routine work
+    does not trip the manifest; a deliberate toolchain bump that reflows the subtree
+    regenerates the manifest in the same PR (per `rust-toolchain.toml`'s bump policy).
 
 ### Track B — Residual un-vendor + rename (gated after slice 1)
 
