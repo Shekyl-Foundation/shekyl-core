@@ -99,7 +99,7 @@ space.
 The view-tag pre-filter is the wallet's first-line scan-on-client
 optimization, operational as of Stage 1 PR 3 / M3a–M3b. The
 mechanism is documented in
-[`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
+[`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md)
 §3.1.1 ("Scanner two-step pattern is implementation orchestration
 hidden behind the workflow boundary"). Restated here for the
 landscape:
@@ -109,7 +109,7 @@ landscape:
   `HybridCiphertext`. Produces a 32-byte raw shared secret used
   as input to view-tag derivation. The view-tag is a 1-byte
   derived value (`VIEW_TAG_BYTES = 1` per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3 amendment A4); a mismatch rejects the output without doing
   the expensive PQC half. ~1/256 of unrelated outputs collide on
   the view-tag, but ~255/256 are rejected by a single classical
@@ -348,7 +348,7 @@ a different prune-shape refinement is preferable.
   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 ("Refresh bandwidth
   tradeoff under α").
 - **View-tag pre-filter mechanism.**
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.1 (scanner two-step pattern).
 - **`RefreshEngine` trait surface (binding).**
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)

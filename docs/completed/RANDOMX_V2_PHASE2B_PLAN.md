@@ -1,12 +1,13 @@
 # RandomX v2 — Track A Phase 2b plan
 
-**Status.** Design-phase closed at Round 3 on 2026-05-21. Implementation
-is gated on PR #62 (Phase 2a) merging to `dev` and on workspace MSRV
+**Status.** **Landed (PR #64, 2026-05-21).** Design-phase closed at Round 3 on 2026-05-21;
+implementation PR (#64) merged to `dev` on 2026-05-21. Original pre-implementation
+text follows: Implementation was gated on PR #62 (Phase 2a) merging to `dev` and on workspace MSRV
 verification (≥ 1.85). The implementation-open commit is the
 post-#62-merge `dev` tip; the branch cuts from there per the F1 in-file-
 discipline ordering rationale (§5.1 below).
 
-**Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
+**Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2b is the binding one-line scope ("AES round /
 SuperscalarHash primitives from the v2 spec; spec-vector parity"); this
 doc expands it into a reviewable change list, dependency-discipline
@@ -30,10 +31,10 @@ rewire, no deletion of existing `src/crypto/rx-slow-hash.c` etc. — those
 are Phase 3a/3b/3c/4.
 
 **Cross-references.**
-- **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
+- **Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A
   — Phase 2" enumerates the sub-PR split; §"Permanent architectural
   decisions" 1-8 are the locked decisions Phase 2b respects.
-- **Design substrate.** [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §3
+- **Design substrate.** [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §3
   (Spec Is the Source of Truth), §4 (Derived-First Design), §7
   (Isolation Invariants), §8 (Performance Targets), §1.3 (the v1→v2
   delta — SuperscalarHash is **not** in the delta; v2 changes are

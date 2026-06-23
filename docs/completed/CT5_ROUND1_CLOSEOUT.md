@@ -12,8 +12,8 @@ single-writer `CurveTreeActor` whose tree is driven from the refresh cursor and
 defended at every ingest against the consensus header root.
 
 **Authoritative spec:** [`CT5_ENGINE_WIRING.md`](CT5_ENGINE_WIRING.md) (engine
-wiring), [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §3.5 (assemble contract)
-/ §5 (reference + horizon), [`PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
+wiring), [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §3.5 (assemble contract)
+/ §5 (reference + horizon), [`PHASE_2A_SEND_PATH.md`](../design/PHASE_2A_SEND_PATH.md)
 §3.7 (the signer the path feeds). **Parent:** §9 CT-5 row.
 
 ---

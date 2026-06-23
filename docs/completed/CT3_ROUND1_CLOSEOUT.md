@@ -9,7 +9,7 @@ clauses; they land with their first consumer (the post-prune refetch path),
 not in CT-3.
 
 **Authoritative plan:** [`CT3_SYNC.md`](CT3_SYNC.md) (Round 1 closed
-2026-06-11, §3.7–§3.8). **Parent:** [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md)
+2026-06-11, §3.7–§3.8). **Parent:** [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md)
 §8 #6 / §9 CT-3 row.
 
 ---

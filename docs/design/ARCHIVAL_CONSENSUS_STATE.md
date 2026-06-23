@@ -115,7 +115,7 @@ mechanics or gate-4 slash wire.
 serve_credit_bit(P_id, shard_id, E) : bool
 ```
 
-Means **affirmative pass** on epoch on-demand challenge ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0) — not
+Means **affirmative pass** on epoch on-demand challenge ([`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §0) — not
 continuous storage.
 
 - Set only on **demonstrated response** this epoch — not "bonded and never failed."
@@ -144,7 +144,7 @@ R_market(shard_id, E) =
   bond-slot count, not time-weighted over `E` (rejected: buys little, costs determinism).
   A bonded `P` that misses challenges **without** earning credit **does not** inflate
   `R_market` at that `E` — slash latency trades bond-resolution timing, not scarcity at
-  E-close ([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §3.1).
+  E-close ([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §3.1).
 - **`Market` membership (per epoch `E`):** record exists ∧ `E ≥ E_join + 1` ∧
   `good_through(P,E)` at E-close ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
   **No serve-credit bits before join** or for epoch `E_join` (partial). Foundation
@@ -280,7 +280,7 @@ replicated_hot_state ≈
 
 ## 6. Gate-2-internal (not in this contract)
 
-Mechanics live in [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) (Round 0,
+Mechanics live in [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) (Round 0,
 2026-06-08). Cryptographic disposition: [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
 
 This contract names **outputs only** — `serve_credit_bit`, shard registry fields — not:
@@ -311,7 +311,7 @@ Reward paths use **`market_R` only**. SLA, audit, and local-pruning policy use
 | Workstream | Status |
 |------------|--------|
 | **§3–§7 FSM retool** | Unblocked — principal form, reward reception, absolute sparse `ClaimedEpochSet`; retool disposition [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) |
-| **Gate 2 retention** | **Round 0** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md); bytes/KATs open |
+| **Gate 2 retention** | **Round 0** — [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md); bytes/KATs open |
 | **Gate 4 join-Market** | **Active** — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) Round 1 |
 | **Gate 6 firewall** | **Active** — [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) Round 0–1 |
 | **§4.5 collapse** | Done in emission leg — lagged §4.4 read + boundary/reorg |

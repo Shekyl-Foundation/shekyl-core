@@ -23,7 +23,7 @@ reservation-tracker ownership correction), Phase 0b
 trait surface narrowing), and Phase 0c
 ([PR #25](https://github.com/Shekyl-Foundation/shekyl-core/pull/25),
 drop `transfers()` for `!Clone` discipline). The
-[Stage 1 PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+[Stage 1 PR 2 design doc](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 captures the lifecycle-not-just-pre-flight discipline pattern
 that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 #31–#41, M3a–M3e) landed 2026-05-11.** **Stage 1 PR 4
@@ -39,7 +39,7 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 the orchestrator to the `Engine<S, D, L, E, R, P, F>` seven-parameter shape —
 the `E` slot is carried for struct-shape stability with zero V3.0 consumer (R6).
 Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) and
-[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+[`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](completed/STAGE_1_COMPLETION_AUDIT.md).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 
@@ -771,7 +771,7 @@ Round-2 dispositions targeted the pre-migration primitive-shape
 trait (`sign_with_spend`, `view_ecdh`, `ml_kem_decapsulate`,
 `derive_subaddress_public`); Stage 1 PR 3's Round 2 substantive
 workflow-shape pivot (commits `1c20fb7ee`, `3e3cb292c` —
-see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+see [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
 "Round trajectory") replaced those primitives with the
 workflow-shape methods above (`try_claim_output`,
 `sign_transaction`), and Round 3 added the handle-indirected
@@ -779,7 +779,7 @@ contract that ensures no secret material crosses the trait
 boundary. The pre-migration Q9.1/Q9.2/Q9.3 dispositions are
 preserved here for the design-trajectory record; their
 post-M3 analogues live in
-[`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+[`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
 §7.14 (Pattern-6 replay/idempotency contract) and the
 source-trait docstrings.
 
@@ -799,7 +799,7 @@ source-trait docstrings.
   `SignDomain` is no longer a trait-level concept; per the
   workflow-shape pivot, HKDF domain separation lives inside
   `LocalKeys` via the `SignsInDomain` marker trait + per-domain
-  markers (see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  markers (see [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.4 / Sub-bundle A).
 - **Q9.3 (explicit `wipe()` method): closed no.** `AllKeysBlob:
   ZeroizeOnDrop`; the Stage 4 actor's `Drop` inherits the wipe.
@@ -807,7 +807,7 @@ source-trait docstrings.
   process-explicit lock"; no method is needed. **Post-M3 status:**
   unchanged. The `AllKeysBlob` `ZeroizeOnDrop` migration landed
   via `chore/allkeysblob-zeroize-realignment` (post-M3a,
-  Phase 0e closure per [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  Phase 0e closure per [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §5.1).
 
 ### 2.2 `LedgerEngine`
@@ -993,7 +993,7 @@ height parameter, no filter), and consumers reach transfers via
 (`rust/shekyl-engine-state/src/ledger_block.rs:231`) which takes
 no parameters at all.
 Introducing `Balance` as a parallel type alongside `BalanceSummary`
-would conflict with `docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`
+would conflict with `docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`
 §7's explicit `BalanceSummary → Balance` rename deferral
 ("cosmetic; defer to a separate cleanup if naming churn is
 wanted"), and introducing empty `BalanceFilter` / `TransferFilter`
@@ -1177,7 +1177,7 @@ lifecycle drift. The template language refinement co-lands in PR
 realignment template.
 
 **Cross-doc realignment note.**
-[`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+[`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
 predates this amendment and the Phase 0b amendment above, and
 carries stale references to the now-removed `Balance` /
 `BalanceFilter` / `TransferFilter` types and the now-removed
@@ -3718,7 +3718,7 @@ not the cancellation surface; the token is).
 | `KeyEngine` | `account_public_address` | sync | yes (read-only) | n/a |
 | `KeyEngine` | `derive_subaddress` | sync | yes (deterministic in `(view_secret, subaddress_index, purpose)`; pure derivation) | n/a |
 | `KeyEngine` | `try_claim_output` | async | **conditionally** — `NotMine` is fully idempotent; `Mine` re-binds the same `OutputHandle` deterministically under the M3b+ handle pathway (`handle = cSHAKE256(view_secret \|\| tx_hash \|\| output_index)`) | **b** (post-M3b workflow-internal handle-table insertion on `Mine`; deterministic handle so re-call observes the existing entry) |
-| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (M3a stub is side-effect-free; even the committed signing body produces only the returned signature material, so signing-then-not-using is invisible to others). **PR-5 forward trigger:** reclassify to **b** if PR 5's signing body consumes handle-table entries as a replay-rejection side effect that is *not* enqueue-survivable. |
+| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (M3a stub is side-effect-free; even the committed signing body produces only the returned signature material, so signing-then-not-using is invisible to others). **PR-5 forward trigger:** reclassify to **b** if PR 5's signing body consumes handle-table entries as a replay-rejection side effect that is *not* enqueue-survivable. |
 | `LedgerEngine` | `synced_height` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
@@ -4428,7 +4428,7 @@ ceremony, which today add ~50–200 ms per test.
   deterministic given the same inputs but distinct across calls.
   (Post-M3 + Post-PR-4 note: PR 3 shipped without a
   `MockKey` type per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §6.4's no-Mock substrate; PR 4 additionally retired
   `MockLedger` (C6β = `e94526dec`; replaced by
   `FaultInjecting<L: LedgerEngine>` composed against
@@ -4791,7 +4791,7 @@ the discipline's enforcement against the corresponding audience.
 
 PRs 1, 2, 3, 4, and 5 each surfaced disciplines that compound across
 subsequent per-engine PRs. The per-engine PR design rounds
-([Stage 1 PR 3 (`KeyEngine`)](design/STAGE_1_PR_3_KEY_ENGINE.md),
+([Stage 1 PR 3 (`KeyEngine`)](completed/STAGE_1_PR_3_KEY_ENGINE.md),
 [Stage 1 PR 4 (`RefreshEngine`)](design/STAGE_1_PR_4_REFRESH_ENGINE.md),
 [Stage 1 PR 5 (`PendingTxEngine`)](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
 produced disciplines whose value is **compound-by-inheritance**: each
@@ -4846,11 +4846,11 @@ Applicability conditions (all three must hold):
 
 | Trait | Lens applies? | Substrate citation |
 |---|---|---|
-| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](design/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
-| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
+| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](completed/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
+| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](completed/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
 | `RefreshEngine` | yes | [PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
 | `EconomicsEngine` | bounded — surface is parameter-derivation; (2) fails | synchronous framing correct; no payoff lost |
-| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](design/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
+| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](completed/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
 | `PersistenceEngine` | bounded — single-runtime-consumer; (3) bounded payoff | synchronous framing correct |
 | `PendingTxEngine` | yes | [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
 | `StakeEngine` (Phase 2b) | yes — (1) stake records mediate cross-actor claim/unstake; (2) reorg + adaptive-burn surfaces quiescence; (3) Stage 4 non-trivial | Phase 2b design rounds apply the lens by inheritance |

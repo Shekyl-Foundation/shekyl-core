@@ -28,14 +28,14 @@ it explicitly.
   near-term deadline compounds. The queue can grow indefinitely without
   pre-genesis cost. Items here include rules-queue work (consolidated
   as 1–2 PRs per §11.3 of
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)),
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)),
   post-genesis architecture work (wallet-RPC cutover, `KeyImage`
   `Option`-promotion, `transfer_details` C++ → Rust migration), and
   structural design passes that warrant their own pre-flight
   (non-`Clone` ban re-evaluation).
 
 The calibration shift recorded at the M3e boundary (per
-[`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+[`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
 §11) bends the V3.0 queue's accumulation trajectory: closing PRs in a
 migration series fold their own mechanical residue (path renames,
 comment-level rationale rewrites, doc-string past-tensing) rather than
@@ -49,7 +49,7 @@ sustainability is unaffected by the recalibration.
 
 - **External cryptographic review of the `FcmpMembershipOnly` soundness
   reduction (2026-06-12).**
-  [`design/FCMP_MEMBERSHIP_ONLY.md`](./design/FCMP_MEMBERSHIP_ONLY.md) §5.5:
+  [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:
   the (a0)–(c) reduction re-establishes soundness of the subtracted
   sub-proof, but §7.2 of the emission leg names the proof-type confusion
   surface load-bearing, and soundness of a sub-proof in isolation is not
@@ -175,7 +175,7 @@ sustainability is unaffected by the recalibration.
   persists `owned_identities`. **Reopening trigger:** the prune-policy PR
   (minimal wallets prune non-owned leaves of frozen segments) lands, at
   which point in-memory-only assembly breaks for pruned wallets by
-  construction. See [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3
+  construction. See [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md) §3
   R1-Q6.
   - **Per-input reconstruction reuse (CT-5c, 2026-06-18).** `assemble_path` is
     called once per input by the `AssembleTx` actor handler, and each call
@@ -191,7 +191,7 @@ sustainability is unaffected by the recalibration.
     reconstruction is material (multi-input spends at mainnet tree size), or the
     Track-2 regtest surfaces it as a hotspot — not before (rules 21/70: no
     speculative perf ahead of its trigger). CT-5 Round 1 deferred; see
-    [`CT5_ROUND1_CLOSEOUT.md`](./design/CT5_ROUND1_CLOSEOUT.md) §5.
+    [`CT5_ROUND1_CLOSEOUT.md`](./completed/CT5_ROUND1_CLOSEOUT.md) §5.
 
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
@@ -353,8 +353,8 @@ sustainability is unaffected by the recalibration.
   (`CT3_SYNC.md` §3 R1-Q5) lands here too. **Reopening trigger:** either R1-Q1
   reversion criterion (forward-sync latency budget breach; pre-genesis
   refetch demand) pulls it earlier. See
-  [`docs/design/CT3_SYNC.md`](./design/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
-  [`docs/design/CT3_ROUND1_CLOSEOUT.md`](./design/CT3_ROUND1_CLOSEOUT.md) §4.
+  [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
+  [`docs/completed/CT3_ROUND1_CLOSEOUT.md`](./completed/CT3_ROUND1_CLOSEOUT.md) §4.
 
 - **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1
   disposition, 2026-06-12).** Target: V3.0, with prune-policy / store
@@ -389,7 +389,7 @@ sustainability is unaffected by the recalibration.
   **Reopening trigger:** CT-5 lands the engine wiring so a regtest can mint a
   non-coinbase output and append the Tier-B oracle; then un-ignore the tests
   and (for the adversarial `0x07` case) add the C++ duplicate/malformed-tag
-  oracle. See [`docs/design/CT2_ROUND1_CLOSEOUT.md`](./design/CT2_ROUND1_CLOSEOUT.md)
+  oracle. See [`docs/completed/CT2_ROUND1_CLOSEOUT.md`](./completed/CT2_ROUND1_CLOSEOUT.md)
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
 
@@ -427,7 +427,7 @@ sustainability is unaffected by the recalibration.
   the curve tree indexes must re-verify `global_output_index ↔ tree gindex`
   equivalence — ideally with a mixed-output-class numbering KAT (the curve-tree
   `assemble_kat` is coinbase-only; the scanner side is engine-local) — *before*
-  merge. See [`docs/design/CT5C_ASSEMBLER_CUTOVER.md`](./design/CT5C_ASSEMBLER_CUTOVER.md)
+  merge. See [`docs/completed/CT5C_ASSEMBLER_CUTOVER.md`](./completed/CT5C_ASSEMBLER_CUTOVER.md)
   §5 / §10.
 
 - **CT-5d reselect: content-changing re-anchor (lock-transplant), tracked
@@ -444,7 +444,7 @@ sustainability is unaffected by the recalibration.
   a bad proof, never a silent mutation. **Reopening trigger (rule-21):** an
   observed rate of deep-reorg-orphaned-selected-output / fee-escalation submit
   failures that makes discard-and-rebuild a real UX cost, or an audit requiring
-  in-place reselection. See [`docs/design/CT5D_REANCHOR.md`](./design/CT5D_REANCHOR.md)
+  in-place reselection. See [`docs/completed/CT5D_REANCHOR.md`](./completed/CT5D_REANCHOR.md)
   §3 (F-I) and the deferred-reselect KATs (d/g).
 
 - **CT-5d background opportunistic re-anchor + the eager reorg mark, tracked
@@ -458,7 +458,7 @@ sustainability is unaffected by the recalibration.
   reorg method) the lazy slice deliberately omitted; the mark is scaffolding the
   rebuilder consumes, useless without it. **Reopening trigger:** the built-tx
   submit-vs-abandon rate (currently unmeasured) shows proactive rebuild wins.
-  See [`docs/design/CT5D_REANCHOR.md`](./design/CT5D_REANCHOR.md) §5 (F-D) / §7.
+  See [`docs/completed/CT5D_REANCHOR.md`](./completed/CT5D_REANCHOR.md) §5 (F-D) / §7.
 
 - **CT-5d broadcast-but-unmined reference orphan, tracked 2026-06-18.** Target:
   V3.0 (send-path money-loss hazard). A tx broadcast *before* a reorg that then
@@ -503,7 +503,7 @@ sustainability is unaffected by the recalibration.
   not an unverified code path. **Reopening trigger:** store-backed assembly or
   the prune-policy PR lands (it operates on real `j=2` segments), or an audit
   requires the full-scale freeze/prune KAT explicitly. See
-  [`docs/design/CT1_ROUND1_CLOSEOUT.md`](./design/CT1_ROUND1_CLOSEOUT.md) §3
+  [`docs/completed/CT1_ROUND1_CLOSEOUT.md`](./completed/CT1_ROUND1_CLOSEOUT.md) §3
   and the `CURVE_TREE_CLIENT.md` §9 CT-1 row.
 
 - **Wallet-local `O.x → position` match index (`CurveTreeClient` §4.3 scan
@@ -1219,7 +1219,7 @@ sustainability is unaffected by the recalibration.
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
   **Dedicated audit markdown landed:**
-  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
+  [`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](./completed/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** wallet
   BIP-39 FFI, economics §3.3 benches (the persistence and economics
   trait PRs both landed — PR #83 / PR #94; P1 async refresh post-pass
@@ -1237,7 +1237,7 @@ sustainability is unaffected by the recalibration.
   `key: KeyEngineHandle` (not an inline `K: KeyEngine` parameter) — `Engine`
   stays seven-parameter `Engine<S, D, L, E, R, P, F>`, the
   `Arc<AllKeysBlob>` field is gone, and the blob lives solely in the
-  `KeyActor`. See `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
+  `KeyActor`. See `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
   and the "Stage 2 — `KeyEngine` migration to actor" entry below, which
   records the completed DoD (including the B9 dispatch-overhead benchmark —
   PASS, ratio 1.039). The reject-the-inline-shape rationale below is retained
@@ -1282,7 +1282,7 @@ sustainability is unaffected by the recalibration.
   "Stage 2 — `KeyEngine` migration to actor" entry below. The trait surface
   is frozen now precisely so the migration swaps in-process composition for
   an actor-mailbox dispatcher without touching method signatures (per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md) §3.1.2
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md) §3.1.2
   handle-indirected workflow contract).
 
   *Target:* before Phase 2b stake-lifecycle work begins (same gate as the
@@ -1323,7 +1323,7 @@ sustainability is unaffected by the recalibration.
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
   *Phase 2h closes this item by replacement: the methodology
   lands as the recipe-based adversarial corpus per
-  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](./design/RANDOMX_V2_PHASE2H_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](./completed/RANDOMX_V2_PHASE2H_PLAN.md)
   R1-D1 (specified-outliers composition); the accessor lands
   at C2 as `PreparedCache::from_raw_for_testing`
   (`rust/shekyl-pow-randomx/src/prepared_cache.rs` under the
@@ -1352,7 +1352,7 @@ sustainability is unaffected by the recalibration.
   gates) discharges the activation-surface contract recorded
   above. Original framing preserved below for historical
   context.* Phase 2g
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 reopens R1-D5 (adversarial seedhash corpus) under
   two independent substrate findings: (i) the verifier-accessor
   gap (the grinding methodology requires a `test-internals`-gated
@@ -1404,7 +1404,7 @@ sustainability is unaffected by the recalibration.
   + cache-equivalence). Rare-path coverage is carried in the
   interim by legs 1 (spec-faithful implementation discipline)
   and 2 (C-reference audit). Per
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §2.5's corpus-coverage-as-leg-3-completeness pin, the deferral
   reduces leg-3's residual catch capacity until the post-2g
   round lands. Landing pre-genesis preserves the "Shekyl's
@@ -1419,7 +1419,7 @@ sustainability is unaffected by the recalibration.
   V3.0 target version.
 
   **Cross-references.**
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 + R7-D2 + R7-D3 + R7-D4 + R7-D5; §2.5 Round 7
   amplification; §3 R1-D5 / R1-D6 / R1-D8 close annotations
   (reopened banners); §6 T2 / T6 (deferred); §8.1 C5b / C7
@@ -1508,7 +1508,7 @@ sustainability is unaffected by the recalibration.
   carryout `Vec<usize>` back through a trait method would split the
   merge and post-pass across the trait boundary, violating the
   single-write-guard atomicity the M3b disposition requires
-  (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
+  (`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
   alternative (ζ)). The ledger-side `FaultInjecting<LocalLedger>`
   test wrapper (whose only purpose was injecting `ConcurrentMutation`
   at the removed trait seam) and the now-dead `replace_ledger`
@@ -1836,7 +1836,7 @@ sustainability is unaffected by the recalibration.
     `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
     at `rust/shekyl-engine-core/src/engine/local_keys.rs:1258`.
     Pre-flight specification:
-    `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
+    `docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
     (`rust/shekyl-engine-core/tests/byte_identical_derivation.rs`).
     Pins bundle-byte identity between engine and legacy derivation
     paths field-by-field. The pre-flight estimated a separate
@@ -1849,7 +1849,7 @@ sustainability is unaffected by the recalibration.
     `engine_derived_bundle_signs_through_tx_builder_end_to_end`
     at `rust/shekyl-engine-core/src/engine/local_keys.rs:1554`.
     Pre-flight specification:
-    `docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
+    `docs/completed/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
     disposition; `rust/shekyl-engine-core/tests/` integration
     placement, suggested name `key_engine_sign_e2e.rs`). Pins
     end-to-end recovery-correctness through
@@ -2191,7 +2191,7 @@ sustainability is unaffected by the recalibration.
   message channels; never reveals raw key material outside its
   own task. The "no secret material crosses the trait boundary"
   property activated by the M3-series (per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.2 handle-indirected workflow contract) survives the
   Stage-1-to-actor transition by construction — the trait surface
   is unchanged; Stage 2 swaps the in-process composition for an
@@ -2230,7 +2230,7 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration from
-  composition*. Design: `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`.
+  composition*. Design: `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md`.
 
   **Status (2026-05-31) — RESOLVED; all six §10 DoD items met; pending merge
   to `dev`.** The actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
@@ -2420,7 +2420,7 @@ sustainability is unaffected by the recalibration.
   its own review cycle (4–6 rounds) per `20-rust-vs-cpp-policy.mdc`'s
   migration-is-a-planning-activity discipline.
 
-  *Reference:* `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
+  *Reference:* `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
   secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
   §3.1.3 (the per-subaddress KEM assumption being interrogated).
 
@@ -3475,7 +3475,7 @@ sustainability is unaffected by the recalibration.
   **Cross-references.**
   [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
   (10-symbol explicit-list grep);
-  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2B_PLAN.md`](completed/RANDOMX_V2_PHASE2B_PLAN.md)
   §5.7 (F7 finding and forward-action rationale);
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   Phase 3c (the wiring PR that closes this item).
@@ -3612,7 +3612,7 @@ sustainability is unaffected by the recalibration.
   RPC-payment subsystem) **landed** on `chore/rpc-payment-deletion`, removing
   the wallet-tree PoW touchpoints and unblocking the rest. The cluster is
   re-split per
-  [`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](./design/LEGACY_POW_CLEANUP_PLAN.md)
+  [`docs/completed/LEGACY_POW_CLEANUP_PLAN.md`](./completed/LEGACY_POW_CLEANUP_PLAN.md)
   to **separate RandomX v1 (retained — rollback hatch) from CryptoNight
   (deletable)** — the prior item (2) wrongly bundled them — and to re-home the
   `RX_BLOCK_VERSION` `#define` onto the PoW-dispatch surface where its surviving
@@ -3696,10 +3696,10 @@ sustainability is unaffected by the recalibration.
   audit-trail IDs only).
 
   **Substrate artifacts (historical).**
-  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](./design/RANDOMX_V2_PHASE2C_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2C_PLAN.md`](./completed/RANDOMX_V2_PHASE2C_PLAN.md)
   (R3-D1, F4, Round 4 addenda, forward-path, R0-D5–R0-D12, R5-D1);
-  [`docs/design/RANDOMX_V2_PHASE2C_AUDIT.md`](./design/RANDOMX_V2_PHASE2C_AUDIT.md);
-  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](./design/RANDOMX_V2_PHASE2D_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2C_AUDIT.md`](./completed/RANDOMX_V2_PHASE2C_AUDIT.md);
+  [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](./completed/RANDOMX_V2_PHASE2D_PLAN.md)
   R1-D3 (post-promotion audit example). Downstream authors cite
   `26-sub-pr-design-discipline.mdc` explicitly for process shape.
 
@@ -4274,7 +4274,7 @@ sustainability is unaffected by the recalibration.
   `.cursor/rules/18-type-placement.mdc` (in-queue draft), with the
   public-material exclusion as a sub-clause. The rule statement,
   drawn from
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5's closure subsection: _typed wrappers attach to
   identity-bearing primitives where rule-grounded; uniformity-driven
   wrapping of public material is the wrapper-shape recapitulation of
@@ -4318,11 +4318,11 @@ sustainability is unaffected by the recalibration.
   "remove fallback" bullet's vacuousness against the PR-5-pinned stub).
   All three share one root cause: the migration plan was written before
   the M3a Round 4a workflow-shape pivot (per
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.1), which deferred the bridge impl past every subsequent PR; the
   surgical shape is consistent across all three. The framework-
   attribution observation is captured in
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §11 with cross-references to the three precedents; future similar PRs
   (likely candidates: PR-3's M3e docs-realignment commit; future per-trait
   extraction PRs' pre-flight passes) can cite the precedent without
@@ -4470,13 +4470,13 @@ sustainability is unaffected by the recalibration.
   the premise carried forward as stale framing._
 
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §2 D1 + §11;
-  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md)
   §2.1.1 (Trim-1 disposition);
-  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §D5 (test-placement divergence);
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.3.1 (M3c landing-notes cross-reference) and §3.4.1 (M3d landing-notes
   cross-reference, landed 2026-05-11);
   [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
@@ -4494,7 +4494,7 @@ sustainability is unaffected by the recalibration.
   review-response commits `5ab5b43a2`/`67be1c0b3` — the
   commit-history-level instance at the 4-vs-6-vs-8 plan-state
   divergence);
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §4 (amended commit-decomposition table) and §11 (the calibration
   shift recording the divergence pattern as forward-template
   content). Target: V3.1 (the rules-queue work's expected landing
@@ -4516,7 +4516,7 @@ sustainability is unaffected by the recalibration.
   M3 sub-PRs); reading the rule strictly would defer mode-2 residue
   indefinitely, generating exactly the V3.0-queue accumulation pattern
   the M3e preflight §11.1 records. The calibration shift, recorded in
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1, distinguishes three modes:
 
   - **Mode 1: in-scope substantive.** Direct PR-scope work; lands in
@@ -4576,13 +4576,13 @@ sustainability is unaffected by the recalibration.
   `18-type-placement.mdc` (public-material exclusion sub-clause) +
   `19-plan-vs-state-divergence.mdc` (or sub-clause of 18).
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1 (trinary reading), §11.3 (rules-queue consolidation guidance);
   M3e D5 disposition (the concrete mode-2 precedent);
   PR #40 applied-disposition table above (eight on-tree applications
   of the trinary calibration across two review-response cycles + a
   post-merge audit; the worked-examples surface for the rule body);
-  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
   §1.3 (the V3.1-prep extension surfacing where the applied
   dispositions get pinned);
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
@@ -4607,7 +4607,7 @@ sustainability is unaffected by the recalibration.
   small), reduces context-switching across reviews, and ships the
   rules as a coherent corpus rather than scattering them. The
   consolidation target, per
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.3:
 
   - **PR 1: rules-corpus consolidation** (likely 4–6 commits, one per
@@ -4628,7 +4628,7 @@ sustainability is unaffected by the recalibration.
   by the per-entry V3.1 targets without an explicit consolidation
   pin — would land each rule as its own PR by default; the
   consolidation pin reverses the default. Cross-references:
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.3; the §18, §19, and rule-15-trinary-reading FOLLOWUPS above.
   Target: V3.1 (queue-internal coordination decision; lands as the
   rules-queue's first PR or as a planning artifact ahead of it).
@@ -4692,7 +4692,7 @@ sustainability is unaffected by the recalibration.
   the higher-abstraction instance of); the rules-queue-
   consolidation FOLLOWUP above (this folds into the V3.1 rules-
   corpus PR's scope);
-  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
   §2 D3 + §6.7 (the closeout PR's discipline binding language
   satisfying the KeyEngine slot of L353-379, written explicitly
   so future trait-introducing PRs inherit the pattern). Target:
@@ -4774,7 +4774,7 @@ sustainability is unaffected by the recalibration.
   `rust/shekyl-engine-state/src/transfer.rs::TransferDetails` doc
   (post-`ad7f6ba7a` rewrite is the entry-point text the design pass
   refines);
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §3.3 (post-M3d engine-confined-secrets property delivery framing,
   which makes the `Option`-secret-field memory-safety rationale
   vacuous);
@@ -4807,7 +4807,7 @@ sustainability is unaffected by the recalibration.
   going through `into_bytes` (potentially via `unsafe` over
   `#[repr(transparent)]` if `fips203` documents that guarantee).
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5 closure;
   [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
   §21–22; PR #33 round-4 Copilot finding closure narrative
@@ -4855,7 +4855,7 @@ sustainability is unaffected by the recalibration.
   the use case in this file and re-evaluate the lifetime of the
   wrapper. The path of least surprise is (a). Cross-references:
   Stage 1 PR 2 commit 2 pre-flight survey;
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §7. Target: V3.1.
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
@@ -6373,7 +6373,7 @@ one place to confirm each item's relationship to the wallet stack.
   `FATAL_ERROR` with the per-`CONFIG` split alongside the first
   real consumer (`rust/shekyl-pow-randomx/` cross-check tests
   against the canonical v2 implementation, per
-  [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](design/RANDOMX_V2_PHASE1_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE1_PLAN.md`](completed/RANDOMX_V2_PHASE1_PLAN.md)
   §6.3). The minimal correct shape is:
   
   - Make `RANDOMX_V2_INSTALL` include `$<CONFIG>` (or, since
@@ -8821,7 +8821,7 @@ one place to confirm each item's relationship to the wallet stack.
   (likely co-landing with Stage 4 actor wiring, where `kameo` is
   already in scope and the runtime handle is available) or an
   alternative trait-shape decision.   Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §1.2 (partial-generalization framing) and §7 (out-of-scope
   refinement). Target: V3.x.
 
@@ -8850,7 +8850,7 @@ one place to confirm each item's relationship to the wallet stack.
   ownership rework happens once for all per-trait implementors,
   not per-trait). Surfaced via Copilot review on PR #26 (Stage 1
   PR 2). Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §3.4 (engine ownership of `L`) and §5 commit-7 row
   (refresh-path generalization scope). Target: V3.x — co-lands
   with Stage 4 `LedgerEngine` actor cutover.
@@ -8895,7 +8895,7 @@ one place to confirm each item's relationship to the wallet stack.
   workaround in PR 2 is the doc-only fix: drop the broken
   intra-doc link target so the rustdoc warning silences while
   the field-type structure stays the same. Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §3.4 (engine ownership / visibility decision tree).
   Target: V3.x — gated on `mapped_lock_guards` stabilization
   (preferred) or a separate decision to adopt
@@ -9459,7 +9459,7 @@ one place to confirm each item's relationship to the wallet stack.
      [`account_base::generate_from_bip39`](../src/cryptonote_basic/account.cpp)
      pipeline (entropy → cSHAKE-256 normalize → spend/view secret
      derivation per
-     [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+     [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
      §7.12) must match what the device firmware derives at the
      corresponding `m/44'/<coin-type>'/<account>'/<change>/<index>`
      path. Today's pipeline is Shekyl-specific (PBKDF2-HMAC-SHA512
@@ -9519,7 +9519,7 @@ one place to confirm each item's relationship to the wallet stack.
   `shekyl_account_generate_from_bip39` pipeline changes shape
   in a way that affects derivation alignment (e.g., the cSHAKE
   customization string changes per
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.12), forcing fresh alignment analysis.
 
   **Cross-references.**
@@ -9529,7 +9529,7 @@ one place to confirm each item's relationship to the wallet stack.
   (host-side BIP-39 entropy / seed derivation);
   [`src/cryptonote_basic/account.cpp`](../src/cryptonote_basic/account.cpp)
   (account-keys derivation from seed);
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.12 (cSHAKE-256 pipeline that's downstream of BIP-39 in
   Shekyl's host-side derivation);
   [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
@@ -9600,7 +9600,7 @@ reference.
   Not-Clone precedent at
   [`rust/shekyl-crypto-pq/src/account.rs:480-494`](../rust/shekyl-crypto-pq/src/account.rs)
   and the
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §5.4.8 #1 reject-with-reopening precedent):
 
   1. **Upstream `sha2` adds a `zeroize` feature** (in any minor or
@@ -9825,7 +9825,7 @@ Retained for citation in review; each links to the canonical record.
   flag distinction).
 
   **Cross-references.**
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §11 Round history Round 8 entry (post-merge substrate-triage
   amendment — R8-D1 verifier-divergence root-cause closure +
   R8-D2 cache-vs-VM-flag asymmetry pin + R8-D3 missed-altitude
@@ -9913,7 +9913,7 @@ Retained for citation in review; each links to the canonical record.
   canonical `apply_scan_result_to_state`.
 
   Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
   substrate disposition), §7.9 (test-substrate disposition open
   question);
@@ -9949,7 +9949,7 @@ Retained for citation in review; each links to the canonical record.
   Round 5 amendment.
 
   Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale);
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   Status banner, §6 no-Mock substrate inheritance discipline,
@@ -9958,7 +9958,7 @@ Retained for citation in review; each links to the canonical record.
 - **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
   to engine" property activated at M3d (2026-05-11).** The
   headline property of the
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   M3-series (see §3.4 / §3.4.1) — orchestrator-side `TransferDetails`
   no longer carries derived per-output secrets — activated with the
   M3d landing on `feat/stage-1-pr3-m3d`. The five legacy
@@ -9968,24 +9968,24 @@ Retained for citation in review; each links to the canonical record.
   postcard schema mirror; the engine re-derives the spend material
   inside the signing-session boundary from `(view_secret,
   source_ciphertext)` via `LocalKeys::derive_source_secrets_bundle`
-  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.10–§7.12.
 
   **Scope and audit trail.** Five-PR sequence (M3a–M3e) per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.1–§3.5; M3d activated the property and M3e completed the
   documentation-realignment-of-the-whole (M3-series complete,
   2026-05-11). Audit table in
-  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./completed/STAGE_1_PR_3_MIGRATION_AUDIT.md)
   §2.1 row 1 marks the five legacy fields "Removed at M3d (landed
   2026-05-11)". `LEDGER_BLOCK_VERSION` and
   `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
   schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
   pre-flight investigations:
   [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md).
+  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md).
 
   **Threat-model delta.** Orchestrator compromise no longer discloses
   output-secret material (capability disclosure via `AllKeysBlob`
@@ -10026,7 +10026,7 @@ Retained for citation in review; each links to the canonical record.
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   ("while we're here is the enemy") then folded into M3e per the
   rule-15 trinary-reading calibration shift recorded in
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1 — the realignment is mode-2 mechanical-residue (mechanically
   derivable from the substrate rename; directly traceable; bounded;
   surfaced inside M3e's review window) and folds into the closing PR

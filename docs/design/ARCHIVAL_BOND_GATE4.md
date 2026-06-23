@@ -3,7 +3,7 @@
 **Status:** **Round 1 base (2026-06-07).** Consensus-balance custody; balance-equation
 `bond_credit` / `bond_debit`; conservation law; `== bond_floor`; `Unbond`; `E_join+1`.
 Numeric cluster pinned in [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md);
-slash trigger interface pinned in [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6.
+slash trigger interface pinned in [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §6.
 
 **Scope:** Consensus objects and vin wire for **bond posture** — **join-Market**, **re-bond**,
 **clean unbond** (collateral return), holdings updates — **distinct** from reward **mint**
@@ -428,7 +428,7 @@ Slash is **not** a user transaction and has **no** balance equation. It is a
 emission being rule-driven rather than balance-proven.
 
 **Trigger:** gate-2 `challenge_failed(P,s,E)` at `H > H_deadline` without
-`serve_credit_bit` ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §6); gate-4
+`serve_credit_bit` ([`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §6); gate-4
 applies `slash(P, s)`.
 
 **Atomic write set (entire slash on block connect):**
@@ -585,7 +585,7 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 
 - [x] **Numeric cluster** — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)
       (2026-06-07 pin).
-- [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)
+- [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md)
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
 - [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verRctSemanticsBondPost`; NIC path).

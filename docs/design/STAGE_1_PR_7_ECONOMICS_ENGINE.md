@@ -59,7 +59,7 @@ and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`. Pha
   [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md),
   [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 - **Prior PRs (shape precedent).**
-  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md),
+  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md),
   [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 - **Performance gates.**
   [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) — deferred benches

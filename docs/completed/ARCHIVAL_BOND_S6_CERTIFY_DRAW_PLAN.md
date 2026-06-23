@@ -1,6 +1,6 @@
 # Bond-PR S6 — `certify_draw` session self-cert wiring (plan + scoping pre-flight)
 
-**Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md).
+**Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](../design/ARCHIVAL_BOND_PR2_CHAIN.md).
 S6 is **not a new `Bond-PR 2x` number** — it is the deferred S6 scope item of
 Bond-PR 2c-2b (the `certify_draw` session self-cert), split out as a small
 follow-on PR per the 2c-2b §3.6 / FOLLOWUPS "Archival bond request path —

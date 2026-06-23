@@ -20,7 +20,7 @@ parent §8 #6 / §9 CT-3 row flipped to closed, FOLLOWUPS routing).
 seam (R1-Q5) are deferred-with-recorded-shape, landing with the post-prune
 refetch path.
 
-**Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-3 row:
+**Parent design:** [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §9 CT-3 row:
 "Source-agnostic bulk-segment fetch + delta sync + per-segment root verify
 against header; reorg rollback by segment."
 

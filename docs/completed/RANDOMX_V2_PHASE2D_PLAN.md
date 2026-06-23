@@ -1,6 +1,6 @@
 # RandomX v2 — Track A Phase 2d plan
 
-**Status.** Rounds 1–6 closed 2026-05-22 on branch
+**Status.** **Landed (PR #70, 2026-05-23).** Rounds 1–6 closed 2026-05-22 on branch
 `chore/randomx-v2-phase2d-plan`. This document began as the skeleton
 scaffold landed 2026-05-21 (Phase 2c Round 3, R3-D3) and was expanded
 into a Round 1 design doc after PR #66 (Phase 2c implementation) merged
@@ -51,7 +51,7 @@ choice; the implementation PR adds the option-specific permitted
 and forbidden grep pattern set. No Scaffold or Scaffold-R4
 disposition reopened.
 
-**Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
+**Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md)
 §"Track A — Phase 2" sub-PR 2d is the binding one-line scope
 ("Implement v2 bytecode dispatch — real per-opcode dispatch
 replacing 2c's `dispatch_instruction` NOP stub body in place; FPU

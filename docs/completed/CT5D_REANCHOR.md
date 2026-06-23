@@ -18,7 +18,7 @@ Archival bond-posts are *not* transfer-shaped — `bond_credit` rides as an
 `OutputTerm`, not a recipient — and by design they **never enter
 `PendingTxEngine`**: they construct + submit through the separate `StakeEngine`
 path over persona `P`'s own circuit, the gate-6 staking firewall
-([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md) §10.1 / §11.1 Q3
+([`ARCHIVAL_BOND_CONSTRUCTION.md`](../design/ARCHIVAL_BOND_CONSTRUCTION.md) §10.1 / §11.1 Q3
 makes the cross-assignment structurally unrepresentable). The two lines share the
 curve-tree **membership** infrastructure (`CurveTreeClient` / `assemble_path` /
 the FCMP++ prover) but not the **submission** path. A future maintainer wiring

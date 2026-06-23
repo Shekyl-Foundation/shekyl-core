@@ -366,7 +366,7 @@ shipping an optimistic sealed floor on top of the very +1 margin it is meant to 
 - [ ] Land wallet disclosure §10 in UX copy.
 - [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
-      [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) (review → land).
+      [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
       cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
       scan contexts; §9.6).
@@ -578,7 +578,7 @@ checks each against a different key.
 |-------------|-------------------------------|------------------------------------------|----------|
 | **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Rebond` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
 | **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
-| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
+| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
 **Bond-post is the recurring self-identifying class (Round-2 scope; rebond/unbond at genesis).**
@@ -688,7 +688,7 @@ the double-match-is-unreachable invariant rather than assuming it.
 leg. Because there is **no key image** on this path, the entire quantum spend-authority property
 rests on one binding: the membership proof and the ML-DSA check must reference the **same proven
 leaf at the same input index**, not merely each reference *a* leaf. The mechanism that delivers
-this ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7, verified at source 2026-06-13): the
+this ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7, verified at source 2026-06-13): the
 `Fcmp` membership leg commits `H(pqc_pk)` as an **in-circuit extra leaf scalar**
 (`fcmps::Input::with_extra_scalars`) on the proven leaf, and the per-input challenge binds the
 input index (§4.2/§8.2); the vin layer recomputes `H(pqc_pk)` from the supplied key and demands
@@ -704,7 +704,7 @@ material; the spend authority is per-output, per the table above.
 (verified at source 2026-06-13).** "Membership-only" omits the **key image / nullifier** (the
 linkability tag), **not** the spend authority. The `MembershipSpendAuth` `R_O` leg is a
 two-generator Schnorr proof that proves **knowledge of the proven leaf's spend secret `x`**
-([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1: (a) a verifying `R_O` proof implies
+([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §5.1: (a) a verifying `R_O` proof implies
 knowledge of the specific `x` via the rewinding extractor; (b) that `x` is the `G`-component of a
 **real tree leaf**; (c) `x = Hs + b` bakes in the recipient spend scalar `b` — i.e. ownership). So
 a **classical** attacker cannot forge a backing claim over a victim's leaf: they cannot produce
@@ -741,7 +741,7 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - **C-1 — emission backing-input quantum spend-authority binding.** The GF-1 §9.6 emission
   contract rests entirely on the membership proof and the ML-DSA check binding the **same
   proven leaf at the same input index**. **Verified at source (2026-06-13,
-  [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
+  [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
   `H(pqc_pk)` extra-leaf-scalar binding (`with_extra_scalars`) is index-bound and **implemented**
   in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
   the supplied key, demand equality with the leaf-committed scalar) is a **hard merge blocker**
@@ -861,7 +861,7 @@ verifier set and enforces it cryptographically. Two conditions ride with it: **(
 set is then a concentrated deanonymization chokepoint (compromise the set → the whole map) → it
 must itself **rotate and be firewall-aware**, not a static registry; **(b)** the choice must
 match the **L14b failure-confirmation** challenger-population assumption
-([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); sliding-window
+([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); sliding-window
 `m`-of-`n`, `11/13` provisional). **Sharpened (verified at source):** the L14 oversight *volume*
 homeostasis (read-credit confines oversight to the cold tail; **challenge ≡ retrieval**, keyed
 on read-credit + retrieval SLA — [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L14×L15*)
@@ -894,7 +894,7 @@ availability margin) is routed to the Round-2 stressnet gate, where gate-2/gate-
   reproducible, no wallet-side discretion).
 - **`m`-of-`n` availability = routed to the Round-2 CDF gate.** Whether a *bonded* set sustains
   the L14b sliding-window recheck cadence (`m`-of-`n`, `11/13` provisional —
-  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)) on the cold
+  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)) on the cold
   tail it must cover is a **quantitative availability question**, not a structural one. It is
   **not answered here** — it is handed to the Round-2 stressnet **availability CDF gate**, which
   measures the bonded verifier population's liveness against the recheck cadence under modeled
@@ -1529,7 +1529,7 @@ privacy axis of the R-3 reconciliation that already gates the seal.
   questions for the pass (§10.10, since renumbered §10.11 by pass 1). §6 round table + §2.2
   pointers updated; old §10 Related documents renumbered §11.
 - **2026-06-13 (Round 1 C-1 second-order confirmation):** Pressure-test on the C-1 interim
-  characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §5.1
+  characterization. Verified at source ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §5.1
   (a)/(b)/(c)) that the `MembershipSpendAuth` `R_O` leg proves **classical knowledge of the leaf's
   spend secret `x`** (= ownership) — "membership-only" omits the **key image/nullifier**, not the
   spend authority. So "reduces to classical security" is **accurate** (the interim is PQ-weak, not
@@ -1540,7 +1540,7 @@ privacy axis of the R-3 reconciliation that already gates the seal.
 - **2026-06-13 (Round 1 post-sign-off review refinements):** Closure-review items on the
   sign-off itself. **C-1** — recorded the emission backing-input quantum spend-authority binding
   as a **named carried dependency** (§9.8) rather than a citation that read as closed; verified
-  at source ([`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
+  at source ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
   proof and ML-DSA check bind the **same proven leaf at the same input index** (in-circuit
   `H(pqc_pk)` extra scalar, index-bound — implemented), and that the **vin-layer ML-DSA equality
   check is a not-yet-landed hard merge blocker** that must precede the `archival_p` impl + emission

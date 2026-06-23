@@ -1998,7 +1998,7 @@ must not be confused with reopening genesis wire.
 | **FA-6 wire / §8.7 disposition** | Closed Round 3 — `FA-6_CLOSEOUT.md` |
 | **FA-6b hint re-key implementation** | V3.1 before multisig user-ship; wire pin closed Round 3 |
 | **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
-| **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
+| **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
 | **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
 | **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
 

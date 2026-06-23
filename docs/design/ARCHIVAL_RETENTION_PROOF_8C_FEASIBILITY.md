@@ -2,7 +2,7 @@
 
 **Status:** **BUILD for on-demand serving obligation (2026-06-08, Round 1).** Merkle opening
 to `R_k` + consensus verify + affirmative serve-credit is the correct statement for the
-market layer ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0). Continuous
+market layer ([`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §0). Continuous
 offline possession is **out of scope**; §7.5 reacquisition "hinge" retired as wrong statement.
 
 **Inputs:** [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) §5 (test
@@ -10,7 +10,7 @@ surface after fossil purge); [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
 [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2; [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.1, §6.
 
 **Out of scope here:** Byte-exact gate-2 serialization and verifier crate (see
-[`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md)); wallet/daemon RPC for
+[`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md)); wallet/daemon RPC for
 challenge delivery. This pass answers: **can the statement be
 built soundly at all?**
 
@@ -76,7 +76,7 @@ E-close).
 | Retention ledger interface | `ARCHIVAL_CONSENSUS_STATE.md` §3.1 | Output bit only — construction deferred |
 
 **Gap (expected):** No gate-2 verifier crate or byte-exact wire yet; Round 0 logical spec in
-[`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md). No `P`-bound response
+[`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md). No `P`-bound response
 envelope. These are **engineering**, not unknown cryptography.
 
 ---
@@ -265,7 +265,7 @@ independent storage** fork, (c) binding failure at gate-6 firewall.
 
 ## 10. Implementation path (ordered)
 
-1. **Gate-2 Round 1** — [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0 obligation pinned.
+1. **Gate-2 Round 1** — [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §0 obligation pinned.
 2. **`shekyl-archival-retention` crate (proposed)** — verify-only membership replay; KATs
    **after** challenge shape frozen.
 3. **Substrate reconciliation** — confirm `R_k` checkpoints in LMDB match §7.2 model;
@@ -279,7 +279,7 @@ independent storage** fork, (c) binding failure at gate-6 firewall.
 | Doc | Relationship |
 |-----|--------------|
 | [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass test surface |
-| [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) | Gate-2 wire + verifier (Round 0) |
+| [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) | Gate-2 wire + verifier (Round 0) |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | Reads `serve_credit_bit`; §6 gate-2-internal |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge |
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumes bits for `work_P` |

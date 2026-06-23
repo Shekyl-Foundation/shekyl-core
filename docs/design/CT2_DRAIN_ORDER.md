@@ -567,7 +567,7 @@ same artifact when the send path can generate them.
 ### Corrections landed (Round 1 close-out, 2026-06-06)
 
 Cross-edits below are **done** — recorded here so §9 does not read as open work.
-Authoritative close-out: [`CT2_ROUND1_CLOSEOUT.md`](CT2_ROUND1_CLOSEOUT.md).
+Authoritative close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOSEOUT.md).
 
 1. **Coinbase `+60` / empty window 0..=60 — LANDED.** Founder coinbase matures at
    `+60` but enters the tree on the *next* block (`drained_through = H − 1`),

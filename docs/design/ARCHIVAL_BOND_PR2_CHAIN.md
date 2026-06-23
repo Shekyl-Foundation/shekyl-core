@@ -141,7 +141,7 @@ grade is float / x86-only and `shekyl-stats`-bearing, so it cannot live on the
 float-free default-production path. Split into a small **`conformance`-gated**
 follow-on PR (off `dev`, **after #163 merges** — it consumes #163's
 `OsRngGapAdapter` / `on_start` / `DEFAULT_ENTRY_GAP`). Full plan:
-[`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md`](ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md)
+[`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md`](../completed/ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md)
 (2-round, tightened — the design is already settled in 2c-2b §3.3).
 
 ### 3.6 Bond-PR 2d — `P`-scan layer (2d-1) + transport/broadcast/reconcile (2d-2)

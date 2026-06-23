@@ -2969,7 +2969,7 @@ that a pure read-credit cannot go below) are post-testnet / gate-7 empirics. L14
 
 ### L14b — failure-confirmation scheduling (design pin; sim-gated)
 
-**Pin:** [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
+**Pin:** [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
 
 After a baseline epoch challenge **miss**, consensus may escalate scrutiny with a **recheck
 window** `[start, start+w]` — `start` from the **assumed residual-life** quantile `p`
@@ -3476,7 +3476,7 @@ over candidate-set size = 1 target + Poisson background funding-shaped decoys.
 (`SETTLEMENT_EPOCH_BLOCKS = 10_000` ≈ 13.9 d); the standoff adds at most `window_blocks` of entry
 latency = `window/epoch` of one epoch. Re-running the epoch-granularity sweep to resolve a sub-epoch
 effect would over-read the model (cf. the float-vs-integer over-read,
-[`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](ARCHIVAL_SIM_ECONOMICS_VERDICT.md)). **Free ≤ 0.10 epoch
+[`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](../completed/ARCHIVAL_SIM_ECONOMICS_VERDICT.md)). **Free ≤ 0.10 epoch
 (≈ 1000 blocks ≈ 1.4 d)** — two orders above any obfuscation-useful window.
 
 **Findings:**

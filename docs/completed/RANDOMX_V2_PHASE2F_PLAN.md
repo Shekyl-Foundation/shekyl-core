@@ -38,7 +38,7 @@ changes in 2f"; "≤600 net-new lines") are superseded by later
 rounds and are flagged inline below; the original framing is
 preserved so the discipline's evolution is auditable.
 
-**Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
+**Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md)
 §"Track A — Phase 2" sub-PR 2f scope (line 27):
 
 > "Implement `CacheStore` utility type (`LruCache<Seedhash, Arc<Cache>>`

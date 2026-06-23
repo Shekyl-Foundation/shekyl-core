@@ -3,7 +3,7 @@
 **Status:** In progress (started 2026-06-20). Phase 0 (harness) landed and green;
 Phase 1 (transfer keystone) next. **Authoritative spec for:** the wallet↔daemon
 submit/verify parity surface. **Parent:** [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md)
-§9 ("C++" row + CT-2 Tier-B), [`CT5_ROUND1_CLOSEOUT.md`](CT5_ROUND1_CLOSEOUT.md)
+§9 ("C++" row + CT-2 Tier-B), [`CT5_ROUND1_CLOSEOUT.md`](../completed/CT5_ROUND1_CLOSEOUT.md)
 §6 (Track 2 is downstream of CT-5, not part of it).
 
 ---

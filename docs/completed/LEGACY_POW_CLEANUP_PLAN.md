@@ -5,7 +5,7 @@
 | **Status** | EXECUTED — **Plan A** (RPC-payment-only this PR), on `chore/rpc-payment-deletion`. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-19-cleanest cut (Plan A) was taken. During execution an orphaned Rust `RpcPrefs` persisted-prefs bucket surfaced; per the "delete in its entirety" mandate the maintainer approved folding it in as a self-contained Commit 4 (distinct persisted-schema validation surface, `19-validation-surface-discipline.mdc`). See §6 for the as-built commit list. |
 | **Author** | (maintainer-reviewed) |
 | **Date** | 2026-06-22 |
-| **Parent** | [`RANDOMX_V2_PHASE3_PLAN.md`](./RANDOMX_V2_PHASE3_PLAN.md) (Phase 3 consensus cutover, landed PR #171 `6c3b86484`) |
+| **Parent** | [`RANDOMX_V2_PHASE3_PLAN.md`](../design/RANDOMX_V2_PHASE3_PLAN.md) (Phase 3 consensus cutover, landed PR #171 `6c3b86484`) |
 | **FOLLOWUPS item** | "RandomX v2 Phase 3c / Phase 4 — PoW C-core + abstraction deletion" ([`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)) — **this plan re-splits that cluster** |
 | **Branch (proposed)** | `chore/rpc-payment-deletion` off `dev` (short-lived, `06-branching.mdc`) |
 

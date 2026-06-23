@@ -384,7 +384,7 @@ conservation law (gate-4 §4.5) extends G11 — loud bond terms cannot mask infl
 ### Disposition
 
 **Landed (2026-06-07):** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7;
-claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md).
+claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md).
 
 **Closed in review:**
 

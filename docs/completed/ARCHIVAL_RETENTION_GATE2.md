@@ -2,22 +2,22 @@
 
 **Status:** **Round 1 obligation pinned (2026-06-08).** On-demand **serving** semantics;
 no continuous-storage proof. Byte-exact wire + verifier crate open (membership layer
-constructible per [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)).
+constructible per [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](../design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)).
 
 **Scope:** How `serve_credit_bit(P_id, shard, E)` is **earned** — one affirmative epoch
 challenge per bonded shard, Merkle opening to `R_k`, consensus verify, slash on miss.
-Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §6.
+Writes the gate-2-internal surface in [`ARCHIVAL_CONSENSUS_STATE.md`](../design/ARCHIVAL_CONSENSUS_STATE.md) §6.
 
 **Authority chain:**
 
 | Doc | Role |
 |-----|------|
-| [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Constructibility — Merkle PoR to `R_k` |
-| [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2 | Segment = shard; frozen `R_k`; subtree level |
-| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | `serve_credit_bit` ledger; invariants 1–4 |
-| [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge; join gates bit writes |
-| [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Off-chain delivery; `P` signature binding |
-| [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
+| [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](../design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Constructibility — Merkle PoR to `R_k` |
+| [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §7.2 | Segment = shard; frozen `R_k`; subtree level |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](../design/ARCHIVAL_CONSENSUS_STATE.md) | `serve_credit_bit` ledger; invariants 1–4 |
+| [`ARCHIVAL_BOND_GATE4.md`](../design/ARCHIVAL_BOND_GATE4.md) | Slash on failed challenge; join gates bit writes |
+| [`ARCHIVAL_FIREWALL_GATE6.md`](../design/ARCHIVAL_FIREWALL_GATE6.md) | Off-chain delivery; `P` signature binding |
+| [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
 | [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) | Sliding-window m-of-n pinned; escalation rejected (Round-1) |
 
 **Out of scope here:** emission economics (gate 1); bond-post wire (gate 4); wallet FSM;
@@ -102,7 +102,7 @@ segment-relative index `ℓ` under frozen sub-root `R_k(s)`:
 VerifyPath(L_ℓ, π, R_k) = true
 ```
 
-using `shekyl-fcmp::tree` grow/trim rules ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) §1.2).
+using `shekyl-fcmp::tree` grow/trim rules ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](../design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) §1.2).
 
 **Verifier** (consensus) accepts iff:
 
@@ -124,7 +124,7 @@ between challenges (§0).
 
 ## 2. Shard geometry (consensus inputs)
 
-Gate 2 **consumes** segment geometry from [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2;
+Gate 2 **consumes** segment geometry from [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §7.2;
 it does not redefine it.
 
 | Field | Source | Gate-2 use |
@@ -153,7 +153,7 @@ derives identical `(ℓ, H_fire, R_k)` from consensus-visible state (§3.3–§3
 | Constant | Value | Role |
 |----------|-------|------|
 | `CHALLENGES_PER_EPOCH` | **1** | Guaranteed on-demand test per `(P,s,E)` — demand floor (§0) |
-| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) |
+| `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) |
 | `CHALLENGE_BEACON_SEAL_BLOCKS` | **1** (provisional) | Blocks after `H_open` before `block_hash(H_seal)` is fixed — `shekyl-archival-retention::CHALLENGE_BEACON_SEAL_BLOCKS` |
 | `CHALLENGE_RESPONSE_BLOCKS` | **TBD (byte pin)** | Blocks after `H_fire` to accept credit; must end before `H_close` |
 
@@ -366,7 +366,7 @@ challenge_failed(P_id, shard, E) :=
 ```
 
 On first block connect where `challenge_failed` is true, consensus calls gate-4
-`slash(P, shard)` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §4.2).
+`slash(P, shard)` ([`ARCHIVAL_BOND_GATE4.md`](../design/ARCHIVAL_BOND_GATE4.md) §4.2).
 
 **T-A16 margin:** `CHALLENGE_RESOLUTION_BLOCKS` (10_000) ≫ typical onion round-trip;
 release cooldown (20_000 blocks) > challenge window — timing cluster verified.
@@ -464,9 +464,9 @@ verifier treats registry as authoritative at `H_anchor`.
 
 | Doc | Relationship |
 |-----|--------------|
-| [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Cryptographic disposition |
-| [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass fossils |
-| [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Reads `serve_credit_bit` for `work_P` |
+| [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](../design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md) | Cryptographic disposition |
+| [`ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`](../design/ARCHIVAL_CORPUS_FOSSIL_SWEEP.md) | Pre-pass fossils |
+| [`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) | Reads `serve_credit_bit` for `work_P` |
 | [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) | Challenge delivery class |
 
 ---

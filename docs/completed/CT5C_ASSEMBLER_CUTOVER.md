@@ -427,9 +427,9 @@ place review rounds concentrate; the migration is itself part of the value
 - [`CT5_ENGINE_WIRING.md`](CT5_ENGINE_WIRING.md) §3.4 (real path assembly), §3.7
   (T1–T3 type-enforced contracts), §5.1 X3 (gindex resolution), R1-Q5 (delete
   `synthetic_tree`).
-- [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.md) — drain order / gindex numbering the
+- [`CT2_DRAIN_ORDER.md`](../design/CT2_DRAIN_ORDER.md) — drain order / gindex numbering the
   resolution keys on.
-- [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §3.5 / §4.3 — path layout and the
+- [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §3.5 / §4.3 — path layout and the
   caller-supplies-root integrity model `assemble_path` enforces.
 
 ---

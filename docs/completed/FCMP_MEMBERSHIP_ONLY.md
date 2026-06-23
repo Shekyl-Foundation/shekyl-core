@@ -1,12 +1,12 @@
 # `FcmpMembershipOnly` — spend authority + tree membership, no key image
 
 **Status:** implemented 2026-06-12 (`feat/fcmp-membership-only`). Consumes the
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.2 verify-API pin
+[`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §7.2 verify-API pin
 (2026-06-12) and closes the §12 "line-441 gap" (the missing sibling API at the
 composition layer of the FCMP++ crate, symbol anchor `FcmpPlusPlus`).
 
 **First consumer:** the emission vin
-([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3, §7.1 step 6). The
+([`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §5.3, §7.1 step 6). The
 FFI entry point, C++ call site, vin deserializer, and emission KAT vectors are
 deferred to that PR — see §9 (Carries).
 
@@ -348,14 +348,14 @@ for an output they do not own and claim it as backing for their pseudonym
    identical to the full path.
 2. **At the vin layer (deferred but gated):** ML-DSA authentication against
    the leaf-committed `pqc_pk`
-   ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.1 sizes two
+   ([`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §10.1 sizes two
    ML-DSA-65 auths into the emission wire).
 
 This PR in isolation has **no quantum spend-authority guarantee**. Per the
 absence-of-claim-is-claim-of-absence rule, the gate is written as a blocker:
 **the emission vin PR is not mergeable without ML-DSA verification binding
 the `H(pqc_pk)` committed by the membership-only proof.** (Also recorded in
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §12.)
+[`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §12.)
 
 **Quantum-forgery wargame (post-draft obligation, input to the vin PR).**
 Adversary: CRQC-equipped, targeting emission backing. Path: recover `x` from
@@ -403,7 +403,7 @@ membership only.
 ## 9. Carries (deferred, named)
 
 The "emission vin PR" rows below are scoped and sequenced in
-[`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E1/E2/E3 map
+[`REWARD_EMISSION_VIN_PLAN.md`](../design/REWARD_EMISSION_VIN_PLAN.md) (PR-E1/E2/E3 map
 in its §9); the ML-DSA hard gate binds that plan's PR-E3.
 
 | Item | Where it lands | Gate / reversion |
@@ -424,7 +424,7 @@ the `Fcmp` leg is byte-identical. Measured totals: **3 104 B vs 3 392 B** at
 1 input / 1 layer; **5 952 B vs 6 240 B** at 1 input / 8 layers; 8 960 B vs
 10 112 B at 4 inputs / 8 layers. Total proof size is therefore **strictly
 smaller** than the 1-input `FcmpPlusPlus` estimate that
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §10.1 carried as the
+[`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §10.1 carried as the
 sizing caveat — the 3× reversion trigger is not approached (measured ratio
 < 1×). The §10.1 caveat's size arm is closed by the doc sweep accompanying
 this PR; the test asserts both bounds permanently.

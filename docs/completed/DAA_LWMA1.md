@@ -2916,7 +2916,7 @@ yet have a design doc — the consumer becomes a stateless Rust
 **block-validator actor**. The validator's shape, following the
 pattern established by the wallet-side `STAGE_1_*` engine
 extractions (DaemonEngine, LedgerEngine, RefreshEngine in
-[`docs/design/STAGE_1_PR_*`](../design/STAGE_1_PR_1_DAEMON_ENGINE.md)),
+[`docs/design/STAGE_1_PR_*`](STAGE_1_PR_1_DAEMON_ENGINE.md)),
 is:
 
 1. Receives `(block_header, parent_chain_handle)` from its caller.
@@ -2965,7 +2965,7 @@ crate exists, it consumes the transform; the transform's signature
   for the LWMA-1 numeric constants (§4).
 - [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md)
   — audit that motivated the JSON-authority pattern.
-- [`STAGE_1_PR_1_DAEMON_ENGINE.md`](../design/STAGE_1_PR_1_DAEMON_ENGINE.md)
+- [`STAGE_1_PR_1_DAEMON_ENGINE.md`](STAGE_1_PR_1_DAEMON_ENGINE.md)
   and sibling `STAGE_1_PR_*` docs — wallet-side engine-extraction
   pattern referenced by §17.
 - [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)

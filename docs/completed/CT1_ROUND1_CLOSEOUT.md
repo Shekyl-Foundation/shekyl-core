@@ -5,8 +5,8 @@ KAT, mixed-composition unit KAT, and `CurveTreeClient` ingest mirroring.
 Amended 2026-06-10 by the §5 robustness hardening (production-tip root
 contract; ahead-of-ingest machinery removed).
 
-**Authoritative pins:** [`CT1_ROUND1_PINS.md`](CT1_ROUND1_PINS.md),
-[`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §3.4 / §3.6 / §9.
+**Authoritative pins:** [`CT1_ROUND1_PINS.md`](../design/CT1_ROUND1_PINS.md),
+[`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §3.4 / §3.6 / §9.
 
 ---
 

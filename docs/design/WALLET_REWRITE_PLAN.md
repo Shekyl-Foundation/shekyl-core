@@ -102,7 +102,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 ### Gap
 
-- **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md)).
+- **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)).
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
 - **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](rust/shekyl-engine-file/) but not exposed as a clean `Wallet::*` API.
@@ -350,7 +350,7 @@ If all five items pass without surfacing new questions, Phase 1 begins.
 > `KeyEngineHandle` key actor, `LocalLedger` RwLock state) is documented
 > in `rust/shekyl-engine-core/src/engine/mod.rs`. The deliverable-by-
 > deliverable done/blocked matrix is
-> [`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md).
+> [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md).
 > Open residue (View/HW lifecycle bodies) is tracked in
 > [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) with a reversion clause.
 
@@ -562,7 +562,7 @@ flowchart TD
 methods landed with the Phase 1 closeout** (2026-06-10): `Engine::refresh` /
 `start_refresh` / `apply_scan_result` / `build_pending_tx` / `submit_pending_tx` /
 `discard_pending_tx` ship on `Engine<S>` (see
-[`PHASE_1_ORCHESTRATOR_STATUS.md`](PHASE_1_ORCHESTRATOR_STATUS.md)); remaining 2a
+[`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)); remaining 2a
 residue is tracked in `PHASE_2A_SEND_PATH.md` §10.
 
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.

@@ -485,7 +485,7 @@ fixtures are inlined per §3.1’s adapter-helper disposition.
 
 - **PR 5’s `TxToSign` shape.** Pinned independently in PR 5’s
   design rounds (parallel track per
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](../design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   and the 2026-05-10 sequencing decision).
 - **Bridge from `KeyEngine::sign_transaction` to
   `tx_builder::sign_transaction`.** Lands in PR 5.

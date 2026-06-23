@@ -181,7 +181,7 @@
   supply-chain surface, no dependency cycle). Tree stays synthetic; on-chain
   end-to-end remains CT-5 work.
 - **wallet: CT-5d submit-time proof re-anchor (reprove) + consent gate
-  (`docs/design/CT5D_REANCHOR.md`, `feat/ct-5d-reanchor-closeout`).** A built-but-
+  (`docs/completed/CT5D_REANCHOR.md`, `feat/ct-5d-reanchor-closeout`).** A built-but-
   unsubmitted FCMP++ proof anchors to a reference block `tip − REF_ANCHOR_AGE`;
   a tip advance past the rebuild horizon, or a reorg that orphans the reference,
   would otherwise degrade to a submit-time daemon rejection. The submit path now
@@ -335,7 +335,7 @@
   [`RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §15) and the named blocker
   for the deferred Phase 3c/4 PoW C-core cleanup
   ([`FOLLOWUPS.md`](FOLLOWUPS.md)); this PR unblocks that cluster. Plan:
-  [`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](design/LEGACY_POW_CLEANUP_PLAN.md).
+  [`docs/completed/LEGACY_POW_CLEANUP_PLAN.md`](completed/LEGACY_POW_CLEANUP_PLAN.md).
   Net ≈1000–1500 lines across ~20 files; **consensus-inert** (RPC access
   control, not block validation — the parity/mining gates are untouched).
   - **Wholesale-deleted files:** `src/rpc/rpc_payment.{cpp,h}`,
@@ -606,7 +606,7 @@
   upgrade is justified on supported-upstream / debt-reduction grounds.
 - **wallet: CT-5b — curve-tree reference selection + §3.3 ingest verify + C2
   spendability gate (2026-06-16, `feat/ct-5b-reference-verify`).** Builds on
-  CT-5a's actor/ingest wiring (`docs/design/CT5_ENGINE_WIRING.md` §6):
+  CT-5a's actor/ingest wiring (`docs/completed/CT5_ENGINE_WIRING.md` §6):
   - **§3.3 ingest-time root verify (O5).** After each block is ingested into the
     curve tree, the reconstructed root must byte-equal the consensus
     header-committed root (producer range from `block_curve_tree_roots`,
@@ -937,7 +937,7 @@
 
 - **docs: CT-4 Round 1 closed — membership-path assembly + reference-block
   horizon (`shekyl-curve-tree`, 2026-06-13).** Added
-  [`CT4_ROUND1_CLOSEOUT.md`](design/CT4_ROUND1_CLOSEOUT.md) recording the two
+  [`CT4_ROUND1_CLOSEOUT.md`](completed/CT4_ROUND1_CLOSEOUT.md) recording the two
   landed CT-4 surfaces: (1) `assemble_path → AssembledPath` (gated on the §3.3
   root match, FCMP++ prover `Path` layout pinned at source, C3 `c1+c2+1 ==
   depth` self-checked) and (2) `reference.rs` validity-horizon arithmetic
@@ -954,7 +954,7 @@
   or consensus surface touched.
 
 - **docs: CT-3 Round 1 closed — CT-3d closeout (`shekyl-curve-tree`,
-  2026-06-13).** Added [`CT3_ROUND1_CLOSEOUT.md`](design/CT3_ROUND1_CLOSEOUT.md)
+  2026-06-13).** Added [`CT3_ROUND1_CLOSEOUT.md`](completed/CT3_ROUND1_CLOSEOUT.md)
   recording the landed persistent-client lifecycle (CT-3a store schema /
   CT-3b open+resume+delta-ingest / CT-3c reorg rollback), the DoD mapping,
   and the deferred-with-reversion-clause surfaces. Flipped `CURVE_TREE_CLIENT.md`
@@ -1953,7 +1953,7 @@
   named close criteria for §2.4 close-condition (iii)
   (`STAKER_ARCHIVAL_SIM.md` §Iteration-5 scope).
 
-- **curve-tree: CT-3 design Round 1 opened (`docs/design/CT3_SYNC.md`).**
+- **curve-tree: CT-3 design Round 1 opened (`docs/completed/CT3_SYNC.md`).**
   Pre-flight substrate audit (pinned citations) of the persistent-client
   gap: CT-1/CT-2 landed persistence and KAT-verified block-derived
   reconstruction, but no path opens on disk, resumes, or rolls back a reorg
@@ -2024,7 +2024,7 @@
   `shekyl-engine-core::Engine<S: EngineSignerKind>` domain orchestrator
   (lifecycle, refresh + scan merge, pending-tx send lifecycle, query
   surface, tracing forwarder) is complete per the done-matrix in
-  `docs/design/PHASE_1_ORCHESTRATOR_STATUS.md`.
+  `docs/completed/PHASE_1_ORCHESTRATOR_STATUS.md`.
   `docs/design/WALLET_REWRITE_PLAN.md` reconciled to the binding
   `Engine` naming (decision log 2026-04-27): frontmatter `phase0_closeout`
   and `phase1_domain_model` marked completed, global naming-supersession
@@ -2192,7 +2192,7 @@
   Tier-A boundary pin (`last_empty=60`, `first_drain=61`), fixture provenance
   baseline, Tier-B `#[ignore]` drift-canary scaffold (`recon_tier_b.rs`),
   scanner `tx_extra 0x07` parse tests (first-match; daemon parity unverified).
-  Close-out `docs/design/CT2_ROUND1_CLOSEOUT.md`; `CT2_DRAIN_ORDER.md` empty-window
+  Close-out `docs/completed/CT2_ROUND1_CLOSEOUT.md`; `CT2_DRAIN_ORDER.md` empty-window
   prose aligned to fixture truth.
 
 - **crypto-pq: FA-6 §8.5.1 decap pre-filter gate harness.**
@@ -2280,7 +2280,7 @@
   substrate in consensus §3.3.
 
 - **docs: archival failure-confirmation policy pin (2026-06-08).**
-  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](design/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) —
+  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) —
   escalate-on-failure with randomized near-term recheck (not exponential backoff);
   not-durably-absent enforcement claim; outage-CDF quantile → false-slash; sim decision gate
   vs sliding-window m-of-n before per-`P` confirmation FSM. Cross-links in gate-2 §0 and
@@ -2293,7 +2293,7 @@
   assembled-path cross-check KAT. Provisional `CHALLENGE_BEACON_SEAL_BLOCKS = 1`.
 
 - **docs: gate-2 Round 1 on-demand serving obligation (2026-06-08).**
-  [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) §0 — solved shape:
+  [`ARCHIVAL_RETENTION_GATE2.md`](completed/ARCHIVAL_RETENTION_GATE2.md) §0 — solved shape:
   affirmative serve-credit per epoch; leaf `ℓ` deterministic, `H_fire` beacon-sealed; no 24/7
   disk proof. `serve_credit_bit` rename; L15 = reach not durability; traffic-pay reopen §0.3.
   Retires §7.5 reacquisition panic ([`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)).
@@ -2314,12 +2314,12 @@
   Review amendment: Merkle opening proves **membership**, not set-B **retention** (public
   leaves + reacquire-on-demand). [`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md)
   §7.5 reacquisition-asymmetry hinge OPEN; economics reopen if hinge fails; `m=3` scoped to
-  partial-deletion only. [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md)
+  partial-deletion only. [`ARCHIVAL_RETENTION_GATE2.md`](completed/ARCHIVAL_RETENTION_GATE2.md)
   downgraded to Round 0 draft; `H_anchor` must fall inside epoch `E` (fixes `H_close+1` bug);
   bytes/KATs held for Round 1.
 
 - **docs: archival retention gate-2 Round 0 spec (2026-06-08).**
-  [`ARCHIVAL_RETENTION_GATE2.md`](design/ARCHIVAL_RETENTION_GATE2.md) — challenge derivation
+  [`ARCHIVAL_RETENTION_GATE2.md`](completed/ARCHIVAL_RETENTION_GATE2.md) — challenge derivation
   (`cSHAKE`, `m=3`, `R_k`-local Merkle openings), `txin_archival_retention_response` wire,
   verifier order, slash handoff to gate 4; §4 flags retention-credit vs slash-window tension
   for stressnet. Cross-refs: consensus state §6, bond gate 4 §4.2, 8c feasibility §10.
@@ -2362,7 +2362,7 @@
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
-  [`PHASE_2B_SECTION7_DRAFT.md`](design/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
+  [`PHASE_2B_SECTION7_DRAFT.md`](completed/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
   lever + T-A1 sim gate; T-A16 (A6); G11 KAT invariants; G1 three-tier slash surfacing;
   partial slash stays Bonded (FSM). Timing doc §1.1 SEB/F1 coupling.
 
@@ -3319,7 +3319,7 @@
   need it). §5.2
   contract/protocol tests landed, as did the §5.3 B9 dispatch-overhead
   benchmark (see the next entry). No consensus or wire-format change. Design:
-  [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`](design/STAGE_2_KEY_ENGINE_ACTOR.md).
+  [`docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md`](completed/STAGE_2_KEY_ENGINE_ACTOR.md).
 
 - **bench: Stage 2 §5.3 B9 dispatch-overhead + merge-path benchmarks.**
   Five `bench-internals`-gated bench targets in `shekyl-engine-core`:
@@ -3418,7 +3418,7 @@
     the `ask`-cancellation leak where the channel drops an un-taken reply. A
     `reply_path_wipes_on_drop` test asserts the reply's `Drop` wipes.
   No consensus or wire-format change. Design:
-  [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`](design/STAGE_2_KEY_ENGINE_ACTOR.md)
+  [`docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md`](completed/STAGE_2_KEY_ENGINE_ACTOR.md)
   §4.3.1.
 
 ### Changed
@@ -3528,7 +3528,7 @@
   `ConcurrentMutation` producer-side. Shape (b) per
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §8; atomicity rationale per
-  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §3.
 
 ### Documentation
@@ -3631,7 +3631,7 @@
   `FOLLOWUPS.md` and `STAGE_1_PR_4_REFRESH_ENGINE.md` (helpers removed in the
   P2 TOCTOU fix, commit `87264a3a2`; the producer now derives its scan start
   from the anchored snapshot). (3) Added a dated closure checkpoint to
-  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md)
+  [`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](completed/STAGE_1_COMPLETION_AUDIT.md)
   recording P1/P2/P3 closure and confirming C2c economics cutover remains the
   sole open V3.0 economics item (standalone 7-cutover PR per
   `STAGE_1_PR_7_ECONOMICS_ENGINE.md` §6.2, not eligible for chore bundling).
@@ -3728,7 +3728,7 @@
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
   landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits
   C1–C10 per
-  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](design/RANDOMX_V2_PHASE2H_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](completed/RANDOMX_V2_PHASE2H_PLAN.md)
   §8). Closes the Phase 2g R7-D1/R7-D2/R7-D3/R7-D4 deferrals by
   replacing the V1-shaped class-heaviness grinding methodology
   (unreachable under V2's PROGRAM_SIZE = 384 σ-gaps) with the
@@ -3938,7 +3938,7 @@
   RandomX v2 verifier port per
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" and the design plan
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](design/RANDOMX_V2_PHASE2G_PLAN.md).
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](completed/RANDOMX_V2_PHASE2G_PLAN.md).
   Stack landed across the planned C0–C10 work commits plus follow-ups
   (two Copilot review rounds, two mechanical `rustfmt` absorptions, the
   R5-D2 plan-doc soft-fail refinement, and the R7 adversarial-corpus
@@ -4225,7 +4225,7 @@
     closure record + lessons-into-substrate dispositions in
     `docs/FOLLOWUPS.md` "Recently resolved (audit trail)"
     section; post-mortem with the missed-altitude finding in
-    `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`. The harness's
+    `docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`. The harness's
     detection of this divergence (and the diagnostic-triage
     test that bisected it) is end-to-end validation of its
     M4 detection capability against a real substrate gap.
@@ -4237,7 +4237,7 @@
 
 - **RandomX v2 Track A Phase 2f implementation core landed**
   (`feat/randomx-v2-phase2f-impl`, 2026-05-23). Implements
-  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md)
   Round 2 + Round 3 dispositions on
   [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx) in five
   commits versus the §8 Round 3 ceiling of six (commit 5 omitted
@@ -4759,7 +4759,7 @@
 - **RandomX v2 Track A Phase 2f — post-closure pin refinements**
   (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Companion
   commit to the post-closure substrate-completeness pins
-  ([`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)).
+  ([`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md)).
   Six narrow refinements, each tightening a post-closure pin
   against a substrate observation. Per
   `21-reversion-clause-discipline.mdc`'s post-closure-pin
@@ -4870,7 +4870,7 @@
 - **RandomX v2 Track A Phase 2f — post-closure substrate-
   completeness pins** (`chore/randomx-v2-phase2f-plan`,
   2026-05-23). Companion commit to Round 2 + Round 3 of
-  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  [`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md).
   Per `21-reversion-clause-discipline.mdc` ("an under-specification
   surfaced post-closure does not reopen the round it belonged
   to but is named explicitly as a post-closure pin"; not a
@@ -4968,7 +4968,7 @@
 - **RandomX v2 Track A Phase 2f — Round 3 design (refinement
   bundle)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Companion commit to Round 2's architectural keystone for
-  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  [`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md).
   Round 3 hardens the dispositions Round 2 left for follow-up.
   **§3.3 R1-D3 reframed to cfg-gated A/B approach** — pool body
   implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
@@ -5044,7 +5044,7 @@
 - **RandomX v2 Track A Phase 2f — Round 2 design (architectural
   reframe)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Architectural keystone for
-  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md)
   Round 2; supersedes the Round 1 dispositions where the Phase 2c
   freeze inherited a consensus-correctness footgun the type system
   can close at zero cost. Round 1 dispositions stand as audit
@@ -5267,7 +5267,7 @@
     Round history gains Round 2 row.
 - **RandomX v2 Track A Phase 2f — Round 1 design closure**
   (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Closes Round 1 of
-  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2F_PLAN.md`](completed/RANDOMX_V2_PHASE2F_PLAN.md)
   six decision points after the 2026-05-23 scaffold (`f3da9f093`):
   - **R1-D1 (CacheStore API surface):** picks option (b) explicit
     two-slot type with `new` / `lookup` / `insert` / `set_canonical`.
@@ -5394,7 +5394,7 @@
 
 - **RandomX v2 Track A Phase 2d implementation core landed**
   (`feat/randomx-v2-phase2d`, 2026-05-22). Implements
-  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
   §3.5/§3.7 R1–R6 decisions on
   [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx):
   - **F128 newtype + integer helpers** (`bd7cea464`). Promotes the
@@ -5467,14 +5467,14 @@
     in a file already being modified" carve-out; no semantic
     change. §8 commit-table reconciliation (five landed commits vs.
     seven planned slots) is documented in
-    [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
     §11's Implementation row with SHA → §8 mapping and §9 gate
     confirmation at HEAD `4fc0606d1`.
 
 - **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
   Phase 2c-emergent process disciplines from
-  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
-  / [`RANDOMX_V2_PHASE2C_AUDIT.md`](design/RANDOMX_V2_PHASE2C_AUDIT.md)
+  [`docs/completed/RANDOMX_V2_PHASE2C_PLAN.md`](completed/RANDOMX_V2_PHASE2C_PLAN.md)
+  / [`RANDOMX_V2_PHASE2C_AUDIT.md`](completed/RANDOMX_V2_PHASE2C_AUDIT.md)
   into [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
   (Option A; opt-in — cite when scoping multi-round per-trait PRs).
   Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
@@ -5483,7 +5483,7 @@
 
 - **RandomX v2 Track A Phase 2d — Rounds 1–6 design closure** (PR #68).
   Expands
-  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
   through Round 6 after PR #66 on `dev` (`e9917097f`): Round 1
   (FPU/`F128`/frequency dispatch/u128 audit); Round 2 (PC-driven loop,
   `Program.cbranch_table`, `VmState.branch_pc`); Round 3 (threat-model
@@ -5509,7 +5509,7 @@
   v2 verifier port per
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" and the design plan
-  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md).
+  [`docs/completed/RANDOMX_V2_PHASE2C_PLAN.md`](completed/RANDOMX_V2_PHASE2C_PLAN.md).
   Eight-commit stack landing the cache + VM substrate end-to-end
   with byte-for-byte parity against the `randomx-v2` fork at pin
   `aaafe71` (v2.0.1) for all eight reference vectors (T1-T8), plus
@@ -5719,7 +5719,7 @@
     simplification surface. F4 absorption (`Cache::derive` moves from
     originally-scoped Phase 2e into 2c) lands as a parent-plan
     precursor commit. Per
-    [`RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+    [`RANDOMX_V2_PHASE2C_PLAN.md`](completed/RANDOMX_V2_PHASE2C_PLAN.md)
     §14 Round 1 entry.
 
   - **Round 2 (2026-05-21).** Substrate-finding pass tightens the
@@ -5745,7 +5745,7 @@
     a v2-only local-variable alias for `mem.ma`, not a struct field;
     §5.5 F5 entry updated to match (the audit-against-actual-code
     precedent that §5.11.8 formalizes in Rounds 4–5). (R3-D3) Sibling
-    commit lands [`RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    commit lands [`RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
     skeleton scaffold: §5.1.1 contract carry-forward, VmState
     field-set reference, forward-actions from F1/F2/F3/F5/F7,
     decision points for 2d Round 1 (FPU rounding-mode mechanism;
@@ -5781,7 +5781,7 @@
     the Round 4 plan-doc; substantive review surface closed at
     Round 4, four discipline-enforcement edges tightened:
 
-    - **(R5-D1)** [`RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+    - **(R5-D1)** [`RANDOMX_V2_PHASE2C_PLAN.md`](completed/RANDOMX_V2_PHASE2C_PLAN.md)
       §5.11.8 framing amendment: "reading-the-source vs.
       producing-a-table-from-intuition" named as the load-bearing
       audit step (the table is the audit's output; the audit's
@@ -5806,7 +5806,7 @@
       the 2 MiB == scratchpad-size coincidence is explicitly named
       non-load-bearing; reversion-clause per
       [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
-    - **(R5-D3)** [`RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    - **(R5-D3)** [`RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
       §3.1 CI-time grep mechanical-enforcement addendum: the
       unsafe-block scope-check discipline (Scaffold-R4 prose-form)
       is promoted to a §10 hard-gate CI grep modeled on the
@@ -5850,8 +5850,8 @@
     per-finding review wouldn't catch because no individual finding
     *suggests* the next one; the attacker-objective frame does.
 
-  - **Touched files.** [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
-    (new; Rounds 1–5); [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  - **Touched files.** [`docs/completed/RANDOMX_V2_PHASE2C_PLAN.md`](completed/RANDOMX_V2_PHASE2C_PLAN.md)
+    (new; Rounds 1–5); [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](completed/RANDOMX_V2_PHASE2D_PLAN.md)
     (new; Scaffold + Scaffold-R4 + Scaffold-R5); [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
     (parent-plan alignment commits for F4 absorption, Decision #7
     substrate-shift, Round 4 FFI/perf/risk carries, Round 5 FFI
@@ -6039,7 +6039,7 @@
   Rust pure-software RandomX v2 verifier port per
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" and the design plan
-  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md).
+  [`docs/completed/RANDOMX_V2_PHASE2B_PLAN.md`](completed/RANDOMX_V2_PHASE2B_PLAN.md).
   7-commit stack (6 designed + 1 rustfmt cleanup interleaved between
   commits 5 and 6 to absorb residue an editor save reintroduced into
   `superscalar.rs` between gate-runs) landing the remaining v2
@@ -6160,7 +6160,7 @@
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 banner plus [`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
   Dedicated audit markdown now landed:
-  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+  [`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](completed/STAGE_1_COMPLETION_AUDIT.md).
 
 - **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
   substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).
@@ -7230,7 +7230,7 @@
   `aaafe71322df6602c21a5c72937ac284724ae561` (v2.0.1 release;
   identical to `tevador/RandomX:master` at pin time, per the
   dependency-discipline verification in
-  `docs/design/RANDOMX_V2_PHASE1_PLAN.md` §1.3). Adds
+  `docs/completed/RANDOMX_V2_PHASE1_PLAN.md` §1.3). Adds
   `BUILD_RANDOMX_V2_MINER_LIB` CMake option (default `OFF`). When
   `ON` on a single-config generator (Ninja, Make), an
   `ExternalProject_Add` block in `external/CMakeLists.txt` builds
@@ -7257,7 +7257,7 @@
   The existing `external/randomx` (v1.2.1 at `102f8acf`) is
   unchanged; the v1 fallback path per
   `docs/design/RANDOMX_V1_FALLBACK.md` §1 remains reachable. See
-  `docs/design/RANDOMX_V2_PHASE1_PLAN.md` for the full scope, the
+  `docs/completed/RANDOMX_V2_PHASE1_PLAN.md` for the full scope, the
   `ExternalProject_Add` configuration rationale, the build-smoke
   test results, the §10 implementation-time dispositions (D1
   `check_submodule` omission, D2 multi-config fail-fast, D3
@@ -9172,10 +9172,10 @@
   `classify()` function-name routing. The fixture is `Box<LocalKeys>`
   rather than the canonical `(Box<Engine<...>>, TempDir)` shape per
   the substrate-forced divergence documented in
-  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
   §1.2 — `Engine` does not yet hold a `LocalKeys` field;
   orchestrator integration is `KeyEngine` PR-5 territory per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.1 (Round 4a workflow-shape pivot). Workload class is
   **trivial pure-read** (cached `AccountPublicAddress` borrow);
   iai-callgrind is the load-bearing signal because criterion
@@ -9490,12 +9490,12 @@
   (`chore/stage-1-pr3-closeout`, 2026-05-12). Three-commit close-out
   PR consolidating audit findings from PR #40 under the trinary
   rule-15 reading per
-  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
   - **A1 commit (mechanical past-tensing sweep)**: reconciled
     17-reference enumeration across
     [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md),
-    [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./design/STAGE_1_PR_1_DAEMON_ENGINE.md),
-    and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./completed/STAGE_1_PR_1_DAEMON_ENGINE.md),
+    and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
     to 13 in-scope references; `PERFORMANCE_BASELINE.md`'s four
     references were deferred to the A2 commit which rewrites those
     sections wholesale. Mode-2 closing-out residue under the trinary
@@ -9525,7 +9525,7 @@
   architecture** (`feat/stage-1-pr3-m3e`; six commits cut off `dev`
   post-M3d, landing the four logical units planned at amendment-cycle
   time per
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §4: the "preflight + review-response + amendment" logical unit
   landed across three actual commits — original preflight at
   `82693bab7`, forward-templates capture at `4b931b1b5`, amendment
@@ -9536,15 +9536,15 @@
   instance of the §19 plan-vs-state-divergence pattern at the commit-
   history level). Closes the M3-series migration of `TransferDetails`
   per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.5 (M3e — documentation realignment-of-the-whole) and
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §6 (Success criteria). The M3-series (M3a–M3e) is complete; the
   "secrets confined to engine" property activated by M3d is now
   reflected throughout the design-doc and rules-corpus surfaces.
 
   - **Design-doc realignment.**
-    [`KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md) carries a
+    [`KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md) carries a
     post-migration status banner and past-tensed forward-looking
     framing in §1.1, §1.2, §5.2; open questions in §7 are annotated
     per-question with `[Closed at M3<X>; see <ref>]` or `[Remains
@@ -9560,7 +9560,7 @@
     `sign_with_spend` → `sign_transaction` while preserving the
     "Round 2 dispositions" section's original Q9.1/Q9.2/Q9.3
     framings as historical record.
-    [`MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+    [`MIGRATION_AUDIT.md`](./completed/STAGE_1_PR_3_MIGRATION_AUDIT.md)
     gains a post-M3 status banner clarifying that the audit's
     commit hashes (`ffcaa62e9` and `e6efaf5b5`) are immutable
     historical anchors and are not to be refreshed to post-M3d
@@ -9570,7 +9570,7 @@
     is documented in the commit message; the surface was classified
     as mode-2 mechanical-residue under the rule-15 trinary reading
     (per
-    [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+    [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
     §11.1) and swept inline rather than deferred.
   - **Rules realignment.**
     [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
@@ -9655,11 +9655,11 @@
   one pre-flight-review-amendment commit + four implementation
   commits cut off `dev` post-M3c). Activates the **"secrets confined
   to engine" property** for the orchestrator/engine boundary per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.4 (and §3.4.1's M3d landing-notes cross-reference),
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §3.3, and the audit migration table at
-  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./completed/STAGE_1_PR_3_MIGRATION_AUDIT.md)
   §2.1 row 1 (now marked "Removed at M3d (landed 2026-05-11)").
 
   - **Schema change:** five `Option<Zeroizing<[u8; N]>>` fields
@@ -9753,10 +9753,10 @@
   test** (`feat/stage-1-pr3-m3c`; one pre-flight commit + two
   implementation commits + one cross-reference commit cut off `dev`
   at `ea1df2539`). Lands the validation milestone per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.3 (with §3.3.1 cross-reference to the implementation
   disposition) and the pre-flight in
-  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md)
   §2.1 (Option C disposition; §2.1.1 Trim-1 amendment). Property
   delivery: **complete for the bundle → SpendInput → SignedProofs
   cryptographic chain at the `tx_builder::sign_transaction`
@@ -9871,9 +9871,9 @@
   rustfmt fix + one docs commit cut off `dev` at `647f82d59` on
   2026-05-09). Lands the `KeyEngine`-mediated source-secrets
   derivation path per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.2 and the pre-flight dispositions in
-  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §2 / §3 / §5. Property delivery: **partial** — every output the
   scanner ingests now carries a deterministic `OutputHandle` and the
   `HybridCiphertext` it was decapsulated from on its
@@ -9999,7 +9999,7 @@
 
 - **Stage 1 PR 3 — Phase 0: `AllKeysBlob` zeroize-discipline
   realignment** (`chore/allkeysblob-zeroize-realignment`; closes
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5 (Phase 0e) and §7.5). Three rule-grounded edits that landed
   together as a focused chore PR before the M3b implementation, each
   closing an audit finding cited to a rule with a concrete failure
@@ -10058,7 +10058,7 @@
   (`Zeroize` semantics on a public type as a distractor for any
   future grep-for-secrets audit). Five-reason disposition recorded
   inline at
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5's "Closed (post-M3a, post-Phase-0)" subsection
   against re-litigation.
 
@@ -11319,7 +11319,7 @@
   - Adds [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md):
     refresh-design-space substrate covering the privacy-by-default
     precondition (§2), the operational view-tag pre-filter from
-    [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
     §3.1.1 (§3), FMD as a V4 research direction (§4 — negative
     result for V3.0), OMR as a V3.x research direction (§5 —
     negative result for V3.0), and the pruning-vocabulary
@@ -12298,7 +12298,7 @@
 
 - **`AllKeysBlob` and `KeyImage` typed-wrapper sweep (between Stage 1
   PR 3 M3a and M3b; short-lived sweep branch off the M3a PR head per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3 "Landing notes (M3a closed)").** Closes the deferred-from-M3a
   typed-wrapper migration that the M3a `ViewSecret` work pre-announced
   in `shekyl-crypto-pq::keys`'s "near-term workstream" docstring.
@@ -12489,7 +12489,7 @@
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3).** The M3a slice of the five-PR Stage-1 PR 3 migration
   (M3a–M3e per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3) lands as `pub(crate)` on `shekyl-engine-core`. M3a is the
   architectural foundation against which the "secrets confined to
   engine" structural property activates at M3d's merge; M3a itself
@@ -12500,7 +12500,7 @@
   - **`pub(crate) trait KeyEngine`** in
     [`engine::traits::key`](../rust/shekyl-engine-core/src/engine/traits/key.rs).
     Four workflow-shaped methods per
-    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
     §4: `account_public_address(&self) -> &AccountPublicAddress`
     (sync borrowed read); `derive_subaddress(&self, idx,
     purpose) -> Result<SubaddressFor, Self::Error>` (sync, two
@@ -12542,7 +12542,7 @@
     hybrid X25519+ML-KEM-768 keygen,
     `shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair`,
     is unbuilt; lands per
-    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
     §6.4 / §3.1.3) and `SignTransactionTraitSurfaceIncomplete`
     (`TxToSign`'s public-on-chain per-input data and FCMP++
     tree-branch context are PR-5-pinned forward-declared; the
@@ -12555,7 +12555,7 @@
     16-byte opaque reference deterministically derived via
     cSHAKE256 over `view_secret || tx_hash || output_index_le8`
     with customization `"shekyl/output-handle-v1"` per
-    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
     §7.12. The deterministic-handle pathway (Round 4 pre-flight
     closure of §7.11=(3)) replaces the originally-considered
     cached `HandleTable` data structure: re-derivation at spend
@@ -12631,7 +12631,7 @@
   still carries its 5 secret-bearing fields, and the bridge
   reads from them transitionally. The property activates at
   M3d's merge per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §4.1, when those fields are deleted. M3a is what makes the
   activation possible: the `KeyEngine` trait is the boundary the
   property eventually attaches to, and the deterministic
@@ -12708,7 +12708,7 @@
   The PR's lifecycle threaded three pre-flight doc-only spec
   amendments (PRs #22, #23, #25) before the implementation work
   began — see
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §1.1 / §2.2 for the discipline pattern.
 
   - **`pub(crate) trait LedgerEngine`** in
@@ -12735,7 +12735,7 @@
     every default type parameter on a `pub` type to be at least as
     visible as the type itself; the trait `LedgerEngine` itself
     stays `pub(crate)` per §1.4 of the contract. See
-    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
     §3.4 for the visibility-lift rationale.
   - **`Engine<S, D: DaemonEngine = DaemonClient, L: LedgerEngine
     = LocalLedger>`** and **`OpenedEngine<S, D, L>`**. The ledger
@@ -12807,7 +12807,7 @@
     pick up the remaining §5.2 properties under the
     "each per-trait PR exercises one §5.2 property predecessors
     have not yet covered" template pinned in
-    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
     §2.3.
   - **`engine_trait_bench_ledger_balance` criterion +
     iai-callgrind bench pair** under
@@ -15526,7 +15526,7 @@
   security-load-bearing substrate work pre-genesis;
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   pre-genesis discount applies. Cross-references:
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (Mock-X rejection rationale + five named failure modes),
   §2.1.5 (four-pattern pre-flight checklist future per-trait PRs
   inherit).

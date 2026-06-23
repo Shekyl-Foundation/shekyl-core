@@ -11,7 +11,7 @@ folded the reference-block hash into `ReferenceBlock`). The store-backed /
 pruned-tree assembly substrate is deferred-with-recorded-shape per its reversion
 clause; it lands with the prune-policy PR, not in CT-4.
 
-**Authoritative spec:** [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §3.5
+**Authoritative spec:** [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §3.5
 (assemble contract) and §5 (reference-block selection + horizon). **Parent:**
 §9 CT-4 row.
 

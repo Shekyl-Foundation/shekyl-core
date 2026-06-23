@@ -1,12 +1,11 @@
 # RandomX v2 — Track A Phase 1 plan
 
-**Status.** Implementation. The `feat/randomx-v2-phase1` branch was
-cut from `dev` at `6b59b54ee` on 2026-05-18 and is now in PR #54
-review. The implementation-close record (file-by-file diff table,
+**Status.** **Landed (PR #54, 2026-05-19).** The `feat/randomx-v2-phase1` branch was
+cut from `dev` at `6b59b54ee` on 2026-05-18 and merged to `dev`. The implementation-close record (file-by-file diff table,
 commit decomposition, build-smoke outcomes, implementation-time
 dispositions, and post-merge close-out task list) is at §10 below.
 
-**Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
+**Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A
 — Phase 1" is the binding two-bullet scope; this doc expands it into
 a reviewable change list, a target-collision disposition, and a test
 plan.
@@ -34,17 +33,17 @@ cross-check tests are the first consumer, in a later PR.
 
 **Cross-references.**
 
-- **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track
+- **Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track
   A — Phase 1" is the two-bullet scope; §"Track A — Phase 3" is where
   the v1→v2 cutover happens and where the deferred wiring decisions
   from this PR are resolved.
 - **Architecture rationale.**
-  [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §1.1 ("fork
+  [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md) §1.1 ("fork
   non-divergence") and §1.4 ("release-time algorithm-review gate") are
   the rationale for the pinned-fork approach and the deferred
   algorithm-review gate.
 - **Fallback path.**
-  [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md) §1 documents
+  [`RANDOMX_V1_FALLBACK.md`](../design/RANDOMX_V1_FALLBACK.md) §1 documents
   why this PR's submodule infrastructure stays in place even if the
   release-time algorithm-review gate fails.
 - **Branch rules.**
@@ -597,7 +596,7 @@ load-bearing.
    `external/CMakeLists.txt`. Per §3.3–§3.4.
 
 3. **`randomx: documentation pass`** (`<commit-3>`). Phase 1
-   status flip in [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
+   status flip in [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md)
    §"Track A — Phase 1" plus YAML todos block; `CHANGELOG.md`
    `[Unreleased]` entry; this §10 close section. Per §3.5–§3.7
    and §7.
@@ -733,7 +732,7 @@ all tasks done in this close-out commit unless flagged otherwise):
 2. ✅ Refreshed the per-file diff-stat table with the final
    as-merged numbers from `git diff --numstat 6b59b54ee..c0c4a11e5`.
 3. ✅ Rewrote
-   [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase
+   [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A — Phase
    1" status paragraph from "in review as PR #54" to "landed on
    `dev` as PR #54 (merge commit `c0c4a11e5`, 2026-05-19)".
 4. ✅ Branch hygiene per `06-branching.mdc` rule 5: created

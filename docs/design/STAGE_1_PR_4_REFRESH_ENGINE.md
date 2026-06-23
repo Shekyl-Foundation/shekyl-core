@@ -757,7 +757,7 @@ pre-C7).
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
-[`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
+[`STAGE_1_PR_3_MIGRATION_PLAN.md`](../completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
 § tail-notes (the “co-locate the next-PR design draft with the
 migration tail” disposition under Strategy B). PR 4 does not begin
 implementation until M3e closes; this seed exists so the
@@ -769,7 +769,7 @@ the consumer-pattern decision that PR 4 makes — Round 1's
 The seed is intentionally short on disposition and long on
 question-naming. Subsequent revisions land each design round
 inline (the precedent set by PR 3's
-[`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md), which
+[`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md), which
 grew round-by-round to its current 4 262 lines).
 
 **Branch.** `feat/stage-1-pr4-refresh-engine-design` off `dev` at
@@ -797,7 +797,7 @@ tip per the PR 2 / PR 3 precedent.
   M3c–M3e; PR 4 implementation lands first, then PR 5 design /
   implementation.**
 - **Migration parallel.**
-  [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`STAGE_1_PR_3_MIGRATION_PLAN.md`](../completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3 (M3c–M3e) is the migration-tail context this seed is
   co-located with. PR 4 does not depend on M3c/M3d/M3e
   *behaviourally* — `RefreshEngine` extraction operates on the
@@ -806,9 +806,9 @@ tip per the PR 2 / PR 3 precedent.
   same one PR 4's design rounds will consume, so the parallel
   scheduling is a process choice, not a structural requirement.
 - **Per-PR template.**
-  [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./STAGE_1_PR_1_DAEMON_ENGINE.md)
+  [`STAGE_1_PR_1_DAEMON_ENGINE.md`](../completed/STAGE_1_PR_1_DAEMON_ENGINE.md)
   and
-  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   are the template — Phase 0 (doc-only spec amendments), Phase 1
   (implementation), §6 review checklist, §5 commit decomposition.
   PR 4 follows the same shape.
@@ -827,7 +827,7 @@ implementor without touching call sites. It has a priority-1
 `apply_scan_result` merge is the single audited mutation point for
 scanner-derived state per `35-secure-memory.mdc` and the §3
 threat-model citations in
-[`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md).
+[`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md).
 
 The PR must preserve, by name:
 
@@ -1000,7 +1000,7 @@ PR 4's check completes here.
   attempt ends; no per-output derived secrets cross the trait
   surface to the orchestrator. This matches the post-Round-3
   PR 3 handle-indirected workflow shape (per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.2): the trait's contract is "the orchestrator never
   observes derived per-output secrets."
 
@@ -1992,7 +1992,7 @@ implementor cannot drift away from the existing mitigations.
   (rotation-timing side-channel) for related mitigations.
 - **View-tag DoS.** View tags are limited entropy (8 bits in
   the X25519 view-tag pre-filter per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.1). Adversarial daemon crafts blocks with high
   false-positive view-tag rates — every output matches the
   view-tag, forcing trial-decrypt on each. CPU asymmetry:
@@ -4944,7 +4944,7 @@ for PR 4's scope: every item has a named home.
 | β internal-batching refinement | **closed (Round 2)** — kept as §2.2 future-scaling note; **not** promoted to FOLLOWUPS yet (avoids "FOLLOWUPS without a named trigger" graveyard per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)); revisit if V3.0 RC stabilization bandwidth profiling identifies β as the remediation over alternatives (daemon-side prefix-matching, view-tag pre-filter improvements, wallet-side prune-by-birthday) | §2.2 (out-of-scope note) + §5.4.7 R2 |
 | FMD (fuzzy message detection) — negative result for V3.0 | V4 research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §4 |
 | OMR (oblivious message retrieval) — negative result for V3.0 | V3.x research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §5 |
-| View-tag pre-filter (operational today) | already live | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §3 (cites [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md) §3.1.1) |
+| View-tag pre-filter (operational today) | already live | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §3 (cites [`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md) §3.1.1) |
 | Refresh bandwidth tradeoff under α | V3.0 (RC stabilization) | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (entry added in this commit) |
 | Pruning-vocabulary disambiguation | reference | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §7 sidebar |
 | `PendingTxEngine::build` behaviour during long refresh (R1) | V3.0 (PR 5 design rounds) | §5.4.7 R1; carried into PR 5 with **build-against-current-snapshot + snapshot-ID pinning** as the working hypothesis |

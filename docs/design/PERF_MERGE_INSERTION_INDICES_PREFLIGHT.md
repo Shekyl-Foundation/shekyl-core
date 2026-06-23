@@ -5,7 +5,7 @@ This document operationalizes the FOLLOWUPS V3.0 entry
 **“`populate_engine_handle_fields` O(n) → O(k) per scan”** against
 the workspace state at `dev` tip `9e53c82fa` (Merge of PR #36 —
 the `workflow_dispatch` runner-bisect workflow). It is a peer to
-[`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./STAGE_1_PR_3_M3B_PREFLIGHT.md):
+[`STAGE_1_PR_3_M3B_PREFLIGHT.md`](../completed/STAGE_1_PR_3_M3B_PREFLIGHT.md):
 M3b landed the engine post-pass; this PR makes the post-pass scale
 with the number of new transfers per scan rather than with the total
 ledger size.
@@ -15,7 +15,7 @@ ledger size.
 immediate post-M3b interim PR; pre-RC1)”*
 ([`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) §V3.0). Touches
 `engine::merge` per
-[`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./STAGE_1_PR_3_M3B_PREFLIGHT.md)
+[`STAGE_1_PR_3_M3B_PREFLIGHT.md`](../completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
 §3 (δ) but does not alter that disposition — the sync/async split
 the M3b post-pass introduced is preserved verbatim.
 
@@ -507,7 +507,7 @@ restores O(n) iteration would not break any test.
   handle population because they have no engine context) cannot
   benefit from the perf optimization. This is intentional — the
   M3b post-pass is engine-only by design per
-  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](../completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §3 (δ). The trait-layer callers do not run the post-pass at all,
   so they have nothing to optimize.
 
@@ -689,7 +689,7 @@ redesign Round 1.
 - **`KeyEngine::sign_transaction` async re-route (M3c+).** Independent
   of this perf interim PR; sequenced behind PR 5
   (`PendingTxEngine`) per
-  [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`STAGE_1_PR_3_MIGRATION_PLAN.md`](../completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.3.
 - **Refresh state-machine extraction (PR 4 / `RefreshEngine`).**
   Separately scheduled per

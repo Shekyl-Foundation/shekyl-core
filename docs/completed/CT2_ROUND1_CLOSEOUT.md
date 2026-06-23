@@ -4,8 +4,8 @@
 the checked-in oracle; Tier B is scaffolded and deferred until Phase 2A can mint
 regular/staked outputs.
 
-**Authoritative spec:** [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.md) §8.2–§8.3,
-[`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §9 CT-2.
+**Authoritative spec:** [`CT2_DRAIN_ORDER.md`](../design/CT2_DRAIN_ORDER.md) §8.2–§8.3,
+[`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §9 CT-2.
 
 ---
 

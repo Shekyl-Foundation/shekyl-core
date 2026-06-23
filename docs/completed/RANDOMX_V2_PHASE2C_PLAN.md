@@ -1,6 +1,6 @@
 # RandomX v2 — Track A Phase 2c plan
 
-**Status.** Round 1 closed via interactive walk on 2026-05-21 (this
+**Status.** **Landed (PR #66, 2026-05-22).** Round 1 closed via interactive walk on 2026-05-21 (this
 conversation; F1–F9 dispositions + ShekylU128 audit). Round 2 closed
 2026-05-21: substrate-finding pass surfaced the mock-X anti-pattern
 recurring under the `BytecodeDispatch` trait / `StubNopDispatch` impl
@@ -336,7 +336,7 @@ distinct definitions. Same shape as R3-D1 (`mp` conflation) and
 R0-D1 (29→28 opcode count): a numeric claim that bypassed the
 substrate-read step.
 
-**Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
+**Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2c is the binding one-line scope ("Implement Cache
 (with public `derive(seedhash)` + pub(crate) `derive_item`/`item_bytes`
 accessors; `from_raw` dropped at impl-time pre-flight per §14 Round 0
@@ -382,12 +382,12 @@ No FFI surface, no C++ caller rewire, no deletion of existing
 
 **Cross-references.**
 
-- **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
+- **Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" enumerates the sub-PR split (now 6 sub-PRs:
   2a, 2b, 2c, 2d, 2f, 2g — 2e absorbed into 2c); §"Permanent
   architectural decisions" 1-8 are the locked decisions Phase 2c
   respects.
-- **Design substrate.** [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md)
+- **Design substrate.** [`RANDOMX_V2_RUST.md`](../design/RANDOMX_V2_RUST.md)
   §4 (Derived-First Design — Cache is the canonical transform-shaped
   example, built end-to-end in 2c; `compute_hash` is the
   per-hash transform), §7 (Isolation Invariants — `compute_hash`
@@ -1088,7 +1088,7 @@ landing, no caller needs a trait.
 
 **Parent-plan revision artifact.** The precursor commit (preceding
 this doc's commit on the same branch) revised
-[`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) to:
+[`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) to:
 
 - expand `phase2c-vm-and-cache` content;
 - expand `phase2d-bytecode-v2` content (FPU + F128 forward-pointers);

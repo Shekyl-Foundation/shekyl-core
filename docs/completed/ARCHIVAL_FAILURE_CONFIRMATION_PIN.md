@@ -6,16 +6,16 @@ baseline miss** is **sliding-window m-of-n**. Escalate-on-failure + recheck wind
 
 **Scope:** Scheduling policy on top of gate-2 baseline challenges
 ([`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) §0). Complements L14/L16 sim
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*L14b*).
+([`STAKER_ARCHIVAL_SIM.md`](../design/STAKER_ARCHIVAL_SIM.md) §*L14b*).
 
 **Authority chain:**
 
 | Doc | Role |
 |-----|------|
 | [`ARCHIVAL_RETENTION_GATE2.md`](ARCHIVAL_RETENTION_GATE2.md) | Baseline challenge; `serve_credit_bit`; beacon `H_fire` |
-| [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | `R_market` derivation (§3.3); m-sizing substrate |
-| [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
-| [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Round-1 harness + `policy_pin` output |
+| [`ARCHIVAL_CONSENSUS_STATE.md`](../design/ARCHIVAL_CONSENSUS_STATE.md) | `R_market` derivation (§3.3); m-sizing substrate |
+| [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) | `CHALLENGE_RESOLUTION_BLOCKS`, SEB |
+| [`STAKER_ARCHIVAL_SIM.md`](../design/STAKER_ARCHIVAL_SIM.md) | Round-1 harness + `policy_pin` output |
 
 ---
 
@@ -24,7 +24,7 @@ baseline miss** is **sliding-window m-of-n**. Escalate-on-failure + recheck wind
 **Shape.** After each baseline epoch challenge **miss**, consensus maintains a **sliding
 window** of recent misses per `(P_id, shard)`. **Slash** when **m** misses occur within the
 last **n** baseline observations. No per-`P` confirmation FSM; tallies reuse credit-window
-discipline ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) composite keys).
+discipline ([`ARCHIVAL_CONSENSUS_STATE.md`](../design/ARCHIVAL_CONSENSUS_STATE.md) composite keys).
 
 **Property enforced.** **Not-durably-absent** — sustained miss slashes; isolated transient
 miss does not (at tuned `m`). Not a reachability SLA; mediocre uptime passes most baselines
@@ -78,7 +78,7 @@ when the foundation floor carries deterrence — but it is **not** automatically
 every cost.
 
 **`R_market` substrate (pinned).** Scarcity uses **serve-credit-weighted** replication
-count, not bonded-slot count ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.3):
+count, not bonded-slot count ([`ARCHIVAL_CONSENSUS_STATE.md`](../design/ARCHIVAL_CONSENSUS_STATE.md) §3.3):
 
 ```text
 R_market(shard, E) = |{ P_id : serve_credit_bit(P,s,E) ∧ good_through(P,E) ∧ P ∈ Market }|

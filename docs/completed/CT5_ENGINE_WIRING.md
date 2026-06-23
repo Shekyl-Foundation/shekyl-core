@@ -88,13 +88,13 @@ they govern every CT-5 disposition):
    handle, not the state. Prefer re-deriving a value from owned state over
    persisting it.
 
-**Parent design:** [`CURVE_TREE_CLIENT.md`](./CURVE_TREE_CLIENT.md) §9 CT-5 row:
+**Parent design:** [`CURVE_TREE_CLIENT.md`](../design/CURVE_TREE_CLIENT.md) §9 CT-5 row:
 "Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A
 §3.7.6 terminology correction (§5.4)." The terminology correction already
 landed (parent §5.4 "Landed (Round-1 cross-edit)"); CT-5 confirms it, it is not
 new work (§7).
 
-**Sibling designs consumed:** [`PHASE_2A_SEND_PATH.md`](./PHASE_2A_SEND_PATH.md)
+**Sibling designs consumed:** [`PHASE_2A_SEND_PATH.md`](../design/PHASE_2A_SEND_PATH.md)
 (the signer this wires into — F1/F2 vessel, §3.6 `ProofStale`, §3.7.5 C2 gate,
 §3.7.6 C3 path precondition), and the landed CT-1–CT-4 client surface
 ([`CT3_ROUND1_CLOSEOUT.md`](./CT3_ROUND1_CLOSEOUT.md),

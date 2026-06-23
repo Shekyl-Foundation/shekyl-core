@@ -81,7 +81,7 @@ is a separate, shallower UX finality knob — see §2.3.
 
 ### 1.2 SEB and F1 (emission cadence — not a structural F1 lever)
 
-[`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md) §7: retention fingerprint **F1**
+[`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) §7: retention fingerprint **F1**
 has a fixed **shard** axis (per-`(P,s,E)` — not coarsenable without breaking Σwork / `R_market`)
 and an **epoch** axis at settlement granularity.
 

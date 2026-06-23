@@ -318,7 +318,7 @@ separate-staking-subtree design ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STA
   main-tree output. Merge/`ScanResult` must reconcile a cross-tree transition, not a
   single-tree spend.
 
-### 0.8 Stage 2 actor template (reference only — [`STAGE_2_KEY_ENGINE_ACTOR.md`](STAGE_2_KEY_ENGINE_ACTOR.md))
+### 0.8 Stage 2 actor template (reference only — [`STAGE_2_KEY_ENGINE_ACTOR.md`](../completed/STAGE_2_KEY_ENGINE_ACTOR.md))
 
 | Pattern | Stage 2 pin | Phase 2b application (confidential) |
 |---------|-------------|-------------------------------------|
@@ -1643,7 +1643,7 @@ The 2026-06-05 Round 3 wargame (old §7.4–§7.5.3) executed against the **conf
 entitlement claim wire**. Historical record for F0, T8 8a/8b, DDH/nullifier/`StakeOpening` rows.
 
 **Do not implement** F0 bucketing, `txin_stake_claim_v2`, or claim nullifier dedup on genesis.
-Full text: git history pre-P2B-6 land; summary retained in [`PHASE_2B_SECTION7_DRAFT.md`](PHASE_2B_SECTION7_DRAFT.md).
+Full text: git history pre-P2B-6 land; summary retained in [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md).
 
 ---
 ## 8. Forward actions and reversion clauses
@@ -1987,7 +1987,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 | [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) | §2.7, §3.3, §10.5.1, §8.3, §10.6.1 |
 | [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) | 2026-04-25 stake lifecycle |
 | [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) | Components 3–4 |
-| [`STAGE_2_KEY_ENGINE_ACTOR.md`](STAGE_2_KEY_ENGINE_ACTOR.md) | Actor template + fail-stop (§0.8, §4.7) |
+| [`STAGE_2_KEY_ENGINE_ACTOR.md`](../completed/STAGE_2_KEY_ENGINE_ACTOR.md) | Actor template + fail-stop (§0.8, §4.7) |
 | [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) | FA-1 |
 | [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) | Round structure |
 | [`36-secret-locality.mdc`](../../.cursor/rules/36-secret-locality.mdc) | Sealed `StakeOpening` |

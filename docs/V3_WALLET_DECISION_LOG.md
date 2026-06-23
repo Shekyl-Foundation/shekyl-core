@@ -2748,7 +2748,7 @@ when"):**
    `Engine` holds `KeyEngineHandle`, `kameo` is now a live
    `shekyl-engine-core` consumer; design and remaining DoD residue
    (the §5.3 B9 dispatch-overhead benchmark) tracked in
-   `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` and `docs/FOLLOWUPS.md`.)*
+   `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` and `docs/FOLLOWUPS.md`.)*
 6. **Phase 2b begins.**
 7. **Stage 3 — `StakeEngine` native-as-actor**, lands within Phase
    2b. Built actor-shaped from inception (not
@@ -4040,7 +4040,7 @@ leaked runtime only around `create` (`refresh.rs::make_wallet`, the bench
 `build_engine_fixture`). No production caller of the orchestrator `Engine` exists
 yet; the assertion is the contract future CLI/RPC wiring must satisfy.
 
-**Reference.** `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §4.2 (Round-8
+**Reference.** `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §4.2 (Round-8
 disposition); supersedes the §4.2 Round-7 ambient-or-owned text.
 
 ---

@@ -543,7 +543,7 @@ the cited file at `aaafe71` and reading the named lines.
 
 ## 9. Cross-references
 
-- **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase 2" sub-PR 2c.
+- **Parent plan.** [`RANDOMX_V2_PLAN.md`](../design/RANDOMX_V2_PLAN.md) §"Track A — Phase 2" sub-PR 2c.
 - **Audited document.** [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) post-PR-#65 merge state at `5df8bd2c2`.
 - **Downstream substrate.** [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §1 (frozen field set carries 2c's; F3's CFROUND correction reaches 2d via the §5.5 F5 row 3 errata).
 - **Discipline anchors.** §5.11.8 of the audited plan-doc (audit-against-actual-code); `.cursor/rules/16-architectural-inheritance.mdc` (continuous-discipline corollary; audits-are-clean-so-compress anti-pattern); `.cursor/rules/91-documentation-after-plans.mdc` (stale-doc detection — the doc update is not optional when the doc references behavior that doesn't exist).

@@ -875,7 +875,7 @@ landing.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
-[`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md) and
+[`STAGE_1_PR_3_KEY_ENGINE.md`](../completed/STAGE_1_PR_3_KEY_ENGINE.md) and
 PR 4's
 [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md),
 each of which grew round-by-round to its current shape). Round 2
@@ -932,8 +932,8 @@ can amend
   correctness property cannot hold under α, PR 4 reverts to γ at
   higher cost than landing γ in Round 1 would have been."
 - **Per-PR template.**
-  [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./STAGE_1_PR_1_DAEMON_ENGINE.md),
-  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./STAGE_1_PR_2_LEDGER_ENGINE.md),
+  [`STAGE_1_PR_1_DAEMON_ENGINE.md`](../completed/STAGE_1_PR_1_DAEMON_ENGINE.md),
+  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md),
   and
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
   are the template — Phase 0 (doc-only spec amendments), Phase 1

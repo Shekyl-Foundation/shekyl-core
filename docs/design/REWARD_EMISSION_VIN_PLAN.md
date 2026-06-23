@@ -28,7 +28,7 @@ consensus rules. Where this plan and the spec disagree, the spec wins and the
 disagreement is a plan bug (`05-system-thinking.mdc`).
 
 **Membership primitive of record:**
-[`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) §7 (quantum gate), §9
+[`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7 (quantum gate), §9
 (carries inherited by this PR series).
 
 ---
@@ -923,8 +923,8 @@ without.
 | Doc | Relationship |
 |---|---|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consensus spec of record (§5–§7, §12) |
-| [`FCMP_MEMBERSHIP_ONLY.md`](FCMP_MEMBERSHIP_ONLY.md) | Backing primitive; §7 quantum gate; §9 carries |
+| [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) | Backing primitive; §7 quantum gate; §9 carries |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | gate 2/3 schema + `W`; §3.5 accumulator + §4 invariant 2 (M-2 as-of-E sourcing) |
-| [`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](ARCHIVAL_SIM_ECONOMICS_VERDICT.md) | economics validation track; PR 1.5 integer-sweep gate (M-1) |
+| [`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](../completed/ARCHIVAL_SIM_ECONOMICS_VERDICT.md) | economics validation track; PR 1.5 integer-sweep gate (M-1) |
 | [`ARCHIVAL_REWARD_ARITHMETIC.md`](ARCHIVAL_REWARD_ARITHMETIC.md) | canonical `reward_arithmetic` Q-format + KAT bands (R1.B, M-3) |
 | [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) | `HybridPublicKey` wire (§5) |

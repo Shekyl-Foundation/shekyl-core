@@ -1,12 +1,12 @@
 # Stage 1 PR 3 — `KeyEngine` extraction — design
 
-**Status.** Round 4 closed; M3a pre-flight closed (§7.10–§7.13
+**Status.** **Implementation complete — M3a–M3e all landed (PRs #32–#40, through 2026-05-11).** Round 4 closed; M3a pre-flight closed (§7.10–§7.13
 dispositions resolved; see closures below); M3a feat branch
 cleared to cut. Stage 1 PR 3 of the seven-trait
 extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1, named explicitly as PR 3 in
-[`docs/design/STAGE_0_HARNESS.md:1722`](STAGE_0_HARNESS.md) and
+[`docs/design/STAGE_0_HARNESS.md:1722`](../design/STAGE_0_HARNESS.md) and
 [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 ("PR 3 (`KeyEngine` per §8.1)").
 
@@ -1167,7 +1167,7 @@ in vendored proof-system surfaces.
 ### 3.1.3 Per-subaddress `kem_pk` derivation is rule-forced, not stylistic
 
 > **Superseded for V3.0 product surface (2026-06-07, FA-7 / End-state 5).**
-> End-state 5 in [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7
+> End-state 5 in [`SUBADDRESS_UNDER_PQC.md`](../design/SUBADDRESS_UNDER_PQC.md) §5.7
 > deletes `derive_subaddress`, `RecipientSubaddress`, and per-subaddress KEM
 > (FA-2). Account-level hybrid KEM + primary address only. This section
 > remains as the Stage 1 PR 3 design-trajectory record; do **not** implement
@@ -3625,7 +3625,7 @@ Phase-0f for the cross-trait error type.
 
 **[Remains open; forward-looking record. Disposition deferred to
 the Stage 2 multisig design pass per
-[`docs/design/PQC_MULTISIG.md`](PQC_MULTISIG.md). M3-series did
+[`docs/PQC_MULTISIG.md`](../PQC_MULTISIG.md). M3-series did
 not engage the multisig surface; the PR 3 trait shipped without
 it.]** The original framing is preserved below.
 
@@ -3633,7 +3633,7 @@ Does the multisig surface accrete onto `KeyEngine` additively
 (per §8.2's additive-amendment discipline), or get its own
 `MultisigKeyEngine` trait that composes alongside `KeyEngine`?
 PQC-multisig is a Stage 2 concern per
-[`docs/design/PQC_MULTISIG.md`](PQC_MULTISIG.md); the PR 3 trait
+[`docs/PQC_MULTISIG.md`](../PQC_MULTISIG.md); the PR 3 trait
 does not expose any multisig surface today. The disposition is
 **open**; arguments on each side:
 
@@ -4324,7 +4324,7 @@ production code; it is clean post-removal.
 - Spec: [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.1 (current) → §4 (post-amendment).
 - Sibling PR design docs:
-  [`STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md),
+  [`STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md),
   [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md).
 - Cryptography rules:
   [`30-cryptography.mdc`](../../.cursor/rules/30-cryptography.mdc),

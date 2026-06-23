@@ -1,5 +1,7 @@
 # Stage 1 PR 1: DaemonEngine extraction 
 
+**Status.** **Landed as PR #21 (merge `cabf638ec`, 2026-05-02).** Implementation complete.
+
 ## Spec anchor
 
 Spec: [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](docs/V3_ENGINE_TRAIT_BOUNDARIES.md), accepted at Round 5 (`e484d5041`, merged to `dev` at `40093ac7a`).
