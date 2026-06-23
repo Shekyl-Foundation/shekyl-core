@@ -373,6 +373,39 @@
 
 ### Changed
 
+- **wallet: migrate the scan/refresh block-parse from `shekyl-oxide` to
+  `shekyl-wire` (§8 step-4 scanner slice, 2026-06,
+  `feat/scan-refresh-wire-migration`).** The wallet's block/transaction parse on
+  the scan and refresh path now rides the canonical, daemon-KAT'd `shekyl-wire`
+  reader instead of the legacy `shekyl-oxide` block/tx serializer.
+  - **`ScannableBlock` relocated + re-typed.** It is no longer a `shekyl-rpc`
+    type built from `shekyl-oxide`; it is a `shekyl-wire`-typed struct owned by
+    `shekyl-scanner` (`block` / `transactions` / `first_output_index`). The
+    `output_index_for_first_ringct_output` field is replaced by
+    `first_output_index: Option<u64>` (sourced from `get_o_indexes`), retiring
+    the inherited `ringct` name (closes the FOLLOWUPS `ringct`-residue rename
+    item for this surface).
+  - **Native fetch.** Blocks are fetched through the new
+    `DaemonEngine::fetch_scannable_block` (default impl in
+    `engine/block_fetch.rs`), which drives the `shekyl-rpc` transport and parses
+    via `shekyl-wire`. `scan.rs` and `engine/curve_tree_decode.rs` consume the
+    wire types directly; `unlock_time: u64` is mapped to the scanner's `Timelock`
+    at the wire→scanner boundary.
+  - **Fixes** `Engine::start_refresh` failing at block fetch with
+    `RpcError::InvalidNode("invalid block")` against a live daemon: the
+    `shekyl-oxide` parse dropped the coinbase `Null` confidential-tx committed
+    base, so real daemon blocks would not deserialize. New live regtest
+    acceptance gate `e2e_refresh_scans_coinbase_balance` mines to the wallet and
+    asserts a matured coinbase balance after refresh.
+  - **Removed** the now-dead `shekyl-rpc` `ScannableBlock` struct and its
+    `get_scannable_block` / `_by_hash` / `_by_number` default trait methods
+    (zero callers post-migration; `15-deletion-and-debt.mdc`).
+  - **Scope.** This is the scanner/refresh slice only; the `shekyl-tx-builder`
+    spend-encode cutover and the final `shekyl-oxide` block/tx deletion remain
+    (the scanner still imports the `Timelock` / `StakingMeta` domain types from
+    `shekyl-oxide::transaction`). See
+    [`docs/design/GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md)
+    §8 step 4.
 - **consensus: collapse the Proof-of-Work path to RandomX v2; remove
   CryptoNight and RandomX v1 (RandomX v2 genesis cutover, 2026-06,
   `feat/randomx-v2-genesis-cutover`).** Every block — genesis included —

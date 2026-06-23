@@ -102,16 +102,18 @@ sustainability is unaffected by the recalibration.
   helper) to the address-derivation guard. Target: V3.0 (cosmetic/diagnostic;
   not genesis-blocking, but cheap to land before the freeze gate).
 
-- **[Superseded] `ringct` residue rename in `shekyl-oxide` — folded into the §8
-  step-4 cut-away (raised 2026-06-14; superseded 2026-06-22).** The original action
-  was to rename `ScannableBlock.output_index_for_first_ringct_output`
+- **[Done] `ringct` residue rename in `shekyl-oxide` — landed via the §8 step-4
+  scanner slice (raised 2026-06-14; superseded 2026-06-22; **landed 2026-06-23**,
+  `feat/scan-refresh-wire-migration`).** The original action was to rename
+  `ScannableBlock.output_index_for_first_ringct_output`
   (`shekyl-oxide/.../rpc/src/lib.rs`) and drop the vacuous `Transaction::V2` scanner
-  guard (`shekyl-scanner/src/scan.rs`). That is now moot: §8 step-4 replaces
-  shekyl-oxide block/tx with `shekyl-wire`, so the `ScannableBlock` type (and its
-  ringct-named field) is **removed, not renamed** — the scanner picks up
-  `shekyl-wire`'s types in the same migration. No standalone work; subsumed by the
-  umbrella `rct → CT` sweep above. *(Do not repair shekyl-oxide here — it is being
-  cut away.)*
+  guard (`shekyl-scanner/src/scan.rs`). It became moot and is now realized: §8
+  step-4's scanner/refresh slice replaced shekyl-oxide block/tx with `shekyl-wire`, so
+  the legacy `shekyl-rpc` `ScannableBlock` (and its ringct-named field) was **removed,
+  not renamed** — `shekyl-scanner` now owns a `shekyl-wire`-typed `ScannableBlock`
+  whose global-index field is `first_output_index`, and the scanner consumes
+  `shekyl-wire`'s types directly. No standalone work remained; subsumed by the
+  umbrella `rct → CT` sweep above. *(Did not repair shekyl-oxide — it was cut away.)*
 
   *Version-concept disambiguation (kept — **corrects an earlier stale "tx-format=2"
   claim**; recorded so the "is `V2` a protocol bug?" question does not recur).* Shekyl

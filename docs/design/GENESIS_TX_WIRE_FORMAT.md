@@ -180,7 +180,10 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   live oracle here is its end-to-end residual.
 - **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
   (drop `key_offsets`); decompose removal / single-output coinbase.
-- **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx.
+- **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx. *(Scanner /
+  refresh slice **landed 2026-06-23** — `ScannableBlock` is now `shekyl-wire`-typed in
+  `shekyl-scanner`, fetched via `DaemonEngine::fetch_scannable_block`; what remains is
+  the tx-builder spend-encode slice + the final block/tx deletion.)*
 - **Non-spend Fcmp residuals** — the EOF-tolerant fee-only form (above) is in; what
   remains is the **`bond_post` pseudoOuts↔spend-subset exact coupling** (a §13 F1/F3
   forward obligation owned by the emission / membership-only PRs — `validate()` bounds
@@ -599,6 +602,19 @@ Format: **ID — item.** *(status)* disposition / what's needed.
    scan-KAT are **already done** — this step is the block/tx *type* migration; 2d-1
    P-scan needs this scanner regardless); delete `shekyl-oxide` block/tx —
    **sequenced to avoid colliding with in-flight wallet-rewrite work**.
+   - **Scanner / refresh slice — landed 2026-06-23** (`feat/scan-refresh-wire-migration`).
+     `ScannableBlock` is now a `shekyl-wire`-typed struct owned by `shekyl-scanner`
+     (`block` / `transactions` / `first_output_index`); the engine fetches it natively
+     through `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`, over the
+     `shekyl-wire` parse), and `scan.rs` / `curve_tree_decode.rs` consume the wire
+     types directly. This is the slice that fixes the coinbase `Null` committed-base
+     drop which made live blocks fail `RpcError::InvalidNode("invalid block")` (regtest
+     acceptance gate: `e2e_refresh_scans_coinbase_balance`). The now-dead `shekyl-rpc`
+     `ScannableBlock` + `get_scannable_block*` surface is deleted.
+   - **Remaining:** the `shekyl-tx-builder` spend-encode slice (the
+     [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) cutover) and the
+     final `shekyl-oxide` block/tx deletion (`shekyl-scanner` still imports the
+     `Timelock` / `StakingMeta` domain types from `shekyl-oxide::transaction`).
 5. Land gate-(c) C++ cuts (each its own consensus change, atomic-flip): **tag
    renumber ✅ (PR #168)**; then `txin_fcmp` reshape, shed dead/staking arms,
    single-output coinbase, exact-consumption + exact-proof-length, reward-zone
