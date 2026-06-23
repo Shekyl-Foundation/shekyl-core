@@ -325,6 +325,10 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
+        // FAKECHAIN/regtest uses the mainnet config + address format
+        // (cryptonote_config.h), so the wallet is Mainnet (Bip39 is the only seed
+        // format permitted for Mainnet). There is no separate regtest address prefix;
+        // verified end-to-end — the daemon accepts this address and mines to it.
         network: Network::Mainnet,
         capability: CapabilityInput::Full {
             master_seed_64: &seed,
@@ -344,13 +348,15 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
         Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
-    // Mine in 10-block batches (a single ~80-block call exceeds the RPC client
-    // timeout) until coinbase outputs mature + drain into the reference tree.
+    // Mine in small batches (a single ~80-block call exceeds the RPC client timeout)
+    // until coinbase outputs mature + drain into the reference tree.
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24; // upper bound ~240 blocks before giving up
     let mut leaf_count = 0u64;
     let mut mined = 0u64;
-    for _ in 0..24 {
-        daemon.generate_blocks(10, &address).await;
-        mined += 10;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        mined += MINE_BATCH_BLOCKS;
         let info: serde_json::Value = daemon
             .rpc
             .json_rpc_call("get_curve_tree_info", None)

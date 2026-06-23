@@ -3439,7 +3439,10 @@ namespace cryptonote
         // Not yet drained into the reference tree (still inside the maturity +
         // reorg window): skip this index rather than failing the whole batch. A
         // wallet legitimately requests paths for all its unspent outputs and
-        // matches the returned paths by output_index, waiting for the rest.
+        // matches the returned paths by output_index, waiting for the rest. The
+        // omission is unambiguous: a genuine fault (e.g. the leaf read below) still
+        // `return false`s the whole call, so a missing index in a *successful*
+        // response means only "not yet in the reference tree", never a server error.
         continue;
       }
 
