@@ -367,9 +367,11 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
     // until output 0 is drained into the *reference* tree (tip − REF_ANCHOR_AGE). Poll
     // get_curve_tree_path itself rather than get_curve_tree_info.leaf_count: that is the
     // *tip* leaf count and races ahead of the reference tree the path is built against.
-    // Early on, output 0 is beyond the (empty) tip and the call hard-fails (WRONG_PARAM);
-    // once leaves exist but aren't yet at the reference height it returns empty paths;
-    // both just mean "mine more".
+    // While the tree is still empty the call errors ("Curve tree is empty"); once leaves
+    // exist but output 0 isn't yet at the reference height it returns Ok with empty paths;
+    // either way we mine more (any Err is "not ready" — only an Ok with a non-empty path
+    // is success). For output 0 the per-index WRONG_PARAM guard never fires: 0 < tip once
+    // the tree is non-empty, and the empty-tree case errors out above it.
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24; // upper bound ~240 blocks before giving up
     let mut path = serde_json::Value::Null;
