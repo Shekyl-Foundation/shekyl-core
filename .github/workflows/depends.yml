@@ -113,7 +113,10 @@ jobs:
         update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
     - name: install Rust
       run: |
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        # Install the toolchain pinned by rust/rust-toolchain.toml up front (and add
+        # the cross target to *it*), so the daemon build's parallel cargos use the
+        # pinned 1.94 instead of racing to auto-install it. Bump in sync with the file.
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal
         . "$HOME/.cargo/env"
         if [ -n "${{ matrix.toolchain.rust_target }}" ]; then
           rustup target add ${{ matrix.toolchain.rust_target }}

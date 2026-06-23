@@ -1,0 +1,42 @@
+name: rust stable canary
+
+# Non-blocking forward-compatibility canary. The dev toolchain is pinned to the
+# MSRV (1.94.0) via rust/rust-toolchain.toml; this job runs the fmt + clippy gates
+# on the current `@stable` toolchain instead, to surface — ahead of a deliberate
+# toolchain bump — any new clippy lints or rustfmt layout changes the next stable
+# would introduce. It is scheduled (never on push/PR), so it cannot block a merge:
+# a red run is an early warning, not a gate. `@stable` only — no `@beta`/nightly
+# for a cryptocurrency.
+
+on:
+  schedule:
+    # Mondays 05:00 UTC, after the shekyl-oxide staleness canary (04:00).
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fmt-clippy-on-stable:
+    name: fmt + clippy on @stable (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # `cargo +stable` overrides the 1.94.0 pin in rust/rust-toolchain.toml for
+      # this advisory run. The vendored-crypto `ignore` in rustfmt.toml still
+      # applies, so the canary reformats only first-party code, same as the gate.
+      - name: cargo fmt --check (@stable)
+        working-directory: rust
+        run: cargo +stable fmt --all -- --check
+      - name: cargo clippy -D warnings (@stable)
+        working-directory: rust
+        # Mirror the real gate (build.yml's clippy step) exactly, so this advisory
+        # signal matches what a toolchain bump would actually face: same scope
+        # (--workspace --all-targets) and --keep-going.
+        run: cargo +stable clippy --workspace --all-targets --keep-going -- -D warnings
