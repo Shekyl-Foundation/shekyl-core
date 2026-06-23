@@ -30,7 +30,7 @@
 #
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 crypto_dir="rust/shekyl-oxide/crypto"
@@ -50,12 +50,16 @@ else
 fi
 
 # Deterministic content snapshot: tracked files only (no build artifacts / untracked),
-# byte-stable C-locale sort, sha256 per file. NUL-delimited throughout so a tracked
-# path containing whitespace (none today, but the gate must not become the thing that
-# breaks when one is introduced) is hashed correctly rather than word-split.
+# sha256 per file. `git ls-files` already emits paths in byte-wise (C-locale) sorted
+# order, so no extra sort is needed — and avoiding `sort -z` keeps the loop portable
+# (the -z NUL flag is a GNU extension absent from macOS' BSD sort, which this script
+# otherwise supports via shasum). NUL-delimited read so a tracked path containing
+# whitespace (none today, but the gate must not become the thing that breaks when one
+# is introduced) is hashed correctly rather than word-split. --check re-sorts both
+# sides, so ordering here only governs the manifest's on-disk layout.
 compute() {
   local f
-  git ls-files -z "$crypto_dir" | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
+  git ls-files -z "$crypto_dir" | while IFS= read -r -d '' f; do
     "${sha256_tool[@]}" "$f"
   done
 }

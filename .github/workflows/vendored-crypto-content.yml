@@ -5,7 +5,8 @@ name: vendored crypto content
 # in-place edits to the pristine, genesis-frozen, externally-review-scoped crypto that
 # bypass the fork workflow — the failure mode that let the `divisors` drift land
 # undetected (there was no automated local-content check; the staleness canary only
-# compares commit hashes). Pure sha256, no toolchain — fast; runs on every push/PR.
+# compares commit hashes). Pure sha256, no toolchain — fast; runs on every PR and on
+# pushes to dev/main.
 #
 # This is the "gate everyone assumed existed" from docs/design/SHEKYL_OXIDE_UNVENDOR.md
 # §5/§6 (Track A, A1), in its drift-from-snapshot form; it upgrades to byte-exact-vs-pin
@@ -13,6 +14,10 @@ name: vendored crypto content
 
 on:
   push:
+    # dev/main only. PR branches are covered by the pull_request event (which
+    # tests the PR merged into its base); an unrestricted push trigger would
+    # double-run the job on every push to an open PR. Mirrors build.yml.
+    branches: [dev, main]
   pull_request:
 
 permissions:
