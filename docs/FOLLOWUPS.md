@@ -158,6 +158,49 @@ sustainability is unaffected by the recalibration.
   that next touches `diagnostics.rs`'s `DaemonOp` for substantive reasons, or land
   standalone before the genesis freeze gate.
 
+- **Block-height-only `unlock_time`: native `Timelock`, a pruned-safe context-free
+  ingestion validator, and daemon-side enforcement (flagged 2026-06-23,
+  `feat/scan-refresh-wire-migration`).** Shekyl is block-height-only: the
+  CryptoNote/Monero *timestamp* form of `unlock_time` (`>=
+  shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
+  "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
+  `shekyl_wire::Transaction::validate` rejects. The step-4 slice closed the *scan-path*
+  exposure in three layers but left two un-vendor-scoped follow-ups:
+  - **Native `Timelock` should drop the `Time` variant.** The wallet-domain `Timelock`
+    is still imported from `shekyl-oxide` (`None`/`Block`/`Time`).
+    `shekyl-scanner::scan::timelock_from_unlock_time` now maps the timestamp form to
+    `Timelock::None` (never `Timelock::Time`), so the `Time` arm is already dead on
+    chain data — but the *type* still carries it. When the `WalletOutput` domain types
+    are brought native off `shekyl-oxide` (the application-layer un-vendor), define
+    `Timelock` as block-height-only (`None`/`Block`) so the dead variant cannot be
+    constructed at all and the lifter becomes total without an unreachable arm.
+  - **A pruned-safe context-free ingestion validator belongs in `shekyl-wire`, called
+    from `block_fetch.rs`.** The wallet ingests *pruned* transactions, and
+    `Transaction::validate()` cannot run on them: its no-prunable branch rejects a
+    key-image-bearing spend whose prunable proof has been dropped *by design* (the
+    pruned full-spend form is reconstructed via §4 `into_full`, not validated by the
+    wire parser). So today `block_fetch.rs` enforces only the *stateless subset that is
+    pruned-safe* — `reject_timestamp_unlock_time` (block-height-only), the
+    `2*MAX_TX_SIZE` DoS pre-bound, strict `missed_tx`, and `parse_tx_batch` order-pinning
+    — and the rest of the context-free reject set (arm-mixing, key-image ordering,
+    output-count) lives only as the scanner's defense-in-depth gates
+    (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` + timestamp-form gates). The clean
+    end-state is a dedicated `shekyl-wire` pruned-safe context-free validator (e.g.
+    `validate_context_free_pruned`) that enforces the full pruned-safe subset at the
+    ingestion boundary uniformly, retiring the scattered scanner gates to true
+    belt-and-suspenders.
+  - **Daemon-side enforcement.** A canonical daemon should reject timestamp-form
+    `unlock_time` at consensus so it can never *serve* one; the wallet's ingestion
+    reject is then pure defense against a buggy/adversarial node. (User: "bring the
+    daemon just that little bit closer to where it should be.") This is the
+    consensus-side companion to the wallet-side gate and rides the daemon's own
+    block-height-only audit.
+
+  Not genesis-blocking (the scan path is already safe end-to-end). **Target: V3.x**,
+  landing with the rest of the `shekyl-oxide` application-layer un-vendor. Reopen-now
+  criterion: when the native `WalletOutput`/`Timelock` types land, or when `shekyl-wire`
+  grows a pruned-safe context-free validator — fold all three sub-items into that work.
+
 - **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
   proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT

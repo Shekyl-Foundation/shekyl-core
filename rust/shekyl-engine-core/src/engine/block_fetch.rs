@@ -32,11 +32,33 @@
 //! [`shekyl_rpc::Rpc::get_o_indexes`] for the first transaction that has
 //! outputs (the coinbase, in practice); the scanner advances the running
 //! index itself, so per-output index requests (a privacy leak) are avoided.
+//!
+//! # Ingestion validation (untrusted daemon)
+//!
+//! The daemon is untrusted, so this boundary rejects non-canonical responses
+//! rather than forwarding them to the scanner: oversized hex blobs (a DoS
+//! pre-bound ahead of [`shekyl_wire::Transaction::from_bytes`]'s own
+//! `MAX_TX_SIZE` guard), reordered / mismatched `get_transactions` results
+//! ([`parse_tx_batch`]), malformed `missed_tx` entries, and the **timestamp
+//! form** of `unlock_time` ([`reject_timestamp_unlock_time`]). The latter is
+//! the *pruned-safe, stateless* subset of [`shekyl_wire::Transaction::validate`]
+//! — Shekyl is block-height-only (`GENESIS_TX_WIRE_FORMAT.md` §9 "creation
+//! cut"). The full `validate()` cannot run here because the wallet ingests
+//! *pruned* transactions (the prunable proof dropped) and `validate()`'s
+//! no-prunable branch rejects a key-image-bearing spend without its prunable
+//! by design. Wiring a dedicated pruned-safe context-free validator into this
+//! boundary (so the full context-free reject set — arm-mixing, key-image
+//! order, output-count — is enforced at ingestion, not just in the scanner's
+//! defense-in-depth gates) is a shekyl-oxide-cutover follow-up tracked in
+//! `docs/FOLLOWUPS.md`.
 
 use serde_json::{json, Value};
 use shekyl_rpc::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_wire::{Block, Transaction};
+use shekyl_wire::{
+    transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL},
+    Block, Transaction,
+};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
 /// restricted RPC (`core_rpc_server.cpp`); batch accordingly.
@@ -84,6 +106,10 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
             "different block than requested (number)".to_string(),
         ));
     }
+    // Block-height-only: a canonical coinbase carries `unlock_time = height +
+    // CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (block form). Reject the timestamp
+    // form here too (defense-in-depth; it would also fail consensus).
+    reject_timestamp_unlock_time(block.miner_transaction.prefix.unlock_time)?;
     Ok(block)
 }
 
@@ -95,9 +121,42 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
 /// to a block hash is pinned by [`parse_tx_batch`], which checks each returned
 /// `tx_hash` against the requested hash, in order.
 fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
+    // DoS pre-bound: `hex::decode` allocates ~`pruned_hex.len() / 2` bytes, so
+    // bound the *input* length before decoding — otherwise a hostile daemon
+    // could force a large allocation that `from_bytes`'s own `MAX_TX_SIZE`
+    // guard only catches after the decode. A pruned blob is at most a full tx
+    // (`MAX_TX_SIZE` bytes ⇒ `2 * MAX_TX_SIZE` hex chars).
+    if pruned_hex.len() > MAX_TX_SIZE.saturating_mul(2) {
+        return Err(invalid_tx_error(tx_hash_hex));
+    }
     let bytes = hex::decode(pruned_hex)
         .map_err(|_| RpcError::InvalidNode("pruned tx blob wasn't hex".to_string()))?;
-    Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))
+    let tx = Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))?;
+    // Block-height-only ingestion gate (see `reject_timestamp_unlock_time`):
+    // stop a timestamp-form tx before it reaches the scanner.
+    reject_timestamp_unlock_time(tx.prefix.unlock_time)?;
+    Ok(tx)
+}
+
+/// Reject the CryptoNote/Monero **timestamp form** of `unlock_time` at the
+/// ingestion boundary. Shekyl is **block-height-only**: `unlock_time >=
+/// `[`UNLOCK_TIME_BLOCK_SENTINEL`] is a deleted inheritance — a "creation cut"
+/// per `GENESIS_TX_WIRE_FORMAT.md` §9 — that [`shekyl_wire::Transaction::validate`]
+/// rejects. The wallet ingests *pruned* transactions, on which the full
+/// `validate()` cannot run (its no-prunable branch rejects a key-image-bearing
+/// spend whose prunable proof has been dropped, by design), so this is the
+/// pruned-safe, stateless subset of that contract: it stops a malicious or
+/// buggy daemon from feeding the scanner a transaction consensus would reject
+/// (which would otherwise surface phantom, never-spendable balance). Reported
+/// as [`RpcError::InvalidNode`] — the node served non-canonical data.
+fn reject_timestamp_unlock_time(unlock_time: u64) -> Result<(), RpcError> {
+    if unlock_time >= UNLOCK_TIME_BLOCK_SENTINEL {
+        return Err(RpcError::InvalidNode(format!(
+            "unlock_time {unlock_time} is the timestamp form; Shekyl is block-height-only \
+             (GENESIS_TX_WIRE_FORMAT.md §9 creation cut)"
+        )));
+    }
+    Ok(())
 }
 
 /// Build the error for a pruned-tx parse failure, preferring the daemon-named
@@ -132,13 +191,7 @@ async fn fetch_pruned_transactions<R: Rpc>(
             .await?;
 
         if let Some(missed) = resp.get("missed_tx").and_then(Value::as_array) {
-            if !missed.is_empty() {
-                let missed_hashes = missed
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter_map(|s| hex::decode(s).ok())
-                    .filter_map(|v| <[u8; 32]>::try_from(v).ok())
-                    .collect();
+            if let Some(missed_hashes) = parse_missed_tx(missed)? {
                 return Err(RpcError::TransactionsNotFound(missed_hashes));
             }
         }
@@ -193,6 +246,36 @@ fn parse_tx_batch(batch: &[[u8; 32]], txs: &[Value]) -> Result<Vec<Transaction>,
         out.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
     }
     Ok(out)
+}
+
+/// Strictly parse a `get_transactions` `missed_tx` array into the missing-hash
+/// set. `Ok(None)` when nothing is missing; `Ok(Some(hashes))` when one or more
+/// requested txs are absent.
+///
+/// Pure (no transport) so the strictness is unit-testable. Every entry must be
+/// a 32-byte hex hash: a `filter_map` chain would silently drop malformed
+/// entries, shrinking (or emptying) the reported set and misrepresenting which
+/// txs are missing. A malformed entry is a daemon protocol violation, not a
+/// missing tx, so it surfaces as [`RpcError::InvalidNode`] rather than a
+/// truncated [`RpcError::TransactionsNotFound`].
+fn parse_missed_tx(missed: &[Value]) -> Result<Option<Vec<[u8; 32]>>, RpcError> {
+    if missed.is_empty() {
+        return Ok(None);
+    }
+    let mut hashes = Vec::with_capacity(missed.len());
+    for m in missed {
+        let hash = m
+            .as_str()
+            .and_then(|s| hex::decode(s).ok())
+            .and_then(|v| <[u8; 32]>::try_from(v).ok())
+            .ok_or_else(|| {
+                RpcError::InvalidNode(
+                    "get_transactions returned a malformed missed_tx hash".to_string(),
+                )
+            })?;
+        hashes.push(hash);
+    }
+    Ok(Some(hashes))
 }
 
 /// Request the global output index of the block's first output (the coinbase's,
@@ -452,5 +535,113 @@ mod tests {
     fn parse_tx_batch_empty_is_ok() {
         let out = parse_tx_batch(&[], &[]).expect("empty batch parses");
         assert!(out.is_empty());
+    }
+
+    /// A valid pruned tx (fee-only Fcmp shape) with the given `unlock_time`,
+    /// hex-encoded — for the block-height-only ingestion gate tests.
+    fn pruned_tx_hex_with_unlock_time(unlock_time: u64) -> String {
+        let tx = Transaction {
+            prefix: TxPrefix {
+                unlock_time,
+                inputs: vec![Input::Gen(0)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0u8; 32],
+                base: CtBase {
+                    enc_amounts: vec![[0u8; 9]],
+                    enc_labels: vec![[0u8; 9]],
+                    commitments: vec![[2u8; 32]],
+                },
+                pqc_auths: vec![],
+                prunable: None,
+            },
+        };
+        hex::encode(tx.serialize())
+    }
+
+    #[test]
+    fn reject_timestamp_unlock_time_boundary() {
+        // Block form (below the sentinel) is accepted; the sentinel itself and
+        // anything above it is the rejected timestamp form.
+        assert!(reject_timestamp_unlock_time(0).is_ok());
+        assert!(reject_timestamp_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1).is_ok());
+        assert!(matches!(
+            reject_timestamp_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_pruned_tx_rejects_timestamp_form_unlock_time() {
+        // A structurally valid pruned tx whose `unlock_time` is the timestamp
+        // form is non-canonical (consensus rejects it — GENESIS §9 creation
+        // cut); ingestion must refuse it so the scanner never sees it.
+        let bad = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
+        assert!(matches!(
+            parse_pruned_tx(&bad, ""),
+            Err(RpcError::InvalidNode(_))
+        ));
+        // The largest block-form value still parses.
+        let ok = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
+        assert!(parse_pruned_tx(&ok, "").is_ok());
+    }
+
+    #[test]
+    fn parse_pruned_tx_rejects_oversized_hex_before_decode() {
+        // DoS pre-bound: a hex string longer than `2 * MAX_TX_SIZE` is rejected
+        // by length before `hex::decode` allocates. All-hex chars of even
+        // length, so only the length gate (not a decode error) can fire.
+        let oversized = "0".repeat(MAX_TX_SIZE * 2 + 2);
+        assert!(parse_pruned_tx(&oversized, "").is_err());
+    }
+
+    #[test]
+    fn parse_block_blob_rejects_timestamp_form_coinbase() {
+        // Defense-in-depth: a canonical coinbase is `height + 60` (block form);
+        // the timestamp form is rejected at ingestion too.
+        let mut block = coinbase_block(5);
+        block.miner_transaction.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL;
+        let blob = hex::encode(block.serialize());
+        assert!(matches!(
+            parse_block_blob(&blob, 5),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_missed_tx_empty_is_none() {
+        assert!(parse_missed_tx(&[]).expect("empty is ok").is_none());
+    }
+
+    #[test]
+    fn parse_missed_tx_parses_valid_hashes() {
+        let (h0, h1) = ([3u8; 32], [4u8; 32]);
+        let missed = vec![json!(hex::encode(h0)), json!(hex::encode(h1))];
+        let parsed = parse_missed_tx(&missed)
+            .expect("valid hashes parse")
+            .expect("non-empty");
+        assert_eq!(parsed, vec![h0, h1]);
+    }
+
+    #[test]
+    fn parse_missed_tx_rejects_malformed_entry() {
+        // Each entry must be a 32-byte hex hash. A non-hex string, a short
+        // hash, a non-string, or null is a protocol violation — not a silently
+        // dropped missing tx.
+        let h0 = [3u8; 32];
+        for bad in [json!("zz"), json!("00"), json!(7), json!(null)] {
+            let missed = vec![json!(hex::encode(h0)), bad];
+            assert!(matches!(
+                parse_missed_tx(&missed),
+                Err(RpcError::InvalidNode(_))
+            ));
+        }
     }
 }

@@ -129,12 +129,23 @@ fn split_enc9(bytes: &[u8; 9]) -> ([u8; 8], u8) {
 
 /// Interpret a transaction's raw `unlock_time` varint
 /// (`shekyl_wire::TxPrefix::unlock_time`) as the wallet-domain [`Timelock`].
-/// The CryptoNote-inherited convention: `0` is no timelock, a value below
-/// [`UNLOCK_TIME_BLOCK_SENTINEL`] is a block height, and anything at or above
-/// it is a unix timestamp. `shekyl-wire` owns the wire-format sentinel and
-/// keeps the raw varint; the scanner binds to that constant (so scanner ↔ wire
-/// unlock-time semantics cannot drift) and lifts the varint into the typed
-/// [`Timelock`] — a wallet concern, not a wire concern.
+///
+/// Shekyl is **block-height-only**: `0` is no timelock and a value below
+/// [`UNLOCK_TIME_BLOCK_SENTINEL`] is a block height. The CryptoNote/Monero
+/// *timestamp* form (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance
+/// — a "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that consensus
+/// rejects (`shekyl_wire::Transaction::validate`), so it can never appear on
+/// canonical chain data. [`InternalScanner::scan_transaction_with_cancel`]
+/// already skips any tx whose `unlock_time` is in the timestamp form before
+/// this lifter runs, so the final arm is unreachable on the scan path; it is
+/// mapped to [`Timelock::None`] (rather than `Timelock::Time`) so the dead
+/// `Timelock::Time` can never be materialized from chain bytes regardless of
+/// caller.
+///
+/// `shekyl-wire` owns the wire-format sentinel and keeps the raw varint; the
+/// scanner binds to that constant (so scanner ↔ wire unlock-time semantics
+/// cannot drift) and lifts the varint into the typed [`Timelock`] — a wallet
+/// concern, not a wire concern.
 fn timelock_from_unlock_time(raw: u64) -> Timelock {
     if raw == 0 {
         Timelock::None
@@ -144,7 +155,11 @@ fn timelock_from_unlock_time(raw: u64) -> Timelock {
                 .expect("a value below UNLOCK_TIME_BLOCK_SENTINEL always fits in usize"),
         )
     } else {
-        Timelock::Time(raw)
+        // Timestamp form: deleted Monero-legacy Shekyl does not honor. The
+        // scan path gates this out per-tx (see the function doc), so this is
+        // unreachable on canonical data; `None` keeps the lifter total and
+        // forecloses materializing `Timelock::Time`.
+        Timelock::None
     }
 }
 
@@ -479,6 +494,30 @@ impl InternalScanner {
                 output_count,
                 max_outputs = MAX_OUTPUTS,
                 "scanner: skipping transaction with excessive output count (defense-in-depth gate; consensus would also reject)"
+            );
+            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
+        }
+
+        // Defense-in-depth consensus gate: Shekyl is block-height-only for
+        // `unlock_time`. The CryptoNote/Monero timestamp form
+        // (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
+        // "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
+        // `shekyl_wire::Transaction::validate` rejects, so a canonical daemon
+        // can never serve such a tx. An adversarial daemon could (pre-consensus
+        // rejection); recovering outputs from a tx consensus would reject would
+        // surface phantom balance. Refuse to recover ANY output from it, the
+        // same skip-and-warn shape as the `MAX_OUTPUTS` gate above. This also
+        // keeps `timelock_from_unlock_time` unreachable with timestamp-form
+        // input, so the dead `Timelock::Time` is never materialized.
+        //
+        // Like the size gate, this is O(1) at function entry and not subject to
+        // the cancellation check (it fires before any per-output derivation).
+        if tx.prefix.unlock_time >= UNLOCK_TIME_BLOCK_SENTINEL {
+            tracing::warn!(
+                target: "shekyl_scanner::scan",
+                unlock_time = tx.prefix.unlock_time,
+                sentinel = UNLOCK_TIME_BLOCK_SENTINEL,
+                "scanner: skipping transaction with timestamp-form unlock_time (block-height-only; consensus would also reject)"
             );
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
@@ -1131,6 +1170,102 @@ mod gate_tests {
             !warn_at_target,
             "gate must NOT fire at the boundary (output_count == MAX_OUTPUTS); WARN events seen: {events:?}"
         );
+    }
+
+    #[test]
+    fn skips_transaction_with_timestamp_form_unlock_time() {
+        // Block-height-only: a tx whose `unlock_time` is the CryptoNote/Monero
+        // timestamp form (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is non-canonical
+        // (consensus rejects it — GENESIS §9 creation cut). Defense-in-depth:
+        // the scanner skips it with the same skip-and-WARN shape as the size
+        // gate, so the dead `Timelock::Time` is never materialized even if a
+        // caller bypassed the ingestion-boundary reject.
+        let scanner = placeholder_scanner();
+        let mut tx = synthesize_tx(1);
+        tx.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL;
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+        });
+
+        let timelocked = match result.expect("gate skips the tx without a ScanError") {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
+        assert!(
+            timelocked.is_empty(),
+            "gate must return Timelocked::empty() for timestamp-form unlock_time"
+        );
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        assert!(
+            events
+                .iter()
+                .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan"),
+            "gate must emit a WARN at `shekyl_scanner::scan` (events seen: {events:?})"
+        );
+    }
+
+    #[test]
+    fn admits_transaction_at_largest_block_form_unlock_time() {
+        // Boundary: the gate fires on `>= UNLOCK_TIME_BLOCK_SENTINEL`, so the
+        // largest block-form value (`SENTINEL - 1`) proceeds past the gate into
+        // the normal scan path (placeholder keys recover nothing, no WARN).
+        let scanner = placeholder_scanner();
+        let mut tx = synthesize_tx(1);
+        tx.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL - 1;
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+        });
+
+        let timelocked = match result.expect("block-form tx scans without ScanError") {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
+        assert!(timelocked.is_empty(), "placeholder keys recover no outputs");
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        assert!(
+            !events
+                .iter()
+                .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan"),
+            "gate must NOT fire at the largest block-form value; WARN events seen: {events:?}"
+        );
+    }
+
+    #[test]
+    fn timelock_from_unlock_time_maps_block_height_and_never_time() {
+        // `0` → no timelock; below the sentinel → block height; the sentinel
+        // and above (the deleted timestamp form) → `None`, never `Time`, so the
+        // dead `Timelock::Time` cannot be materialized from chain bytes.
+        assert_eq!(timelock_from_unlock_time(0), Timelock::None);
+        assert_eq!(timelock_from_unlock_time(1), Timelock::Block(1));
+        assert_eq!(
+            timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1),
+            Timelock::Block(
+                usize::try_from(UNLOCK_TIME_BLOCK_SENTINEL - 1).expect("sentinel-1 fits in usize")
+            )
+        );
+        assert_eq!(
+            timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL),
+            Timelock::None
+        );
+        assert_eq!(timelock_from_unlock_time(u64::MAX), Timelock::None);
     }
 }
 
