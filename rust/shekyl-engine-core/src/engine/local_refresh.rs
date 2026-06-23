@@ -904,44 +904,50 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
 ///
 /// # Refresh-reachable mapping
 ///
-/// The five [`ProtocolErrorKind`] variants enumerate the
-/// refresh-reachable upstream subset confirmed by the Round 4
-/// call-site audit (`get_height` + `get_scannable_block_by_number`
-/// are the only refresh-issued RPCs):
+/// Refresh issues `get_height` and `fetch_scannable_block`, the
+/// latter composing the `Rpc` transport primitives `get_block` /
+/// `get_transactions` / `get_o_indexes` (the §8 step-4 `shekyl-wire`
+/// migration replaced the single-call `get_scannable_block_by_number`
+/// the Round 4 audit was written against). The refresh-reachable
+/// upstream variants and their tags:
 ///
 /// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
 /// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
 /// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
 /// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
 /// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
+/// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
+///   (reachable via the `get_transactions` leg of the block fetch: a
+///   daemon that names transaction hashes in a block and then reports
+///   them missing is internally inconsistent, which from the refresh
+///   path is the "unexpected envelope" `InvalidNode` signal).
 ///
 /// # Defensive mapping for non-refresh-reachable variants
 ///
-/// `RpcError::TransactionsNotFound` / `RpcError::InvalidFee` /
-/// `RpcError::InvalidPriority` are not reachable from
-/// `get_height` / `get_scannable_block_by_number` per the
-/// Round 4 audit — they belong to the future `PendingTxEngine`
-/// send-tx path. If they nonetheless surface from this site
-/// (e.g., upstream RPC client behavior change), the defensive
-/// classification is [`ProtocolErrorKind::InvalidNode`] — "the
-/// daemon returned an envelope the producer did not expect from
-/// this RPC method." [`ProtocolErrorKind`] is
-/// `#[non_exhaustive]`; PR 5's `PendingTxEngine` extraction may
-/// grow the variant set additively.
+/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` are not
+/// reachable from refresh — they belong to the future
+/// `PendingTxEngine` send-tx path. If they nonetheless surface from
+/// this site (e.g., upstream RPC client behavior change), the
+/// defensive classification is [`ProtocolErrorKind::InvalidNode`] —
+/// "the daemon returned an envelope the producer did not expect from
+/// this RPC method." [`ProtocolErrorKind`] is `#[non_exhaustive]`;
+/// PR 5's `PendingTxEngine` extraction may grow the variant set
+/// additively.
 ///
 /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 //
-// `clippy::match_same_arms` would have us merge the audit-
-// confirmed `InvalidNode(_)` arm with the defensive
+// `clippy::match_same_arms` would have us merge the
+// `InvalidNode(_)` arm with the
 // `TransactionsNotFound | InvalidFee | InvalidPriority` arm
-// because both map to `ProtocolErrorKind::InvalidNode`. The
-// separation is the load-bearing discipline here: the first arm
-// is the Round-4-audit-confirmed mapping for a refresh-reachable
-// variant; the second is the defensive fallback for variants
-// that the audit confirmed are NOT refresh-reachable. Merging
-// them would lose the audit boundary that the rustdoc records
-// and that future maintainers need to see when PR 5's
-// `PendingTxEngine` extraction reaches this site.
+// because both map to `ProtocolErrorKind::InvalidNode`. Keeping
+// them separate preserves the rustdoc's reachability boundary:
+// the grouped arm carries `TransactionsNotFound` (refresh-reachable
+// via the block fetch's `get_transactions` leg — an inconsistent
+// daemon, mapped to `InvalidNode`) alongside the genuinely
+// non-refresh-reachable `InvalidFee` / `InvalidPriority` defensive
+// fallbacks (send-tx path). Merging would lose that boundary, which
+// future maintainers need when PR 5's `PendingTxEngine` extraction
+// reaches this site.
 #[allow(clippy::match_same_arms)]
 const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
     match err {
@@ -950,10 +956,10 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
         RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
         RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
         RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
-        // Non-refresh-reachable upstream variants
-        // (`TransactionsNotFound` / `InvalidFee` /
-        // `InvalidPriority`) defensively classify as
-        // `InvalidNode`; see rustdoc.
+        // All map to `InvalidNode`: `TransactionsNotFound` is
+        // refresh-reachable (block fetch's `get_transactions` leg;
+        // inconsistent daemon), while `InvalidFee` / `InvalidPriority`
+        // are non-refresh-reachable defensive fallbacks. See rustdoc.
         RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
             ProtocolErrorKind::InvalidNode
         }

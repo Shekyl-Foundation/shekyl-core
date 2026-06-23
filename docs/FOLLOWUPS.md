@@ -135,6 +135,29 @@ sustainability is unaffected by the recalibration.
   "V3 at genesis" is realized on-chain as **tx-version=3 + hardfork=1 +
   proof=FcmpPlusPlusPqc**.
 
+- **`get_scannable_block_by_number` → `fetch_scannable_block` name residue in
+  untouched files (flagged 2026-06-23, `feat/scan-refresh-wire-migration`).** The §8
+  step-4 scanner/refresh slice replaced the legacy `Rpc::get_scannable_block_by_number`
+  call with `DaemonEngine::fetch_scannable_block`. Two stale references survive in files
+  the slice did not substantively edit and were therefore held out of its scope (kept
+  tight per `15-deletion-and-debt.mdc` "while we're here"):
+  - `shekyl-engine-core/src/engine/diagnostics.rs` — the `pub enum DaemonOp` carries a
+    `GetScannableBlockByNumber` variant (def + doc at ~160/172/174, one construction site
+    at ~1477). Renaming it to `FetchScannableBlock` is a small refactor across its
+    use/construction sites, not a doc-only edit, so it belongs in its own change. The
+    variant's *meaning* (the per-block fetch op, timeout-classified) is unchanged; only
+    the name is stale.
+  - `shekyl-engine-core/src/engine/refresh.rs:~3218` — a test-module doc comment still
+    names `get_scannable_block_by_number` as the wired per-block fetch.
+
+  Naming-only; no behavior change (the in-scope production docs in `daemon.rs`,
+  `local_refresh.rs`, `merge.rs`, `block_fetch.rs`, `mod.rs` were already corrected, and
+  their remaining `get_scannable_block_by_*` mentions are intentional "this replaces the
+  legacy X" history). Not genesis-blocking. **Target: V3.0** (cheap pre-genesis rename
+  that completes the step-4 deletion cleanly). Reopen-now criterion: fold into any PR
+  that next touches `diagnostics.rs`'s `DaemonOp` for substantive reasons, or land
+  standalone before the genesis freeze gate.
+
 - **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
   proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT

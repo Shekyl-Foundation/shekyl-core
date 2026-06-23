@@ -286,7 +286,7 @@ impl<
     /// # Errors
     ///
     /// - Daemon transport failure during the backfill fetch
-    ///   (`get_scannable_block_by_number`) → [`RefreshError::Io`]
+    ///   (`fetch_scannable_block`) → [`RefreshError::Io`]
     ///   (`IoError::Daemon`).
     /// - A `block_leaves` height missing from the producer range →
     ///   [`RefreshError::MalformedScanResult`] (a producer-contract defect,

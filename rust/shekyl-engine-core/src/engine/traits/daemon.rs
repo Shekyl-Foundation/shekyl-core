@@ -9,10 +9,14 @@
 //! the wallet-side trait the [`Engine`](super::super::Engine)
 //! orchestrator binds against for daemon-bound calls. It is a
 //! supertrait extension of [`shekyl_rpc::Rpc`] (the
-//! upstream-vendored RPC trait that already covers
-//! `get_height` / `get_scannable_block_by_*` / etc.), adding only
-//! the wallet-specific methods that have no place on `Rpc`:
-//! [`DaemonEngine::get_fee_estimates`] and
+//! upstream-vendored RPC trait that covers the transport primitives —
+//! `get_height` / `get_block` / `get_transactions` / `get_o_indexes` /
+//! etc.), adding the wallet-specific methods that have no place on
+//! `Rpc`: [`DaemonEngine::fetch_scannable_block`] — which composes
+//! those transport primitives into a `shekyl-wire`-parsed
+//! [`ScannableBlock`], superseding the legacy single-call
+//! `Rpc::get_scannable_block_by_*` removed in the §8 step-4 migration
+//! — plus [`DaemonEngine::get_fee_estimates`] and
 //! [`DaemonEngine::submit_transaction`].
 //!
 //! # Two-trait shape rationale (§2.5)
