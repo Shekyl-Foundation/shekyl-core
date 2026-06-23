@@ -187,6 +187,10 @@ pub(crate) mod curve_tree_actor;
 // the daemon's consensus drain order so the producer can materialize the full
 // leaf set the merge feeds to `curve_tree_actor`.
 pub(crate) mod curve_tree_decode;
+// Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
+// replacement for the legacy `shekyl_rpc::Rpc::get_scannable_block_by_*` path.
+// Backs `DaemonEngine::fetch_scannable_block`'s default impl.
+pub(crate) mod block_fetch;
 pub mod daemon;
 pub(crate) mod diagnostics;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays

@@ -157,9 +157,9 @@
 use std::time::Duration;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use shekyl_oxide::transaction::Input;
-use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
-use shekyl_scanner::{ScanError, ScanOutcome, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_rpc::RpcError;
+use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_wire::Input;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -698,8 +698,8 @@ impl RefreshEngine for LocalRefresh {
                 // hypothesis (per-tx scan-budget inflation) rather
                 // than relying on the scanner-side InvalidScannableBlock
                 // catch-all.
-                let miner_tx = scannable.block.miner_transaction();
-                if miner_tx.prefix().outputs.len() > MAX_OUTPUTS {
+                let miner_tx = &scannable.block.miner_transaction;
+                if miner_tx.prefix.outputs.len() > MAX_OUTPUTS {
                     emit_state.try_emit(
                         diagnostics,
                         RefreshDiagnostic::DaemonMalformed {
@@ -709,7 +709,7 @@ impl RefreshEngine for LocalRefresh {
                     return Err(LocalRefreshError::Malformed);
                 }
                 for tx in &scannable.transactions {
-                    if tx.prefix().outputs.len() > MAX_OUTPUTS {
+                    if tx.prefix.outputs.len() > MAX_OUTPUTS {
                         emit_state.try_emit(
                             diagnostics,
                             RefreshDiagnostic::DaemonMalformed {
@@ -728,28 +728,24 @@ impl RefreshEngine for LocalRefresh {
                 // owned-output set; we do not pre-filter here
                 // because the snapshot deliberately does not carry
                 // the wallet's owned-output index.
-                for input in &miner_tx.prefix().inputs {
-                    if let Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } =
-                        input
-                    {
+                for input in &miner_tx.prefix.inputs {
+                    if let Input::ToKey { key_image, .. } = input {
                         spent_key_images.push(KeyImageObserved {
                             block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
-                                key_image.0,
+                                *key_image,
                             ),
                         });
                     }
                 }
                 for tx in &scannable.transactions {
-                    for input in &tx.prefix().inputs {
-                        if let Input::ToKey { key_image, .. }
-                        | Input::StakeClaim { key_image, .. } = input
-                        {
+                    for input in &tx.prefix.inputs {
+                        if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
                                 block_height: h,
                                 key_image:
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
-                                        key_image.0,
+                                        *key_image,
                                     ),
                             });
                         }
@@ -977,7 +973,7 @@ const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
 /// classification so producer-side `DaemonProtocolError` events
 /// emit under the per-block ceiling + F13-S latch discipline
 /// during reorg-walk traversal.
-async fn find_fork_point<R: Rpc>(
+async fn find_fork_point<R: DaemonEngine>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
     from_height: u64,
@@ -1023,7 +1019,7 @@ async fn find_fork_point<R: Rpc>(
 /// ceiling + F13-S latch (§5.4.8 #5) close the
 /// emission-cadence covert channel when the retry budget triggers
 /// many emissions in a single block window.
-async fn fetch_block_with_retry<R: Rpc>(
+async fn fetch_block_with_retry<R: DaemonEngine>(
     rpc: &R,
     height: u64,
     cancel: &CancellationToken,
@@ -1039,7 +1035,7 @@ async fn fetch_block_with_retry<R: Rpc>(
             return Err(LocalRefreshError::Cancelled);
         }
 
-        match rpc.get_scannable_block_by_number(height_usize).await {
+        match rpc.fetch_scannable_block(height_usize).await {
             Ok(b) => return Ok(b),
             Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
@@ -1426,7 +1422,7 @@ mod producer_property_tests {
     /// `chain[h].block.header.previous = chain[h-1].block.hash()`.
     /// `chain[0]`'s parent is `[0u8; 32]`. Real-daemon convention:
     /// `chain[h] = block at height h`.
-    fn linear_chain(n: u64) -> Vec<shekyl_rpc::ScannableBlock> {
+    fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
         let mut parent = [0u8; 32];

@@ -37,7 +37,8 @@
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/CI_BASELINE.md`]: ../../../../../docs/CI_BASELINE.md
 
-use shekyl_rpc::{FeeRate, Rpc};
+use shekyl_rpc::{FeeRate, Rpc, RpcError};
+use shekyl_scanner::ScannableBlock;
 
 use crate::engine::error::{IoError, TerminalErrorKind};
 use crate::engine::pending::TxHash;
@@ -248,6 +249,48 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// orchestration code can propagate uniform errors regardless of
     /// implementor.
     type Error: Into<IoError>;
+
+    /// Fetch the block at `number` in scannable form: the block, its pruned
+    /// non-miner transactions, and the first global output index, all parsed
+    /// through the canonical [`shekyl_wire`] parse.
+    ///
+    /// This is the engine-native replacement for the legacy
+    /// `shekyl_rpc::Rpc::get_scannable_block_by_number`. The transport is the
+    /// inherited [`Rpc`] surface (`get_block` / `get_transactions` /
+    /// `get_o_indexes`), but parsing is `shekyl_wire`, which reads the coinbase
+    /// `Null` committed base correctly (`GENESIS_TX_WIRE_FORMAT.md` §9.6/§9.9)
+    /// where the legacy parse dropped it and rejected live coinbase blocks as
+    /// `InvalidNode("invalid block")`.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: read-only network calls with no wallet-side side
+    /// effect; dropping the returned future is equivalent to never calling.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: repeated calls return whatever the daemon currently
+    /// serves at `number`. Read-only methods are always retry-safe (§5.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RpcError`] for transport failures and malformed daemon
+    /// responses; a block that fails the `shekyl_wire` parse surfaces as
+    /// [`RpcError::InvalidNode`].
+    ///
+    /// # Default implementation
+    ///
+    /// The default delegates to the in-crate native fetch
+    /// (`engine::block_fetch`). The Stage-4 `ActorRef<DaemonActor>` overrides
+    /// it to route through the actor mailbox; the test `TestDaemon` overrides
+    /// it to serve synthetic chains. Trait method signatures do not change
+    /// across the swap-in (§7).
+    fn fetch_scannable_block(
+        &self,
+        number: usize,
+    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number)
+    }
 
     /// Atomically snapshot the daemon's fee-rate estimate at each
     /// non-`Custom` priority tier.
