@@ -107,6 +107,35 @@ pub const PQC_MAX_PUBLIC_KEY_BLOB: usize =
 /// Max tx-level `pqc_auths` signature blob (`PQC_MAX_SIGNATURE_BLOB`).
 pub const PQC_MAX_SIGNATURE_BLOB: usize = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
 
+/// The Bp+ weight clawback as a pure function of the padded output count — the C++
+/// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp:93`); `0` for ≤ 2
+/// padded outputs. This is the single source of the formula: [`Transaction::weight`]
+/// applies it to the count derived from the proof, and the wallet fee predictor
+/// (`shekyl-engine-core`) applies it to the count derived a-priori from `n_out`, so the
+/// two can never drift. Callers pass an already-bounded `n_padded_outputs`
+/// (≤ [`MAX_OUTPUTS`] for any valid tx); `saturating_mul` keeps it overflow-safe.
+#[must_use]
+pub fn bp_plus_weight_clawback(n_padded_outputs: usize) -> usize {
+    if n_padded_outputs <= 2 {
+        return 0;
+    }
+    // bp_base = (32 * (6 + 7*2)) / 2 = 320.
+    const BP_BASE: usize = (32 * (6 + 7 * 2)) / 2;
+    // nlr = smallest value with `1 << nlr >= n_padded`, then `+ 6` (the proof's |L|).
+    let mut nlr = 0u32;
+    while (1usize << nlr) < n_padded_outputs {
+        nlr += 1;
+    }
+    let bp_size = 32 * (6 + 2 * (nlr as usize + 6));
+    // C++ asserts `bp_base * n_padded >= bp_size`; clamp to 0 rather than panic on a
+    // malformed proof — consensus weight must not overflow on adversarial input.
+    let gross = BP_BASE.saturating_mul(n_padded_outputs);
+    if gross < bp_size {
+        return 0;
+    }
+    (gross - bp_size) * 4 / 5
+}
+
 /// Read a varint-length-prefixed opaque byte blob, capped against `READ_LEN_CAP`.
 fn read_len_prefixed<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
     read_len_prefixed_bounded(r, what, READ_LEN_CAP)
@@ -1110,6 +1139,53 @@ impl Transaction {
         self.write(&mut counter)
             .expect("counting write is infallible");
         counter.bytes
+    }
+
+    /// The consensus **transaction weight** — the serialized size **plus** the
+    /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
+    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp:292`). The clawback is
+    /// a verification-cost *penalty* added for a Bp+ covering more than two (padded)
+    /// outputs — so weight is **not** the serialized length, and weight ≥ size always.
+    /// It is `0` for the genesis ≤2-output spend shapes and for any non-spend (coinbase
+    /// `Null`, fee-only `Fcmp`). This is the value the daemon charges fees and block
+    /// weight against, so a wallet fee estimate must match it.
+    pub fn weight(&self) -> usize {
+        self.serialized_len() + self.bp_plus_clawback()
+    }
+
+    /// Bp+ weight clawback for this tx: derive the padded output count from each proof's
+    /// `L` length — the daemon's `n_bulletproof_plus_max_amounts` (`|L| = 6 +
+    /// ceil(log2(n_padded))`, so `n_padded = 1 << (|L| − 6)`, summed across proofs;
+    /// genesis carries one) — then apply [`bp_plus_weight_clawback`]. Returns `0` for a
+    /// non-spend / fee-only ct (no prunable).
+    fn bp_plus_clawback(&self) -> usize {
+        let Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } = &self.ct
+        else {
+            return 0;
+        };
+        // `|L| < 6` cannot occur for a valid proof. An oversize `|L|` *can* be parsed —
+        // `BpPlus::read` caps to the loose `READ_LEN_CAP`, and `validate()` bounds the
+        // output *count* but not `|L|` — so the shift must not overflow, which would panic
+        // on a parseable-but-invalid tx (DoS). Clamp each proof to `MAX_OUTPUTS`: exact for
+        // any valid tx (`n_padded ≤ MAX_OUTPUTS`) and merely bounded for an invalid one,
+        // which `validate()` / `MAX_TX_SIZE` rejects regardless.
+        let n_padded: usize = prunable
+            .bulletproofs
+            .iter()
+            .map(|bp| {
+                let bits = bp.l.len().saturating_sub(6);
+                if bits >= MAX_OUTPUTS.ilog2() as usize {
+                    MAX_OUTPUTS
+                } else {
+                    1usize << bits
+                }
+            })
+            .sum::<usize>()
+            .min(MAX_OUTPUTS);
+        bp_plus_weight_clawback(n_padded)
     }
 
     /// The FCMP++ **`signable_tx_hash`** — the prefix hash the membership/SAL proof

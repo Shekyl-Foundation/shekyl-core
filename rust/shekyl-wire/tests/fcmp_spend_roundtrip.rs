@@ -337,3 +337,81 @@ fn bp_plus_from_bytes_parses_canonical_layout() {
         "trailing bytes after a Bp+ must be rejected"
     );
 }
+
+/// Set the first bulletproof's `L`/`R` to `len` elements so `n_padded_outputs`
+/// (`1 << (|L| − 6)`) can be driven directly in the clawback tests.
+fn set_bp_lr_len(tx: &mut Transaction, len: usize) {
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        let bp = &mut p.bulletproofs[0];
+        bp.l = vec![[0x20; 32]; len];
+        bp.r = vec![[0x21; 32]; len];
+    }
+}
+
+#[test]
+fn weight_has_no_clawback_at_two_padded_outputs() {
+    // synthetic_spend's proof has |L| = 7 ⇒ n_padded = 2 ⇒ clawback 0, so the
+    // consensus weight equals the serialized size for the genesis ≤2-output shapes.
+    let tx = synthetic_spend();
+    assert_eq!(
+        tx.weight(),
+        tx.serialized_len(),
+        "n_padded ≤ 2 carries no clawback"
+    );
+}
+
+#[test]
+fn weight_clawback_matches_cpp_formula() {
+    // Hand-computed against get_transaction_weight_clawback:
+    //   nlr = ceil(log2(n_padded)) + 6;  bp_size = 32*(6 + 2*nlr);
+    //   clawback = (320*n_padded − bp_size) * 4 / 5.
+    // n_padded = 1 << (|L| − 6):
+    //   |L|=8 ⇒ n_padded=4 ⇒ (1280 − 704)*4/5 = 460
+    //   |L|=9 ⇒ n_padded=8 ⇒ (2560 − 768)*4/5 = 1433
+    for (l_len, expected) in [(8usize, 460usize), (9, 1433)] {
+        let mut tx = synthetic_spend();
+        set_bp_lr_len(&mut tx, l_len);
+        assert_eq!(
+            tx.weight() - tx.serialized_len(),
+            expected,
+            "clawback for |L|={l_len}"
+        );
+    }
+}
+
+#[test]
+fn weight_does_not_panic_on_oversize_bp_l() {
+    // A parseable-but-invalid tx whose Bp+ |L| far exceeds the consensus bound must not
+    // shift-overflow weight() (DoS): |L|=100 ⇒ bits=94 ⇒ `1 << 94` without the clamp.
+    // The clamp caps n_padded at MAX_OUTPUTS, so weight() stays finite and ≥ the size.
+    let mut tx = synthetic_spend();
+    set_bp_lr_len(&mut tx, 100);
+    assert!(tx.weight() >= tx.serialized_len());
+}
+
+#[test]
+fn weight_equals_serialized_len_for_non_spend() {
+    // No Bp+ ⇒ no clawback ⇒ weight == size, for both non-spend shapes.
+    let mut fee_only = synthetic_spend();
+    if let Ct::Fcmp {
+        prunable,
+        pqc_auths,
+        ..
+    } = &mut fee_only.ct
+    {
+        *prunable = None;
+        pqc_auths.clear();
+    }
+    assert_eq!(fee_only.weight(), fee_only.serialized_len());
+
+    let mut null_ct = synthetic_spend();
+    null_ct.ct = Ct::Null(CtBase {
+        enc_amounts: Vec::new(),
+        enc_labels: Vec::new(),
+        commitments: Vec::new(),
+    });
+    assert_eq!(null_ct.weight(), null_ct.serialized_len());
+}
