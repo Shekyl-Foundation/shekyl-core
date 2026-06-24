@@ -65,6 +65,23 @@ sustainability is unaffected by the recalibration.
   serializer, real PQC pk/sig lengths, KAT fcmp proof). This raises the real fee on
   every spend (correctly). Landed on `feat/wire-tx-weight`.
 
+- **`shekyl_wire::Transaction::validate()` does not bound the Bp+ `|L|` against the
+  output count (consensus-parity gap, flagged 2026-06-24 on `feat/wire-tx-weight`).**
+  `BpPlus::read` caps `|L|`/`|R|` only at the loose `READ_LEN_CAP`, and `validate()`
+  bounds the output *count* (`MAX_OUTPUTS`) but not `|L|` — yet for a well-formed
+  proof `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` is *fully determined* by the
+  output count (and at genesis `nbp == 1`). So a tx with a valid `n_out` but an
+  inconsistent/oversize `|L|` parses **and passes local `validate()`**, while the C++
+  daemon rejects it (it derives `n_padded` from `|L|` and enforces the tight bound +
+  `bp_base*n_padded >= bp_size`). That is a local↔daemon divergence: the wallet would
+  treat a tx as valid that fails at submit. PR #179 made `weight()` *panic-safe* on
+  such input (clamping `n_padded` to `MAX_OUTPUTS`), but that is DoS hardening, **not**
+  a reject. **Reopen-now criterion:** `validate()` should reject a spend whose Bp+
+  `|L|`/`|R|` ≠ `6 + ceil(log2(next_pow2(n_out)))` (and `nbp != 1`), matching the
+  daemon's `n_bulletproof_plus_max_amounts` + clawback assertions. Belongs in a
+  parse/validate consensus-parity pass, not the fee surface. Target: V3.0
+  (pre-genesis consensus parity).
+
 - **External cryptographic review of the `FcmpMembershipOnly` soundness
   reduction (2026-06-12).**
   [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:
