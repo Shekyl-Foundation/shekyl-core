@@ -68,9 +68,12 @@ fn wire_outputs(
     output_keys
         .iter()
         .zip(view_tags.iter())
-        .map(|(key, view_tag)| {
+        .enumerate()
+        .map(|(idx, (key, view_tag))| {
             let view_tag = view_tag.ok_or_else(|| {
-                TxBuilderError::WireError("output missing view_tag (genesis requires it)".into())
+                TxBuilderError::WireError(format!(
+                    "output {idx} missing view_tag (genesis requires it)"
+                ))
             })?;
             Ok(Output {
                 amount: 0,

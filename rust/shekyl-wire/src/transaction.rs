@@ -1139,7 +1139,7 @@ impl Transaction {
     /// - `rct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
     ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
     /// - `prunable_hash`  = `cn_fast_hash(Prunable::write)` (the digest, not the blob — §1.4)
-    /// - `pqc_header(i)`  = the i-th auth header, **no signature** ([`PqcAuth::header_write`] — §1.5)
+    /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
     /// - `all_key_hashes` = `‖ over every auth: cn_fast_hash(hybrid_public_key)` (binds every
     ///   input's key into every signature)
     ///
