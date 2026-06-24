@@ -208,3 +208,84 @@ fn synthetic_spend_hash_preimage_is_pinned() {
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
+
+#[test]
+fn synthetic_spend_prefix_hash_is_pinned() {
+    // The FCMP++ `signable_tx_hash` (FCMP_SPEND_SIGNING_PREIMAGE.md §1.2) — the prefix
+    // hash the membership/SAL proof signs. It INCLUDES the version:
+    // cn_fast_hash(varint(3) ‖ TxPrefix::write). Distinct from the chain-identity tx
+    // hash above. Source-validated against the spec; no live spend-hash oracle yet, so
+    // this pins the value against drift — confirm vs the daemon before changing it.
+    let tx = synthetic_spend();
+    assert_ne!(
+        tx.prefix_hash(),
+        tx.hash(),
+        "prefix (signable) hash must differ from the chain-identity tx hash"
+    );
+    // Structural: the prefix hash depends ONLY on the prefix, not the ct — changing the
+    // fee (a ct field) must leave it untouched.
+    let mut ct_changed = synthetic_spend();
+    if let Ct::Fcmp { fee, .. } = &mut ct_changed.ct {
+        *fee += 1;
+    }
+    assert_eq!(
+        tx.prefix_hash(),
+        ct_changed.prefix_hash(),
+        "prefix hash must not depend on the ct section"
+    );
+    let h: String = tx
+        .prefix_hash()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        h, "271a9c0a13de6a1a7e81db6ef7e2cde7d2ac7145581050ae3dbe34e5858d9f9c",
+        "FCMP++ prefix (signable_tx_hash) drifted (§1.2)"
+    );
+}
+
+#[test]
+fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
+    // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ rct_base_blob ‖
+    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then cn_fast_hash. Source-validated;
+    // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
+    let tx = synthetic_spend();
+    let hashes = tx.pqc_signing_payload_hashes();
+    assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
+    let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        h, "12997863855a3d6f731199b75780966075a36aa587b13adeef7f45e9100355dd",
+        "FCMP++ PQC signing preimage drifted (§1.1)"
+    );
+    // Structural: the fee is bound into the preimage (it lives in rct_base_blob), so
+    // bumping it must move the hash.
+    let mut fee_changed = synthetic_spend();
+    if let Ct::Fcmp { fee, .. } = &mut fee_changed.ct {
+        *fee += 1;
+    }
+    assert_ne!(
+        hashes,
+        fee_changed.pqc_signing_payload_hashes(),
+        "fee must be bound into the PQC signing preimage"
+    );
+}
+
+#[test]
+fn pqc_signing_payload_hashes_empty_for_non_spend() {
+    // Non-spend shapes carry no per-input PQC signature: a fee-only `Fcmp` (no prunable)
+    // and the coinbase `Null` ct both return an empty vec.
+    let mut fee_only = synthetic_spend();
+    if let Ct::Fcmp {
+        prunable,
+        pqc_auths,
+        ..
+    } = &mut fee_only.ct
+    {
+        *prunable = None;
+        pqc_auths.clear();
+    }
+    assert!(
+        fee_only.pqc_signing_payload_hashes().is_empty(),
+        "fee-only (no prunable) yields no signing hashes"
+    );
+}
