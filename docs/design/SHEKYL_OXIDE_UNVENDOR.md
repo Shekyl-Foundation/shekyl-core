@@ -132,6 +132,14 @@ in the *application* layer is genesis-load-bearing too. The pristine gate (§6 A
 is therefore not hygiene — it protects a frozen surface ([`42-serialization-policy`],
 [`30-cryptography`]).
 
+**The pin is not just stale — it is proof-format-buggy.** Re-baselining at the
+upstream tip (§6 A0) surfaced two genesis-relevant corrections sitting *above* the
+pin: an `fcmps` proof-sizing fix (`ni = 2 + 2*(c/2)` → `ni = 2 + 2*c`) and an IETF
+constant-`c` alignment — both change the proof structure Q6 freezes. **Round 1 must
+therefore freeze on the post-fix tip, not the pin (`3933664d`)**, or genesis freezes
+a known-buggy proof size. Our PQC extra-leaf work reapplies cleanly onto the fix and
+the `fcmps` suite is green on it, so the correction and our delta are compatible.
+
 ## 3. The manifest — three buckets, with the slice-1 boundary
 
 | Bucket | Crates | Owner / fate |
@@ -215,14 +223,31 @@ Touches only kept-vendored crates, which neither slice 1 nor Track B otherwise
 moves. It is a genesis-gate dependency (Q6 + EC review), so it is the higher-
 priority track.
 
-- **A0 — heal the `divisors` cut at source.** Cherry-pick `barycentric.rs` +
-  `divisor.rs` (and the inert `fcmps/params.rs` change) into
-  `Shekyl-Foundation/monero-oxide@fcmp++`; run the fork's tests in isolation;
-  re-sync the crypto subtree; bump `UPSTREAM_MONERO_OXIDE_COMMIT`; re-verify
-  byte-for-byte that **local copy == pin == fork tip**. This is the documented
-  vendoring workflow applied retroactively to drift that bypassed step 1.
-  *(Requires a push to `Shekyl-Foundation/monero-oxide` — gated on explicit
-  authorization per [`06-branching`].)*
+- **A0 — re-baseline the crypto subtree at the upstream tip [EXECUTED on the fork; shekyl-core re-pin gated].**
+  The original plan (cherry-pick the divisor patches onto the pin) was overtaken by
+  what the fork actually held: an in-flight per-commit upstream sync
+  (`chore/upstream-sync-2026-05`) stalled ~8-of-49 commits in, on a *non-compiling*
+  intermediate (an out-of-order cherry-pick left a `ConditionallySelectable` use
+  without its import). Hand-replaying 49 commits is the cherry-pick expedition §0
+  names as the core problem, so we did the reset the posture implies — take upstream
+  wholesale, reapply our small delta:
+  - New branch **`chore/crypto-resync-from-tip`** off the real upstream `fcmp++`
+    tip (`06622980`), pushed to `Shekyl-Foundation/monero-oxide`; the stalled branch
+    is preserved as a record.
+  - Reapplied the **entire** Shekyl crypto delta as two documented commits: PQC
+    extra-leaf scalar support (reapply of `87acb57` onto the fixed `fcmps` — clean
+    3-way, **fcmps 7/7**) and the `divisors` `div`/`interpolate` hardening (sourced
+    from the vendored copy, the only place it lived — **divisors 6/6**).
+    `helioselene`/`gbp` carry upstream's formal-verification + WCG fixes *natively*,
+    zero Shekyl delta — the clean, bounded, diff-against-upstream set the EC review
+    wants. The crypto `Cargo.toml` metadata is kept upstream-minimal (the Shekyl
+    `repository` stamping happens at re-pin per §5).
+  - **Gated remainder (genesis-format change, not solo):** re-pin shekyl-core
+    (`UPSTREAM_MONERO_OXIDE_COMMIT` → the new tip), re-sync the vendored crypto
+    subtree, regenerate the A1 manifest from the pristine tree (then snapshot == pin,
+    so A1 becomes byte-exact-vs-pin), and re-vet the Q6 freeze references against the
+    moved proof structure — routed through the slice-1/wire-format track + crypto
+    review (see §2.3).
 - **A1 — add the gate everyone assumed existed. [content gate landed; canary
   re-scoped]** A content-integrity gate now runs on push/PR
   (`.github/workflows/vendored-crypto-content.yml` →
@@ -303,8 +328,11 @@ empties — the same double-handling trap one level down. Each is a B1 input.
 
 ## 8. Sequencing
 
-1. **Track A may begin now** (decoupled; genesis-gate priority). A0 needs a
-   push-authorization; A1 is local CI.
+1. **Track A — A0 executed on the fork; shekyl-core re-pin gated.** The crypto
+   subtree is re-baselined at the upstream tip (`chore/crypto-resync-from-tip`,
+   pushed) with the two-commit Shekyl delta reapplied and green; A1's content gate
+   runs on push/PR. The remaining step — re-pin shekyl-core to the new tip + re-vet Q6 —
+   is a genesis-format change, sequenced with slice 1 (step 2).
 2. **Slice 1 lands** (wire-format extraction; main crate dissolves; ~58 sites
    migrated) — out of this doc's scope, tracked in
    [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md).
