@@ -82,6 +82,20 @@ sustainability is unaffected by the recalibration.
   parse/validate consensus-parity pass, not the fee surface. Target: V3.0
   (pre-genesis consensus parity).
 
+- **Bounded-count newtypes for the fee/weight path — do once #179 lands (flagged
+  2026-06-24 on `feat/wire-tx-weight`).** `predict_weight` and its helpers take raw
+  `n_in`/`n_out: usize` that arrive uncapped from the fee context, so #179 made the
+  body fail safe with saturating arithmetic + a `padded_outputs` clamp. The *proper*
+  fix is typing: an `InputCount` (`1..=MAX_INPUTS`) / `OutputCount`
+  (`1..=MAX_OUTPUTS`) newtype validated **once** at the coin-selection boundary and
+  threaded through `FeeEstimationContext` → `converge_fee` / `build_fee_directive` →
+  `predict_weight`. Then an out-of-range count is *unrepresentable*, the saturating
+  arithmetic + clamp can be **deleted** (plain arithmetic is provably overflow-free),
+  and the `MAX_INPUTS`/`MAX_OUTPUTS` assertions scattered through `fcmp_proof_size` +
+  the weight KAT collapse to the type invariant. Deferred from #179 (a Copilot-finding
+  fix) to keep that PR localized; this is its own small refactor. Target: V3.1+
+  (maintainability / type-safety).
+
 - **External cryptographic review of the `FcmpMembershipOnly` soundness
   reduction (2026-06-12).**
   [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:
@@ -121,6 +135,25 @@ sustainability is unaffected by the recalibration.
   source) that no reward-binding path reads `hybrid_sign_pk.ed25519` as the
   address spend pubkey; discharge by citing the structural binding it uses
   instead. Target: V3.0 (must discharge before the emission leg freezes).
+
+- **FCMP++ circuit: confirm `incomplete_add_pub` need not constrain `c`
+  on-curve (relocated from a vendored-code marker, 2026-06-24).** Upstream
+  `crypto/fcmps/src/gadgets/mod.rs` carries `// TODO: Do we need to constrain c
+  on-curve? That may be redundant` on `Circuit::incomplete_add_pub` (checked
+  incomplete addition for a public point and an on-curve point). The Shekyl fork
+  had escalated this to a `RELEASE-BLOCKER` comment; the crypto re-baseline
+  ([`design/SHEKYL_OXIDE_UNVENDOR.md`](./design/SHEKYL_OXIDE_UNVENDOR.md) §6 A0)
+  reset the subtree to the pristine upstream tip and keeps the kept-vendored
+  crypto diff-minimal — so the open question is tracked here rather than as a
+  divergent comment in vendored upstream code. The concern: if `c`'s
+  on-curve-ness is **not** already implied by the surrounding constraints, an
+  unconstrained `c` is an FCMP++ circuit soundness gap (a prover could supply an
+  off-curve `c`). **Reopening / discharge criterion:** the FCMP++ soundness review
+  (the same external-review window as the `FcmpMembershipOnly` item above)
+  confirms whether the on-curve property is redundant given the gadget's other
+  constraints; discharge by citing the constraint that implies it, or by adding
+  the explicit constraint. Target: V3.0 (FCMP++ circuit soundness; bundle with the
+  EC-membership / FCMP++ audit).
 
 - **Corpus-freeze guards: align `address_derivation_freeze` error message
   with `archival_p_freeze` (Copilot PR #152, 2026-06-17).** PR #152 enriched
