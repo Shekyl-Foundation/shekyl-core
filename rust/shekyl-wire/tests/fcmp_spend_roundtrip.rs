@@ -288,6 +288,17 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         fee_only.pqc_signing_payload_hashes().is_empty(),
         "fee-only (no prunable) yields no signing hashes"
     );
+
+    let mut coinbase = synthetic_spend();
+    coinbase.ct = Ct::Null(CtBase {
+        enc_amounts: Vec::new(),
+        enc_labels: Vec::new(),
+        commitments: Vec::new(),
+    });
+    assert!(
+        coinbase.pqc_signing_payload_hashes().is_empty(),
+        "coinbase (Null ct) yields no signing hashes"
+    );
 }
 
 #[test]
