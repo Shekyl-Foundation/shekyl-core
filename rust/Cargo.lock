@@ -1360,18 +1360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ff-group-tests"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2afc03ebbfbdd2097d4534ee03d68e8ab4166b49b56a23169d849f0f3270cabc"
-dependencies = [
- "ff",
- "group",
- "rand_core 0.6.4",
- "subtle",
-]
-
-[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1464,13 +1452,11 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "ciphersuite",
- "dalek-ff-group 0.5.0",
  "ec-divisors",
  "generalized-bulletproofs",
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.3.5",
- "helioselene",
  "multiexp",
  "rand_core 0.6.4",
  "std-shims",
@@ -1582,6 +1568,7 @@ dependencies = [
  "multiexp",
  "rand_core 0.6.4",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -1796,9 +1783,7 @@ dependencies = [
  "dalek-ff-group 0.5.0",
  "ec-divisors",
  "ff",
- "ff-group-tests",
  "group",
- "hex",
  "rand_core 0.6.4",
  "std-shims",
  "subtle",

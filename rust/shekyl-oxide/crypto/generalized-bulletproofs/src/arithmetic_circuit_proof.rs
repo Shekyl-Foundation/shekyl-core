@@ -1,11 +1,14 @@
+#![allow(clippy::many_single_char_names)]
+
 use std_shims::{vec, vec::Vec};
 
 use rand_core::{CryptoRng, RngCore};
 
+use subtle::ConditionallySelectable;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use ciphersuite::{
-    group::ff::{Field, FromUniformBytes},
+    group::ff::{Field as _, FromUniformBytes},
     Ciphersuite,
 };
 use multiexp::{multiexp, multiexp_vartime};
@@ -38,7 +41,7 @@ pub struct ArithmeticCircuitStatement<'a, C: Ciphersuite> {
     V: PointVector<C>,
 }
 
-impl<'a, C: Ciphersuite> Zeroize for ArithmeticCircuitStatement<'a, C> {
+impl<C: Ciphersuite> Zeroize for ArithmeticCircuitStatement<'_, C> {
     fn zeroize(&mut self) {
         self.constraints.zeroize();
         self.C.zeroize();
@@ -94,6 +97,8 @@ pub enum AcStatementError {
     ConstrainedNonExistentVectorCommitment,
     /// A constraint referred to a non-existent commitment.
     ConstrainedNonExistentCommitment,
+    /// Too many commitments were specified as part of the statement.
+    TooManyCommitments,
 }
 
 impl<'a, C: Ciphersuite> ArithmeticCircuitStatement<'a, C>
@@ -128,6 +133,12 @@ where
             if Some(V.len()) <= constraint.highest_v_index {
                 Err(AcStatementError::ConstrainedNonExistentCommitment)?;
             }
+        }
+
+        // This ensures we may perform `n' = 2 * n_c + 2, 2 * (n' + 1)` with plenty of room,
+        // without limiting any realistic uses of this proof
+        if C.len() >= (usize::MAX >> 4) {
+            Err(AcStatementError::TooManyCommitments)?;
         }
 
         Ok(Self {
@@ -167,7 +178,7 @@ struct YzChallenges<C: Ciphersuite> {
     z: ScalarVector<C::F>,
 }
 
-impl<'a, C: Ciphersuite> ArithmeticCircuitStatement<'a, C>
+impl<C: Ciphersuite> ArithmeticCircuitStatement<'_, C>
 where
     C::F: FromUniformBytes<64>,
 {
@@ -207,11 +218,15 @@ pub enum AcProveError {
     InconsistentWitness,
 }
 
-impl<'a, C: Ciphersuite> ArithmeticCircuitStatement<'a, C>
+impl<C: Ciphersuite> ArithmeticCircuitStatement<'_, C>
 where
     C::F: FromUniformBytes<64>,
+    C::G: ConditionallySelectable,
 {
     /// Prove for this statement/witness.
+    ///
+    /// This is only guaranteed to return a valid proof when the witness satisfies the statement. It
+    /// may or may not return an error if the witness does not satisfy the statement.
     pub fn prove<R: RngCore + CryptoRng>(
         self,
         rng: &mut R,
@@ -277,12 +292,22 @@ where
                         }
                     }))
                     .chain(
-                        constraint
-                            .WCG
+                        witness
+                            .c
                             .iter()
-                            .zip(&witness.c)
+                            .enumerate()
+                            .map(|(i, c)| {
+                                (
+                                    constraint
+                                        .WCG()
+                                        .get(&i)
+                                        .into_iter()
+                                        .flat_map(|value| value.iter()),
+                                    c,
+                                )
+                            })
                             .flat_map(|(weights, c)| {
-                                weights.iter().map(|(j, weight)| {
+                                weights.map(|(j, weight)| {
                                     if let Some(value) = c.g_values.get(*j) {
                                         *weight * value
                                     } else {
@@ -373,34 +398,29 @@ where
         let YzChallenges { y_inv, z } = self.yz_challenges(y, z);
         let y = ScalarVector::powers(y, n);
 
-        // t is a n'-term polynomial
-        // While Bulletproofs discuss it as a 6-term polynomial, Generalized Bulletproofs re-defines it
-        // as `2(n' + 1)`-term, where `n'` is `2 (c + 1)`.
-        // When `c = 0`, `n' = 2`, and t is `6` (which lines up with Bulletproofs having a 6-term
-        // polynomial).
+        /*
+          `t` is a degree-`2 * (n' + 1)` polynomial.
 
-        // ni = n'
-        let ni = 2 + (2 * (c / 2));
-        // These indexes are from the Generalized Bulletproofs paper
-        #[rustfmt::skip]
-    let ilr = ni / 2; // 1 if c = 0
-        #[rustfmt::skip]
-    let io = ni; // 2 if c = 0
-        #[rustfmt::skip]
-    let is = ni + 1; // 3 if c = 0
-        #[rustfmt::skip]
-    let jlr = ni / 2; // 1 if c = 0
-        #[rustfmt::skip]
-    let jo = 0; // 0 if c = 0
-        #[rustfmt::skip]
-    let js = ni + 1; // 3 if c = 0
+          While Bulletproofs defines and considers it as a degree-6 polynomial, this re-definition is
+          part of the expanded statement offered by Generalized Bulletproofs such that
+          `n' = (2 * c) + 2`. When `c`, the amount of vector commitments, is `0`, we have `n' = 2`,
+          and `t = 2 * (2 + 1) = 6`, collapsing the structure of `t` back to the definition within the
+          original Bulletproofs paper.
+        */
 
-        // If c = 0, these indexes perfectly align with the stated powers of X from the Bulletproofs
-        // paper for the following coefficients
+        // `ni` = `n'` as `n'` is not a valid name for a variable in the Rust programming language
+        let ni = (2 * c) + 2;
+        // These indexes are from the Generalized Bulletproofs (fixed) paper
+        let ilr = ni / 2;
+        let io = ni;
+        let is = ni + 1;
+        let jlr = ilr;
+        let jo = 0;
+        let js = is;
 
         // Declare the l and r polynomials, assigning the traditional coefficients to their positions
-        let mut l = vec![];
-        let mut r = vec![];
+        let mut l = Vec::with_capacity(is + 1);
+        let mut r = Vec::with_capacity(is + 1);
         #[allow(clippy::range_plus_one)]
         for _ in 0..(is + 1) {
             l.push(ScalarVector::new(0));
@@ -471,7 +491,7 @@ where
         for (dest, (o, y)) in r[jo].0.iter_mut().zip(o_weights.0.iter().zip(&y.0)) {
             *dest = *o - *y;
         }
-        // As the prior loop may terminate if `o_weights` was short, push the rest of `[jo]`
+        // As the prior loop may terminate if `o_weights` was short, push the rest of `r[jo]` (`-y`)
         for i in o_weights.len()..n {
             r[jo][i] = -y[i];
         }
@@ -485,12 +505,12 @@ where
           coefficients of `r` decreasing from `ni` (skipping `jlr`).
         */
 
-        for (mut i, c) in witness.c.iter().enumerate() {
+        for (i, c) in witness.c.iter().enumerate() {
             let cg_weights = {
                 let mut cg = ScalarVector::new(n);
                 let mut cg_hi = 0;
                 for (constraint, z) in self.constraints.iter().zip(&z.0) {
-                    if let Some(WCG) = constraint.WCG.get(i) {
+                    if let Some(WCG) = constraint.WCG().get(&i) {
                         cg_hi = cg_hi.max(accumulate_vector(&mut cg, WCG, *z));
                     }
                 }
@@ -498,20 +518,25 @@ where
                 cg
             };
 
-            // Modify `i` from the index of the vector commitment to its index within `l`
-            if i >= ilr {
-                i += 1;
-            }
-            // Because `i` has skipped `ilr`, `j` will inherently skip `jlr`
+            let i = 1 + i;
             let j = ni - i;
 
-            l[i] = ScalarVector::from(c.g_values.clone());
-            r[j] = cg_weights;
+            l[j] = ScalarVector::from(c.g_values.clone());
+            r[i] = cg_weights;
+            // This does not set `r[j]` as our prover does not populate the right-hand of the VCs
         }
 
         // Multiply `l` and `r` to obtain `t`
-        let mut t = ScalarVector::new(1 + (2 * (l.len() - 1)));
+        let mut t = ScalarVector::<C::F>::new(1 + (2 * (l.len() - 1)));
         for (i, l) in l.iter().enumerate() {
+            if i < (ni / 2) {
+                // This is guaranteed due to how these elements of `l` aren't populated by the indexing
+                #[cfg(debug_assertions)]
+                for coeff in &l.0 {
+                    debug_assert_eq!(coeff, &C::F::ZERO);
+                }
+                continue;
+            }
             for (j, r) in r.iter().enumerate() {
                 t[i + j] += l.inner_product_without_length_checks(r.0.iter());
             }
@@ -524,7 +549,7 @@ where
           Then, `n'` is equal to `2` when no vector commitments are present.
         */
         let mut tau_before_ni = vec![];
-        for _ in 0..ni {
+        for _ in (ni / 2)..ni {
             tau_before_ni.push(C::F::random(&mut *rng));
         }
         let mut tau_after_ni = vec![];
@@ -532,7 +557,7 @@ where
             tau_after_ni.push(C::F::random(&mut *rng));
         }
         // Calculate commitments to the coefficients of `t`, blinded by `tau`
-        for (t, tau) in t.0[0..ni].iter().zip(tau_before_ni.iter()) {
+        for (t, tau) in t.0[(ni / 2)..ni].iter().zip(tau_before_ni.iter()) {
             transcript.push_point(&multiexp(&[
                 (*t, self.generators.g()),
                 (*tau, self.generators.h()),
@@ -569,36 +594,44 @@ where
         }
 
         let tau_x = {
-            let mut tau_x_poly = Vec::with_capacity(t.len());
+            let mut tau_x_poly = Vec::with_capacity(t.len() - (ni / 2));
             tau_x_poly.extend(tau_before_ni);
             tau_x_poly.push(V_weights.inner_product(witness.v.iter().map(|v| &v.mask)));
             tau_x_poly.extend(tau_after_ni);
 
             let mut tau_x = C::F::ZERO;
             for (i, coeff) in tau_x_poly.into_iter().enumerate() {
-                tau_x += coeff * x[i];
+                tau_x += coeff * x[(ni / 2) + i];
             }
             tau_x
         };
 
-        // Calculate `u` for the powers of `x` variable to `ilr`/`io`/`is`
-        let u = {
-            // Calculate the first part of `u`
-            let mut u = (alpha * x[ilr]) + (beta * x[io]) + (rho * x[is]);
+        // Calculate `mu` for the powers of `x` variable to `ilr`/`io`/`is`
+        let mu = {
+            // Calculate the first part of `mu`
+            let mut mu = (alpha * x[ilr]) + (beta * x[io]) + (rho * x[is]);
 
             // Incorporate the commitment masks multiplied by the associated power of `x`
-            for (mut i, commitment) in witness.c.iter().enumerate() {
-                // If this index is `ni / 2`, skip it
-                if i >= (ni / 2) {
-                    i += 1;
-                }
-                u += x[i] * commitment.mask;
+            for (i, commitment) in witness.c.iter().enumerate() {
+                let i = 1 + i;
+                mu += x[ni - i] * commitment.mask;
             }
-            u
+            mu
         };
 
-        // Use the Inner-Product argument to prove for the following:
-        // `P = t_caret * g + l * g_bold + r * (y_inv * h_bold)`
+        transcript.push_scalar(tau_x);
+        transcript.push_scalar(mu);
+        transcript.push_scalar(t_caret);
+
+        /*
+          Use the Inner-Product argument to prove for the following statement:
+            `P = l * g_bold + r * (y_inv * h_bold), t_caret = <l, r>`
+          This avoids needing to transmit `l, r`.
+        */
+
+        // Protocol 1, inlined, since our `IpStatement` is for Protocol 2
+
+        let ip_x = transcript.challenge::<C>();
 
         let mut P_terms = Vec::with_capacity(1 + (2 * self.generators.len()));
         debug_assert_eq!(l.len(), r.len());
@@ -607,11 +640,6 @@ where
             P_terms.push((y_inv[i] * r, self.generators.h_bold(i)));
         }
 
-        // Protocol 1, inlined, since our IpStatement is for Protocol 2
-        transcript.push_scalar(tau_x);
-        transcript.push_scalar(u);
-        transcript.push_scalar(t_caret);
-        let ip_x = transcript.challenge::<C>();
         P_terms.push((ip_x * t_caret, self.generators.g()));
         IpStatement::new(
             self.generators,
@@ -641,9 +669,10 @@ pub enum AcVerifyError {
     IncompleteProof,
 }
 
-impl<'a, C: Ciphersuite> ArithmeticCircuitStatement<'a, C>
+impl<C: Ciphersuite> ArithmeticCircuitStatement<'_, C>
 where
     C::F: FromUniformBytes<64>,
+    C::G: ConditionallySelectable,
 {
     /// Verify a proof for this statement.
     ///
@@ -666,15 +695,12 @@ where
         let n = self.n();
         let c = self.c();
 
-        let ni = 2 + (2 * (c / 2));
+        let ni = (2 * c) + 2;
 
         let ilr = ni / 2;
         let io = ni;
         let is = ni + 1;
-        let jlr = ni / 2;
-
-        let l_r_poly_len = 1 + ni + 1;
-        let t_poly_len = (2 * l_r_poly_len) - 1;
+        let jo = 0;
 
         let AI = transcript
             .read_point::<C>()
@@ -689,6 +715,26 @@ where
         let z = transcript.challenge::<C>();
         let YzChallenges { y_inv, z } = self.yz_challenges(y, z);
 
+        // The fixed GBP paper writes this as `2 * (ni + 1)` (inclusive), but this is exclusive
+        let t_poly_len = (2 * (ni + 1)) + 1;
+        let mut T_before_ni = Vec::with_capacity(ni - (ni / 2));
+        for _ in (ni / 2)..ni {
+            T_before_ni.push(
+                transcript
+                    .read_point::<C>()
+                    .map_err(|_| AcVerifyError::IncompleteProof)?,
+            );
+        }
+        let mut T_after_ni = Vec::with_capacity(t_poly_len - (ni + 1));
+        for _ in (ni + 1)..t_poly_len {
+            T_after_ni.push(
+                transcript
+                    .read_point::<C>()
+                    .map_err(|_| AcVerifyError::IncompleteProof)?,
+            );
+        }
+        let x: ScalarVector<C::F> = ScalarVector::powers(transcript.challenge::<C>(), t_poly_len);
+
         let mut l_weights = ScalarVector::new(n);
         let mut r_weights = ScalarVector::new(n);
         let mut o_weights = ScalarVector::new(n);
@@ -701,28 +747,10 @@ where
 
         let delta = r_weights.inner_product(l_weights.0.iter());
 
-        let mut T_before_ni = Vec::with_capacity(ni);
-        let mut T_after_ni = Vec::with_capacity(t_poly_len - ni - 1);
-        for _ in 0..ni {
-            T_before_ni.push(
-                transcript
-                    .read_point::<C>()
-                    .map_err(|_| AcVerifyError::IncompleteProof)?,
-            );
-        }
-        for _ in 0..(t_poly_len - ni - 1) {
-            T_after_ni.push(
-                transcript
-                    .read_point::<C>()
-                    .map_err(|_| AcVerifyError::IncompleteProof)?,
-            );
-        }
-        let x: ScalarVector<C::F> = ScalarVector::powers(transcript.challenge::<C>(), t_poly_len);
-
         let tau_x = transcript
             .read_scalar::<C>()
             .map_err(|_| AcVerifyError::IncompleteProof)?;
-        let u = transcript
+        let mu = transcript
             .read_scalar::<C>()
             .map_err(|_| AcVerifyError::IncompleteProof)?;
         let t_caret = transcript
@@ -730,34 +758,40 @@ where
             .map_err(|_| AcVerifyError::IncompleteProof)?;
 
         // Lines 88-90, modified per Generalized Bulletproofs as needed w.r.t. `t`
+        // This corresponds to the verifier's final Step 4 in the 'fixed' paper
         {
             let verifier_weight = C::F::random(&mut *rng);
             // lhs of the equation, weighted to enable batch verification
             verifier.g += t_caret * verifier_weight;
             verifier.h += tau_x * verifier_weight;
 
-            let mut V_weights = ScalarVector::new(self.V.len());
-            for (constraint, z) in self.constraints.iter().zip(&z.0) {
-                // We use `-z`, not `z`, as we write our constraint as `... + WV V = 0` not `= WV V + ..`
-                // This means we need to subtract `WV V` from both sides, which we accomplish here
-                accumulate_vector(&mut V_weights, &constraint.WV, -*z);
-            }
-            V_weights = V_weights * x[ni];
-
             // rhs of the equation, negated to cause a sum to zero
-            // `delta - z...`, instead of `delta + z...`, is done for the same reason as in the above WV
-            // matrix transform
+
+            /*
+              `delta - z...`, instead of `delta + z...`, is because we write our constraint as
+              `+ c = 0`, not `= c`, so we have to subtract it from both sides, which this effects.
+            */
             verifier.g -= verifier_weight
                 * x[ni]
                 * (delta
                     - z.inner_product(self.constraints.iter().map(|constraint| &constraint.c)));
+            let mut V_weights = ScalarVector::new(self.V.len());
+            for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                accumulate_vector(&mut V_weights, &constraint.WV, *z);
+            }
+            V_weights = V_weights * x[ni];
             for pair in V_weights.0.into_iter().zip(self.V.0) {
-                verifier
-                    .additional
-                    .push((-verifier_weight * pair.0, pair.1));
+                /*
+                  We actually don't negate `verifier_weight` here as we write our constraint as
+                  `... + WV V = 0` not `= WV V + ..`. This means we need to subtract it from both sides,
+                  which this effects.
+                */
+                verifier.additional.push((verifier_weight * pair.0, pair.1));
             }
             for (i, T) in T_before_ni.into_iter().enumerate() {
-                verifier.additional.push((-verifier_weight * x[i], T));
+                verifier
+                    .additional
+                    .push((-verifier_weight * x[(ni / 2) + i], T));
             }
             for (i, T) in T_after_ni.into_iter().enumerate() {
                 verifier
@@ -765,6 +799,8 @@ where
                     .push((-verifier_weight * x[ni + 1 + i], T));
             }
         }
+
+        // This corresponds to the verifier's final Steps 3, 5 in the 'fixed' paper
 
         let verifier_weight = C::F::random(&mut *rng);
         // Multiply `x` by `verifier_weight` as this effects `verifier_weight` onto most scalars and
@@ -785,17 +821,16 @@ where
 
             // Lines 85-87 calculate `WL`, `WR`, `WO`
             // We preserve them in terms of `g_bold` and `h_bold` for a more efficient multiexp
-            let mut h_bold_scalars = l_weights * x[jlr];
-            for (i, wr) in (r_weights * x[jlr]).0.into_iter().enumerate() {
+            let mut h_bold_scalars = l_weights * x[ilr];
+            for (i, wr) in (r_weights * x[ilr]).0.into_iter().enumerate() {
                 verifier.g_bold[i] += wr;
             }
-            // `WO` is weighted by `x^jo` where `jo == 0`, hence why we can ignore the `x` term
-            h_bold_scalars = h_bold_scalars + &(o_weights * verifier_weight);
+            h_bold_scalars = h_bold_scalars + &(o_weights * x[jo]);
 
             for i in 0..self.C.len() {
                 let mut cg = ScalarVector::new(n);
                 for (constraint, z) in self.constraints.iter().zip(&z.0) {
-                    if let Some(WCG) = constraint.WCG.get(i) {
+                    if let Some(WCG) = constraint.WCG().get(&i) {
                         accumulate_vector(&mut cg, WCG, *z);
                     }
                 }
@@ -803,16 +838,12 @@ where
                 // Push the terms for `C`, which increment from `0`, and the terms for `WC`, which
                 // decrement from `n'`
                 {
-                    let mut i = i;
                     let C = self.C.0[i];
                     let WCG = cg;
-
-                    if i >= (ni / 2) {
-                        i += 1;
-                    }
+                    let i = 1 + i;
                     let j = ni - i;
-                    verifier.additional.push((x[i], C));
-                    h_bold_scalars = h_bold_scalars + &(WCG * x[j]);
+                    verifier.additional.push((x[j], C));
+                    h_bold_scalars = h_bold_scalars + &(WCG * x[i]);
                 }
             }
 
@@ -822,8 +853,8 @@ where
                 verifier.h_bold[i] += scalar;
             }
 
-            // Remove `u * h` from `P`
-            verifier.h -= verifier_weight * u;
+            // Remove `mu * h` from `P`
+            verifier.h -= verifier_weight * mu;
         }
 
         // Prove for lines 88, 92 with an Inner-Product statement

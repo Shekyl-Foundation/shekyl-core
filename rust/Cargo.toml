@@ -58,13 +58,10 @@ members = [
     # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
     "shekyl-types",
 
-    # Vendored monero-oxide protocol crates
-    "shekyl-oxide/crypto/helioselene",
-    "shekyl-oxide/crypto/divisors",
-    "shekyl-oxide/crypto/generalized-bulletproofs",
-    "shekyl-oxide/crypto/fcmps/circuit-abstraction",
-    "shekyl-oxide/crypto/fcmps/ec-gadgets",
-    "shekyl-oxide/crypto/fcmps",
+    # Vendored monero-oxide protocol crates (application layer). The FCMP++
+    # crypto research crates are workspace-excluded (see the `exclude` list
+    # below) so the pristine upstream subtree is not forced through Shekyl's
+    # fmt/clippy gates; consumers depend on them by path.
     "shekyl-oxide/shekyl-oxide/io",
     "shekyl-oxide/shekyl-oxide/generators",
     "shekyl-oxide/shekyl-oxide/primitives",
@@ -132,6 +129,21 @@ members = [
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
     "shekyl-engine-state/fuzz",
+    # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
+    # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
+    # the fork — the EC-membership review artifact; this vendored copy is
+    # reformatted to the workspace rustfmt style (the fork uses nightly-only
+    # rustfmt options Shekyl's stable toolchain can't replicate). Excluded from
+    # the workspace so upstream code is not subjected to Shekyl's clippy `-D`
+    # gate (it builds as a path-dep of consumers; `cargo fmt --all` still formats
+    # it to workspace style). The A1 content gate (CRYPTO_CONTENT_MANIFEST.sha256)
+    # verifies its integrity. See docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 (A0/A1).
+    "shekyl-oxide/crypto/helioselene",
+    "shekyl-oxide/crypto/divisors",
+    "shekyl-oxide/crypto/generalized-bulletproofs",
+    "shekyl-oxide/crypto/fcmps/circuit-abstraction",
+    "shekyl-oxide/crypto/fcmps/ec-gadgets",
+    "shekyl-oxide/crypto/fcmps",
 ]
 resolver = "2"
 

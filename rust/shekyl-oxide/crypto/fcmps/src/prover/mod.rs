@@ -1,6 +1,6 @@
 use std_shims::{vec, vec::Vec};
 
-use ciphersuite::{group::ff::Field, Ciphersuite};
+use ciphersuite::{group::ff::Field as _, Ciphersuite};
 
 use ec_divisors::DivisorCurve;
 
@@ -326,7 +326,6 @@ where
 
         // Phase 1: Standard per-input branches (leaves + tree layers).
         // These must be contiguous on the tape so known branch blinds align with commitment indices.
-        #[allow(clippy::type_complexity)]
         let mut per_input: Vec<(Vec<Vec<Variable>>, Vec<Vec<Variable>>)> = vec![];
         for input in &self.per_input {
             let mut c1 = vec![];

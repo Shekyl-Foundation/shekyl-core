@@ -1,7 +1,9 @@
 use std_shims::{vec, vec::Vec};
 
+use subtle::ConditionallySelectable;
+
 use ciphersuite::{
-    group::ff::{BatchInvert, Field, FromUniformBytes},
+    group::ff::{BatchInvert as _, Field as _, FromUniformBytes},
     Ciphersuite,
 };
 use multiexp::multiexp_vartime;
@@ -92,13 +94,13 @@ pub(crate) enum IpProveError {
     /// Sanity checks on the witness are always performed. This library may also check whether or not
     /// the witness actually opens the statement (such as if `debug_assertions = on`), and if so, may
     /// return this error if the witness is perceived as inconsistent with the statement.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     InconsistentWitness,
 }
 
-impl<'a, C: Ciphersuite> IpStatement<'a, C>
+impl<C: Ciphersuite> IpStatement<'_, C>
 where
     C::F: FromUniformBytes<64>,
+    C::G: ConditionallySelectable,
 {
     /// Prove for this Inner-Product statement.
     ///
@@ -257,7 +259,7 @@ pub(crate) enum IpVerifyError {
     IncompleteProof,
 }
 
-impl<'a, C: Ciphersuite> IpStatement<'a, C>
+impl<C: Ciphersuite> IpStatement<'_, C>
 where
     C::F: FromUniformBytes<64>,
 {

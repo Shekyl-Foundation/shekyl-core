@@ -23,7 +23,7 @@ impl<C: Ciphersuite> Circuit<C> {
 
             let carry_eval = self.eval(&carry);
             let next_eval = self.eval(&next);
-            let witness = carry_eval.zip(next_eval);
+            let witness = carry_eval.map(|carry_eval| (carry_eval, next_eval.unwrap()));
 
             let (_l, _r, constrainable_carry) = self.mul(Some(carry), Some(next), witness);
             carry = constrainable_carry.into();
@@ -43,9 +43,7 @@ impl<C: Ciphersuite> Circuit<C> {
     }
 
     /// Perform checked incomplete addition for a public point and an on-curve point.
-    /// Both `b` and `c` are accepted as `OnCurve`, so callers must supply points
-    /// that have already been constrained on-curve (e.g. via `on_curve`). No
-    /// additional on-curve constraint is needed here.
+    // TODO: Do we need to constrain c on-curve? That may be redundant
     pub(crate) fn incomplete_add_pub(
         &mut self,
         a: (C::F, C::F),

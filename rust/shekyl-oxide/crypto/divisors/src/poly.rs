@@ -512,7 +512,7 @@ impl<F: From<u64> + Zeroize + PrimeField> Poly<F> {
             for (a, b) in a.yx_coefficients.iter().zip(&b.yx_coefficients) {
                 let mut yx_coefficients = Vec::with_capacity(a.len());
                 for (a, b) in a.iter().zip(b) {
-                    yx_coefficients.push(<_>::conditional_select(a, b, choice))
+                    yx_coefficients.push(<_>::conditional_select(a, b, choice));
                 }
                 res.yx_coefficients.push(yx_coefficients);
             }

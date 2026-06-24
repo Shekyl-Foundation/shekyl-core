@@ -106,7 +106,10 @@ impl<C: Ciphersuite> PointVector<C> {
     ///
     /// May panic if the vectors are different lengths.
     #[cfg(test)] // Only used by the tests at this time
-    pub(crate) fn multiexp(&self, vector: &ScalarVector<C::F>) -> C::G {
+    pub(crate) fn multiexp(&self, vector: &ScalarVector<C::F>) -> C::G
+    where
+        C::G: subtle::ConditionallySelectable,
+    {
         debug_assert_eq!(
             self.len(),
             vector.len(),

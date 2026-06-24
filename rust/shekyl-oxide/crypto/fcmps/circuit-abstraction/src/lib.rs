@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
@@ -9,7 +9,7 @@ use std_shims::{vec, vec::Vec};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use ciphersuite::{
-    group::ff::{Field, FromUniformBytes},
+    group::ff::{Field as _, FromUniformBytes},
     Ciphersuite,
 };
 
@@ -27,18 +27,18 @@ mod gadgets;
 /// A trait for the transcript, whether proving for verifying, as necessary for sampling
 /// challenges.
 pub trait Transcript {
-    /// Sample a challenge from the transcript.
+    /// Sample a challenge from the transacript.
     ///
-    /// It is the caller's responsibility to have properly added all variables to the transcript
-    /// prior to sampling this challenge.
+    /// It is the caller's responsibility to have properly transcripted all variables prior to
+    /// sampling this challenge.
     fn challenge<C: Ciphersuite>(&mut self) -> C::F
     where
         C::F: FromUniformBytes<64>;
 
     /// Sample a challenge as a byte array.
     ///
-    /// It is the caller's responsibility to have properly added all variables to the transcript
-    /// prior to sampling this challenge.
+    /// It is the caller's responsibility to have properly transcripted all variables prior to
+    /// sampling this challenge.
     fn challenge_bytes(&mut self) -> [u8; 64];
 }
 impl Transcript for ProverTranscript {
@@ -134,8 +134,13 @@ impl<C: Ciphersuite> Circuit<C> {
             for (index, weight) in lincomb.WO() {
                 res += prover.aL[*index] * prover.aR[*index] * weight;
             }
-            for (WCG, C) in lincomb.WCG().iter().zip(&prover.C) {
-                for (j, weight) in WCG {
+            for (i, C) in prover.C.iter().enumerate() {
+                for (j, weight) in lincomb
+                    .WCG()
+                    .get(&i)
+                    .into_iter()
+                    .flat_map(|values| values.iter())
+                {
                     res += C.g_values[*j] * weight;
                 }
             }
@@ -151,6 +156,7 @@ impl<C: Ciphersuite> Circuit<C> {
     ///
     /// May panic if any linear combinations reference non-existent terms or if the witness isn't
     /// provided when proving/is provided when verifying.
+    #[allow(clippy::many_single_char_names)]
     pub fn mul(
         &mut self,
         a: Option<LinComb<C::F>>,

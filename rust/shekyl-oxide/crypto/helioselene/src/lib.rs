@@ -1,10 +1,10 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![no_std]
 
 use core::hint::black_box;
 
-use zeroize::Zeroize;
+use zeroize::Zeroize as _;
 
 pub use group;
 
