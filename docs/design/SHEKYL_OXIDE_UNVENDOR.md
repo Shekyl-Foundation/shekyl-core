@@ -134,9 +134,9 @@ is therefore not hygiene — it protects a frozen surface ([`42-serialization-po
 
 **The pin is not just stale — it is proof-format-buggy.** Re-baselining at the
 upstream tip (§6 A0) surfaced two genesis-relevant corrections sitting *above* the
-pin: an `fcmps` proof-sizing fix (`ni = 2 + 2*(c/2)` → `2 + 2*c`) and an IETF
+pin: an `fcmps` proof-sizing fix (`ni = 2 + 2*(c/2)` → `ni = 2 + 2*c`) and an IETF
 constant-`c` alignment — both change the proof structure Q6 freezes. **Round 1 must
-therefore freeze on the post-fix tip, not the pin (`3933664`)**, or genesis freezes
+therefore freeze on the post-fix tip, not the pin (`3933664d`)**, or genesis freezes
 a known-buggy proof size. Our PQC extra-leaf work reapplies cleanly onto the fix and
 the `fcmps` suite is green on it, so the correction and our delta are compatible.
 
@@ -232,7 +232,7 @@ priority track.
   names as the core problem, so we did the reset the posture implies — take upstream
   wholesale, reapply our small delta:
   - New branch **`chore/crypto-resync-from-tip`** off the real upstream `fcmp++`
-    tip (`0662298`), pushed to `Shekyl-Foundation/monero-oxide`; the stalled branch
+    tip (`06622980`), pushed to `Shekyl-Foundation/monero-oxide`; the stalled branch
     is preserved as a record.
   - Reapplied the **entire** Shekyl crypto delta as two documented commits: PQC
     extra-leaf scalar support (reapply of `87acb57` onto the fixed `fcmps` — clean
@@ -331,7 +331,7 @@ empties — the same double-handling trap one level down. Each is a B1 input.
 1. **Track A — A0 executed on the fork; shekyl-core re-pin gated.** The crypto
    subtree is re-baselined at the upstream tip (`chore/crypto-resync-from-tip`,
    pushed) with the two-commit Shekyl delta reapplied and green; A1's content gate
-   is local CI. The remaining step — re-pin shekyl-core to the new tip + re-vet Q6 —
+   runs on push/PR. The remaining step — re-pin shekyl-core to the new tip + re-vet Q6 —
    is a genesis-format change, sequenced with slice 1 (step 2).
 2. **Slice 1 lands** (wire-format extraction; main crate dissolves; ~58 sites
    migrated) — out of this doc's scope, tracked in
