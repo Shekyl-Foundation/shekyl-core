@@ -743,15 +743,13 @@ pub trait Rpc: Sync + Clone {
     /// terminal daemon rejection by higher layers.
     fn publish_transaction(
         &self,
-        tx: &Transaction,
+        tx_blob: &[u8],
     ) -> impl Send + Future<Output = Result<TxRelayResponse, RpcError>> {
         async move {
             let res: TxRelayResponse = self
                 .rpc_call(
                     "send_raw_transaction",
-                    Some(
-                        json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": false }),
-                    ),
+                    Some(json!({ "tx_as_hex": hex::encode(tx_blob), "do_sanity_checks": false })),
                 )
                 .await?;
 
