@@ -273,7 +273,8 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
 #[test]
 fn pqc_signing_payload_hashes_empty_for_non_spend() {
     // Non-spend shapes carry no per-input PQC signature: a fee-only `Fcmp` (no prunable)
-    // and the coinbase `Null` ct both return an empty vec.
+    // and a `Null` ct both return an empty vec. `pqc_signing_payload_hashes` keys off the
+    // ct shape, not the prefix, so the `Null` case need not be a full coinbase prefix.
     let mut fee_only = synthetic_spend();
     if let Ct::Fcmp {
         prunable,
@@ -289,15 +290,15 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         "fee-only (no prunable) yields no signing hashes"
     );
 
-    let mut coinbase = synthetic_spend();
-    coinbase.ct = Ct::Null(CtBase {
+    let mut null_ct = synthetic_spend();
+    null_ct.ct = Ct::Null(CtBase {
         enc_amounts: Vec::new(),
         enc_labels: Vec::new(),
         commitments: Vec::new(),
     });
     assert!(
-        coinbase.pqc_signing_payload_hashes().is_empty(),
-        "coinbase (Null ct) yields no signing hashes"
+        null_ct.pqc_signing_payload_hashes().is_empty(),
+        "Null ct yields no signing hashes"
     );
 }
 

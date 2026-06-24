@@ -1143,9 +1143,11 @@ impl Transaction {
     /// - `all_key_hashes` = `‖ over every auth: cn_fast_hash(hybrid_public_key)` (binds every
     ///   input's key into every signature)
     ///
-    /// Returns one hash per input (`len() == pqc_auths.len() == nvin`). Returns an empty
-    /// vec for any non-spend shape — a coinbase `Null` ct, or a fee-only `Fcmp` with no
-    /// prunable / empty `pqc_auths` — which carries no per-input PQC signature.
+    /// Returns one hash per `pqc_auths` entry — `== nvin` for a valid spend, whose arity
+    /// `Transaction::validate` couples (the count is not re-checked here, so a hand-built
+    /// tx with mismatched arity yields one hash per auth regardless). Returns an empty vec
+    /// for any non-spend shape — a `Null` ct, or a fee-only `Fcmp` with no prunable /
+    /// empty `pqc_auths` — which carries no per-input PQC signature.
     pub fn pqc_signing_payload_hashes(&self) -> Vec<[u8; 32]> {
         let Ct::Fcmp {
             fee,

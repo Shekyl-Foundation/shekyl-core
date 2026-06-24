@@ -6,6 +6,7 @@
 //! keeps shekyl-oxide's **crypto** (`Bulletproof`) but no longer its wire/proof types,
 //! and the four §3 divergences of the old shekyl-oxide encoder are gone with it.
 
+use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
@@ -13,9 +14,6 @@ use shekyl_wire::{
 
 use crate::error::TxBuilderError;
 use crate::types::PqcAuth;
-
-/// Scheme id for the genesis hybrid PQC auth (ed25519 + ML-DSA-65).
-const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
 
 /// Material for final on-wire transaction encoding (Phase 2a §4).
 #[derive(Clone, Debug)]
