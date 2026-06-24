@@ -1,20 +1,21 @@
-//! Wire adapter: assemble `shekyl_oxide::transaction::Transaction::V3` and serialize.
+//! Wire adapter: map the builder's spend material onto a canonical
+//! `shekyl_wire::Transaction`, then serialize it / derive its signing hashes.
 //!
-//! This module is the **sole** importer of `shekyl_oxide::transaction::Transaction`
-//! in the `shekyl-tx-builder` crate (`sign.rs` stays format-agnostic).
+//! shekyl-wire is the single authority for the genesis spend layout AND its signing
+//! hashes (`FCMP_SPEND_SIGNING_PREIMAGE.md` §4). This module only *maps* onto it; it
+//! keeps shekyl-oxide's **crypto** (`Bulletproof`) but no longer its wire/proof types,
+//! and the four §3 divergences of the old shekyl-oxide encoder are gone with it.
 
-use shekyl_io::{write_varint, write_vec, CompressedPoint};
 use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
-use shekyl_oxide::fcmp::{
-    EncryptedAmount, EncryptedLabel, ProofBase, ProofType, Proofs, PrunableProof,
-};
-use shekyl_oxide::primitives::keccak256;
-use shekyl_oxide::transaction::{
-    Input, NotPruned, Output, Timelock, Transaction, TransactionPrefix,
+use shekyl_wire::{
+    BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
 
 use crate::error::TxBuilderError;
 use crate::types::PqcAuth;
+
+/// Scheme id for the genesis hybrid PQC auth (ed25519 + ML-DSA-65).
+const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
 
 /// Material for final on-wire transaction encoding (Phase 2a §4).
 #[derive(Clone, Debug)]
@@ -32,221 +33,160 @@ pub struct WireEncodeInput {
     pub reference_block: [u8; 32],
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
+    /// Curve-tree depth the FCMP++ proof was built against — the prunable's
+    /// `tree_depth` (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4). The old shekyl-oxide encoder
+    /// omitted it (it put `reference_block` in the prunable instead — divergence §3.2/§3.3).
+    pub tree_depth: u8,
 }
 
-fn reference_block_u64(block: &[u8; 32]) -> u64 {
-    let mut le = [0u8; 8];
-    le.copy_from_slice(&block[..8]);
-    u64::from_le_bytes(le)
-}
-
-fn serialize_prefix_blob(prefix: &TransactionPrefix) -> Result<Vec<u8>, TxBuilderError> {
-    let mut buf = Vec::new();
-    prefix
-        .additional_timelock
-        .write(&mut buf)
-        .map_err(|e| TxBuilderError::WireError(format!("timelock write: {e}")))?;
-    write_vec(Input::write, &prefix.inputs, &mut buf)
-        .map_err(|e| TxBuilderError::WireError(format!("inputs write: {e}")))?;
-    write_vec(Output::write, &prefix.outputs, &mut buf)
-        .map_err(|e| TxBuilderError::WireError(format!("outputs write: {e}")))?;
-    write_varint(&prefix.extra.len(), &mut buf)
-        .map_err(|e| TxBuilderError::WireError(format!("extra len: {e}")))?;
-    buf.extend_from_slice(&prefix.extra);
-    Ok(buf)
-}
-
-fn tx_prefix_hash(prefix: &TransactionPrefix) -> [u8; 32] {
-    let mut buf = Vec::new();
-    write_varint(&2u8, &mut buf).expect("vec write");
-    buf.extend_from_slice(&serialize_prefix_blob(prefix).expect("prefix blob serializes in tests"));
-    keccak256(buf)
-}
-
-fn pqc_header_blob(auth: &PqcAuth) -> Vec<u8> {
-    let pk_len = u32::try_from(auth.public_key.len())
-        .map_err(|_| TxBuilderError::WireError("PQC public key length exceeds u32".into()))
-        .expect("hybrid PQC public keys fit in u32");
-    let mut out = Vec::with_capacity(4 + auth.public_key.len());
-    out.push(auth.auth_version);
-    out.push(1); // HYBRID_SCHEME_ID_ED25519_ML_DSA_65
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&pk_len.to_le_bytes());
-    out.extend_from_slice(&auth.public_key);
-    out
-}
-
-fn build_prefix(input: &WireEncodeInput) -> TransactionPrefix {
-    let inputs: Vec<Input> = input
-        .key_images
+/// Map key images to `shekyl_wire::Input::ToKey` (FCMP++ inputs: amount 0, no offsets).
+fn wire_inputs(key_images: &[[u8; 32]]) -> Vec<Input> {
+    key_images
         .iter()
         .map(|ki| Input::ToKey {
-            amount: None,
+            amount: 0,
             key_offsets: Vec::new(),
-            key_image: CompressedPoint::from(*ki),
+            key_image: *ki,
         })
-        .collect();
-
-    let outputs: Vec<Output> = input
-        .output_keys
-        .iter()
-        .zip(input.view_tags.iter())
-        .map(|(key, view_tag)| Output {
-            amount: None,
-            key: CompressedPoint::from(*key),
-            view_tag: *view_tag,
-            staking: None,
-        })
-        .collect();
-
-    TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs,
-        outputs,
-        extra: input.tx_extra.clone(),
-    }
+        .collect()
 }
 
-fn build_proofs(input: &WireEncodeInput, n_in: usize, n_out: usize) -> Proofs {
-    let base = ProofBase {
-        fee: input.fee,
-        encrypted_amounts: input
-            .enc_amounts
-            .iter()
-            .map(|bytes| EncryptedAmount {
-                amount: bytes[..8].try_into().expect("enc_amount len"),
-                amount_tag: bytes[8],
+/// Map output keys + view tags to `shekyl_wire::Output`. Genesis outputs always carry a
+/// view_tag (FA-6); the optional form is a pre-genesis inheritance that must not reach
+/// the wire, so a `None` is a hard error.
+fn wire_outputs(
+    output_keys: &[[u8; 32]],
+    view_tags: &[Option<u8>],
+) -> Result<Vec<Output>, TxBuilderError> {
+    output_keys
+        .iter()
+        .zip(view_tags.iter())
+        .map(|(key, view_tag)| {
+            let view_tag = view_tag.ok_or_else(|| {
+                TxBuilderError::WireError("output missing view_tag (genesis requires it)".into())
+            })?;
+            Ok(Output {
+                amount: 0,
+                key: *key,
+                view_tag,
             })
-            .collect(),
-        encrypted_labels: input
-            .enc_labels
-            .iter()
-            .map(|bytes| EncryptedLabel {
-                label: bytes[..8].try_into().expect("enc_label len"),
-                label_tag: bytes[8],
-            })
-            .collect(),
-        commitments: input
-            .out_commitments
-            .iter()
-            .map(|c| CompressedPoint::from(*c))
-            .collect(),
-    };
+        })
+        .collect()
+}
 
-    debug_assert_eq!(base.encrypted_amounts.len(), n_out);
-    debug_assert_eq!(base.commitments.len(), n_out);
-    debug_assert_eq!(input.pseudo_outs.len(), n_in);
+/// Map the builder's spend material onto a canonical `shekyl_wire::Transaction`.
+///
+/// This replaces the old shekyl-oxide assembly and fixes its four §3 divergences vs the
+/// C++ daemon: the version is part of the prefix hash, `reference_block` is a 32-byte
+/// hash in the *base*, the prunable is `nbp ‖ bp+ ‖ tree_depth ‖ proof ‖ pseudoOuts`, and
+/// the pqc_header uses a varint public-key length.
+fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
+    // Bp+: oxide `Bulletproof::write` and wire `BpPlus` share the exact byte layout
+    // (`a‖a1‖b‖r1‖s1‖d1‖vec(L)‖vec(R)`), so round-trip through the bytes. Pinned by
+    // `bulletproof_oxide_layout_parses_as_wire_bpplus`.
+    let mut bp_bytes = Vec::new();
+    input
+        .bulletproof
+        .write(&mut bp_bytes)
+        .map_err(|e| TxBuilderError::WireError(format!("bulletproof write: {e}")))?;
+    let bp_plus = BpPlus::from_bytes(&bp_bytes)
+        .map_err(|e| TxBuilderError::WireError(format!("bulletproof -> BpPlus: {e}")))?;
 
-    // PrunableProof stores per-input signature bytes only; the PQC header
-    // is hashed separately in `phase1_payload_hashes`.
-    let pqc_blobs: Vec<Vec<u8>> = input
+    let pqc_auths = input
         .pqc_auths
         .iter()
-        .map(|auth| auth.signature.clone())
+        .map(|a| WirePqcAuth {
+            auth_version: a.auth_version,
+            scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            flags: 0,
+            hybrid_public_key: a.public_key.clone(),
+            hybrid_signature: a.signature.clone(),
+        })
         .collect();
 
-    let prunable = PrunableProof {
-        pseudo_outs: input
-            .pseudo_outs
-            .iter()
-            .map(|p| CompressedPoint::from(*p))
-            .collect(),
-        bulletproof: input.bulletproof.clone(),
-        reference_block: reference_block_u64(&input.reference_block),
-        fcmp_proof: input.fcmp_proof.clone(),
-        pqc_auths: pqc_blobs,
-    };
-
-    Proofs { base, prunable }
+    Ok(Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: wire_inputs(&input.key_images),
+            outputs: wire_outputs(&input.output_keys, &input.view_tags)?,
+            extra: input.tx_extra.clone(),
+        },
+        ct: Ct::Fcmp {
+            fee: input.fee,
+            reference_block: input.reference_block,
+            base: CtBase {
+                enc_amounts: input.enc_amounts.clone(),
+                enc_labels: input.enc_labels.clone(),
+                commitments: input.out_commitments.clone(),
+            },
+            pqc_auths,
+            prunable: Some(Prunable {
+                bulletproofs: vec![bp_plus],
+                tree_depth: u64::from(input.tree_depth),
+                fcmp_proof: input.fcmp_proof.clone(),
+                pseudo_outs: input.pseudo_outs.clone(),
+            }),
+        },
+    })
 }
 
-/// Build per-input PQC payload hashes (Keccak-256) mirroring C++ `get_transaction_signed_payload`.
+/// A prefix-only `Transaction` (placeholder `Null` ct) for the prefix-hash path —
+/// [`Transaction::prefix_hash`] reads only the prefix, so the ct is irrelevant.
+fn prefix_only_tx(
+    key_images: &[[u8; 32]],
+    output_keys: &[[u8; 32]],
+    view_tags: &[Option<u8>],
+    tx_extra: &[u8],
+) -> Result<Transaction, TxBuilderError> {
+    Ok(Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: wire_inputs(key_images),
+            outputs: wire_outputs(output_keys, view_tags)?,
+            extra: tx_extra.to_vec(),
+        },
+        ct: Ct::Null(CtBase {
+            enc_amounts: Vec::new(),
+            enc_labels: Vec::new(),
+            commitments: Vec::new(),
+        }),
+    })
+}
+
+/// Per-input PQC signing-preimage hashes — delegates to the canonical
+/// [`shekyl_wire::Transaction::pqc_signing_payload_hashes`]
+/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++ `get_transaction_signed_payload`).
 pub fn phase1_payload_hashes(input: &WireEncodeInput) -> Result<Vec<[u8; 32]>, TxBuilderError> {
-    let prefix = build_prefix(input);
-    let prefix_blob = serialize_prefix_blob(&prefix)?;
-
-    let n_in = input.key_images.len();
-    let n_out = input.output_keys.len();
-    let proofs = build_proofs(input, n_in, n_out);
-
-    let mut rct_base_blob = Vec::new();
-    proofs
-        .base
-        .write(&mut rct_base_blob, ProofType::FcmpPlusPlusPqc)
-        .map_err(|e| TxBuilderError::WireError(format!("rct base write: {e}")))?;
-
-    let prunable_hash = keccak256(proofs.prunable.serialize());
-
-    let mut all_key_hashes = Vec::with_capacity(n_in * 32);
-    for auth in &input.pqc_auths {
-        all_key_hashes.extend_from_slice(&keccak256(&auth.public_key));
-    }
-
-    let mut hashes = Vec::with_capacity(n_in);
-    for (i, auth) in input.pqc_auths.iter().enumerate().take(n_in) {
-        let header = pqc_header_blob(auth);
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&prefix_blob);
-        payload.extend_from_slice(&rct_base_blob);
-        payload.extend_from_slice(&prunable_hash);
-        payload.extend_from_slice(&header);
-        payload.extend_from_slice(&all_key_hashes);
-        let _ = i;
-        hashes.push(keccak256(payload));
-    }
-    Ok(hashes)
+    Ok(build_wire_tx(input)?.pqc_signing_payload_hashes())
 }
 
-/// Assemble and serialize the final signed transaction bytes.
+/// Assemble and serialize the final signed transaction via the canonical
+/// [`shekyl_wire::Transaction`].
 pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderError> {
-    let prefix = build_prefix(input);
-    let n_in = input.key_images.len();
-    let n_out = input.output_keys.len();
-    let proofs = build_proofs(input, n_in, n_out);
-
-    let tx: Transaction<NotPruned> = Transaction::V3 {
-        prefix,
-        proofs: Some(proofs),
-    };
-
-    Ok(tx.serialize())
+    Ok(build_wire_tx(input)?.serialize())
 }
 
-/// Prefix hash used as FCMP++ `signable_tx_hash` input.
+/// The FCMP++ `signable_tx_hash` — the canonical prefix hash (§1.2), via shekyl-wire.
+///
+/// Panics only on a genesis-invalid input (an output without a view_tag), which the
+/// signing path never produces; this keeps the `[u8; 32]` contract its callers rely on.
 pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
-    tx_prefix_hash(&build_prefix(input))
+    build_wire_tx(input)
+        .expect("wire tx builds for a well-formed spend")
+        .prefix_hash()
 }
 
-/// Prefix hash from prefix fields only (no proofs required).
+/// Prefix hash from prefix fields only (no proofs) — the canonical `prefix_hash` (the ct
+/// section is irrelevant to it). Same panic contract as [`tx_prefix_hash_for_signing`].
 pub fn tx_prefix_hash_from_parts(
     key_images: &[[u8; 32]],
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
 ) -> [u8; 32] {
-    let prefix = TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs: key_images
-            .iter()
-            .map(|ki| Input::ToKey {
-                amount: None,
-                key_offsets: Vec::new(),
-                key_image: CompressedPoint::from(*ki),
-            })
-            .collect(),
-        outputs: output_keys
-            .iter()
-            .zip(view_tags.iter())
-            .map(|(key, view_tag)| Output {
-                amount: None,
-                key: CompressedPoint::from(*key),
-                view_tag: *view_tag,
-                staking: None,
-            })
-            .collect(),
-        extra: tx_extra.to_vec(),
-    };
-    tx_prefix_hash(&prefix)
+    prefix_only_tx(key_images, output_keys, view_tags, tx_extra)
+        .expect("prefix tx builds for well-formed parts")
+        .prefix_hash()
 }
 
 #[cfg(test)]
@@ -280,6 +220,7 @@ mod tests {
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
+            tree_depth: 1,
         }
     }
 
@@ -293,28 +234,100 @@ mod tests {
     }
 
     #[test]
-    fn shekyl_oxide_transaction_import_is_wire_only() {
-        let lib_rs = include_str!("lib.rs");
-        let sign_rs = include_str!("sign.rs");
-        let types_rs = include_str!("types.rs");
-        assert!(
-            !lib_rs.contains("shekyl_oxide::transaction"),
-            "lib.rs must not import shekyl_oxide::transaction"
-        );
-        assert!(
-            !sign_rs.contains("shekyl_oxide::transaction"),
-            "sign.rs must stay format-agnostic"
-        );
-        assert!(
-            !types_rs.contains("shekyl_oxide::transaction"),
-            "types.rs must stay format-agnostic"
-        );
-    }
-
-    #[test]
     fn phase1_payload_hashes_len_matches_inputs() {
         let input = minimal_input();
         let hashes = phase1_payload_hashes(&input).expect("hashes");
         assert_eq!(hashes.len(), input.key_images.len());
+    }
+
+    #[test]
+    fn cn_fast_hash_equals_oxide_keccak256() {
+        // The migration replaces the tx-builder's `shekyl_oxide::keccak256` with
+        // shekyl-wire's `cn_fast_hash`. Pin that they are the same primitive (original
+        // Keccak-256) so the signing-hash bytes are preserved.
+        use shekyl_oxide::primitives::keccak256;
+        for input in [
+            &b""[..],
+            b"Shekyl",
+            &[0u8; 200][..],
+            &vec![0xABu8; 5000][..],
+        ] {
+            assert_eq!(
+                shekyl_crypto_hash::cn_fast_hash(input),
+                keccak256(input),
+                "cn_fast_hash must equal shekyl-oxide keccak256"
+            );
+        }
+    }
+
+    #[test]
+    fn bulletproof_oxide_layout_parses_as_wire_bpplus() {
+        // The Bp+ conversion relies on the oxide `Bulletproof::write` bytes being a
+        // canonical wire `BpPlus`. `from_bytes` requires exact consumption, so a
+        // successful parse of a *real* proof's bytes proves the layouts are identical.
+        let mut bytes = Vec::new();
+        minimal_input()
+            .bulletproof
+            .write(&mut bytes)
+            .expect("oxide bp write");
+        BpPlus::from_bytes(&bytes).expect("oxide bp+ bytes must parse as a wire BpPlus");
+    }
+
+    #[test]
+    fn encode_round_trips_and_signing_hashes_match_the_encoded_tx() {
+        // End-to-end self-consistency: the encoded bytes re-parse as a shekyl-wire tx,
+        // and the delegated signing hashes equal the re-parsed tx's own hashes — so the
+        // bytes the daemon would verify are exactly the bytes the signatures cover.
+        let input = minimal_input();
+        let bytes = encode_final_tx(&input).expect("encode");
+        let tx = Transaction::from_bytes(&bytes).expect("encoded tx must re-parse");
+
+        assert_eq!(
+            phase1_payload_hashes(&input).expect("hashes"),
+            tx.pqc_signing_payload_hashes(),
+            "delegated phase-1 hashes must match the encoded tx's signing hashes"
+        );
+        assert_eq!(
+            tx_prefix_hash_for_signing(&input),
+            tx.prefix_hash(),
+            "delegated prefix hash must match the encoded tx's prefix hash"
+        );
+    }
+
+    #[test]
+    fn missing_view_tag_is_rejected() {
+        let mut input = minimal_input();
+        input.view_tags = vec![None];
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+    }
+
+    #[test]
+    fn shekyl_oxide_wire_types_are_removed() {
+        // The wire/proof-type imports moved to shekyl-wire; only shekyl-oxide CRYPTO
+        // (`bulletproofs::Bulletproof`, and `primitives::keccak256` in a test) remains.
+        // wire.rs is checked on its PRODUCTION half only (split off the test module), so
+        // these very assertion strings don't self-match.
+        let wire_prod = include_str!("wire.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("wire.rs has a production section");
+        for (name, src) in [
+            ("wire.rs", wire_prod),
+            ("lib.rs", include_str!("lib.rs")),
+            ("sign.rs", include_str!("sign.rs")),
+            ("types.rs", include_str!("types.rs")),
+        ] {
+            assert!(
+                !src.contains("shekyl_oxide::transaction"),
+                "{name} must not reference shekyl_oxide::transaction"
+            );
+            assert!(
+                !src.contains("shekyl_oxide::fcmp::{"),
+                "{name} must not import shekyl_oxide::fcmp wire types"
+            );
+        }
     }
 }

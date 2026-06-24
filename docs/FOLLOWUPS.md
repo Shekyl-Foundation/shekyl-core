@@ -47,6 +47,23 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
+  against the canonical spend format (flagged 2026-06-23, the tx-builder
+  shekyl-wire spend cutover).** The spend serializer moved onto `shekyl-wire`, so
+  the old `shekyl_oxide::Transaction::weight()` no longer parses the built bytes.
+  The consensus tx *weight* is the serialized size minus the Bp+ discount (Monero
+  `get_transaction_weight`), so it is **not** the serialized length — `shekyl-wire`
+  needs a `Transaction::weight()` that computes it. Two build-path cross-checks
+  (`predict_weight == tx.weight()`) in `local_pending_tx.rs`
+  (`build_then_submit_marks_outputs_spent`, `build_then_submit_via_test_daemon_uses_daemon_fee`)
+  were temporarily dropped pending it. **Also re-validate `tx_fee_model::predict_weight`
+  against the canonical sizes** — the format fix changed the blob by ~24 bytes
+  (`reference_block` is now a 32-byte hash in the *base* + a `tree_depth` varint),
+  so `predict_weight`'s component model must match the new layout, not the retired
+  shekyl-oxide one. **Reopen-now criterion:** add `shekyl_wire::Transaction::weight()`
+  (Bp+ discount), then restore the two cross-checks and pin a `predict_weight` ==
+  canonical-weight KAT. Target: V3.0 (pre-genesis fee correctness).
+
 - **External cryptographic review of the `FcmpMembershipOnly` soundness
   reduction (2026-06-12).**
   [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:

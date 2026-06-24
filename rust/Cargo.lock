@@ -4338,6 +4338,7 @@ dependencies = [
  "shekyl-primitives",
  "shekyl-rct-balance",
  "shekyl-units",
+ "shekyl-wire",
  "thiserror",
  "zeroize",
 ]

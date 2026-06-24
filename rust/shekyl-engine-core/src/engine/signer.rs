@@ -339,6 +339,7 @@ impl Signer for LocalSigner {
                 .iter()
                 .map(|i| i.pqc_auth.clone())
                 .collect(),
+            tree_depth: signatures.tree_depth,
         };
 
         let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
