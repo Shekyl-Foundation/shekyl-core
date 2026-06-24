@@ -141,14 +141,24 @@ proof-type imports are removed.
   end-to-end proof that closes both this migration and §1.1. Until it lands, the
   migration is *source- and corpus-validated but not live-proven*.
 
-## 6. Decision (informed by this spec)
+## 6. Decision (resolved): **implemented**
 
-Two viable paths, to choose explicitly:
-- **Implement now** as a consensus PR (source + corpus + golden validation; live
-  oracle flagged as the §1.1 residual). Moves tx-builder onto the canonical format —
-  strictly better than the confirmed-wrong shekyl-oxide encoding it replaces.
-- **Defer** and do it together with §1.1 when the daemon spend path is free
-  (post-PoW-cutover), so the first landing is live-oracle-proven.
+Implemented (`feat/tx-builder-shekyl-wire-spend`) as the "implement now" path — source +
+corpus + golden validated, with the live C++ oracle (§1.1) as the remaining residual:
 
-Either way, the four §3 divergences are now documented so the broken-spend status has
-a precise, reviewable root-cause.
+- **shekyl-wire** gained `Transaction::prefix_hash()` (§1.2 signable_tx_hash, version
+  included) and `pqc_signing_payload_hashes()` (§1.1 per-input preimage), composed from
+  the existing component writers + a private `PqcAuth::header_write`, plus a public
+  `BpPlus::from_bytes`.
+- **shekyl-tx-builder/wire.rs** now maps `WireEncodeInput → shekyl_wire::Transaction`
+  (a new `tree_depth` field threaded from the signer; BP+ via the byte-identical
+  `oxide.write → BpPlus::from_bytes`) and **delegates** `encode_final_tx` /
+  `phase1_payload_hashes` / `tx_prefix_hash*`. Its shekyl-oxide wire/proof types are
+  removed (crypto `Bulletproof` kept). The four §3 divergences are fixed by construction.
+
+Validation that landed: the keccak swap to RustCrypto `sha3` is pinned byte-equal
+(`cn_fast_hash == shekyl_oxide::keccak256`); the BP+ oxide↔wire layout identity is pinned
+by an exact-consumption parse; an encode→reparse→rehash test pins that the signed bytes
+equal the encoded bytes; and golden vectors pin `prefix_hash` + the per-input preimage
+against drift. The four §3 divergences thus have a precise, reviewable resolution — the
+wire encoder is the canonical one.

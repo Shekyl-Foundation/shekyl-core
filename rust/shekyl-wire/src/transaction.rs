@@ -698,6 +698,19 @@ impl PqcAuth {
         w.write_all(&self.hybrid_signature)
     }
 
+    /// The PQC **header** — `auth_version ‖ scheme_id ‖ flags(u16 LE) ‖ varint(pk_len) ‖
+    /// hybrid_public_key`, with **no signature bytes**. This is the `pqc_header(i)`
+    /// component of the per-input PQC signing preimage
+    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5 / C++ `tx_pqc_verify.cpp:109-124`): a
+    /// signature signs over its own header, so the header must exclude it. Identical to
+    /// [`Self::write`] up to and including the public key.
+    fn header_write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_all(&[self.auth_version, self.scheme_id])?;
+        w.write_all(&self.flags.to_le_bytes())?;
+        write_varint(self.hybrid_public_key.len(), w)?;
+        w.write_all(&self.hybrid_public_key)
+    }
+
     fn read<R: Read>(r: &mut R) -> io::Result<PqcAuth> {
         let auth_version = read_byte(r)?;
         let scheme_id = read_byte(r)?;
@@ -755,6 +768,22 @@ impl BpPlus {
             w.write_all(point)?;
         }
         Ok(())
+    }
+
+    /// Parse a single Bp+ from a complete blob, requiring exact consumption. The
+    /// tx-builder uses this to map a `shekyl_oxide` `Bulletproof` — which serializes to
+    /// the identical byte layout (`a‖a1‖b‖r1‖s1‖d1‖vec(L)‖vec(R)`) — into the wire
+    /// `BpPlus` during the spend-encode migration; the format identity is pinned by a
+    /// round-trip test in shekyl-tx-builder.
+    pub fn from_bytes(blob: &[u8]) -> io::Result<BpPlus> {
+        let mut cursor: &[u8] = blob;
+        let bp = Self::read(&mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(io::Error::other(
+                "shekyl-wire: trailing bytes after Bp+ blob",
+            ));
+        }
+        Ok(bp)
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<BpPlus> {
@@ -1081,6 +1110,101 @@ impl Transaction {
         self.write(&mut counter)
             .expect("counting write is infallible");
         counter.bytes
+    }
+
+    /// The FCMP++ **`signable_tx_hash`** — the prefix hash the membership/SAL proof
+    /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over the
+    /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`
+    /// serializes `VARINT(version)` first, so this is
+    /// `cn_fast_hash(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
+    /// prefix` composition [`Self::write`] emits at the head of the tx.
+    pub fn prefix_hash(&self) -> [u8; 32] {
+        let mut buf = Vec::new();
+        write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
+        self.prefix
+            .write(&mut buf)
+            .expect("writing to a Vec is infallible");
+        cn_fast_hash(&buf)
+    }
+
+    /// Per-input PQC signing-preimage hashes — the `signed_hash(i)` each input's PQC
+    /// auth (ML-DSA + ed25519) signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++
+    /// `get_transaction_signed_payload`, `tx_pqc_verify.cpp:58-152`):
+    ///
+    /// ```text
+    /// payload(i)     = prefix_blob ‖ rct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
+    /// signed_hash(i) = cn_fast_hash(payload(i))
+    /// ```
+    /// - `prefix_blob`    = `varint(TX_VERSION) ‖ TxPrefix::write` (same as [`Self::prefix_hash`]'s input)
+    /// - `rct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
+    ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
+    /// - `prunable_hash`  = `cn_fast_hash(Prunable::write)` (the digest, not the blob — §1.4)
+    /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
+    /// - `all_key_hashes` = `‖ over every auth: cn_fast_hash(hybrid_public_key)` (binds every
+    ///   input's key into every signature)
+    ///
+    /// Returns one hash per `pqc_auths` entry — `== nvin` for a valid spend, whose arity
+    /// `Transaction::validate` couples (the count is not re-checked here, so a hand-built
+    /// tx with mismatched arity yields one hash per auth regardless). Returns an empty vec
+    /// for any non-spend shape — a `Null` ct, or a fee-only `Fcmp` with no prunable /
+    /// empty `pqc_auths` — which carries no per-input PQC signature.
+    pub fn pqc_signing_payload_hashes(&self) -> Vec<[u8; 32]> {
+        let Ct::Fcmp {
+            fee,
+            reference_block,
+            base,
+            pqc_auths,
+            prunable: Some(prunable),
+        } = &self.ct
+        else {
+            return Vec::new();
+        };
+        if pqc_auths.is_empty() {
+            return Vec::new();
+        }
+
+        // prefix_blob = varint(TX_VERSION) ‖ TxPrefix::write
+        let mut prefix_blob = Vec::new();
+        write_varint(TX_VERSION, &mut prefix_blob).expect("Vec write is infallible");
+        self.prefix
+            .write(&mut prefix_blob)
+            .expect("Vec write is infallible");
+
+        // rct_base_blob = CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write —
+        // byte-for-byte the head `Ct::Fcmp::write` emits before pqc_auths/prunable.
+        let mut rct_base_blob = Vec::new();
+        rct_base_blob.push(CT_TYPE_FCMP);
+        write_varint(*fee, &mut rct_base_blob).expect("Vec write is infallible");
+        rct_base_blob.extend_from_slice(reference_block);
+        base.write(&mut rct_base_blob)
+            .expect("Vec write is infallible");
+
+        // prunable_hash = cn_fast_hash(Prunable::write)
+        let mut prunable_blob = Vec::new();
+        prunable
+            .write(&mut prunable_blob)
+            .expect("Vec write is infallible");
+        let prunable_hash = cn_fast_hash(&prunable_blob);
+
+        // all_key_hashes = concat over EVERY auth of cn_fast_hash(hybrid_public_key)
+        let mut all_key_hashes = Vec::with_capacity(pqc_auths.len() * 32);
+        for auth in pqc_auths {
+            all_key_hashes.extend_from_slice(&cn_fast_hash(&auth.hybrid_public_key));
+        }
+
+        pqc_auths
+            .iter()
+            .map(|auth| {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&prefix_blob);
+                payload.extend_from_slice(&rct_base_blob);
+                payload.extend_from_slice(&prunable_hash);
+                auth.header_write(&mut payload)
+                    .expect("Vec write is infallible");
+                payload.extend_from_slice(&all_key_hashes);
+                cn_fast_hash(&payload)
+            })
+            .collect()
     }
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**

@@ -371,6 +371,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 public_key: pk.clone(),
             })
             .collect(),
+        tree_depth: signed.tree_depth,
     };
 
     let payload_hashes =
