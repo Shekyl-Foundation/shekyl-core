@@ -350,9 +350,15 @@ sustainability is unaffected by the recalibration.
   `on_get_curve_tree_path` for another reason (route the new logic through the
   FFI per the rule-20 daemon clause then).
 
-- **FCMP++ spend wire format diverges between `shekyl-tx-builder` (vendored
-  `shekyl-oxide`) and the canonical `shekyl-wire` serializer (surfaced
-  2026-06-21 building the Rust e2e spend round-trip).** Two Rust serializers
+- **[Done] FCMP++ spend wire format divergence between `shekyl-tx-builder` and
+  `shekyl-wire` — resolved 2026-06-24 by the tx-builder spend cutover (PR #178), which
+  cut `shekyl-tx-builder` onto the `shekyl-wire` encoder and deleted its shekyl-oxide
+  spend serializer, so there is now one canonical on-wire FCMP++ spend layout and the
+  genesis hazard is closed. Residual (test-only, not a hazard): replace the
+  `fcmp_spend_e2e.rs` assemble-direct shim with a cross-crate `tx-builder output ==
+  shekyl-wire round-trip` byte-identity assertion, which rides the live FCMP++ spend KAT
+  (§1.1). Original finding (surfaced 2026-06-21 building the Rust e2e spend
+  round-trip):** Two Rust serializers
   emit structurally different bytes for the *same* FCMP++ spend:
   - **`reference_block`** — `shekyl-oxide`
     ([`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`](../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs)
@@ -382,8 +388,12 @@ sustainability is unaffected by the recalibration.
   `shekyl-wire` round-trip) replaces the assemble-direct shim in the e2e test.
   Target: **V3.0** (genesis wire-format freeze; one canonical spend layout).
 
-- **Rust/Axum daemon RPC: curve-tree endpoints missing from the FFI dispatch
-  table (404). Surfaced 2026-06-21 debugging the C++ FCMP++ spend capture.**
+- **[Done] Rust/Axum daemon RPC: curve-tree endpoints missing from the FFI dispatch
+  table (404) — resolved 2026-06-23 by PR #174, which wired
+  `get_curve_tree_path`/`_info`/`_checkpoint` into `core_rpc_ffi.cpp get_jsonrpc_table()`
+  and landed the handler fixes (out-of-range `output_index` → skip; branch-layer loop
+  emits exactly `depth` layers). A default-configured daemon now serves the endpoints.
+  Original finding (surfaced 2026-06-21 debugging the C++ FCMP++ spend capture).**
   The `on_get_curve_tree_path` / `on_get_curve_tree_info` /
   `on_get_curve_tree_checkpoint` handlers exist and are registered in the
   **legacy epee** dispatch (`src/rpc/core_rpc_server.h` ≈ line 193,
