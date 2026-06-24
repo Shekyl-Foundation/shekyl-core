@@ -58,6 +58,15 @@ fn wire_outputs(
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
 ) -> Result<Vec<Output>, TxBuilderError> {
+    // `zip` would silently truncate to the shorter slice — emitting fewer outputs (or
+    // dropping tags) and building an invalid tx unnoticed. Couple the lengths explicitly.
+    if output_keys.len() != view_tags.len() {
+        return Err(TxBuilderError::WireError(format!(
+            "output_keys ({}) / view_tags ({}) length mismatch",
+            output_keys.len(),
+            view_tags.len()
+        )));
+    }
     output_keys
         .iter()
         .zip(view_tags.iter())
@@ -81,6 +90,36 @@ fn wire_outputs(
 /// hash in the *base*, the prunable is `nbp ‖ bp+ ‖ tree_depth ‖ proof ‖ pseudoOuts`, and
 /// the pqc_header uses a varint public-key length.
 fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
+    // Enforce the wire arity couplings up front: the committed-base arrays are per-output
+    // and pqc_auths / pseudo_outs are per-input (the invariants `Transaction::validate`
+    // assumes). A mismatch would otherwise serialize a tx only the daemon (or
+    // `from_bytes`) rejects — far from the cause. (Not full `validate()`: that adds the
+    // ≥2-output rule, which would false-reject the minimal fixtures and the unproven
+    // daemon path.)
+    let n_in = input.key_images.len();
+    let n_out = input.output_keys.len();
+    for (label, got) in [
+        ("enc_amounts", input.enc_amounts.len()),
+        ("enc_labels", input.enc_labels.len()),
+        ("out_commitments", input.out_commitments.len()),
+    ] {
+        if got != n_out {
+            return Err(TxBuilderError::WireError(format!(
+                "{label} count {got} != output count {n_out}"
+            )));
+        }
+    }
+    for (label, got) in [
+        ("pqc_auths", input.pqc_auths.len()),
+        ("pseudo_outs", input.pseudo_outs.len()),
+    ] {
+        if got != n_in {
+            return Err(TxBuilderError::WireError(format!(
+                "{label} count {got} != input count {n_in}"
+            )));
+        }
+    }
+
     // Bp+: oxide `Bulletproof::write` and wire `BpPlus` share the exact byte layout
     // (`a‖a1‖b‖r1‖s1‖d1‖vec(L)‖vec(R)`), so round-trip through the bytes. Pinned by
     // `bulletproof_oxide_layout_parses_as_wire_bpplus`.
@@ -171,9 +210,16 @@ pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderErro
 /// Panics only on a genesis-invalid input (an output without a view_tag), which the
 /// signing path never produces; this keeps the `[u8; 32]` contract its callers rely on.
 pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
-    build_wire_tx(input)
-        .expect("wire tx builds for a well-formed spend")
-        .prefix_hash()
+    // `prefix_hash` depends only on the prefix, so build a prefix-only tx — skips the
+    // ct/Bp+ assembly and its unrelated failure modes (e.g. BpPlus parsing).
+    prefix_only_tx(
+        &input.key_images,
+        &input.output_keys,
+        &input.view_tags,
+        &input.tx_extra,
+    )
+    .expect("prefix tx builds for a well-formed spend")
+    .prefix_hash()
 }
 
 /// Prefix hash from prefix fields only (no proofs) — the canonical `prefix_hash` (the ct
@@ -298,6 +344,38 @@ mod tests {
     fn missing_view_tag_is_rejected() {
         let mut input = minimal_input();
         input.view_tags = vec![None];
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+    }
+
+    #[test]
+    fn base_arity_mismatch_is_rejected() {
+        // A per-output base array out of step with the output count must fail at the
+        // boundary, not serialize a tx the daemon later rejects.
+        let mut input = minimal_input();
+        input.enc_amounts.push([0u8; 9]); // 2 enc_amounts vs 1 output
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+    }
+
+    #[test]
+    fn pqc_auth_arity_mismatch_is_rejected() {
+        let mut input = minimal_input();
+        input.pseudo_outs.push([0u8; 32]); // 2 pseudo_outs vs 1 input
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+    }
+
+    #[test]
+    fn output_view_tag_length_mismatch_is_rejected() {
+        let mut input = minimal_input();
+        input.view_tags.push(Some(5)); // 2 view_tags vs 1 output key
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))
