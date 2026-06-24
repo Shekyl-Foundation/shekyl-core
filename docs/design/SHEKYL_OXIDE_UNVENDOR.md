@@ -242,12 +242,18 @@ priority track.
     zero Shekyl delta — the clean, bounded, diff-against-upstream set the EC review
     wants. The crypto `Cargo.toml` metadata is kept upstream-minimal (the Shekyl
     `repository` stamping happens at re-pin per §5).
-  - **Gated remainder (genesis-format change, not solo):** re-pin shekyl-core
-    (`UPSTREAM_MONERO_OXIDE_COMMIT` → the new tip), re-sync the vendored crypto
-    subtree, regenerate the A1 manifest from the pristine tree (then snapshot == pin,
-    so A1 becomes byte-exact-vs-pin), and re-vet the Q6 freeze references against the
-    moved proof structure — routed through the slice-1/wire-format track + crypto
-    review (see §2.3).
+  - **shekyl-core re-pin — EXECUTED (PR #181):** `UPSTREAM_MONERO_OXIDE_COMMIT` →
+    the resync branch tip `2753111c50`, vendored crypto subtree re-synced, A1
+    manifest regenerated, and the one consumer break (`FcmpParams::new` became
+    infallible) adapted in `shekyl-fcmp-plus-plus`. The `ni` proof-structure change
+    rippled cleanly (`proof_size()` delegates to upstream — no KAT regen).
+    **Correction to the byte-exact-vs-pin expectation below:** the fork formats with
+    nightly-only rustfmt options Shekyl's stable toolchain can't reproduce, and
+    `cargo fmt --all` formats path-deps regardless of `exclude`, so the vendored copy
+    is reformatted to the workspace rustfmt style (as it always was) — the manifest
+    pins *that* tree (catches silent edits; not byte-identical to the fork). The clean
+    upstream-formatted mirror is the fork. Re-vetting Q6 against the moved proof
+    structure is the remaining slice-1 coordination (see §2.3).
 - **A1 — add the gate everyone assumed existed. [content gate landed; canary
   re-scoped]** A content-integrity gate now runs on push/PR
   (`.github/workflows/vendored-crypto-content.yml` →
@@ -258,22 +264,22 @@ priority track.
   staleness canary is re-scoped/clarified (`shekyl-oxide-divergence.yml`, now
   "vendored crypto staleness"): commit-hash staleness only, explicitly distinct from
   the content gate.
-  - **Caveat — this is the *drift-from-snapshot* form, not yet local==pin.** The
-    local subtree currently diverges from the pin by rustfmt reflow + Shekyl stamps +
-    the `divisors` drift (measured: even rustfmt-normalized, residual diffs remain
-    across every crate), so a literal byte-exact-vs-pin gate cannot be green until
-    **A0** re-syncs the subtree to a clean fork baseline. After A0, regenerate the
-    manifest from the pristine tree (then snapshot == pin) and the gate is effectively
-    byte-exact-vs-pin. Until then it already closes the actual hole — *silent local
-    edits* — which is what bit `divisors`.
-  - **Fmt-isolation deferred to A0.** Keeping `cargo fmt` off the subtree via a
-    workspace `exclude` is the stable-compatible mechanism (rustfmt `ignore` is
-    nightly-only), but excluding the crates requires de-inheriting
-    `[lints] workspace = true` from each Cargo.toml — which A0's re-sync replaces
-    wholesale, so it rides A0. Meanwhile the toolchain pin
-    (1.94, `chore/pin-rust-toolchain`) keeps the subtree fmt-stable, so routine work
-    does not trip the manifest; a deliberate toolchain bump that reflows the subtree
-    regenerates the manifest in the same PR (per `rust-toolchain.toml`'s bump policy).
+  - **Snapshot form, not byte-exact-to-fork (resolved post-A0).** The gate verifies
+    the working tree against a checked-in manifest of the *vendored* tree — it catches
+    silent local edits (the `divisors` failure mode), which is its job. It is NOT a
+    byte-comparison against the fork: A0 reformats the subtree to Shekyl's stable
+    rustfmt style (the fork's nightly rustfmt options don't reproduce on stable, and
+    `cargo fmt --all` formats the path-dep crypto regardless of `exclude`), so the
+    manifest pins the reformatted tree. Diffability against upstream lives on the fork,
+    not here.
+  - **Fmt: `exclude` does NOT isolate the subtree from `cargo fmt` (mistaken
+    premise, corrected by A0).** `cargo fmt --all` formats workspace members *and
+    their local path-dependencies*, so the crypto (a path-dep of the consumers) is
+    formatted regardless of `exclude` (rustfmt's per-path `ignore` is nightly-only).
+    The `exclude` does its real job for **clippy/lints** — upstream code isn't subject
+    to Shekyl's `-D warnings` gate. For fmt, A0 reformats the subtree to the workspace
+    rustfmt style and the manifest pins it; a toolchain bump that reflows it
+    regenerates the manifest in the same PR.
 
 ### Track B — Residual un-vendor + rename (gated after slice 1)
 
