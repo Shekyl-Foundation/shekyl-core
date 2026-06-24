@@ -289,3 +289,39 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         "fee-only (no prunable) yields no signing hashes"
     );
 }
+
+#[test]
+fn bp_plus_from_bytes_parses_canonical_layout() {
+    // BpPlus::from_bytes is how the tx-builder maps an oxide `Bulletproof` (byte-identical
+    // layout: a‖a1‖b‖r1‖s1‖d1‖varint(L)·L‖varint(R)·R) into the wire BpPlus. Build that
+    // exact layout by hand, parse it, and confirm round-trip + trailing-byte rejection.
+    let bp = BpPlus {
+        a: [1u8; 32],
+        a1: [2u8; 32],
+        b: [3u8; 32],
+        r1: [4u8; 32],
+        s1: [5u8; 32],
+        d1: [6u8; 32],
+        l: vec![[7u8; 32], [8u8; 32]],
+        r: vec![[9u8; 32]],
+    };
+    let mut bytes = Vec::new();
+    for field in [&bp.a, &bp.a1, &bp.b, &bp.r1, &bp.s1, &bp.d1] {
+        bytes.extend_from_slice(field);
+    }
+    bytes.push(2); // varint(L_len = 2) — single byte for len < 128
+    for p in &bp.l {
+        bytes.extend_from_slice(p);
+    }
+    bytes.push(1); // varint(R_len = 1)
+    for p in &bp.r {
+        bytes.extend_from_slice(p);
+    }
+    assert_eq!(BpPlus::from_bytes(&bytes).expect("parses"), bp);
+
+    bytes.push(0xFF);
+    assert!(
+        BpPlus::from_bytes(&bytes).is_err(),
+        "trailing bytes after a Bp+ must be rejected"
+    );
+}

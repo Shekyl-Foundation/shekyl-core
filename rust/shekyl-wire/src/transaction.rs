@@ -770,6 +770,22 @@ impl BpPlus {
         Ok(())
     }
 
+    /// Parse a single Bp+ from a complete blob, requiring exact consumption. The
+    /// tx-builder uses this to map a `shekyl_oxide` `Bulletproof` — which serializes to
+    /// the identical byte layout (`a‖a1‖b‖r1‖s1‖d1‖vec(L)‖vec(R)`) — into the wire
+    /// `BpPlus` during the spend-encode migration; the format identity is pinned by a
+    /// round-trip test in shekyl-tx-builder.
+    pub fn from_bytes(blob: &[u8]) -> io::Result<BpPlus> {
+        let mut cursor: &[u8] = blob;
+        let bp = Self::read(&mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(io::Error::other(
+                "shekyl-wire: trailing bytes after Bp+ blob",
+            ));
+        }
+        Ok(bp)
+    }
+
     fn read<R: Read>(r: &mut R) -> io::Result<BpPlus> {
         let a = read_array(r)?;
         let a1 = read_array(r)?;
