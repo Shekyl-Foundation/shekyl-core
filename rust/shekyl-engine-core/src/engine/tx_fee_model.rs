@@ -13,7 +13,7 @@
 
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
-use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
+use shekyl_tx_builder::{MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::TX_VERSION;
 
@@ -156,7 +156,9 @@ fn pqc_auth_weight() -> usize {
 
 /// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
 fn padded_outputs(n_out: usize) -> usize {
-    n_out.max(1).next_power_of_two()
+    // Clamp to MAX_OUTPUTS so `next_power_of_two` can't panic on an out-of-range count
+    // (and the Bp+/clawback arithmetic stays bounded); exact for any valid tx (≤ 16).
+    n_out.clamp(1, MAX_OUTPUTS).next_power_of_two()
 }
 
 /// Serialized Bp+ size: 6 fixed points + varint(|L|)‖L + varint(|R|)‖R, where
@@ -177,7 +179,9 @@ fn bp_plus_clawback_weight(n_out: usize) -> usize {
     const BP_BASE: usize = (32 * (6 + 7 * 2)) / 2;
     let nlr = n_padded.trailing_zeros() as usize + 6;
     let bp_size = 32 * (6 + 2 * nlr);
-    let gross = BP_BASE * n_padded;
+    // `n_padded ≤ MAX_OUTPUTS` (padded_outputs clamps), so this can't overflow;
+    // `saturating_mul` keeps it structurally identical to the wire twin regardless.
+    let gross = BP_BASE.saturating_mul(n_padded);
     if gross < bp_size {
         return 0;
     }
@@ -189,29 +193,39 @@ fn bp_plus_clawback_weight(n_out: usize) -> usize {
 /// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
 pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64) -> usize {
-    // version + unlock_time.
-    let mut w = varint_len(TX_VERSION) + varint_len(0u64);
-    // vin / vout: count prefix + elements.
-    w += varint_len(n_in as u64) + n_in * INPUT_TO_KEY_WEIGHT;
-    w += varint_len(n_out as u64) + n_out * OUTPUT_WEIGHT;
-    // tx_extra: one PublicKey field + one PqcKemCiphertext per output.
-    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT + n_out * extra_kem_field_weight();
-    w += varint_len(extra_len as u64) + extra_len;
-    // ct head: type byte + fee + reference_block.
-    w += 1 + varint_len(fee) + REFERENCE_BLOCK_LEN;
-    // ct base (per output) + per-input PQC auth.
-    w += n_out * CT_BASE_PER_OUTPUT_WEIGHT;
-    w += n_in * pqc_auth_weight();
-    // prunable: nbp + bp+ + tree_depth + fcmp_proof + pseudoOuts.
+    // `n_in`/`n_out` arrive uncapped from the fee context, so per-count products use
+    // `saturating_mul` and the fields are summed with a single saturating fold: an
+    // out-of-range request over-estimates (toward usize::MAX) rather than wrapping to a
+    // small weight that under-pays. A valid tx (n_in ≤ MAX_INPUTS, n_out ≤ MAX_OUTPUTS)
+    // is far from saturation, so a real fee is unchanged. Each entry below is one field
+    // of `shekyl_wire::Transaction::write`, in wire order.
     let fcmp = fcmp_proof_size(n_in, tree_depth);
-    w += varint_len(1u64)
-        + bp_plus_weight(n_out)
-        + varint_len(u64::from(tree_depth))
-        + varint_len(fcmp as u64)
-        + fcmp
-        + n_in * PSEUDO_OUT_LEN;
-    // Bp+ verification clawback (0 for the genesis ≤2-output shapes).
-    w + bp_plus_clawback_weight(n_out)
+    let extra_len =
+        EXTRA_PUBKEY_FIELD_WEIGHT.saturating_add(n_out.saturating_mul(extra_kem_field_weight()));
+    [
+        varint_len(TX_VERSION),                          // version
+        varint_len(0u64),                                // unlock_time
+        varint_len(n_in as u64),                         // vin count
+        n_in.saturating_mul(INPUT_TO_KEY_WEIGHT),        // vin elements
+        varint_len(n_out as u64),                        // vout count
+        n_out.saturating_mul(OUTPUT_WEIGHT),             // vout elements
+        varint_len(extra_len as u64),                    // tx_extra length prefix
+        extra_len,                                       // tx_extra body
+        1,                                               // ct type byte
+        varint_len(fee),                                 // fee
+        REFERENCE_BLOCK_LEN,                             // reference_block
+        n_out.saturating_mul(CT_BASE_PER_OUTPUT_WEIGHT), // ct base (per output)
+        n_in.saturating_mul(pqc_auth_weight()),          // per-input PQC auth
+        varint_len(1u64),                                // prunable nbp
+        bp_plus_weight(n_out),                           // bulletproof+
+        varint_len(u64::from(tree_depth)),               // tree_depth
+        varint_len(fcmp as u64),                         // fcmp_proof length prefix
+        fcmp,                                            // fcmp_proof body
+        n_in.saturating_mul(PSEUDO_OUT_LEN),             // pseudoOuts
+        bp_plus_clawback_weight(n_out),                  // Bp+ verification clawback
+    ]
+    .into_iter()
+    .fold(0usize, usize::saturating_add)
 }
 
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
@@ -391,6 +405,18 @@ mod tests {
         let w3 = predict_weight(1, 2, 1, 1_000);
         assert!(w2 > w1);
         assert!(w3 > w1);
+    }
+
+    #[test]
+    fn predict_weight_saturates_on_oversize_counts() {
+        // Uncapped counts must over-estimate (fail safe: never wrap to a small weight
+        // that under-pays) and must not panic (next_power_of_two / multiply overflow).
+        let huge = predict_weight(usize::MAX, usize::MAX, MAX_TREE_DEPTH, u64::MAX);
+        let normal = predict_weight(2, 2, MAX_TREE_DEPTH, 1_000);
+        assert!(
+            huge > normal,
+            "an out-of-range request must not wrap below a normal weight"
+        );
     }
 
     /// `predict_weight` must equal `shekyl_wire::Transaction::weight()` for the tx
