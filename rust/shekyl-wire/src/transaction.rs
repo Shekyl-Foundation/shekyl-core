@@ -1138,13 +1138,27 @@ impl Transaction {
         else {
             return 0;
         };
-        // `|L| < 6` cannot occur for a valid proof; saturate to 0 padded outputs
-        // (⇒ no clawback) rather than underflow on malformed input.
+        // n_padded for one proof = `1 << (|L| − 6)`. `|L| < 6` cannot occur for a valid
+        // proof. An oversize `|L|` *can* be parsed — `BpPlus::read` caps to the loose
+        // `READ_LEN_CAP`, and `validate()` bounds the output *count* but not `|L|` — so the
+        // shift must not overflow, which would panic `weight()` on a parseable-but-invalid
+        // tx (DoS). Clamp each proof to `MAX_OUTPUTS`: this is exact for any valid tx
+        // (whose `n_padded ≤ MAX_OUTPUTS`) and merely bounded for an invalid one, which
+        // `validate()` / `MAX_TX_SIZE` rejects regardless. The clamp also keeps the
+        // downstream `BP_BASE * n_padded` arithmetic from overflowing.
         let n_padded: usize = prunable
             .bulletproofs
             .iter()
-            .map(|bp| bp.l.len().checked_sub(6).map_or(0, |bits| 1usize << bits))
-            .sum();
+            .map(|bp| {
+                let bits = bp.l.len().saturating_sub(6);
+                if bits >= MAX_OUTPUTS.ilog2() as usize {
+                    MAX_OUTPUTS
+                } else {
+                    1usize << bits
+                }
+            })
+            .sum::<usize>()
+            .min(MAX_OUTPUTS);
         if n_padded <= 2 {
             return 0;
         }

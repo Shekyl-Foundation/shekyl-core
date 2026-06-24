@@ -383,6 +383,16 @@ fn weight_clawback_matches_cpp_formula() {
 }
 
 #[test]
+fn weight_does_not_panic_on_oversize_bp_l() {
+    // A parseable-but-invalid tx whose Bp+ |L| far exceeds the consensus bound must not
+    // shift-overflow weight() (DoS): |L|=100 ⇒ bits=94 ⇒ `1 << 94` without the clamp.
+    // The clamp caps n_padded at MAX_OUTPUTS, so weight() stays finite and ≥ the size.
+    let mut tx = synthetic_spend();
+    set_bp_lr_len(&mut tx, 100);
+    assert!(tx.weight() >= tx.serialized_len());
+}
+
+#[test]
 fn weight_equals_serialized_len_for_non_spend() {
     // No Bp+ ⇒ no clawback ⇒ weight == size, for both non-spend shapes.
     let mut fee_only = synthetic_spend();
