@@ -1112,6 +1112,60 @@ impl Transaction {
         counter.bytes
     }
 
+    /// The consensus **transaction weight** — the serialized size **plus** the
+    /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
+    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp:292`). The clawback is
+    /// a verification-cost *penalty* added for a Bp+ covering more than two (padded)
+    /// outputs — so weight is **not** the serialized length, and weight ≥ size always.
+    /// It is `0` for the genesis ≤2-output spend shapes and for any non-spend (coinbase
+    /// `Null`, fee-only `Fcmp`). This is the value the daemon charges fees and block
+    /// weight against, so a wallet fee estimate must match it.
+    pub fn weight(&self) -> usize {
+        self.serialized_len() + self.bp_plus_clawback()
+    }
+
+    /// Bp+ weight clawback — the C++ `get_transaction_weight_clawback`
+    /// (`cryptonote_format_utils.cpp:93`). `n_padded_outputs` is derived from each
+    /// proof's `L` length exactly as the daemon's `n_bulletproof_plus_max_amounts`
+    /// does (`|L| = 6 + ceil(log2(n_padded))`, so `n_padded = 1 << (|L| − 6)`), then
+    /// summed across proofs (genesis carries one). Returns `0` unless FCMP prunable
+    /// data is present with a proof set covering more than two padded outputs.
+    fn bp_plus_clawback(&self) -> usize {
+        let Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } = &self.ct
+        else {
+            return 0;
+        };
+        // `|L| < 6` cannot occur for a valid proof; saturate to 0 padded outputs
+        // (⇒ no clawback) rather than underflow on malformed input.
+        let n_padded: usize = prunable
+            .bulletproofs
+            .iter()
+            .map(|bp| bp.l.len().checked_sub(6).map_or(0, |bits| 1usize << bits))
+            .sum();
+        if n_padded <= 2 {
+            return 0;
+        }
+        // bp_base = (32 * (6 + 7*2)) / 2 = 320.
+        const BP_BASE: usize = (32 * (6 + 7 * 2)) / 2;
+        // nlr recomputed from n_padded exactly as the C++ does inside the clawback
+        // (smallest nlr with `1<<nlr >= n_padded`, then `+6`).
+        let mut nlr = 0u32;
+        while (1usize << nlr) < n_padded {
+            nlr += 1;
+        }
+        let bp_size = 32 * (6 + 2 * (nlr as usize + 6));
+        // C++ asserts `bp_base * n_padded >= bp_size`; clamp to 0 rather than panic on
+        // a malformed proof — consensus weight must not overflow on adversarial input.
+        let gross = BP_BASE.saturating_mul(n_padded);
+        if gross < bp_size {
+            return 0;
+        }
+        (gross - bp_size) * 4 / 5
+    }
+
     /// The FCMP++ **`signable_tx_hash`** — the prefix hash the membership/SAL proof
     /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over the
     /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`

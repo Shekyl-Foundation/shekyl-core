@@ -3241,13 +3241,32 @@ mod tests {
             !built.tx_bytes.is_empty(),
             "2a-3 build produces non-empty signed tx bytes"
         );
-        // The built tx parses as the canonical shekyl-wire format.
-        assert!(shekyl_wire::Transaction::from_bytes(&built.tx_bytes).is_ok());
-        // (The build-path weight cross-check `predict_weight == tx.weight()` is deferred:
-        // the canonical tx weight is the serialized size minus the Bp+ discount, which
-        // needs a `shekyl_wire::Transaction::weight()` — tracked in docs/FOLLOWUPS.md.
-        // The fee model itself stays exercised by the daemon-fee-tier test and the
-        // tx_weight KATs.)
+        // The built tx parses as the canonical shekyl-wire format, and the a-priori
+        // `predict_weight` equals its canonical `weight()` (same n_in/n_out/depth/fee) —
+        // the build-path half of the fee-model ↔ wire-weight reconciliation.
+        let tx = shekyl_wire::Transaction::from_bytes(&built.tx_bytes)
+            .expect("built tx parses as canonical shekyl-wire");
+        let (depth, fee) = match &tx.ct {
+            shekyl_wire::Ct::Fcmp {
+                prunable: Some(p),
+                fee,
+                ..
+            } => (
+                u8::try_from(p.tree_depth).expect("tree_depth fits u8"),
+                *fee,
+            ),
+            _ => panic!("a spend is Fcmp with prunable"),
+        };
+        assert_eq!(
+            crate::engine::tx_fee_model::predict_weight(
+                tx.prefix.inputs.len(),
+                tx.prefix.outputs.len(),
+                depth,
+                fee,
+            ),
+            tx.weight(),
+            "predict_weight must equal the built tx's canonical weight"
+        );
         assert_eq!(pending.outstanding(), 1);
 
         let tx_hash = pending
@@ -4402,9 +4421,24 @@ mod tests {
             expected_fee,
             "built fee must match daemon Standard tier through production path"
         );
-        // (The `predict_weight == tx.weight()` cross-check is deferred with the canonical
-        // `shekyl_wire::Transaction::weight()` — see docs/FOLLOWUPS.md. n_in/n_out above
-        // still drive the daemon-fee-tier convergence asserted above.)
+        // Build-path weight cross-check: the a-priori `predict_weight` equals the
+        // canonical weight of the bytes actually built (same n_in/n_out/depth/fee).
+        let (depth, fee) = match &tx.ct {
+            shekyl_wire::Ct::Fcmp {
+                prunable: Some(p),
+                fee,
+                ..
+            } => (
+                u8::try_from(p.tree_depth).expect("tree_depth fits u8"),
+                *fee,
+            ),
+            _ => panic!("a spend is Fcmp with prunable"),
+        };
+        assert_eq!(
+            predict_weight(n_in, n_out, depth, fee),
+            tx.weight(),
+            "predict_weight must equal the built tx's canonical weight"
+        );
 
         let tx_hash = pending
             .submit(built.id, built.content_gen)

@@ -5,34 +5,44 @@
 
 //! Structural tx-weight predictor and fee-directive helpers (Phase 2a §3.10).
 //!
-//! `predict_weight` mirrors post-build `Transaction::weight()` without
-//! constructing a transaction. The `fcmp_proof_size` term is a provisional
-//! linear stub until the 2a-3 KAT table lands.
+//! `predict_weight` mirrors `shekyl_wire::Transaction::write` byte-for-byte (and
+//! adds the same Bp+ clawback), so it equals the post-build
+//! `Transaction::weight()` without constructing a transaction — pinned by the
+//! build-path cross-checks and `predict_weight_matches_wire_weight`. The
+//! `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
 use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::TX_VERSION;
 
 use super::traits::key::FeeDirective;
 
-/// Hybrid PQC auth bytes per input (§3.10.1).
-const HYBRID_PQC_AUTH_WEIGHT: usize = 3385;
+// ── Wire-exact component sizes ──────────────────────────────────────────────
+// Each constant is one field of `shekyl_wire::Transaction::write`; `predict_weight`
+// sums them so it equals `Transaction::weight()` exactly (pinned by the build-path
+// cross-checks + `predict_weight_matches_wire_weight`).
 
-/// Per-input fixed on-wire fields excluding the FCMP proof blob.
-const PER_INPUT_FIXED_WEIGHT: usize = 32 + 32 + HYBRID_PQC_AUTH_WEIGHT + 8;
+/// Hybrid PQC public-key blob on the wire (ed25519 ‖ ML-DSA-65).
+const PQC_PUBLIC_KEY_LEN: usize = 1996;
+/// Hybrid PQC signature blob on the wire (ed25519 ‖ ML-DSA-65).
+const PQC_SIGNATURE_LEN: usize = 3385;
+/// Hybrid KEM ciphertext per output in `tx_extra` (x25519 ‖ ML-KEM-768 CT).
+const KEM_CIPHERTEXT_LEN: usize = 32 + 1_088;
 
-/// Per-output on-wire fields (one-time key + commitment + enc_amount + enc_label).
-const PER_OUTPUT_WEIGHT: usize = 32 + 32 + 9 + 9;
-
-/// Hybrid KEM material per output embedded in `tx_extra` (x25519 + ML-KEM-768 CT).
-const PER_OUTPUT_HYBRID_EXTRA_WEIGHT: usize = 32 + 1_088;
-
-/// Conservative tx-prefix overhead beyond per-output hybrid extra (version, pubkey, varints).
-const TX_PREFIX_EXTRA_WEIGHT: usize = 64;
-
-/// Bulletproof+ aggregate proof size scales with output count (2a synthetic path KAT).
-const BULLETPROOF_PLUS_PER_OUTPUT_WEIGHT: usize = 320;
+/// `Input::ToKey`: tag + varint(amount=0) + varint(key_offsets=0) + key_image.
+const INPUT_TO_KEY_WEIGHT: usize = 1 + 1 + 1 + 32;
+/// `Output`: tag + varint(amount=0) + one-time key + view_tag.
+const OUTPUT_WEIGHT: usize = 1 + 1 + 32 + 1;
+/// `CtBase` per output: enc_amount + enc_label + commitment.
+const CT_BASE_PER_OUTPUT_WEIGHT: usize = 9 + 9 + 32;
+/// `reference_block` hash in the ct base.
+const REFERENCE_BLOCK_LEN: usize = 32;
+/// `pseudoOut` commitment per input in the prunable.
+const PSEUDO_OUT_LEN: usize = 32;
+/// `ExtraField::PublicKey`: tag + Edwards point.
+const EXTRA_PUBKEY_FIELD_WEIGHT: usize = 1 + 32;
 
 /// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
 /// `n_in ∈ 0..=8` and `tree_depth ∈ 0..=24` (row/col 0 are unused sentinels).
@@ -128,16 +138,80 @@ fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
         .unwrap_or(FCMP_PROOF_SIZE_MAX)
 }
 
-/// Structural weight predictor (§3.10.1). Clawback is 0 for 2a (`n_out ∈ {1,2}`).
+/// `ExtraField::PqcKemCiphertext`: tag + varint(len) + ciphertext.
+fn extra_kem_field_weight() -> usize {
+    1 + varint_len(KEM_CIPHERTEXT_LEN as u64) + KEM_CIPHERTEXT_LEN
+}
+
+/// One per-input `PqcAuth`: auth_version + scheme_id + flags(u16) +
+/// varint(pk_len) ‖ pk + varint(sig_len) ‖ sig.
+fn pqc_auth_weight() -> usize {
+    1 + 1
+        + 2
+        + varint_len(PQC_PUBLIC_KEY_LEN as u64)
+        + PQC_PUBLIC_KEY_LEN
+        + varint_len(PQC_SIGNATURE_LEN as u64)
+        + PQC_SIGNATURE_LEN
+}
+
+/// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
+fn padded_outputs(n_out: usize) -> usize {
+    n_out.max(1).next_power_of_two()
+}
+
+/// Serialized Bp+ size: 6 fixed points + varint(|L|)‖L + varint(|R|)‖R, where
+/// `|L| == |R| == 6 + log2(n_padded)` (the proof's L/R vector length).
+fn bp_plus_weight(n_out: usize) -> usize {
+    let nlr = 6 + padded_outputs(n_out).trailing_zeros() as usize;
+    6 * 32 + 2 * (varint_len(nlr as u64) + nlr * 32)
+}
+
+/// Bp+ verification clawback, the C++ `get_transaction_weight_clawback` — `0` for
+/// ≤ 2 padded outputs. Mirrors `shekyl_wire`'s `bp_plus_clawback` (derived from
+/// `n_padded` rather than the proof's `|L|`, equal for a well-formed tx).
+fn bp_plus_clawback_weight(n_out: usize) -> usize {
+    let n_padded = padded_outputs(n_out);
+    if n_padded <= 2 {
+        return 0;
+    }
+    const BP_BASE: usize = (32 * (6 + 7 * 2)) / 2;
+    let nlr = n_padded.trailing_zeros() as usize + 6;
+    let bp_size = 32 * (6 + 2 * nlr);
+    let gross = BP_BASE * n_padded;
+    if gross < bp_size {
+        return 0;
+    }
+    (gross - bp_size) * 4 / 5
+}
+
+/// Structural weight predictor (§3.10.1) — a byte-for-byte mirror of
+/// `shekyl_wire::Transaction::write` plus the Bp+ clawback, so it equals
+/// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
 pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64) -> usize {
-    TX_PREFIX_EXTRA_WEIGHT
-        + n_in.saturating_mul(PER_INPUT_FIXED_WEIGHT)
-        + n_out.saturating_mul(PER_OUTPUT_WEIGHT)
-        + n_out.saturating_mul(PER_OUTPUT_HYBRID_EXTRA_WEIGHT)
-        + n_out.saturating_mul(BULLETPROOF_PLUS_PER_OUTPUT_WEIGHT)
-        + fcmp_proof_size(n_in, tree_depth)
-        + varint_len(fee)
+    // version + unlock_time.
+    let mut w = varint_len(TX_VERSION) + varint_len(0u64);
+    // vin / vout: count prefix + elements.
+    w += varint_len(n_in as u64) + n_in * INPUT_TO_KEY_WEIGHT;
+    w += varint_len(n_out as u64) + n_out * OUTPUT_WEIGHT;
+    // tx_extra: one PublicKey field + one PqcKemCiphertext per output.
+    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT + n_out * extra_kem_field_weight();
+    w += varint_len(extra_len as u64) + extra_len;
+    // ct head: type byte + fee + reference_block.
+    w += 1 + varint_len(fee) + REFERENCE_BLOCK_LEN;
+    // ct base (per output) + per-input PQC auth.
+    w += n_out * CT_BASE_PER_OUTPUT_WEIGHT;
+    w += n_in * pqc_auth_weight();
+    // prunable: nbp + bp+ + tree_depth + fcmp_proof + pseudoOuts.
+    let fcmp = fcmp_proof_size(n_in, tree_depth);
+    w += varint_len(1u64)
+        + bp_plus_weight(n_out)
+        + varint_len(u64::from(tree_depth))
+        + varint_len(fcmp as u64)
+        + fcmp
+        + n_in * PSEUDO_OUT_LEN;
+    // Bp+ verification clawback (0 for the genesis ≤2-output shapes).
+    w + bp_plus_clawback_weight(n_out)
 }
 
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
@@ -317,6 +391,96 @@ mod tests {
         let w3 = predict_weight(1, 2, 1, 1_000);
         assert!(w2 > w1);
         assert!(w3 > w1);
+    }
+
+    /// `predict_weight` must equal `shekyl_wire::Transaction::weight()` for the tx
+    /// shape the builder produces from the same counts — the reopen criterion for the
+    /// canonical-weight follow-up. Builds a wire tx whose field *sizes* mirror a real
+    /// spend (real `Extra` serializer, so the tx_extra term is validated non-circularly;
+    /// real Bp+ `|L|`, real PQC pk/sig lengths, KAT fcmp proof) across input/output
+    /// scaling and the >2-output clawback. The live build-path cross-checks
+    /// (`build_then_submit_*`) anchor the n_in=1/n_out=2 case against the real builder.
+    #[test]
+    fn predict_weight_matches_wire_weight() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+        use shekyl_scanner::extra::Extra;
+        use shekyl_wire::{
+            BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
+        };
+
+        for &(n_in, n_out, depth, fee) in &[
+            (1usize, 1usize, 1u8, 0u64),
+            (1, 2, 2, 103_760),
+            (2, 2, 8, 1_000),
+            (2, 3, 4, 50_000), // n_out=3 ⇒ 4 padded ⇒ non-zero clawback
+            (3, 4, 12, 7),
+        ] {
+            let nlr = 6 + padded_outputs(n_out).trailing_zeros() as usize;
+            let bp = BpPlus {
+                a: [0; 32],
+                a1: [0; 32],
+                b: [0; 32],
+                r1: [0; 32],
+                s1: [0; 32],
+                d1: [0; 32],
+                l: vec![[0; 32]; nlr],
+                r: vec![[0; 32]; nlr],
+            };
+            let extra = Extra::for_hybrid_transfer(
+                ED25519_BASEPOINT_POINT,
+                (0..n_out).map(|_| vec![0u8; KEM_CIPHERTEXT_LEN]),
+            )
+            .serialize();
+            let tx = Transaction {
+                prefix: TxPrefix {
+                    unlock_time: 0,
+                    inputs: (0..n_in)
+                        .map(|_| Input::ToKey {
+                            amount: 0,
+                            key_offsets: vec![],
+                            key_image: [0; 32],
+                        })
+                        .collect(),
+                    outputs: (0..n_out)
+                        .map(|_| Output {
+                            amount: 0,
+                            key: [0; 32],
+                            view_tag: 0,
+                        })
+                        .collect(),
+                    extra,
+                },
+                ct: Ct::Fcmp {
+                    fee,
+                    reference_block: [0; 32],
+                    base: CtBase {
+                        enc_amounts: vec![[0; 9]; n_out],
+                        enc_labels: vec![[0; 9]; n_out],
+                        commitments: vec![[0; 32]; n_out],
+                    },
+                    pqc_auths: (0..n_in)
+                        .map(|_| PqcAuth {
+                            auth_version: 1,
+                            scheme_id: 1,
+                            flags: 0,
+                            hybrid_public_key: vec![0u8; PQC_PUBLIC_KEY_LEN],
+                            hybrid_signature: vec![0u8; PQC_SIGNATURE_LEN],
+                        })
+                        .collect(),
+                    prunable: Some(Prunable {
+                        bulletproofs: vec![bp],
+                        tree_depth: u64::from(depth),
+                        fcmp_proof: vec![0u8; fcmp_proof_size(n_in, depth)],
+                        pseudo_outs: vec![[0; 32]; n_in],
+                    }),
+                },
+            };
+            assert_eq!(
+                predict_weight(n_in, n_out, depth, fee),
+                tx.weight(),
+                "predict_weight ≠ wire weight for n_in={n_in} n_out={n_out} depth={depth} fee={fee}"
+            );
+        }
     }
 
     #[test]
