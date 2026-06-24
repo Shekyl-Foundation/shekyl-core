@@ -11,29 +11,31 @@
 //! build-path cross-checks and `predict_weight_matches_wire_weight`. The
 //! `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 
+use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
 use shekyl_tx_builder::{MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::TX_VERSION;
+use shekyl_wire::transaction::{
+    bp_plus_weight_clawback, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN, TX_VERSION,
+};
 
 use super::traits::key::FeeDirective;
 
 // ── Wire-exact component sizes ──────────────────────────────────────────────
 // Each constant is one field of `shekyl_wire::Transaction::write`; `predict_weight`
 // sums them so it equals `Transaction::weight()` exactly (pinned by the build-path
-// cross-checks + `predict_weight_matches_wire_weight`).
+// cross-checks + `predict_weight_matches_wire_weight`). Sizes that have a canonical
+// home are imported, not re-typed: the hybrid PQC pk/sig lengths
+// (`PQC_HYBRID_SINGLE_KEY_LEN` / `PQC_HYBRID_SINGLE_SIG_LEN`) come from `shekyl_wire`.
 
-/// Hybrid PQC public-key blob on the wire (ed25519 ‖ ML-DSA-65).
-const PQC_PUBLIC_KEY_LEN: usize = 1996;
-/// Hybrid PQC signature blob on the wire (ed25519 ‖ ML-DSA-65).
-const PQC_SIGNATURE_LEN: usize = 3385;
-/// Hybrid KEM ciphertext per output in `tx_extra` (x25519 ‖ ML-KEM-768 CT).
-const KEM_CIPHERTEXT_LEN: usize = 32 + 1_088;
+/// Hybrid KEM ciphertext per output in `tx_extra`: the 32-byte x25519 component ‖ the
+/// ML-KEM-768 ciphertext (canonical length from `shekyl-crypto-pq`).
+const KEM_CIPHERTEXT_LEN: usize = 32 + ML_KEM_768_CT_LEN;
 
 /// `Input::ToKey`: tag + varint(amount=0) + varint(key_offsets=0) + key_image.
 const INPUT_TO_KEY_WEIGHT: usize = 1 + 1 + 1 + 32;
-/// `Output`: tag + varint(amount=0) + one-time key + view_tag.
+/// `Output`: varint(amount=0) + tag + one-time key + view_tag.
 const OUTPUT_WEIGHT: usize = 1 + 1 + 32 + 1;
 /// `CtBase` per output: enc_amount + enc_label + commitment.
 const CT_BASE_PER_OUTPUT_WEIGHT: usize = 9 + 9 + 32;
@@ -148,10 +150,10 @@ fn extra_kem_field_weight() -> usize {
 fn pqc_auth_weight() -> usize {
     1 + 1
         + 2
-        + varint_len(PQC_PUBLIC_KEY_LEN as u64)
-        + PQC_PUBLIC_KEY_LEN
-        + varint_len(PQC_SIGNATURE_LEN as u64)
-        + PQC_SIGNATURE_LEN
+        + varint_len(PQC_HYBRID_SINGLE_KEY_LEN as u64)
+        + PQC_HYBRID_SINGLE_KEY_LEN
+        + varint_len(PQC_HYBRID_SINGLE_SIG_LEN as u64)
+        + PQC_HYBRID_SINGLE_SIG_LEN
 }
 
 /// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
@@ -168,24 +170,12 @@ fn bp_plus_weight(n_out: usize) -> usize {
     6 * 32 + 2 * (varint_len(nlr as u64) + nlr * 32)
 }
 
-/// Bp+ verification clawback, the C++ `get_transaction_weight_clawback` — `0` for
-/// ≤ 2 padded outputs. Mirrors `shekyl_wire`'s `bp_plus_clawback` (derived from
-/// `n_padded` rather than the proof's `|L|`, equal for a well-formed tx).
+/// Bp+ verification clawback for the predicted output count. Delegates to the canonical
+/// [`shekyl_wire::transaction::bp_plus_weight_clawback`] so the predictor and `weight()`
+/// share one formula; `padded_outputs` supplies the same `n_padded` (clamped to
+/// `MAX_OUTPUTS`) that a built tx's proof would yield.
 fn bp_plus_clawback_weight(n_out: usize) -> usize {
-    let n_padded = padded_outputs(n_out);
-    if n_padded <= 2 {
-        return 0;
-    }
-    const BP_BASE: usize = (32 * (6 + 7 * 2)) / 2;
-    let nlr = n_padded.trailing_zeros() as usize + 6;
-    let bp_size = 32 * (6 + 2 * nlr);
-    // `n_padded ≤ MAX_OUTPUTS` (padded_outputs clamps), so this can't overflow;
-    // `saturating_mul` keeps it structurally identical to the wire twin regardless.
-    let gross = BP_BASE.saturating_mul(n_padded);
-    if gross < bp_size {
-        return 0;
-    }
-    (gross - bp_size) * 4 / 5
+    bp_plus_weight_clawback(padded_outputs(n_out))
 }
 
 /// Structural weight predictor (§3.10.1) — a byte-for-byte mirror of
@@ -211,18 +201,18 @@ pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64
         n_out.saturating_mul(OUTPUT_WEIGHT),             // vout elements
         varint_len(extra_len as u64),                    // tx_extra length prefix
         extra_len,                                       // tx_extra body
-        1,                                               // ct type byte
-        varint_len(fee),                                 // fee
-        REFERENCE_BLOCK_LEN,                             // reference_block
+        1,                   // ct type tag — one u8 (a byte width, not CT_TYPE_FCMP's value)
+        varint_len(fee),     // fee
+        REFERENCE_BLOCK_LEN, // reference_block
         n_out.saturating_mul(CT_BASE_PER_OUTPUT_WEIGHT), // ct base (per output)
-        n_in.saturating_mul(pqc_auth_weight()),          // per-input PQC auth
-        varint_len(1u64),                                // prunable nbp
-        bp_plus_weight(n_out),                           // bulletproof+
-        varint_len(u64::from(tree_depth)),               // tree_depth
-        varint_len(fcmp as u64),                         // fcmp_proof length prefix
-        fcmp,                                            // fcmp_proof body
-        n_in.saturating_mul(PSEUDO_OUT_LEN),             // pseudoOuts
-        bp_plus_clawback_weight(n_out),                  // Bp+ verification clawback
+        n_in.saturating_mul(pqc_auth_weight()), // per-input PQC auth
+        varint_len(1u64),    // prunable nbp
+        bp_plus_weight(n_out), // bulletproof+
+        varint_len(u64::from(tree_depth)), // tree_depth
+        varint_len(fcmp as u64), // fcmp_proof length prefix
+        fcmp,                // fcmp_proof body
+        n_in.saturating_mul(PSEUDO_OUT_LEN), // pseudoOuts
+        bp_plus_clawback_weight(n_out), // Bp+ verification clawback
     ]
     .into_iter()
     .fold(0usize, usize::saturating_add)
@@ -489,8 +479,8 @@ mod tests {
                             auth_version: 1,
                             scheme_id: 1,
                             flags: 0,
-                            hybrid_public_key: vec![0u8; PQC_PUBLIC_KEY_LEN],
-                            hybrid_signature: vec![0u8; PQC_SIGNATURE_LEN],
+                            hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+                            hybrid_signature: vec![0u8; PQC_HYBRID_SINGLE_SIG_LEN],
                         })
                         .collect(),
                     prunable: Some(Prunable {
