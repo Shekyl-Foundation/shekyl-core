@@ -252,8 +252,11 @@ priority track.
     `cargo fmt --all` formats path-deps regardless of `exclude`, so the vendored copy
     is reformatted to the workspace rustfmt style (as it always was) — the manifest
     pins *that* tree (catches silent edits; not byte-identical to the fork). The clean
-    upstream-formatted mirror is the fork. Re-vetting Q6 against the moved proof
-    structure is the remaining slice-1 coordination (see §2.3).
+    upstream-formatted mirror is the fork. **Re-vetting Q6 against the moved proof
+    structure is DONE (2026-06-25):** Q6 is ratified frozen on `2753111c50` — the wire
+    framing is opaque/structural, `proof_len == proof_size` is reconciled (engine KAT
+    `0dcef1081` + `kat_fcmp_proof_size_depth1_row` to the real proof), and `fcmps` is
+    7/7 green on the new pin. See `GENESIS_TX_WIRE_FORMAT.md` §6 Q6.
 - **A1 — add the gate everyone assumed existed. [content gate landed; canary
   re-scoped]** A content-integrity gate now runs on push/PR
   (`.github/workflows/vendored-crypto-content.yml` →

@@ -494,14 +494,29 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference)* The wire layer length-prefixes the proof as opaque bytes
-  (`fcmp.rs:191`); the canonical interiors are defined in
-  `rust/shekyl-oxide/crypto/fcmps/src/lib.rs` (FCMP++) and
-  `rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/lib.rs` (Bp+). Round 1
-  cites these + the pinned commit as part of the freeze. **Cross-link stands:**
-  these kept-vendored crates carry genesis-frozen *format*, raising the bar on the
-  crypto-crate triage (the 4 Shekyl-stamped files may be exactly this — recon /
-  root-hash-convention).
+  reference; **re-vetted 2026-06-25 on pin `2753111c50`**)* The wire layer
+  length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
+  `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
+  fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
+  are defined in `rust/shekyl-oxide/crypto/fcmps/src/lib.rs` (FCMP++) and
+  `rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/lib.rs` (Bp+). Round 1 cites
+  these + the pinned commit as part of the freeze. **Cross-link stands:** these
+  kept-vendored crates carry genesis-frozen *format*, raising the bar on the
+  crypto-crate triage.
+
+  **Re-vet (2026-06-25, after the #181 crypto re-pin).** The re-baseline to the
+  upstream `fcmp++` tip carried two genesis-relevant proof corrections sitting above
+  the old pin `3933664` — the `ni = 2+2*(c/2) → 2+2*c` proof-sizing fix and the IETF
+  constant-`c` alignment — so the freeze now binds the **fixed** structure at
+  `UPSTREAM_MONERO_OXIDE_COMMIT = 2753111c50`, never the buggy pre-fix one. The freeze
+  **holds**, verified three ways: (a) the wire framing is **opaque / structural** —
+  `Prunable::write` length-prefixes the proof and writes the Bp+ by fixed fields, so
+  the `ni`/`c` change moves the proof's *content and length*, not its *serialization*;
+  (b) `proof_len == proof_size(nvin, tree_depth)` for the new structure — the engine's
+  `FCMP_PROOF_SIZE_KAT` was regenerated against the fixed proof (`0dcef1081`) and
+  `kat_fcmp_proof_size_depth1_row` matches it to the **real** `sign_transaction` proof;
+  (c) the `fcmps` proof self-consistency suite is green on the new pin (7/7). Q6 is
+  **frozen on `2753111c50`**.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
