@@ -35,7 +35,7 @@ use ciphersuite::{
 };
 use ec_divisors::DivisorCurve;
 use helioselene::{Helios, Selene};
-use shekyl_fcmp_plus_plus::fcmps;
+use shekyl_fcmp_proofs::fcmps;
 use shekyl_curve_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
 
 /// Number of scalars per output in the leaf layer.
@@ -103,7 +103,7 @@ pub fn hash_grow_selene(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -129,7 +129,7 @@ pub fn hash_trim_selene(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -159,7 +159,7 @@ pub fn hash_grow_helios(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -185,7 +185,7 @@ pub fn hash_trim_helios(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -547,8 +547,8 @@ pub fn leaves_to_bytes(leaves: &[ShekylLeaf]) -> Vec<u8> {
 
 /// Compute the expected proof size for a given number of inputs and tree depth.
 pub fn proof_size(num_inputs: usize, tree_depth: usize) -> usize {
-    use shekyl_fcmp_plus_plus::fcmps::Fcmp;
-    type ShekylFcmp = Fcmp<shekyl_fcmp_plus_plus::Curves>;
+    use shekyl_fcmp_proofs::fcmps::Fcmp;
+    type ShekylFcmp = Fcmp<shekyl_fcmp_proofs::Curves>;
     ShekylFcmp::proof_size(num_inputs, tree_depth)
 }
 

@@ -25,7 +25,7 @@ use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
 use rand_core::OsRng;
 
-use shekyl_fcmp_plus_plus::{
+use shekyl_fcmp_proofs::{
     fcmps::{
         BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path,
         TreeRoot,
@@ -466,9 +466,9 @@ pub fn prove(
 #[cfg(feature = "multisig")]
 #[allow(non_snake_case)]
 pub fn prove_with_sal(
-    sal_pairs: Vec<(shekyl_fcmp_plus_plus::Input, SpendAuthAndLinkability)>,
+    sal_pairs: Vec<(shekyl_fcmp_proofs::Input, SpendAuthAndLinkability)>,
     original_outputs: &[Output],
-    rerands: &[shekyl_fcmp_plus_plus::sal::RerandomizedOutput],
+    rerands: &[shekyl_fcmp_proofs::sal::RerandomizedOutput],
     leaf_chunks: &[ProveInputLeafChunk],
     tree_depth: u8,
 ) -> Result<ProveResult, ProveError> {

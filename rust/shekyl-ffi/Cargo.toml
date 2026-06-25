@@ -75,7 +75,7 @@ ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
 multiexp = "0.4"
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++" }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
 
 [lints]
 workspace = true

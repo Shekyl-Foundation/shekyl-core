@@ -30,7 +30,6 @@ shekyl-curve-io = { path = "../../shekyl-curve-io", version = "0.1", default-fea
 shekyl-curve-generators = { path = "../../shekyl-curve-generators", version = "0.4", default-features = false }
 shekyl-curve-primitives = { path = "../../shekyl-curve-primitives", version = "0.1", default-features = false }
 shekyl-bulletproofs = { path = "../../shekyl-bulletproofs", version = "0.1", default-features = false }
-shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
 
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 
@@ -49,12 +48,10 @@ std = [
   "shekyl-curve-generators/std",
   "shekyl-curve-primitives/std",
   "shekyl-bulletproofs/std",
-  "shekyl-fcmp-plus-plus/std",
 ]
 
 compile-time-generators = [
   "curve25519-dalek/precomputed-tables",
   "shekyl-bulletproofs/compile-time-generators",
-  "shekyl-fcmp-plus-plus/compile-time-generators",
 ]
 default = ["std", "compile-time-generators"]

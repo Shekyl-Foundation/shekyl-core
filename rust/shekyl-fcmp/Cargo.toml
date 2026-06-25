@@ -18,7 +18,7 @@ license.workspace = true
 # pseudo-outs, hashes) where a key image is required.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Vendored shekyl-oxide crates (tracked upstream in Shekyl-Foundation/monero-oxide).
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 generalized-bulletproofs = { path = "../shekyl-oxide/crypto/generalized-bulletproofs" }
@@ -53,7 +53,7 @@ rand_chacha = "0.3"
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-plus-plus/multisig", "transcript", "modular-frost", "dkg-pedpop", "rand_chacha"]
+multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-pedpop", "rand_chacha"]
 
 [lints]
 workspace = true

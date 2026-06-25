@@ -3921,7 +3921,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-fcmp",
- "shekyl-fcmp-plus-plus",
+ "shekyl-fcmp-proofs",
  "shekyl-oxide",
  "shekyl-rpc",
  "shekyl-scanner",
@@ -4044,14 +4044,14 @@ dependencies = [
  "serde",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
- "shekyl-fcmp-plus-plus",
+ "shekyl-fcmp-proofs",
  "thiserror",
  "tracing",
  "zeroize",
 ]
 
 [[package]]
-name = "shekyl-fcmp-plus-plus"
+name = "shekyl-fcmp-proofs"
 version = "0.1.0"
 dependencies = [
  "blake2",
@@ -4106,7 +4106,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-fcmp",
- "shekyl-fcmp-plus-plus",
+ "shekyl-fcmp-proofs",
  "shekyl-logging",
  "shekyl-pow-randomx",
  "shekyl-proofs",
@@ -4146,7 +4146,6 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
- "shekyl-fcmp-plus-plus",
  "std-shims",
  "zeroize",
 ]
