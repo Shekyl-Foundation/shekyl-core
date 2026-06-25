@@ -3,15 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FFI surface for the Shekyl LWMA-1 difficulty-adjustment algorithm.
+//! FFI surface for the Shekyl difficulty crate.
 //!
-//! Single export: [`shekyl_difficulty_lwma1_next`] wraps
-//! [`shekyl_difficulty::lwma1_next`] in a C-compatible ABI. The
-//! algorithm itself stays in [`shekyl_difficulty`] (the `#![no_std]`
-//! `#![deny(unsafe_code)]` crate that holds the LWMA-1 logic); this
-//! module is the `unsafe` boundary that translates raw pointers and
-//! decomposed `u128` halves into the safe-Rust slice/`u128` API per
-//! `docs/completed/DAA_LWMA1.md` §6.1.
+//! Two exports, both thin `unsafe` boundaries over the `#![no_std]`
+//! `#![deny(unsafe_code)]` [`shekyl_difficulty`] crate:
+//!
+//! - [`shekyl_difficulty_lwma1_next`] wraps
+//!   [`shekyl_difficulty::lwma1_next`] (the LWMA-1 difficulty-adjustment
+//!   algorithm) per `docs/completed/DAA_LWMA1.md` §6.1.
+//! - [`shekyl_difficulty_check_hash`] wraps
+//!   [`shekyl_difficulty::check_hash`] (the PoW-target predicate ported
+//!   from the inherited C++ `cryptonote::check_hash` family).
+//!
+//! Both translate raw pointers and the decomposed `ShekylU128` `u128`
+//! ABI into the safe-Rust slice/`u128` API.
 //!
 //! # `ShekylU128` ABI
 //!
@@ -102,7 +107,7 @@
 
 use core::slice;
 
-use shekyl_difficulty::{lwma1_next, Error as DifficultyError};
+use shekyl_difficulty::{check_hash, lwma1_next, Error as DifficultyError};
 
 /// Difficulty target at the C-ABI boundary.
 ///
@@ -232,6 +237,67 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
     }
 }
 
+/// PoW-target predicate: does `hash` satisfy `difficulty`?
+///
+/// Wraps [`shekyl_difficulty::check_hash`] — passes iff the 32-byte
+/// `hash`, read as a 256-bit little-endian integer, satisfies
+/// `hash * difficulty < 2^256`. This is the unified port of the
+/// inherited C++ `cryptonote::check_hash`/`_64`/`_128` family; the
+/// `_64`/`_128` split was a speed optimization and the boolean is
+/// identical on both paths (proven over the differential corpus in
+/// `shekyl-difficulty`).
+///
+/// # Arguments
+///
+/// - `hash_ptr` — pointer to exactly 32 bytes (little-endian PoW hash).
+///   Typed `*const [u8; 32]` (C `const uint8_t (*)[32]`) so the fixed
+///   length is part of the ABI, not a caller convention. Must be non-null.
+/// - `difficulty` — the 128-bit difficulty as a [`ShekylU128`]
+///   (constructed at the C++ call site as `{lo, hi}`; never
+///   reinterpret-cast from a native `uint128_t` — see module docs).
+///   `difficulty == 0` always passes (matching the inherited C++
+///   behaviour; not an error).
+/// - `out_pass` — pointer to a single `bool` that receives the
+///   predicate result on success. Must be non-null.
+///
+/// # Return
+///
+/// [`SHEKYL_DIFFICULTY_OK`] (`0`) on success (and `*out_pass` is
+/// written), or [`SHEKYL_DIFFICULTY_ERR_NULL_PTR`] (`-1`) if
+/// `hash_ptr` or `out_pass` is null (in which case `*out_pass` is
+/// untouched).
+///
+/// # Safety
+///
+/// The caller must uphold:
+/// - `hash_ptr` points to a valid, aligned, initialized `[u8; 32]`.
+/// - `out_pass` points to a valid, aligned `bool` slot writable by
+///   this function.
+/// - The hash buffer and the out-pointer do not alias.
+/// - No other thread mutates the hash buffer for the duration of the
+///   call.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_difficulty_check_hash(
+    hash_ptr: *const [u8; 32],
+    difficulty: ShekylU128,
+    out_pass: *mut bool,
+) -> i32 {
+    if hash_ptr.is_null() || out_pass.is_null() {
+        return SHEKYL_DIFFICULTY_ERR_NULL_PTR;
+    }
+
+    // SAFETY: hash_ptr is non-null and the caller's contract guarantees
+    // an aligned, initialized [u8; 32].
+    let hash = &*hash_ptr;
+
+    let pass = check_hash(hash, u128::from(difficulty));
+
+    // SAFETY: out_pass is non-null per the check above; the caller's
+    // contract guarantees alignment and writability.
+    core::ptr::write(out_pass, pass);
+    SHEKYL_DIFFICULTY_OK
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +375,91 @@ mod tests {
         let rc =
             unsafe { shekyl_difficulty_lwma1_next(ts.as_ptr(), cd.as_ptr(), 1, 90, &raw mut out) };
         assert_eq!(rc, SHEKYL_DIFFICULTY_ERR_INVALID_COUNT);
+    }
+
+    #[test]
+    fn check_hash_null_hash_rejected() {
+        let mut pass = true;
+        // SAFETY: out_pass is a valid stack slot; the null hash pointer
+        // is rejected before any dereference.
+        let rc = unsafe {
+            shekyl_difficulty_check_hash(
+                core::ptr::null(),
+                ShekylU128 { lo: 1, hi: 0 },
+                &raw mut pass,
+            )
+        };
+        assert_eq!(rc, SHEKYL_DIFFICULTY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn check_hash_null_out_rejected() {
+        let hash = [0u8; 32];
+        // SAFETY: hash points to 32 valid bytes; the null out-pointer is
+        // rejected before any write.
+        let rc = unsafe {
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 1, hi: 0 },
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, SHEKYL_DIFFICULTY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn check_hash_known_pass() {
+        // hash = 1 (LE), difficulty = 1: 1 * 1 = 1 < 2^256 -> pass.
+        let mut hash = [0u8; 32];
+        hash[0] = 1;
+        let mut pass = false;
+        // SAFETY: hash points to 32 valid bytes; out_pass is a valid
+        // stack slot.
+        let rc = unsafe {
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 1, hi: 0 },
+                &raw mut pass,
+            )
+        };
+        assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
+        assert!(pass);
+    }
+
+    #[test]
+    fn check_hash_known_fail() {
+        // hash = all-ones (2^256 - 1), difficulty = 2:
+        // (2^256 - 1) * 2 >= 2^256 -> fail.
+        let hash = [0xffu8; 32];
+        let mut pass = true;
+        // SAFETY: hash points to 32 valid bytes; out_pass is a valid
+        // stack slot.
+        let rc = unsafe {
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 2, hi: 0 },
+                &raw mut pass,
+            )
+        };
+        assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
+        assert!(!pass);
+    }
+
+    #[test]
+    fn check_hash_difficulty_zero_passes() {
+        // difficulty == 0 always passes (matches inherited C++).
+        let hash = [0xffu8; 32];
+        let mut pass = false;
+        // SAFETY: hash points to 32 valid bytes; out_pass is a valid
+        // stack slot.
+        let rc = unsafe {
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 0, hi: 0 },
+                &raw mut pass,
+            )
+        };
+        assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
+        assert!(pass);
     }
 }

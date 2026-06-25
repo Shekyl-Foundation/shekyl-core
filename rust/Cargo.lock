@@ -3808,6 +3808,7 @@ dependencies = [
 name = "shekyl-difficulty"
 version = "3.1.0"
 dependencies = [
+ "proptest",
  "serde_json",
 ]
 

@@ -1887,6 +1887,34 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
+/// PoW-target predicate: does `hash` satisfy `difficulty`?
+///
+/// Wraps the `shekyl-difficulty` crate's `check_hash` — the unified
+/// port of the inherited C++ `cryptonote::check_hash`/`_64`/`_128`
+/// family. Passes iff the 32-byte `hash`, read as a 256-bit
+/// little-endian integer, satisfies `hash * difficulty < 2^256`. The
+/// `_64`/`_128` split was a speed optimization; both produced the
+/// identical boolean (proven over the differential corpus in
+/// `rust/shekyl-difficulty/tests/check_hash_vectors.rs`).
+///
+/// `hash` is a pointer to exactly 32 bytes; the fixed length is encoded
+/// in the type as `const uint8_t (*)[32]` (same convention as the
+/// RandomX v2 surface below) so a wrong-sized buffer is a compile error
+/// rather than an out-of-bounds read. `difficulty` is the 128-bit
+/// difficulty as a `struct shekyl_u128` — construct it at the call
+/// site as `{ .lo = (uint64_t)v, .hi = (uint64_t)(v >> 64) }`; never
+/// reinterpret-cast a native `uint128_t` (Round-5 ABI rationale
+/// above). `difficulty == 0` always passes (matching the inherited
+/// behaviour; not an error).
+///
+/// Returns 0 on success and writes the result into `*out_pass`;
+/// returns `SHEKYL_DIFFICULTY_ERR_NULL_PTR` if `hash` or `out_pass`
+/// is null (in which case `*out_pass` is untouched).
+int32_t shekyl_difficulty_check_hash(
+    const uint8_t (*hash)[32],
+    struct shekyl_u128 difficulty,
+    bool* out_pass);
+
 // ---------------------------------------------------------------------------
 // RandomX v2 light-cache PoW verification FFI surface
 //

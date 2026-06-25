@@ -20,5 +20,12 @@ license.workspace = true
 [build-dependencies]
 serde_json = "1"
 
+# Test-only. The runtime crate keeps its zero-dependency posture
+# (DAA_LWMA1.md §2.1); `proptest` is a dev-dependency used solely by
+# the `check_hash` differential fuzz test and is already pinned in the
+# workspace lockfile, so it adds no new resolution.
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

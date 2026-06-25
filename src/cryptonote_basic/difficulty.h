@@ -48,16 +48,20 @@ namespace cryptonote
      *
      * The hash passes if (hash * difficulty) < 2^256.
      * Phrased differently, if (hash * difficulty) fits without overflow into
-     * the least significant 256 bits of the 320 bit multiplication result.
+     * the least significant 256 bits of the 384 bit multiplication result.
+     *
+     * Thin wrapper over the Rust `shekyl_difficulty_check_hash`. The
+     * inherited `check_hash_64` / `check_hash_128` fast/slow split was
+     * deleted in the Rust port: it was a speed optimization producing the
+     * identical boolean on both paths (proven over the differential corpus
+     * in `rust/shekyl-difficulty/tests/check_hash_vectors.rs`). There is
+     * one unified predicate. A difficulty of 0 always passes.
      *
      * @param hash the hash to check
      * @param difficulty the difficulty to check against
      *
      * @return true if valid, else false
      */
-    bool check_hash_64(const crypto::hash &hash, uint64_t difficulty);
-
-    bool check_hash_128(const crypto::hash &hash, difficulty_type difficulty);
     bool check_hash(const crypto::hash &hash, difficulty_type difficulty);
 
     // Difficulty-adjustment selection: LWMA-1 is the canonical
@@ -75,10 +79,12 @@ namespace cryptonote
     //     `cryptonote::difficulty_computation_error` exception declared
     //     in `src/cryptonote_core/difficulty_engine_error.h`.
     //
-    // No DAA helper lives in this header any more; the only inhabitants
-    // are the `check_hash*` PoW predicates and the `hex` formatter,
-    // both of which are language-mechanical utilities orthogonal to
-    // the algorithm choice.
+    // No DAA helper lives in this header any more. The remaining
+    // inhabitants are the `check_hash` PoW predicate (now a thin wrapper
+    // over the Rust `shekyl_difficulty_check_hash`; its `check_hash_64` /
+    // `check_hash_128` fast/slow split was deleted in the port) and the
+    // `hex` formatter, which is a language-mechanical utility orthogonal
+    // to the algorithm choice.
 
     std::string hex(difficulty_type v);
 }
