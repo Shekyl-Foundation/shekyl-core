@@ -14,7 +14,7 @@ pub(crate) struct ScalarVector<F: PrimeField>(pub(crate) Vec<F>);
 
 impl<F: PrimeField + Zeroize> Zeroize for ScalarVector<F> {
     fn zeroize(&mut self) {
-        self.0.zeroize()
+        self.0.zeroize();
     }
 }
 

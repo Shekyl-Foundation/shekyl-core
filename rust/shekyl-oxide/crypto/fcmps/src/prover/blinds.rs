@@ -1,4 +1,4 @@
-use core::ops::Deref;
+use core::ops::Deref as _;
 
 use zeroize::{Zeroize, Zeroizing};
 
@@ -141,6 +141,7 @@ where
 }
 
 /// All of the blinds used for an output, prepared for usage within the circuit.
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Zeroize)]
 pub struct OutputBlinds<G: DivisorCurve>
 where

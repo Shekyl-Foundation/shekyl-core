@@ -1,8 +1,10 @@
+//! Tests for the arithmetic circuit proof.
+
 #![allow(non_snake_case)]
 
-use rand_core::{OsRng, RngCore};
+use rand_core::{OsRng, RngCore as _};
 
-use ciphersuite::{group::ff::Field, Ciphersuite, Ristretto};
+use ciphersuite::{group::ff::Field as _, Ciphersuite, Ristretto};
 
 use generalized_bulletproofs::{
     arithmetic_circuit_proof::{
@@ -135,7 +137,7 @@ fn fuzz_test_arithmetic_circuit() {
     let generators = insecure_test_generators(&mut OsRng, 32).unwrap();
 
     for i in 0..100 {
-        dbg!(i);
+        println!("Fuzzing Arithmetic Circuit, iteration {i}");
 
         // Create aL, aR, aO
         let mut aL = vec![];

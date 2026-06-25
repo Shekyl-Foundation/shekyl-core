@@ -4,7 +4,7 @@ use std_shims::{vec, vec::Vec};
 
 use zeroize::Zeroize;
 
-use generic_array::{typenum::Unsigned, GenericArray};
+use generic_array::{typenum::Unsigned as _, GenericArray};
 
 use ciphersuite::{group::ff::PrimeFieldBits, Ciphersuite};
 use multiexp::multiexp;
@@ -43,7 +43,7 @@ impl<F: Zeroize + PrimeFieldBits> VectorCommitmentTape<F> {
         } else {
             let commitment = self.commitments.last_mut().unwrap();
             commitment.extend(variables);
-        };
+        }
         let i = self.commitments.len() - 1;
         let j_range = self.current_j_offset..(self.current_j_offset + COMMITMENT_WORD_LEN);
         let res = j_range
