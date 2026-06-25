@@ -173,8 +173,9 @@ fn bp_plus_weight(n_out: OutputCount) -> usize {
 
 /// Bp+ verification clawback for the predicted output count. Delegates to the canonical
 /// [`shekyl_wire::transaction::bp_plus_weight_clawback`] so the predictor and `weight()`
-/// share one formula; `padded_outputs` supplies the same `n_padded` (clamped to
-/// `MAX_OUTPUTS`) that a built tx's proof would yield.
+/// share one formula; `padded_outputs` supplies the same `n_padded` a built tx's proof
+/// would yield (`n_out` is type-bounded to `1..=MAX_OUTPUTS` by [`OutputCount`], so no
+/// separate clamp is needed).
 fn bp_plus_clawback_weight(n_out: OutputCount) -> usize {
     bp_plus_weight_clawback(padded_outputs(n_out))
 }
