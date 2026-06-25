@@ -1897,7 +1897,10 @@ int32_t shekyl_difficulty_lwma1_next(
 /// identical boolean (proven over the differential corpus in
 /// `rust/shekyl-difficulty/tests/check_hash_vectors.rs`).
 ///
-/// `hash` points to exactly 32 bytes. `difficulty` is the 128-bit
+/// `hash` is a pointer to exactly 32 bytes; the fixed length is encoded
+/// in the type as `const uint8_t (*)[32]` (same convention as the
+/// RandomX v2 surface below) so a wrong-sized buffer is a compile error
+/// rather than an out-of-bounds read. `difficulty` is the 128-bit
 /// difficulty as a `struct shekyl_u128` — construct it at the call
 /// site as `{ .lo = (uint64_t)v, .hi = (uint64_t)(v >> 64) }`; never
 /// reinterpret-cast a native `uint128_t` (Round-5 ABI rationale
@@ -1908,7 +1911,7 @@ int32_t shekyl_difficulty_lwma1_next(
 /// returns `SHEKYL_DIFFICULTY_ERR_NULL_PTR` if `hash` or `out_pass`
 /// is null (in which case `*out_pass` is untouched).
 int32_t shekyl_difficulty_check_hash(
-    const uint8_t* hash,
+    const uint8_t (*hash)[32],
     struct shekyl_u128 difficulty,
     bool* out_pass);
 

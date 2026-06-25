@@ -32,7 +32,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <vector>
 
 #include "int-util.h"
@@ -63,15 +62,19 @@ namespace cryptonote {
   // call site (never reinterpret-cast from boost::uint128_t) per the
   // `struct shekyl_u128` ABI in `shekyl/shekyl_ffi.h`.
   bool check_hash(const crypto::hash &hash, difficulty_type difficulty) {
-    const difficulty_type u64_mask =
-        difficulty_type(std::numeric_limits<uint64_t>::max());
+    // Low-64 mask as (2^64 - 1). Deliberately not
+    // std::numeric_limits<uint64_t>::max(): on MSVC <windows.h> defines a
+    // function-like max() macro that mis-expands the no-arg call (the
+    // inherited _64/_128 code guarded the same hazard with `#undef max`);
+    // the literal mask avoids the collision with no preprocessor hack.
+    const difficulty_type u64_mask = (difficulty_type(1) << 64) - 1;
     shekyl_u128 d{};
     d.lo = (difficulty & u64_mask).convert_to<uint64_t>();
     d.hi = ((difficulty >> 64) & u64_mask).convert_to<uint64_t>();
 
     bool pass = false;
     const int32_t rc = shekyl_difficulty_check_hash(
-        reinterpret_cast<const uint8_t *>(&hash),
+        reinterpret_cast<const uint8_t (*)[32]>(&hash),
         d,
         &pass);
     if (rc != SHEKYL_DIFFICULTY_OK)

@@ -250,7 +250,8 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
 /// # Arguments
 ///
 /// - `hash_ptr` — pointer to exactly 32 bytes (little-endian PoW hash).
-///   Must be non-null.
+///   Typed `*const [u8; 32]` (C `const uint8_t (*)[32]`) so the fixed
+///   length is part of the ABI, not a caller convention. Must be non-null.
 /// - `difficulty` — the 128-bit difficulty as a [`ShekylU128`]
 ///   (constructed at the C++ call site as `{lo, hi}`; never
 ///   reinterpret-cast from a native `uint128_t` — see module docs).
@@ -269,7 +270,7 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
 /// # Safety
 ///
 /// The caller must uphold:
-/// - `hash_ptr` points to 32 valid, readable, initialized bytes.
+/// - `hash_ptr` points to a valid, aligned, initialized `[u8; 32]`.
 /// - `out_pass` points to a valid, aligned `bool` slot writable by
 ///   this function.
 /// - The hash buffer and the out-pointer do not alias.
@@ -277,7 +278,7 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
 ///   call.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_difficulty_check_hash(
-    hash_ptr: *const u8,
+    hash_ptr: *const [u8; 32],
     difficulty: ShekylU128,
     out_pass: *mut bool,
 ) -> i32 {
@@ -286,12 +287,10 @@ pub unsafe extern "C" fn shekyl_difficulty_check_hash(
     }
 
     // SAFETY: hash_ptr is non-null and the caller's contract guarantees
-    // 32 valid, aligned, initialized bytes.
-    let hash_slice = slice::from_raw_parts(hash_ptr, 32);
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(hash_slice);
+    // an aligned, initialized [u8; 32].
+    let hash = &*hash_ptr;
 
-    let pass = check_hash(&hash, u128::from(difficulty));
+    let pass = check_hash(hash, u128::from(difficulty));
 
     // SAFETY: out_pass is non-null per the check above; the caller's
     // contract guarantees alignment and writability.
@@ -400,7 +399,7 @@ mod tests {
         // rejected before any write.
         let rc = unsafe {
             shekyl_difficulty_check_hash(
-                hash.as_ptr(),
+                &raw const hash,
                 ShekylU128 { lo: 1, hi: 0 },
                 core::ptr::null_mut(),
             )
@@ -417,7 +416,11 @@ mod tests {
         // SAFETY: hash points to 32 valid bytes; out_pass is a valid
         // stack slot.
         let rc = unsafe {
-            shekyl_difficulty_check_hash(hash.as_ptr(), ShekylU128 { lo: 1, hi: 0 }, &raw mut pass)
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 1, hi: 0 },
+                &raw mut pass,
+            )
         };
         assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
         assert!(pass);
@@ -432,7 +435,11 @@ mod tests {
         // SAFETY: hash points to 32 valid bytes; out_pass is a valid
         // stack slot.
         let rc = unsafe {
-            shekyl_difficulty_check_hash(hash.as_ptr(), ShekylU128 { lo: 2, hi: 0 }, &raw mut pass)
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 2, hi: 0 },
+                &raw mut pass,
+            )
         };
         assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
         assert!(!pass);
@@ -446,7 +453,11 @@ mod tests {
         // SAFETY: hash points to 32 valid bytes; out_pass is a valid
         // stack slot.
         let rc = unsafe {
-            shekyl_difficulty_check_hash(hash.as_ptr(), ShekylU128 { lo: 0, hi: 0 }, &raw mut pass)
+            shekyl_difficulty_check_hash(
+                &raw const hash,
+                ShekylU128 { lo: 0, hi: 0 },
+                &raw mut pass,
+            )
         };
         assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
         assert!(pass);
