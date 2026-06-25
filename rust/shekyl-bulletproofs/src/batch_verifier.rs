@@ -7,7 +7,7 @@ use curve25519_dalek::{
     traits::{IsIdentity, VartimeMultiscalarMul},
 };
 
-use shekyl_curve_generators::{BulletproofGenerators, H as MONERO_H};
+use shekyl_curve_generators::{BulletproofGenerators, H as SHEKYL_H};
 
 use crate::plus;
 
@@ -65,7 +65,7 @@ impl BulletproofsPlusBatchVerifier {
         // Bulletproofs+ is written as per the paper, with G for the value and H for the mask
         // Monero uses H for the value and G for the mask
         self.0
-            .verify(*MONERO_H, ED25519_BASEPOINT_POINT, &plus::GENERATORS)
+            .verify(*SHEKYL_H, ED25519_BASEPOINT_POINT, &plus::GENERATORS)
     }
 }
 

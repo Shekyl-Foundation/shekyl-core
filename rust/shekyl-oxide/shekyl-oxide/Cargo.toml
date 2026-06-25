@@ -29,7 +29,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 shekyl-curve-io = { path = "../../shekyl-curve-io", version = "0.1", default-features = false }
 shekyl-curve-generators = { path = "../../shekyl-curve-generators", version = "0.4", default-features = false }
 shekyl-curve-primitives = { path = "../../shekyl-curve-primitives", version = "0.1", default-features = false }
-shekyl-bulletproofs = { path = "fcmp/bulletproofs", version = "0.1", default-features = false }
+shekyl-bulletproofs = { path = "../../shekyl-bulletproofs", version = "0.1", default-features = false }
 shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
 
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }

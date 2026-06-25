@@ -65,7 +65,7 @@ members = [
     "shekyl-curve-io",
     "shekyl-curve-generators",
     "shekyl-curve-primitives",
-    "shekyl-oxide/shekyl-oxide/fcmp/bulletproofs",
+    "shekyl-bulletproofs",
     "shekyl-oxide/shekyl-oxide/fcmp/fcmp++",
     "shekyl-oxide/shekyl-oxide",
     "shekyl-oxide/shekyl-oxide/rpc",

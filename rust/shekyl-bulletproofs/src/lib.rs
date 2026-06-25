@@ -1,3 +1,10 @@
+// Provenance: this crate and all its modules are forked from monero-oxide
+// (Shekyl-Foundation/monero-oxide, fcmp++ lineage), originally
+// `shekyl-oxide/fcmp/bulletproofs`, last vendored at 2753111c50. Relocated to a
+// first-party shekyl-* crate in the shekyl-oxide un-vendor (slice 2); no longer
+// upstream-tracked. This crate's `src/lib.rs` is genesis-frozen by reference (Q6,
+// docs/design/GENESIS_TX_WIRE_FORMAT.md) — the Bp+ wire interior.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]

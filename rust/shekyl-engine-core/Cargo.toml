@@ -282,7 +282,7 @@ proptest = "1"
 # unconditional dev-dep does not alter the production crate graph.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
