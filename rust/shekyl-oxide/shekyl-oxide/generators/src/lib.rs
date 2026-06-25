@@ -52,17 +52,24 @@ pub fn H_pow_2() -> &'static [EdwardsPoint; 64] {
     &H_POW_2_CELL
 }
 
+// FROZEN DST (genesis) — every `b"Monero …"` / `"Monero …"` byte-string below is a
+// consensus-frozen domain separator: it is hashed to derive a generator point the
+// FCMP++ proofs verify against (pinned by the `tests::frozen_points` KAT). Changing a
+// byte moves the point and silently invalidates proofs. These are NOT rule-93
+// (`MONERO_*` identifier) targets — a rebrand/`MONERO_`→`SHEKYL_` sweep must skip
+// them. See docs/FROZEN_DOMAIN_SEPARATORS.md.
+
 /// Monero's `T`, used to blind the key-image commitment present within output keys.
 pub static T: LazyLock<EdwardsPoint> =
-    LazyLock::new(|| hash_to_point(keccak256(b"Monero Generator T")));
+    LazyLock::new(|| hash_to_point(keccak256(b"Monero Generator T"))); // FROZEN DST
 
 /// FCMP++s's key-image generator blinding generator `U`.
 pub static FCMP_PLUS_PLUS_U: LazyLock<EdwardsPoint> =
-    LazyLock::new(|| hash_to_point(keccak256(b"Monero FCMP++ Generator U")));
+    LazyLock::new(|| hash_to_point(keccak256(b"Monero FCMP++ Generator U"))); // FROZEN DST
 
 /// FCMP++s's randomness commitment generator `V`.
 pub static FCMP_PLUS_PLUS_V: LazyLock<EdwardsPoint> =
-    LazyLock::new(|| hash_to_point(keccak256(b"Monero FCMP++ Generator V")));
+    LazyLock::new(|| hash_to_point(keccak256(b"Monero FCMP++ Generator V"))); // FROZEN DST
 
 /// The maximum amount of input tuples provable for within a single FCMP.
 // https://github.com/seraphis-migration/monero
@@ -151,11 +158,13 @@ fn rejection_sampling_hash_to_curve<G: PrimeGroup + GroupEncoding<Repr = [u8; 32
 
 /// The hash-initialization generator for Helios hashes.
 pub static HELIOS_HASH_INIT: LazyLock<HeliosPoint> = LazyLock::new(|| {
+    // FROZEN DST
     rejection_sampling_hash_to_curve::<HeliosPoint>(b"Monero Helios Hash Initializer")
 });
 
 /// The hash-initialization generator for Selene hashes.
 pub static SELENE_HASH_INIT: LazyLock<SelenePoint> = LazyLock::new(|| {
+    // FROZEN DST
     rejection_sampling_hash_to_curve::<SelenePoint>(b"Monero Selene Hash Initializer")
 });
 
@@ -177,17 +186,19 @@ where
         String::from_utf8(C::ID.to_vec()).expect("Helios/Selene din't have a UTF-8 ID")
     }
 
+    // FROZEN DST (genesis) — the `"Monero {id} …"` templates below derive the FCMP
+    // generator tables (pinned by `tests::frozen_points`); not rule-93 targets.
     fn g_h(id: &str) -> (C::G, C::G) {
         (
-            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} G").as_bytes()),
-            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} H").as_bytes()),
+            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} G").as_bytes()), // FROZEN DST
+            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} H").as_bytes()), // FROZEN DST
         )
     }
 
     fn new_generator_pair(id: &str, i: usize) -> (C::G, C::G) {
         (
-            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} G {i}").as_bytes()),
-            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} H {i}").as_bytes()),
+            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} G {i}").as_bytes()), // FROZEN DST
+            rejection_sampling_hash_to_curve::<C::G>(format!("Monero {id} H {i}").as_bytes()), // FROZEN DST
         )
     }
 
