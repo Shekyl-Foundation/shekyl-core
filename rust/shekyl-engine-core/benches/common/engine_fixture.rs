@@ -185,7 +185,7 @@ use shekyl_engine_core::{
 };
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_simple_request_rpc::SimpleRequestRpc;
+use shekyl_rpc_transport::SimpleRequestRpc;
 use tempfile::TempDir;
 
 // `engine_trait_bench_ledger_balance{,_iai}.rs` require the

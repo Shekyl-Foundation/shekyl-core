@@ -1,12 +1,12 @@
 [package]
-name = "shekyl-simple-request-rpc"
+name = "shekyl-rpc-transport"
 version = "0.1.0"
 # Vendored shekyl-oxide app crate: workspace path-dependency only, never published, on the
 # un-vendor track — no external consumers, so no SemVer contract on its public surface.
 publish = false
 description = "RPC connection to a Shekyl daemon via simple-request, built around shekyl-oxide"
 license = "MIT"
-repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/rpc/simple-request"
+repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
 rust-version = "1.75"
@@ -25,9 +25,9 @@ digest_auth = { version = "0.3", default-features = false }
 simple-request = { version = "0.2", default-features = false, features = ["tls"] }
 tokio = { version = "1", default-features = false }
 
-shekyl-rpc = { path = "..", default-features = false, features = ["std"] }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
-shekyl-address = { path = "../../../../shekyl-address" }
+shekyl-address = { path = "../shekyl-address" }

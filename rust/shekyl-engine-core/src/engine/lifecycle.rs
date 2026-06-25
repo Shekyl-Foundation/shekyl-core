@@ -1259,7 +1259,7 @@ mod tests {
 
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use shekyl_rpc_transport::SimpleRequestRpc;
     use tempfile::TempDir;
     use zeroize::Zeroizing;
 

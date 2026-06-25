@@ -13,7 +13,7 @@
 
 use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
 use shekyl_curve_io::varint_len;
-use shekyl_rpc::{tx_fee, FeeRate};
+use shekyl_rpc_client::{tx_fee, FeeRate};
 use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{
@@ -358,7 +358,7 @@ pub(crate) fn fee_no_change_atomic(directive: &FeeDirective) -> AtomicUnits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_rpc::FeeRate;
+    use shekyl_rpc_client::FeeRate;
 
     #[test]
     #[ignore]

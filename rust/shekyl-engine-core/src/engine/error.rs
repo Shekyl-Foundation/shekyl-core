@@ -880,8 +880,8 @@ pub enum IoError {
     },
 }
 
-impl From<shekyl_rpc::RpcError> for IoError {
-    /// Map the upstream `shekyl_rpc::RpcError` into an
+impl From<shekyl_rpc_client::RpcError> for IoError {
+    /// Map the upstream `shekyl_rpc_client::RpcError` into an
     /// [`IoError::Daemon`] by stringifying the upstream variant.
     ///
     /// This conversion exists so the crate-internal `DaemonEngine`
@@ -902,7 +902,7 @@ impl From<shekyl_rpc::RpcError> for IoError {
     /// canonical stringification rather than `Debug`, which would
     /// leak variant names and bracket-quoted field shapes that are
     /// brittle to upstream refactors.
-    fn from(err: shekyl_rpc::RpcError) -> Self {
+    fn from(err: shekyl_rpc_client::RpcError) -> Self {
         IoError::Daemon {
             detail: err.to_string(),
         }

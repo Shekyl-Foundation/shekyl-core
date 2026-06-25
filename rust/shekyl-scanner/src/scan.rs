@@ -89,7 +89,7 @@ const _: () = assert!(
 /// A block paired with its wallet-scannable transaction set and the global
 /// output index of its first output.
 ///
-/// The spec-faithful successor to the vendored `shekyl_rpc::ScannableBlock`
+/// The spec-faithful successor to the vendored `shekyl_rpc_client::ScannableBlock`
 /// (`docs/design/SHEKYL_OXIDE_UNVENDOR.md` step 4): it carries `shekyl-wire`
 /// block/transaction types, which parse the coinbase `Ct::Null` committed base
 /// (`enc_amounts`/`enc_labels`/`outPk`, GENESIS_TX_WIRE_FORMAT.md §9.7)

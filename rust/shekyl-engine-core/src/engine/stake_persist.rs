@@ -173,7 +173,7 @@ mod tests {
     use shekyl_address::Network;
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
-    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use shekyl_rpc_transport::SimpleRequestRpc;
     use tempfile::tempdir;
 
     use crate::engine::{Credentials, DaemonClient, EngineCreateParams, OpenedEngine, SoloSigner};

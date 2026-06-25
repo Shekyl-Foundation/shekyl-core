@@ -1,3 +1,10 @@
+// Provenance: this crate and its modules are forked from monero-oxide
+// (Shekyl-Foundation/monero-oxide, fcmp++ lineage), originally `shekyl-oxide/rpc`, last
+// vendored at 2753111c50. Relocated to a first-party shekyl-* crate in the shekyl-oxide
+// un-vendor (slice 2); no longer upstream-tracked. Transitional: the wallet's daemon
+// RPC client `Rpc` trait, slated for replacement by the Axum-side shekyl-daemon-rpc
+// cutover (tracked in docs/FOLLOWUPS.md). See docs/design/SHEKYL_OXIDE_UNVENDOR.md.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
@@ -18,7 +25,7 @@ use zeroize::Zeroize;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use shekyl_oxide::io::*;
+use shekyl_curve_io::*;
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121

@@ -178,17 +178,17 @@ pub enum DaemonOp {
 /// [`RefreshDiagnostic::DaemonProtocolError`].
 ///
 /// Per the §5.4.7 R6 memory-amplifier closure (binding), the
-/// producer MUST classify [`RpcError`](shekyl_rpc::RpcError)
+/// producer MUST classify [`RpcError`](shekyl_rpc_client::RpcError)
 /// variant tags into this bounded enum without propagating the
 /// underlying `String` payload. The classification preserves the
 /// audit-readable failure category; the dropped payload denies
 /// adversarial daemons a memory-amplification channel into the
 /// wallet's observability stream.
 ///
-/// The five variants enumerate the [`RpcError`](shekyl_rpc::RpcError)
+/// The five variants enumerate the [`RpcError`](shekyl_rpc_client::RpcError)
 /// variants that surface at the producer's daemon-call boundary.
 /// Additional variants land additively under the
-/// `#[non_exhaustive]` discipline if `shekyl_rpc::RpcError` grows.
+/// `#[non_exhaustive]` discipline if `shekyl_rpc_client::RpcError` grows.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolErrorKind {
@@ -328,7 +328,7 @@ pub enum RefreshDiagnostic {
     /// Daemon returned a typed RPC error classified into a
     /// bounded [`ProtocolErrorKind`]. Per the §5.4.7 R6
     /// memory-amplifier closure, the underlying
-    /// [`RpcError`](shekyl_rpc::RpcError) `String` payload is NOT
+    /// [`RpcError`](shekyl_rpc_client::RpcError) `String` payload is NOT
     /// propagated.
     DaemonProtocolError {
         /// Bounded classification of the underlying RPC error

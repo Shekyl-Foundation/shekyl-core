@@ -3923,9 +3923,9 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
  "shekyl-oxide",
- "shekyl-rpc",
+ "shekyl-rpc-client",
+ "shekyl-rpc-transport",
  "shekyl-scanner",
- "shekyl-simple-request-rpc",
  "shekyl-staking",
  "shekyl-standoff",
  "shekyl-tx-builder",
@@ -4199,16 +4199,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-rpc"
+name = "shekyl-rpc-client"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek",
  "hex",
  "serde",
  "serde_json",
- "shekyl-oxide",
+ "shekyl-curve-io",
  "std-shims",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-rpc-transport"
+version = "0.1.0"
+dependencies = [
+ "digest_auth",
+ "hex",
+ "shekyl-address",
+ "shekyl-rpc-client",
+ "simple-request",
+ "tokio",
  "zeroize",
 ]
 
@@ -4229,7 +4242,7 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-engine-state",
  "shekyl-oxide",
- "shekyl-rpc",
+ "shekyl-rpc-client",
  "shekyl-scanner",
  "shekyl-staking",
  "shekyl-types",
@@ -4253,19 +4266,6 @@ dependencies = [
  "sha2",
  "sha3",
  "thiserror",
-]
-
-[[package]]
-name = "shekyl-simple-request-rpc"
-version = "0.1.0"
-dependencies = [
- "digest_auth",
- "hex",
- "shekyl-address",
- "shekyl-rpc",
- "simple-request",
- "tokio",
- "zeroize",
 ]
 
 [[package]]

@@ -8,7 +8,7 @@
 //! Per [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`] §2.5, `DaemonEngine` is
 //! the wallet-side trait the [`Engine`](super::super::Engine)
 //! orchestrator binds against for daemon-bound calls. It is a
-//! supertrait extension of [`shekyl_rpc::Rpc`] (the
+//! supertrait extension of [`shekyl_rpc_client::Rpc`] (the
 //! upstream-vendored RPC trait that covers the transport primitives —
 //! `get_height` / `get_block` / `get_transactions` / `get_o_indexes` /
 //! etc.), adding the wallet-specific methods that have no place on
@@ -41,7 +41,7 @@
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/CI_BASELINE.md`]: ../../../../../docs/CI_BASELINE.md
 
-use shekyl_rpc::{FeeRate, Rpc, RpcError};
+use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 
 use crate::engine::error::{IoError, TerminalErrorKind};
@@ -68,7 +68,7 @@ use crate::engine::pending::TxHash;
 ///
 /// # Per-tier `FeeRate`
 ///
-/// `FeeRate` is the `shekyl_rpc::FeeRate` (per-weight cost + rounding
+/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (per-weight cost + rounding
 /// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
 /// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
@@ -228,7 +228,7 @@ pub(crate) enum TxSubmitOutcome {
 /// Engine-side view of the daemon RPC surface (§2.5).
 ///
 /// Implementors carry the RPC client (today: [`DaemonClient`] wrapping
-/// `shekyl_simple_request_rpc::SimpleRequestRpc`; at Stage 4: an
+/// `shekyl_rpc_transport::SimpleRequestRpc`; at Stage 4: an
 /// `ActorRef<DaemonActor>` per §1.4). Callers
 /// ([`Engine<S>`](super::super::Engine) orchestration,
 /// `RefreshEngine::produce_scan_result`, `PendingTxEngine::submit`)
@@ -259,7 +259,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// through the canonical [`shekyl_wire`] parse.
     ///
     /// This is the engine-native replacement for the legacy
-    /// `shekyl_rpc::Rpc::get_scannable_block_by_number`. The transport is the
+    /// `shekyl_rpc_client::Rpc::get_scannable_block_by_number`. The transport is the
     /// inherited [`Rpc`] surface (`get_block` / `get_transactions` /
     /// `get_o_indexes`), but parsing is `shekyl_wire`, which reads the coinbase
     /// `Null` committed base correctly (`GENESIS_TX_WIRE_FORMAT.md` §9.6/§9.9)

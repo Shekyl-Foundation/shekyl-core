@@ -7,10 +7,10 @@
 //!
 //! [`DaemonClient`] is the [`Engine`](super::Engine)-facing type for
 //! reaching `shekyld` over HTTP(S). It is a thin wrapper around
-//! [`shekyl_simple_request_rpc::SimpleRequestRpc`], chosen as the
+//! [`shekyl_rpc_transport::SimpleRequestRpc`], chosen as the
 //! default transport because it is the only daemon-RPC client crate
 //! already in the workspace and it implements
-//! [`shekyl_rpc::Rpc`].
+//! [`shekyl_rpc_client::Rpc`].
 //!
 //! # Why a wrapper rather than `pub use`
 //!
@@ -42,8 +42,8 @@
 use std::future::Future;
 
 use serde_json::{json, Value};
-use shekyl_rpc::{FeeRate, Rpc, RpcError, TxRelayResponse};
-use shekyl_simple_request_rpc::SimpleRequestRpc;
+use shekyl_rpc_client::{FeeRate, Rpc, RpcError, TxRelayResponse};
+use shekyl_rpc_transport::SimpleRequestRpc;
 use shekyl_wire::Transaction;
 
 use crate::engine::error::TerminalErrorKind;
@@ -51,7 +51,7 @@ use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 
 /// Grace-block horizon passed to the daemon's `get_fee_estimate`
-/// JSON-RPC (matches `shekyl_rpc`'s private
+/// JSON-RPC (matches `shekyl_rpc_client`'s private
 /// `GRACE_BLOCKS_FOR_FEE_ESTIMATE`). The daemon estimates a fee rate
 /// expected to stay above the relay floor for this many blocks. Held
 /// here (rather than reaching for the upstream constant, which is not
@@ -63,7 +63,7 @@ const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 /// three-tier [`FeeEstimates`] snapshot (§3.3), deriving every tier
 /// and the rounding mask from this **one** response.
 ///
-/// Mirrors `shekyl_rpc::Rpc::get_fee_rate`'s response handling but
+/// Mirrors `shekyl_rpc_client::Rpc::get_fee_rate`'s response handling but
 /// resolves **all three** non-`Custom` tiers from a single call
 /// rather than one tier per call:
 ///
@@ -194,7 +194,7 @@ fn submit_outcome_from_response(resp: &TxRelayResponse, hash: TxHash) -> TxSubmi
 /// [`SimpleRequestRpc`] is `Clone + Send + Sync`; cloning it is cheap
 /// (an `Arc`-wrapped HTTP client + URL string).
 ///
-/// `DaemonClient` implements [`shekyl_rpc::Rpc`] (delegating `post` to
+/// `DaemonClient` implements [`shekyl_rpc_client::Rpc`] (delegating `post` to
 /// the wrapped transport) and the crate-internal `DaemonEngine` Stage 1
 /// trait (in `crate::engine::traits`); callers reach the upstream
 /// `Rpc` methods (block / height / output / mempool) via the

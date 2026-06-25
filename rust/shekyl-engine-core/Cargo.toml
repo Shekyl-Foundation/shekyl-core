@@ -70,10 +70,10 @@ shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
@@ -111,14 +111,14 @@ serde = { version = "1", features = ["derive"], optional = true }
 # code that builds `get_fee_estimate` params and parses the response as
 # `serde_json::Value` (defensive untrusted-daemon parsing per
 # `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
-# lockfile (transitively via `shekyl-rpc`, plus this crate's build- and
+# lockfile (transitively via `shekyl-rpc-client`, plus this crate's build- and
 # dev-deps), so making it a direct non-optional dependency adds no new
 # third-party crate (`17-dependency-discipline.mdc`). It is therefore no
 # longer listed under the `multisig` feature.
 serde_json = "1"
 # Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
 # native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
-# workspace lockfile (shekyl-rpc, shekyl-wire deps + this crate's multisig path),
+# workspace lockfile (shekyl-rpc-client, shekyl-wire deps + this crate's multisig path),
 # so promoting it to a direct non-optional dependency adds no third-party crate
 # (`17-dependency-discipline.mdc`). No longer listed under the `multisig` feature.
 hex = "0.4"

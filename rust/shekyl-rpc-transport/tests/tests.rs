@@ -6,7 +6,7 @@ use shekyl_address::{Network, ShekylAddress, PQC_PAYLOAD_LEN};
 // shekyl-rpc doesn't include a transport
 // We can't include the simple-request crate there as then we'd have a cyclical dependency
 // Accordingly, we test shekyl-rpc here (implicitly testing the simple-request transport)
-use shekyl_simple_request_rpc::*;
+use shekyl_rpc_transport::*;
 
 /// Mainnet default HTTP RPC port (`config::RPC_DEFAULT_PORT` / 11029 in shekyl-core). Use `--rpc-login`
 /// when testing against a daemon that requires auth.
@@ -29,7 +29,7 @@ static SAMPLE_MAINNET_ADDR: LazyLock<String> = LazyLock::new(|| {
 #[tokio::test]
 #[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029 (default mainnet); run with: cargo test -p shekyl-simple-request-rpc --test tests -- --ignored"]
 async fn test_rpc() {
-    use shekyl_rpc::Rpc;
+    use shekyl_rpc_client::Rpc;
 
     let guard = SEQUENTIAL.lock().await;
 
@@ -74,7 +74,7 @@ async fn test_rpc() {
 /*
 #[tokio::test]
 async fn test_zero_out_tx_o_indexes() {
-  use shekyl_rpc::Rpc;
+  use shekyl_rpc_client::Rpc;
 
   let guard = SEQUENTIAL.lock().await;
 

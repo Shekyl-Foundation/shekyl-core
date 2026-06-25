@@ -9,7 +9,7 @@
 //! fewer metadata fingerprints are preferred together to reduce on-chain
 //! clustering of the wallet's activity.
 
-use shekyl_rpc::{tx_fee, FeeRate};
+use shekyl_rpc_client::{tx_fee, FeeRate};
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;

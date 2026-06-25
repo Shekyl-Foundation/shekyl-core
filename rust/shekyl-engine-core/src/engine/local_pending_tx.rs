@@ -2291,7 +2291,7 @@ mod tests {
     use shekyl_crypto_pq::account::AllKeysBlob;
     use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
     use shekyl_curve_tree::{BlockHeight, CurveTreeClient};
-    use shekyl_rpc::FeeRate;
+    use shekyl_rpc_client::FeeRate;
     use shekyl_scanner::RecoveredWalletOutput;
     use tempfile::TempDir;
 
@@ -4343,7 +4343,7 @@ mod tests {
         use shekyl_curve_tree::{
             AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext,
         };
-        use shekyl_rpc::FeeRate;
+        use shekyl_rpc_client::FeeRate;
 
         let ledger = Arc::new(test_ledger());
         populate_ledger_scan_only(

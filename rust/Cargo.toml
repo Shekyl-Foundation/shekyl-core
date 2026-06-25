@@ -68,8 +68,8 @@ members = [
     "shekyl-bulletproofs",
     "shekyl-fcmp-proofs",
     "shekyl-oxide/shekyl-oxide",
-    "shekyl-oxide/shekyl-oxide/rpc",
-    "shekyl-oxide/shekyl-oxide/rpc/simple-request",
+    "shekyl-rpc-client",
+    "shekyl-rpc-transport",
 
     # Shekyl-native scanner crate
     "shekyl-scanner",

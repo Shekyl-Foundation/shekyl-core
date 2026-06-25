@@ -1,3 +1,9 @@
+// Provenance: forked from monero-oxide (Shekyl-Foundation/monero-oxide, fcmp++
+// lineage), originally `shekyl-oxide/rpc/simple-request`, last vendored at 2753111c50.
+// Relocated to a first-party shekyl-* crate in the shekyl-oxide un-vendor (slice 2); no
+// longer upstream-tracked. The simple-request/hyper transport implementing
+// shekyl-rpc-client's `Rpc` trait. See docs/design/SHEKYL_OXIDE_UNVENDOR.md.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
@@ -14,7 +20,7 @@ use simple_request::{
 };
 use zeroize::Zeroizing;
 
-use shekyl_rpc::{Rpc, RpcError};
+use shekyl_rpc_client::{Rpc, RpcError};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 

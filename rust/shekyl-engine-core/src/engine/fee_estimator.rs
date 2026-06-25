@@ -271,7 +271,7 @@ mod tests {
     //!   from a fixed §3.3 snapshot.
     use super::*;
     use crate::engine::traits::FeeEstimates;
-    use shekyl_rpc::FeeRate;
+    use shekyl_rpc_client::FeeRate;
     use std::num::NonZeroU64;
 
     fn dummy_context() -> LedgerSnapshot {
