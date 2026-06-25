@@ -54,8 +54,12 @@ where
     D: DaemonEngine,
 {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-        // Graceful on a malformed blob (the daemon path returns `Malformed`); the
-        // `Submitted`/`AlreadyKnown` arms below are only reached for a valid tx.
+        // Debug-only plumbing cross-check that the daemon impl returns the canonical
+        // wire id. Computed only in debug builds so release does no extra parse — the
+        // daemon path parses the blob again, and this is its sole consumer. Graceful on a
+        // malformed blob (the daemon path returns `Malformed`; the matched arms below are
+        // reached only for a valid tx).
+        #[cfg(debug_assertions)]
         let local_hash = canonical_tx_id_opt(&tx_bytes);
         let outcome = self
             .daemon
@@ -70,6 +74,7 @@ where
             })?;
         match outcome {
             TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyKnown { hash } => {
+                #[cfg(debug_assertions)]
                 debug_assert_eq!(
                     Some(hash),
                     local_hash,

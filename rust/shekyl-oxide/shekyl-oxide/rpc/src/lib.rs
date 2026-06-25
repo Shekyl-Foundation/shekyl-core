@@ -725,6 +725,11 @@ pub trait Rpc: Sync + Clone {
     /// Broadcast a transaction to the daemon, returning the daemon's
     /// accept-or-reject decision.
     ///
+    /// `tx_blob` is the **serialized** transaction (the canonical wire bytes); it is
+    /// hex-encoded into the daemon's `send_raw_transaction` `tx_as_hex` field. The
+    /// caller already holds these bytes, so this takes the blob directly rather than a
+    /// parsed transaction (no parse → re-serialize round-trip).
+    ///
     /// The returned [`TxRelayResponse`] carries the daemon's verdict,
     /// including on rejection: an [`Err`] is reserved for transport- or
     /// protocol-level failures, while a daemon that parses the
