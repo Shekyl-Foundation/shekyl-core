@@ -2,6 +2,8 @@ use shekyl_io::CompressedPoint;
 
 use crate::biased_hash_to_point;
 
+mod frozen_points;
+
 #[test]
 fn test_vectors() {
     // tests.txt file copied from monero repo
