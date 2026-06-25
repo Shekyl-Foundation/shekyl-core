@@ -2,7 +2,7 @@ use rand_core::{OsRng, RngCore};
 
 use curve25519_dalek::Scalar;
 
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 use crate::{
     batch_verifier::BulletproofsPlusBatchVerifier,

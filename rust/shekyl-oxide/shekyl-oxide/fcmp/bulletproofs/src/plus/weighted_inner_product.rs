@@ -11,7 +11,7 @@ use crate::{
     plus::{padded_pow_of_2, BpPlusGenerators, GeneratorsList, PointVector, ScalarVector},
 };
 use shekyl_curve_io::CompressedPoint;
-use shekyl_primitives::{keccak256_to_scalar, INV_EIGHT};
+use shekyl_curve_primitives::{keccak256_to_scalar, INV_EIGHT};
 
 // Figure 1 of the Bulletproofs+ paper
 #[derive(Clone, Debug)]

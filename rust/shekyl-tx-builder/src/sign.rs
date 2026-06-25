@@ -19,7 +19,7 @@ use zeroize::Zeroizing;
 
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_rct_balance::{InputTerm, OutputTerm};
 
 use crate::error::TxBuilderError;

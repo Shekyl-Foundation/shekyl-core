@@ -3679,7 +3679,7 @@ dependencies = [
  "rand_core 0.6.4",
  "shekyl-curve-generators",
  "shekyl-curve-io",
- "shekyl-primitives",
+ "shekyl-curve-primitives",
  "std-shims",
  "thiserror",
  "zeroize",
@@ -3762,8 +3762,8 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-curve-generators",
+ "shekyl-curve-primitives",
  "shekyl-fcmp",
- "shekyl-primitives",
  "shekyl-stats",
  "thiserror",
  "x25519-dalek",
@@ -3795,6 +3795,19 @@ name = "shekyl-curve-io"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek",
+ "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-curve-primitives"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "hex",
+ "sha3",
+ "shekyl-curve-generators",
+ "shekyl-curve-io",
  "std-shims",
  "zeroize",
 ]
@@ -3901,6 +3914,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-engine-file",
@@ -3909,7 +3923,6 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
  "shekyl-oxide",
- "shekyl-primitives",
  "shekyl-rpc",
  "shekyl-scanner",
  "shekyl-simple-request-rpc",
@@ -4132,8 +4145,8 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-curve-generators",
  "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-fcmp-plus-plus",
- "shekyl-primitives",
  "std-shims",
  "zeroize",
 ]
@@ -4146,19 +4159,6 @@ dependencies = [
  "argon2",
  "blake2",
  "criterion",
-]
-
-[[package]]
-name = "shekyl-primitives"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "sha3",
- "shekyl-curve-generators",
- "shekyl-curve-io",
- "std-shims",
- "zeroize",
 ]
 
 [[package]]
@@ -4319,9 +4319,9 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-oxide",
- "shekyl-primitives",
  "shekyl-rct-balance",
  "shekyl-units",
  "shekyl-wire",

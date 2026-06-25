@@ -1,9 +1,9 @@
 [package]
-name = "shekyl-primitives"
+name = "shekyl-curve-primitives"
 version = "0.1.0"
 description = "Primitives for the Shekyl protocol"
 license = "MIT"
-repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/primitives"
+repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
 rust-version = "1.66"
@@ -25,8 +25,8 @@ sha3 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Other Shekyl dependencies
-shekyl-curve-io = { path = "../../../shekyl-curve-io", version = "0.1", default-features = false }
-shekyl-curve-generators = { path = "../../../shekyl-curve-generators", version = "0.4", default-features = false }
+shekyl-curve-io = { path = "../shekyl-curve-io", version = "0.1", default-features = false }
+shekyl-curve-generators = { path = "../shekyl-curve-generators", version = "0.4", default-features = false }
 
 [dev-dependencies]
 hex = { version = "0.4", default-features = false, features = ["alloc"] }

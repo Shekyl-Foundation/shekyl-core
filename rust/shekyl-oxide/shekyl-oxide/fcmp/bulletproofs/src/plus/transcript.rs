@@ -3,7 +3,7 @@ use std_shims::{sync::LazyLock, vec::Vec};
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
 
 use shekyl_curve_generators::biased_hash_to_point;
-use shekyl_primitives::{keccak256, keccak256_to_scalar};
+use shekyl_curve_primitives::{keccak256, keccak256_to_scalar};
 
 // Monero starts BP+ transcripts with the following constant.
 // Why this uses a hash to point is completely unknown.

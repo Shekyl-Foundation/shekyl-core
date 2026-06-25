@@ -28,7 +28,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 
 shekyl-curve-io = { path = "../../shekyl-curve-io", version = "0.1", default-features = false }
 shekyl-curve-generators = { path = "../../shekyl-curve-generators", version = "0.4", default-features = false }
-shekyl-primitives = { path = "primitives", version = "0.1", default-features = false }
+shekyl-curve-primitives = { path = "../../shekyl-curve-primitives", version = "0.1", default-features = false }
 shekyl-bulletproofs = { path = "fcmp/bulletproofs", version = "0.1", default-features = false }
 shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
 
@@ -47,7 +47,7 @@ std = [
 
   "shekyl-curve-io/std",
   "shekyl-curve-generators/std",
-  "shekyl-primitives/std",
+  "shekyl-curve-primitives/std",
   "shekyl-bulletproofs/std",
   "shekyl-fcmp-plus-plus/std",
 ]

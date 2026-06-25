@@ -1161,7 +1161,7 @@ mod tests {
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;
         use shekyl_curve_io::CompressedPoint;
-        use shekyl_primitives::Commitment;
+        use shekyl_curve_primitives::Commitment;
         use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
 
         let keys = LocalKeys::from_test_seed(TEST_SEED);
@@ -1618,7 +1618,7 @@ mod tests {
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;
         use shekyl_curve_io::CompressedPoint;
-        use shekyl_primitives::Commitment;
+        use shekyl_curve_primitives::Commitment;
         use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 
         // Wallet keys fund the transaction; the bond persona `P` is a separate

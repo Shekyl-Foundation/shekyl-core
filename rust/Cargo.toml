@@ -64,7 +64,7 @@ members = [
     # fmt/clippy gates; consumers depend on them by path.
     "shekyl-curve-io",
     "shekyl-curve-generators",
-    "shekyl-oxide/shekyl-oxide/primitives",
+    "shekyl-curve-primitives",
     "shekyl-oxide/shekyl-oxide/fcmp/bulletproofs",
     "shekyl-oxide/shekyl-oxide/fcmp/fcmp++",
     "shekyl-oxide/shekyl-oxide",
@@ -316,7 +316,7 @@ generalized-bulletproofs-ec-gadgets = { opt-level = 3 }
 full-chain-membership-proofs = { opt-level = 3 }
 shekyl-curve-io = { opt-level = 3 }
 shekyl-curve-generators = { opt-level = 3 }
-shekyl-primitives = { opt-level = 3 }
+shekyl-curve-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
 shekyl-fcmp-plus-plus = { opt-level = 3 }
 shekyl-oxide = { opt-level = 3 }

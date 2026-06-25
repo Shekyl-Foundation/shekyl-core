@@ -36,7 +36,7 @@
 //! - **shekyl-bulletproofs**: Bulletproofs+ range proofs (`Bulletproof::prove_plus()`)
 //!   over Pedersen commitments.
 //! - **shekyl-crypto-pq**: Hybrid signature construction (`SignatureScheme::sign()`).
-//! - **shekyl-primitives**: `Commitment` and scalar arithmetic.
+//! - **shekyl-curve-primitives**: `Commitment` and scalar arithmetic.
 
 #![deny(unsafe_code)]
 

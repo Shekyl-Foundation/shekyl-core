@@ -6,7 +6,7 @@
 
 pub use shekyl_curve_generators as generators;
 pub use shekyl_curve_io as io;
-pub use shekyl_primitives as primitives;
+pub use shekyl_curve_primitives as primitives;
 
 /// FCMP++ Bulletproof+ crypto re-export (the proof serializer moved to `shekyl-wire`).
 pub mod fcmp;

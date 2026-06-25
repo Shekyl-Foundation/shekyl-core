@@ -5,7 +5,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_curve_io::CompressedPoint;
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 41 {

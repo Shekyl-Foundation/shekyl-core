@@ -286,7 +286,7 @@ shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" 
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # Stage 1 PR 2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §3, §8). The
 # `join_market_bond_post_signs_and_verifies_through_prover` test (in
 # `engine::local_keys::tests`) drives a JoinMarket bond post —

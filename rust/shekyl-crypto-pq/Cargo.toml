@@ -126,7 +126,7 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # `shekyl-scanner` per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a. V3.0
 # hardcodes index `0` for signing (`output_spend_offset_scalar`); see
 # `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md`.
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # Typed wallet-state JSON ser/des (WALLET_FILE_FORMAT_V1 region 2). Versioned
 # by `state_schema_version`; mismatched version refuses to load, never silently
 # migrates. JSON field names are the wire format; see wallet_state.rs.

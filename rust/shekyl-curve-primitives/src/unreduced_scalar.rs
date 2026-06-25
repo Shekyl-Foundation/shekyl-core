@@ -1,3 +1,7 @@
+// Provenance: forked from monero-oxide (Shekyl-Foundation/monero-oxide, fcmp++
+// lineage), originally `shekyl-oxide/primitives`, last vendored at 2753111c50.
+// Relocated in the shekyl-oxide un-vendor (slice 2); no longer upstream-tracked.
+
 use core::cmp::Ordering;
 use std_shims::{
     io::{self, *},

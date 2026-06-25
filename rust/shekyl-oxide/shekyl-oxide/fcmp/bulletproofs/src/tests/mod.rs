@@ -3,7 +3,7 @@ use rand_core::{OsRng, RngCore};
 use curve25519_dalek::scalar::Scalar;
 
 use crate::{batch_verifier::BatchVerifier, Bulletproof, BulletproofError};
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 mod plus;
 
