@@ -96,6 +96,31 @@ sustainability is unaffected by the recalibration.
   fix) to keep that PR localized; this is its own small refactor. Target: V3.1+
   (maintainability / type-safety).
 
+- **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW
+  arithmetic (flagged 2026-06-24, the `check_hash` C++ → Rust port).** The ported
+  predicate `check_hash(hash: &[u8; 32], difficulty: u128) -> bool`
+  (`shekyl-difficulty/src/check_hash.rs`) and its sibling
+  `lwma1_next(..) -> Result<u128, Error>` (`lwma1.rs`) both pass the PoW hash and
+  the difficulty as bare primitives — two anonymous values that are trivially
+  arg-swappable and carry no meaning in the type system, against
+  [`18-type-placement`](../.cursor/rules/18-type-placement.mdc) and the "new code
+  with proper types" mandate. The *proper* fix is **transform-shaped**
+  `Difficulty` and `PowHash`/`Hash256` newtypes in the foundational layer
+  (`shekyl-types`/`shekyl-units`), with the predicate expressed as a named method
+  (`difficulty.is_met_by(&hash)`) so the relation has a name and the swap is
+  unrepresentable. Doing this *right* also retires the mislayered, **state-shaped**
+  `Difficulty(pub u128)` in [`shekyl-consensus/src/types.rs`](../rust/shekyl-consensus/src/types.rs)
+  (serde-carrying, in a crate that *consumes* `shekyl-difficulty` — it cannot be
+  imported back into the `no_std` transform crate without inverting the dependency),
+  unifying both crates on one definition. Deferred from the `check_hash` port to keep
+  that consensus flip primitive-consistent with `lwma1_next` and small/atomic — a
+  half-typed crate is worse than a uniformly-primitive one. **Scope note:** the FFI
+  seam stays primitive regardless — `extern "C"` cannot carry a newtype (cf. the
+  typed-`Leaf` entry's "the C ABI cannot carry newtypes"); `ShekylU128`/`*const u8`
+  remain the marshalling layer, and the FFI shim becomes the adapter that
+  reconstructs the domain types. Same pattern as the bounded-count newtype item
+  above. Target: V3.1+ (maintainability / type-safety).
+
 - **External cryptographic review of the `FcmpMembershipOnly` soundness
   reduction (2026-06-12).**
   [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:

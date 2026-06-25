@@ -62,7 +62,14 @@ public:
 
   bool test()
   {
-    cryptonote::check_hash_128(hash, difficulty);
+    // The inherited `check_hash_128` was deleted in the Rust port; the
+    // _64/_128 fast/slow split collapsed into the single unified
+    // `check_hash` predicate (now a thin wrapper over the Rust
+    // `shekyl_difficulty_check_hash`). This microbench times that one
+    // predicate. `check_hash` is a once-per-block PoW check and is not
+    // perf-sensitive; the bench is retained only for parity with the
+    // historical performance suite.
+    cryptonote::check_hash(hash, difficulty);
     return true;
   }
 
