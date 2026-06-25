@@ -415,3 +415,39 @@ fn weight_equals_serialized_len_for_non_spend() {
     });
     assert_eq!(null_ct.weight(), null_ct.serialized_len());
 }
+
+#[test]
+fn into_full_typed_view() {
+    use shekyl_wire::{FullTransaction, PrunedError};
+
+    // A full spend converts; `prunable()` is reachable without an Option, and Deref
+    // exposes the underlying Transaction.
+    let full: FullTransaction = synthetic_spend()
+        .into_full()
+        .expect("a full spend converts");
+    assert_eq!(full.prunable().bulletproofs.len(), 1);
+    assert_eq!(full.prefix.inputs.len(), 1);
+    assert_eq!(full.into_inner().prefix.outputs.len(), 2);
+
+    // A fee-only Fcmp (no prunable) is rejected.
+    let mut fee_only = synthetic_spend();
+    if let Ct::Fcmp {
+        prunable,
+        pqc_auths,
+        ..
+    } = &mut fee_only.ct
+    {
+        *prunable = None;
+        pqc_auths.clear();
+    }
+    assert_eq!(fee_only.into_full().unwrap_err(), PrunedError);
+
+    // A coinbase `Null` ct is rejected.
+    let mut null_ct = synthetic_spend();
+    null_ct.ct = Ct::Null(CtBase {
+        enc_amounts: Vec::new(),
+        enc_labels: Vec::new(),
+        commitments: Vec::new(),
+    });
+    assert!(null_ct.into_full().is_err());
+}

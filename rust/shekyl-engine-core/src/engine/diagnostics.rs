@@ -157,7 +157,7 @@ pub enum MalformedKind {
 /// [`RefreshDiagnostic::DaemonTimeout`].
 ///
 /// Two ops are timing-classified at C2: `GetHeight` (the
-/// snapshot-tip read) and `GetScannableBlockByNumber` (the
+/// snapshot-tip read) and `FetchScannableBlock` (the
 /// per-block fetch inside the producer's scan loop). Other RPC
 /// calls fire and forget without timing classification at the
 /// diagnostic boundary; the producer's internal timeout budget
@@ -169,9 +169,9 @@ pub enum DaemonOp {
     /// start of each attempt.
     GetHeight,
 
-    /// `Rpc::get_scannable_block_by_number` — used to fetch each
+    /// `DaemonEngine::fetch_scannable_block` — used to fetch each
     /// block in the producer's scan range.
-    GetScannableBlockByNumber,
+    FetchScannableBlock,
 }
 
 /// Bounded classification of typed RPC errors surfaced via
@@ -1474,7 +1474,7 @@ mod tests {
             kind: MalformedKind::ExcessiveOutputs,
         });
         sink.emit(RefreshDiagnostic::DaemonTimeout {
-            op: DaemonOp::GetScannableBlockByNumber,
+            op: DaemonOp::FetchScannableBlock,
             elapsed: Duration::from_millis(1500),
         });
         sink.emit(RefreshDiagnostic::DaemonProtocolError {

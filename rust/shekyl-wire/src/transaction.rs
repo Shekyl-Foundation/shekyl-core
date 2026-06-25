@@ -1747,4 +1747,69 @@ impl Transaction {
     pub fn is_coinbase(&self) -> bool {
         matches!(self.prefix.inputs.as_slice(), [Input::Gen(_)])
     }
+
+    /// Typed-view conversion (`GENESIS_TX_WIRE_FORMAT.md` §4): succeed only if this tx
+    /// carries prunable proof data, yielding a [`FullTransaction`] whose `prunable` is
+    /// *guaranteed* present. Returns [`PrunedError`] for a coinbase `Null` ct or a
+    /// fee-only / serve-credit `Fcmp` with no prunable.
+    ///
+    /// This is the **one boundary** where "pruned tx where full required" is made
+    /// unrepresentable — consensus code that requires a full spend takes a
+    /// `FullTransaction`, without threading a `Pruned`/`NotPruned` generic through every
+    /// consumer (the honest parse result stays `Transaction { prunable: Option<_> }`).
+    pub fn into_full(self) -> Result<FullTransaction, PrunedError> {
+        match &self.ct {
+            Ct::Fcmp {
+                prunable: Some(_), ..
+            } => Ok(FullTransaction(self)),
+            _ => Err(PrunedError),
+        }
+    }
+}
+
+/// The error from [`Transaction::into_full`]: the transaction carries no prunable proof
+/// data (a coinbase `Null` ct, or a fee-only / serve-credit `Fcmp` with `prunable: None`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PrunedError;
+
+impl core::fmt::Display for PrunedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("transaction carries no prunable proof data (pruned or non-spend)")
+    }
+}
+
+impl std::error::Error for PrunedError {}
+
+/// A [`Transaction`] *guaranteed* to carry prunable proof data — the typed view produced
+/// by [`Transaction::into_full`] (`GENESIS_TX_WIRE_FORMAT.md` §4). Constructible only
+/// through that conversion, so the `prunable`-present invariant holds by construction.
+/// Derefs to the underlying [`Transaction`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FullTransaction(Transaction);
+
+impl FullTransaction {
+    /// The prunable proof data, guaranteed present by this type's invariant.
+    pub fn prunable(&self) -> &Prunable {
+        match &self.0.ct {
+            Ct::Fcmp {
+                prunable: Some(prunable),
+                ..
+            } => prunable,
+            // Only constructed via `Transaction::into_full`, which rejects any tx with
+            // no prunable; this arm is unreachable.
+            _ => unreachable!("FullTransaction invariant: prunable is present"),
+        }
+    }
+
+    /// Consume back into the underlying [`Transaction`].
+    pub fn into_inner(self) -> Transaction {
+        self.0
+    }
+}
+
+impl core::ops::Deref for FullTransaction {
+    type Target = Transaction;
+    fn deref(&self) -> &Transaction {
+        &self.0
+    }
 }

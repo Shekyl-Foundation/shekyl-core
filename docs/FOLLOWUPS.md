@@ -214,8 +214,11 @@ sustainability is unaffected by the recalibration.
   "V3 at genesis" is realized on-chain as **tx-version=3 + hardfork=1 +
   proof=FcmpPlusPlusPqc**.
 
-- **`get_scannable_block_by_number` → `fetch_scannable_block` name residue in
-  untouched files (flagged 2026-06-23, `feat/scan-refresh-wire-migration`).** The §8
+- **[Done] `get_scannable_block_by_number` → `fetch_scannable_block` name residue in
+  untouched files (flagged 2026-06-23; resolved 2026-06-25, slice-1 loose-ends cleanup).**
+  The `DaemonOp::GetScannableBlockByNumber` variant was renamed to `FetchScannableBlock`
+  (def + doc + the one construction site in `diagnostics.rs`) and the stale
+  `refresh.rs` test-doc reference corrected. Original finding: The §8
   step-4 scanner/refresh slice replaced the legacy `Rpc::get_scannable_block_by_number`
   call with `DaemonEngine::fetch_scannable_block`. Two stale references survive in files
   the slice did not substantively edit and were therefore held out of its scope (kept
@@ -365,10 +368,12 @@ sustainability is unaffected by the recalibration.
   `shekyl-wire` — resolved 2026-06-24 by the tx-builder spend cutover (PR #178), which
   cut `shekyl-tx-builder` onto the `shekyl-wire` encoder and deleted its shekyl-oxide
   spend serializer, so there is now one canonical on-wire FCMP++ spend layout and the
-  genesis hazard is closed. Residual (test-only, not a hazard): replace the
-  `fcmp_spend_e2e.rs` assemble-direct shim with a cross-crate `tx-builder output ==
-  shekyl-wire round-trip` byte-identity assertion, which rides the live FCMP++ spend KAT
-  (§1.1). Original finding (surfaced 2026-06-21 building the Rust e2e spend
+  genesis hazard is closed. Residual **resolved 2026-06-25** (slice-1 loose-ends cleanup):
+  `fcmp_spend_e2e.rs` now feeds the real signed spend through the production
+  `shekyl_tx_builder::encode_final_tx` and asserts it emits the consensus-validated
+  `shekyl-wire` bytes **byte-for-byte** (the cross-crate identity), in addition to the
+  existing hand-assembled round-trip — no longer waiting on the live KAT. Original
+  finding (surfaced 2026-06-21 building the Rust e2e spend
   round-trip):** Two Rust serializers
   emit structurally different bytes for the *same* FCMP++ spend:
   - **`reference_block`** — `shekyl-oxide`
@@ -398,6 +403,8 @@ sustainability is unaffected by the recalibration.
   encoder and a cross-crate byte-identity assertion (tx-builder output ==
   `shekyl-wire` round-trip) replaces the assemble-direct shim in the e2e test.
   Target: **V3.0** (genesis wire-format freeze; one canonical spend layout).
+  *(Both conditions met — cutover #178, byte-identity 2026-06-25; resolved, see the
+  `[Done]` header and residual note above.)*
 
 - **[Done] Rust/Axum daemon RPC: curve-tree endpoints missing from the FFI dispatch
   table (404) — resolved 2026-06-23 by PR #174, which wired

@@ -3214,8 +3214,8 @@ mod start_refresh_integration_tests {
     /// - `Engine<SoloSigner, TestDaemon>` is a real, callable shape —
     ///   the `D: DaemonEngine` parameterization isn't a phantom type;
     ///   `TestDaemon` actually drives the producer.
-    /// - `TestDaemon`'s `Rpc` impl (`get_height`,
-    ///   `get_scannable_block_by_number`) is wired through every
+    /// - `TestDaemon`'s `DaemonEngine` impl (`get_height`,
+    ///   `fetch_scannable_block`) is wired through every
     ///   layer that the real `start_refresh` traverses (handle →
     ///   producer task → scanner → merge), so scenario coverage can be
     ///   added by composing the production implementors and
