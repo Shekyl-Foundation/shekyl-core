@@ -348,6 +348,28 @@ empties — the same double-handling trap one level down. Each is a B1 input.
 3. **Track B begins** once slice 1 is on `dev`: B0 re-inventory → B1 names → B2
    relocate+rename → B3 metadata → B4 verify+land.
 
+**Status (2026-06-25) — Track B split into two PRs by validation surface (rule 19):**
+
+- **PR 1 — relocations (no-behavior-change reorg).** B0 re-inventory + B1 names
+  done; B2 executed. Six support crates relocated out of the oxide tree to
+  role-honest first-party names (clean-role naming, not lineage-prefixed):
+  `io → shekyl-curve-io`, `generators → shekyl-curve-generators`,
+  `primitives → shekyl-curve-primitives`, `fcmp/bulletproofs → shekyl-bulletproofs`
+  (name kept; Q6 label updated), `fcmp/fcmp++ → shekyl-fcmp-proofs` (+ #186
+  feature-forward edge retired), `rpc → shekyl-rpc-client`,
+  `rpc/simple-request → shekyl-rpc-transport`. Gated by a new release-mode KAT
+  freezing the derived generator points (the varint→generator-table backstop) and
+  an explicit FROZEN-DST carve-out ([`../FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md)).
+  RPC crates are **moved, not deleted** — B0 refuted §7's delete hypothesis (the
+  `Rpc` trait is still the live wallet→daemon surface).
+- **PR 2 — dissolve the main crate (genesis-adjacent).** `Timelock` →
+  `shekyl-types` block-height-only (drop the `Time` variant; `Block(BlockHeight)`),
+  `StakingMeta` → `shekyl-staking` (`lock_tier: u8` kept; `LockTier` enum deferred),
+  live lock-window consts → `shekyl-consensus`, dead consts dropped, the re-export
+  facade torn down + crate deleted. Carries the B3 doc reconcile (vendoring-doc →
+  crypto-only; `MONERO_OXIDE_VENDOR_STATUS.md` + `CI_BASELINE.md` → pin
+  `2753111c50`) and the binding decision-log entry.
+
 On approval, append a binding entry to
 [`../V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) recording the
 upstream-relationship test, the keep/move split, and the `divisors`-to-fork
