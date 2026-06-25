@@ -19,7 +19,7 @@ use curve25519_dalek::{
 };
 use sha3::{Digest, Keccak256};
 
-use shekyl_generators::H;
+use shekyl_curve_generators::H;
 use shekyl_curve_io::*;
 
 mod unreduced_scalar;

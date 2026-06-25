@@ -2506,7 +2506,7 @@ mod tests {
         use shekyl_crypto_pq::handle::derive_output_handle;
         use shekyl_crypto_pq::kem::HybridCiphertext;
         use shekyl_crypto_pq::output::{compute_output_key_image, construct_output};
-        use shekyl_generators::biased_hash_to_point;
+        use shekyl_curve_generators::biased_hash_to_point;
 
         let blob = test_account_blob();
         let local = LocalKeys::from_test_seed(PENDING_TX_TEST_RAW_SEED);
@@ -3723,7 +3723,7 @@ mod tests {
 
         // Key image L = x · Hp(O); the FCMP++ verifier checks the SAL proof
         // binds this exact image (depth-independent — identical to the 2a path).
-        let i_point = shekyl_generators::biased_hash_to_point(output_key);
+        let i_point = shekyl_curve_generators::biased_hash_to_point(output_key);
         let x_scalar = Scalar::from_canonical_bytes(spend_key_x).expect("spend_key_x canonical");
         let key_images = vec![KeyImage::from_canonical_bytes(
             (i_point * x_scalar).compress().to_bytes(),

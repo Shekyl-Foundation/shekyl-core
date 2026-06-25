@@ -108,7 +108,7 @@ pub const MAX_TREE_DEPTH: u8 = shekyl_fcmp::MAX_TREE_DEPTH;
 /// # Canonical source of truth
 ///
 /// This constant mirrors
-/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// [`shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
 /// Bulletproofs+ CRS is generated against. The builder cannot
 /// construct a transaction with more outputs than the BP+ CRS
 /// supports, so this mirror is structural rather than a separate
@@ -125,11 +125,11 @@ pub const MAX_TREE_DEPTH: u8 = shekyl_fcmp::MAX_TREE_DEPTH;
 pub const MAX_OUTPUTS: usize = 16;
 
 // Single-direction enforcement against the canonical source of truth.
-// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS` is the
 // Bulletproofs+ CRS size; the builder-side cap must agree by
 // construction. See the `MAX_OUTPUTS` doc-comment above for the
 // canonical-source-of-truth rationale.
 const _: () = assert!(
-    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
-    "shekyl-tx-builder MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+    MAX_OUTPUTS == shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-tx-builder MAX_OUTPUTS must match shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
 );

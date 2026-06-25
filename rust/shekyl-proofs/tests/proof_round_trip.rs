@@ -326,7 +326,7 @@ fn test_04_reserve_proof_round_trip() {
 
         let ps = derive_proof_secrets(&combined_ss.0, i as u64);
 
-        let hp_point = shekyl_generators::biased_hash_to_point(ctx.on_chain[i].output_key);
+        let hp_point = shekyl_curve_generators::biased_hash_to_point(ctx.on_chain[i].output_key);
         let hp_bytes = hp_point.compress().to_bytes();
 
         let ki_result =

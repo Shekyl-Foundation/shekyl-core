@@ -12,8 +12,8 @@ use std_shims::{
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroizing;
 
-use shekyl_generators::COMMITMENT_BITS;
-pub use shekyl_generators::MAX_BULLETPROOF_COMMITMENTS as MAX_COMMITMENTS;
+use shekyl_curve_generators::COMMITMENT_BITS;
+pub use shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS as MAX_COMMITMENTS;
 use shekyl_curve_io::*;
 use shekyl_primitives::Commitment;
 

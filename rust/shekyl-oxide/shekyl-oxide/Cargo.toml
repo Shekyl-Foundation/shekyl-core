@@ -27,7 +27,7 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 shekyl-curve-io = { path = "../../shekyl-curve-io", version = "0.1", default-features = false }
-shekyl-generators = { path = "generators", version = "0.4", default-features = false }
+shekyl-curve-generators = { path = "../../shekyl-curve-generators", version = "0.4", default-features = false }
 shekyl-primitives = { path = "primitives", version = "0.1", default-features = false }
 shekyl-bulletproofs = { path = "fcmp/bulletproofs", version = "0.1", default-features = false }
 shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
@@ -46,7 +46,7 @@ std = [
   "zeroize/std",
 
   "shekyl-curve-io/std",
-  "shekyl-generators/std",
+  "shekyl-curve-generators/std",
   "shekyl-primitives/std",
   "shekyl-bulletproofs/std",
   "shekyl-fcmp-plus-plus/std",

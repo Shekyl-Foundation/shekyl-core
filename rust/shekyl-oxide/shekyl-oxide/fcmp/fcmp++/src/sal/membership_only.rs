@@ -42,7 +42,7 @@ use ciphersuite::{
 };
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 
-use shekyl_generators::T;
+use shekyl_curve_generators::T;
 
 use crate::{
     sal::{

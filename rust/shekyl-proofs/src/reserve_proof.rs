@@ -27,7 +27,7 @@ use curve25519_dalek::{
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
-use shekyl_generators::T as T_LAZY;
+use shekyl_curve_generators::T as T_LAZY;
 
 use crate::dleq::{self, DleqProof};
 use crate::error::ProofError;
@@ -173,7 +173,7 @@ pub fn generate_reserve_proof(
 
         let x = ho_scalar + b_scalar;
 
-        let hp_of_o = shekyl_generators::biased_hash_to_point(entry.output_key);
+        let hp_of_o = shekyl_curve_generators::biased_hash_to_point(entry.output_key);
 
         let p = x * G_POINT; // P = x*G = O - y*T
         let ki_point = x * hp_of_o;
@@ -331,7 +331,7 @@ pub fn verify_reserve_proof(
             return Err(ProofError::OutputKeyMismatch { index: i });
         }
 
-        let hp_of_o = shekyl_generators::biased_hash_to_point(on_chain.output_key);
+        let hp_of_o = shekyl_curve_generators::biased_hash_to_point(on_chain.output_key);
 
         // P = O - y*T = (ho + b)*G = x*G
         let p = expected_o - y_scalar * *T_LAZY;

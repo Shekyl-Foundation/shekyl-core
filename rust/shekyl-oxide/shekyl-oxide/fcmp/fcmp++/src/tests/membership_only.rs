@@ -22,7 +22,7 @@ use ec_divisors::{DivisorCurve, ScalarDecomposition};
 use helioselene::{Helios, Selene};
 use multiexp::multiexp_vartime;
 
-use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
 use crate::{
     fcmps::{Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path, TreeRoot},

@@ -32,7 +32,7 @@ use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
 };
-use shekyl_generators::H as H_POINT_LAZY;
+use shekyl_curve_generators::H as H_POINT_LAZY;
 use shekyl_units::AtomicUnits;
 
 /// A cleartext balance term contributing `amount * H` to the **input** side of

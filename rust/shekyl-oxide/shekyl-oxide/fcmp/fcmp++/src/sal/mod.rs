@@ -14,7 +14,7 @@ use ciphersuite::{
 };
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 
-use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
 use crate::{Input, Output};
 

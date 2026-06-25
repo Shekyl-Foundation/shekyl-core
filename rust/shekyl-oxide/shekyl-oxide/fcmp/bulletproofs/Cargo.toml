@@ -28,12 +28,12 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 
 # Other Shekyl dependencies
 shekyl-curve-io = { path = "../../../../shekyl-curve-io", version = "0.1", default-features = false }
-shekyl-generators = { path = "../../generators", version = "0.4", default-features = false }
+shekyl-curve-generators = { path = "../../../../shekyl-curve-generators", version = "0.4", default-features = false }
 shekyl-primitives = { path = "../../primitives", version = "0.1", default-features = false }
 
 [build-dependencies]
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
-shekyl-generators = { path = "../../generators", version = "0.4", default-features = false }
+shekyl-curve-generators = { path = "../../../../shekyl-curve-generators", version = "0.4", default-features = false }
 
 [dev-dependencies]
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }
@@ -48,7 +48,7 @@ std = [
   "zeroize/std",
 
   "shekyl-curve-io/std",
-  "shekyl-generators/std",
+  "shekyl-curve-generators/std",
   "shekyl-primitives/std",
 ]
 compile-time-generators = ["curve25519-dalek/precomputed-tables"]

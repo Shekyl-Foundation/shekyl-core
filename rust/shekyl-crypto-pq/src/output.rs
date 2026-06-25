@@ -44,7 +44,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use shekyl_generators::{H, T};
+use shekyl_curve_generators::{H, T};
 
 /// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
 /// `ml_kem_ss` wipe before returning `Err` (test-only observability).

@@ -25,7 +25,7 @@ pub use fcmps;
 use fcmps::*;
 use generalized_bulletproofs_ec_gadgets::*;
 
-use shekyl_generators::{
+use shekyl_curve_generators::{
     FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, SELENE_HASH_INIT, T,
 };
 

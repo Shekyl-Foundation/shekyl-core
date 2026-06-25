@@ -1,9 +1,9 @@
 [package]
-name = "shekyl-generators"
+name = "shekyl-curve-generators"
 version = "0.4.0"
 description = "Shekyl's hash to point function and generators"
 license = "MIT"
-repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/generators"
+repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
 rust-version = "1.66"
@@ -28,12 +28,12 @@ ciphersuite = { version = "0.4", default-features = false, features = ["alloc"] 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 crypto-bigint = { version = "0.5", default-features = false, features = ["alloc"] }
 dalek-ff-group = { version = "0.5", default-features = false }
-helioselene = { path = "../../crypto/helioselene", version = "0.1", default-features = false }
+helioselene = { path = "../shekyl-oxide/crypto/helioselene", version = "0.1", default-features = false }
 
-generalized-bulletproofs = { path = "../../crypto/generalized-bulletproofs", default-features = false }
-full-chain-membership-proofs = { path = "../../crypto/fcmps", default-features = false }
+generalized-bulletproofs = { path = "../shekyl-oxide/crypto/generalized-bulletproofs", default-features = false }
+full-chain-membership-proofs = { path = "../shekyl-oxide/crypto/fcmps", default-features = false }
 
-shekyl-curve-io = { path = "../../../shekyl-curve-io", version = "0.1", default-features = false }
+shekyl-curve-io = { path = "../shekyl-curve-io", version = "0.1", default-features = false }
 
 [dev-dependencies]
 hex = "0.4"

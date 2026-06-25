@@ -3661,10 +3661,10 @@ dependencies = [
  "serde_json",
  "sha3",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
- "shekyl-generators",
  "shekyl-rct-balance",
  "shekyl-units",
  "thiserror",
@@ -3677,8 +3677,8 @@ dependencies = [
  "curve25519-dalek",
  "hex-literal",
  "rand_core 0.6.4",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
- "shekyl-generators",
  "shekyl-primitives",
  "std-shims",
  "thiserror",
@@ -3761,13 +3761,33 @@ dependencies = [
  "sha3",
  "shekyl-address",
  "shekyl-crypto-hash",
+ "shekyl-curve-generators",
  "shekyl-fcmp",
- "shekyl-generators",
  "shekyl-primitives",
  "shekyl-stats",
  "thiserror",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-curve-generators"
+version = "0.4.0"
+dependencies = [
+ "blake2",
+ "ciphersuite",
+ "crypto-bigint",
+ "curve25519-dalek",
+ "dalek-ff-group 0.5.0",
+ "full-chain-membership-proofs",
+ "generalized-bulletproofs",
+ "group",
+ "helioselene",
+ "hex",
+ "sha3",
+ "shekyl-curve-io",
+ "std-shims",
+ "subtle",
 ]
 
 [[package]]
@@ -3879,6 +3899,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-economics",
@@ -3887,7 +3908,6 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
- "shekyl-generators",
  "shekyl-oxide",
  "shekyl-primitives",
  "shekyl-rpc",
@@ -4010,8 +4030,8 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-fcmp-plus-plus",
- "shekyl-generators",
  "thiserror",
  "tracing",
  "zeroize",
@@ -4035,7 +4055,7 @@ dependencies = [
  "multiexp",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
- "shekyl-generators",
+ "shekyl-curve-generators",
  "std-shims",
  "zeroize",
 ]
@@ -4065,6 +4085,7 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-encoding",
@@ -4073,7 +4094,6 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
- "shekyl-generators",
  "shekyl-logging",
  "shekyl-pow-randomx",
  "shekyl-proofs",
@@ -4083,26 +4103,6 @@ dependencies = [
  "tempfile",
  "tracing",
  "zeroize",
-]
-
-[[package]]
-name = "shekyl-generators"
-version = "0.4.0"
-dependencies = [
- "blake2",
- "ciphersuite",
- "crypto-bigint",
- "curve25519-dalek",
- "dalek-ff-group 0.5.0",
- "full-chain-membership-proofs",
- "generalized-bulletproofs",
- "group",
- "helioselene",
- "hex",
- "sha3",
- "shekyl-curve-io",
- "std-shims",
- "subtle",
 ]
 
 [[package]]
@@ -4130,9 +4130,9 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-bulletproofs",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-fcmp-plus-plus",
- "shekyl-generators",
  "shekyl-primitives",
  "std-shims",
  "zeroize",
@@ -4155,8 +4155,8 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "sha3",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
- "shekyl-generators",
  "std-shims",
  "zeroize",
 ]
@@ -4173,7 +4173,7 @@ dependencies = [
  "rand_core 0.6.4",
  "sha2",
  "shekyl-crypto-pq",
- "shekyl-generators",
+ "shekyl-curve-generators",
  "thiserror",
  "zeroize",
 ]
@@ -4195,7 +4195,7 @@ name = "shekyl-rct-balance"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
- "shekyl-generators",
+ "shekyl-curve-generators",
  "shekyl-units",
 ]
 
@@ -4227,8 +4227,8 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-engine-state",
- "shekyl-generators",
  "shekyl-oxide",
  "shekyl-rpc",
  "shekyl-scanner",
@@ -4317,9 +4317,9 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-fcmp",
- "shekyl-generators",
  "shekyl-oxide",
  "shekyl-primitives",
  "shekyl-rct-balance",
@@ -4361,10 +4361,10 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
- "shekyl-generators",
  "shekyl-oxide",
  "shekyl-rct-balance",
  "shekyl-tx-builder",

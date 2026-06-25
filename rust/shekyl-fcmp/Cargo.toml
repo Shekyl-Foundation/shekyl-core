@@ -19,7 +19,7 @@ license.workspace = true
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Vendored shekyl-oxide crates (tracked upstream in Shekyl-Foundation/monero-oxide).
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 generalized-bulletproofs = { path = "../shekyl-oxide/crypto/generalized-bulletproofs" }
 dalek-ff-group = "0.5"

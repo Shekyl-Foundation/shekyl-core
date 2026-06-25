@@ -63,7 +63,7 @@ members = [
     # below) so the pristine upstream subtree is not forced through Shekyl's
     # fmt/clippy gates; consumers depend on them by path.
     "shekyl-curve-io",
-    "shekyl-oxide/shekyl-oxide/generators",
+    "shekyl-curve-generators",
     "shekyl-oxide/shekyl-oxide/primitives",
     "shekyl-oxide/shekyl-oxide/fcmp/bulletproofs",
     "shekyl-oxide/shekyl-oxide/fcmp/fcmp++",
@@ -315,7 +315,7 @@ generalized-bulletproofs-circuit-abstraction = { opt-level = 3 }
 generalized-bulletproofs-ec-gadgets = { opt-level = 3 }
 full-chain-membership-proofs = { opt-level = 3 }
 shekyl-curve-io = { opt-level = 3 }
-shekyl-generators = { opt-level = 3 }
+shekyl-curve-generators = { opt-level = 3 }
 shekyl-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
 shekyl-fcmp-plus-plus = { opt-level = 3 }

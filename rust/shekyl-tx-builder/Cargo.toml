@@ -25,7 +25,7 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 # Canonical genesis spend serializer + signing hashes (the wire authority). The wire

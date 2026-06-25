@@ -4,7 +4,7 @@ use ciphersuite::group::Group;
 use dalek_ff_group::{EdwardsPoint, Scalar};
 use multiexp::BatchVerifier;
 
-use shekyl_generators::T;
+use shekyl_curve_generators::T;
 
 use crate::{sal::*, Output};
 

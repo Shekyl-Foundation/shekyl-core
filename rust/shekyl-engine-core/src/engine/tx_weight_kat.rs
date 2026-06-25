@@ -13,7 +13,7 @@ pub(crate) mod support {
     use curve25519_dalek::EdwardsPoint;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
-    use shekyl_generators::biased_hash_to_point;
+    use shekyl_curve_generators::biased_hash_to_point;
     use shekyl_tx_builder::{sign_transaction, LeafEntry, OutputInfo, SpendInput, TreeContext};
     use shekyl_units::AtomicUnits;
 

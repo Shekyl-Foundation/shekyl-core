@@ -21,7 +21,7 @@ use modular_frost::{
     algorithm::Algorithm, curve::Curve, FrostError, Participant, ThresholdKeys, ThresholdView,
 };
 
-use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
 use crate::sal::*;
 

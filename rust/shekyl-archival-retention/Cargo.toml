@@ -18,7 +18,7 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 curve25519-dalek = "4"
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # Single-sourced RCT balance equation + typed-side terms (bond_rct_balance wraps
 # this; construct uses the same definitions — ARCHIVAL_BOND_CONSTRUCTION.md §7.2).
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }

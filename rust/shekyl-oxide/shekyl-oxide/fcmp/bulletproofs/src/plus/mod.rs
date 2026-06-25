@@ -4,7 +4,7 @@ use std_shims::sync::LazyLock;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, edwards::EdwardsPoint, scalar::Scalar};
 
-use shekyl_generators::{BulletproofGenerators, H};
+use shekyl_curve_generators::{BulletproofGenerators, H};
 
 pub(crate) use crate::{point_vector::PointVector, scalar_vector::ScalarVector};
 

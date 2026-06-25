@@ -24,7 +24,7 @@ use shekyl_crypto_pq::{
     key_image::KeyImage,
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
-use shekyl_generators::hash_to_point;
+use shekyl_curve_generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
@@ -57,7 +57,7 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 ///
 /// Three mirror sites name the same `16` constant in the workspace.
 /// The canonical source of truth is
-/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// [`shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
 /// Bulletproofs+ CRS is generated against; loosening it without
 /// regenerating generators would break verification. The other
 /// mirrors are:
@@ -75,15 +75,15 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 pub const MAX_OUTPUTS: usize = 16;
 
 // Single-direction enforcement against the canonical source of truth.
-// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS` is the
 // Bulletproofs+ CRS size; the scanner gate must agree by construction.
 // `shekyl-tx-builder` carries its own assertion against the same
 // canonical, so a future loosening of the canonical bound fires CI in
 // every mirror crate independently rather than triangulating through
 // any single crate.
 const _: () = assert!(
-    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
-    "shekyl-scanner MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+    MAX_OUTPUTS == shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-scanner MAX_OUTPUTS must match shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
 );
 
 /// A block paired with its wallet-scannable transaction set and the global

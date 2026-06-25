@@ -6,7 +6,7 @@ use curve25519_dalek::{
     traits::{MultiscalarMul, VartimeMultiscalarMul},
 };
 
-pub(crate) use shekyl_generators::{
+pub(crate) use shekyl_curve_generators::{
     COMMITMENT_BITS, MAX_BULLETPROOF_COMMITMENTS as MAX_COMMITMENTS,
 };
 

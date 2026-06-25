@@ -26,7 +26,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 
 # Other Shekyl dependencies
 shekyl-curve-io = { path = "../../../shekyl-curve-io", version = "0.1", default-features = false }
-shekyl-generators = { path = "../generators", version = "0.4", default-features = false }
+shekyl-curve-generators = { path = "../../../shekyl-curve-generators", version = "0.4", default-features = false }
 
 [dev-dependencies]
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -39,6 +39,6 @@ std = [
 
   "sha3/std",
 
-  "shekyl-generators/std",
+  "shekyl-curve-generators/std",
 ]
 default = ["std"]

@@ -287,7 +287,7 @@ pub fn sign_pqc_auths(
 /// Uses `biased_hash_to_point(O)` which matches the C++ `hash_to_p3(O)`.
 /// This is the same deterministic hash-to-curve used in leaf construction.
 fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
-    shekyl_generators::biased_hash_to_point(*output_key)
+    shekyl_curve_generators::biased_hash_to_point(*output_key)
         .compress()
         .to_bytes()
 }

@@ -76,7 +76,7 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # CT-5 (`docs/design/CT5_ENGINE_WIRING.md`): the wallet-side FCMP++
 # curve-tree client (`CurveTreeClient`, redb-backed, public-material-only).
@@ -284,7 +284,7 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 # Stage 1 PR 2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §3, §8). The

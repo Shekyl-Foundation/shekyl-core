@@ -4,7 +4,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use shekyl_generators as generators;
+pub use shekyl_curve_generators as generators;
 pub use shekyl_curve_io as io;
 pub use shekyl_primitives as primitives;
 

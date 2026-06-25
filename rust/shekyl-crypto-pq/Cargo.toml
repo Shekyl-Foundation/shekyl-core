@@ -120,7 +120,7 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # AAD) tuples, never the cipher.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # `keccak256_to_scalar` for the classical Edwards-curve component of Shekyl
 # primary output-claim offset (`crate::output_claim`), relocated from
 # `shekyl-scanner` per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a. V3.0

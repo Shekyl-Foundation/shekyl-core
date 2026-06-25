@@ -7,7 +7,7 @@ use curve25519_dalek::{
     traits::{IsIdentity, VartimeMultiscalarMul},
 };
 
-use shekyl_generators::{BulletproofGenerators, H as MONERO_H};
+use shekyl_curve_generators::{BulletproofGenerators, H as MONERO_H};
 
 use crate::plus;
 

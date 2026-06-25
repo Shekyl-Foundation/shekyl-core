@@ -13,7 +13,7 @@ license.workspace = true
 
 [dependencies]
 curve25519-dalek = "4"
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-units = { path = "../shekyl-units" }
 
 [lints]

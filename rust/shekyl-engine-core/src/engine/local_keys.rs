@@ -604,7 +604,7 @@ mod tests {
     /// without going through `OutputClaim` so the test can assemble
     /// the verifier inputs directly from the engine bundle.
     fn compute_test_key_image(output_key: [u8; 32], spend_key_x: [u8; 32]) -> [u8; 32] {
-        let i_point = shekyl_generators::biased_hash_to_point(output_key);
+        let i_point = shekyl_curve_generators::biased_hash_to_point(output_key);
         let x_scalar = Scalar::from_canonical_bytes(spend_key_x)
             .expect("spend_key_x from bundle is canonical");
         (i_point * x_scalar).compress().to_bytes()
@@ -1276,7 +1276,7 @@ mod tests {
                     make_synthetic_h_pqc_bytes((n_in as u64) * 1_000_000 + (input_idx as u64));
                 leaf_chunk.push(LeafEntry {
                     output_key: constructed.output_key,
-                    key_image_gen: shekyl_generators::biased_hash_to_point(constructed.output_key)
+                    key_image_gen: shekyl_curve_generators::biased_hash_to_point(constructed.output_key)
                         .compress()
                         .to_bytes(),
                     commitment: constructed.commitment,
@@ -1683,7 +1683,7 @@ mod tests {
         let h_pqc = make_synthetic_h_pqc_bytes(0xB0);
         let leaf_chunk = vec![LeafEntry {
             output_key: constructed.output_key,
-            key_image_gen: shekyl_generators::biased_hash_to_point(constructed.output_key)
+            key_image_gen: shekyl_curve_generators::biased_hash_to_point(constructed.output_key)
                 .compress()
                 .to_bytes(),
             commitment: constructed.commitment,

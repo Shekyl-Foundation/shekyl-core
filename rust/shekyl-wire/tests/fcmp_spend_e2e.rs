@@ -235,7 +235,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // I = Hp(O); the prover derives the same generator via
     // `compute_key_image_gen` == `biased_hash_to_point`, so the key image we
     // compute here matches the one the proof binds.
-    let hp_of_o = shekyl_generators::biased_hash_to_point(spent.output_key)
+    let hp_of_o = shekyl_curve_generators::biased_hash_to_point(spent.output_key)
         .compress()
         .to_bytes();
     let ki = compute_output_key_image(&combined_ss.0, spent_index, &wallet.spend_secret, &hp_of_o)

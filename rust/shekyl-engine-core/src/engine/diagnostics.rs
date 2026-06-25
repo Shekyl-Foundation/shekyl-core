@@ -108,7 +108,7 @@ pub enum MalformedKind {
     /// The fetched block contains a transaction whose output count
     /// exceeds [`shekyl_scanner::MAX_OUTPUTS`] (the FCMP++
     /// Bulletproofs+ CRS bound; canonically anchored at
-    /// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`).
+    /// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`).
     ///
     /// # Producer-side detection (PR 4 C4 emission site)
     ///

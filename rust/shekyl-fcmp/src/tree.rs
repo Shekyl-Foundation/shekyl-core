@@ -36,7 +36,7 @@ use ciphersuite::{
 use ec_divisors::DivisorCurve;
 use helioselene::{Helios, Selene};
 use shekyl_fcmp_plus_plus::fcmps;
-use shekyl_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
+use shekyl_curve_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
 
 /// Number of scalars per output in the leaf layer.
 /// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, H(pqc_pk)}.
@@ -499,7 +499,7 @@ pub fn construct_leaf(
     commitment: &[u8; 32],
     h_pqc: &[u8; 32],
 ) -> Option<[u8; 128]> {
-    let hp_point = shekyl_generators::biased_hash_to_point(*output_key);
+    let hp_point = shekyl_curve_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
 
     let o_x = ed25519_point_to_selene_scalar(output_key)?;
@@ -522,12 +522,12 @@ pub fn construct_leaf(
 /// scalar), which cannot be decompressed back to a point. The FCMP++
 /// membership prover's `Path.leaves` consumes `O`/`I`/`C` as compressed
 /// **points**, so path assembly re-derives the compressed `I` here rather
-/// than depending on `shekyl-generators` / `curve25519-dalek` directly
+/// than depending on `shekyl-curve-generators` / `curve25519-dalek` directly
 /// (`17-dependency-discipline.mdc`: reuse the crate that already owns the
 /// primitive). Infallible: `biased_hash_to_point` always yields a point.
 #[must_use]
 pub fn key_image_generator(output_key: &[u8; 32]) -> [u8; 32] {
-    shekyl_generators::biased_hash_to_point(*output_key)
+    shekyl_curve_generators::biased_hash_to_point(*output_key)
         .compress()
         .to_bytes()
 }

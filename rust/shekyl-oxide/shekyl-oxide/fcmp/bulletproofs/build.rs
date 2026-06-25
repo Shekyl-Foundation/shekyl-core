@@ -9,7 +9,7 @@ use std::{
 fn generators(prefix: &'static str, path: &str) {
     use curve25519_dalek::EdwardsPoint;
 
-    use shekyl_generators::BulletproofGenerators;
+    use shekyl_curve_generators::BulletproofGenerators;
 
     fn serialize(generators_string: &mut String, points: &[EdwardsPoint]) {
         for generator in points {
@@ -68,7 +68,7 @@ fn generators(prefix: &'static str, path: &str) {
             format!(
                 r#"
         pub(crate) static GENERATORS: LazyLock<BulletproofGenerators> = LazyLock::new(|| {{
-          shekyl_generators::BulletproofGenerators::new(b"{prefix}")
+          shekyl_curve_generators::BulletproofGenerators::new(b"{prefix}")
         }});
       "#,
             )
