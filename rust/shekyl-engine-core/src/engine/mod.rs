@@ -264,6 +264,7 @@ pub(crate) mod stake_timing;
 pub(crate) mod synthetic_tree;
 pub(crate) mod traits;
 pub(crate) mod transaction_submitter;
+pub(crate) mod tx_counts;
 pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
@@ -291,6 +292,7 @@ pub use local_ledger::LocalLedger;
 pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
 pub use network::Network;
+pub use tx_counts::{InputCount, OutputCount};
 // Re-exported so binary-layer consumers of [`Engine::primary_address`]
 // can name the return type without a direct `shekyl-address` dependency,
 // mirroring the `Network` re-export above.

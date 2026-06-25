@@ -58,6 +58,7 @@ use shekyl_units::AtomicUnits;
 use super::error::FeeEstimatorError;
 use super::refresh::LedgerSnapshot;
 use super::traits::FeeEstimates;
+use super::tx_counts::{InputCount, OutputCount};
 use super::tx_fee_model::{converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight};
 
 /// Caller-supplied fee preference for the
@@ -134,12 +135,13 @@ pub struct FeeEstimationContext<'a> {
     /// estimators that size the fee against the projected
     /// transaction shape.
     pub recipient_count: usize,
-    /// Number of inputs the output selector identified. Used
-    /// by estimators that size the fee against the projected
-    /// transaction shape.
-    pub input_count: usize,
-    /// Projected output count for this fee variant.
-    pub output_count: usize,
+    /// Number of inputs the output selector identified
+    /// (bounded `1..=MAX_INPUTS`). Used by estimators that size
+    /// the fee against the projected transaction shape.
+    pub input_count: InputCount,
+    /// Projected output count for this fee variant
+    /// (bounded `1..=MAX_OUTPUTS`).
+    pub output_count: OutputCount,
     /// Single-RPC fee snapshot for the build (§3.3 / PF1).
     pub fee_snapshot: FeeEstimates,
     /// Tree depth for structural weight prediction.
@@ -247,8 +249,9 @@ impl FeeEstimator for DaemonFeeEstimator {
         context: &FeeEstimationContext<'_>,
     ) -> Result<AtomicUnits, FeeEstimatorError> {
         let rate = fee_rate_for_priority(priority, &context.fee_snapshot)?;
-        let n_in = context.input_count.max(1);
-        let n_out = context.output_count.max(1);
+        // The counts are type-bounded (`>= 1`), so no `.max(1)` floor is needed.
+        let n_in = context.input_count;
+        let n_out = context.output_count;
         let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, context.tree_depth, 0));
         let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, seed);
         Ok(AtomicUnits::from_raw(fee))
@@ -307,8 +310,8 @@ mod tests {
         let context = FeeEstimationContext {
             ledger: &ledger,
             recipient_count: 1,
-            input_count: 1,
-            output_count: 2,
+            input_count: InputCount::clamped(1),
+            output_count: OutputCount::clamped(2),
             fee_snapshot: snapshot,
             tree_depth: 1,
         };
@@ -350,8 +353,8 @@ mod tests {
         let base = FeeEstimationContext {
             ledger: &ledger,
             recipient_count: 1,
-            input_count: 1,
-            output_count: 2,
+            input_count: InputCount::clamped(1),
+            output_count: OutputCount::clamped(2),
             fee_snapshot: snapshot,
             tree_depth: 1,
         };
