@@ -76,6 +76,7 @@ use super::signing_assembly::assemble_tx_to_sign;
 use super::traits::{LedgerEngine, PendingTxEngine};
 use super::transaction_submitter::canonical_tx_id;
 use super::transaction_submitter::TransactionSubmitter;
+use super::tx_counts::{InputCount, OutputCount};
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 /// Per-output identifier used as the `output_locks` map key.
@@ -1145,8 +1146,8 @@ where
                     &FeeEstimationContext {
                         ledger: &ledger_snapshot,
                         recipient_count: payment_count,
-                        input_count,
-                        output_count,
+                        input_count: InputCount::clamped(input_count),
+                        output_count: OutputCount::clamped(output_count),
                         fee_snapshot,
                         tree_depth,
                     },
@@ -1154,7 +1155,7 @@ where
                 .map_err(|err| map_fee_estimator_error(&err.into()))
         };
 
-        let fee_pass_a = estimate(1, payment_count + 1)
+        let fee_pass_a = estimate(1, payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
@@ -1180,7 +1181,7 @@ where
                 mapped
             })?;
 
-        let fee_pass_b = estimate(selected.indices.len(), payment_count + 1)
+        let fee_pass_b = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if fee_pass_b > fee_pass_a {
             let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
@@ -1205,7 +1206,7 @@ where
                     mapped
                 })?;
         }
-        let fee = estimate(selected.indices.len(), payment_count + 1)
+        let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let required = total_amount.checked_add(fee).ok_or_else(|| {
@@ -1227,8 +1228,12 @@ where
             return Err(err);
         }
 
-        let fee_directive =
-            build_fee_directive(&rate, selected.indices.len(), payment_count, tree_depth);
+        let fee_directive = build_fee_directive(
+            &rate,
+            InputCount::clamped(selected.indices.len()),
+            OutputCount::clamped(payment_count),
+            tree_depth,
+        );
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -1530,8 +1535,8 @@ where
                     &FeeEstimationContext {
                         ledger: &ledger_snapshot,
                         recipient_count: payment_count,
-                        input_count: selected_indices.len(),
-                        output_count: payment_count + 1,
+                        input_count: InputCount::clamped(selected_indices.len()),
+                        output_count: OutputCount::clamped(payment_count.saturating_add(1)),
                         fee_snapshot,
                         tree_depth: depth,
                     },
@@ -1587,8 +1592,12 @@ where
                         "fresh-depth fee exceeds the selected inputs' coverage; discard and rebuild",
                 });
             }
-            let fee_directive =
-                build_fee_directive(&rate, selected_indices.len(), payment_count, depth);
+            let fee_directive = build_fee_directive(
+                &rate,
+                InputCount::clamped(selected_indices.len()),
+                OutputCount::clamped(payment_count),
+                depth,
+            );
 
             // --- phase 2 (prover, lock-free): assemble + fold + sign ---
             let paths = handle
@@ -3259,8 +3268,8 @@ mod tests {
         };
         assert_eq!(
             crate::engine::tx_fee_model::predict_weight(
-                tx.prefix.inputs.len(),
-                tx.prefix.outputs.len(),
+                InputCount::clamped(tx.prefix.inputs.len()),
+                OutputCount::clamped(tx.prefix.outputs.len()),
                 depth,
                 fee,
             ),
@@ -4345,7 +4354,12 @@ mod tests {
         );
         let request = standard_request(7_000);
         let rate = FeeRate::new(10, 1).expect("rate");
-        let fee_directive = build_fee_directive(&rate, 1, request.recipients.len(), 1);
+        let fee_directive = build_fee_directive(
+            &rate,
+            InputCount::clamped(1),
+            OutputCount::clamped(request.recipients.len()),
+            1,
+        );
         // The `gindex` must equal the output's `global_output_index` (100) so the
         // index-stability guard passes and the missing-`key_image` check inside
         // `input_context_from_transfer` is reached. The path is unused before
@@ -4411,8 +4425,17 @@ mod tests {
         let snapshot = daemon_fee_estimates_distinct();
         let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
         // Real tree depth for the 2-leaf consistent fixture is 2.
-        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, 2, 0));
-        let expected_fee = converge_fee(&rate, n_in, n_out, 2, seed);
+        let seed = fee_from_weight(
+            &rate,
+            predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), 2, 0),
+        );
+        let expected_fee = converge_fee(
+            &rate,
+            InputCount::clamped(n_in),
+            OutputCount::clamped(n_out),
+            2,
+            seed,
+        );
         assert_eq!(
             built.fee_atomic_units.to_raw(),
             expected_fee,
@@ -4432,7 +4455,12 @@ mod tests {
             _ => panic!("a spend is Fcmp with prunable"),
         };
         assert_eq!(
-            predict_weight(n_in, n_out, depth, fee),
+            predict_weight(
+                InputCount::clamped(n_in),
+                OutputCount::clamped(n_out),
+                depth,
+                fee
+            ),
             tx.weight(),
             "predict_weight must equal the built tx's canonical weight"
         );

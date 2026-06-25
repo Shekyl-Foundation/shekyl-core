@@ -14,13 +14,14 @@
 use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
 use shekyl_io::varint_len;
 use shekyl_rpc::{tx_fee, FeeRate};
-use shekyl_tx_builder::{MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH};
+use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{
     bp_plus_weight_clawback, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN, TX_VERSION,
 };
 
 use super::traits::key::FeeDirective;
+use super::tx_counts::{InputCount, OutputCount};
 
 // ── Wire-exact component sizes ──────────────────────────────────────────────
 // Each constant is one field of `shekyl_wire::Transaction::write`; `predict_weight`
@@ -129,12 +130,12 @@ const FCMP_PROOF_SIZE_MAX: usize = {
     max
 };
 
-fn fcmp_proof_size(n_in: usize, tree_depth: u8) -> usize {
-    // Every reachable `(n_in, tree_depth)` has a measured cell. An out-of-range
-    // lookup (rejected upstream) falls back to the largest measured size so the
-    // fee estimate is conservative rather than panicking or under-paying.
+fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
+    // `n_in` is type-bounded to `1..=MAX_INPUTS`, so the row always hits a measured
+    // cell; an out-of-range `tree_depth` falls back to the largest measured size so
+    // the fee estimate stays conservative rather than panicking or under-paying.
     FCMP_PROOF_SIZE_KAT
-        .get(n_in)
+        .get(n_in.get())
         .and_then(|row| row.get(usize::from(tree_depth)).copied())
         .filter(|&v| v != 0)
         .unwrap_or(FCMP_PROOF_SIZE_MAX)
@@ -157,24 +158,25 @@ fn pqc_auth_weight() -> usize {
 }
 
 /// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
-fn padded_outputs(n_out: usize) -> usize {
-    // Clamp to MAX_OUTPUTS so `next_power_of_two` can't panic on an out-of-range count
-    // (and the Bp+/clawback arithmetic stays bounded); exact for any valid tx (≤ 16).
-    n_out.clamp(1, MAX_OUTPUTS).next_power_of_two()
+fn padded_outputs(n_out: OutputCount) -> usize {
+    // `n_out` is type-bounded to `1..=MAX_OUTPUTS`, so `next_power_of_two` is in
+    // range with no clamp needed.
+    n_out.get().next_power_of_two()
 }
 
 /// Serialized Bp+ size: 6 fixed points + varint(|L|)‖L + varint(|R|)‖R, where
 /// `|L| == |R| == 6 + log2(n_padded)` (the proof's L/R vector length).
-fn bp_plus_weight(n_out: usize) -> usize {
+fn bp_plus_weight(n_out: OutputCount) -> usize {
     let nlr = 6 + padded_outputs(n_out).trailing_zeros() as usize;
     6 * 32 + 2 * (varint_len(nlr as u64) + nlr * 32)
 }
 
 /// Bp+ verification clawback for the predicted output count. Delegates to the canonical
 /// [`shekyl_wire::transaction::bp_plus_weight_clawback`] so the predictor and `weight()`
-/// share one formula; `padded_outputs` supplies the same `n_padded` (clamped to
-/// `MAX_OUTPUTS`) that a built tx's proof would yield.
-fn bp_plus_clawback_weight(n_out: usize) -> usize {
+/// share one formula; `padded_outputs` supplies the same `n_padded` a built tx's proof
+/// would yield (`n_out` is type-bounded to `1..=MAX_OUTPUTS` by [`OutputCount`], so no
+/// separate clamp is needed).
+fn bp_plus_clawback_weight(n_out: OutputCount) -> usize {
     bp_plus_weight_clawback(padded_outputs(n_out))
 }
 
@@ -182,40 +184,47 @@ fn bp_plus_clawback_weight(n_out: usize) -> usize {
 /// `shekyl_wire::Transaction::write` plus the Bp+ clawback, so it equals
 /// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
-pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64) -> usize {
-    // `n_in`/`n_out` arrive uncapped from the fee context, so per-count products use
-    // `saturating_mul` and the fields are summed with a single saturating fold: an
-    // out-of-range request over-estimates (toward usize::MAX) rather than wrapping to a
-    // small weight that under-pays. A valid tx (n_in ≤ MAX_INPUTS, n_out ≤ MAX_OUTPUTS)
-    // is far from saturation, so a real fee is unchanged. Each entry below is one field
-    // of `shekyl_wire::Transaction::write`, in wire order.
+pub(crate) fn predict_weight(
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+    fee: u64,
+) -> usize {
+    // `n_in`/`n_out` are type-bounded (`1..=MAX_INPUTS` / `1..=MAX_OUTPUTS`), so every
+    // per-count product and the field sum stay far below `usize` overflow — plain
+    // arithmetic, no saturation (the #179 saturating fold/products and `padded_outputs`
+    // clamp collapse to the type invariant). Each entry below is one field of
+    // `shekyl_wire::Transaction::write`, in wire order.
     let fcmp = fcmp_proof_size(n_in, tree_depth);
-    let extra_len =
-        EXTRA_PUBKEY_FIELD_WEIGHT.saturating_add(n_out.saturating_mul(extra_kem_field_weight()));
+    let bp = bp_plus_weight(n_out);
+    let bp_clawback = bp_plus_clawback_weight(n_out);
+    let n_in = n_in.get();
+    let n_out = n_out.get();
+    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT + n_out * extra_kem_field_weight();
     [
-        varint_len(TX_VERSION),                          // version
-        varint_len(0u64),                                // unlock_time
-        varint_len(n_in as u64),                         // vin count
-        n_in.saturating_mul(INPUT_TO_KEY_WEIGHT),        // vin elements
-        varint_len(n_out as u64),                        // vout count
-        n_out.saturating_mul(OUTPUT_WEIGHT),             // vout elements
-        varint_len(extra_len as u64),                    // tx_extra length prefix
-        extra_len,                                       // tx_extra body
+        varint_len(TX_VERSION),            // version
+        varint_len(0u64),                  // unlock_time
+        varint_len(n_in as u64),           // vin count
+        n_in * INPUT_TO_KEY_WEIGHT,        // vin elements
+        varint_len(n_out as u64),          // vout count
+        n_out * OUTPUT_WEIGHT,             // vout elements
+        varint_len(extra_len as u64),      // tx_extra length prefix
+        extra_len,                         // tx_extra body
         1,                   // ct type tag — one u8 (a byte width, not CT_TYPE_FCMP's value)
         varint_len(fee),     // fee
         REFERENCE_BLOCK_LEN, // reference_block
-        n_out.saturating_mul(CT_BASE_PER_OUTPUT_WEIGHT), // ct base (per output)
-        n_in.saturating_mul(pqc_auth_weight()), // per-input PQC auth
+        n_out * CT_BASE_PER_OUTPUT_WEIGHT, // ct base (per output)
+        n_in * pqc_auth_weight(), // per-input PQC auth
         varint_len(1u64),    // prunable nbp
-        bp_plus_weight(n_out), // bulletproof+
+        bp,                  // bulletproof+
         varint_len(u64::from(tree_depth)), // tree_depth
         varint_len(fcmp as u64), // fcmp_proof length prefix
         fcmp,                // fcmp_proof body
-        n_in.saturating_mul(PSEUDO_OUT_LEN), // pseudoOuts
-        bp_plus_clawback_weight(n_out), // Bp+ verification clawback
+        n_in * PSEUDO_OUT_LEN, // pseudoOuts
+        bp_clawback,         // Bp+ verification clawback
     ]
     .into_iter()
-    .fold(0usize, usize::saturating_add)
+    .sum()
 }
 
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
@@ -223,9 +232,13 @@ pub(crate) fn predict_weight(n_in: usize, n_out: usize, tree_depth: u8, fee: u64
 #[allow(dead_code)] // 2a-3 dust-fold consumes; 2a-2 uses `tx_fee::MARGINAL_INPUT_WEIGHT` stub.
 pub(crate) fn marginal_input_weight_at_d_ref(tree_depth: u8) -> usize {
     let fee = 0;
-    let n_out = 1;
-    predict_weight(2, n_out, tree_depth, fee)
-        .saturating_sub(predict_weight(1, n_out, tree_depth, fee))
+    let n_out = OutputCount::clamped(1);
+    predict_weight(InputCount::clamped(2), n_out, tree_depth, fee).saturating_sub(predict_weight(
+        InputCount::clamped(1),
+        n_out,
+        tree_depth,
+        fee,
+    ))
 }
 
 /// Canonical dust predicate inner expression (§3.10.2).
@@ -289,8 +302,8 @@ pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
 #[must_use]
 pub(crate) fn converge_fee(
     rate: &FeeRate,
-    n_in: usize,
-    n_out: usize,
+    n_in: InputCount,
+    n_out: OutputCount,
     tree_depth: u8,
     initial_fee: u64,
 ) -> u64 {
@@ -305,15 +318,29 @@ pub(crate) fn converge_fee(
 /// Populate [`FeeDirective`] for the selected input count and payment outputs `N`.
 pub(crate) fn build_fee_directive(
     rate: &FeeRate,
-    n_in: usize,
-    payment_output_count: usize,
+    n_in: InputCount,
+    payment_output_count: OutputCount,
     tree_depth: u8,
 ) -> FeeDirective {
     let n_no_change = payment_output_count;
-    let n_with_change = payment_output_count + 1;
     let seed = fee_from_weight(rate, predict_weight(n_in, n_no_change, tree_depth, 0));
     let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, seed);
-    let fee_with_change = converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change);
+
+    // With-change adds one output. At the output limit a change output would exceed
+    // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
+    // `TooManyOutputs`). Mark it impossible with an infinite fee so the signer's
+    // `leftover >= fee_with_change + dust_threshold` selection (sign_bridge) can never
+    // pick it and instead falls through to the buildable no-change variant — rather
+    // than selecting a change output that fails validation. `clamped` returning a
+    // value below the requested `+1` is exactly the "at the limit" signal.
+    let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
+    let n_with_change = OutputCount::clamped(with_change_request);
+    let fee_with_change = if n_with_change.get() < with_change_request {
+        u64::MAX
+    } else {
+        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)
+    };
+
     FeeDirective {
         fee_no_change,
         fee_with_change,
@@ -349,7 +376,7 @@ mod tests {
             let measured = crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, 1)
                 .unwrap_or_else(|e| panic!("({n_in},1): {e}"));
             assert_eq!(
-                fcmp_proof_size(n_in, 1),
+                fcmp_proof_size(InputCount::clamped(n_in), 1),
                 measured,
                 "depth=1 KAT mismatch at n_in={n_in}"
             );
@@ -380,7 +407,7 @@ mod tests {
                     crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
                         .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
                 assert_eq!(
-                    fcmp_proof_size(n_in, tree_depth),
+                    fcmp_proof_size(InputCount::clamped(n_in), tree_depth),
                     measured,
                     "KAT mismatch at n_in={n_in} depth={tree_depth}"
                 );
@@ -390,22 +417,33 @@ mod tests {
 
     #[test]
     fn predict_weight_increases_with_inputs_and_outputs() {
-        let w1 = predict_weight(1, 1, 1, 1_000);
-        let w2 = predict_weight(2, 1, 1, 1_000);
-        let w3 = predict_weight(1, 2, 1, 1_000);
+        let w1 = predict_weight(InputCount::clamped(1), OutputCount::clamped(1), 1, 1_000);
+        let w2 = predict_weight(InputCount::clamped(2), OutputCount::clamped(1), 1, 1_000);
+        let w3 = predict_weight(InputCount::clamped(1), OutputCount::clamped(2), 1, 1_000);
         assert!(w2 > w1);
         assert!(w3 > w1);
     }
 
     #[test]
-    fn predict_weight_saturates_on_oversize_counts() {
-        // Uncapped counts must over-estimate (fail safe: never wrap to a small weight
-        // that under-pays) and must not panic (next_power_of_two / multiply overflow).
-        let huge = predict_weight(usize::MAX, usize::MAX, MAX_TREE_DEPTH, u64::MAX);
-        let normal = predict_weight(2, 2, MAX_TREE_DEPTH, 1_000);
+    fn predict_weight_caps_oversize_counts() {
+        // Counts are type-bounded, so an out-of-range value is unrepresentable:
+        // `clamped` caps it at the bound and the predictor yields a finite MAX-count
+        // weight (no overflow/panic, no wrap below a normal weight that would under-pay).
+        let capped = predict_weight(
+            InputCount::clamped(usize::MAX),
+            OutputCount::clamped(usize::MAX),
+            MAX_TREE_DEPTH,
+            u64::MAX,
+        );
+        let normal = predict_weight(
+            InputCount::clamped(2),
+            OutputCount::clamped(2),
+            MAX_TREE_DEPTH,
+            1_000,
+        );
         assert!(
-            huge > normal,
-            "an out-of-range request must not wrap below a normal weight"
+            capped > normal,
+            "capped MAX-count weight must exceed a normal weight"
         );
     }
 
@@ -431,7 +469,7 @@ mod tests {
             (2, 3, 4, 50_000), // n_out=3 ⇒ 4 padded ⇒ non-zero clawback
             (3, 4, 12, 7),
         ] {
-            let nlr = 6 + padded_outputs(n_out).trailing_zeros() as usize;
+            let nlr = 6 + padded_outputs(OutputCount::clamped(n_out)).trailing_zeros() as usize;
             let bp = BpPlus {
                 a: [0; 32],
                 a1: [0; 32],
@@ -486,13 +524,13 @@ mod tests {
                     prunable: Some(Prunable {
                         bulletproofs: vec![bp],
                         tree_depth: u64::from(depth),
-                        fcmp_proof: vec![0u8; fcmp_proof_size(n_in, depth)],
+                        fcmp_proof: vec![0u8; fcmp_proof_size(InputCount::clamped(n_in), depth)],
                         pseudo_outs: vec![[0; 32]; n_in],
                     }),
                 },
             };
             assert_eq!(
-                predict_weight(n_in, n_out, depth, fee),
+                predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth, fee),
                 tx.weight(),
                 "predict_weight ≠ wire weight for n_in={n_in} n_out={n_out} depth={depth} fee={fee}"
             );
@@ -502,8 +540,38 @@ mod tests {
     #[test]
     fn converge_fee_is_stable_within_two_passes() {
         let rate = FeeRate::new(10, 1).unwrap();
-        let fee = converge_fee(&rate, 1, 2, 1, 0);
+        let fee = converge_fee(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1, 0);
         assert!(fee > 0);
+    }
+
+    #[test]
+    fn with_change_is_impossible_at_the_output_limit() {
+        let rate = FeeRate::new(10, 1).unwrap();
+        // Below the limit: with-change is a real, finite fee.
+        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1);
+        assert!(below.fee_no_change > 0);
+        assert!(below.fee_with_change > 0 && below.fee_with_change < u64::MAX);
+        assert!(
+            below.fee_with_change > below.fee_no_change,
+            "the change output costs more"
+        );
+
+        // At MAX_OUTPUTS payments, a change output would exceed the limit, so the
+        // with-change variant is marked impossible (`u64::MAX`) — the signer's
+        // `leftover >= fee_with_change + dust` check can never select it, so a
+        // max-recipient spend falls through to the buildable no-change variant.
+        let at_limit = build_fee_directive(
+            &rate,
+            InputCount::clamped(1),
+            OutputCount::clamped(usize::MAX),
+            1,
+        );
+        assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
+        assert_eq!(
+            at_limit.fee_with_change,
+            u64::MAX,
+            "with-change unselectable at the limit"
+        );
     }
 
     /// PHASE_2A_SEND_PATH.md §8.2 — documents the **implemented** Custom-only ceiling.

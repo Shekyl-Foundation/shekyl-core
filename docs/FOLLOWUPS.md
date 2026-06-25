@@ -82,20 +82,6 @@ sustainability is unaffected by the recalibration.
   parse/validate consensus-parity pass, not the fee surface. Target: V3.0
   (pre-genesis consensus parity).
 
-- **Bounded-count newtypes for the fee/weight path — do once #179 lands (flagged
-  2026-06-24 on `feat/wire-tx-weight`).** `predict_weight` and its helpers take raw
-  `n_in`/`n_out: usize` that arrive uncapped from the fee context, so #179 made the
-  body fail safe with saturating arithmetic + a `padded_outputs` clamp. The *proper*
-  fix is typing: an `InputCount` (`1..=MAX_INPUTS`) / `OutputCount`
-  (`1..=MAX_OUTPUTS`) newtype validated **once** at the coin-selection boundary and
-  threaded through `FeeEstimationContext` → `converge_fee` / `build_fee_directive` →
-  `predict_weight`. Then an out-of-range count is *unrepresentable*, the saturating
-  arithmetic + clamp can be **deleted** (plain arithmetic is provably overflow-free),
-  and the `MAX_INPUTS`/`MAX_OUTPUTS` assertions scattered through `fcmp_proof_size` +
-  the weight KAT collapse to the type invariant. Deferred from #179 (a Copilot-finding
-  fix) to keep that PR localized; this is its own small refactor. Target: V3.1+
-  (maintainability / type-safety).
-
 - **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW
   arithmetic (flagged 2026-06-24, the `check_hash` C++ → Rust port).** The ported
   predicate `check_hash(hash: &[u8; 32], difficulty: u128) -> bool`
