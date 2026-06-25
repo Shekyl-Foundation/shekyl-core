@@ -74,6 +74,7 @@ use super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
 use super::traits::{LedgerEngine, PendingTxEngine};
+use super::transaction_submitter::canonical_tx_id;
 use super::transaction_submitter::TransactionSubmitter;
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
@@ -833,7 +834,7 @@ where
         let tx_hash = state
             .in_flight
             .get(&id)
-            .map(|flight| TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&flight.tx_bytes)))
+            .map(|flight| canonical_tx_id(&flight.tx_bytes))
             .unwrap_or_else(|| phase1_tx_hash(id));
 
         emit_pending_tx_diagnostic(
@@ -2369,8 +2370,7 @@ mod tests {
 
     impl TransactionSubmitter for TestTransactionSubmitter {
         async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-            let hash = shekyl_crypto_hash::cn_fast_hash(&tx_bytes);
-            Ok(TxHash::from_bytes(hash))
+            Ok(canonical_tx_id(&tx_bytes))
         }
     }
 
@@ -3071,7 +3071,7 @@ mod tests {
             .expect("submit ok");
         assert_eq!(
             tx_hash,
-            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes)),
+            canonical_tx_id(&built.tx_bytes),
             "the submitted hash is the signed tx bytes' hash",
         );
     }
@@ -3273,10 +3273,7 @@ mod tests {
             .submit(built.id, built.content_gen)
             .await
             .expect("submit ok");
-        assert_eq!(
-            tx_hash,
-            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
-        );
+        assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(pending.outstanding(), 0);
 
         let spent = pending
@@ -4444,10 +4441,7 @@ mod tests {
             .submit(built.id, built.content_gen)
             .await
             .expect("submit ok");
-        assert_eq!(
-            tx_hash,
-            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
-        );
+        assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(daemon.submitted_count(), 1);
 
         let spent = pending
@@ -4487,10 +4481,7 @@ mod tests {
             .submit(built.tx_bytes.clone())
             .await
             .expect("daemon dedup accepts identical bytes");
-        assert_eq!(
-            hash_again,
-            TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&built.tx_bytes))
-        );
+        assert_eq!(hash_again, canonical_tx_id(&built.tx_bytes));
         assert_eq!(daemon.submitted_count(), 1);
 
         let err = pending

@@ -42,9 +42,9 @@
 use std::future::Future;
 
 use serde_json::{json, Value};
-use shekyl_oxide::transaction::Transaction;
 use shekyl_rpc::{FeeRate, Rpc, RpcError, TxRelayResponse};
 use shekyl_simple_request_rpc::SimpleRequestRpc;
+use shekyl_wire::Transaction;
 
 use crate::engine::error::TerminalErrorKind;
 use crate::engine::pending::TxHash;
@@ -271,7 +271,7 @@ impl DaemonEngine for DaemonClient {
         tx_bytes: Vec<u8>,
     ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         async move {
-            let Ok(tx) = Transaction::read(&mut tx_bytes.as_slice()) else {
+            let Ok(tx) = Transaction::from_bytes(&tx_bytes) else {
                 return Ok(TxSubmitOutcome::DaemonRejectedTerminal {
                     kind: TerminalErrorKind::Malformed,
                 });
@@ -279,7 +279,7 @@ impl DaemonEngine for DaemonClient {
 
             let hash = TxHash::from_bytes(tx.hash());
 
-            let resp = self.publish_transaction(&tx).await?;
+            let resp = self.publish_transaction(&tx_bytes).await?;
             Ok(submit_outcome_from_response(&resp, hash))
         }
     }
