@@ -17,9 +17,9 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_curve_primitives::Commitment;
 use shekyl_rct_balance::{InputTerm, OutputTerm};
 
 use crate::error::TxBuilderError;

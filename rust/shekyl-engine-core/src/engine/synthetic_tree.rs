@@ -39,8 +39,8 @@ pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32
     use ec_divisors::DivisorCurve;
     use helioselene::Selene;
     use multiexp::multiexp_vartime;
-    use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
     use shekyl_curve_generators::SELENE_HASH_INIT;
+    use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
 
     let leaves: Vec<(EdwardsPoint, EdwardsPoint, EdwardsPoint, [u8; 32])> = leaf_chunk
         .iter()

@@ -1158,10 +1158,10 @@ mod tests {
         use rand_core::OsRng;
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::kem::HybridCiphertext;
-        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-        use shekyl_fcmp::PqcLeafScalar;
         use shekyl_curve_io::CompressedPoint;
         use shekyl_curve_primitives::Commitment;
+        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+        use shekyl_fcmp::PqcLeafScalar;
         use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
 
         let keys = LocalKeys::from_test_seed(TEST_SEED);
@@ -1276,9 +1276,11 @@ mod tests {
                     make_synthetic_h_pqc_bytes((n_in as u64) * 1_000_000 + (input_idx as u64));
                 leaf_chunk.push(LeafEntry {
                     output_key: constructed.output_key,
-                    key_image_gen: shekyl_curve_generators::biased_hash_to_point(constructed.output_key)
-                        .compress()
-                        .to_bytes(),
+                    key_image_gen: shekyl_curve_generators::biased_hash_to_point(
+                        constructed.output_key,
+                    )
+                    .compress()
+                    .to_bytes(),
                     commitment: constructed.commitment,
                     h_pqc,
                 });
@@ -1615,10 +1617,10 @@ mod tests {
         use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
         use shekyl_crypto_pq::kem::HybridCiphertext;
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
-        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-        use shekyl_fcmp::PqcLeafScalar;
         use shekyl_curve_io::CompressedPoint;
         use shekyl_curve_primitives::Commitment;
+        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+        use shekyl_fcmp::PqcLeafScalar;
         use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 
         // Wallet keys fund the transaction; the bond persona `P` is a separate

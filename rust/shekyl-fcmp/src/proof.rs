@@ -25,6 +25,7 @@ use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
 use rand_core::OsRng;
 
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 use shekyl_fcmp_proofs::{
     fcmps::{
         BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path,
@@ -34,7 +35,6 @@ use shekyl_fcmp_proofs::{
     Curves, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
     SELENE_FCMP_GENERATORS,
 };
-use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
 /// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
 /// [`verify`] can name the type without taking a direct dependency on

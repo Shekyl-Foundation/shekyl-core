@@ -68,13 +68,13 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
     TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_curve_io::CompressedPoint;
 use shekyl_rct_balance::verify_rct_balance;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
