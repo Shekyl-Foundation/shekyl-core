@@ -1,6 +1,10 @@
 [package]
 name = "shekyl-oxide"
 version = "0.1.4-alpha"
+# Vendored, disposable shekyl-oxide fork crate (rule 10): workspace path-dependency only,
+# never published, on the un-vendor track — no external consumers, so no SemVer contract on
+# its public surface (the block/tx serializer was removed in un-vendor slice 1).
+publish = false
 description = "A Shekyl transaction library (shekyl-oxide fork with FCMP++ support)"
 license = "MIT"
 repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide"
