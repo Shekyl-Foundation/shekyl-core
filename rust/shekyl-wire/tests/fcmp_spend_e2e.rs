@@ -612,4 +612,43 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         bytes,
         "shekyl-wire serialization must be deterministic (byte-identical re-emit)"
     );
+
+    // ── Cross-crate byte-identity (replaces the assemble-direct shim) ─────────────
+    // The hand-assembled `wire_tx` above is a structurally-validated, consensus-valid
+    // spend. Feed the SAME signed fields through the production `shekyl-tx-builder`
+    // encoder (`encode_final_tx`, the wallet's real send path) and assert it emits those
+    // exact bytes — closing the loop between the tx-builder encoder and the canonical
+    // `shekyl-wire` format on a real spend (FCMP_SPEND_SIGNING_PREIMAGE.md §5 residual).
+    let wire_input = shekyl_tx_builder::WireEncodeInput {
+        key_images: vec![*ki.key_image.as_bytes()],
+        output_keys: vec![payment.output_key, change.output_key],
+        view_tags: vec![
+            Some(payment.view_tag_prefilter),
+            Some(change.view_tag_prefilter),
+        ],
+        tx_extra: Vec::new(),
+        fee,
+        enc_amounts: signed.enc_amounts.clone(),
+        enc_labels: signed.enc_labels.clone(),
+        out_commitments: signed.commitments.clone(),
+        pseudo_outs: signed.pseudo_outs.clone(),
+        bulletproof: bp.clone(),
+        reference_block: signed.reference_block,
+        fcmp_proof: signed.fcmp_proof.clone(),
+        pqc_auths: pqc_auths.clone(),
+        tree_depth: signed.tree_depth,
+    };
+    let builder_bytes =
+        shekyl_tx_builder::encode_final_tx(&wire_input).expect("tx-builder encodes the spend");
+    assert_eq!(
+        builder_bytes, bytes,
+        "tx-builder's production encoder must emit the consensus-validated wire bytes \
+         byte-for-byte"
+    );
+
+    // The same bytes pass the typed-view boundary: a real spend yields a FullTransaction.
+    Transaction::from_bytes(&builder_bytes)
+        .expect("re-parse")
+        .into_full()
+        .expect("a real spend is a full transaction");
 }

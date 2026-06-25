@@ -184,13 +184,14 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   refresh slice **landed 2026-06-23** — `ScannableBlock` is now `shekyl-wire`-typed in
   `shekyl-scanner`, fetched via `DaemonEngine::fetch_scannable_block`; what remains is
   the tx-builder spend-encode slice + the final block/tx deletion.)*
-- **Non-spend Fcmp residuals** — the EOF-tolerant fee-only form (above) is in; what
-  remains is the **`bond_post` pseudoOuts↔spend-subset exact coupling** (a §13 F1/F3
-  forward obligation owned by the emission / membership-only PRs — `validate()` bounds
-  it, doesn't pin it), the **§4 `into_full`/`FullTransaction`** ergonomic (lands with
-  the §8 consumer migration), and the live byte/hash parity for the fee-only / bond_post
-  shapes. True storage-pruned txs (prunable dropped + external prunable hash) stay
-  post-genesis / p2p scope.
+- **Non-spend Fcmp residuals** — the EOF-tolerant fee-only form (above) is in; the **§4
+  `into_full`/`FullTransaction`** ergonomic is **DONE** (2026-06-25:
+  `Transaction::into_full() -> Result<FullTransaction, PrunedError>` in `shekyl-wire`,
+  the single typed boundary that guarantees `prunable` present). What remains is the
+  **`bond_post` pseudoOuts↔spend-subset exact coupling** (a §13 F1/F3 forward obligation
+  owned by the emission / membership-only PRs — `validate()` bounds it, doesn't pin it)
+  and the live byte/hash parity for the fee-only / bond_post shapes. True storage-pruned
+  txs (prunable dropped + external prunable hash) stay post-genesis / p2p scope.
 - The F1–F6 freeze obligations and the §2.1 deferred sub-freezes remain.
 
 ## 2. The arbitration table
