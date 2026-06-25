@@ -1,8 +1,8 @@
 //! Wallet-domain transaction types retained after the block/tx **serializer** was
 //! removed (un-vendor slice 1). The canonical genesis tx/block serializer lives in the
-//! Shekyl-owned `shekyl-wire` crate; only the wallet-domain enums the scanner still
-//! consumes (`Timelock`, `StakingMeta`) remain here, pending their native home in
-//! Track B of `docs/design/SHEKYL_OXIDE_UNVENDOR.md`.
+//! Shekyl-owned `shekyl-wire` crate; only the wallet-domain types the scanner still
+//! consumes (the `Timelock` enum, the `StakingMeta` struct) remain here, pending their
+//! native home in Track B of `docs/design/SHEKYL_OXIDE_UNVENDOR.md`.
 
 use core::cmp::Ordering;
 use std_shims::io::{self, Read, Write};

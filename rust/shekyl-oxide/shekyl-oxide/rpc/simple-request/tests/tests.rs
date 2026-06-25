@@ -38,32 +38,20 @@ async fn test_rpc() {
         .unwrap();
 
     {
-        // Test get_height
+        // Block-metadata routes that survive the oxide block/tx serializer removal
+        // (un-vendor slice 1): block *fetch* (`get_block`/`get_block_by_number`,
+        // returning the parsed oxide `Block`) is retired — the canonical block parse
+        // lives in `shekyl-wire`, fetched from raw bytes. `get_block_hash` /
+        // `get_hardfork_version` / `get_height` remain and are smoked here.
         let height = rpc.get_height().await.unwrap();
-        // The height should be the amount of blocks on chain
-        // The number of a block should be its zero-indexed position
-        // Accordingly, there should be no block whose number is the height
-        assert!(rpc.get_block_by_number(height).await.is_err());
         let block_number = height - 1;
-        // There should be a block just prior
-        let block = rpc.get_block_by_number(block_number).await.unwrap();
-
-        // Also test the block RPC routes are consistent
-        assert_eq!(block.number(), block_number);
-        assert_eq!(rpc.get_block(block.hash()).await.unwrap(), block);
-        assert_eq!(
-            rpc.get_block_hash(block_number).await.unwrap(),
-            block.hash()
-        );
-
-        // And finally the hardfork version route
-        assert_eq!(
-            rpc.get_hardfork_version().await.unwrap(),
-            block.header.hardfork_version
-        );
+        // There should be a block just prior; its hash route resolves.
+        rpc.get_block_hash(block_number).await.unwrap();
+        // The hardfork version route resolves to a genesis-or-later version.
+        assert!(rpc.get_hardfork_version().await.unwrap() >= 1);
     }
 
-    // Test generate_blocks
+    // Test generate_blocks, cross-checking the returned hashes against `get_block_hash`.
     for amount_of_blocks in [1, 5] {
         let (blocks, number) = rpc
             .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), amount_of_blocks)
@@ -74,7 +62,7 @@ async fn test_rpc() {
 
         let mut actual_blocks = Vec::with_capacity(amount_of_blocks);
         for i in (height - amount_of_blocks)..height {
-            actual_blocks.push(rpc.get_block_by_number(i).await.unwrap().hash());
+            actual_blocks.push(rpc.get_block_hash(i).await.unwrap());
         }
         assert_eq!(blocks, actual_blocks);
     }

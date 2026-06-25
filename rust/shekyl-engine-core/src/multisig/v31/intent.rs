@@ -31,11 +31,12 @@ pub const MAX_VALIDITY_SECS: u64 = 86400;
 // after Decision 14, copied the pre-Decision-14 value `10`). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 //
-// `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the `shekyl-oxide`
-// `ProofType` enum's `From<ProofType> for u8` is single-source within
-// that crate and is pinned to this generated value at the
-// const-evaluated `assert!` block below (see "Sentinel against silent
-// loss-of-meaning" notes).
+// `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the canonical wire ct-type
+// `shekyl_wire::transaction::CT_TYPE_FCMP` is pinned to it by the runtime tripwire
+// `wire_ct_type_matches_consensus_authority` below, and the generated value itself is
+// pinned to the genesis dense baseline (`1`) by the const-evaluated `assert!` block
+// below (see "Sentinel against silent loss-of-meaning" notes). (The former
+// `shekyl-oxide` `ProofType` enum was removed with its serializer in un-vendor slice 1.)
 include!(concat!(
     env!("OUT_DIR"),
     "/consensus_constants_generated.rs"
