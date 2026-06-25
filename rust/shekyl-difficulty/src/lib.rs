@@ -26,9 +26,13 @@
 //!
 //! # Public surface
 //!
-//! - [`lwma1_next`] — the algorithm. Inputs are
+//! - [`lwma1_next`] — the difficulty-adjustment algorithm. Inputs are
 //!   `(chain_height, timestamps, cumulative_difficulties)`; the
 //!   output is the difficulty target for the next block.
+//! - [`check_hash`] — the PoW-target predicate: does a 256-bit hash
+//!   satisfy a 128-bit difficulty? (`hash * difficulty < 2^256`.)
+//!   Ported from the inherited C++ `check_hash`/`_64`/`_128` family
+//!   into a single unified path.
 //! - [`is_timestamp_below_ftl`] and [`is_above_mtp`] — coupled
 //!   timestamp-validation predicates per §5.5.
 //! - Public consensus constants `N`, `T_SECONDS`, `FTL_SECONDS`,
@@ -46,11 +50,13 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+mod check_hash;
 pub mod consts;
 mod error;
 mod lwma1;
 mod timestamp;
 
+pub use check_hash::check_hash;
 pub use consts::{
     FTL_SECONDS, GENESIS_DIFFICULTY, MTP_WINDOW, MTP_WINDOW_USIZE, N, N_USIZE, T_SECONDS,
 };

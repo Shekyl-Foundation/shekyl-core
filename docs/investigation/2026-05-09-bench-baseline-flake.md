@@ -1,5 +1,32 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-06-25) — gungraun did NOT fix the flake; an in-run
+> auto-rerun was tried and reverted as architecturally racy.** The capture
+> still flakes to `instructions=0` under the latest gungraun (`0.19.2`, the
+> newest published version — there is nothing to bump to), confirming the
+> §3.3 cause remains unknown and the migration's flake-mitigation was, as
+> flagged, speculative. Reconfirmed the bench is healthy:
+> `engine_trait_bench_key_merge_projection` measures ~5.16M instructions
+> locally and on a fresh CI runner; the zero is purely a capture-layer
+> anomaly. The flake correlates with the runner-VM state at job start — a
+> same-VM retry (the per-bench retry budget) does not clear it; only a
+> *fresh* runner does, which is why the documented remediation is "rerun the
+> workflow."
+>
+> An in-workflow `rerun-on-flake` job that called `gh run rerun --failed` on
+> its own run was added and then **removed**: a run cannot re-run itself
+> while still in progress (CI failed with `run … cannot be rerun; This
+> workflow is already running`). The race-free shape is a **separate
+> `workflow_run`-triggered workflow** that fires *after* `ci/benchmarks`
+> completes — but that must live on the **default branch (`main`)** to fire
+> at all, so it cannot be validated from a feature PR and is deferred. Until
+> then the disposition is unchanged from the original: the producer guard
+> rejects the zero (never persisting it), and a maintainer re-runs the
+> workflow on a fresh runner. No measurement is fabricated or carried
+> forward.
+
+<!-- -->
+
 > **Update (2026-06-16) — migration landed as gungraun 0.19.x.** The May
 > investigation's recommended disposition (§4.1 Option A) was executed at the
 > time on `chore/investigate-bench-baseline-flake-2026-05-09` against gungraun
