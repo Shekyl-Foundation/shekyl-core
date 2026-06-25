@@ -1,5 +1,26 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-06-25) — gungraun did NOT fix the flake; automated the
+> documented "rerun" remediation instead.** The capture still flakes to
+> `instructions=0` under the latest gungraun (`0.19.2`, the newest published
+> version — there is nothing to bump to), confirming the §3.3 cause remains
+> unknown and the migration's flake-mitigation was, as flagged, speculative.
+> Reconfirmed the bench is healthy: `engine_trait_bench_key_merge_projection`
+> measures ~5.16M instructions locally and on a fresh CI runner; the zero is
+> purely a capture-layer anomaly. Since the flake correlates with the
+> runner-VM state at job start — a same-VM retry (the per-bench retry budget)
+> does not clear it, only a *fresh* runner does — the `ci/benchmarks` workflow
+> now automates the doc's own "rerun the workflow" remediation: a bounded
+> `rerun-on-flake` job re-runs the failed capture on a fresh runner
+> (`gh run rerun --failed`), gated on the producer guard's `*.flake.json`
+> signature and bounded by `github.run_attempt < 3` (≤2 auto-reruns). A
+> *persistent* zero (a genuine empty measured region) flakes on every fresh
+> runner, exhausts the budget, and still hard-fails — the guard's
+> never-persist-a-zero guarantee is unchanged, and no measurement is ever
+> fabricated or carried forward.
+
+<!-- -->
+
 > **Update (2026-06-16) — migration landed as gungraun 0.19.x.** The May
 > investigation's recommended disposition (§4.1 Option A) was executed at the
 > time on `chore/investigate-bench-baseline-flake-2026-05-09` against gungraun

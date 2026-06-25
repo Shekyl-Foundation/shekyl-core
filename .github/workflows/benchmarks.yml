@@ -108,6 +108,14 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Surfaces the `instructions=0` capture flake to the bounded
+    # `rerun-on-flake` job below. Set only when the producer guard in
+    # `capture_rust_baseline.sh` rejected the capture for that specific
+    # reason (a `*.flake.json` envelope was written); a real failure
+    # (compile error, genuine empty measured region) leaves no envelope
+    # and therefore does not auto-rerun.
+    outputs:
+      flaked: ${{ steps.detect-flake.outputs.flaked }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -147,6 +155,29 @@ jobs:
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: detect instructions=0 capture flake
+        id: detect-flake
+        if: failure()
+        run: |
+          # The producer guard writes `<OUT_JSON>.flake.json` *only* for
+          # the `instructions_zero` capture anomaly (the bench is healthy;
+          # see docs/investigation/2026-05-09-bench-baseline-flake.md).
+          # Any other failure leaves no envelope -> flaked=false -> no rerun.
+          if [ -f docs/benchmarks/shekyl_rust_v0.json.flake.json ]; then
+            echo "instructions=0 capture flake detected on attempt ${GITHUB_RUN_ATTEMPT}"
+            echo "flaked=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "flaked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: upload instructions=0 flake envelope
+        if: failure() && steps.detect-flake.outputs.flaked == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shekyl_rust_v0-flake-pr-attempt${{ github.run_attempt }}
+          path: docs/benchmarks/shekyl_rust_v0.json.flake.json
+          retention-days: 14
 
       - name: upload PR baseline
         uses: actions/upload-artifact@v4
@@ -381,6 +412,12 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+    # Same `instructions=0` flake signal as `capture-pr` (a flaked dev
+    # capture leaves the previous good bench-baseline untouched — the guard
+    # never pushes a zero — so this only suppresses the false-red, never
+    # corrupts the baseline).
+    outputs:
+      flaked: ${{ steps.detect-flake.outputs.flaked }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -413,6 +450,17 @@ jobs:
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: detect instructions=0 capture flake
+        id: detect-flake
+        if: failure()
+        run: |
+          if [ -f docs/benchmarks/shekyl_rust_v0.json.flake.json ]; then
+            echo "instructions=0 capture flake detected on attempt ${GITHUB_RUN_ATTEMPT}"
+            echo "flaked=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "flaked=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: push updated baseline to bench-baseline branch
         env:
@@ -470,3 +518,47 @@ jobs:
 
           git -C "$WORK" commit -m "bench-baseline: refresh from ${CAPTURE_SOURCE_SHA:0:12}"
           git -C "$WORK" push origin bench-baseline
+
+  # ── Bounded auto-rerun for the `instructions=0` capture flake ─────────────
+  #
+  # The capture is a known measurement-layer flake (cause unknown; see
+  # docs/investigation/2026-05-09-bench-baseline-flake.md). The bench is
+  # healthy — it measures a real, large instruction count locally and on a
+  # fresh runner — and the producer guard in `capture_rust_baseline.sh`
+  # already distinguishes this anomaly (it writes a `*.flake.json` envelope)
+  # from a genuine failure. The documented remediation is "rerun the workflow"
+  # because the flake correlates with the runner-VM state at job start: a
+  # same-VM retry (the per-bench retry budget in the script) does NOT clear
+  # it, only a *fresh* runner does. This job automates exactly that — and
+  # nothing more.
+  #
+  # Bound: `github.run_attempt` increments on each rerun, so `< 3` allows up
+  # to two auto-reruns (three fresh-runner attempts total). A *persistent*
+  # zero — a real regression to an empty measured region — flakes on every
+  # fresh runner too, so it exhausts the budget and surfaces as a hard
+  # failure. We never fabricate or carry-forward a measurement; the guard's
+  # never-persist-a-zero guarantee is untouched.
+  rerun-on-flake:
+    name: rerun capture on instructions=0 flake
+    needs: [capture-pr, update-baseline]
+    # `always()` so a skipped sibling (capture-pr on push, update-baseline on
+    # PR) does not block this; the fork guard avoids a guaranteed-failing
+    # rerun attempt from a read-only fork `GITHUB_TOKEN`.
+    if: >-
+      ${{ always()
+          && github.run_attempt < 3
+          && github.event.pull_request.head.repo.fork != true
+          && (needs.capture-pr.outputs.flaked == 'true'
+              || needs.update-baseline.outputs.flaked == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: re-run failed jobs on a fresh runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "instructions=0 capture flake on attempt ${GITHUB_RUN_ATTEMPT} of 3;" \
+               "re-running failed jobs on a fresh runner" \
+               "(docs/investigation/2026-05-09-bench-baseline-flake.md)."
+          gh run rerun --failed "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}"
