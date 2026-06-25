@@ -74,7 +74,7 @@ shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-re
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
@@ -267,7 +267,7 @@ proptest = "1"
 #   - **Workspace path-deps newly pulled into this crate's dev-
 #     deps:** `shekyl-tx-builder`, `shekyl-fcmp`,
 #     `shekyl-bulletproofs`, `shekyl-fcmp-plus-plus`,
-#     `shekyl-generators`, `shekyl-io`, `shekyl-primitives`,
+#     `shekyl-curve-generators`, `shekyl-curve-io`, `shekyl-curve-primitives`,
 #     `ec-divisors`, `helioselene`. All are first-party Shekyl /
 #     Shekyl-vendored crates.
 #   - **Crates.io versions reused from the workspace lockfile:**
@@ -285,7 +285,7 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 # Stage 1 PR 2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §3, §8). The
 # `join_market_bond_post_signs_and_verifies_through_prover` test (in

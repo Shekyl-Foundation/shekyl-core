@@ -15,7 +15,7 @@ license.workspace = true
 thiserror.workspace = true
 sha3 = { version = "0.10", default-features = false }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 curve25519-dalek = "4"
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }

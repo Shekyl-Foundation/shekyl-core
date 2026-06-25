@@ -74,7 +74,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_io::CompressedPoint;
+use shekyl_curve_io::CompressedPoint;
 use shekyl_rct_balance::verify_rct_balance;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,

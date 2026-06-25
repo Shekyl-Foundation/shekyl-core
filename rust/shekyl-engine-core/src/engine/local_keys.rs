@@ -1160,7 +1160,7 @@ mod tests {
         use shekyl_crypto_pq::kem::HybridCiphertext;
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;
-        use shekyl_io::CompressedPoint;
+        use shekyl_curve_io::CompressedPoint;
         use shekyl_primitives::Commitment;
         use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
 
@@ -1617,7 +1617,7 @@ mod tests {
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;
-        use shekyl_io::CompressedPoint;
+        use shekyl_curve_io::CompressedPoint;
         use shekyl_primitives::Commitment;
         use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 

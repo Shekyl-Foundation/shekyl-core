@@ -1,3 +1,8 @@
+// Provenance: forked from monero-oxide (Shekyl-Foundation/monero-oxide, fcmp++
+// lineage), originally `shekyl-oxide/io`, last vendored at 2753111c50. Relocated to a
+// first-party shekyl-* crate in the shekyl-oxide un-vendor (slice 2); no longer
+// upstream-tracked. See docs/design/SHEKYL_OXIDE_UNVENDOR.md.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]

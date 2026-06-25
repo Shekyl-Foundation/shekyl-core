@@ -9,7 +9,7 @@
 //! verified against exactly these points, so any drift silently changes which
 //! proofs are valid — a consensus corruption that compiles clean. The Bulletproof
 //! generator tables are *varint-derived* (`BulletproofGenerators::new` feeds
-//! `shekyl_io::write_varint(&i, …)` into each generator's hash preimage), so this
+//! `shekyl_curve_io::write_varint(&i, …)` into each generator's hash preimage), so this
 //! KAT is what backstops the `shekyl-io` / `shekyl-curve-io` serialization layer:
 //! a future "tidy-up" of the varint utility that shifts its output would move these
 //! points, and only a release-running assertion on the points themselves catches it.

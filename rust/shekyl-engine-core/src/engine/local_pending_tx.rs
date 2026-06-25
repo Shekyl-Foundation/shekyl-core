@@ -3357,7 +3357,7 @@ mod tests {
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
-        use shekyl_io::CompressedPoint;
+        use shekyl_curve_io::CompressedPoint;
         use shekyl_primitives::Commitment;
 
         use curve25519_dalek::scalar::Scalar;

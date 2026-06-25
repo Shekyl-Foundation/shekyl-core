@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 
 use curve25519_dalek::scalar::Scalar;
 
-use shekyl_io::*;
+use shekyl_curve_io::*;
 
 // Precomputed scalars used to recover an incorrectly reduced scalar.
 static PRECOMPUTED_SCALARS: LazyLock<[Scalar; 8]> = LazyLock::new(|| {

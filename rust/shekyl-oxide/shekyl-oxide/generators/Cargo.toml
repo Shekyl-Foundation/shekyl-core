@@ -33,7 +33,7 @@ helioselene = { path = "../../crypto/helioselene", version = "0.1", default-feat
 generalized-bulletproofs = { path = "../../crypto/generalized-bulletproofs", default-features = false }
 full-chain-membership-proofs = { path = "../../crypto/fcmps", default-features = false }
 
-shekyl-io = { path = "../io", version = "0.1", default-features = false }
+shekyl-curve-io = { path = "../../../shekyl-curve-io", version = "0.1", default-features = false }
 
 [dev-dependencies]
 hex = "0.4"
@@ -53,6 +53,6 @@ std = [
 
   "generalized-bulletproofs/std",
 
-  "shekyl-io/std"
+  "shekyl-curve-io/std"
 ]
 default = ["std"]

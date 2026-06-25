@@ -25,7 +25,7 @@ sha3 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Other Shekyl dependencies
-shekyl-io = { path = "../io", version = "0.1", default-features = false }
+shekyl-curve-io = { path = "../../../shekyl-curve-io", version = "0.1", default-features = false }
 shekyl-generators = { path = "../generators", version = "0.4", default-features = false }
 
 [dev-dependencies]

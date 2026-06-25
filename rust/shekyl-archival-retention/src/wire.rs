@@ -6,7 +6,7 @@
 //! Byte-exact `txin_archival_serve_credit_response` wire (gate-2 §5.1).
 //!
 //! Serialization matches [`shekyl-oxide` transaction input] varint discipline
-//! (`shekyl-io`). Signature preimage field encoding uses **fixed-width** `le64` /
+//! (`shekyl-curve-io`). Signature preimage field encoding uses **fixed-width** `le64` /
 //! `le32` where the gate-2 §5.2 preimage specifies it, not the on-wire varints.
 //!
 //! [`shekyl-oxide` transaction input]: ../../../shekyl-oxide/shekyl-oxide/src/transaction.rs
@@ -18,7 +18,7 @@ use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_io::{read_byte, read_bytes, read_u32, read_varint, write_varint};
+use shekyl_curve_io::{read_byte, read_bytes, read_u32, read_varint, write_varint};
 
 /// Canonical single [`HybridSignature`] encoding bound; matches
 /// `config::PQC_HYBRID_SINGLE_SIG_LEN` in `cryptonote_config.h` (not multisig blob).

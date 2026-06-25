@@ -13,7 +13,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, edwards::EdwardsPoint
 use group::{prime::PrimeGroup, GroupEncoding};
 use helioselene::{Helios, HeliosPoint, Selene, SelenePoint};
 
-use shekyl_io::{write_varint, CompressedPoint};
+use shekyl_curve_io::{write_varint, CompressedPoint};
 
 mod hash_to_point;
 pub use hash_to_point::{biased_hash_to_point, hash_to_point};

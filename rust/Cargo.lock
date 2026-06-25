@@ -3661,10 +3661,10 @@ dependencies = [
  "serde_json",
  "sha3",
  "shekyl-crypto-pq",
+ "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-rct-balance",
  "shekyl-units",
  "thiserror",
@@ -3677,8 +3677,8 @@ dependencies = [
  "curve25519-dalek",
  "hex-literal",
  "rand_core 0.6.4",
+ "shekyl-curve-io",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-primitives",
  "std-shims",
  "thiserror",
@@ -3767,6 +3767,15 @@ dependencies = [
  "shekyl-stats",
  "thiserror",
  "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-curve-io"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "std-shims",
  "zeroize",
 ]
 
@@ -3870,6 +3879,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-engine-file",
@@ -3878,7 +3888,6 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-oxide",
  "shekyl-primitives",
  "shekyl-rpc",
@@ -4091,18 +4100,9 @@ dependencies = [
  "helioselene",
  "hex",
  "sha3",
- "shekyl-io",
+ "shekyl-curve-io",
  "std-shims",
  "subtle",
-]
-
-[[package]]
-name = "shekyl-io"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "std-shims",
- "zeroize",
 ]
 
 [[package]]
@@ -4130,9 +4130,9 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-bulletproofs",
+ "shekyl-curve-io",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-primitives",
  "std-shims",
  "zeroize",
@@ -4155,8 +4155,8 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "sha3",
+ "shekyl-curve-io",
  "shekyl-generators",
- "shekyl-io",
  "std-shims",
  "zeroize",
 ]
@@ -4317,9 +4317,9 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-io",
  "shekyl-fcmp",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-oxide",
  "shekyl-primitives",
  "shekyl-rct-balance",
@@ -4361,10 +4361,10 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-generators",
- "shekyl-io",
  "shekyl-oxide",
  "shekyl-rct-balance",
  "shekyl-tx-builder",

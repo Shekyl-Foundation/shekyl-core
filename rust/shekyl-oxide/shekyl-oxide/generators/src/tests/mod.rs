@@ -1,4 +1,4 @@
-use shekyl_io::CompressedPoint;
+use shekyl_curve_io::CompressedPoint;
 
 use crate::biased_hash_to_point;
 

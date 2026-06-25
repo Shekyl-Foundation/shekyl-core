@@ -5,7 +5,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, traits::Identity};
 
-use shekyl_io::CompressedPoint;
+use shekyl_curve_io::CompressedPoint;
 use shekyl_primitives::{keccak256_to_scalar, Commitment, INV_EIGHT};
 
 use crate::{
