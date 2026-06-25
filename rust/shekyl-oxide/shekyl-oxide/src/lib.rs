@@ -8,19 +8,12 @@ pub use shekyl_generators as generators;
 pub use shekyl_io as io;
 pub use shekyl_primitives as primitives;
 
-/// Merkle tree functionality.
-pub mod merkle;
-
-/// FCMP++ proof types and supporting structures (range proofs, encrypted amounts, etc.).
+/// FCMP++ Bulletproof+ crypto re-export (the proof serializer moved to `shekyl-wire`).
 pub mod fcmp;
 
-/// Block structs and functionality.
-pub mod block;
-/// Transaction structs and functionality.
+/// Wallet-domain transaction types (`Timelock`, `StakingMeta`); the block/tx serializer
+/// moved to the Shekyl-owned `shekyl-wire` crate (un-vendor slice 1).
 pub mod transaction;
-
-#[cfg(test)]
-mod tests;
 
 /// The minimum amount of blocks an output is locked for.
 ///

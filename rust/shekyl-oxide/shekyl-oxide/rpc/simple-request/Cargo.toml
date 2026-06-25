@@ -1,6 +1,9 @@
 [package]
 name = "shekyl-simple-request-rpc"
 version = "0.1.0"
+# Vendored shekyl-oxide app crate: workspace path-dependency only, never published, on the
+# un-vendor track — no external consumers, so no SemVer contract on its public surface.
+publish = false
 description = "RPC connection to a Shekyl daemon via simple-request, built around shekyl-oxide"
 license = "MIT"
 repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/rpc/simple-request"
