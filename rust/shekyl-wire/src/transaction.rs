@@ -1756,7 +1756,8 @@ impl Transaction {
     /// This is the **one boundary** where "pruned tx where full required" is made
     /// unrepresentable — consensus code that requires a full spend takes a
     /// `FullTransaction`, without threading a `Pruned`/`NotPruned` generic through every
-    /// consumer (the honest parse result stays `Transaction { prunable: Option<_> }`).
+    /// consumer (the honest parse result keeps `prunable` as an `Option<Prunable>` on the
+    /// `Ct::Fcmp` confidential section).
     pub fn into_full(self) -> Result<FullTransaction, PrunedError> {
         match &self.ct {
             Ct::Fcmp {

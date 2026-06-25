@@ -218,7 +218,13 @@ sustainability is unaffected by the recalibration.
   untouched files (flagged 2026-06-23; resolved 2026-06-25, slice-1 loose-ends cleanup).**
   The `DaemonOp::GetScannableBlockByNumber` variant was renamed to `FetchScannableBlock`
   (def + doc + the one construction site in `diagnostics.rs`) and the stale
-  `refresh.rs` test-doc reference corrected. Original finding: The §8
+  `refresh.rs` test-doc reference corrected. **Scope: the code rename.** The
+  `STAGE_1_PR_4_REFRESH_ENGINE.md` design doc still names the old variant — deliberately:
+  it is a *point-in-time PR-4 design record* (DRAFT, with dated Round-N decision tables,
+  e.g. the 2026-05-13 "Round 2 close-out" that seeded the `DaemonOp` set), so its
+  references record the variant *as designed then*; rewriting those dated decision records
+  to a name that post-dates them would falsify the history. The canonical current name is
+  `FetchScannableBlock` (code). Original finding: The §8
   step-4 scanner/refresh slice replaced the legacy `Rpc::get_scannable_block_by_number`
   call with `DaemonEngine::fetch_scannable_block`. Two stale references survive in files
   the slice did not substantively edit and were therefore held out of its scope (kept
