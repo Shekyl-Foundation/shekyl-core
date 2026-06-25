@@ -323,13 +323,24 @@ pub(crate) fn build_fee_directive(
     tree_depth: u8,
 ) -> FeeDirective {
     let n_no_change = payment_output_count;
-    // With-change adds one output; a perfect-fit MAX_OUTPUTS-payment spend has no
-    // change slot, so the speculative `+1` caps at MAX_OUTPUTS (that variant is then
-    // unbuildable and the orchestrator picks no-change).
-    let n_with_change = OutputCount::clamped(payment_output_count.get() + 1);
     let seed = fee_from_weight(rate, predict_weight(n_in, n_no_change, tree_depth, 0));
     let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, seed);
-    let fee_with_change = converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change);
+
+    // With-change adds one output. At the output limit a change output would exceed
+    // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
+    // `TooManyOutputs`). Mark it impossible with an infinite fee so the signer's
+    // `leftover >= fee_with_change + dust_threshold` selection (sign_bridge) can never
+    // pick it and instead falls through to the buildable no-change variant — rather
+    // than selecting a change output that fails validation. `clamped` returning a
+    // value below the requested `+1` is exactly the "at the limit" signal.
+    let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
+    let n_with_change = OutputCount::clamped(with_change_request);
+    let fee_with_change = if n_with_change.get() < with_change_request {
+        u64::MAX
+    } else {
+        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)
+    };
+
     FeeDirective {
         fee_no_change,
         fee_with_change,
@@ -531,6 +542,36 @@ mod tests {
         let rate = FeeRate::new(10, 1).unwrap();
         let fee = converge_fee(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1, 0);
         assert!(fee > 0);
+    }
+
+    #[test]
+    fn with_change_is_impossible_at_the_output_limit() {
+        let rate = FeeRate::new(10, 1).unwrap();
+        // Below the limit: with-change is a real, finite fee.
+        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1);
+        assert!(below.fee_no_change > 0);
+        assert!(below.fee_with_change > 0 && below.fee_with_change < u64::MAX);
+        assert!(
+            below.fee_with_change > below.fee_no_change,
+            "the change output costs more"
+        );
+
+        // At MAX_OUTPUTS payments, a change output would exceed the limit, so the
+        // with-change variant is marked impossible (`u64::MAX`) — the signer's
+        // `leftover >= fee_with_change + dust` check can never select it, so a
+        // max-recipient spend falls through to the buildable no-change variant.
+        let at_limit = build_fee_directive(
+            &rate,
+            InputCount::clamped(1),
+            OutputCount::clamped(usize::MAX),
+            1,
+        );
+        assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
+        assert_eq!(
+            at_limit.fee_with_change,
+            u64::MAX,
+            "with-change unselectable at the limit"
+        );
     }
 
     /// PHASE_2A_SEND_PATH.md §8.2 — documents the **implemented** Custom-only ceiling.
