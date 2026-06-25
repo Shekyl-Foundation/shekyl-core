@@ -1155,7 +1155,7 @@ where
                 .map_err(|err| map_fee_estimator_error(&err.into()))
         };
 
-        let fee_pass_a = estimate(1, payment_count + 1)
+        let fee_pass_a = estimate(1, payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
@@ -1181,7 +1181,7 @@ where
                 mapped
             })?;
 
-        let fee_pass_b = estimate(selected.indices.len(), payment_count + 1)
+        let fee_pass_b = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if fee_pass_b > fee_pass_a {
             let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
@@ -1206,7 +1206,7 @@ where
                     mapped
                 })?;
         }
-        let fee = estimate(selected.indices.len(), payment_count + 1)
+        let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let required = total_amount.checked_add(fee).ok_or_else(|| {
@@ -1536,7 +1536,7 @@ where
                         ledger: &ledger_snapshot,
                         recipient_count: payment_count,
                         input_count: InputCount::clamped(selected_indices.len()),
-                        output_count: OutputCount::clamped(payment_count + 1),
+                        output_count: OutputCount::clamped(payment_count.saturating_add(1)),
                         fee_snapshot,
                         tree_depth: depth,
                     },
