@@ -569,7 +569,12 @@ impl DaemonEngine for TestDaemon {
     ) -> impl Send + std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         let state = self.state.clone();
         async move {
-            let hash = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&tx_bytes));
+            // A real daemon only ever sees canonical wire txs, for which this yields the
+            // §11 tx id. The flat-hash fallback is for the dedup/error-draining plumbing
+            // tests below, which submit arbitrary (non-wire) bytes — those exercise the
+            // id-keyed dedup, which is format-agnostic, not the tx format.
+            let hash = crate::engine::transaction_submitter::canonical_tx_id_opt(&tx_bytes)
+                .unwrap_or_else(|| TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&tx_bytes)));
             let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.submit_errors.pop_front() {
                 return Err(err);
