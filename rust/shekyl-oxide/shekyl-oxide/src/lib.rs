@@ -11,10 +11,6 @@ pub use shekyl_curve_primitives as primitives;
 /// FCMP++ Bulletproof+ crypto re-export (the proof serializer moved to `shekyl-wire`).
 pub mod fcmp;
 
-/// Wallet-domain transaction types (`Timelock`, `StakingMeta`); the block/tx serializer
-/// moved to the Shekyl-owned `shekyl-wire` crate (un-vendor slice 1).
-pub mod transaction;
-
 /// The minimum amount of blocks an output is locked for.
 ///
 /// Under Shekyl's FCMP++ design, outputs are proven against the full UTXO curve tree rather

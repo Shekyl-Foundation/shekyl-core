@@ -4277,6 +4277,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-units",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

@@ -16,7 +16,8 @@
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use shekyl_oxide::{io::CompressedPoint, primitives::Commitment, transaction::Timelock};
+use shekyl_oxide::{io::CompressedPoint, primitives::Commitment};
+use shekyl_types::{BlockHeight, Timelock};
 use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 
 use shekyl_crypto_pq::{
@@ -150,15 +151,13 @@ fn timelock_from_unlock_time(raw: u64) -> Timelock {
     if raw == 0 {
         Timelock::None
     } else if raw < UNLOCK_TIME_BLOCK_SENTINEL {
-        Timelock::Block(
-            usize::try_from(raw)
-                .expect("a value below UNLOCK_TIME_BLOCK_SENTINEL always fits in usize"),
-        )
+        Timelock::Block(BlockHeight::from_raw(raw))
     } else {
-        // Timestamp form: deleted Monero-legacy Shekyl does not honor. The
-        // scan path gates this out per-tx (see the function doc), so this is
-        // unreachable on canonical data; `None` keeps the lifter total and
-        // forecloses materializing `Timelock::Time`.
+        // Timestamp form: deleted Monero-legacy Shekyl does not honor. The scan
+        // path gates this out per-tx (see the function doc), so this is unreachable
+        // on canonical data; `None` keeps the lifter total. `Timelock` is now
+        // block-height-only (no `Time` variant), so the timestamp form cannot be
+        // materialized regardless of caller — this arm is belt-and-suspenders.
         Timelock::None
     }
 }
@@ -1265,12 +1264,13 @@ mod gate_tests {
         // and above (the deleted timestamp form) → `None`, never `Time`, so the
         // dead `Timelock::Time` cannot be materialized from chain bytes.
         assert_eq!(timelock_from_unlock_time(0), Timelock::None);
-        assert_eq!(timelock_from_unlock_time(1), Timelock::Block(1));
+        assert_eq!(
+            timelock_from_unlock_time(1),
+            Timelock::Block(BlockHeight::from_raw(1))
+        );
         assert_eq!(
             timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1),
-            Timelock::Block(
-                usize::try_from(UNLOCK_TIME_BLOCK_SENTINEL - 1).expect("sentinel-1 fits in usize")
-            )
+            Timelock::Block(BlockHeight::from_raw(UNLOCK_TIME_BLOCK_SENTINEL - 1))
         );
         assert_eq!(
             timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL),

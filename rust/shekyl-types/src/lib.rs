@@ -335,5 +335,58 @@ impl Timestamp {
     }
 }
 
+/// A per-output additional timelock — **block-height-only**.
+///
+/// Shekyl is block-height-only: the CryptoNote *timestamp* form of `unlock_time`
+/// (a "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9) is rejected at ingestion
+/// and is **not representable here** — there is no `Time` variant, so it can never
+/// be materialized from chain bytes regardless of caller. An output is locked by a
+/// default timelock; an explicit one, if set, takes the later of the two.
+///
+/// Brought native off the vendored `shekyl-oxide` in the un-vendor slice-2 dissolve;
+/// `Block` wraps [`BlockHeight`] (rule 18) rather than a bare integer. Serialization
+/// is decoupled — the owning wire format encodes [`Timelock::to_unlock_raw`] as a
+/// varint — so this foundational crate stays free of an io/curve dependency.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Timelock {
+    /// No additional timelock. Orders before any [`Timelock::Block`].
+    None,
+    /// Additionally locked until this block height.
+    Block(BlockHeight),
+}
+
+impl Timelock {
+    /// The raw `unlock_time` value as persisted: `0` for [`Timelock::None`], else
+    /// the block height. Inverse of [`Timelock::from_unlock_raw`].
+    #[must_use]
+    pub const fn to_unlock_raw(self) -> u64 {
+        match self {
+            Timelock::None => 0,
+            Timelock::Block(h) => h.to_raw(),
+        }
+    }
+
+    /// Lift a raw `unlock_time` varint into a typed timelock: `0` → [`Timelock::None`],
+    /// any other value → [`Timelock::Block`]. Block-height-only by construction;
+    /// callers reject the timestamp form upstream (consensus + ingestion).
+    #[must_use]
+    pub const fn from_unlock_raw(raw: u64) -> Self {
+        if raw == 0 {
+            Timelock::None
+        } else {
+            Timelock::Block(BlockHeight::from_raw(raw))
+        }
+    }
+}
+
+impl ::zeroize::Zeroize for Timelock {
+    fn zeroize(&mut self) {
+        // Block heights are public chain data, not secrets; resetting to the
+        // `None` default satisfies the `ZeroizeOnDrop` derive on containing wallet
+        // structs without pretending to scrub a secret.
+        *self = Timelock::None;
+    }
+}
+
 #[cfg(test)]
 mod tests;

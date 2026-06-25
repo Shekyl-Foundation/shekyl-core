@@ -9,7 +9,9 @@
 #[cfg(test)]
 pub(crate) mod staking {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::{primitives::Commitment, transaction::StakingMeta};
+    use shekyl_oxide::primitives::Commitment;
+    use shekyl_staking::StakingMeta;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
@@ -57,7 +59,7 @@ pub(crate) mod staking {
                 },
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -811,6 +813,7 @@ mod ledger_proptest {
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_oxide::primitives::Commitment;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
@@ -850,7 +853,7 @@ mod ledger_proptest {
                 },
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -1005,6 +1008,7 @@ mod ledger_proptest {
 mod sync_bookkeeping {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_oxide::primitives::Commitment;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
@@ -1047,7 +1051,7 @@ mod sync_bookkeeping {
                     },
                 },
                 metadata: Metadata {
-                    additional_timelock: shekyl_oxide::transaction::Timelock::None,
+                    additional_timelock: Timelock::None,
                     payment_id: None,
                     arbitrary_data: vec![],
                 },

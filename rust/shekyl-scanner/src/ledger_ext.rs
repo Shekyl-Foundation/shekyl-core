@@ -36,6 +36,7 @@ use std::ops::Range;
 use shekyl_engine_state::{
     LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails, SPENDABLE_AGE,
 };
+use shekyl_types::Timelock;
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -58,16 +59,11 @@ pub trait TransferDetailsExt {
 }
 
 /// The absolute block height an output's additional timelock unlocks at, for
-/// the `eligible_height` floor (X5). Coinbase maturity rides a block-based
-/// [`Timelock::Block`](shekyl_oxide::transaction::Timelock::Block); a wall-clock
-/// `Timelock::Time` is enforced at consensus, not via the tree-insertion
-/// height, so it contributes no block floor here (and `None` contributes none).
-fn additional_timelock_block(timelock: shekyl_oxide::transaction::Timelock) -> u64 {
-    use shekyl_oxide::transaction::Timelock;
-    match timelock {
-        Timelock::Block(height) => height as u64,
-        Timelock::None | Timelock::Time(_) => 0,
-    }
+/// the `eligible_height` floor (X5). [`Timelock`] is block-height-only, so this is
+/// exactly its raw unlock value: the block height for [`Timelock::Block`], `0` for
+/// [`Timelock::None`]. (The CryptoNote timestamp form is not representable.)
+fn additional_timelock_block(timelock: Timelock) -> u64 {
+    timelock.to_unlock_raw()
 }
 
 impl TransferDetailsExt for TransferDetails {
@@ -274,7 +270,8 @@ mod x5_eligible_height_tests {
     use crate::output::WalletOutput;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_oxide::primitives::Commitment;
-    use shekyl_oxide::transaction::{StakingMeta, Timelock};
+    use shekyl_staking::StakingMeta;
+    use shekyl_types::{BlockHeight, Timelock};
 
     fn dummy_output(staking: Option<StakingMeta>) -> WalletOutput {
         let key = &Scalar::from_bytes_mod_order([7u8; 32]) * ED25519_BASEPOINT_TABLE;
@@ -302,7 +299,8 @@ mod x5_eligible_height_tests {
     /// as spendable at +SPENDABLE_AGE while its leaf is still absent.
     #[test]
     fn eligible_height_respects_block_timelock() {
-        let out = dummy_output(None).with_additional_timelock(Timelock::Block(160));
+        let out = dummy_output(None)
+            .with_additional_timelock(Timelock::Block(BlockHeight::from_raw(160)));
         let td = TransferDetails::from_wallet_output(&out, 100);
         assert_eq!(
             td.eligible_height, 160,
@@ -310,15 +308,9 @@ mod x5_eligible_height_tests {
         );
     }
 
-    /// A wall-clock `Time` timelock is enforced at consensus, not via the
-    /// tree-insertion height, so it contributes no block floor; eligibility
-    /// falls back to `+SPENDABLE_AGE`.
-    #[test]
-    fn eligible_height_ignores_time_timelock() {
-        let out = dummy_output(None).with_additional_timelock(Timelock::Time(9_999_999));
-        let td = TransferDetails::from_wallet_output(&out, 100);
-        assert_eq!(td.eligible_height, 100 + SPENDABLE_AGE);
-    }
+    // (The former `eligible_height_ignores_time_timelock` test is retired: the
+    // CryptoNote timestamp-form `Timelock::Time` is no longer representable —
+    // `Timelock` is block-height-only — so there is nothing to ignore.)
 
     /// X5 also floors `eligible_height` at the stake lock, so a staked output is
     /// not treated as spendable before its lock expires.
