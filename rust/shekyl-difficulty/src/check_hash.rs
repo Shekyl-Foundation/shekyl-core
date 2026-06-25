@@ -111,9 +111,15 @@ pub fn check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
             words[k] = low64(prod);
             carry = high64(prod);
         }
-        // Propagate the final carry into the next-higher limb (i + 2).
-        // i ranges 0..=3 and j ends at 1, so i + 2 <= 5 — always in bounds.
-        words[i + 2] = words[i + 2].wrapping_add(carry);
+        // The final carry is output limb i + 2, and this is its first and
+        // only write: the inner loop writes only words[i] and words[i + 1],
+        // and the carry-out of any lower column was written in an earlier,
+        // lower-index iteration — so words[i + 2] is still zero here and the
+        // carry lands exactly (a plain assignment, no add, no possible
+        // overflow). i <= 3 -> i + 2 <= 5, always in bounds; the full product
+        // h*d < 2^256 * 2^128 = 2^384 fits in 6 limbs with no carry past
+        // words[5].
+        words[i + 2] = carry;
     }
 
     // Pass iff bits 256..384 are zero (product < 2^256).

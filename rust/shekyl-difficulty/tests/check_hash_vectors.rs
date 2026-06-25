@@ -99,8 +99,13 @@ fn reference_check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
             words[k] = lo64(acc);
             carry = u128::from(hi64(acc));
         }
-        // carry lands at limb (4 + j): j in {0,1} -> index 4 or 5.
-        words[4 + j] = words[4 + j].wrapping_add(lo64(carry));
+        // The final carry is output limb 4 + j (j in {0,1} -> index 4 or 5),
+        // and it is zero at this point on both passes: j=0 writes words[4]
+        // before the j=1 inner loop reaches it, and j=1 writes words[5],
+        // which nothing else touches. So the carry lands exactly — a plain
+        // assignment, a distinct limb schedule from the SUT, same 384-bit
+        // product.
+        words[4 + j] = lo64(carry);
     }
     words[4] == 0 && words[5] == 0
 }
