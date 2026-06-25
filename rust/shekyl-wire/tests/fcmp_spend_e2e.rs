@@ -51,14 +51,11 @@
 //! pseudo-outs, the Bulletproof+, the FCMP++ proof, the per-input PQC auth — is
 //! real and consensus-validated by Stages 1-2.
 //!
-//! Note on scope: `shekyl-wire` is the Shekyl-owned **migration-target**
-//! serializer (`lib.rs`), which deliberately diverges from the vendored
-//! `shekyl_oxide::transaction` encoder still used by `shekyl-tx-builder::wire`
-//! (e.g. `referenceBlock` as a 32-byte hash vs. a `u64` height; tx-level
-//! `pqc_auths` carrying the public key vs. signature-only blobs in the
-//! prunable). Cross-validating the two encoders byte-for-byte is therefore a
-//! separate migration concern, tracked in `docs/FOLLOWUPS.md`; this test
-//! validates the `shekyl-wire` serializer against real crypto-valued fields.
+//! Note on scope: `shekyl-wire` is the Shekyl-owned **canonical** genesis serializer
+//! (`lib.rs`). The vendored `shekyl_oxide::transaction` encoder it once diverged from was
+//! cut over (`shekyl-tx-builder`, PR #178) and then deleted (un-vendor slice 1), so there
+//! is now a single on-wire FCMP++ spend layout; this test validates that serializer
+//! against real crypto-valued fields.
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,

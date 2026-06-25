@@ -602,23 +602,18 @@ mod tests {
     }
 
     #[test]
-    fn shekyl_oxide_proof_type_matches_consensus_authority() {
-        // `shekyl-oxide::fcmp::ProofType::FcmpPlusPlusPqc` encodes its
-        // u8 wire value via runtime `From` (not const-evaluable), so
-        // the const-evaluated `assert!` block at the top of the
-        // module can't reach it. This runtime check is the
-        // next-cheapest tripwire: if anyone edits shekyl-oxide's
-        // `FCMP_PLUS_PLUS_PQC_WIRE_VALUE` / `ProofType` mapping (now dense-tagged
-        // to `1`) without also updating `config/consensus_constants.json`, this
-        // test fires.
-        // shekyl-oxide is the disposable Monero fork (per
-        // `10-shekyl-first.mdc`); the consensus authority lives in the
-        // Shekyl-core JSON, and shekyl-oxide must follow.
-        use shekyl_oxide::fcmp::ProofType;
+    fn wire_ct_type_matches_consensus_authority() {
+        // Tripwire on the canonical FCMP++ ct-type wire value: if anyone edits
+        // `shekyl_wire::transaction::CT_TYPE_FCMP` (the genesis dense ct tag, `1`)
+        // without also updating `config/consensus_constants.json`, this test fires.
+        // `shekyl-wire` is the canonical genesis serializer; the consensus authority
+        // lives in the Shekyl-core JSON, and the wire layer must follow.
+        // (Re-pointed from the now-deleted `shekyl_oxide::fcmp::ProofType` — its
+        // serializer was removed in un-vendor slice 1.)
         assert_eq!(
-            u8::from(ProofType::FcmpPlusPlusPqc),
+            shekyl_wire::transaction::CT_TYPE_FCMP,
             RCT_TYPE_FCMP_PLUS_PLUS_PQC,
-            "shekyl-oxide ProofType::FcmpPlusPlusPqc wire value drifted from \
+            "shekyl-wire CT_TYPE_FCMP wire value drifted from \
              config/consensus_constants.json"
         );
     }
