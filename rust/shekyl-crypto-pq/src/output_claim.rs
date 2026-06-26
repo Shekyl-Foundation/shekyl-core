@@ -39,7 +39,7 @@
 use curve25519_dalek::Scalar;
 use zeroize::Zeroizing;
 
-use shekyl_primitives::keccak256_to_scalar;
+use shekyl_curve_primitives::keccak256_to_scalar;
 
 /// Domain-separation tag for `m_i` derivation. Genesis-locked; do not change.
 const CLAIM_DERIVATION_DOMAIN: &[u8] = b"shekyl-subaddr-v1\0";

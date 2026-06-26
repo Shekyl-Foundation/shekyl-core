@@ -254,7 +254,7 @@ mod tests {
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
                 &mut rand_core::OsRng,
-                vec![shekyl_primitives::Commitment::new(
+                vec![shekyl_curve_primitives::Commitment::new(
                     curve25519_dalek::scalar::Scalar::from(1u64),
                     100,
                 )],

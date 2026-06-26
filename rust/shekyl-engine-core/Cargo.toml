@@ -70,13 +70,13 @@ shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # CT-5 (`docs/design/CT5_ENGINE_WIRING.md`): the wallet-side FCMP++
 # curve-tree client (`CurveTreeClient`, redb-backed, public-material-only).
@@ -91,7 +91,7 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
 # placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
 # `sign_bridge` on the production send path.
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 multiexp = "0.4"
@@ -111,14 +111,14 @@ serde = { version = "1", features = ["derive"], optional = true }
 # code that builds `get_fee_estimate` params and parses the response as
 # `serde_json::Value` (defensive untrusted-daemon parsing per
 # `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
-# lockfile (transitively via `shekyl-rpc`, plus this crate's build- and
+# lockfile (transitively via `shekyl-rpc-client`, plus this crate's build- and
 # dev-deps), so making it a direct non-optional dependency adds no new
 # third-party crate (`17-dependency-discipline.mdc`). It is therefore no
 # longer listed under the `multisig` feature.
 serde_json = "1"
 # Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
 # native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
-# workspace lockfile (shekyl-rpc, shekyl-wire deps + this crate's multisig path),
+# workspace lockfile (shekyl-rpc-client, shekyl-wire deps + this crate's multisig path),
 # so promoting it to a direct non-optional dependency adds no third-party crate
 # (`17-dependency-discipline.mdc`). No longer listed under the `multisig` feature.
 hex = "0.4"
@@ -266,8 +266,8 @@ proptest = "1"
 # Two categories below:
 #   - **Workspace path-deps newly pulled into this crate's dev-
 #     deps:** `shekyl-tx-builder`, `shekyl-fcmp`,
-#     `shekyl-bulletproofs`, `shekyl-fcmp-plus-plus`,
-#     `shekyl-generators`, `shekyl-io`, `shekyl-primitives`,
+#     `shekyl-bulletproofs`, `shekyl-fcmp-proofs`,
+#     `shekyl-curve-generators`, `shekyl-curve-io`, `shekyl-curve-primitives`,
 #     `ec-divisors`, `helioselene`. All are first-party Shekyl /
 #     Shekyl-vendored crates.
 #   - **Crates.io versions reused from the workspace lockfile:**
@@ -282,11 +282,11 @@ proptest = "1"
 # unconditional dev-dep does not alter the production crate graph.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # Stage 1 PR 2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §3, §8). The
 # `join_market_bond_post_signs_and_verifies_through_prover` test (in
 # `engine::local_keys::tests`) drives a JoinMarket bond post —

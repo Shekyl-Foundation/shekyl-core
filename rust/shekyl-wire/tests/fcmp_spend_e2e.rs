@@ -68,13 +68,13 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
     TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_io::CompressedPoint;
 use shekyl_rct_balance::verify_rct_balance;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
@@ -235,7 +235,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // I = Hp(O); the prover derives the same generator via
     // `compute_key_image_gen` == `biased_hash_to_point`, so the key image we
     // compute here matches the one the proof binds.
-    let hp_of_o = shekyl_generators::biased_hash_to_point(spent.output_key)
+    let hp_of_o = shekyl_curve_generators::biased_hash_to_point(spent.output_key)
         .compress()
         .to_bytes();
     let ki = compute_output_key_image(&combined_ss.0, spent_index, &wallet.spend_secret, &hp_of_o)

@@ -25,7 +25,8 @@ use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
 use rand_core::OsRng;
 
-use shekyl_fcmp_plus_plus::{
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_fcmp_proofs::{
     fcmps::{
         BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path,
         TreeRoot,
@@ -34,7 +35,6 @@ use shekyl_fcmp_plus_plus::{
     Curves, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
     SELENE_FCMP_GENERATORS,
 };
-use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
 /// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
 /// [`verify`] can name the type without taking a direct dependency on
@@ -466,9 +466,9 @@ pub fn prove(
 #[cfg(feature = "multisig")]
 #[allow(non_snake_case)]
 pub fn prove_with_sal(
-    sal_pairs: Vec<(shekyl_fcmp_plus_plus::Input, SpendAuthAndLinkability)>,
+    sal_pairs: Vec<(shekyl_fcmp_proofs::Input, SpendAuthAndLinkability)>,
     original_outputs: &[Output],
-    rerands: &[shekyl_fcmp_plus_plus::sal::RerandomizedOutput],
+    rerands: &[shekyl_fcmp_proofs::sal::RerandomizedOutput],
     leaf_chunks: &[ProveInputLeafChunk],
     tree_depth: u8,
 ) -> Result<ProveResult, ProveError> {
@@ -1006,7 +1006,7 @@ mod tests {
     fn prove_verify_roundtrip() {
         use ec_divisors::DivisorCurve;
         use multiexp::multiexp_vartime;
-        use shekyl_generators::SELENE_HASH_INIT;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
         let signable_tx_hash = [0xABu8; 32];
@@ -1129,7 +1129,7 @@ mod tests {
         use multiexp::multiexp_vartime;
         use rand::SeedableRng;
         use rand_chacha::ChaCha20Rng;
-        use shekyl_generators::SELENE_HASH_INIT;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
 
         // Deterministic: a regression KAT must reproduce the same witness every
         // run, so a failure is debuggable and the `selene_point_to_helios_scalar`
@@ -1385,7 +1385,7 @@ mod tests {
     fn prove_verify_wrong_signable_tx_hash_fails() {
         use ec_divisors::DivisorCurve;
         use multiexp::multiexp_vartime;
-        use shekyl_generators::SELENE_HASH_INIT;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
         let signable_tx_hash = [0xABu8; 32];
@@ -1464,7 +1464,7 @@ mod tests {
     fn legacy_single_component_key_with_mask_as_y_must_fail() {
         use ec_divisors::DivisorCurve;
         use multiexp::multiexp_vartime;
-        use shekyl_generators::SELENE_HASH_INIT;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
         let signable_tx_hash = [0xBBu8; 32];
@@ -1530,7 +1530,7 @@ mod tests {
     fn two_component_key_with_real_y_must_succeed() {
         use ec_divisors::DivisorCurve;
         use multiexp::multiexp_vartime;
-        use shekyl_generators::SELENE_HASH_INIT;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
         let signable_tx_hash = [0xCCu8; 32];

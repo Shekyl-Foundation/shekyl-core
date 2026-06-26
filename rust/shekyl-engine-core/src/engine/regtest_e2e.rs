@@ -35,8 +35,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::json;
-use shekyl_rpc::Rpc;
-use shekyl_simple_request_rpc::SimpleRequestRpc;
+use shekyl_rpc_client::Rpc;
+use shekyl_rpc_transport::SimpleRequestRpc;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently

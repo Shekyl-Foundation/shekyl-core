@@ -188,7 +188,7 @@ pub(crate) mod curve_tree_actor;
 // leaf set the merge feeds to `curve_tree_actor`.
 pub(crate) mod curve_tree_decode;
 // Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
-// replacement for the legacy `shekyl_rpc::Rpc::get_scannable_block_by_*` path.
+// replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
 pub(crate) mod block_fetch;
 pub mod daemon;
@@ -531,7 +531,7 @@ pub struct Engine<
     ///
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
-    /// `shekyl_simple_request_rpc::SimpleRequestRpc`); crate-internal
+    /// `shekyl_rpc_transport::SimpleRequestRpc`); crate-internal
     /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
@@ -712,7 +712,7 @@ impl<
     ///   accessors.
     /// - `daemon` — passes through to [`DaemonClient`]'s `Debug`, which
     ///   includes the daemon URL but no auth credentials (see
-    ///   [`shekyl_simple_request_rpc::SimpleRequestRpc`]).
+    ///   [`shekyl_rpc_transport::SimpleRequestRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
     /// - `pending` — printed as an outstanding-count via

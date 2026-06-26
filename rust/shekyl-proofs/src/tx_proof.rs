@@ -34,7 +34,7 @@ use curve25519_dalek::{
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
-use shekyl_generators::{H as H_POINT_LAZY, T as T_LAZY};
+use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
 
 use crate::error::ProofError;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};

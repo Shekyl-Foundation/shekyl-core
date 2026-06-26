@@ -23,10 +23,10 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # consumes the same typed-side terms verify checks
 # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2); the builder stays bond-agnostic.
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 # Canonical genesis spend serializer + signing hashes (the wire authority). The wire
 # adapter (`wire.rs`) maps onto this; shekyl-oxide is kept only for crypto (Bulletproof).
@@ -55,7 +55,7 @@ rand = "0.8"
 # known gap for a future commit (see §3.2 "Known gaps").
 criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 rand_core = { version = "0.6", features = ["std"] }
 

@@ -500,8 +500,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
   fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
   are defined in `rust/shekyl-oxide/crypto/fcmps/src/lib.rs` (FCMP++) and
-  `rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/lib.rs` (Bp+). Round 1 cites
-  these + the pinned commit as part of the freeze. **Cross-link stands:** these
+  `rust/shekyl-bulletproofs/src/lib.rs` (Bp+). Round 1 cites
+  these + the pinned commit as part of the freeze. *(Bp+ path updated by the
+  un-vendor slice-2 relocate — `fcmp/bulletproofs` → first-party `shekyl-bulletproofs`;
+  the freeze is anchored by content + pin, so the move is a label change only.)* **Cross-link stands:** these
   kept-vendored crates carry genesis-frozen *format*, raising the bar on the
   crypto-crate triage.
 

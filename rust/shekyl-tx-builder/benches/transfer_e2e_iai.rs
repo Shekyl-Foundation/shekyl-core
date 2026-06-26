@@ -47,7 +47,7 @@ use rand::{RngCore, SeedableRng};
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridSecretKey, HybridSignature, ML_DSA_65_SECRET_KEY_LENGTH};
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 /// Fixed seed for all deterministic RNG draws in this bench. The
 /// value has no cryptographic meaning; it is pinned so re-runs produce

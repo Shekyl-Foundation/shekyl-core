@@ -1768,7 +1768,7 @@ mod refresh_driver_tests {
     use std::cell::RefCell;
     use std::sync::{Mutex, OnceLock};
 
-    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use shekyl_rpc_transport::SimpleRequestRpc;
     use tempfile::TempDir;
     use tokio::runtime::Runtime;
 
@@ -2846,7 +2846,7 @@ mod start_refresh_integration_tests {
     use shekyl_crypto_pq::account::{
         rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
-    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use shekyl_rpc_transport::SimpleRequestRpc;
     use tempfile::TempDir;
     use tokio::sync::{watch, RwLock};
     use tokio_util::sync::CancellationToken;

@@ -9,7 +9,7 @@ use core::fmt;
 use std::io::{self, Read, Write};
 
 use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
-use shekyl_io::{read_byte, read_bytes, read_varint, write_varint};
+use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 
 /// Vin type tag: `txin_archival_bond_post` (gate-4 §3.4.1).
 ///

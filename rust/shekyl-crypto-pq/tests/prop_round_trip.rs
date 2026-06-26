@@ -26,7 +26,7 @@ use shekyl_crypto_pq::{
     kem::{HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation},
     output::{compute_output_key_image, construct_output, scan_output_recover},
 };
-use shekyl_generators::hash_to_point;
+use shekyl_curve_generators::hash_to_point;
 
 fn scalar_from_u64s(a: u64, b: u64, c: u64, d: u64) -> Scalar {
     let mut bytes = [0u8; 32];

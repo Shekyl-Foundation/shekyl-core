@@ -19,7 +19,7 @@ use shekyl_ffi::{
 use ciphersuite::group::GroupEncoding;
 use curve25519_dalek::Scalar;
 use rand_core::OsRng;
-use shekyl_generators::SELENE_HASH_INIT;
+use shekyl_curve_generators::SELENE_HASH_INIT;
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -198,7 +198,7 @@ fn scan_output_ffi(
     out: &ConstructedOutput,
     output_index: u64,
 ) -> ScannedSecrets {
-    let hp_point = shekyl_generators::biased_hash_to_point(out.output_key);
+    let hp_point = shekyl_curve_generators::biased_hash_to_point(out.output_key);
     let hp_of_o: [u8; 32] = hp_point.compress().to_bytes();
 
     let mut ho = [0u8; 32];
@@ -336,7 +336,7 @@ fn build_test_case(iteration: u32) {
     eprintln!("  [signing_round_trip] iteration {iteration}: building curve tree...");
     let tree_root = build_selene_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
 
-    let hp_of_o_point = shekyl_generators::biased_hash_to_point(input_out.output_key);
+    let hp_of_o_point = shekyl_curve_generators::biased_hash_to_point(input_out.output_key);
     let hp_of_o: [u8; 32] = hp_of_o_point.compress().to_bytes();
 
     eprintln!("  [signing_round_trip] iteration {iteration}: constructing change output...");

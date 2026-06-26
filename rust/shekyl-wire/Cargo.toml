@@ -37,9 +37,9 @@ shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 # Consensus checks composed alongside FCMP membership: CT cleartext balance
 # (`sum(pseudoOuts) == sum(outPk) + fee*H`) and Bp+ range-proof verification.
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }
 # Deterministic, seedable CSPRNG for the e2e fixture draw. The workspace's

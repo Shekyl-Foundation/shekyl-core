@@ -58,18 +58,23 @@ members = [
     # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
     "shekyl-types",
 
-    # Vendored monero-oxide protocol crates (application layer). The FCMP++
-    # crypto research crates are workspace-excluded (see the `exclude` list
-    # below) so the pristine upstream subtree is not forced through Shekyl's
-    # fmt/clippy gates; consumers depend on them by path.
-    "shekyl-oxide/shekyl-oxide/io",
-    "shekyl-oxide/shekyl-oxide/generators",
-    "shekyl-oxide/shekyl-oxide/primitives",
-    "shekyl-oxide/shekyl-oxide/fcmp/bulletproofs",
-    "shekyl-oxide/shekyl-oxide/fcmp/fcmp++",
+    # First-party crates relocated out of the vendored shekyl-oxide tree in the
+    # un-vendor slice-2 Track B (docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 B2): the
+    # FCMP++ application/support layer is ours, no longer upstream-tracked. Renamed
+    # to role-honest names; provenance stamped per file. The pristine FCMP++ crypto
+    # research crates remain workspace-excluded (see the `exclude` list below) and
+    # vendored — those are the only "vendored" crates left.
+    "shekyl-curve-io",
+    "shekyl-curve-generators",
+    "shekyl-curve-primitives",
+    "shekyl-bulletproofs",
+    "shekyl-fcmp-proofs",
+    "shekyl-rpc-client",
+    "shekyl-rpc-transport",
+    # The last vendored application crate — dissolves in the next slice (the
+    # wallet-domain Timelock/StakingMeta move native; the re-export facade is torn
+    # down). Until then it carries only those types + a thin re-export shim.
     "shekyl-oxide/shekyl-oxide",
-    "shekyl-oxide/shekyl-oxide/rpc",
-    "shekyl-oxide/shekyl-oxide/rpc/simple-request",
 
     # Shekyl-native scanner crate
     "shekyl-scanner",
@@ -314,11 +319,11 @@ generalized-bulletproofs = { opt-level = 3 }
 generalized-bulletproofs-circuit-abstraction = { opt-level = 3 }
 generalized-bulletproofs-ec-gadgets = { opt-level = 3 }
 full-chain-membership-proofs = { opt-level = 3 }
-shekyl-io = { opt-level = 3 }
-shekyl-generators = { opt-level = 3 }
-shekyl-primitives = { opt-level = 3 }
+shekyl-curve-io = { opt-level = 3 }
+shekyl-curve-generators = { opt-level = 3 }
+shekyl-curve-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
-shekyl-fcmp-plus-plus = { opt-level = 3 }
+shekyl-fcmp-proofs = { opt-level = 3 }
 shekyl-oxide = { opt-level = 3 }
 
 [profile.dev]

@@ -35,7 +35,7 @@ use rand_core::{OsRng, RngCore};
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 /// Build the two Pedersen commitments for a standard 1-in/2-out
 /// transfer (recipient + change). Deterministic-ish: amounts

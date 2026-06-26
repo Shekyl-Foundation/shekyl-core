@@ -9,9 +9,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-shekyl-bulletproofs = { path = "../../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-primitives = { path = "../../shekyl-oxide/shekyl-oxide/primitives" }
-shekyl-io = { path = "../../shekyl-oxide/shekyl-oxide/io" }
+shekyl-bulletproofs = { path = "../../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../../shekyl-curve-primitives" }
+shekyl-curve-io = { path = "../../shekyl-curve-io" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }
 

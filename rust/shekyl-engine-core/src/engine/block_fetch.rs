@@ -6,9 +6,9 @@
 //! Native `ScannableBlock` fetch over the `shekyl-wire` parse.
 //!
 //! This is the engine-side replacement for the legacy
-//! `shekyl_rpc::Rpc::get_scannable_block_by_*` path. The transport
+//! `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path. The transport
 //! (`get_block` / `get_transactions` JSON-RPC, `get_o_indexes` binary RPC) is
-//! still the vendored [`shekyl_rpc::Rpc`] surface, but **parsing moves to the
+//! still the vendored [`shekyl_rpc_client::Rpc`] surface, but **parsing moves to the
 //! canonical [`shekyl_wire`] crate**: [`shekyl_wire::Block::from_bytes`] and
 //! [`shekyl_wire::Transaction::from_bytes`].
 //!
@@ -29,7 +29,7 @@
 //! `ScannableBlock::first_output_index` is the global output index of the
 //! first output in the block (the same role the legacy
 //! `output_index_for_first_ringct_output` played). It is requested once via
-//! [`shekyl_rpc::Rpc::get_o_indexes`] for the first transaction that has
+//! [`shekyl_rpc_client::Rpc::get_o_indexes`] for the first transaction that has
 //! outputs (the coinbase, in practice); the scanner advances the running
 //! index itself, so per-output index requests (a privacy leak) are avoided.
 //!
@@ -60,7 +60,7 @@
 //! `docs/FOLLOWUPS.md`.
 
 use serde_json::{json, Value};
-use shekyl_rpc::{Rpc, RpcError};
+use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 

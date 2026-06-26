@@ -28,12 +28,12 @@ tracing = "0.1"
 # (`Timelock`, `StakingMeta`, `CompressedPoint`, `Commitment`).
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
-shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-address = { path = "../shekyl-address" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-units = { path = "../shekyl-units" }
 # `TxHash` newtype: the scanner lifts oxide's raw `[u8; 32]` txid into the
@@ -42,7 +42,7 @@ shekyl-types = { path = "../shekyl-types" }
 
 [features]
 default = ["std"]
-std = ["shekyl-oxide/std", "shekyl-rpc/std"]
+std = ["shekyl-oxide/std", "shekyl-rpc-client/std"]
 test-utils = []
 
 [dev-dependencies]

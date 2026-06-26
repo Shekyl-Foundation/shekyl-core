@@ -34,9 +34,9 @@ use transcript::{RecommendedTranscript, Transcript};
 
 use modular_frost::{algorithm::Algorithm, Participant, ThresholdKeys, ThresholdView};
 
-pub use shekyl_fcmp_plus_plus::sal::multisig::{Ed25519T, SalAlgorithm};
-use shekyl_fcmp_plus_plus::sal::{RerandomizedOutput, SpendAuthAndLinkability};
-use shekyl_fcmp_plus_plus::{Input, Output};
+pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
+use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
+use shekyl_fcmp_proofs::{Input, Output};
 
 use crate::proof::ProveError;
 

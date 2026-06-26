@@ -1076,7 +1076,7 @@ pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
     if out_ptr.is_null() {
         return;
     }
-    let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes();
+    let t_bytes: [u8; 32] = shekyl_curve_generators::T.to_bytes();
     std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32);
 }
 

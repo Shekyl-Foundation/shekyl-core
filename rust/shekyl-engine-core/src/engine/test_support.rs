@@ -15,7 +15,7 @@
 //! What this module ships:
 //!
 //! - [`TestDaemon`]: deterministic in-memory implementor of both
-//!   [`shekyl_rpc::Rpc`] (chain serving — height / block fetch
+//!   [`shekyl_rpc_client::Rpc`] (chain serving — height / block fetch
 //!   with reorg simulation, failure injection per height) **and**
 //!   the crate-internal `DaemonEngine` Stage 1 trait (transaction
 //!   submission with daemon-faithful tx-hash dedup per the §5.2
@@ -71,7 +71,7 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
-use shekyl_rpc::{FeeRate, Rpc, RpcError};
+use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
@@ -138,7 +138,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
     output
 }
 
-/// In-memory implementor of [`shekyl_rpc::Rpc`] **and** the
+/// In-memory implementor of [`shekyl_rpc_client::Rpc`] **and** the
 /// crate-internal `DaemonEngine` trait for refresh / scan-loop /
 /// hybrid tests.
 ///
