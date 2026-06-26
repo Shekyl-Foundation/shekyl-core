@@ -6,8 +6,9 @@ name: vendored crypto staleness
 # contents — local-content integrity is the separate, push/PR-blocking
 # vendored-crypto-content.yml gate. Weekly; a red run means "consider re-syncing the
 # crypto subtree", not a build failure. (Scope is the kept-vendored crypto: that is
-# what the pin tracks; the residual application crates under shekyl-oxide/ are being
-# un-vendored and are no longer tracked against upstream.)
+# what the pin tracks; the former residual application crates under shekyl-oxide/ have
+# been un-vendored — relocated to first-party shekyl-* crates / dissolved — and are no
+# longer tracked against upstream.)
 
 on:
   schedule:
