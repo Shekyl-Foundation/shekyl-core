@@ -5575,8 +5575,9 @@ sustainability is unaffected by the recalibration.
   ### Residual: digest_auth transitive
 
   Even after our workspace crates migrate, `digest_auth v0.3.1` (a
-  transitive dependency of `shekyl-simple-request-rpc` via the
-  `shekyl-oxide` vendor tree) selects rand 0.8.5 for cnonce generation.
+  transitive dependency of `shekyl-rpc-transport`, the first-party crate
+  relocated from the old `shekyl-oxide` `rpc/simple-request`) selects rand
+  0.8.5 for cnonce generation.
   It has no newer crates.io release. Alerts #3 and #4 (the two
   `Cargo.lock` alerts) will reappear until `digest_auth` is either:
 

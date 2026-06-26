@@ -1507,16 +1507,18 @@ cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
 
 ## monero-oxide Fork Integration Status
 
-The FCMP++ Rust crypto stack depends on the
+The FCMP++ Rust crypto stack descends from the
 [Shekyl Foundation monero-oxide fork](https://github.com/Shekyl-Foundation/monero-oxide)
-(`fcmp++` branch). In `shekyl-core`, these crates are now vendored under
-`rust/shekyl-oxide/` and consumed through path dependencies from
-`rust/shekyl-fcmp/Cargo.toml`:
+(`fcmp++` branch). After the un-vendor (slice 2, `SHEKYL_OXIDE_UNVENDOR.md`), the
+proof/generator/support crates are **first-party** `shekyl-*` crates (relocated out
+of the vendored tree, no longer upstream-tracked); only the research crypto remains
+vendored under `rust/shekyl-oxide/crypto/`. `rust/shekyl-fcmp/Cargo.toml` consumes
+them by path:
 
-- `shekyl-fcmp-plus-plus`
-- `shekyl-generators`
-- `helioselene`
-- `ec-divisors`
+- `shekyl-fcmp-proofs` (first-party — the FCMP++ SAL/membership proofs; was `shekyl-fcmp-plus-plus`)
+- `shekyl-curve-generators` (first-party; was `shekyl-generators`)
+- `helioselene` (vendored crypto)
+- `ec-divisors` (vendored crypto)
 
 ### Current Pin
 
@@ -1532,7 +1534,7 @@ vendored crate copy.
 The `full-chain-membership-proofs` circuit in the monero-oxide fork has been
 modified to support Shekyl's 4-scalar leaf format. The `FcmpCurves` trait now
 includes `const EXTRA_LEAF_SCALARS: usize = 1`, and `Curves` in the
-`shekyl-fcmp-plus-plus` wrapper sets this to `1`. The `FcmpPlusPlus::verify`
+`shekyl-fcmp-proofs` wrapper sets this to `1`. The `FcmpPlusPlus::verify`
 accepts `pqc_pk_hashes: Vec<SeleneF>` to pass the 4th scalar through to the
 circuit.
 

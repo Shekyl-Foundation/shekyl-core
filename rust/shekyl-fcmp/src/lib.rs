@@ -5,9 +5,10 @@
 
 //! Shekyl FCMP++ wrapper crate.
 //!
-//! Wraps the upstream `shekyl-fcmp-plus-plus` crate with Shekyl-specific
-//! extensions: 4-scalar curve tree leaves `{O.x, I.x, C.x, H(pqc_pk)}`,
-//! Shekyl domain separators, and per-output PQC commitment integration.
+//! Wraps the first-party `shekyl-fcmp-proofs` crate (the FCMP++ SAL/membership
+//! proof system) with Shekyl-specific extensions: 4-scalar curve tree leaves
+//! `{O.x, I.x, C.x, H(pqc_pk)}`, Shekyl domain separators, and per-output PQC
+//! commitment integration.
 
 #![deny(unsafe_code)]
 

@@ -48,7 +48,9 @@ the daemon's structured block JSON.
 ### Why daemon JSON rather than a Rust block decode
 
 Shekyl's coinbase serializes a real `outPk` under `RCTTypeNull`
-(`rctTypes.h::serialize_rctsig_base`), which `shekyl-oxide`'s coinbase
-model (`proofs: None`) does not parse. Until that gap closes (tracked in
-`docs/FOLLOWUPS.md`), the authoritative leaf inputs are taken from the
-daemon's block JSON, which serializes `outPk`/vout/`extra` correctly.
+(`rctTypes.h::serialize_rctsig_base`). The old `shekyl-oxide` coinbase model
+(`proofs: None`) did not parse this; that crate is now dissolved and `shekyl-wire`
+parses the coinbase `Null` committed base correctly (un-vendor slice 1). The fixtures
+still source leaf inputs from the daemon's block JSON because it is the authoritative
+C++ oracle (it serializes `outPk`/vout/`extra` correctly), not because nothing in Rust
+can decode the block.

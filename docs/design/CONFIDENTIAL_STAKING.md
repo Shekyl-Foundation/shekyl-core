@@ -589,10 +589,10 @@ remainder bound is the **lower** bound `ρ ≥ 0`, **not** a tight upper bound `
   `ρ < D = 2⁴⁹ < 2⁶⁴` always fits the 64-bit slot.
 - **Therefore fold, don't add a proof.** `C_ρ = ρ_blind·G + ρ·H` matches Monero's commitment
   convention `mask·G + amount·H`
-  ([`primitives::Commitment`](../../rust/shekyl-oxide/shekyl-oxide/primitives/src/lib.rs)) with
+  ([`Commitment`](../../rust/shekyl-curve-primitives/src/lib.rs)) with
   `mask = ρ_blind`, `amount = ρ` (`ρ < 2⁴⁹` fits `u64`), so `C_ρ` is **one more aggregated
   commitment** in the claim tx's existing reward-output `AggregateRangeProof`
-  ([`fcmp/bulletproofs/.../aggregate_range_proof.rs`](../../rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/aggregate_range_proof.rs),
+  ([`aggregate_range_proof.rs`](../../rust/shekyl-bulletproofs/src/plus/aggregate_range_proof.rs),
   `COMMITMENT_BITS = 64`, `MAX_COMMITMENTS = 16` — a claim has ≤ 2 outputs, ample room). The
   marginal wire/verify cost is one commitment in an aggregate that already exists. **The folded
   `C_ρ` is the *same* group element the entitlement relation `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩`

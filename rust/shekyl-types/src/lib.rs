@@ -74,8 +74,8 @@ macro_rules! scalar_u64 {
             pub const ZERO: Self = $name(0);
 
             /// Wrap a raw `u64`. An *edge* constructor — use it only where a
-            /// value crosses into the typed domain (FFI, RPC decode, the
-            /// `shekyl-oxide` fork, deserialization helpers).
+            /// value crosses into the typed domain (FFI, RPC decode,
+            /// deserialization helpers).
             #[must_use]
             pub const fn from_raw(value: u64) -> Self {
                 $name(value)

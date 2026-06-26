@@ -1217,10 +1217,10 @@ one-time key) is the same output-construction mechanism that defers to **2c**;
 #### 3.10.1 W — tx weight model (§9 #1)
 
 **The weight concept is already implemented and verified — the pass does not
-invent it.** `Transaction::weight()`
-(`shekyl-oxide/shekyl-oxide/src/transaction.rs`) is
+invent it.** The tx weight model (the oxide `transaction.rs` was deleted in the
+slice-1 wire extraction; the genesis tx serializer now lives in `shekyl-wire`) is
 `serialize().len() + Bulletproof::calculate_clawback(true, n_outputs).0`, and
-`calculate_clawback` (`…/fcmp/bulletproofs/src/lib.rs`) is deterministic in
+`calculate_clawback` (`shekyl-bulletproofs/src/lib.rs`) is deterministic in
 `n_outputs` alone. That function is the **authoritative post-build** weight. Fee
 estimation, however, runs **pre-build** (before the proof exists), so the pass
 deliverable is a **structural predictor** `predict_weight(n_in, n_out,

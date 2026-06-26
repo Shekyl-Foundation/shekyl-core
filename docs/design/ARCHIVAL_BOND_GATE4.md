@@ -252,7 +252,7 @@ enum BondPostKind {
 ### 3.4.1 Byte layout (genesis pin)
 
 Vin type tag **`5`** (`txin_archival_bond_post`). Varint discipline matches gate-2 §5.1.1 /
-[`shekyl-io`](../../rust/shekyl-oxide/shekyl-oxide/io). Reference implementation:
+[`shekyl-curve-io`](../../rust/shekyl-curve-io). Reference implementation:
 `shekyl-archival-retention::bond_wire`.
 
 ```text

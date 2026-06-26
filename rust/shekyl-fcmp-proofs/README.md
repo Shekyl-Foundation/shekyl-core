@@ -7,7 +7,8 @@ proof that spent outputs exist in the full UTXO set curve tree, providing
 global anonymity set coverage.
 
 This crate is the only proof system accepted by Shekyl consensus from
-genesis (HF1). It is re-exported from `shekyl-oxide` as `fcmp::fcmp_pp`.
+genesis (HF1). It is a first-party crate (relocated out of the vendored
+`shekyl-oxide` tree in the un-vendor) and is wrapped by `shekyl-fcmp`.
 
 This library is usable under no-std when the `std` feature (on by default) is
 disabled. `#![deny(unsafe_code)]` is enforced.

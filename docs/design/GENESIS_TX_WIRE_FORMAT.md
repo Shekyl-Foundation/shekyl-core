@@ -534,7 +534,8 @@ Format: **ID — item.** *(status)* disposition / what's needed.
 - **Q10 — varint format.** *(RESOLVED — pinned)* LEB128-style little-endian
   base-128 varint — 7 data bits/byte, MSB = continuation, **canonical** (no
   redundant trailing-zero byte; over-long encodings rejected) — as implemented in
-  `rust/shekyl-oxide/shekyl-oxide/io/src/lib.rs` (`read_varint`/`write_varint`).
+  `rust/shekyl-wire/src/varint.rs` (`read_varint`/`write_varint`), the canonical
+  genesis serializer (byte-identical to the relocated `shekyl-curve-io` varint).
   This is the `V(x)` of §3; non-canonical varints are a negative-corpus reject
   case (§7).
 - **Q11 — staked amount vs cover model.** *(RESOLVED → public floor + cover + `P`;
