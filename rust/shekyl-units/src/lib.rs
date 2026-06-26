@@ -12,7 +12,7 @@
 //!
 //! 1. **Silent wrap.** There are no `Add`/`Sub`/`Mul`/`Div` operator impls and
 //!    no `saturating_*`; arithmetic is *checked-only*
-//!    ([`Self::checked_add`], [`Self::checked_sub`], [`Self::checked_sum`]).
+//!    ([`AtomicUnits::checked_add`], [`AtomicUnits::checked_sub`], [`AtomicUnits::checked_sum`]).
 //!    `a + b` does not compile, so a local accounting bug cannot silently wrap
 //!    (or saturate) on a money path. This is a priority-1 (security) property
 //!    per `00-mission.mdc`.
@@ -20,13 +20,13 @@
 //!    [`Display`](core::fmt::Display)/[`Debug`](core::fmt::Debug) render the
 //!    raw integer with an `au` marker, never SKL, so a log line cannot be
 //!    misread as a SKL figure. SKL formatting is available only through the
-//!    explicit, single-sourced [`Self::to_skl_string`] /
-//!    [`Self::from_skl_str`].
+//!    explicit, single-sourced [`AtomicUnits::to_skl_string`] /
+//!    [`AtomicUnits::from_skl_str`].
 //!
 //! ## Boundaries
 //!
 //! The inner `u64` is private. Conversion happens only through the named
-//! [`Self::from_raw`] / [`Self::to_raw`] (no blanket `From<u64>`/`Into<u64>`),
+//! [`AtomicUnits::from_raw`] / [`AtomicUnits::to_raw`] (no blanket `From<u64>`/`Into<u64>`),
 //! so the conversion call sites are the greppable edge set that bounds the
 //! migration. `#[serde(transparent)]` + `#[repr(transparent)]` make the type
 //! wire- and ABI-identical to the `u64` it replaces, so the swap requires no
