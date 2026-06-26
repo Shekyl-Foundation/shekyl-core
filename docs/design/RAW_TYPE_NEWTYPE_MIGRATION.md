@@ -200,6 +200,49 @@ oxide `StakeClaim.staked_output_index`. `internal_output_index` (position
 within a tx, can be sparse) and `global_output_index` (dense, ledger-wide) are
 different types — that distinction is part of the validation surface.
 
+### 7.5 The consensus-path priority (C++) — where a height transposition is catastrophic
+
+Strong types are used at the *edges* — the C++ DB layer
+(`shekyl::db::{BlockHeight, OutputIndex, MaturityHeight, TreePosition}`,
+[`shekyl_types.h:100-122`](../../src/cryptonote_basic/shekyl_types.h)) and inside the
+Rust curve-tree crate — while the **consensus validation path** (`blockchain.cpp`) and
+the FFI seam still run on bare `uint64_t`. The middle, where transposition is most
+catastrophic, is exactly where the types stop. Ranked by value (flagged 2026-06-25 from
+the un-vendor slice-2 review; this is prioritization *within* PR D, on the C++ validation
+surface — landing on its own PR per §3, **not** bundled into a Rust crate move):
+
+1. **The FCMP `referenceBlock` window + curve-tree-depth check**
+   (`blockchain.cpp:3946-3964`) — **highest single win.** `chain_height` and `ref_height`
+   are both bare `uint64_t`, mixed in the window arithmetic
+   (`ref_height > chain_height - MIN_AGE`, …), then `ref_height` is passed straight into
+   `get_curve_tree_root_at_height(ref_height)` and written to `*pmax_used_block_height`.
+   Four distinct height-derived quantities live here — tip/`chain_height`, `ref_height`,
+   `eligible_height`, `MaturityHeight` (+60) — plus `REF_ANCHOR_AGE=6` vs `SPENDABLE_AGE=10`,
+   all `u64`. Transposing any of them, or subtracting the wrong AGE constant, silently
+   anchors a membership proof to the wrong block — a consensus corruption that compiles
+   clean. The strong types already exist (`db::BlockHeight`, the curve-tree
+   `ReferenceBlock`); they are simply not used in the validator. **Fix here first.**
+2. **`add_staked_outputs(tx, uint64_t creation_height, uint64_t eval_height)`** (`:2050`) —
+   two adjacent bare heights, different semantics, live staking path.
+   `StrongId<BlockHeightTag>` stops height↔index/amount confusion but **not** height↔height;
+   give this pair distinct tags (`CreationHeight`/`EvalHeight`) or a named two-field struct.
+3. **The two-bare-`u64` lookups** — `get_output_key(amount, global_index)` (`:2653`),
+   `get_output_key_mask_unlocked(amount, index, …)` (`:2705`),
+   `get_output_distribution(amount, from_height, to_height, start_height, …)` (`:2715`).
+   Caveat: these are the legacy amount-indexed ring path §2.1 Q1 says FCMP++ doesn't use
+   (`amount` is 0) — resolve **shed-or-type** explicitly rather than leaving them bare.
+4. **Archival consensus scalars are bare** (`bond_wire.rs:70` `shard_ids: Vec<u64>`;
+   `settlement_epoch`, `leaf_index_in_segment`, `global_output_index`) — they enter the
+   §9.11 sig-preimage; a `ShardId`/`SettlementEpoch` transposition breaks the signature or
+   binds the wrong commitment. Add `ShardId`/`SettlementEpoch`/`LeafIndex` (the transparent
+   `u64` macro is right there in `shekyl-types`; `KeyImage`/`AtomicUnits` are the precedent),
+   reuse `Gindex` for `global_output_index`. Transparent → no wire/format-version bump.
+5. **The FFI seam — keep bare primitives ≤3 lines deep.** The C-ABI boundary necessarily
+   uses scalars (`shekyl_difficulty_lwma1_next(…, chain_height: u64, …)`); the discipline is
+   that the wrapper on each side reconstructs the strong type *immediately* so bare `u64`
+   heights never propagate into consensus logic. Today the C++ anon-namespace helpers hand
+   bare `uint64_t` straight into validation — bracket them.
+
 ## 8. PR E — Crypto object newtypes (lower priority, larger surface)
 
 Points / scalars / signatures / ciphertexts in crypto-pq / proofs / fcmp /
