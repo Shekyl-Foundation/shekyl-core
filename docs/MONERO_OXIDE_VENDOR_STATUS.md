@@ -1,5 +1,23 @@
 # Monero-oxide vendor status
 
+> **⚠️ SUPERSEDED (2026-06-25) — historical audit, retained for the record.**
+> This was a point-in-time freshness audit (PR 0.4/0.6, pin `3933664`) of a tree
+> that no longer exists in this shape. Two things changed it:
+>
+> - **Pin re-based** to `2753111c50abe04395102e060fb4dc0b57e8d278` (un-vendor
+>   slice-2 Track A; the crypto subtree was re-synced from the upstream tip, the
+>   `87acb57`/`3933664` deltas reapplied). The live pin is always
+>   `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`, not this doc.
+> - **App layer un-vendored** (slice-2 Track B): `io`/`generators`/`primitives`/
+>   `bulletproofs`/`fcmp++`/`rpc`/the main crate are now first-party `shekyl-*`
+>   crates, not tracked against upstream. Only the FCMP++ **crypto** subtree
+>   remains vendored.
+>
+> The three-upstream confusion this audit documented is resolved to one honest
+> lineage. Current source of truth:
+> [`SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md) (crypto-only workflow)
+> and [`design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md).
+
 Audit produced for **PR 0.4** of the `shekyl_v3_wallet_rust_rewrite` plan
 (see [`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
 Phase 0; in-repo continuation of the original Cursor plan).
