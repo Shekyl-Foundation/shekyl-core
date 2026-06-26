@@ -345,8 +345,12 @@ impl WalletOutput {
         let staking = match read_byte(r)? {
             0 => None,
             1 => {
-                let lock_tier = LockTier::from_id(read_byte(r)?)
-                    .ok_or_else(|| io::Error::other("invalid stake lock tier in WalletOutput"))?;
+                let tier_byte = read_byte(r)?;
+                let lock_tier = LockTier::from_id(tier_byte).ok_or_else(|| {
+                    io::Error::other(format!(
+                        "invalid stake lock tier byte {tier_byte} in WalletOutput"
+                    ))
+                })?;
                 Some(StakingMeta { lock_tier })
             }
             _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,

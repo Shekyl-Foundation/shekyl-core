@@ -52,7 +52,13 @@ pub fn tier_by_id(id: u8) -> Option<&'static StakeTier> {
 /// deserialization edge ([`LockTier::from_id`]) rejects an out-of-range tier byte
 /// instead of letting it flow on as a silent `u8` that only fails (or defaults to 0)
 /// at a later `tier_by_id` lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No `serde` derive: the only serialized form is the manual `u8` tier byte
+/// ([`LockTier::as_id`] / [`LockTier::from_id`]) written by the wire code. A derived
+/// `Serialize` would encode the *variant* (`"Short"` / index), contradicting that
+/// `u8` form — a serde consumer that needs the byte should add
+/// `#[serde(into = "u8", try_from = "u8")]` when it actually exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LockTier {
     /// Short lock tier (`id = 0`).
@@ -81,11 +87,17 @@ impl LockTier {
         }
     }
 
-    /// The full [`StakeTier`] parameters for this tier. Infallible — every
-    /// `LockTier` variant maps to a [`TIERS`] entry.
+    /// The full [`StakeTier`] parameters for this tier. Infallible by construction —
+    /// a closed enum matched directly onto [`TIERS`], with no table scan or panic
+    /// path. Relies on the `TIERS` index↔id contiguity invariant (asserted by
+    /// `tier_ids_are_contiguous_from_zero`).
     #[must_use]
     pub fn params(self) -> &'static StakeTier {
-        tier_by_id(self.as_id()).expect("every LockTier maps to a StakeTier table entry")
+        match self {
+            LockTier::Short => &TIERS[0],
+            LockTier::Medium => &TIERS[1],
+            LockTier::Long => &TIERS[2],
+        }
     }
 }
 
