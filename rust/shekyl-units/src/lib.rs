@@ -81,7 +81,7 @@ impl AtomicUnits {
     /// Wrap a raw `u64` of atomic units.
     ///
     /// An *edge* constructor: use it only where amounts cross into Shekyl's
-    /// typed domain (FFI, the `shekyl-oxide` fork, deserialization helpers).
+    /// typed domain (FFI, RPC decode, deserialization helpers).
     /// Inside the domain, build amounts from existing [`AtomicUnits`] via the
     /// checked arithmetic so no bare `u64` re-enters as an amount.
     pub const fn from_raw(atomic_units: u64) -> Self {

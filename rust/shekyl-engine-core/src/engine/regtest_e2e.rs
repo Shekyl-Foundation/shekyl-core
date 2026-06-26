@@ -530,15 +530,16 @@ async fn e2e_refresh_scans_coinbase_balance() {
 /// validates the tx-builder→shekyl-wire serialization + PQC signing-preimage byte-for-byte
 /// against the C++ daemon (no other test crosses the wallet→daemon spend boundary).
 ///
-/// NORTH STAR (gated) — committed as the acceptance gate, but it cannot pass yet. Run
-/// today it fails at `refresh`: the scanner parses daemon blocks via shekyl-oxide, which
-/// the daemon's blocks reject (`InvalidNode("invalid block")`). It goes green once (1) the
-/// §8 step-4 shekyl-oxide→shekyl-wire scanner migration routes block parsing through the
-/// daemon-KAT'd shekyl-wire parser, and (2) the tx-builder→shekyl-wire format migration
-/// makes the submitted bytes daemon-valid. Each migration lands as its own PR; this test
-/// is their joint acceptance gate.
+/// NORTH STAR (gated) — committed as the acceptance gate for the end-to-end
+/// wallet→daemon spend. The two migrations it once waited on have both landed: (1)
+/// the §8 step-4 scanner block-parsing migration onto the daemon-KAT'd `shekyl-wire`
+/// parser, and (2) the tx-builder→`shekyl-wire` spend-format migration (the
+/// `shekyl-oxide` serializers that originally diverged are dissolved). It remains
+/// `#[ignore]`d on the live-daemon harness (`SHEKYLD_BIN` + a running regtest
+/// daemon), which CI does not provide; run with a built daemon to exercise the full
+/// wallet→daemon spend boundary.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + the shekyl-oxide scanner + tx-builder migrations (currently blocks at refresh)"]
+#[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;

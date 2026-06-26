@@ -45,13 +45,15 @@ shekyl-scanner
 
 ## Dependencies
 
-- `shekyl-oxide` — Transaction/block types, FCMP module, IO primitives
-- `shekyl-rpc` — `ScannableBlock` type, daemon RPC traits
+- `shekyl-wire` — canonical genesis block/tx wire types + parsing
+- `shekyl-curve-io` / `shekyl-curve-primitives` — IO primitives + `Commitment`
+- `shekyl-rpc-client` — daemon RPC `Rpc` trait / `RpcError` / `FeeRate`
 - `shekyl-crypto-pq` — Hybrid KEM operations (X25519 + ML-KEM-768),
   `scan_output_recover`, `compute_output_key_image`
-- `shekyl-staking` — Staking tier definitions
+- `shekyl-staking` — `StakingMeta`, staking tier definitions
+- `shekyl-types` — `Timelock` and foundational domain newtypes
 - `shekyl-address` — Bech32m address encoding
-- `shekyl-generators` — `hash_to_point` for key image computation
+- `shekyl-curve-generators` — `hash_to_point` for key image computation
 
 ## Usage
 

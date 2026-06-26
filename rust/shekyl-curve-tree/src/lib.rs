@@ -17,7 +17,7 @@
 //!
 //! This is a lean, public-material-only crate. It depends on
 //! `shekyl-fcmp` (the curve-tree composition primitives, shared with the
-//! daemon through FFI) and `shekyl-oxide` (consensus maturity constants).
+//! daemon through FFI) and `shekyl-consensus` (consensus maturity constants).
 //! It deliberately does **not** depend on `shekyl-scanner`: the
 //! `tx_extra 0x07` parse is owned by `shekyl_scanner::extra::Extra` and
 //! runs at the block-decode boundary ([`client`], CT-3); this crate

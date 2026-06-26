@@ -21,14 +21,14 @@
 //!
 //! # Two-trait shape rationale (§2.5)
 //!
-//! `Rpc` lives in `shekyl-oxide` (the vendored upstream fork tracking
-//! `monero-oxide`); adding wallet-specific methods to it would either
-//! modify upstream-vendored code (increasing divergence pressure on
-//! the canary tracked in [`docs/CI_BASELINE.md`]) or be defined as
-//! an extension trait — which is exactly the two-trait shape under a
-//! different name. Consumers that need the inherited `Rpc` methods
-//! reach them through the supertrait bound rather than duplicating
-//! the surface on `DaemonEngine`.
+//! `Rpc` is the daemon-transport surface in `shekyl-rpc-client` (a first-party
+//! crate relocated from the vendored `shekyl-oxide` `rpc` in the un-vendor, so the
+//! original "don't modify upstream-vendored code / divergence-canary" pressure no
+//! longer applies). The two-trait shape is retained on its own merits: `Rpc` stays
+//! the generic, reusable daemon-transport surface and `DaemonEngine` carries the
+//! wallet-specific methods as a supertrait extension. Consumers that need the
+//! inherited `Rpc` methods reach them through the supertrait bound rather than
+//! duplicating the surface on `DaemonEngine`.
 //!
 //! # Stage-4 swap-in (§7)
 //!
