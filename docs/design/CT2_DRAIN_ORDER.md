@@ -202,8 +202,8 @@ re-raised:
    `shekyl_curve_generators::biased_hash_to_point`, whose Elligator-2 map ends in
    `res.mul_by_cofactor()` — explicitly *"Ensure this point lies within the
    prime-order subgroup"*
-   (`rust/shekyl-curve-generators/src/hash_to_point.rs:86`;
-   `biased_hash_to_point` at `:111-112`). So `Hp(O)`
+   (`rust/shekyl-curve-generators/src/hash_to_point.rs:90`;
+   `biased_hash_to_point` at `:115`). So `Hp(O)`
    carries no torsion, `O` is `is_torsion_free`-checked at output creation, and
    `C = zG + aH` lies in the prime-order subgroup by construction. No torsion
    enters the leaf, and even if a malformed on-chain `O` carried torsion, ground
