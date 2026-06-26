@@ -148,7 +148,13 @@ fn split_enc9(bytes: &[u8; 9]) -> ([u8; 8], u8) {
 /// scanner binds to that constant (so scanner ↔ wire unlock-time semantics
 /// cannot drift) and lifts the varint into the typed [`Timelock`] — a wallet
 /// concern, not a wire concern.
-fn timelock_from_unlock_time(raw: u64) -> Timelock {
+///
+/// This is the **canonical** raw-`u64` → [`Timelock`] lift for the wallet: the scan
+/// path uses it, and so does `WalletOutput` metadata deserialization
+/// ([`crate::output`]). Both go through here precisely so the block-height-only
+/// invariant (the timestamp form is never materialized as a `Block`) is enforced in
+/// one consensus-aware place rather than re-decided at each call site.
+pub(crate) fn timelock_from_unlock_time(raw: u64) -> Timelock {
     if raw == 0 {
         Timelock::None
     } else if raw < UNLOCK_TIME_BLOCK_SENTINEL {

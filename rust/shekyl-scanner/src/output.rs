@@ -157,7 +157,11 @@ impl Metadata {
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<Metadata> {
-        let additional_timelock = Timelock::from_unlock_raw(read_varint(r)?);
+        // Lift through the canonical, sentinel-aware lift (not a bare 0→None/else→Block
+        // cast): a persisted value `>= UNLOCK_TIME_BLOCK_SENTINEL` is the deleted
+        // timestamp form (corruption or a legacy cache), and is mapped to `None` rather
+        // than materialized as a huge `Timelock::Block`, preserving block-height-only.
+        let additional_timelock = crate::scan::timelock_from_unlock_time(read_varint(r)?);
 
         match read_byte(r)? {
             0 => {}

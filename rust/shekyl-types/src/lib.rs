@@ -357,24 +357,21 @@ pub enum Timelock {
 
 impl Timelock {
     /// The raw `unlock_time` value as persisted: `0` for [`Timelock::None`], else
-    /// the block height. Inverse of [`Timelock::from_unlock_raw`].
+    /// the block height.
+    ///
+    /// This is the forward half only. The reverse lift (raw `u64` → `Timelock`) is
+    /// **not** a context-free operation: a raw value must be discriminated against the
+    /// block-height/timestamp sentinel (`>= UNLOCK_TIME_BLOCK_SENTINEL` is the deleted
+    /// CryptoNote timestamp form, not a block height). That discrimination is a
+    /// consensus concern, so it lives with the consensus-aware consumer that owns the
+    /// wire format (`shekyl-scanner`'s `timelock_from_unlock_time`), not here — keeping
+    /// this foundational type free of a "treat any non-zero value as a block height"
+    /// footgun.
     #[must_use]
     pub const fn to_unlock_raw(self) -> u64 {
         match self {
             Timelock::None => 0,
             Timelock::Block(h) => h.to_raw(),
-        }
-    }
-
-    /// Lift a raw `unlock_time` varint into a typed timelock: `0` → [`Timelock::None`],
-    /// any other value → [`Timelock::Block`]. Block-height-only by construction;
-    /// callers reject the timestamp form upstream (consensus + ingestion).
-    #[must_use]
-    pub const fn from_unlock_raw(raw: u64) -> Self {
-        if raw == 0 {
-            Timelock::None
-        } else {
-            Timelock::Block(BlockHeight::from_raw(raw))
         }
     }
 }
