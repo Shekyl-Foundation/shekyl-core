@@ -8,7 +8,7 @@ mod lifecycle {
     use shekyl_scanner::{
         staker_pool::AccrualRecord, LedgerBlock, LedgerIndexes, LedgerIndexesExt,
     };
-    use shekyl_staking::StakingMeta;
+    use shekyl_staking::{LockTier, StakingMeta};
     use shekyl_units::AtomicUnits;
 
     use crate::{
@@ -66,7 +66,9 @@ mod lifecycle {
             0,
             100,
             amount,
-            Some(StakingMeta { lock_tier: tier }),
+            Some(StakingMeta {
+                lock_tier: LockTier::from_id(tier).expect("test tier in range"),
+            }),
         );
         indexes.process_scanned_outputs(
             &mut ledger,

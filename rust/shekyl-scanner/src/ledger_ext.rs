@@ -70,10 +70,10 @@ impl TransferDetailsExt for TransferDetails {
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
         let (staked, stake_tier, stake_lock_until) = match output.staking() {
             Some(meta) => {
-                let lock_blocks = shekyl_staking::tiers::tier_by_id(meta.lock_tier)
-                    .map(|t| t.lock_blocks)
-                    .unwrap_or(0);
-                (true, meta.lock_tier, block_height + lock_blocks)
+                // `LockTier::params` is infallible (every tier maps to a table entry),
+                // replacing the old `tier_by_id(u8).unwrap_or(0)` fallback.
+                let lock_blocks = meta.lock_tier.params().lock_blocks;
+                (true, meta.lock_tier.as_id(), block_height + lock_blocks)
             }
             None => (false, 0, 0),
         };
@@ -270,7 +270,7 @@ mod x5_eligible_height_tests {
     use crate::output::WalletOutput;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_curve_primitives::Commitment;
-    use shekyl_staking::StakingMeta;
+    use shekyl_staking::{LockTier, StakingMeta};
     use shekyl_types::{BlockHeight, Timelock};
 
     fn dummy_output(staking: Option<StakingMeta>) -> WalletOutput {
@@ -316,10 +316,8 @@ mod x5_eligible_height_tests {
     /// not treated as spendable before its lock expires.
     #[test]
     fn eligible_height_respects_stake_lock() {
-        let tier = 2u8;
-        let lock_blocks = shekyl_staking::tiers::tier_by_id(tier)
-            .map(|t| t.lock_blocks)
-            .expect("tier 2 exists");
+        let tier = LockTier::Long;
+        let lock_blocks = tier.params().lock_blocks;
         let td = TransferDetails::from_wallet_output(
             &dummy_output(Some(StakingMeta { lock_tier: tier })),
             100,
