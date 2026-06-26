@@ -10,7 +10,7 @@
 pub(crate) mod staking {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_curve_primitives::Commitment;
-    use shekyl_staking::StakingMeta;
+    use shekyl_staking::{LockTier, StakingMeta};
     use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
@@ -115,7 +115,9 @@ pub(crate) mod staking {
             0,
             100,
             5_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Long,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
         assert!(td.staked);
@@ -142,7 +144,9 @@ pub(crate) mod staking {
             0,
             102,
             2_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Medium,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 5000);
 
@@ -164,7 +168,9 @@ pub(crate) mod staking {
             0,
             104,
             3_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Short,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 5000);
 
@@ -180,7 +186,9 @@ pub(crate) mod staking {
             0,
             105,
             1_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Short,
+            }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 5000);
         td.spent = true;
@@ -196,7 +204,9 @@ pub(crate) mod staking {
             0,
             106,
             5_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Long,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
         assert!(td.has_claimable_rewards(5000));
@@ -209,7 +219,9 @@ pub(crate) mod staking {
             0,
             107,
             5_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Medium,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
@@ -224,7 +236,9 @@ pub(crate) mod staking {
             0,
             108,
             5_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Short,
+            }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.last_claimed_height = 1000 + tier_lock(0);
@@ -239,7 +253,9 @@ pub(crate) mod staking {
             0,
             109,
             5_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Medium,
+            }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.spent = true;
@@ -255,7 +271,9 @@ pub(crate) mod staking {
             0,
             110,
             2_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Long,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
@@ -274,7 +292,9 @@ pub(crate) mod staking {
             0,
             111,
             2_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Medium,
+            }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.last_claimed_height = 3000;
@@ -291,7 +311,9 @@ pub(crate) mod staking {
             0,
             112,
             2_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Short,
+            }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
@@ -308,7 +330,9 @@ pub(crate) mod staking {
             0,
             113,
             2_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
+            Some(StakingMeta {
+                lock_tier: LockTier::Short,
+            }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.last_claimed_height = 1000 + tier_lock(0);
@@ -332,7 +356,9 @@ pub(crate) mod staking {
                     1,
                     201,
                     5_000_000_000,
-                    Some(StakingMeta { lock_tier: 2 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Long,
+                    }),
                 ),
                 5_000_000_000,
             ),
@@ -358,7 +384,9 @@ pub(crate) mod staking {
                     0,
                     300,
                     2_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Medium,
+                    }),
                 ),
                 2_000_000_000,
             ),
@@ -368,7 +396,9 @@ pub(crate) mod staking {
                     1,
                     301,
                     3_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Short,
+                    }),
                 ),
                 3_000_000_000,
             ),
@@ -394,7 +424,9 @@ pub(crate) mod staking {
                     0,
                     400,
                     2_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Short,
+                    }),
                 ),
                 2_000_000_000,
             ),
@@ -404,7 +436,9 @@ pub(crate) mod staking {
                     1,
                     401,
                     3_000_000_000,
-                    Some(StakingMeta { lock_tier: 2 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Long,
+                    }),
                 ),
                 3_000_000_000,
             ),
@@ -433,7 +467,9 @@ pub(crate) mod staking {
                     0,
                     500,
                     5_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Medium,
+                    }),
                 ),
                 5_000_000_000,
             )]),
@@ -449,7 +485,9 @@ pub(crate) mod staking {
                     0,
                     501,
                     1_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Short,
+                    }),
                 ),
                 1_000_000_000,
             )]),
@@ -474,7 +512,9 @@ pub(crate) mod staking {
                 0,
                 600,
                 2_000_000_000,
-                Some(StakingMeta { lock_tier: 0 }),
+                Some(StakingMeta {
+                    lock_tier: LockTier::Short,
+                }),
             ),
             2_000_000_000,
         )];
@@ -506,7 +546,9 @@ pub(crate) mod staking {
                 0,
                 700,
                 5_000_000_000,
-                Some(StakingMeta { lock_tier: 2 }),
+                Some(StakingMeta {
+                    lock_tier: LockTier::Long,
+                }),
             ),
             5_000_000_000,
         )];
@@ -654,7 +696,9 @@ pub(crate) mod staking {
                     1,
                     841,
                     1_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
+                    Some(StakingMeta {
+                        lock_tier: LockTier::Medium,
+                    }),
                 ),
                 1_000_000_000,
             ),

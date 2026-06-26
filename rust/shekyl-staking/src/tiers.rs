@@ -44,6 +44,60 @@ pub fn tier_by_id(id: u8) -> Option<&'static StakeTier> {
     TIERS.iter().find(|t| t.id == id)
 }
 
+/// The lock-duration tier of a staked output, as a closed enum.
+///
+/// The on-chain / serialized form is the `u8` tier index ([`LockTier::as_id`]:
+/// `Short = 0`, `Medium = 1`, `Long = 2`). Carrying the tier as this enum rather than
+/// a bare `u8` makes any other value unrepresentable inside the typed domain — the
+/// deserialization edge ([`LockTier::from_id`]) rejects an out-of-range tier byte
+/// instead of letting it flow on as a silent `u8` that only fails (or defaults to 0)
+/// at a later `tier_by_id` lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum LockTier {
+    /// Short lock tier (`id = 0`).
+    Short = 0,
+    /// Medium lock tier (`id = 1`).
+    Medium = 1,
+    /// Long lock tier (`id = 2`).
+    Long = 2,
+}
+
+impl LockTier {
+    /// The serialized `u8` tier index.
+    #[must_use]
+    pub const fn as_id(self) -> u8 {
+        self as u8
+    }
+
+    /// Lift a serialized tier index into a [`LockTier`], or `None` if out of range.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<Self> {
+        match id {
+            0 => Some(Self::Short),
+            1 => Some(Self::Medium),
+            2 => Some(Self::Long),
+            _ => None,
+        }
+    }
+
+    /// The full [`StakeTier`] parameters for this tier. Infallible — every
+    /// `LockTier` variant maps to a [`TIERS`] entry.
+    #[must_use]
+    pub fn params(self) -> &'static StakeTier {
+        tier_by_id(self.as_id()).expect("every LockTier maps to a StakeTier table entry")
+    }
+}
+
+impl zeroize::Zeroize for LockTier {
+    fn zeroize(&mut self) {
+        // The tier is public chain data, not a secret; resetting to the default tier
+        // satisfies the `ZeroizeOnDrop` derive on containing wallet structs without
+        // pretending to scrub a secret (mirrors `shekyl_types::Timelock`).
+        *self = LockTier::Short;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +179,30 @@ mod tests {
     fn max_claim_range_matches_config() {
         assert_eq!(MAX_CLAIM_RANGE, GENERATED_STAKE_MAX_CLAIM_RANGE);
         const { assert!(MAX_CLAIM_RANGE > 0) };
+    }
+
+    #[test]
+    fn lock_tier_round_trips_and_maps_to_params() {
+        for (tier, id) in [
+            (LockTier::Short, 0u8),
+            (LockTier::Medium, 1),
+            (LockTier::Long, 2),
+        ] {
+            assert_eq!(tier.as_id(), id, "as_id");
+            assert_eq!(LockTier::from_id(id), Some(tier), "from_id round-trip");
+            // `params()` is the infallible bridge to the `TIERS` table.
+            assert_eq!(tier.params().id, id);
+            assert_eq!(
+                tier.params().lock_blocks,
+                tier_by_id(id).unwrap().lock_blocks
+            );
+        }
+    }
+
+    #[test]
+    fn lock_tier_rejects_out_of_range_ids() {
+        for id in 3..=255u8 {
+            assert_eq!(LockTier::from_id(id), None, "from_id({id}) should be None");
+        }
     }
 }

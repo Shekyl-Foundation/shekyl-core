@@ -364,7 +364,8 @@ empties — the same double-handling trap one level down. Each is a B1 input.
   `Rpc` trait is still the live wallet→daemon surface).
 - **PR 2 — dissolve the main crate (genesis-adjacent).** `Timelock` →
   `shekyl-types` block-height-only (drop the `Time` variant; `Block(BlockHeight)`),
-  `StakingMeta` → `shekyl-staking` (`lock_tier: u8` kept; `LockTier` enum deferred),
+  `StakingMeta` → `shekyl-staking` (`lock_tier` is now the typed `LockTier` enum —
+  the un-vendor type sweep replaced the magic `u8` and added wire-edge validation),
   live lock-window consts → `shekyl-consensus`, dead consts dropped, the re-export
   facade torn down + crate deleted. Carries the B3 doc reconcile (vendoring-doc →
   crypto-only; `MONERO_OXIDE_VENDOR_STATUS.md` + `CI_BASELINE.md` → pin

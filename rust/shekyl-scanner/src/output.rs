@@ -14,7 +14,7 @@ use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
 use shekyl_curve_io::*;
 use shekyl_curve_primitives::Commitment;
-use shekyl_staking::StakingMeta;
+use shekyl_staking::{LockTier, StakingMeta};
 use shekyl_types::Timelock;
 
 use crate::extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE};
@@ -321,7 +321,7 @@ impl WalletOutput {
         match &self.staking {
             Some(s) => {
                 w.write_all(&[1])?;
-                w.write_all(&[s.lock_tier])?;
+                w.write_all(&[s.lock_tier.as_id()])?;
             }
             None => w.write_all(&[0])?,
         }
@@ -345,7 +345,8 @@ impl WalletOutput {
         let staking = match read_byte(r)? {
             0 => None,
             1 => {
-                let lock_tier = read_byte(r)?;
+                let lock_tier = LockTier::from_id(read_byte(r)?)
+                    .ok_or_else(|| io::Error::other("invalid stake lock tier in WalletOutput"))?;
                 Some(StakingMeta { lock_tier })
             }
             _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,

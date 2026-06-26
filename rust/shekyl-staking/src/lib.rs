@@ -15,7 +15,7 @@ pub use error::StakingError;
 pub use meta::StakingMeta;
 pub use registry::{StakeEntry, StakeRegistry};
 pub use rewards::distribute_staker_rewards;
-pub use tiers::{StakeTier, TierTable, MAX_CLAIM_RANGE, TIERS};
+pub use tiers::{LockTier, StakeTier, TierTable, MAX_CLAIM_RANGE, TIERS};
 
 #[cfg(test)]
 mod property_tests;
