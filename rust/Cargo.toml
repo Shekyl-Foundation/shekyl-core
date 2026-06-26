@@ -71,10 +71,6 @@ members = [
     "shekyl-fcmp-proofs",
     "shekyl-rpc-client",
     "shekyl-rpc-transport",
-    # The last vendored application crate — dissolves in the next slice (the
-    # wallet-domain Timelock/StakingMeta move native; the re-export facade is torn
-    # down). Until then it carries only those types + a thin re-export shim.
-    "shekyl-oxide/shekyl-oxide",
 
     # Shekyl-native scanner crate
     "shekyl-scanner",
@@ -324,7 +320,6 @@ shekyl-curve-generators = { opt-level = 3 }
 shekyl-curve-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
 shekyl-fcmp-proofs = { opt-level = 3 }
-shekyl-oxide = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

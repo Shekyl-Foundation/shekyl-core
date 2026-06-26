@@ -2416,7 +2416,7 @@ mod tests {
         use curve25519_dalek::edwards::CompressedEdwardsY;
         use curve25519_dalek::scalar::Scalar;
         use shekyl_crypto_pq::output::construct_output;
-        use shekyl_oxide::primitives::Commitment;
+        use shekyl_curve_primitives::Commitment;
         use shekyl_scanner::{RecoveredWalletOutput, WalletOutput};
 
         let blob = test_account_blob();
@@ -2678,8 +2678,8 @@ mod tests {
     ) -> (Arc<LocalLedger>, TempDir, CurveTreeHandle) {
         use curve25519_dalek::scalar::Scalar;
         use shekyl_crypto_pq::output::construct_output;
+        use shekyl_curve_primitives::Commitment;
         use shekyl_curve_tree::{RawOutput, TargetKind};
-        use shekyl_oxide::primitives::Commitment;
 
         // Ledger side: the same `make_recovered_output` outputs `populate_ledger`
         // wires the secret-pathway fields (`source_ciphertext`, `output_handle`,

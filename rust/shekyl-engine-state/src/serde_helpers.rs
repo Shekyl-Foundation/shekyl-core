@@ -41,7 +41,7 @@ use serde::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 // ── EdwardsPoint (compressed Y, 32 bytes, canonical) ──
 

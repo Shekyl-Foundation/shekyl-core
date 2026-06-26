@@ -3821,8 +3821,8 @@ dependencies = [
  "rand_chacha 0.3.1",
  "redb",
  "serde_json",
+ "shekyl-consensus",
  "shekyl-fcmp",
- "shekyl-oxide",
  "tempfile",
 ]
 
@@ -3922,7 +3922,6 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
- "shekyl-oxide",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-scanner",
@@ -4013,7 +4012,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-crypto-pq",
- "shekyl-oxide",
+ "shekyl-curve-primitives",
  "shekyl-scanner",
  "shekyl-staking",
  "shekyl-types",
@@ -4134,23 +4133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-oxide"
-version = "0.1.4-alpha"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "hex-literal",
- "serde",
- "serde_json",
- "shekyl-bulletproofs",
- "shekyl-curve-generators",
- "shekyl-curve-io",
- "shekyl-curve-primitives",
- "std-shims",
- "zeroize",
-]
-
-[[package]]
 name = "shekyl-pow-randomx"
 version = "3.1.0"
 dependencies = [
@@ -4240,8 +4222,9 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-engine-state",
- "shekyl-oxide",
  "shekyl-rpc-client",
  "shekyl-scanner",
  "shekyl-staking",
@@ -4321,7 +4304,6 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
- "shekyl-oxide",
  "shekyl-rct-balance",
  "shekyl-units",
  "shekyl-wire",
@@ -4359,13 +4341,13 @@ dependencies = [
  "rand_core 0.6.4",
  "serde_json",
  "shekyl-bulletproofs",
+ "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
- "shekyl-oxide",
  "shekyl-rct-balance",
  "shekyl-tx-builder",
  "shekyl-units",

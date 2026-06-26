@@ -66,7 +66,7 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, recover_combined_ss, scan_output_recover,
 };
 use shekyl_crypto_pq::output_claim::{output_spend_offset_scalar, PRIMARY_CLAIM_INDEX_LE};
-use shekyl_oxide::generators::hash_to_point;
+use shekyl_curve_generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 

@@ -209,6 +209,8 @@ use shekyl_crypto_pq::handle::derive_output_handle;
 #[cfg(feature = "bench-internals")]
 use shekyl_crypto_pq::kem::HybridCiphertext;
 #[cfg(feature = "bench-internals")]
+use shekyl_curve_primitives::Commitment;
+#[cfg(feature = "bench-internals")]
 use shekyl_engine_core::__bench_internals::engine_local_ledger_for_bench;
 #[cfg(feature = "bench-internals")]
 use shekyl_engine_state::{
@@ -216,8 +218,6 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-#[cfg(feature = "bench-internals")]
-use shekyl_oxide::primitives::Commitment;
 
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.

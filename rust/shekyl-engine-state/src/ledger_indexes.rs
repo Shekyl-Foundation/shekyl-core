@@ -509,7 +509,7 @@ mod tests {
         transfer::SPENDABLE_AGE,
     };
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     fn ki(b: u8) -> KeyImage {
         KeyImage::from_canonical_bytes([b; 32])

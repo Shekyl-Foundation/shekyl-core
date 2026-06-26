@@ -62,7 +62,7 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::keys::SpendPublicKey;
 use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
-use shekyl_oxide::generators::hash_to_point;
+use shekyl_curve_generators::hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;

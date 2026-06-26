@@ -35,7 +35,7 @@ shekyl-address = { path = "../shekyl-address" }
 # type-system protection at the engine-state boundary; serialization
 # is `#[serde(transparent)]` so the on-disk format is unchanged.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-staking = { path = "../shekyl-staking" }
 # `AtomicUnits` amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md). The
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
@@ -65,7 +65,6 @@ gungraun = "0.19"
 # that is where the `TransferDetails` input type is defined. Dev-only, does
 # not widen the crate's runtime dep graph.
 shekyl-scanner = { path = "../shekyl-scanner" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 
 [[bench]]

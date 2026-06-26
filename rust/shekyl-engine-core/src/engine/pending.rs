@@ -855,7 +855,7 @@ mod tests {
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_address::Network;
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_scanner::{
         LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked,
         WalletOutput,

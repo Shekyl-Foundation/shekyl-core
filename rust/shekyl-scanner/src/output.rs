@@ -12,7 +12,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
-use shekyl_oxide::{io::*, primitives::Commitment};
+use shekyl_curve_io::*;
+use shekyl_curve_primitives::Commitment;
 use shekyl_staking::StakingMeta;
 use shekyl_types::Timelock;
 
@@ -272,7 +273,7 @@ impl WalletOutput {
         index_on_blockchain: u64,
         key: curve25519_dalek::edwards::EdwardsPoint,
         key_offset: curve25519_dalek::Scalar,
-        commitment: shekyl_oxide::primitives::Commitment,
+        commitment: shekyl_curve_primitives::Commitment,
         staking: Option<StakingMeta>,
     ) -> Self {
         WalletOutput {

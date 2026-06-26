@@ -27,7 +27,8 @@ tracing = "0.1"
 # `shekyl-oxide` is retained only for the residual typed domain elements
 # (`Timelock`, `StakingMeta`, `CompressedPoint`, `Commitment`).
 shekyl-wire = { path = "../shekyl-wire" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
@@ -42,7 +43,7 @@ shekyl-types = { path = "../shekyl-types" }
 
 [features]
 default = ["std"]
-std = ["shekyl-oxide/std", "shekyl-rpc-client/std"]
+std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primitives/std", "shekyl-rpc-client/std"]
 test-utils = []
 
 [dev-dependencies]

@@ -31,7 +31,7 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # Consensus maturity constants: `DEFAULT_LOCK_WINDOW` (+10) and
 # `COINBASE_LOCK_WINDOW` (+60). Sourced from the low-level protocol
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-consensus = { path = "../shekyl-consensus" }
 
 # Reads `config/consensus_constants.json` to emit the FCMP++
 # reference-block age constants (`build.rs`). Mirrors

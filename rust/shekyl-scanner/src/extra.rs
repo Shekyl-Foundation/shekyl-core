@@ -16,7 +16,7 @@ use zeroize::Zeroize;
 
 use curve25519_dalek::edwards::EdwardsPoint;
 
-use shekyl_oxide::io::*;
+use shekyl_curve_io::*;
 
 // PaymentId moved to `shekyl-engine-state`; re-exported here so `crate::extra::PaymentId`
 // and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.

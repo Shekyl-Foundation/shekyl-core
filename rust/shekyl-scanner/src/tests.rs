@@ -9,7 +9,7 @@
 #[cfg(test)]
 pub(crate) mod staking {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_staking::StakingMeta;
     use shekyl_types::Timelock;
     use zeroize::Zeroizing;
@@ -812,7 +812,7 @@ mod ledger_proptest {
     use proptest::prelude::*;
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
@@ -1007,7 +1007,7 @@ mod ledger_proptest {
 #[cfg(test)]
 mod sync_bookkeeping {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 

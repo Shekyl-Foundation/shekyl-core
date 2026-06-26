@@ -14,7 +14,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     output::WalletOutput,
     scan::{RecoveredWalletOutput, Timelocked},

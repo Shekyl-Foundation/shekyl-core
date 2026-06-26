@@ -260,8 +260,8 @@ mod tests {
     #[test]
     fn rewind_keeps_match_when_transfer_survives() {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        use shekyl_curve_primitives::Commitment;
         use shekyl_engine_state::{transfer::TransferDetails, LedgerBlock};
-        use shekyl_oxide::primitives::Commitment;
 
         let rid = 8;
         let tx_hash = shekyl_types::TxHash::from_bytes([0xCD; 32]);

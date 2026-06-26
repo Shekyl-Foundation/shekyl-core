@@ -6,8 +6,8 @@
 //! keeps shekyl-oxide's **crypto** (`Bulletproof`) but no longer its wire/proof types,
 //! and the four §3 divergences of the old shekyl-oxide encoder are gone with it.
 
+use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
-use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -239,7 +239,7 @@ pub fn tx_prefix_hash_from_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::Bulletproof;
 
     fn minimal_input() -> WireEncodeInput {
         WireEncodeInput {
@@ -292,7 +292,7 @@ mod tests {
         // The migration replaces the tx-builder's `shekyl_oxide::keccak256` with
         // shekyl-wire's `cn_fast_hash`. Pin that they are the same primitive (original
         // Keccak-256) so the signing-hash bytes are preserved.
-        use shekyl_oxide::primitives::keccak256;
+        use shekyl_curve_primitives::keccak256;
         for input in [
             &b""[..],
             b"Shekyl",

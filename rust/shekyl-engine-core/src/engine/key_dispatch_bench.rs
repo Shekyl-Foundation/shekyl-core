@@ -59,12 +59,12 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use shekyl_crypto_pq::account::{generate_account_from_raw_seed, AllKeysBlob, DerivationNetwork};
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_state::{
     payment_id::PaymentId,
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_oxide::primitives::Commitment;
 use shekyl_types::TxHash;
 
 use crate::engine::key_actor::KeyEngineHandle;

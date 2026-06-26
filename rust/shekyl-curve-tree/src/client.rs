@@ -819,8 +819,8 @@ mod tests {
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
+    use shekyl_consensus::COINBASE_LOCK_WINDOW;
     use shekyl_fcmp::tree::selene_hash_init;
-    use shekyl_oxide::COINBASE_LOCK_WINDOW;
 
     /// Standard Ed25519 basepoint, compressed — a valid, torsion-free
     /// point `construct_leaf` accepts for both `O` and `C`.

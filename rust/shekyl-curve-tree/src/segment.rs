@@ -9,10 +9,10 @@
 //! CT-0 gate harness (`rust/shekyl-fcmp/tests/curve_tree_freeze.rs`) and are
 //! pinned in `docs/design/CT1_ROUND1_PINS.md`.
 
+use shekyl_consensus::DEFAULT_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_is_selene, try_build_layers, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
-use shekyl_oxide::DEFAULT_LOCK_WINDOW;
 
 /// Sub-root layer index `j` for segment boundaries (provisional; §7.2.2).
 pub const SEGMENT_LAYER_J: u8 = 2;

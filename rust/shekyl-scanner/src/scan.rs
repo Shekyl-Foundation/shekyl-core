@@ -16,7 +16,8 @@
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use shekyl_oxide::{io::CompressedPoint, primitives::Commitment};
+use shekyl_curve_io::CompressedPoint;
+use shekyl_curve_primitives::Commitment;
 use shekyl_types::{BlockHeight, Timelock};
 use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 

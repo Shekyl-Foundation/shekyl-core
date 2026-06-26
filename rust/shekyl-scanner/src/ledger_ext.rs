@@ -269,7 +269,7 @@ mod x5_eligible_height_tests {
     use super::*;
     use crate::output::WalletOutput;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_staking::StakingMeta;
     use shekyl_types::{BlockHeight, Timelock};
 

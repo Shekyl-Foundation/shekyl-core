@@ -23,7 +23,7 @@ mod lifecycle {
         staking: Option<StakingMeta>,
     ) -> shekyl_scanner::RecoveredWalletOutput {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-        use shekyl_oxide::primitives::Commitment;
+        use shekyl_curve_primitives::Commitment;
 
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&global_index.to_le_bytes());
