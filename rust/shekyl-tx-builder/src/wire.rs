@@ -385,10 +385,12 @@ mod tests {
 
     #[test]
     fn shekyl_oxide_wire_types_are_removed() {
-        // The wire/proof-type imports moved to shekyl-wire; only shekyl-oxide CRYPTO
-        // (`bulletproofs::Bulletproof`, and `primitives::keccak256` in a test) remains.
-        // wire.rs is checked on its PRODUCTION half only (split off the test module), so
-        // these very assertion strings don't self-match.
+        // The wire/proof-type imports moved to shekyl-wire (slice 1); the Bp+ crypto now
+        // comes from shekyl-bulletproofs and keccak from shekyl-curve-primitives, and the
+        // shekyl-oxide crate is fully dissolved (slice 2). These assertions remain as a
+        // cheap tripwire that the old `shekyl_oxide::{transaction,fcmp}` coupling never
+        // reappears. wire.rs is checked on its PRODUCTION half only (split off the test
+        // module), so these very assertion strings don't self-match.
         let wire_prod = include_str!("wire.rs")
             .split("#[cfg(test)]")
             .next()

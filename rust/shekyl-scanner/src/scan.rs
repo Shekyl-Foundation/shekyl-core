@@ -140,8 +140,9 @@ fn split_enc9(bytes: &[u8; 9]) -> ([u8; 8], u8) {
 /// canonical chain data. [`InternalScanner::scan_transaction_with_cancel`]
 /// already skips any tx whose `unlock_time` is in the timestamp form before
 /// this lifter runs, so the final arm is unreachable on the scan path; it is
-/// mapped to [`Timelock::None`] (rather than `Timelock::Time`) so the dead
-/// `Timelock::Time` can never be materialized from chain bytes regardless of
+/// mapped to [`Timelock::None`]. `Timelock` is block-height-only — the CryptoNote
+/// `Time` variant was removed in the un-vendor dissolve — so the timestamp form is
+/// not representable and can never be materialized from chain bytes regardless of
 /// caller.
 ///
 /// `shekyl-wire` owns the wire-format sentinel and keeps the raw varint; the
@@ -514,7 +515,8 @@ impl InternalScanner {
         // surface phantom balance. Refuse to recover ANY output from it, the
         // same skip-and-warn shape as the `MAX_OUTPUTS` gate above. This also
         // keeps `timelock_from_unlock_time` unreachable with timestamp-form
-        // input, so the dead `Timelock::Time` is never materialized.
+        // input — belt-and-suspenders, since `Timelock` is block-height-only and
+        // the timestamp form is not representable anyway.
         //
         // Like the size gate, this is O(1) at function entry and not subject to
         // the cancellation check (it fires before any per-output derivation).
@@ -1195,8 +1197,8 @@ mod gate_tests {
         // timestamp form (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is non-canonical
         // (consensus rejects it — GENESIS §9 creation cut). Defense-in-depth:
         // the scanner skips it with the same skip-and-WARN shape as the size
-        // gate, so the dead `Timelock::Time` is never materialized even if a
-        // caller bypassed the ingestion-boundary reject.
+        // gate, so the timestamp form is never lifted even if a caller bypassed
+        // the ingestion-boundary reject (`Timelock` has no `Time` variant anyway).
         let scanner = placeholder_scanner();
         let mut tx = synthesize_tx(1);
         tx.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL;
@@ -1268,8 +1270,8 @@ mod gate_tests {
     #[test]
     fn timelock_from_unlock_time_maps_block_height_and_never_time() {
         // `0` → no timelock; below the sentinel → block height; the sentinel
-        // and above (the deleted timestamp form) → `None`, never `Time`, so the
-        // dead `Timelock::Time` cannot be materialized from chain bytes.
+        // and above (the deleted timestamp form) → `None` — `Timelock` has no
+        // `Time` variant, so the timestamp form cannot be materialized.
         assert_eq!(timelock_from_unlock_time(0), Timelock::None);
         assert_eq!(
             timelock_from_unlock_time(1),

@@ -27,7 +27,7 @@ static SAMPLE_MAINNET_ADDR: LazyLock<String> = LazyLock::new(|| {
 });
 
 #[tokio::test]
-#[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029 (default mainnet); run with: cargo test -p shekyl-simple-request-rpc --test tests -- --ignored"]
+#[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029 (default mainnet); run with: cargo test -p shekyl-rpc-transport --test tests -- --ignored"]
 async fn test_rpc() {
     use shekyl_rpc_client::Rpc;
 

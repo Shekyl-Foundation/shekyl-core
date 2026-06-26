@@ -88,8 +88,8 @@ existing `AtomicUnits` everywhere a raw `u64` *amount* persists or flows.
 |---|---|---|
 | [`transfer.rs`](../../rust/shekyl-engine-state/src/transfer.rs) | amounts via `Commitment` accessor — audit completeness | persisted |
 | [`payment_request.rs:84`](../../rust/shekyl-engine-state/src/payment_request.rs) | `amount_atomic: u64` | persisted |
-| [`shekyl-oxide primitives` `Commitment.amount`](../../rust/shekyl-oxide/shekyl-oxide/primitives/src/lib.rs) | `amount: u64` | vendored-but-ours; edge accessor |
-| [`shekyl-oxide` `ProofBase.fee`](../../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs) | `fee: u64` | vendored-but-ours |
+| [`shekyl-curve-primitives` `Commitment.amount`](../../rust/shekyl-curve-primitives/src/lib.rs) | `amount: u64` | first-party (relocated from shekyl-oxide); edge accessor |
+| `shekyl-wire` transaction `fee` | `fee: u64` | the oxide `fcmp.rs` `ProofBase.fee` was deleted in the slice-1 wire extraction; the fee now lives on the genesis tx in `shekyl-wire` (see the `tx-builder wire.rs:26` row below) |
 | [`tx-builder wire.rs:26`](../../rust/shekyl-tx-builder/src/wire.rs) | `fee: u64` | |
 | economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs:62`](../../rust/shekyl-economics/src/params.rs) `money_supply`, emission returns | reward/fee/supply | |
 | staking [`registry.rs:9`](../../rust/shekyl-staking/src/registry.rs) `StakeEntry.amount` | | |
@@ -122,7 +122,7 @@ field per §1).
 | [`sync_state_block.rs:75,86`](../../rust/shekyl-engine-state/src/sync_state_block.rs) `creation_anchor_hash`, `pending_tx_hashes` | persisted |
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
 | [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
-| [`shekyl-oxide block.rs:33,47,90`](../../rust/shekyl-oxide/shekyl-oxide/src/block.rs) `previous`, `curve_tree_root`, `transactions` | vendored-but-ours wire — distinguish `BlockHash` vs `CurveTreeRoot` |
+| `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | the oxide `block.rs` was deleted in the slice-1 wire extraction; these wire fields now live in `shekyl-wire`'s block serializer — distinguish `BlockHash` vs `CurveTreeRoot` |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
 
 ## 7. PR D — Heights, indices, timestamps (the clock-semantics decision)

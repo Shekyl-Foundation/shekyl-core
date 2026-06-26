@@ -245,9 +245,8 @@ pub struct TxRelayResponse {
 /// This is abstract such that users can use an HTTP library (which being their choice), a
 /// Tor/i2p-based transport, or even a memory buffer an external service somehow routes.
 ///
-/// While no implementors are directly provided, [shekyl-simple-request-rpc](
-///   https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/rpc/simple-request
-/// ) is recommended.
+/// While no implementors are directly provided here, the first-party
+/// `shekyl-rpc-transport` crate (the simple-request/hyper transport) is recommended.
 pub trait Rpc: Sync + Clone {
     /// Perform a POST request to the specified route with the specified body.
     ///

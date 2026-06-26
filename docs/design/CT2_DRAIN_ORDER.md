@@ -199,10 +199,10 @@ re-raised:
    (`CURVE_TREE_CLIENT.md` §7.7, single-canonical-composition), so there is no
    site at which a "hygienic torsion clear" could be added unilaterally.
 2. **`Hp(O)` is already torsion-free.** `construct_leaf` computes `Hp(O)` via
-   `shekyl_generators::biased_hash_to_point`, whose Elligator-2 map ends in
+   `shekyl_curve_generators::biased_hash_to_point`, whose Elligator-2 map ends in
    `res.mul_by_cofactor()` — explicitly *"Ensure this point lies within the
    prime-order subgroup"*
-   (`rust/shekyl-oxide/shekyl-oxide/generators/src/hash_to_point.rs:86`;
+   (`rust/shekyl-curve-generators/src/hash_to_point.rs:86`;
    `biased_hash_to_point` at `:111-112`). So `Hp(O)`
    carries no torsion, `O` is `is_torsion_free`-checked at output creation, and
    `C = zG + aH` lies in the prime-order subgroup by construction. No torsion

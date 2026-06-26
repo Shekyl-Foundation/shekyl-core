@@ -5,11 +5,10 @@
 
 //! Byte-exact `txin_archival_serve_credit_response` wire (gate-2 §5.1).
 //!
-//! Serialization matches [`shekyl-oxide` transaction input] varint discipline
-//! (`shekyl-curve-io`). Signature preimage field encoding uses **fixed-width** `le64` /
-//! `le32` where the gate-2 §5.2 preimage specifies it, not the on-wire varints.
-//!
-//! [`shekyl-oxide` transaction input]: ../../../shekyl-oxide/shekyl-oxide/src/transaction.rs
+//! Serialization matches the canonical genesis tx-input varint discipline
+//! (`shekyl-wire`'s transaction serializer, over `shekyl-curve-io`). Signature preimage
+//! field encoding uses **fixed-width** `le64` / `le32` where the gate-2 §5.2 preimage
+//! specifies it, not the on-wire varints.
 
 use core::fmt;
 use std::io::{self, Read, Write};
