@@ -843,6 +843,59 @@ fn print_cover_fn_report() {
     }
 }
 
+fn print_cover_targeting_report() {
+    let report = cover::run_targeting_report();
+    eprintln!("shekyl-staking-sim — statistic DQ: count-uniform vs histogram-per-rung (§7.8/§7.9)");
+    eprintln!(
+        "Rung-local suppression adversary: withdraw m own bonds (at the victim's rung for the"
+    );
+    eprintln!("  per-rung response, globally for the uniform one) across a closed epoch, so f's");
+    eprintln!(
+        "  epoch-close statistic sees the suppressed value. Thin N_P corner; lower set = more"
+    );
+    eprintln!(
+        "  narrowed cover = worse for the victim. MOD = a moderate (targetable) rung; thin rungs the"
+    );
+    eprintln!(
+        "  histogram already concedes and dense rungs swamp the attacker — the middle is where a"
+    );
+    eprintln!(
+        "  rung-local depopulation moves the dial. honest avg local occ (±{} rungs) = {:.2}.",
+        report.w_ref, report.honest_avg_local
+    );
+    eprintln!();
+    eprintln!(
+        "{:>4} | {:>9} {:>9} | {:>10} {:>10}",
+        "m", "cntSet", "histSet", "cntModSet", "histModSet",
+    );
+    for p in &report.points {
+        eprintln!(
+            "{:>4} | {:>9.2} {:>9.2} | {:>10.2} {:>10.2}",
+            p.attacker_bonds,
+            p.count_uniform_set,
+            p.histogram_set,
+            p.count_uniform_mod_set,
+            p.histogram_mod_set,
+        );
+    }
+    eprintln!();
+    let fmt_m = |o: Option<u64>| o.map(|m| format!("{m}")).unwrap_or_else(|| ">8".into());
+    eprintln!(
+        "Attacker bonds to HALVE a moderate victim's set: histogram = {}, count = {}.",
+        fmt_m(report.histogram_m_to_halve_mod),
+        fmt_m(report.count_m_to_halve_mod),
+    );
+    eprintln!(
+        "Decision: if histogram narrows the moderate victim materially more than count, the per-rung"
+    );
+    eprintln!("  targeting gain is MATERIAL ⇒ count-uniform confirmed. If neither moves (honest");
+    eprintln!("  occupancy swamps the attacker), the histogram is safe to take with eyes open.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-targeting report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -861,6 +914,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover-fn") {
         print_cover_fn_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-targeting") {
+        print_cover_targeting_report();
         return;
     }
 

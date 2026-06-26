@@ -1063,6 +1063,191 @@ pub fn run_cover_fn_report() -> FnReport {
     }
 }
 
+// ===========================================================================
+// Statistic DQ (§7.8 / §7.9): count-uniform vs histogram-per-rung. The response
+// `f` reads is genesis-frozen, so the choice of statistic is un-takebackable.
+// The histogram lets `f` give a PER-RUNG response (narrow where your local rung
+// is sparse, wide where dense — the saturation-aware shape arm B measured). That
+// per-rung response IS a rung-local targeting surface: an attacker who withdraws
+// their own bonds *at a victim's rung* makes `f` see "sparse here" and narrows
+// THAT victim's cover toward `A == bond_floor` — a targeted, cheap attack. The
+// count drives only a UNIFORM `D` (one width per epoch), so the same attacker can
+// only move the global width — broad, epoch-long, visible. Richness and
+// forgeability are the same property; this arm measures the gap so the decision
+// is empirical (the saturation-finding discipline), not argued.
+// ===========================================================================
+
+/// Honest-baselined width response: a density signal → dial width, monotone
+/// increasing (sparse → narrow/conceded, dense → wide), normalised so the honest
+/// signal maps to `K_HONEST` and clamped to `[K_MIN, K_SAT]`. Same shape for both
+/// modes — only the *signal* (global count vs local occupancy) differs, which is
+/// exactly the manipulability difference under test.
+fn targeting_width(signal: f64, honest_signal: f64) -> u64 {
+    const K_HONEST: f64 = 16.0;
+    const K_MIN: f64 = 4.0;
+    const K_SAT: f64 = 24.0;
+    if honest_signal <= 0.0 {
+        return K_MIN as u64;
+    }
+    (K_HONEST * (signal.max(0.0) / honest_signal))
+        .clamp(K_MIN, K_SAT)
+        .round() as u64
+}
+
+/// Victim's realized anonymity set at a given cover width (honest decoys in the
+/// window; the attacker's withdrawn bonds are not decoys either way).
+fn victim_realized_set(rng: &mut SplitMix64, pop: &[i64], victim: usize, width: u64) -> f64 {
+    let s_v = pop[victim];
+    let u = rng.unit();
+    let lo = s_v - ((1.0 - u) * width as f64).floor() as i64;
+    let hi = s_v + (u * width as f64).floor() as i64;
+    let decoys = pop
+        .iter()
+        .enumerate()
+        .filter(|(j, &s)| *j != victim && s >= lo && s <= hi)
+        .count();
+    1.0 + decoys as f64
+}
+
+/// Honest local occupancy: bonds within `±W_REF` rungs of `rung` (excluding the
+/// bond itself). The per-rung signal a histogram `f` would read.
+fn local_occupancy(pop: &[i64], idx: usize, w_ref: i64) -> f64 {
+    let r = pop[idx];
+    pop.iter()
+        .enumerate()
+        .filter(|(j, &s)| *j != idx && (s - r).abs() <= w_ref)
+        .count() as f64
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetingPoint {
+    /// Bonds the attacker withdraws (their own), the cost axis.
+    pub attacker_bonds: u64,
+    /// Victim realized set when `f` reads the GLOBAL count (uniform `D`).
+    pub count_uniform_set: f64,
+    /// Victim realized set when `f` reads the victim's LOCAL occupancy (per-rung).
+    pub histogram_set: f64,
+    /// Same, restricted to victims on a MODERATE rung (local occupancy near the
+    /// honest mean) — the *targetable* tier. Thin rungs the histogram already
+    /// concedes (the three-tier framing); dense rungs swamp the attacker; the
+    /// moderate middle is where a rung-local depopulation actually moves the dial.
+    pub count_uniform_mod_set: f64,
+    pub histogram_mod_set: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetingReport {
+    pub n_p: u64,
+    pub mean_shards: f64,
+    pub w_ref: i64,
+    pub honest_avg_local: f64,
+    pub points: Vec<TargetingPoint>,
+    /// Attacker bonds to halve a MODERATE victim's set: histogram vs count. The
+    /// ratio is the targeting gain (how much cheaper the per-rung surface is).
+    pub histogram_m_to_halve_mod: Option<u64>,
+    pub count_m_to_halve_mod: Option<u64>,
+}
+
+/// Rung-local suppression adversary (§7.8 / §7.9). The attacker withdraws `m` of
+/// their own bonds — concentrated at the victim's rung for the histogram mode,
+/// spread globally for the count mode — across a full closed epoch, so the
+/// epoch-close statistic sees the suppressed value. We measure how far each
+/// response lets the attacker narrow the victim's realized cover. Default to
+/// count-uniform; this is the measurement that may upgrade to a richer statistic
+/// only if the per-rung targeting gain is negligible (honest occupancy swamps the
+/// attacker's mass even at thin rungs).
+fn targeting_attack() -> TargetingReport {
+    let (_, n_p, mean) = SCENARIOS[0]; // thin N_P — the regime where attacker mass bites.
+    let dispersion = Dispersion::Dispersed;
+    let w_ref = 4i64;
+    let trials = 60_000u64;
+    let ms: Vec<u64> = (0..=8).collect();
+
+    // Honest average local occupancy — the histogram normaliser and the
+    // thin-rung threshold (bottom third ≈ 0.6× the mean here).
+    let mut warm = SplitMix64::new(0x7A46_0001);
+    let mut acc = 0.0;
+    let mut cnt = 0u64;
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+    for _ in 0..20_000 {
+        pop.clear();
+        pop.extend((0..n_p).map(|_| draw_shard_count(&mut warm, mean, dispersion) as i64));
+        for i in 0..pop.len() {
+            acc += local_occupancy(&pop, i, w_ref);
+            cnt += 1;
+        }
+    }
+    let honest_avg_local = acc / cnt as f64;
+    // Moderate (targetable) band: local occupancy within ±25% of the honest mean.
+    let mod_lo = honest_avg_local * 0.75;
+    let mod_hi = honest_avg_local * 1.25;
+
+    let mut points = Vec::new();
+    for &m in &ms {
+        let mut rng = SplitMix64::new(0x7A46_1000 ^ m);
+        let (mut cu, mut hs) = (0.0, 0.0);
+        let (mut cu_n, mut hs_n) = (0u64, 0u64);
+        let (mut cum, mut hsm) = (0.0, 0.0);
+        let (mut cum_n, mut hsm_n) = (0u64, 0u64);
+        for _ in 0..trials {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean, dispersion) as i64));
+            let victim = (rng.next_u64() % n_p) as usize;
+            let local = local_occupancy(&pop, victim, w_ref);
+
+            // count-uniform: global signal N_P, suppressed by m globally.
+            let w_count = targeting_width((n_p - m.min(n_p)) as f64, n_p as f64);
+            // histogram: local signal, suppressed by m at the victim's rung.
+            let w_hist = targeting_width(local - m as f64, honest_avg_local);
+
+            let set_count = victim_realized_set(&mut rng, &pop, victim, w_count);
+            let set_hist = victim_realized_set(&mut rng, &pop, victim, w_hist);
+            cu += set_count;
+            hs += set_hist;
+            cu_n += 1;
+            hs_n += 1;
+            if local >= mod_lo && local <= mod_hi {
+                cum += set_count;
+                hsm += set_hist;
+                cum_n += 1;
+                hsm_n += 1;
+            }
+        }
+        points.push(TargetingPoint {
+            attacker_bonds: m,
+            count_uniform_set: cu / cu_n as f64,
+            histogram_set: hs / hs_n as f64,
+            count_uniform_mod_set: if cum_n > 0 { cum / cum_n as f64 } else { 1.0 },
+            histogram_mod_set: if hsm_n > 0 { hsm / hsm_n as f64 } else { 1.0 },
+        });
+    }
+
+    // Attacker bonds to halve a moderate victim's set, per mode.
+    let halve = |get: &dyn Fn(&TargetingPoint) -> f64| -> Option<u64> {
+        let base = get(&points[0]);
+        points
+            .iter()
+            .find(|p| get(p) <= base / 2.0)
+            .map(|p| p.attacker_bonds)
+    };
+    let histogram_m_to_halve_mod = halve(&|p| p.histogram_mod_set);
+    let count_m_to_halve_mod = halve(&|p| p.count_uniform_mod_set);
+
+    TargetingReport {
+        n_p,
+        mean_shards: mean,
+        w_ref,
+        honest_avg_local,
+        points,
+        histogram_m_to_halve_mod,
+        count_m_to_halve_mod,
+    }
+}
+
+pub fn run_targeting_report() -> TargetingReport {
+    targeting_attack()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1208,5 +1393,33 @@ mod tests {
         );
         // And it stays bounded — even a 3× shock strips less than the whole set.
         assert!(at_three.leak_frac < 1.0);
+    }
+
+    #[test]
+    fn targeting_no_attack_baseline_matches_across_modes() {
+        // At m = 0 nothing is suppressed, so both modes sit at their honest width;
+        // every per-point set is at least the same-rung baseline.
+        let r = targeting_attack();
+        let base = &r.points[0];
+        assert_eq!(base.attacker_bonds, 0);
+        assert!(base.count_uniform_set >= 1.0 && base.histogram_set >= 1.0);
+        assert!(base.count_uniform_mod_set >= 1.0 && base.histogram_mod_set >= 1.0);
+    }
+
+    #[test]
+    fn histogram_is_more_targetable_than_count_at_moderate_rungs() {
+        // The decision measurement: at a wide attacker mass, the per-rung response
+        // narrows a moderate (targetable) victim strictly more than the uniform
+        // response — the local signal is a small number the attacker dominates,
+        // while the global count dilutes the same mass across the whole network.
+        let r = targeting_attack();
+        let m8 = r.points.last().unwrap();
+        assert_eq!(m8.attacker_bonds, 8);
+        assert!(
+            m8.histogram_mod_set < m8.count_uniform_mod_set,
+            "histogram mod {} should be below count mod {}",
+            m8.histogram_mod_set,
+            m8.count_uniform_mod_set
+        );
     }
 }
