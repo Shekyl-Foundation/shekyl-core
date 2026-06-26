@@ -1,10 +1,11 @@
 [package]
 name = "shekyl-rpc-client"
 version = "0.1.0"
-# Vendored shekyl-oxide app crate: a workspace path-dependency only, never published to
-# crates.io, and on the un-vendor track (Track B relocates/renames it). It has no external
-# downstream consumers, so its public surface carries no SemVer contract — API changes
-# during un-vendoring (e.g. removing the block/tx RPC methods) are not breaking changes.
+# First-party crate, relocated from the vendored shekyl-oxide `rpc` in the un-vendor:
+# a workspace path-dependency only, never published to crates.io. Transitional — the
+# wallet's daemon RPC client (`Rpc` trait), slated for replacement by the Axum-side
+# shekyl-daemon-rpc. No external downstream consumers, so its public surface carries no
+# SemVer contract — API changes during the cutover are not breaking changes.
 publish = false
 description = "Trait for an RPC connection to a Shekyl daemon, built around shekyl-oxide"
 license = "BSD-3-Clause"

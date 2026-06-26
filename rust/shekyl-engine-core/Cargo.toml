@@ -230,7 +230,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-ut
 # injection). The seed plus a stable PRNG implementation is what
 # makes hybrid-test reproducibility a function of the master seed
 # alone. Workspace consensus version is `0.3` (matches
-# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-oxide/.../fcmp++`).
+# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-fcmp-proofs`).
 rand_chacha = "0.3"
 # `derive_seed` (in `engine::test_support`) implements the §6.2
 # master-seed-derivation contract via HKDF-SHA256: hybrid tests

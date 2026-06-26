@@ -28,7 +28,8 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # Canonical genesis spend serializer + signing hashes (the wire authority). The wire
-# adapter (`wire.rs`) maps onto this; shekyl-oxide is kept only for crypto (Bulletproof).
+# adapter (`wire.rs`) maps onto this. (Bp+ crypto comes from `shekyl-bulletproofs`
+# above; the dissolved `shekyl-oxide` crate is no longer a dependency.)
 shekyl-wire = { path = "../shekyl-wire" }
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }

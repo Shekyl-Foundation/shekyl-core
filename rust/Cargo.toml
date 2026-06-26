@@ -183,7 +183,7 @@ serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the
 # per-crate pins that had drifted across two version floors (`1` / `^1.5`)
 # and two derive-feature spellings (`derive` / `zeroize_derive`). First-party
-# crates reference this as `{ workspace = true }`; the vendored `shekyl-oxide/*`
+# crates reference this as `{ workspace = true }`; the vendored `shekyl-oxide/crypto/*`
 # crates keep their own `default-features = false` pins (rule 10).
 zeroize = { version = "1.5", features = ["derive"] }
 
@@ -215,7 +215,7 @@ blake2 = { version = "0.10", default-features = false }
 # independent per-crate pins (`sha2` in `shekyl-engine-core`,
 # `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
 # `rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
-# `shekyl-fcmp`, `shekyl-oxide/fcmp/fcmp++`; `serde_json` across
+# `shekyl-fcmp`, `shekyl-fcmp-proofs`; `serde_json` across
 # ~14 crates). This section adds them to `[workspace.dependencies]`
 # so the new `shekyl-randomx-differential` crate can reference them
 # via `{ workspace = true }` and inherit a single shared pin; the

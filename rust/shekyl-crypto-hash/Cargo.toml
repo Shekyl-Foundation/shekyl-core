@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 # Audited RustCrypto keccak — `Keccak256` is original Keccak (0x01 padding), the
-# consensus-critical variant. Shared with shekyl-oxide's primitives so the codebase
+# consensus-critical variant. Shared with shekyl-curve-primitives so the codebase
 # has one keccak implementation. The empty-input KAT in lib.rs pins byte-identity.
 sha3 = { version = "0.10", default-features = false }
 
