@@ -13,12 +13,12 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::EdwardsPoint;
 use rand_core::{OsRng, RngCore};
 use shekyl_address::{Network, ShekylAddress};
+use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_crypto_pq::output_claim::output_spend_offset_scalar;
-use shekyl_oxide::fcmp::bulletproofs::Bulletproof;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,

@@ -323,7 +323,7 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
 mod tests {
     use super::*;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     use crate::{
         bookkeeping_block::BookkeepingBlock,

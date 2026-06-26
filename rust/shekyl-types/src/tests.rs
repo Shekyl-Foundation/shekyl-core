@@ -158,6 +158,38 @@ fn hashes_are_viewable_as_bytes() {
     assert_eq!(block_ref, &bytes[..]);
 }
 
+#[test]
+fn timelock_to_unlock_raw_is_block_height_only() {
+    // `None` encodes as 0; `Block(h)` encodes as the bare height. (The reverse lift
+    // is the consensus-aware `timelock_from_unlock_time` in `shekyl-scanner`, which
+    // owns the sentinel discrimination — there is deliberately no context-free
+    // `from_unlock_raw` here.)
+    assert_eq!(Timelock::None.to_unlock_raw(), 0);
+    assert_eq!(Timelock::Block(BlockHeight::from_raw(1)).to_unlock_raw(), 1);
+    assert_eq!(
+        Timelock::Block(BlockHeight::from_raw(123_456)).to_unlock_raw(),
+        123_456
+    );
+}
+
+#[test]
+fn timelock_orders_none_before_block_and_blocks_by_height() {
+    use core::cmp::Ordering;
+    let none = Timelock::None;
+    let low = Timelock::Block(BlockHeight::from_raw(10));
+    let high = Timelock::Block(BlockHeight::from_raw(20));
+
+    // `None` is the least element; blocks order by height.
+    assert_eq!(none.cmp(&none), Ordering::Equal);
+    assert!(none < low);
+    assert!(low < high);
+    assert_eq!(low.cmp(&low), Ordering::Equal);
+
+    // The "later of the two timelocks wins" selection (`max`) the design relies on.
+    assert_eq!(none.max(low), low);
+    assert_eq!(low.max(high), high);
+}
+
 #[cfg(feature = "schema")]
 #[test]
 fn schema_is_derivable() {

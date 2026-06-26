@@ -21,8 +21,8 @@ use curve25519_dalek::Scalar;
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};
-use shekyl_oxide::primitives::Commitment;
 use shekyl_scanner::BalanceSummary;
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {

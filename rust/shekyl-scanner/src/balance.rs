@@ -86,7 +86,7 @@ impl BalanceSummary {
 mod tests {
     use super::*;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     fn make_td(amount: u64, height: u64) -> TransferDetails {
         use crate::transfer::SPENDABLE_AGE;

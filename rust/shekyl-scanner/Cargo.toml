@@ -23,11 +23,13 @@ tracing = "0.1"
 # Canonical genesis block/tx wire format. Parses the coinbase `Ct::Null`
 # committed base (`enc_amounts`/`enc_labels`/`outPk`, GENESIS §9.7) the vendored
 # `shekyl-oxide` reader skipped — the bug this crate's scan path is migrated off
-# (`SHEKYL_OXIDE_UNVENDOR.md` step 4). Block/tx parsing lives here now;
-# `shekyl-oxide` is retained only for the residual typed domain elements
-# (`Timelock`, `StakingMeta`, `CompressedPoint`, `Commitment`).
+# (`SHEKYL_OXIDE_UNVENDOR.md` step 4). Block/tx parsing lives here now, and the typed
+# domain elements the scan path needs are first-party: `Timelock` (shekyl-types),
+# `StakingMeta` (shekyl-staking), `CompressedPoint` (shekyl-curve-io),
+# `Commitment` (shekyl-curve-primitives) — the `shekyl-oxide` crate is dissolved.
 shekyl-wire = { path = "../shekyl-wire" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
@@ -42,7 +44,7 @@ shekyl-types = { path = "../shekyl-types" }
 
 [features]
 default = ["std"]
-std = ["shekyl-oxide/std", "shekyl-rpc-client/std"]
+std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primitives/std", "shekyl-rpc-client/std"]
 test-utils = []
 
 [dev-dependencies]

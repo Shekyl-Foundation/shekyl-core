@@ -34,7 +34,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     output::WalletOutput,
     scan::{RecoveredWalletOutput, Timelocked},

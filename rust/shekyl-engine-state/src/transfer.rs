@@ -11,7 +11,7 @@ use zeroize::Zeroize;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 

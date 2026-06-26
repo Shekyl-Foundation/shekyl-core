@@ -1035,7 +1035,7 @@ pub(crate) fn populate_engine_handle_fields(
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_scanner::{
         staker_pool::AccrualRecord, LedgerBlock, LedgerIndexes, RecoveredWalletOutput, WalletOutput,
     };

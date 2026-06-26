@@ -17,8 +17,8 @@
 //! decode boundary (`client`, CT-3). No second `tx_extra` parser exists.
 
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
+use shekyl_consensus::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use shekyl_fcmp::tree::{build_layers, construct_leaf, selene_hash_init, SCALARS_PER_LEAF};
-use shekyl_oxide::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 
 /// Size in bytes of one per-output PQC leaf hash (`PQC_LEAF_HASH_BYTES`).
 pub const PQC_LEAF_HASH_BYTES: usize = 32;

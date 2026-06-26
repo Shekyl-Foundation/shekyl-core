@@ -4346,4 +4346,52 @@ sites: `rust/shekyl-oxide/shekyl-oxide/src/transaction.rs` (`Timelock`,
 
 ---
 
+## 2026-06-25 — shekyl-oxide un-vendor slice 2: the upstream-relationship test
+
+**Decision.** Scope vendoring by a single question, applied per crate — *"Do we
+realistically expect to ever re-vendor an upstream change into this?"* — not by a
+"primitives vs application" heuristic. **Yes → keep vendored** (diffable against the
+fork, divergence CI, EC-review-scoped). **No → it's ours**: move it into a normal
+`shekyl-*` crate, drop the tracking machinery, stamp the monero-oxide provenance,
+stop pretending. The end state is unambiguous: *vendored* = "pristine, tracked,
+external-review-scoped"; *`shekyl-*` crate* = "ours, no upstream."
+
+**The split this produced.**
+
+- **KEEP-VENDORED** — the FCMP++ research crypto only:
+  `crypto/{helioselene, divisors, generalized-bulletproofs, fcmps, fcmps/ec-gadgets,
+  fcmps/circuit-abstraction}`. Security-critical, headed for the divisor EC-membership
+  external review (a genesis gate), and carrying genesis-frozen format by reference
+  (Q6). Re-pinned to the upstream tip `2753111c50` with the Shekyl delta reapplied
+  (Track A, PR #181); an A1 content gate verifies the local subtree byte-for-byte.
+- **MOVED-OUT → first-party** (relocate, PR #188 / dissolve, PR #189), renamed to
+  role-honest names: `io → shekyl-curve-io`, `generators → shekyl-curve-generators`,
+  `primitives → shekyl-curve-primitives` (kept distinct from `shekyl-types` — these
+  are transform-shaped, rule 18), `fcmp/bulletproofs → shekyl-bulletproofs` (name
+  kept; Q6 path label updated), `fcmp/fcmp++ → shekyl-fcmp-proofs`, `rpc →
+  shekyl-rpc-client`, `rpc/simple-request → shekyl-rpc-transport`. The main crate
+  **dissolved**: `Timelock → shekyl-types` (block-height-only — the CryptoNote `Time`
+  variant dropped, now unrepresentable), `StakingMeta → shekyl-staking`, the live
+  lock-window consts → `shekyl-consensus`, dead consts dropped.
+- **`divisors` drift goes upstream into the fork**, not patch-overlaid in place: the
+  two genuine logic changes were re-based onto the upstream tip so the local copy is a
+  pristine mirror again, restoring diffability for the EC-membership review (which is
+  itself the review target).
+
+**Binding facts.** RPC crates are *moved, not deleted* — B0 refuted the §7 hypothesis;
+the `Rpc` trait is still the live wallet→daemon surface (delete tracked for the Axum
+cutover). The `b"Monero …"` generator domain separators are consensus-frozen and are
+**not** rule-93 targets (a backstopping release KAT + `docs/FROZEN_DOMAIN_SEPARATORS.md`
+make this explicit). The reorg is reversible (rule 21); only the genesis-format-adjacent
+`Timelock`/freeze-label touches carry consensus weight.
+
+**Reference.**
+[`docs/design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md) (the binding
+plan; §0 posture, §6 Tracks A/B, §8 the two-PR split);
+[`docs/FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md);
+[`docs/SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md) (crypto-only workflow).
+PRs #181 (Track A re-pin), #188 (relocations), #189 (dissolve).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

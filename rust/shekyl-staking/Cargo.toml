@@ -11,6 +11,7 @@ build = "build.rs"
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+zeroize = { workspace = true }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-units = { path = "../shekyl-units" }
 

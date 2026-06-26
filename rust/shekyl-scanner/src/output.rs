@@ -12,11 +12,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
-use shekyl_oxide::{
-    io::*,
-    primitives::Commitment,
-    transaction::{StakingMeta, Timelock},
-};
+use shekyl_curve_io::*;
+use shekyl_curve_primitives::Commitment;
+use shekyl_staking::StakingMeta;
+use shekyl_types::Timelock;
 
 use crate::extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE};
 
@@ -132,7 +131,9 @@ impl core::fmt::Debug for Metadata {
 
 impl Metadata {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        self.additional_timelock.write(w)?;
+        // Block-height-only unlock encoding: 0 = None, else the block height. The
+        // owning wire format keeps the varint; `Timelock` is a pure value type.
+        write_varint(&self.additional_timelock.to_unlock_raw(), w)?;
 
         // FA-2: subaddress metadata slot is always absent on wire.
         w.write_all(&[0])?;
@@ -156,7 +157,11 @@ impl Metadata {
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<Metadata> {
-        let additional_timelock = Timelock::read(r)?;
+        // Lift through the canonical, sentinel-aware lift (not a bare 0→None/else→Block
+        // cast): a persisted value `>= UNLOCK_TIME_BLOCK_SENTINEL` is the deleted
+        // timestamp form (corruption or a legacy cache), and is mapped to `None` rather
+        // than materialized as a huge `Timelock::Block`, preserving block-height-only.
+        let additional_timelock = crate::scan::timelock_from_unlock_time(read_varint(r)?);
 
         match read_byte(r)? {
             0 => {}
@@ -272,7 +277,7 @@ impl WalletOutput {
         index_on_blockchain: u64,
         key: curve25519_dalek::edwards::EdwardsPoint,
         key_offset: curve25519_dalek::Scalar,
-        commitment: shekyl_oxide::primitives::Commitment,
+        commitment: shekyl_curve_primitives::Commitment,
         staking: Option<StakingMeta>,
     ) -> Self {
         WalletOutput {
@@ -289,7 +294,7 @@ impl WalletOutput {
                 commitment,
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
@@ -302,10 +307,7 @@ impl WalletOutput {
     /// [`Self::new_for_test`]'s signature for every caller.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
-    pub fn with_additional_timelock(
-        mut self,
-        timelock: shekyl_oxide::transaction::Timelock,
-    ) -> Self {
+    pub fn with_additional_timelock(mut self, timelock: Timelock) -> Self {
         self.metadata.additional_timelock = timelock;
         self
     }

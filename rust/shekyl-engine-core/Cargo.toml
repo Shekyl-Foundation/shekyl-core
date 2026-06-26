@@ -16,7 +16,6 @@ build = "build.rs"
 serde_json = "1"
 
 [dependencies]
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 # Canonical, spec-faithful block/transaction parse (`GENESIS_TX_WIRE_FORMAT.md`).
 # Backs `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`) and the
@@ -77,6 +76,10 @@ shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# Pedersen commitment + Bp+ proof types the signer/pending paths construct against
+# (formerly reached via the dissolved `shekyl_oxide::{primitives,fcmp::bulletproofs}`).
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # CT-5 (`docs/design/CT5_ENGINE_WIRING.md`): the wallet-side FCMP++
 # curve-tree client (`CurveTreeClient`, redb-backed, public-material-only).
@@ -190,7 +193,6 @@ zeroize = { workspace = true }
 kameo = { workspace = true }
 
 [dev-dependencies]
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
@@ -228,7 +230,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-ut
 # injection). The seed plus a stable PRNG implementation is what
 # makes hybrid-test reproducibility a function of the master seed
 # alone. Workspace consensus version is `0.3` (matches
-# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-oxide/.../fcmp++`).
+# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-fcmp-proofs`).
 rand_chacha = "0.3"
 # `derive_seed` (in `engine::test_support`) implements the §6.2
 # master-seed-derivation contract via HKDF-SHA256: hybrid tests

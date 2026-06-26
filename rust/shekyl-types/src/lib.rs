@@ -335,5 +335,55 @@ impl Timestamp {
     }
 }
 
+/// A per-output additional timelock — **block-height-only**.
+///
+/// Shekyl is block-height-only: the CryptoNote *timestamp* form of `unlock_time`
+/// (a "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9) is rejected at ingestion
+/// and is **not representable here** — there is no `Time` variant, so it can never
+/// be materialized from chain bytes regardless of caller. An output is locked by a
+/// default timelock; an explicit one, if set, takes the later of the two.
+///
+/// Brought native off the vendored `shekyl-oxide` in the un-vendor slice-2 dissolve;
+/// `Block` wraps [`BlockHeight`] (rule 18) rather than a bare integer. Serialization
+/// is decoupled — the owning wire format encodes [`Timelock::to_unlock_raw`] as a
+/// varint — so this foundational crate stays free of an io/curve dependency.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Timelock {
+    /// No additional timelock. Orders before any [`Timelock::Block`].
+    None,
+    /// Additionally locked until this block height.
+    Block(BlockHeight),
+}
+
+impl Timelock {
+    /// The raw `unlock_time` value as persisted: `0` for [`Timelock::None`], else
+    /// the block height.
+    ///
+    /// This is the forward half only. The reverse lift (raw `u64` → `Timelock`) is
+    /// **not** a context-free operation: a raw value must be discriminated against the
+    /// block-height/timestamp sentinel (`>= UNLOCK_TIME_BLOCK_SENTINEL` is the deleted
+    /// CryptoNote timestamp form, not a block height). That discrimination is a
+    /// consensus concern, so it lives with the consensus-aware consumer that owns the
+    /// wire format (`shekyl-scanner`'s `timelock_from_unlock_time`), not here — keeping
+    /// this foundational type free of a "treat any non-zero value as a block height"
+    /// footgun.
+    #[must_use]
+    pub const fn to_unlock_raw(self) -> u64 {
+        match self {
+            Timelock::None => 0,
+            Timelock::Block(h) => h.to_raw(),
+        }
+    }
+}
+
+impl ::zeroize::Zeroize for Timelock {
+    fn zeroize(&mut self) {
+        // Block heights are public chain data, not secrets; resetting to the
+        // `None` default satisfies the `ZeroizeOnDrop` derive on containing wallet
+        // structs without pretending to scrub a secret.
+        *self = Timelock::None;
+    }
+}
+
 #[cfg(test)]
 mod tests;

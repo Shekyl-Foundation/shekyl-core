@@ -310,7 +310,7 @@ impl Signer for LocalSigner {
 
         debug_assert_eq!(signatures.tree_depth, expected_tree_depth);
 
-        let bulletproof = shekyl_oxide::fcmp::bulletproofs::Bulletproof::read_plus(
+        let bulletproof = shekyl_bulletproofs::Bulletproof::read_plus(
             &mut signatures.bulletproof_plus.as_slice(),
         )
         .map_err(|_| SignerError::RemoteFailure {

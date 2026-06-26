@@ -37,13 +37,13 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_core::__bench_internals::LedgerSnapshot;
 use shekyl_engine_state::{
     payment_id::PaymentId,
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_oxide::primitives::Commitment;
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced

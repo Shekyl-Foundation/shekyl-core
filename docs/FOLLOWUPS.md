@@ -254,14 +254,19 @@ sustainability is unaffected by the recalibration.
   "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
   `shekyl_wire::Transaction::validate` rejects. The step-4 slice closed the *scan-path*
   exposure in three layers but left two un-vendor-scoped follow-ups:
-  - **Native `Timelock` should drop the `Time` variant.** The wallet-domain `Timelock`
-    is still imported from `shekyl-oxide` (`None`/`Block`/`Time`).
-    `shekyl-scanner::scan::timelock_from_unlock_time` now maps the timestamp form to
-    `Timelock::None` (never `Timelock::Time`), so the `Time` arm is already dead on
-    chain data — but the *type* still carries it. When the `WalletOutput` domain types
-    are brought native off `shekyl-oxide` (the application-layer un-vendor), define
-    `Timelock` as block-height-only (`None`/`Block`) so the dead variant cannot be
-    constructed at all and the lifter becomes total without an unreachable arm.
+  - **[Done 2026-06-25, un-vendor slice-2 dissolve] Native `Timelock` is now
+    block-height-only.** `Timelock` moved native to `shekyl-types` as `None`/`Block`
+    only (the `Time` variant dropped); `Block` wraps `BlockHeight` (rule 18).
+    Serialization is decoupled — the scanner's `Metadata` wire format encodes
+    `Timelock::to_unlock_raw()` as a varint (byte-identical to the old encoding for
+    the values ever produced), so `shekyl-types` stays free of an io/curve dep. The
+    timestamp form is no longer representable, so it can never be materialized
+    regardless of caller; `timelock_from_unlock_time`'s `>= sentinel → None` arm is
+    now belt-and-suspenders. **Remaining:** the scanner's redundant defense-in-depth
+    gates (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates)
+    stay as-is — retiring them is a *security-surface* change (rule 19/21), tracked
+    for a focused follow-up alongside the daemon-side enforcement below, not bundled
+    into the type-move.
   - **[Done 2026-06-23, this slice] A pruned-safe context-free ingestion validator now
     lives in `shekyl-wire`, called from `block_fetch.rs`.**
     `Transaction::validate_context_free_pruned` enforces the full context-free reject set

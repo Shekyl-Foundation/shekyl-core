@@ -105,7 +105,7 @@ the V3.x daemon-validation port.
 | --- | --- |
 | Workflow | `.github/workflows/shekyl-oxide-divergence.yml` (scheduled Mondays 04:00 UTC) |
 | Mechanics | Reads `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`, resolves the upstream `Shekyl-Foundation/monero-oxide` branch tip, and exits non-zero on mismatch. |
-| Current state | Vendored snapshot = upstream tip = `3933664d0851871c976f07298b862373d1c6fec0` (verified by replaying the workflow logic locally on 2026-04-28). The earlier red runs were against a `dev` HEAD that predated the bump in commit `39981643f` ("oxide: bump vendor pin 87acb57 → 3933664"). No action needed in Track 0. |
+| Current state | Vendored snapshot = upstream tip = `3933664d0851871c976f07298b862373d1c6fec0` (verified by replaying the workflow logic locally on 2026-04-28). The earlier red runs were against a `dev` HEAD that predated the bump in commit `39981643f` ("oxide: bump vendor pin 87acb57 → 3933664"). No action needed in Track 0. *(Historical: the crypto pin was later re-based to `2753111c50` in un-vendor slice-2 Track A and the app layer un-vendored — see [`SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md); the live pin is `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`.)* |
 
 ## Interim shekyl-oxide divergence policy
 

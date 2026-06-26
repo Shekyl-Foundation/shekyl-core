@@ -409,7 +409,7 @@ mod tests {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
     use proptest::prelude::*;
     use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     use crate::{payment_id::PaymentId, transfer::SPENDABLE_AGE};
 
