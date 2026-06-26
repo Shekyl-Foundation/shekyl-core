@@ -28,7 +28,13 @@ inherits a **manipulation** surface a constant never had, so `f` must read a **s
 reorg-final, canonical** aggregate (proposal: the settlement-epoch-boundary live-bond
 count, `SETTLEMENT_EPOCH_BLOCKS`, read below `ARCHIVAL_REORG_DEPTH_BLOCKS`) — not a tip
 snapshot — and its **bootstrap boundary** must be pinned deliberately. The statistic
-`f` trusts is now the whole ballgame.
+`f` trusts is now the whole ballgame. **Resolved (§7.9, `--cover-targeting`):** the
+statistic is the **bond count** (global) driving a **uniform `D`** — a histogram's
+per-rung response *is* a rung-local targeting surface (it halves a chosen victim at
+`m = 5` vs count's `> 8`, surgically vs broadly), so count-uniform is pinned (coarse
+global dispersion scalar the only sanctioned enrichment). Grounded on the existing
+epoch-close state (`consensus_state`), with last-closed-epoch keying giving finality
+for free.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -698,3 +704,59 @@ function trust,"* and that input is now the whole ballgame. The next pass specif
 around the **slow / final / canonical** statistic (the epoch-boundary aggregate) and
 the **deliberately-pinned bootstrap boundary**; those are the new un-takebackable
 choices, and the manipulation surface is the one a constant never had.
+
+### 7.9 The statistic, grounded in landed code + the targeting measurement
+
+Re-grounding §7.8 on `dev` lands the abstract statistic on concrete consensus code,
+and settles its one open DQ (count vs histogram) by measurement.
+
+**The statistic source already exists.** `shekyl-archival-retention::consensus_state`
+computes `EpochCloseResult` / `EpochCloseInputs` at every settlement-epoch close, and
+`EpochCloseInputs.bonds: &[EpochCloseBond]` carries per-bond `held_shard_ids` — so the
+**live-bond count (`N_P`)** and the **rung histogram** are both derivable from it. `f`
+reads the most-recently-*closed* epoch's result, which gives two §7.8 properties **for
+free**: it is ≥ `SETTLEMENT_EPOCH_BLOCKS` (10 000) blocks deep — far below any
+`NetworkSafetyConstants::max_reorg_depth` (there is no canonical production `720`
+const; the `720` cited earlier is sim-local) — so it is **final by construction**, and
+it is **fixed for the whole current epoch**, so draw and post read the identical value.
+Reorg-desync and draw-post-desync collapse to "key to the last closed epoch"; no reorg
+machinery enters the cover path. Manipulation (and the bootstrap boundary) are all that
+remain.
+
+**Count vs histogram — settled by `--cover-targeting`, not argument.** The histogram's
+only value over the count is a **per-rung** response (narrow where your local rung is
+sparse, wide where dense) — and that per-rung response **is** the rung-local targeting
+surface: an attacker who withdraws bonds *at a victim's rung* makes `f` see "sparse
+here" and narrows that victim's cover toward `A == bond_floor`. Richness and
+forgeability are the same property. The arm models a rung-local suppression adversary
+and measures the gap (thin `N_P` corner, moderate/targetable victim):
+
+| attacker bonds `m` | count victim set | histogram victim set |
+| --- | --- | --- |
+| 0 | 10.5 | 10.4 |
+| 5 | 8.6 | **5.2** |
+| 8 | 7.0 | 4.3 |
+
+**Bonds to halve a chosen victim's set: histogram = 5, count = > 8** — and the
+histogram attack is **surgical** (only the chosen victim), while count's same mass only
+moves the **global** width: it narrows *everyone* (broad, epoch-long, visible) and never
+halves a single chosen victim within `m ≤ 8`. The local signal (~6.6) is small enough
+that the attacker's bonds dominate it; the global count (17) dilutes the same mass.
+**The per-rung targeting gain is material ⇒ count-uniform is the pin.**
+
+**Decision.** The statistic is the **bond count** (global), driving a **uniform `D`**.
+This makes the targetable design *unrepresentable* (the make-bad-states-unrepresentable
+move), keeps the one live threat — manipulation — broad, expensive, and visible, and is
+one consistent rule with the bootstrap boundary (low count → narrow → concede to the
+`N_P`-independent seams). The **only** sanctioned enrichment is a **coarse global
+dispersion scalar** (e.g. effective-occupied-rungs or an occupancy IPR) feeding the same
+uniform `D` — it recovers the clustered-vs-dispersed signal that actually moved the
+anonymity set (§7.4: 2.1% vs 6.8% thin-tail) while staying global, so it inherits the
+count's targeting-resistance (the attacker must move a whole-population measure, not
+sculpt a rung). A per-rung histogram is **rejected**.
+
+**Still open (the response-curve spec, post-this-arm):** the width response `D(count[,
+dispersion])` — target set → capped at the saturation knee → floored at `C_min`, smooth
+and monotone; the **deliberate bootstrap boundary** (epoch 0–1, count ≈ 0); the
+dispersion scalar's exact definition; and `draw_cover_amount` in `shekyl-standoff`
+(C4, the `draw_entry_gap` sibling) emitting the inert `CoverAmount` at `stake_timing.rs`.
