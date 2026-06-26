@@ -7,7 +7,7 @@ version = "0.1.0"
 # during un-vendoring (e.g. removing the block/tx RPC methods) are not breaking changes.
 publish = false
 description = "Trait for an RPC connection to a Shekyl daemon, built around shekyl-oxide"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"

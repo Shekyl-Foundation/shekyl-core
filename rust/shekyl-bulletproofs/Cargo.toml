@@ -2,7 +2,7 @@
 name = "shekyl-bulletproofs"
 version = "0.1.0"
 description = "Bulletproofs(+) range proofs, as defined by the Shekyl protocol"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"

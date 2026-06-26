@@ -2,7 +2,7 @@
 name = "shekyl-curve-primitives"
 version = "0.1.0"
 description = "Primitives for the Shekyl protocol"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"

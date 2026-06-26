@@ -24,12 +24,11 @@ this list is closed except by a genesis-parameter change.
    frozen-inherited from rebrandable).
 3. **A release KAT** pinning the *derived* points by frozen hex — the only guard that
    actually fails if a byte changes:
-   `rust/shekyl-oxide/shekyl-oxide/generators/src/tests/frozen_points.rs`
-   (moves with the crate to `shekyl-curve-generators`).
+   `rust/shekyl-curve-generators/src/tests/frozen_points.rs`.
 
 ## The list (FCMP++ generator DSTs)
 
-All in the generator crate (`generators/src/lib.rs`, → `shekyl-curve-generators`):
+All in `rust/shekyl-curve-generators/src/lib.rs`:
 
 | DST byte-string | Derives | Pinned by |
 |---|---|---|
@@ -48,6 +47,8 @@ are pinned by `frozen_bulletproof_tables`.
 
 ## Related (not in this list)
 
-- `MONERO_H` in `fcmp/bulletproofs` is an *identifier* alias of the frozen `H` point —
-  that **is** a rule-93 target (renamed to `SHEKYL_H` on touch); the underlying point is
-  frozen, the local binding name is not.
+- The `H as SHEKYL_H` import alias in `rust/shekyl-bulletproofs/src/batch_verifier.rs`
+  was a rule-93 *identifier* target (renamed from `MONERO_H` during the relocate); the
+  underlying point is frozen, the local binding name is not. This is the distinction:
+  a frozen hash-input string is skipped by a rebrand sweep; a `MONERO_*` identifier
+  that merely binds a frozen point is still renamed.

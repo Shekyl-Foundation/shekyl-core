@@ -2,7 +2,7 @@
 name = "shekyl-fcmp-proofs"
 version = "0.1.0"
 description = "Implementation of Shekyl FCMP++ (full-chain membership proofs)"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 keywords = ["shekyl", "ciphersuite", "ff", "group"]

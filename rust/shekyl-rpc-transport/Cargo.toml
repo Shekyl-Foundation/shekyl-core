@@ -5,7 +5,7 @@ version = "0.1.0"
 # un-vendor track — no external consumers, so no SemVer contract on its public surface.
 publish = false
 description = "RPC connection to a Shekyl daemon via simple-request, built around shekyl-oxide"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
 edition = "2021"
