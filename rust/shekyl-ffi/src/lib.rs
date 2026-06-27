@@ -3207,6 +3207,8 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         TxBuilderError::PqcSignError { .. } => -26,
         TxBuilderError::TreeDepthTooLarge(_) => -27,
         TxBuilderError::WireError(_) => -28,
+        // Appended (codes are a stable C++-facing contract; never renumber).
+        TxBuilderError::TreeTooShallow { .. } => -29,
     }
 }
 

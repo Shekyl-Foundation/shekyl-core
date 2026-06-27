@@ -26,7 +26,7 @@ use shekyl_crypto_pq::{
     key_image::KeyImage,
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
-use shekyl_curve_generators::hash_to_point;
+use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
@@ -655,7 +655,11 @@ impl InternalScanner {
             );
 
             // --- Key image: KI = x * Hp(O) where x = ho + b ---
-            let hp_of_o = hash_to_point(output_key_bytes);
+            // `Hp` is the *biased* hash-to-point — the canonical FCMP++ key-image
+            // generator (`shekyl_fcmp::tree::key_image_generator`, the leaf `I`
+            // the proof and daemon bind to). The non-biased `hash_to_point` would
+            // produce a key image the SAL linkability check rejects (`ed_ok=false`).
+            let hp_of_o = biased_hash_to_point(output_key_bytes);
             let hp_bytes = hp_of_o.compress().to_bytes();
 
             let ki_result = compute_output_key_image(

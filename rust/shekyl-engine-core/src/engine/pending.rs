@@ -830,6 +830,31 @@ impl<
         poll_immediate_submit(id, self.pending.submit(id, seen_gen))
     }
 
+    /// Async counterpart to [`Self::build_pending_tx`].
+    ///
+    /// The production [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
+    /// `build` performs real async I/O — it awaits the curve-tree actor's
+    /// `AssembleTx` to assemble the FCMP++ membership path — so the sync wrapper's
+    /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
+    /// returns `CannotSign`. Callers already on an async runtime use this method
+    /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
+    pub async fn build_pending_tx_async(
+        &mut self,
+        request: &TxRequest,
+    ) -> Result<PendingTx, SendError> {
+        self.pending.build(request.clone()).await
+    }
+
+    /// Async counterpart to [`Self::submit_pending_tx`] — the production submit
+    /// awaits the daemon RPC. See [`Self::build_pending_tx_async`].
+    pub async fn submit_pending_tx_async(
+        &mut self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
+        self.pending.submit(id, seen_gen).await
+    }
+
     /// Discard a reservation via [`PendingTxEngine::discard`].
     ///
     /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
