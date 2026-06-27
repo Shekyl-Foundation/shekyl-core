@@ -589,7 +589,11 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                 .collect(),
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
-                tree_depth: u64::from(signed.tree_depth),
+                // Consensus `curve_trees_tree_depth` is the LMDB depth = layer
+                // count − 1 (the daemon reconstructs `fcmp_layers = depth + 1`).
+                // `signed.tree_depth` is the layer count `L`, so emit `L - 1` to
+                // match the daemon and the tx-builder's `build_wire_tx`.
+                tree_depth: u64::from(signed.tree_depth) - 1,
                 fcmp_proof: signed.fcmp_proof.clone(),
                 pseudo_outs: signed.pseudo_outs.clone(),
             }),
@@ -636,7 +640,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         reference_block: signed.reference_block,
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: pqc_auths.clone(),
-        tree_depth: signed.tree_depth,
+        // FCMP++ layer count `L`; the encoder serializes `curve_trees_tree_depth = L - 1`.
+        fcmp_layers: signed.tree_depth,
     };
     let builder_bytes =
         shekyl_tx_builder::encode_final_tx(&wire_input).expect("tx-builder encodes the spend");
