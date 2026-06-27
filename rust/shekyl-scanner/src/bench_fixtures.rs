@@ -271,7 +271,11 @@ fn join_enc9(value: &[u8; 8], tag: u8) -> [u8; 9] {
 /// `first_output_index: Some(0)` is set so the scanner walks the
 /// non-miner transaction's outputs (the value is not load-bearing for
 /// the fixture; the scanner's per-output loop uses the local index `o`).
-fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey) -> ScannableBlock {
+fn assemble_scannable_block(
+    n_outputs: usize,
+    recipient_pk: &HybridKemPublicKey,
+    recipient_spend_pub: &[u8; 32],
+) -> ScannableBlock {
     // Pre-allocate the on-wire fields.
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
     let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
@@ -279,21 +283,20 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
 
-    let spend_key = fake_spend_key_bytes();
-
     for output_index in 0..n_outputs {
         let out = construct_output(
             &BENCH_TX_KEY,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
-            &spend_key,
+            recipient_spend_pub,
             BENCH_AMOUNT,
             output_index as u64,
         )
-        .expect(
-            "construct_output is infallible for torsion-free spend keys and \
-             valid KEM public keys; both are guaranteed by the fixture",
-        );
+        // Precondition of this fixture: `recipient_pk` is a valid hybrid KEM
+        // public key and `recipient_spend_pub` a torsion-free compressed Edwards
+        // point. Both hold for any derived persona/wallet keys; a malformed key
+        // is a test bug and panics loudly (the intended failure for a fixture).
+        .expect("construct_output succeeds for valid recipient KEM + spend-pub key material");
 
         outputs.push(Output {
             amount: 0,
@@ -410,7 +413,39 @@ pub fn build_worst_case_scannable_block(
     n_outputs: usize,
     wallet_keys: &BenchWalletKeys,
 ) -> ScannableBlock {
-    assemble_scannable_block(n_outputs, &wallet_keys.wallet_kem_pk)
+    assemble_scannable_block(
+        n_outputs,
+        &wallet_keys.wallet_kem_pk,
+        &fake_spend_key_bytes(),
+    )
+}
+
+/// Build a [`ScannableBlock`] of `n_outputs` outputs addressed to a
+/// **caller-supplied recipient** — encapsulated to `recipient_kem` with the
+/// one-time output key derived against `recipient_spend_pub`.
+///
+/// Unlike [`build_worst_case_scannable_block`] (which targets the bench wallet
+/// with a placeholder spend key), this lets a caller target real key material —
+/// e.g. an archival persona's `(x25519_pk, ml_kem_ek)` and `spend_pk` — so a
+/// scanner built from the *matching* secrets recovers the output, and one built
+/// from any other secrets does not. Used to prove view-key/scanner adapters.
+///
+/// # Preconditions (test fixture — fails loud, does not return `Result`)
+///
+/// `recipient_kem` must be a valid hybrid KEM public key and `recipient_spend_pub`
+/// a torsion-free compressed Edwards point — i.e. the conditions
+/// [`shekyl_crypto_pq::output::construct_output`] requires. Any key material
+/// produced by a derivation path (`derive_archival_p_keys`, `make_bench_wallet`)
+/// satisfies this. Malformed input is a **test bug** and **panics** — the
+/// intended loud failure for a fixture; this is not a `Result`-returning API,
+/// because threading an impossible-in-tests error through every call site would
+/// add noise for no real branch.
+pub fn scannable_block_for_recipient(
+    n_outputs: usize,
+    recipient_kem: &HybridKemPublicKey,
+    recipient_spend_pub: &[u8; 32],
+) -> ScannableBlock {
+    assemble_scannable_block(n_outputs, recipient_kem, recipient_spend_pub)
 }
 
 /// Build a [`ScannableBlock`] whose single non-miner transaction
@@ -430,7 +465,7 @@ pub fn build_typical_case_scannable_block(n_outputs: usize) -> ScannableBlock {
     // wallet's view-pair never sees a matching view-tag, so every
     // output exits via fast-path rejection.
     let other = make_bench_wallet();
-    assemble_scannable_block(n_outputs, &other.wallet_kem_pk)
+    assemble_scannable_block(n_outputs, &other.wallet_kem_pk, &fake_spend_key_bytes())
 }
 
 #[cfg(test)]

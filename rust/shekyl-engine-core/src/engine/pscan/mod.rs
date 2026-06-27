@@ -10,8 +10,12 @@
 //! execution layers. The design and its per-SP breakdown live in
 //! [`docs/design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](../../../../../docs/design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md).
 //!
-//! Build order: **SP-0** ([`block_source`]) lands first — the per-`P`
-//! fetch-everything block source that the isolation boundary (DQ1) rests on.
-//! It produces no on-chain event; it broadcasts and garbage-collects nothing.
+//! Build order: **SP-0** ([`block_source`]) — the per-`P` fetch-everything block
+//! source the isolation boundary (DQ1) rests on; **SP-1** ([`persona_scanner`]) —
+//! the `ArchivalPKeys` → `GuaranteedViewPair` adapter that builds a persona's
+//! burning-bug-immune scanner. Both are read-side: they produce no on-chain
+//! event and broadcast/GC nothing. Their non-test consumer is the SP-5 scan loop
+//! (not yet built), so they carry transient `#[allow(dead_code)]`.
 
 pub(crate) mod block_source;
+pub(crate) mod persona_scanner;
