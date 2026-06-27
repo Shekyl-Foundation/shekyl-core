@@ -200,8 +200,10 @@ A `P`-scan cursor that loses its place re-scans or **half-scans** — and the cu
 **separate** sealed cursor (not `BlockchainTip` — DQ1), following the **`StakingBlock`
 discipline exactly**: postcard + AEAD seal + `atomic_write_file` (`tmp→fsync→rename→
 fsync(parent)`) + a version constant, tier-4 (sealed, not advisory). A persisted cursor
-is then a durable crash-atomic commit; on reopen the monotone-cursor rule prevents a
-rolled-back scan from re-reporting.
+is then a durable crash-atomic commit; the *crash-recovery* design (how a stale-on-reopen
+cursor is handled) is resolved in §6 SP-2/SP-4 — **Design B**: the cursor is the single
+authoritative frontier and resume re-scans idempotently, rather than a monotone-forward
+clamp (whose floor, unlike the slot's, has no chain-derived source).
 
 ### DQ5 — view-key locality: reuse the resident union, don't widen the surface
 
@@ -410,75 +412,117 @@ retrofit) is pinned today.
 
 ---
 
-### SP-2 — `PScanCursor`: distinct type *and* monotone-on-load (not type-at-runtime)
+### SP-2 — `PScanCursor`: single authoritative frontier, resume-and-recompute (crash-recovery **Design B**, decided jointly with SP-4)
 
 A distinct newtype stops accidental reuse of the principal's `BlockchainTip` (the compiler
 rejects passing one for the other — DQ4 cross-contamination caught by `cargo`, not review).
-But the **invariant lives in the LOAD path**: a postcard-decoded cursor is only as monotone
-as the decode checks it to be — the type distinction *evaporates* at the seal boundary and
-reconstitutes from whatever is on disk.
+That part is type-carried. The crash-recovery *behaviour*, though, is the real decision, and
+**it cannot be specified separately from SP-4's accrual** — they are two halves of one design.
+
+**Why the earlier "monotone-forward clamp" was wrong.** A `synced_height.max(known_frontier)`
+clamp *advances* the cursor and **scans from there, skipping `[synced_height, known_frontier)`** —
+safe only if `known_frontier` means "already durably scanned to here." But the
+`monotone_current_slot` precedent (`staking_block.rs:166`) **does not transfer**: the slot's
+floor (`highest_bonded_slot_seen`) is **chain-derived** — the bonded set independently anchors
+"this persona has a bond, never reuse it." The scan cursor has **no chain-derived
+already-scanned anchor** — scan progress is private to `P` and recorded *only* by the cursor.
+So `known_frontier` had no safe source short of a *second* durable progress record, which just
+raises "why isn't the seal authoritative, and what's the commit ordering between the two?"
+
+**Two coherent designs; we take B.** *Design A (clamp/skip):* commit scan results durably to
+height H **before** advancing the cursor, set `known_frontier = H`; the clamp then correctly
+skips the already-committed range — but you owe a second durable frontier, a pinned
+results-before-cursor commit ordering, and a defined recovery if the results commit is itself
+interrupted. *Design B (resume/idempotent):* the cursor is the **single** authoritative scan
+frontier; on resume, re-scan from the sealed `synced_height` forward to
+`tip − archival_reorg_depth_blocks` (`= 720`, `config/consensus_constants.json:23`), and make
+the accrual idempotent (SP-4) so the re-scan is harmless. **We take B** — one frontier with no
+cross-record ordering beats A's two-frontier atomicity protocol (which grows its own
+crash-window bugs), and on a read-side scan the redundant post-crash re-scan is cheap.
 
 ```rust
 /// `P`'s scan cursor — distinct from `BlockchainTip`. Sealed StakingBlock-class
-/// (postcard + AEAD + atomic_write_file + version). The monotone guard is on LOAD.
+/// (postcard + AEAD + atomic_write_file + version). THE single scan-progress record.
 pub struct PScanCursor {
     version: u32,                 // rejected (not migrated) on mismatch — StakingBlock precedent
-    synced_height: BlockHeight,   // sweep newtype — confirmed (finality-deep) scan frontier
+    synced_height: BlockHeight,   // the one authoritative durable scan frontier
 }
 
 impl PScanCursor {
-    /// LOAD is where the invariant is enforced (mirrors `StakingBlock::
-    /// monotone_current_slot`, `staking_block.rs:166`): reject on version mismatch,
-    /// then clamp the on-disk height monotone-forward against the durably-known
-    /// frontier — a rolled-back disk value can never re-report a scan (DQ2 c1:
-    /// no reorg path because the frontier is finality-deep).
-    pub fn from_sealed(bytes: &[u8], known_frontier: BlockHeight) -> Result<Self, CursorError> {
-        let c: Self = decode_versioned(bytes)?;          // version-reject on load
-        Ok(Self { synced_height: c.synced_height.max(known_frontier), ..c })  // monotone
+    /// LOAD just verifies + decodes — NO forward clamp, NO `known_frontier` (Design B:
+    /// nothing safe to clamp to). AEAD integrity + version-reject; the value is trusted
+    /// as a resume point. A stale-low seal merely re-scans more (harmless under SP-4
+    /// idempotency); a too-high seal is impossible because of the write discipline below.
+    pub fn from_sealed(bytes: &[u8]) -> Result<Self, CursorError> {
+        decode_versioned(bytes)
     }
 }
 ```
 
-**Enforcement point:** the **deserializer (`from_sealed`)** — version-reject and the
-monotone clamp — *not* the runtime newtype. The newtype is the in-memory carrier that stops
-cross-use; the seal-load is the guard that survives the byte round-trip.
+**Enforcement point — a *write* discipline, not a load clamp.** Persist the confirmed
+owned-output set durably, **then** seal the cursor to that frontier: the cursor **never seals
+past durable outputs** (never over-claims), so a crash can only leave it *at or behind* real
+progress, and resume re-scans the gap. The newtype stops cross-use at compile time; *integrity*
+is AEAD + version; *safety* is seal-after-durable-outputs + SP-4 idempotency. There is no
+load-time invariant to get wrong because there is no clamp.
 
 ---
 
-### SP-4 — `PFundingInflow`: confirmed-only constructor + *output-only across the seam*
+### SP-4 — `PFundingInflow`: confirmed-only + output-only + **idempotent recompute** (Design B's other half)
 
-The `C_min`-feeding inflow (DQ3) carries its unit *and* its provenance invariant. The trap
-(actor boundary): if it travels as a message *field*, anything that can name the type can
-build a message carrying a hand-built one — re-injecting an unconfirmed inflow into `C_min`,
-the exact DQ7 corruption the type was meant to prevent. So **two** enforcement points:
+The `C_min`-feeding inflow (DQ3) carries its unit *and* its provenance invariant. Two things
+must hold: the actor-boundary trap (a hand-built inflow injected as a message field), and —
+because we took Design B in SP-2 — **idempotency**, so a post-crash re-scan recomputes the
+same value rather than double-counting.
+
+**Idempotency (the Design-B obligation):** the per-epoch inflow is **recomputed once from the
+epoch's *complete* confirmed-output set** — a pure fold over that set — **not accumulated
+across scan passes**. Re-scanning a range therefore changes nothing: the constructor is called
+per epoch when the epoch is finality-sealed, over all of that epoch's confirmed outputs, and is
+a deterministic function of them. (The companion `PReconcileSet`, SP-6, is likewise recomputed,
+and 2d-2's GC must be idempotent — re-handing the same matched posts is a no-op.)
+
+**"Confirmed" is two different predicates — disambiguate them, because only one is
+type-guarded.** `ConfirmedOutput` means **ownership-confirmed** (DQ7: passed the full
+ownership test, *not* an FA-6 pre-filter hit) — and the type carries that, built only by the
+extractor's confirmed path. But `C_min` also needs **finality-confirmed** (DQ2: reorg-deep,
+behind `tip − archival_reorg_depth_blocks`), and **nothing in the type enforces that.**
+Finality is *contextual* — a function of the current tip, not intrinsic to an output — so it
+cannot be a purely intrinsic type guard; it rides entirely on the extractor running behind the
+cursor's finality horizon. **So `PFundingInflow`'s finality soundness is exactly as strong as
+SP-2's cursor discipline** — finality-confirmedness has **no type guard; it is a cursor
+invariant.** Fixing SP-2 (seal-behind-the-horizon) *is* what makes SP-4 finality-sound. The
+constructor guards provenance + ownership; the cursor guards finality, and only the cursor.
 
 ```rust
 /// Per-epoch `P` funding inflow — the signal `C_min` sizing consumes. Private
 /// fields; NO `pub` constructor, NO `From<raw>`. Constructible ONLY inside the
-/// extractor module, ONLY from outputs that passed the full ownership test (DQ7:
-/// confirmed, never FA-6 pre-filter hits). Money is `AtomicUnits` (the existing
-/// newtype), epoch is the sweep's settlement-epoch type — sweep-conformant from
-/// birth, not new raw-`u64` debt (see "Alignment" below).
+/// extractor module, ONLY from OWNERSHIP-confirmed outputs (DQ7: passed the full
+/// ownership test, never FA-6 pre-filter hits). FINALITY-confirmedness (DQ2) is
+/// NOT in this type — it is the SP-2 cursor invariant (scan only behind the horizon).
+/// Money is `AtomicUnits`, epoch is the sweep's settlement-epoch type (Alignment §).
 pub struct PFundingInflow {
     settlement_epoch: SettlementEpoch,   // sweep home-crate type, not raw u64
     atomic: AtomicUnits,                 // EXISTING newtype — checked, unit-marked
 }
 
 impl PFundingInflow {
-    /// `pub(in crate::pscan::extractor)` — only the confirmed-output path builds it.
-    pub(in crate::pscan::extractor) fn from_confirmed(epoch: SettlementEpoch, outs: &[ConfirmedOutput]) -> Self { /* checked sum into AtomicUnits */ }
+    /// `pub(in crate::pscan::extractor)`. IDEMPOTENT: `epoch_outs` is the epoch's
+    /// COMPLETE ownership-confirmed set; this recomputes (does not accumulate), so a
+    /// post-crash re-scan yields the same value. Called once per finality-sealed epoch.
+    pub(in crate::pscan::extractor) fn recompute_for_epoch(epoch: SettlementEpoch, epoch_outs: &[ConfirmedOutput]) -> Self { /* checked sum into AtomicUnits */ }
     pub fn epoch(&self) -> SettlementEpoch { self.settlement_epoch }
     pub fn atomic(&self) -> AtomicUnits { self.atomic }
 }
 ```
 
 **Enforcement point:** (a) **constructor privacy** — `pub(in extractor)`, so no foreign
-module builds one; and (b) **direction across the seam** — `PFundingInflow` is an *output*
-only (a handler `Reply`, then pulled toward `C_min`); it is **never an inbound message
-field**, so there is no message a caller can send that *carries* a hand-built inflow into
-sizing. The `C_min` consumer takes `PFundingInflow` (not `u64`) and *queries* it; nothing
-injects it. (Resolution of the user's pick: **message carries the already-validated type,
-built only inside the extractor module — never raw-validated-on-receipt, never inbound.**)
+module builds one (ownership/provenance); (b) **direction across the seam** — output only (a
+handler `Reply`, pulled toward `C_min`), **never an inbound message field**, so no caller can
+send a message *carrying* a hand-built inflow into sizing (the user's pick: message carries the
+already-validated type, built only inside the extractor — never raw-validated-on-receipt); and
+(c) **finality has no type guard** — it is the SP-2 cursor invariant, so (a)/(b) secure
+provenance and ownership while *finality* is secured upstream by seal-behind-the-horizon.
 
 ---
 
@@ -514,9 +558,19 @@ impl Message<ScanStep> for StakeEngine {
 **The bounded-AND-offloaded point (DQ6, the subtle one):** kameo handlers are
 `async fn handle(&mut self, …)` and hold `&mut self` across the `await`, so `spawn_blocking`
 moves the CPU off the runtime thread but the **actor still cannot process another message
-until `handle` returns**. So `range` must be **bounded** (per-block / small batch): the task
-loops, sending many small `ScanStep`s, and the actor interleaves rotation/sign/activate
-*between* batches. Bounded batch + offload together; neither alone is enough.
+until `handle` returns**. So `range` must be **bounded**: the task loops, sending small
+`ScanStep`s, and the actor interleaves rotation/sign/activate *between* batches. Bounded
+batch and offload together; neither alone is enough.
+
+**Block-granularity is adequate — no mid-block-resumable cursor needed.** A single block's
+work is **consensus-bounded**: outputs-per-tx are capped at `BULLETPROOF_PLUS_MAX_OUTPUTS = 16`
+(`src/cryptonote_config.h:241`), the decode path independently gates on
+`shekyl_scanner::MAX_OUTPUTS` (`engine-core/.../curve_tree_decode.rs:109`), and txs-per-block
+is bounded by the cumulative block-weight limit. So a small `BlockRange` carries bounded work
+and `synced_height` (block-granular) is a sufficient resume point. **Tuning note (not
+architecture):** size the `range` bound against the **worst-case (max-weight) block**, not the
+average — a maximally-stuffed range must still return fast enough not to starve a pending
+rotation/sign between batches.
 
 **Enforcement point:** the secret stays inside the `spawn_blocking` closure (cloned from
 `self.held`, dropped at closure end); `ScanStepResult` carries only public outputs +
@@ -549,8 +603,8 @@ domain-carrying values; they are designed **sweep-conformant from birth**, so th
 finds no fresh raw-`u64`/`[u8;N]` debt here:
 
 - **Money is `AtomicUnits`** (the existing newtype — checked-only, unit-marked) — never a
-  bare `u64`. `PFundingInflow.atomic` is `AtomicUnits`; its `from_confirmed` sums into it
-  with the checked path. This is the migration's exact precedent, applied at creation.
+  bare `u64`. `PFundingInflow.atomic` is `AtomicUnits`; its `recompute_for_epoch` sums into
+  it with the checked path. This is the migration's exact precedent, applied at creation.
 - **Heights/epochs source the migration's home-crate types** (`BlockHeight`,
   `SettlementEpoch`), not raw `u64` — `PScanCursor.synced_height`, `BlockSource::block_at`,
   `BlockRange`, `PFundingInflow.settlement_epoch`. If those types aren't landed when 2d-1
@@ -575,10 +629,18 @@ not as work for it.
   a cover/cold-start anonymity finding (Round 0 DQ1).
 - **The Arti transport** behind `BlockSource` (SP-0 interface pinned; impl is 2d-2).
 - **The `bonded_slots`/`p_slot` GC action** (2d-2 consumes `PReconcileSet`).
-- **The `max_reorg_depth` funding-visibility lag** as a cold-start sequencing input (DQ2
-  c2) — surfaced for the cold-start design, not 2d-1's to resolve.
+- **The `archival_reorg_depth_blocks` funding-visibility lag** as a cold-start sequencing
+  input (DQ2 c2) — surfaced for the cold-start design, not 2d-1's to resolve.
+- **Fetch-ordering of the same `BlockSource` trait (2d-2 constraint).** `block_at(height)`
+  *permits* non-sequential fetch; once the Arti transport is underneath, the **order/timing**
+  of `block_at` calls is itself a network-layer fingerprint. The trait correctly cannot leak
+  output-*selectivity* (SP-0), but 2d-2's impl must additionally fetch **sequentially**, never
+  in any output-correlated order. Not a 2d-1 issue — a constraint carried to the same trait's
+  2d-2 implementation.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
-(`PScanCursor` + sealed monotone load) → SP-3/SP-5 (dual extractor + `ScanStep` handler) →
-SP-4 (`PFundingInflow`) → SP-6 (`PReconcileSet`). Read-side only; broadcasts and GCs nothing.
+(`PScanCursor`, Design-B single frontier) → SP-3/SP-5 (dual extractor + bounded `ScanStep`
+handler) → SP-4 (`PFundingInflow`, idempotent recompute) → SP-6 (`PReconcileSet`). Read-side
+only; SP-2 and SP-4 land **together** as the one crash-recovery decision. Broadcasts and GCs
+nothing.
