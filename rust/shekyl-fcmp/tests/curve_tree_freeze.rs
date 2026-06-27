@@ -936,7 +936,19 @@ fn correct_grow_telescopes_to_batch_at_depth3() {
     // the daemon's incremental gets wrong. This is the reference a Rust
     // shekyl_curve_tree_grow must reproduce (the daemon then calls it via FFI,
     // retiring the C++ deepening orchestration).
-    for &n in &[1usize, 38, 39, 684, 685, 701, 800] {
+    // Boundaries derived from the topology, not hard-coded: SELENE_CHUNK_WIDTH (38)
+    // leaves fill one Selene leaf node; outputs_per_node(1) (= 38*18 = 684) fill one
+    // Helios node — the last depth-2 size, so +1 (685) is the first depth-3.
+    let d2 = outputs_per_node(1);
+    for &n in &[
+        1,
+        SELENE_CHUNK_WIDTH,
+        SELENE_CHUNK_WIDTH + 1,
+        d2,
+        d2 + 1,
+        701,
+        800,
+    ] {
         let seed = 40_000 + n as u64;
         let batch = build_layers(&{
             let mut rng = seeded(seed);
@@ -977,7 +989,17 @@ fn daemon_incremental_matches_batch_through_depth2() {
     // for every size up to and INCLUDING the last depth-2 tree (684 leaves = 18
     // full Selene nodes -> one Helios root). Proves the replica + the leaf/Helios
     // layers are exact, so a depth-3 divergence is real, not a port artifact.
-    for &n in &[1usize, 38, 39, 100, 683, 684] {
+    // Up to and including the last depth-2 size (outputs_per_node(1) = 684), derived
+    // from the chunk-width topology rather than hard-coded.
+    let d2 = outputs_per_node(1);
+    for &n in &[
+        1,
+        SELENE_CHUNK_WIDTH,
+        SELENE_CHUNK_WIDTH + 1,
+        100,
+        d2 - 1,
+        d2,
+    ] {
         let seed = 30_000 + n as u64;
         let batch = build_layers(&{
             let mut rng = seeded(seed);
@@ -1001,7 +1023,10 @@ fn daemon_incremental_drops_existing_sibling_at_depth3_deepen() {
     // telescope correctly, but the layer-2 root drops G_0 — the consensus bug lives
     // in grow_curve_tree's deepening propagation (db_lmdb.cpp:6594-6719), NOT in
     // build_layers (the narrow reference: hash_grow over BOTH children, no padding).
-    for &n in &[685usize, 701, 800] {
+    // The first depth-3 size (outputs_per_node(1) + 1 = 685, the leaf that forces the
+    // layer-2 Selene root) plus two arbitrary deeper depth-3 samples.
+    let first_depth3 = outputs_per_node(1) + 1;
+    for &n in &[first_depth3, 701, 800] {
         let seed = 30_000 + n as u64;
         let batch = build_layers(&{
             let mut rng = seeded(seed);

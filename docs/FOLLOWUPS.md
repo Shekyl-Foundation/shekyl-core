@@ -644,7 +644,8 @@ sustainability is unaffected by the recalibration.
   root mismatch vs header" }`. The wallet's `CurveTreeClient` reconstruction (built
   on the narrow-from-init `build_layers`) diverges from the daemon's header root at
   the **layer-2 Selene branch**. **This is consensus-critical: a wallet cannot sync
-  past depth-3** (≈685 outputs — reached fast on mainnet).
+  once the chain exceeds 684 outputs** — the 685th output (`SELENE_CHUNK_WIDTH *
+  HELIOS_CHUNK_WIDTH + 1`) forces the first layer-2 Selene root; reached fast on mainnet.
   **ROOT-CAUSED 2026-06-27 (all-Rust triangulation, no mining) — the DAEMON is the
   bug, NOT `build_layers`.** `build_layers` is the narrow reference by definition
   (`try_build_upper_layers` tree.rs:330-348 — `hash_grow(init, 0, ZERO, [all converted
