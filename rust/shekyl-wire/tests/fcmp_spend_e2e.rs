@@ -591,9 +591,16 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
                 // Consensus `curve_trees_tree_depth` is the LMDB depth = layer
                 // count − 1 (the daemon reconstructs `fcmp_layers = depth + 1`).
-                // `signed.tree_depth` is the layer count `L`, so emit `L - 1` to
-                // match the daemon and the tx-builder's `build_wire_tx`.
-                tree_depth: u64::from(signed.tree_depth) - 1,
+                // `signed.tree_depth` is the layer count `L` (>= 3 here; asserted
+                // above), so emit `L - 1` to match the daemon and the tx-builder's
+                // `build_wire_tx`. `checked_sub` makes the `L >= 1` invariant
+                // explicit and fails loudly rather than wrapping if it ever breaks.
+                tree_depth: u64::from(
+                    signed
+                        .tree_depth
+                        .checked_sub(1)
+                        .expect("layer count L >= 1 (depth-3 fixture)"),
+                ),
                 fcmp_proof: signed.fcmp_proof.clone(),
                 pseudo_outs: signed.pseudo_outs.clone(),
             }),
