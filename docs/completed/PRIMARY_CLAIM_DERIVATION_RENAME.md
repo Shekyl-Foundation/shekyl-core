@@ -1,6 +1,24 @@
 # Primary claim derivation — vocabulary and API cleanup
 
-**Status.** **Landed** (2026-06-07). FA-8 (#113) prerequisite satisfied;
+> **⚠️ CORRECTION (2026-06-27) — the signing offset `m₀` was wrong; it has been
+> removed from all production paths.**
+>
+> This doc's §1 and §5.3 stated that signing uses `x = ho + b + m₀` with
+> `m₀ ≠ 0`. **That is incorrect**, and was internally inconsistent with this
+> doc's own §5.1 rule 4 ("ownership iff recovered `B' == base D`"): an output
+> paid to the base key `D = b·G` opens with `x = ho + b`, so the extra `m₀·G`
+> made the spend witness miss the output key *and* the key image miss its leaf
+> generator. It survived because every test fed a synthetic witness satisfying
+> the relation by construction; the **first daemon-verified FCMP++ spend**
+> (Track-2 north-star, `TRACK2_REGTEST_PARITY.md` / `TRACK2_NORTHSTAR_SAL.md`)
+> exposed it. Production signing **and** change-output construction now use
+> `x = ho + b` at the base spend key; `output_spend_offset_scalar` is retained
+> genesis-locked only as the §9.2 multi-account substrate (no V3.0 caller). Read
+> §1/§5.3 below as historical; the corrected statement is "signing uses the base
+> key, no offset." See `shekyl-crypto-pq::output_claim` module docs.
+
+**Status.** **Landed** (2026-06-07); **signing-formula correction landed
+2026-06-27** (see banner above). FA-8 (#113) prerequisite satisfied;
 implementation on branch `chore/primary-claim-rename`.
 
 **Binding decisions (do not relitigate).**
