@@ -4394,4 +4394,37 @@ PRs #181 (Track A re-pin), #188 (relocations), #189 (dissolve).
 
 ---
 
+## 2026-06-27 — Depth-3+ curve-tree root: narrow recompose (`== build_layers`), producer-side
+
+**Decision.** The curve-tree header root for depth-3+ trees is computed by
+recomposing every upper layer **narrow** — `hash_grow(init, 0, ZERO, [all converted
+children])`, i.e. exactly `shekyl-fcmp`'s `build_layers` — via the Rust
+`shekyl_curve_tree_grow_upper_layers` FFI, for **both** `grow_curve_tree` and
+`trim_curve_tree`. The daemon's prior in-place incremental upper-layer propagation
+(editing each parent by its changed child's `old→new` difference) dropped the
+pre-existing sibling when it created a new parent at a layer boundary (a *deepen*),
+so its header root diverged from the wallet's `build_layers` at depth-3+ — the #162
+reopening trigger. Per rule 16 / the #162-retraction discipline, we fixed the
+**producer** (the daemon), not the reference: conforming `build_layers` to the
+daemon would freeze a consensus defect at genesis.
+
+**Scope.** Changes depth-3+ header roots only. Depth-0/1/2 are unaffected (the daemon
+was already correct there — the Tier-A/B fixtures and `recon_kat`/`recon_tier_b`
+reconstruct unchanged against the fixed code). **No persisted-wire-format change**
+(the block/header serialization is byte-identical; only the depth-3+ root *value*
+differs, derived from blocks by the fixed code), so **no schema-version bump and no
+migration** — pre-genesis, no live chain past depth-2 exists; only ephemeral regtest
+DBs, which are wiped, not upgraded.
+
+**Validation.** `e2e_fcmp_spend_over_depth3_tree` (a wallet refreshes + the daemon
+accepts a spend over a real depth-3 tree), `e2e_trim_curve_tree_restores_grow_root`
+(`trim == grow⁻¹`), and the `curve_tree_freeze` daemon-replica tests — all against a
+locally-built daemon. The dead in-place propagation + the now-unused
+`ct_layer_is_selene` helper were removed.
+
+**Reference.** PR #197;
+[`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

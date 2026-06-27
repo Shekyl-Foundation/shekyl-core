@@ -637,6 +637,12 @@ sustainability is unaffected by the recalibration.
   out as the cause: the pinned crate's own `test_single_input` passes layers 1-9.
   **Reopening trigger:** a depth-3+ real-tree verify, or the Tier-B fixture.
   Target: V3.0 with the CT-5 series.
+  **✓ RESOLVED 2026-06-27 (PR #197).** Both `grow` and `trim` recompose narrow
+  (`== build_layers`); validated end-to-end against a locally-built daemon. The
+  consensus cutover is documented in
+  [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md)
+  and the binding decision in `V3_WALLET_DECISION_LOG.md` (2026-06-27). The
+  diagnosis below is retained for the record.
   **⚠ TRIGGER FIRED — REOPENED 2026-06-27 (Track-2 depth-3 regtest).** The depth-3
   regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
   curve tree to depth-3 (daemon depth 2 = 3 layers; 701 drained leaves, height 760)
