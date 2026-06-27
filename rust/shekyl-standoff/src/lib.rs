@@ -1,4 +1,10 @@
-//! Funding-seam entry-standoff draw — single-sourced and build-float-free.
+//! Funding-seam decorrelation draws — single-sourced and build-float-free.
+//!
+//! Two axes of the same funding seam: the **entry-gap timing** draw
+//! ([`draw_entry_gap`]) and the **cover-amount** draw ([`draw_cover_amount`],
+//! `cover`) — *when* `P` funds/enters and *how much* it sends on top of the
+//! public `bond_floor`. Both are pure-integer, golden-vector-pinned, and
+//! imported by the simulator, the conformance vector, and the wallet alike.
 //!
 //! The funding seam (`docs/design/ARCHIVAL_FIREWALL_GATE6.md` §10.12) is
 //! decorrelated by a randomized **standoff window**: at a private intent the
@@ -45,8 +51,13 @@
 //! particular sequence: the fixed seed in the KAT is *reference determinism*,
 //! not a PRNG mandate.
 
+pub mod cover;
 pub mod draw;
 
+pub use cover::{
+    cover_dial_span_atomic, draw_cover_amount, COVER_RAMP_END_COUNT, COVER_RUNWAY_FLOOR_ATOMIC,
+    COVER_SPAN_CAP_ATOMIC, COVER_TAIL_COUNT,
+};
 pub use draw::{draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 
 #[cfg(feature = "conformance")]

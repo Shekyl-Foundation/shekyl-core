@@ -28,7 +28,15 @@ inherits a **manipulation** surface a constant never had, so `f` must read a **s
 reorg-final, canonical** aggregate (proposal: the settlement-epoch-boundary live-bond
 count, `SETTLEMENT_EPOCH_BLOCKS`, read below `ARCHIVAL_REORG_DEPTH_BLOCKS`) — not a tip
 snapshot — and its **bootstrap boundary** must be pinned deliberately. The statistic
-`f` trusts is now the whole ballgame.
+`f` trusts is now the whole ballgame. **Resolved (§7.9, `--cover-targeting`):** the
+statistic is the **bond count** (global) driving a **uniform `D`** — a histogram's
+per-rung response *is* a rung-local targeting surface (it halves a chosen victim at
+`m = 5` vs count's `> 8`, surgically vs broadly), so count-uniform is pinned (the
+dispersion scalar is a *deferrable* capital-efficiency refinement, not a genesis
+requirement — measured). **Grounding correction (§7.9):** the statistic must be the
+**standing-bond *stock*** read at the last-closed epoch boundary (final-by-construction);
+`EpochCloseInputs.bonds` is the *serving* set, not the stock, and the standing aggregate
+is audit-only today — so a canonical stock read is itself a spec item, not a ready field.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -698,3 +706,316 @@ function trust,"* and that input is now the whole ballgame. The next pass specif
 around the **slow / final / canonical** statistic (the epoch-boundary aggregate) and
 the **deliberately-pinned bootstrap boundary**; those are the new un-takebackable
 choices, and the manipulation surface is the one a constant never had.
+
+### 7.9 The statistic, grounded in landed code + the targeting measurement
+
+Re-grounding §7.8 on `dev` lands the abstract statistic on concrete consensus code,
+and settles its one open DQ (count vs histogram) by measurement.
+
+**The statistic must be a *stock*, and that needs care — corrected at source.** `f`'s
+whole manipulation/finality argument rests on the input being the **standing live-bond
+population** (a stock: slow, expensive to suppress across a full epoch), not a flow
+(per-epoch deltas) or a serving subset. Checking `consensus_state` at source:
+`EpochCloseInputs.bonds: &[EpochCloseBond]` is **not** the standing stock — its gather
+contract is "one entry per distinct `P_id` *holding at least one serve-credit row* for
+the epoch," and idle-bonded `P`s "may be omitted." So it is the **serving/credited
+set**, which both **drops posted-but-idle bonds** (wrong population — the cover mixes
+over *all* posted bonds) and measures manipulation against serving-churn, not standing
+stock. The true standing stock *is* expressible — `conservation::ConservationSnapshot`
+carries `total_bonded_atomic` and `per_p_bonded` (count = `per_p_bonded.len()`) — but
+that module is flagged **"Audit/KAT only … a full `Σ_P` scan is O(`N_P`); live
+enforcement would need incremental maintenance"**. So there is **no ready-made,
+live-maintained standing-bond-count** to read; the earlier "the source already exists in
+`EpochCloseInputs.bonds`" claim was wrong.
+
+**Consequence:** `f` needs a **canonical, deterministic standing-bond-count read at the
+last-closed epoch boundary**, defined as part of this spec — either a canonical
+epoch-boundary `Σ_P` gather (acceptable: epoch close is already a heavy consensus
+compute, and it runs once per 10 000 blocks) or a maintained standing-count aggregate.
+It must **not** read the serving-set close payload directly. Given a stock source, the
+two §7.8 finality properties still come free — keyed to the most-recently-*closed*
+epoch the value is ≥ `SETTLEMENT_EPOCH_BLOCKS` (10 000) blocks deep (far below any
+`NetworkSafetyConstants::max_reorg_depth`; the `720` cited earlier is sim-local, not a
+canonical prod const) so it is **final by construction** and **fixed for the whole
+current epoch** (draw and post read the identical value) — and the Arm-D manipulation
+numbers (measured against honest *standing* occupancy) are the right ones. Manipulation,
+the stock source, and the bootstrap boundary are what remain.
+
+**Count vs histogram — settled by `--cover-targeting`, not argument.** The histogram's
+only value over the count is a **per-rung** response (narrow where your local rung is
+sparse, wide where dense) — and that per-rung response **is** the rung-local targeting
+surface: an attacker who withdraws bonds *at a victim's rung* makes `f` see "sparse
+here" and narrows that victim's cover toward `A == bond_floor`. Richness and
+forgeability are the same property. The arm models a rung-local suppression adversary
+and measures the gap (thin `N_P` corner, moderate/targetable victim):
+
+| attacker bonds `m` | count victim set | histogram victim set |
+| --- | --- | --- |
+| 0 | 10.5 | 10.4 |
+| 5 | 8.6 | **5.2** |
+| 8 | 7.0 | 4.3 |
+
+**Bonds to halve a chosen victim's set: histogram = 5, count = > 8** — and the
+histogram attack is **surgical** (only the chosen victim), while count's same mass only
+moves the **global** width: it narrows *everyone* (broad, epoch-long, visible) and never
+halves a single chosen victim within `m ≤ 8`. The local signal (~6.6) is small enough
+that the attacker's bonds dominate it; the global count (17) dilutes the same mass.
+**The per-rung targeting gain is material ⇒ count-uniform is the pin.**
+
+**Decision.** The statistic is the **bond count** (global), driving a **uniform `D`**.
+This makes the targetable design *unrepresentable* (the make-bad-states-unrepresentable
+move), keeps the one live threat — manipulation — broad, expensive, and visible, and is
+one consistent rule with the bootstrap boundary (low count → narrow → concede to the
+`N_P`-independent seams). A per-rung histogram is **rejected**.
+
+**The dispersion scalar buys capital, not anonymity — measured (`--cover-dispersion`).**
+The candidate enrichment is a **coarse global dispersion scalar** — the occupancy
+inverse-participation-ratio `(Σ n_r)² / Σ n_r²` (`1` = fully clustered → `N_P` = fully
+dispersed), global so it keeps the targeting-resistance. The arm tested whether count
+*alone* under-serves the dispersed bracket (§7.4's load-bearing input). It does — at the
+thin corner the dispersed victim's set is `4.3` vs clustered `7.0` under count-only (a
+real ~40% gap). But the scalar closes that gap (`2.7 → 1.4`) **almost entirely by
+narrowing the over-served clustered side** (`7.0 → 5.7`, capital saved), **not** by
+lifting the dispersed side (`4.3 → 4.4`, +0.1): the dispersed thin population is
+**saturation-limited** (§7.4) — widening can't gather neighbours that aren't there. So
+the scalar's real value is **capital efficiency** (right-size dense periods, less §7.5
+over-tax), **not** anonymity for the under-served tier, which is conceded to the
+`N_P`-independent seams anyway (the three-tier framing). **Verdict: count-only is
+sufficient for the *anonymity* goal; the dispersion scalar is a *deferrable*
+capital-efficiency refinement (IPR, global), not a genesis requirement** — and its
+**reopen trigger is *economic*, not anonymity** (the arm measured that it doesn't move
+the anonymity floor): file it as *"deferred for capital efficiency; reopens if
+post-testnet the realized capital lock-up at the chosen `D` prices out more of the
+population than projected (the §7.5 opt-out / participation pressure); gated on the
+Arm-D targeting check when it returns."* That keeps it from being re-proposed for the
+wrong reason (anonymity, which it doesn't help) and ensures the targeting check rides
+along with it.
+
+**The response-curve spec (next), with four constraints pinned *deliberately* — not
+left to fall out of the curve's math, because each is genesis-frozen and un-revisable:**
+
+- **Statistic source (the §7.9 grounding gap):** define the canonical standing-bond-count
+  read at the last-closed epoch boundary (a `Σ_P` gather, or a maintained aggregate) —
+  the stock, **not** the serving-set close payload.
+- **Same population as the anonymity set — the metric's hinge.** The count `f` reads must
+  be the count of bonds the attacker can enumerate as candidates: **every active posted
+  bond with an observable `bond_floor`**. Checked at source: a bond-post aggregates a
+  `P`'s full `holdings` into **one** `bond_floor`, and `HoldingsUpdate`/`Rebond` mutate
+  that single bond — so **per-`P` == per-bond == per-observable-`bond_floor`** (no
+  persona-deflation; `per_p_bonded`'s per-`P_id` keying is the right per-bond unit). The
+  population matches at both edges: the *serving* set was too few (dropped idle bonds, the
+  §7.9 correction); the standing set is not too many either — an announced-but-not-posted
+  `P` has no `bond_floor` (not a candidate, not bonded), and last-closed-epoch finality
+  excludes any pending/un-final bond. The one-active-bond-per-`P_id` invariant is now
+  **verified at source as three sub-checks** (not inferred from the record shape): it is
+  **consensus-enforced** — the daemon rejects a second `JoinMarket` for a bonded `P` via
+  the `RecordExists` rule (`bond_post.rs:73`, called from `blockchain.cpp:4673`), not a
+  wallet convention; there is **no transient double** across the unbond/rebond seam
+  (single record per `P_id`, `Rebond` mutates, `Unbond` atomically zeros, invariant
+  `bonded_total_atomic ∈ {0, bond_floor}`); and the rule and `per_p_bonded` key on the
+  **same** `p_canonical_id` granularity (`p_slot` rotation mints a *new* retired-old
+  `P_id`, so rotated personas are distinct candidates, correctly counted apart). **One
+  precision the check surfaced:** `Unbond` leaves the record present with
+  `bonded_total_atomic = 0`, so the count is of **active** bonds (`bonded > 0` — the only
+  ones with an observable `bond_floor`); the `Σ_P` gather **must filter out zeroed-retired
+  records**, or the denominator inflates with `P`s the attacker can't match. With that
+  filter, the count read is **bedrock**.
+- **Bootstrap boundary as a *stated clause*, not an extrapolation.** At epochs 0–1 the
+  last-closed count ≈ 0; a smooth low-count→narrow curve would hand the earliest stakers
+  the **narrowest** cover at the moment the live set is smallest and the cold-start link
+  most exposed. Pin it as an explicit clause — *"below `count = C_boot`, `D` is [floor /
+  the other seams carry it]"* — conceding the bootstrap cohort to network-isolation +
+  funder-scope (consistent with how `f` treats every sparse state), a decision on the
+  record. Genesis-frozen, so the clause is itself un-revisable.
+- **The saturation-knee cap is self-referential — pin it in lockstep.** The cap is
+  computed from the *same* count `f` reads, so it must stay monotone and sane as count
+  moves under a suppression attempt, or the manipulation surface closed on the width
+  re-opens on the cap. State the cap as a function of the **same slow standing-stock
+  aggregate**, not a separately-sourced number, so the whole curve moves in lockstep with
+  one final, expensive-to-move input.
+- **Smooth and monotone is a *hard constraint* on `D(count)`, not a preference.** Any step
+  is the continuous analogue of the cohort split — it sorts bonds into below-step and
+  above-step cover-regimes at a public, frozen count threshold (a fingerprint,
+  un-revisable). Monotone-and-smooth keeps every bond on one continuum.
+
+And `draw_cover_amount` in `shekyl-standoff` (C4, the `draw_entry_gap` sibling) emitting
+the inert `CoverAmount` at `stake_timing.rs`.
+
+**Dispersion scalar — deferred, *with* its Arm-D check.** If the scalar is ever added
+(post-testnet, for capital efficiency), it must first clear the **same Arm-D bar the
+histogram failed**: confirm a global IPR/occupied-rungs measure feeding a uniform `D`
+**cannot** be sculpted rung-locally (it almost certainly can't — moving a whole-population
+dispersion measure takes far more bond mass than moving one rung's local signal — but it
+is a one-arm check, not an assumption). Since count-only ships at genesis, this check is
+deferred with the scalar; if it doesn't clear cheaply, drop it and stay count-only.
+
+---
+
+## 8. The `D(count)` response curve — spec
+
+The four frozen constraints (§7.9) pinned in **dependency order**, so each constrains the
+next rather than being implied by the curve's math: the **count read** is bedrock; the
+**saturation-knee cap** and the **`C_min` floor** define the envelope; the **smooth
+monotone shape** fills it; the **bootstrap clause** is the named exception at the
+`count ≈ 0` edge. All five are genesis-frozen and un-revisable.
+
+Notation: `floor = ARCHIVAL_BOND_FLOOR_ATOMIC = 0.75 SKL` (rung spacing). The wallet draws
+`cover ~ U[C_min, C_min + k(C)·floor]`, i.e. a uniform draw whose **width is `k(C)` rungs**;
+`C` is the count read. `draw_cover_amount` (C4) emits this in `shekyl-standoff`,
+float-free with a golden-vector and a conformance grade, like `draw_entry_gap`.
+
+### 8.1 The count read `C` (bedrock — §7.9, verified)
+
+`C` = the count of **active** archival bonds (`bonded_total_atomic > 0`) at the
+**most-recently-closed settlement epoch boundary**, keyed per `p_canonical_id` (= per
+observable `bond_floor` = the attacker's candidate pool, §7.9). Sourced by a canonical
+`Σ_P` gather at epoch close (filtering zeroed-retired records), **not** the serving-set
+close payload. Final-by-construction (≥ `SETTLEMENT_EPOCH_BLOCKS` deep) and fixed for the
+current epoch. Everything below is a function of **this one** slow, expensive-to-move input.
+
+### 8.2 The saturation-knee cap `K_sat(C)` (self-referential lockstep)
+
+The dial is capped at the **saturation knee for the realized count** — the `k` past which a
+rung of cover buys less than the marginal-return cutoff (`--cover` arm). `K_sat` is a
+function of the **same `C`**, monotone non-decreasing: more candidates ⇒ a wider blur can
+still gather set; fewer ⇒ the knee falls. Stating the cap as `K_sat(C)` (not a
+separately-sourced constant) is the **lockstep** that keeps the §7.8 manipulation surface
+closed: an attacker suppressing `C` moves the width *and* the cap together, against the
+same epoch-scoped, expensive-to-move quantity — there is no second input to sculpt.
+
+### 8.3 The `C_min` floor (runway)
+
+`C_min` is the **working-capital runway floor** (§2.2): strictly positive, `≥ 1 rung
+(0.75 SKL)`, so even the narrowest draw funds non-trivial runway and `cover == 0` stays
+reserved for the DQ6 opt-out. Sized against **pessimistic slow early yield** (under-funding
+re-links `P` too soon), pending the 2d-1 earnings-ramp numbers. It is the lower edge of
+every draw, independent of `C` — the envelope's floor.
+
+### 8.4 The shape `k(C)` — smooth, monotone, *decaying to zero in the low tail* (hard constraint)
+
+Across the populated range `k(C)` rises **smoothly and monotonically** from `0` toward
+`K_sat(C)` as `C` grows: more live bonds ⇒ wider blur, up to the knee. **No steps** — a
+step at any count threshold is the continuous analogue of the cohort split (§7.8), sorting
+bonds into below-/above-threshold cover-regimes at a public frozen threshold (a fingerprint,
+un-revisable). The `k(C)` magnitudes inherit the `--cover` / `--cover-fn` analysis under the
+**pessimistic** corner, pinned conservatively at genesis (per §2.5 the bound can't be
+re-tuned later); a future `f` may *confirm* but not *fix* them.
+
+**The low tail must *decay* to zero, not *clamp* to it.** Because `K_sat(C) → 0` in the low
+tail (§8.5), `k(C)` reaches zero there as the limit of the ramp — there is no separate
+bootstrap threshold to be continuous *at*. But the functional form (§8.8) must realise this as
+a **decay**: a ramp that is smooth in the body and then *clamps* to `0` at the bottom
+re-introduces a **slope discontinuity** (a kink) at the clamp count — softer than a value-step,
+but still a curvature feature at a public frozen count, the same fingerprint genre one order
+down. The form must **approach** zero (`k` *and* `dk/dC → 0` into the tail) so the bootstrap
+behaviour is the natural limit of the curve, not a clamp on it.
+
+### 8.5 "Bootstrap" is the `k = 0` tail of `K_sat`, not a separate threshold (`C_boot` *dissolved*)
+
+The continuous resolution doesn't *pin* `C_boot` — it **dissolves** it. Earlier this section
+treated `C_boot` as a frozen policy threshold (the count below which the cover "gives up").
+The magnitude pass (§8.7) shows that was a conflation of two different things: the
+**`K_sat → 0` boundary** (`C ≈ 13–15`) is where the curve's *own math* stops offering cover —
+below it `k = 0` is **not a concession or an override, it is simply what the saturation
+structure yields**; whereas the **floor's-worth point** (`C = 25`) is where cover stops being
+*worth much*, a descriptive statement and **not a boundary at all**. The old "derive `C_boot`
+from where cover buys < a floor's worth" would have *manufactured* a discontinuity to express
+something the curve already expresses continuously by ramping toward zero.
+
+So there is **one envelope, `K_sat(C)`** — `0` below `C ≈ 13–15`, ramping under the §8.7 cap
+above — and **"bootstrap" is the name for its low `k = 0` tail**, not a separate regime, clause,
+or pinned constant. This is strictly better: **one fewer frozen scalar**, and the one removed is
+the policy threshold that was most exposed to being wrong with no recourse (a genesis-once value
+post-testnet couldn't confirm). The §2.5 *confirm-not-fix* discipline applies to `K_sat` and
+`C_min`; there is no third magnitude here. `C = 25` is retained only as the descriptive
+*"cover-becomes-substantial"* marker.
+
+**Record discipline:** state this as the single envelope, or a future reader who sees a `C_boot`
+constant *and* a bootstrap clause re-introduces the step we removed. There is no `C_boot`
+constant; there is `K_sat(C)` and its low tail.
+
+### 8.6 Out of scope here (downstream)
+
+The `draw_cover_amount` wiring (C4) and the `CoverAmount` orchestration (the
+`bond_floor + cover` send, `P`-change threading) remain 2d. The dispersion scalar stays
+deferred (§7.9, capital-efficiency, economic reopen trigger). This section pins the **frozen
+shape of `f`**; the magnitude pins (`K_sat` curve, `C_min`, `C_boot`) are the conservative
+genesis numbers the `--cover` analysis sets under the pessimistic corner (§8.7).
+
+### 8.7 Measured magnitudes (`--cover-magnitudes`, joint corner)
+
+The pass runs the **joint** corner (dispersed, `timing_retain = 0.5`, `β = 2`, thin per-staker
+mean), `C` on the x-axis — *not* the amount-marginal set, which overstates. Per count: the
+saturation knee `K_sat(C)`, its cover span, the achievable joint set, the `k = 0` baseline,
+and the robust **plateau width** (dial rungs within 90% of peak):
+
+| `C` | `K_sat` | cover span | set@knee | baseline | gain | plateau (rungs) |
+| --- | --- | --- | --- | --- | --- | --- |
+| ≤ 12 | 0 | 0 | ≈ baseline | 1.0–1.3 | 0 | 14–34 |
+| 15 | 4 | 3.0 SKL | 2.27 | 1.41 | 0.86 | 14 |
+| 17 | 6 | 4.5 SKL | 2.79 | 1.47 | 1.31 | 14 |
+| 25 | 8 | 6.0 SKL | 3.99 | 1.71 | 2.28 | 12 |
+| 40 | 8 | 6.0 SKL | 5.84 | 2.16 | 3.68 | 10 |
+| 79 | 10 | 7.5 SKL | 11.1 | 3.29 | 7.81 | 10 |
+| 154 | 10 | 7.5 SKL | 20.6 | 5.51 | 15.1 | 10 |
+
+Three reads:
+
+- **`K_sat(C)` ramps and caps low.** It activates at `C ≈ 13–15` and caps at **`k = 10`
+  (7.5 SKL)** even at thick — the joint corner saturates low (consistent with §7.4). The
+  `K_sat(C)` curve is the **cap envelope**; the frozen `k(C)` is a smooth ramp *under* it.
+- **The pins are robust, not sharp.** Plateau widths are **10–16+ rungs** near-peak, so a
+  band around each `K_sat` stays near-peak — safe to freeze conservatively (a narrow plateau
+  would have been the signal to widen, per the magnitude-pass rule; none is).
+- **No `C_boot` pin — the tail dissolves it (§8.5).** `K_sat(C)` is already `0` below
+  `C ≈ 13–15`, so the bootstrap concession is the curve's own `k = 0` tail, not a separate
+  threshold. The "buys ≥ floor's worth" point (`C = 25`, where `K_sat = 8`) is a *descriptive*
+  marker only — conceding out to it would re-introduce a `0 → 8` step. **First-cut genesis
+  pins:** just `K_sat(C)` per the table (a smooth monotone ramp under it, decaying to `0` in
+  the tail, capping at `k = 10 / 7.5 SKL`); `C_min` still pending the 2d-1 ramp. Two frozen
+  magnitudes, not three. Conservative-frozen per §2.5 (confirm-not-fix for `K_sat`).
+
+### 8.8 The `k(C)` functional form — float-free cubic smoothstep (`--cover-dial`, ref C4 ports)
+
+Two genesis-frozen constraints decide the form, not just "smooth and monotone":
+
+- **Decay, not clamp (§8.4).** A ramp that is smooth in the body but *clamps* to `0` at the
+  bottom leaves a **slope kink** at the clamp count — a softer fingerprint, but the same genre.
+  The form must approach zero with `k` *and* `dk/dC → 0` into the tail.
+- **Exactly float-free.** C4 (`draw_cover_amount`) is the consumer and the production draw is
+  float-free by doctrine (the standoff's integer rule). Two wallets computing even slightly
+  different `k` from the same `C` draw from **different distributions** — the cross-wallet
+  uniformity break that *is* the fingerprint the mechanism closes. So the form must be
+  **bit-identically evaluable in integer arithmetic**, golden-vector-pinnable — which rules out
+  anything transcendental and points at a fixed-point polynomial.
+
+Both are met by a **cubic smoothstep** `s(t) = t²(3 − 2t)`, whose `s'(0) = s'(1) = 0` gives zero
+slope at *both* ends (decays into the tail *and* joins the cap with no kink), and which is a
+finite integer expression. The output is the cover **span** `C_max − C_min` in atomic units (the
+draw is then `bounded_uniform` over `[C_min, C_min + span]`, the standoff's integer draw):
+
+```text
+COVER_TAIL_COUNT      = 13            # K_sat→0 tail (the dissolved C_boot)
+COVER_RAMP_END_COUNT  = 79            # ramp reaches the cap
+COVER_SPAN_CAP_ATOMIC = 7_500_000_000 # 7.5 SKL = k=10 × 0.75 (§8.7 knee)
+
+span(C) = 0                                   for C ≤ 13
+        = CAP                                 for C ≥ 79
+        = CAP · num²·(3·den − 2·num) / den³   otherwise, num = C−13, den = 66
+```
+
+`num²·(3·den − 2·num) ≤ den³`, so `span ≤ CAP` and it is monotone in `num`; the intermediate
+`CAP · num²·(…) ≤ CAP · den³ ≈ 2.16e15 < u64::MAX`, so it never overflows. Sampled
+(`--cover-dial`): `C=14 → 0.005 SKL` (gentle decay, no jump), `25 → 0.65`, `46 → 3.75`,
+`60 → 5.99`, `79 → 7.50` (cap). Golden vector pinned (`cover_dial_span_golden_vector`); tests
+assert monotone-and-capped and the second-difference sign (convex into the tail = decay, concave
+into the cap = no kink). **C4 landed:** `draw_cover_amount(count, c_min, rng)` +
+`cover_dial_span_atomic` in `shekyl-standoff::cover` (`cover ~ U[C_min, C_min + span(C)]`
+via the shared `bounded_uniform`). The three implementation checks are its acceptance tests,
+not open decisions: **variable-span uniformity** (`bounded_uniform` is exact rejection for
+any bound, golden-vectored at tail/mid/cap spans), **tail smoothness** (`span = 0 ⇒
+cover = C_min` exactly, the continuous `span→0` limit; the first non-zero span ~5.1M atomic
+is no near-constant), and **`C_min` single-sourced** (`COVER_RUNWAY_FLOOR_ATOMIC`, provisional
+pending the 2d-1 ramp; the cover golden vector is provisional-until-`C_min`-lands). The
+`shekyl-staking-sim` copy is independently golden-vectored to the same values, so the two
+can't silently diverge.
