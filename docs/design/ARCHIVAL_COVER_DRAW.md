@@ -806,10 +806,20 @@ left to fall out of the curve's math, because each is genesis-frozen and un-revi
   population matches at both edges: the *serving* set was too few (dropped idle bonds, the
   §7.9 correction); the standing set is not too many either — an announced-but-not-posted
   `P` has no `bond_floor` (not a candidate, not bonded), and last-closed-epoch finality
-  excludes any pending/un-final bond. Residual confirmation: the **one-active-bond-per-`P_id`
-  invariant** (lives in the connect/state machine, implied by the mutate-not-add post
-  kinds) — verify it before the read is settled, since it is what makes per-`P` == per-bond
-  airtight.
+  excludes any pending/un-final bond. The one-active-bond-per-`P_id` invariant is now
+  **verified at source as three sub-checks** (not inferred from the record shape): it is
+  **consensus-enforced** — the daemon rejects a second `JoinMarket` for a bonded `P` via
+  the `RecordExists` rule (`bond_post.rs:73`, called from `blockchain.cpp:4673`), not a
+  wallet convention; there is **no transient double** across the unbond/rebond seam
+  (single record per `P_id`, `Rebond` mutates, `Unbond` atomically zeros, invariant
+  `bonded_total_atomic ∈ {0, bond_floor}`); and the rule and `per_p_bonded` key on the
+  **same** `p_canonical_id` granularity (`p_slot` rotation mints a *new* retired-old
+  `P_id`, so rotated personas are distinct candidates, correctly counted apart). **One
+  precision the check surfaced:** `Unbond` leaves the record present with
+  `bonded_total_atomic = 0`, so the count is of **active** bonds (`bonded > 0` — the only
+  ones with an observable `bond_floor`); the `Σ_P` gather **must filter out zeroed-retired
+  records**, or the denominator inflates with `P`s the attacker can't match. With that
+  filter, the count read is **bedrock**.
 - **Bootstrap boundary as a *stated clause*, not an extrapolation.** At epochs 0–1 the
   last-closed count ≈ 0; a smooth low-count→narrow curve would hand the earliest stakers
   the **narrowest** cover at the moment the live set is smallest and the cold-start link
@@ -838,3 +848,77 @@ histogram failed**: confirm a global IPR/occupied-rungs measure feeding a unifor
 dispersion measure takes far more bond mass than moving one rung's local signal — but it
 is a one-arm check, not an assumption). Since count-only ships at genesis, this check is
 deferred with the scalar; if it doesn't clear cheaply, drop it and stay count-only.
+
+---
+
+## 8. The `D(count)` response curve — spec
+
+The four frozen constraints (§7.9) pinned in **dependency order**, so each constrains the
+next rather than being implied by the curve's math: the **count read** is bedrock; the
+**saturation-knee cap** and the **`C_min` floor** define the envelope; the **smooth
+monotone shape** fills it; the **bootstrap clause** is the named exception at the
+`count ≈ 0` edge. All five are genesis-frozen and un-revisable.
+
+Notation: `floor = ARCHIVAL_BOND_FLOOR_ATOMIC = 0.75 SKL` (rung spacing). The wallet draws
+`cover ~ U[C_min, C_min + k(C)·floor]`, i.e. a uniform draw whose **width is `k(C)` rungs**;
+`C` is the count read. `draw_cover_amount` (C4) emits this in `shekyl-standoff`,
+float-free with a golden-vector and a conformance grade, like `draw_entry_gap`.
+
+### 8.1 The count read `C` (bedrock — §7.9, verified)
+
+`C` = the count of **active** archival bonds (`bonded_total_atomic > 0`) at the
+**most-recently-closed settlement epoch boundary**, keyed per `p_canonical_id` (= per
+observable `bond_floor` = the attacker's candidate pool, §7.9). Sourced by a canonical
+`Σ_P` gather at epoch close (filtering zeroed-retired records), **not** the serving-set
+close payload. Final-by-construction (≥ `SETTLEMENT_EPOCH_BLOCKS` deep) and fixed for the
+current epoch. Everything below is a function of **this one** slow, expensive-to-move input.
+
+### 8.2 The saturation-knee cap `K_sat(C)` (self-referential lockstep)
+
+The dial is capped at the **saturation knee for the realized count** — the `k` past which a
+rung of cover buys less than the marginal-return cutoff (`--cover` arm). `K_sat` is a
+function of the **same `C`**, monotone non-decreasing: more candidates ⇒ a wider blur can
+still gather set; fewer ⇒ the knee falls. Stating the cap as `K_sat(C)` (not a
+separately-sourced constant) is the **lockstep** that keeps the §7.8 manipulation surface
+closed: an attacker suppressing `C` moves the width *and* the cap together, against the
+same epoch-scoped, expensive-to-move quantity — there is no second input to sculpt.
+
+### 8.3 The `C_min` floor (runway)
+
+`C_min` is the **working-capital runway floor** (§2.2): strictly positive, `≥ 1 rung
+(0.75 SKL)`, so even the narrowest draw funds non-trivial runway and `cover == 0` stays
+reserved for the DQ6 opt-out. Sized against **pessimistic slow early yield** (under-funding
+re-links `P` too soon), pending the 2d-1 earnings-ramp numbers. It is the lower edge of
+every draw, independent of `C` — the envelope's floor.
+
+### 8.4 The shape `k(C)` — smooth and monotone (hard constraint)
+
+Between the floor and the cap, `k(C)` rises **smoothly and monotonically** from `0` (at the
+bootstrap edge) toward `K_sat(C)` as `C` grows: more live bonds ⇒ wider blur, up to the
+knee. **No steps** — a step at any count threshold is the continuous analogue of the cohort
+split (§7.8), sorting bonds into below-/above-threshold cover-regimes at a public frozen
+threshold (a fingerprint, un-revisable). The exact `k(C)` magnitudes inherit the `--cover` /
+`--cover-fn` analysis under the **pessimistic** corner, pinned conservatively at genesis
+(per §2.5 the bound can't be re-tuned later); a future `f` may *confirm* but not *fix* them.
+
+### 8.5 The bootstrap clause (the named low-count exception)
+
+At epochs 0–1 the last-closed `C ≈ 0`. A bare smooth curve would hand the earliest stakers
+the **narrowest** cover at the moment the live set is smallest and the cold-start link most
+exposed. So pin an **explicit clause**, not an extrapolation:
+
+> **For `C < C_boot`, `k(C) = 0`** — the draw is `cover = C_min` exactly (runway only, no
+> blur), conceding the bootstrap cohort to the `N_P`-independent seams (network-isolation +
+> funder-scope), consistent with how `f` treats every sparse state.
+
+This is a decision on the record, genesis-frozen and itself un-revisable. (`C_boot` is the
+count below which the cover's blur buys no usable set — sized with `K_sat(C)` against the
+same pessimistic populations.)
+
+### 8.6 Out of scope here (downstream)
+
+The `draw_cover_amount` wiring (C4) and the `CoverAmount` orchestration (the
+`bond_floor + cover` send, `P`-change threading) remain 2d. The dispersion scalar stays
+deferred (§7.9, capital-efficiency, economic reopen trigger). This section pins the **frozen
+shape of `f`**; the magnitude pins (`K_sat` curve, `C_min`, `C_boot`) are the conservative
+genesis numbers the `--cover` analysis sets under the pessimistic corner.
