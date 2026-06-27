@@ -505,6 +505,18 @@ constructor accepts — variant choice by construction. (b) The CT *compare* is 
 behind the trait, so the deferral is a swap, and the architecture (the thing expensive to
 retrofit) is pinned today.
 
+**Build status (refines the seam decision):** SP-1 (the `GuaranteedViewPair`-only adapter)
+landed in PR #195 and the **CT compare** in PR #194 (`subtle::ct_eq` in the shared scanner).
+The **`OutputExtractor` seam itself is deferred *with* the CT-everything impl it exists to
+enable** (rule-21) — not built now. Reasoning: the seam is a refactor of the *shared*
+scanner's per-output path whose only purpose is to make a **rule-21-deferred** swap cheap;
+building it now is pre-provisioning flexibility for a maybe-never trigger, which
+[`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+and [`70-modular-consensus`](../../.cursor/rules/70-modular-consensus.mdc) (no speculative
+scaffolding) say to avoid. When a co-tenancy target reopens the CT-everything tax, the seam
+and its impl land together — the re-architecture cost is real but paid against a real target,
+not pre-paid. The CT compare (the correct-now half) did *not* wait on the seam.
+
 ---
 
 ### SP-2 — `PScanCursor`: single authoritative frontier, resume-and-recompute (crash-recovery **Design B**, decided jointly with SP-4)

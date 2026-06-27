@@ -55,6 +55,29 @@ prior version's hashes (e.g., a `-v2` increment from the `-v1` examples above).
 Forgetting the version means a future protocol upgrade can't safely change the
 construction.
 
+## Derive-vs-store: recompute parameter-free maps, store labeled derivations
+
+For any "should this secret be recomputed at use, or stored?" call, the line is
+whether the derivation carries a **label/seed parameter**:
+
+- A **parameter-free structural map** is safe to recompute on demand — there is
+  nothing to drift. The Edwards→Montgomery map is the canonical case: a persona's
+  X25519 scan secret **is** its `view_sk` (the Ed25519 view scalar reinterpreted
+  as an unclamped Montgomery scalar), recomputed at scan-time, never stored as a
+  second copy. Storing it would be a redundant secret to zeroize for the same bytes.
+- A **labeled or seeded HKDF derivation must be stored**, not recomputed at each
+  use site. The danger is **label drift**: if the produce-site and a later
+  consume-site disagree on the domain separator / version suffix / seed, the
+  derivation silently yields *different* secrets — a silent-wrong-secrets bug, not
+  a load error, so nothing fails loudly. Derive once, store, and load.
+
+The failure mode that makes this load-bearing is *silence*. A recomputed labeled
+secret that drifts doesn't error; it scans/signs against the wrong key and looks
+fine until funds or unlinkability are already lost. (Surfaced building the 2d-1
+archival `view_sk`→X25519 adapter; the keypair-consistency proof is the
+recover-a-persona-owned-output + negative-control test, not a self-consistent
+round-trip — see `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 SP-1.)
+
 ## Memwipe is structural, not manual
 
 In Rust, secrets are `Zeroizing<[u8; N]>` or a struct with
