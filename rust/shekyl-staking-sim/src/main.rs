@@ -843,6 +843,196 @@ fn print_cover_fn_report() {
     }
 }
 
+fn print_cover_targeting_report() {
+    let report = cover::run_targeting_report();
+    eprintln!("shekyl-staking-sim — statistic DQ: count-uniform vs histogram-per-rung (§7.8/§7.9)");
+    eprintln!(
+        "Rung-local suppression adversary: withdraw m own bonds (at the victim's rung for the"
+    );
+    eprintln!("  per-rung response, globally for the uniform one) across a closed epoch, so f's");
+    eprintln!(
+        "  epoch-close statistic sees the suppressed value. Thin N_P corner; lower set = more"
+    );
+    eprintln!(
+        "  narrowed cover = worse for the victim. MOD = a moderate (targetable) rung; thin rungs the"
+    );
+    eprintln!(
+        "  histogram already concedes and dense rungs swamp the attacker — the middle is where a"
+    );
+    eprintln!(
+        "  rung-local depopulation moves the dial. honest avg local occ (±{} rungs) = {:.2}.",
+        report.w_ref, report.honest_avg_local
+    );
+    eprintln!();
+    eprintln!(
+        "{:>4} | {:>9} {:>9} | {:>10} {:>10}",
+        "m", "cntSet", "histSet", "cntModSet", "histModSet",
+    );
+    for p in &report.points {
+        eprintln!(
+            "{:>4} | {:>9.2} {:>9.2} | {:>10.2} {:>10.2}",
+            p.attacker_bonds,
+            p.count_uniform_set,
+            p.histogram_set,
+            p.count_uniform_mod_set,
+            p.histogram_mod_set,
+        );
+    }
+    eprintln!();
+    let fmt_m = |o: Option<u64>| o.map(|m| format!("{m}")).unwrap_or_else(|| ">8".into());
+    eprintln!(
+        "Attacker bonds to HALVE a moderate victim's set: histogram = {}, count = {}.",
+        fmt_m(report.histogram_m_to_halve_mod),
+        fmt_m(report.count_m_to_halve_mod),
+    );
+    eprintln!(
+        "Decision: if histogram narrows the moderate victim materially more than count, the per-rung"
+    );
+    eprintln!("  targeting gain is MATERIAL ⇒ count-uniform confirmed. If neither moves (honest");
+    eprintln!("  occupancy swamps the attacker), the histogram is safe to take with eyes open.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-targeting report: {e}"),
+    }
+}
+
+fn print_cover_dispersion_report() {
+    use cover::Dispersion;
+    let shape = |d: Dispersion| match d {
+        Dispersion::Clustered => "clustered",
+        Dispersion::Dispersed => "dispersed",
+    };
+    let report = cover::run_dispersion_report();
+    eprintln!("shekyl-staking-sim — statistic DQ: does count need the dispersion scalar? (§7.9)");
+    eprintln!("Count alone can't tell clustered from dispersed (same N_P, different spread → same");
+    eprintln!(
+        "  uniform D). A global dispersion scalar (occupied-rungs) converts count → density. We"
+    );
+    eprintln!(
+        "  size for target set {:.0} at the thin N_P corner; count-only assumes a fixed reference",
+        report.target_set
+    );
+    eprintln!(
+        "  span ({:.1}), count+disp reads the realised occupied-rungs. set = victim realised set.",
+        report.span_ref
+    );
+    eprintln!();
+    eprintln!(
+        "{:>10} {:>8} | {:>8} {:>8} | {:>8} {:>8}",
+        "shape", "occRung", "cntWid", "cntSet", "dispWid", "dispSet",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "{:>10} {:>8.1} | {:>8.1} {:>8.2} | {:>8.1} {:>8.2}",
+            shape(r.shape),
+            r.occ_rungs,
+            r.width_count_only,
+            r.set_count_only,
+            r.width_count_disp,
+            r.set_count_disp,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Clustered↔dispersed realised-set gap: count-only = {:.2}, count+dispersion = {:.2}.",
+        report.gap_count_only, report.gap_count_disp
+    );
+    eprintln!(
+        "Decision: if count-only leaves a material gap that count+dispersion closes, the scalar"
+    );
+    eprintln!("  earns its place (still global ⇒ targeting-resistant, §7.9). If the gap is small,");
+    eprintln!("  count alone suffices — take the simpler statistic.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-dispersion report: {e}"),
+    }
+}
+
+fn print_cover_magnitudes_report() {
+    let report = cover::run_magnitude_report();
+    eprintln!("shekyl-staking-sim — §8 magnitude pass: K_sat(C) + derived C_boot (JOINT corner)");
+    eprintln!(
+        "Joint pessimistic corner: dispersed, timing_retain={:.1}, beta={:.0}, mean={:.0} (count is",
+        report.timing_retain, report.beta, report.mean_shards
+    );
+    eprintln!(
+        "  the x-axis). kSat = saturation knee at this count; covSKL = K_sat·floor; setKnee = joint"
+    );
+    eprintln!(
+        "  set there; base = k=0 (C_min-only) baseline; gain = setKnee−base; plat = robust plateau"
+    );
+    eprintln!(
+        "  width (dial rungs within 90% of peak — narrow ⇒ sharp optimum ⇒ widen conservatism)."
+    );
+    eprintln!();
+    eprintln!(
+        "{:>5} | {:>5} {:>7} {:>8} {:>6} {:>6} {:>6}",
+        "C", "kSat", "covSKL", "setKnee", "base", "gain", "plat",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "{:>5} | {:>5} {:>7.2} {:>8.2} {:>6.2} {:>6.2} {:>6}",
+            r.count,
+            r.k_sat,
+            r.cover_span_skl,
+            r.set_at_knee,
+            r.baseline_set,
+            r.set_gain,
+            r.plateau_width_rungs,
+        );
+    }
+    eprintln!();
+    match report.c_boot_continuity {
+        Some(c) => eprintln!(
+            "C_boot (recommended) = {c}: first count with K_sat>0; below it K_sat=0, so k(C)=K_sat(C) \
+             is CONTINUOUS through the boundary (cover span at it = {:.2} SKL ramps up from 0 — no",
+            report.c_boot_continuity_cover_span_skl
+        ),
+        None => eprintln!("K_sat is 0 at every swept count — the joint corner buys no usable cover."),
+    }
+    eprintln!(
+        "  step). The bootstrap clause is the k=0 TAIL of K_sat, not a glued floor (§8.4/§8.5)."
+    );
+    if let Some(cs) = report.c_substantial {
+        eprintln!(
+            "  Context: cover becomes 'substantial' (gain ≥ baseline) only at C={cs} — but conceding"
+        );
+        eprintln!("  up to there would re-introduce the step (K_sat already large), so it is NOT the cutoff.");
+    }
+    eprintln!("  C_min is economic (runway, 2d-1 ramp) — out of this arm.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-magnitudes report: {e}"),
+    }
+}
+
+fn print_cover_dial_report() {
+    // The §8.8 float-free k(C) form: cover span (C_max−C_min) vs count C. The
+    // dial k = span/floor (floor = 0.75 SKL). Cubic-smoothstep: decays to 0 in the
+    // tail (no clamp kink) and joins the cap with zero slope — integer-exact.
+    eprintln!("shekyl-staking-sim — §8.8 k(C) form: cover span vs count (float-free smoothstep)");
+    eprintln!(
+        "span = C_max−C_min (atomic); kEff = span/floor rungs (floor=0.75 SKL). Decays to 0 below"
+    );
+    eprintln!("  C=13, caps at 7.5 SKL above C=79, with zero slope at both ends (no kink, §8.4).");
+    eprintln!();
+    eprintln!(
+        "{:>5} | {:>13} {:>9} {:>7}",
+        "C", "span(atomic)", "spanSKL", "kEff"
+    );
+    let floor_atomic = 750_000_000u64;
+    for c in [0u64, 13, 14, 16, 20, 25, 33, 46, 60, 79, 100, 154] {
+        let span = cover::cover_dial_span_atomic(c);
+        eprintln!(
+            "{:>5} | {:>13} {:>9.3} {:>7.2}",
+            c,
+            span,
+            span as f64 / 1e9,
+            span as f64 / floor_atomic as f64,
+        );
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -861,6 +1051,26 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover-fn") {
         print_cover_fn_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-targeting") {
+        print_cover_targeting_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-dispersion") {
+        print_cover_dispersion_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-magnitudes") {
+        print_cover_magnitudes_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-dial") {
+        print_cover_dial_report();
         return;
     }
 

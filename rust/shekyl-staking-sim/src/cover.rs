@@ -1063,6 +1063,535 @@ pub fn run_cover_fn_report() -> FnReport {
     }
 }
 
+// ===========================================================================
+// Statistic DQ (§7.8 / §7.9): count-uniform vs histogram-per-rung. The response
+// `f` reads is genesis-frozen, so the choice of statistic is un-takebackable.
+// The histogram lets `f` give a PER-RUNG response (narrow where your local rung
+// is sparse, wide where dense — the saturation-aware shape arm B measured). That
+// per-rung response IS a rung-local targeting surface: an attacker who withdraws
+// their own bonds *at a victim's rung* makes `f` see "sparse here" and narrows
+// THAT victim's cover toward `A == bond_floor` — a targeted, cheap attack. The
+// count drives only a UNIFORM `D` (one width per epoch), so the same attacker can
+// only move the global width — broad, epoch-long, visible. Richness and
+// forgeability are the same property; this arm measures the gap so the decision
+// is empirical (the saturation-finding discipline), not argued.
+// ===========================================================================
+
+/// Honest-baselined width response: a density signal → dial width, monotone
+/// increasing (sparse → narrow/conceded, dense → wide), normalised so the honest
+/// signal maps to `K_HONEST` and clamped to `[K_MIN, K_SAT]`. Same shape for both
+/// modes — only the *signal* (global count vs local occupancy) differs, which is
+/// exactly the manipulability difference under test.
+fn targeting_width(signal: f64, honest_signal: f64) -> u64 {
+    const K_HONEST: f64 = 16.0;
+    const K_MIN: f64 = 4.0;
+    const K_SAT: f64 = 24.0;
+    if honest_signal <= 0.0 {
+        return K_MIN as u64;
+    }
+    (K_HONEST * (signal.max(0.0) / honest_signal))
+        .clamp(K_MIN, K_SAT)
+        .round() as u64
+}
+
+/// Victim's realized anonymity set at a given cover width (honest decoys in the
+/// window; the attacker's withdrawn bonds are not decoys either way).
+fn victim_realized_set(rng: &mut SplitMix64, pop: &[i64], victim: usize, width: u64) -> f64 {
+    let s_v = pop[victim];
+    let u = rng.unit();
+    let lo = s_v - ((1.0 - u) * width as f64).floor() as i64;
+    let hi = s_v + (u * width as f64).floor() as i64;
+    let decoys = pop
+        .iter()
+        .enumerate()
+        .filter(|(j, &s)| *j != victim && s >= lo && s <= hi)
+        .count();
+    1.0 + decoys as f64
+}
+
+/// Honest local occupancy: bonds within `±W_REF` rungs of `rung` (excluding the
+/// bond itself). The per-rung signal a histogram `f` would read.
+fn local_occupancy(pop: &[i64], idx: usize, w_ref: i64) -> f64 {
+    let r = pop[idx];
+    pop.iter()
+        .enumerate()
+        .filter(|(j, &s)| *j != idx && (s - r).abs() <= w_ref)
+        .count() as f64
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetingPoint {
+    /// Bonds the attacker withdraws (their own), the cost axis.
+    pub attacker_bonds: u64,
+    /// Victim realized set when `f` reads the GLOBAL count (uniform `D`).
+    pub count_uniform_set: f64,
+    /// Victim realized set when `f` reads the victim's LOCAL occupancy (per-rung).
+    pub histogram_set: f64,
+    /// Same, restricted to victims on a MODERATE rung (local occupancy near the
+    /// honest mean) — the *targetable* tier. Thin rungs the histogram already
+    /// concedes (the three-tier framing); dense rungs swamp the attacker; the
+    /// moderate middle is where a rung-local depopulation actually moves the dial.
+    pub count_uniform_mod_set: f64,
+    pub histogram_mod_set: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetingReport {
+    pub n_p: u64,
+    pub mean_shards: f64,
+    pub w_ref: i64,
+    pub honest_avg_local: f64,
+    pub points: Vec<TargetingPoint>,
+    /// Attacker bonds to halve a MODERATE victim's set: histogram vs count. The
+    /// ratio is the targeting gain (how much cheaper the per-rung surface is).
+    pub histogram_m_to_halve_mod: Option<u64>,
+    pub count_m_to_halve_mod: Option<u64>,
+}
+
+/// Rung-local suppression adversary (§7.8 / §7.9). The attacker withdraws `m` of
+/// their own bonds — concentrated at the victim's rung for the histogram mode,
+/// spread globally for the count mode — across a full closed epoch, so the
+/// epoch-close statistic sees the suppressed value. We measure how far each
+/// response lets the attacker narrow the victim's realized cover. Default to
+/// count-uniform; this is the measurement that may upgrade to a richer statistic
+/// only if the per-rung targeting gain is negligible (honest occupancy swamps the
+/// attacker's mass even at thin rungs).
+fn targeting_attack() -> TargetingReport {
+    let (_, n_p, mean) = SCENARIOS[0]; // thin N_P — the regime where attacker mass bites.
+    let dispersion = Dispersion::Dispersed;
+    let w_ref = 4i64;
+    let trials = 60_000u64;
+    let ms: Vec<u64> = (0..=8).collect();
+
+    // Honest average local occupancy — the histogram normaliser and the
+    // thin-rung threshold (bottom third ≈ 0.6× the mean here).
+    let mut warm = SplitMix64::new(0x7A46_0001);
+    let mut acc = 0.0;
+    let mut cnt = 0u64;
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+    for _ in 0..20_000 {
+        pop.clear();
+        pop.extend((0..n_p).map(|_| draw_shard_count(&mut warm, mean, dispersion) as i64));
+        for i in 0..pop.len() {
+            acc += local_occupancy(&pop, i, w_ref);
+            cnt += 1;
+        }
+    }
+    let honest_avg_local = acc / cnt as f64;
+    // Moderate (targetable) band: local occupancy within ±25% of the honest mean.
+    let mod_lo = honest_avg_local * 0.75;
+    let mod_hi = honest_avg_local * 1.25;
+
+    let mut points = Vec::new();
+    for &m in &ms {
+        let mut rng = SplitMix64::new(0x7A46_1000 ^ m);
+        let (mut cu, mut hs) = (0.0, 0.0);
+        let (mut cu_n, mut hs_n) = (0u64, 0u64);
+        let (mut cum, mut hsm) = (0.0, 0.0);
+        let (mut cum_n, mut hsm_n) = (0u64, 0u64);
+        for _ in 0..trials {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean, dispersion) as i64));
+            let victim = (rng.next_u64() % n_p) as usize;
+            let local = local_occupancy(&pop, victim, w_ref);
+
+            // count-uniform: global signal N_P, suppressed by m globally.
+            let w_count = targeting_width((n_p - m.min(n_p)) as f64, n_p as f64);
+            // histogram: local signal, suppressed by m at the victim's rung.
+            let w_hist = targeting_width(local - m as f64, honest_avg_local);
+
+            let set_count = victim_realized_set(&mut rng, &pop, victim, w_count);
+            let set_hist = victim_realized_set(&mut rng, &pop, victim, w_hist);
+            cu += set_count;
+            hs += set_hist;
+            cu_n += 1;
+            hs_n += 1;
+            if local >= mod_lo && local <= mod_hi {
+                cum += set_count;
+                hsm += set_hist;
+                cum_n += 1;
+                hsm_n += 1;
+            }
+        }
+        points.push(TargetingPoint {
+            attacker_bonds: m,
+            count_uniform_set: cu / cu_n as f64,
+            histogram_set: hs / hs_n as f64,
+            count_uniform_mod_set: if cum_n > 0 { cum / cum_n as f64 } else { 1.0 },
+            histogram_mod_set: if hsm_n > 0 { hsm / hsm_n as f64 } else { 1.0 },
+        });
+    }
+
+    // Attacker bonds to halve a moderate victim's set, per mode.
+    let halve = |get: &dyn Fn(&TargetingPoint) -> f64| -> Option<u64> {
+        let base = get(&points[0]);
+        points
+            .iter()
+            .find(|p| get(p) <= base / 2.0)
+            .map(|p| p.attacker_bonds)
+    };
+    let histogram_m_to_halve_mod = halve(&|p| p.histogram_mod_set);
+    let count_m_to_halve_mod = halve(&|p| p.count_uniform_mod_set);
+
+    TargetingReport {
+        n_p,
+        mean_shards: mean,
+        w_ref,
+        honest_avg_local,
+        points,
+        histogram_m_to_halve_mod,
+        count_m_to_halve_mod,
+    }
+}
+
+pub fn run_targeting_report() -> TargetingReport {
+    targeting_attack()
+}
+
+// ===========================================================================
+// Dispersion-value (§7.9): does count ALONE leave material anonymity on the
+// table vs count + a coarse GLOBAL dispersion scalar? §7.4 showed clustered vs
+// dispersed was load-bearing (2.1% vs 6.8% thin-tail) — but the count can't tell
+// them apart (same N_P, different spread → same uniform D). A global dispersion
+// scalar (effective-occupied-rungs) converts count into density without exposing
+// a per-rung lever (the attacker must move a whole-population measure, §7.9). The
+// arm measures the gap count-only leaves and whether count+dispersion closes it,
+// so the enrichment is taken only if it earns its place.
+// ===========================================================================
+
+/// Effective occupied rungs via the occupancy **inverse-participation-ratio**:
+/// `(Σ n_r)² / Σ n_r²` over per-rung occupancies `n_r` (`Σ n_r = N_P`). Ranges
+/// from `1` (all bonds on one rung — fully clustered) to `N_P` (one per rung —
+/// fully dispersed), so it is a far sharper spread discriminator than a raw
+/// distinct-rung count. A whole-population measure (no per-rung handle), so it
+/// keeps the §7.9 targeting-resistance.
+fn effective_occupied_rungs(pop: &[i64]) -> f64 {
+    let mut v: Vec<i64> = pop.to_vec();
+    v.sort_unstable();
+    let mut sum_sq = 0.0;
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i + 1;
+        while j < v.len() && v[j] == v[i] {
+            j += 1;
+        }
+        let n = (j - i) as f64;
+        sum_sq += n * n;
+        i = j;
+    }
+    let total = pop.len() as f64;
+    if sum_sq <= 0.0 {
+        1.0
+    } else {
+        total * total / sum_sq
+    }
+}
+
+/// Width to gather `target` neighbours at density `n_p / span`, clamped. The
+/// count-only response uses a fixed reference span (blind to spread); the
+/// count+dispersion response uses the realised occupied-rungs.
+fn density_width(target: f64, span: f64, n_p: f64) -> u64 {
+    const K_MIN: f64 = 2.0;
+    const K_SAT: f64 = 32.0;
+    if n_p <= 0.0 {
+        return K_MIN as u64;
+    }
+    (target * span.max(1.0) / n_p).clamp(K_MIN, K_SAT).round() as u64
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DispersionRow {
+    pub shape: Dispersion,
+    /// Mean distinct occupied rungs (the dispersion signal).
+    pub occ_rungs: f64,
+    /// count-only: one width from `N_P` and a fixed reference span (blind to spread).
+    pub width_count_only: f64,
+    pub set_count_only: f64,
+    /// count + dispersion: width from `N_P` and the realised occupied-rungs.
+    pub width_count_disp: f64,
+    pub set_count_disp: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DispersionReport {
+    pub n_p: u64,
+    pub mean_shards: f64,
+    pub target_set: f64,
+    pub span_ref: f64,
+    pub rows: Vec<DispersionRow>,
+    /// Spread of realised set across the clustered↔dispersed bracket, count-only.
+    pub gap_count_only: f64,
+    /// …and with the dispersion scalar — does it close the gap?
+    pub gap_count_disp: f64,
+}
+
+fn dispersion_value() -> DispersionReport {
+    let (_, n_p, mean) = SCENARIOS[0]; // thin corner.
+    let target = 8.0;
+    let trials = 60_000u64;
+    let shapes = [Dispersion::Clustered, Dispersion::Dispersed];
+
+    // Reference span = mean occupied-rungs across both shapes — the best a
+    // spread-blind count-only response can assume.
+    let mut warm = SplitMix64::new(0x0D15_0001);
+    let mut span_acc = 0.0;
+    let mut span_n = 0u64;
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+    for &shape in &shapes {
+        for _ in 0..15_000 {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut warm, mean, shape) as i64));
+            span_acc += effective_occupied_rungs(&pop);
+            span_n += 1;
+        }
+    }
+    let span_ref = span_acc / span_n as f64;
+
+    let mut rows = Vec::new();
+    let mut seed = 0x0D15_1000u64;
+    for &shape in &shapes {
+        let mut rng = SplitMix64::new(seed);
+        seed += 1;
+        let (mut occ, mut wc, mut sc, mut wd, mut sd) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for _ in 0..trials {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean, shape) as i64));
+            let span = effective_occupied_rungs(&pop);
+            let victim = (rng.next_u64() % n_p) as usize;
+
+            let w_count = density_width(target, span_ref, n_p as f64); // blind to spread.
+            let w_disp = density_width(target, span, n_p as f64); // spread-aware.
+
+            occ += span;
+            wc += w_count as f64;
+            wd += w_disp as f64;
+            sc += victim_realized_set(&mut rng, &pop, victim, w_count);
+            sd += victim_realized_set(&mut rng, &pop, victim, w_disp);
+        }
+        let t = trials as f64;
+        rows.push(DispersionRow {
+            shape,
+            occ_rungs: occ / t,
+            width_count_only: wc / t,
+            set_count_only: sc / t,
+            width_count_disp: wd / t,
+            set_count_disp: sd / t,
+        });
+    }
+
+    let gap = |get: &dyn Fn(&DispersionRow) -> f64| (get(&rows[0]) - get(&rows[1])).abs();
+    let gap_count_only = gap(&|r| r.set_count_only);
+    let gap_count_disp = gap(&|r| r.set_count_disp);
+
+    DispersionReport {
+        n_p,
+        mean_shards: mean,
+        target_set: target,
+        span_ref,
+        rows,
+        gap_count_only,
+        gap_count_disp,
+    }
+}
+
+pub fn run_dispersion_report() -> DispersionReport {
+    dispersion_value()
+}
+
+// ===========================================================================
+// Magnitude pass (§8): pin the D(count) curve's numbers under the JOINT corner
+// (dispersed density × timing intersection × tight affordability) — the marginal
+// set overstates, so size against the joint set, not it. For each count C:
+// K_sat(C) (the saturation knee), the achievable set there, and the robust
+// PLATEAU WIDTH (a sharp optimum ⇒ widen conservatism, don't pin the peak).
+// C_boot is DERIVED, not guessed: the count below which even max-viable cover at
+// the knee buys less than the floor's worth of set over the k=0 baseline — so the
+// concession boundary falls out of the measured knee (§8.5).
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MagnitudeRow {
+    /// The count `f` reads (live active-bond count).
+    pub count: u64,
+    /// Saturation-knee dial at this count.
+    pub k_sat: u64,
+    /// `K_sat · floor` in SKL — the cover span the curve caps at here.
+    pub cover_span_skl: f64,
+    /// Realized joint set at the knee.
+    pub set_at_knee: f64,
+    /// Realized set at `k = 0` (the `C_min`-only / same-rung baseline).
+    pub baseline_set: f64,
+    /// What the blur buys over the baseline (`set_at_knee − baseline`).
+    pub set_gain: f64,
+    /// Robust plateau: dial values within 90% of the peak set (a wide band ⇒ safe
+    /// to pin; a narrow band ⇒ the optimum is sharp, widen the conservatism).
+    pub plateau_width_rungs: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MagnitudeReport {
+    pub mean_shards: f64,
+    pub timing_retain: f64,
+    pub beta: f64,
+    pub floor_skl: f64,
+    pub marginal_cutoff: f64,
+    pub rows: Vec<MagnitudeRow>,
+    /// **The continuity-clean `C_boot` (recommended):** the first count whose
+    /// saturation knee is non-zero (`K_sat > 0`). At/below it `K_sat = 0`, so
+    /// `k(C) = K_sat(C)` is **continuous through the boundary by construction** —
+    /// the bootstrap clause is the `k = 0` tail of `K_sat`, not a glued step (§8.4).
+    pub c_boot_continuity: Option<u64>,
+    /// The cover span just above `c_boot_continuity` — small ⇒ no step (§8.4).
+    pub c_boot_continuity_cover_span_skl: f64,
+    /// The "cover becomes substantial" marker: the first count whose knee buys ≥
+    /// the floor's worth (`set_gain ≥ baseline`). **NOT** the concession cutoff —
+    /// conceding up to here would re-introduce the §8.4 step (here `K_sat` is
+    /// already large). Reported as context only.
+    pub c_substantial: Option<u64>,
+}
+
+fn magnitude_pin() -> MagnitudeReport {
+    // Pessimistic JOINT corner: dispersed density, timing intersection on, tight
+    // affordability, pessimistic per-staker portfolio (thin mean held fixed so the
+    // x-axis is purely the count).
+    let (_, _, mean) = SCENARIOS[0];
+    let dispersion = Dispersion::Dispersed;
+    let timing_retain = 0.5;
+    let beta = 2.0;
+    let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
+    let trials = 30_000u64;
+    let step = 2u64;
+    let ks: Vec<u64> = std::iter::once(0)
+        .chain((step..=32).step_by(step as usize))
+        .collect();
+    let counts: [u64; 14] = [2, 3, 4, 5, 6, 8, 10, 12, 15, 17, 25, 40, 79, 154];
+
+    let mut seed = 0x8A60_0001u64;
+    let mut rows = Vec::new();
+    for &count in &counts {
+        let curve: Vec<f64> = ks
+            .iter()
+            .map(|&k| {
+                seed += 1;
+                realized_payer_set_mean(
+                    count,
+                    mean,
+                    dispersion,
+                    k,
+                    timing_retain,
+                    beta,
+                    trials,
+                    seed,
+                )
+            })
+            .collect();
+        let baseline_set = curve[0]; // k = 0
+        let peak = curve.iter().cloned().fold(0.0_f64, f64::max);
+
+        // Saturation knee: first k-step whose marginal gain per rung < cutoff.
+        let mut k_sat = *ks.last().unwrap();
+        for w in 1..ks.len() {
+            let marginal = (curve[w] - curve[w - 1]) / step as f64;
+            if marginal < MARGINAL_CUTOFF {
+                k_sat = ks[w - 1];
+                break;
+            }
+        }
+        let set_at_knee = curve[ks.iter().position(|&k| k == k_sat).unwrap()];
+        // Plateau width: dial values within 90% of the peak.
+        let plateau_width_rungs = ks
+            .iter()
+            .zip(&curve)
+            .filter(|(_, &s)| s >= 0.9 * peak)
+            .count() as u64
+            * step;
+
+        rows.push(MagnitudeRow {
+            count,
+            k_sat,
+            cover_span_skl: k_sat as f64 * floor_skl,
+            set_at_knee,
+            baseline_set,
+            set_gain: set_at_knee - baseline_set,
+            plateau_width_rungs,
+        });
+    }
+
+    // Continuity-clean C_boot: the first count with a non-zero knee. Below it
+    // K_sat = 0, so k(C) = K_sat(C) is continuous through the boundary (§8.4).
+    let c_boot_continuity = rows.iter().find(|r| r.k_sat > 0).map(|r| r.count);
+    let c_boot_continuity_cover_span_skl = c_boot_continuity
+        .and_then(|c| rows.iter().find(|r| r.count == c))
+        .map(|r| r.cover_span_skl)
+        .unwrap_or(0.0);
+    // The "cover becomes substantial" marker (floor's-worth) — context, not the cutoff.
+    let c_substantial = rows
+        .iter()
+        .find(|r| r.set_gain >= r.baseline_set)
+        .map(|r| r.count);
+
+    MagnitudeReport {
+        mean_shards: mean,
+        timing_retain,
+        beta,
+        floor_skl,
+        marginal_cutoff: MARGINAL_CUTOFF,
+        rows,
+        c_boot_continuity,
+        c_boot_continuity_cover_span_skl,
+        c_substantial,
+    }
+}
+
+pub fn run_magnitude_report() -> MagnitudeReport {
+    magnitude_pin()
+}
+
+// ===========================================================================
+// The k(C) functional form (§8.8) — float-free reference C4 ports verbatim.
+//
+// Requirements (genesis-frozen): smooth, monotone, and DECAYING to zero in the
+// low tail (k AND dk/dC → 0, so "bootstrap" is the limit of the ramp, not a
+// clamp-kink, §8.4) — and EXACTLY evaluable in integer arithmetic, bit-identical
+// across architectures, so two wallets compute the identical span from the same
+// C (a float divergence would be a cross-wallet uniformity break, the very
+// fingerprint the mechanism closes). A cubic smoothstep `s(t) = t²(3−2t)` has
+// `s'(0) = s'(1) = 0` — zero slope at BOTH ends, so it decays into the tail and
+// joins the cap with no kink — and as a cubic it is a finite integer expression.
+// Output is the cover SPAN `C_max − C_min` in atomic units (the draw is then
+// `bounded_uniform` over `[C_min, C_min + span]`, the standoff's integer draw).
+// ===========================================================================
+
+/// `K_sat → 0` tail boundary (§8.7): at/below this count the span is 0 — the
+/// dissolved-`C_boot` bootstrap tail (§8.5).
+const COVER_TAIL_COUNT: u64 = 13;
+/// Count at which the ramp reaches the cap (the §8.7 knee plateau).
+const COVER_RAMP_END_COUNT: u64 = 79;
+/// Cover-span cap: `k = 10 rungs × 0.75 SKL = 7.5 SKL` (§8.7, joint-corner knee).
+const COVER_SPAN_CAP_ATOMIC: u64 = 7_500_000_000;
+
+/// `k(C)` as the cover span `C_max − C_min` in atomic units — the float-free
+/// reference form (§8.8). Cubic-smoothstep ramp from `0` at `COVER_TAIL_COUNT`
+/// (zero value *and* zero slope — the decay, not a clamp) to `COVER_SPAN_CAP_ATOMIC`
+/// at `COVER_RAMP_END_COUNT` (joined with zero slope), flat thereafter. Pure u64
+/// arithmetic ⇒ identical on every architecture; golden-vector-pinnable.
+pub fn cover_dial_span_atomic(count: u64) -> u64 {
+    if count <= COVER_TAIL_COUNT {
+        return 0;
+    }
+    if count >= COVER_RAMP_END_COUNT {
+        return COVER_SPAN_CAP_ATOMIC;
+    }
+    let num = count - COVER_TAIL_COUNT; // in (0, den)
+    let den = COVER_RAMP_END_COUNT - COVER_TAIL_COUNT; // 66
+                                                       // smoothstep s(t) = t²(3 − 2t) with t = num/den:
+                                                       //   s = num²·(3·den − 2·num) / den³   (≤ den³, so span ≤ cap; monotone in num)
+                                                       // span = cap · s. cap·s_num ≤ cap·den³ = 7.5e9·287_496 ≈ 2.16e15 < u64::MAX.
+    let s_num = num * num * (3 * den - 2 * num);
+    let s_den = den * den * den;
+    COVER_SPAN_CAP_ATOMIC * s_num / s_den // floor division — deterministic
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,6 +1608,52 @@ mod tests {
             trials: 50_000,
             seed: 1,
         }
+    }
+
+    #[test]
+    fn cover_dial_span_golden_vector() {
+        // Pinned (C, span) — C4 must reproduce these bit-for-bit (§8.8).
+        assert_eq!(cover_dial_span_atomic(0), 0);
+        assert_eq!(cover_dial_span_atomic(13), 0); // tail boundary
+        assert_eq!(cover_dial_span_atomic(46), 3_750_000_000); // midpoint t=0.5 → cap/2
+        assert_eq!(cover_dial_span_atomic(79), 7_500_000_000); // ramp end → cap
+        assert_eq!(cover_dial_span_atomic(154), 7_500_000_000); // flat above
+    }
+
+    #[test]
+    fn cover_dial_matches_standoff_reference() {
+        // The sim's copy must equal the production form (`shekyl-standoff`, a
+        // dev-dependency) at EVERY count — so drift between the two is
+        // unrepresentable, not merely caught at the sampled golden points. If
+        // either changes without the other, this fails.
+        for c in 0..=200u64 {
+            assert_eq!(
+                cover_dial_span_atomic(c),
+                shekyl_standoff::cover_dial_span_atomic(c),
+                "sim k(C) diverged from shekyl-standoff at C={c}"
+            );
+        }
+    }
+
+    #[test]
+    fn cover_dial_span_is_monotone_and_capped() {
+        let mut prev = 0u64;
+        for c in 0..=200u64 {
+            let s = cover_dial_span_atomic(c);
+            assert!(s >= prev, "monotone at C={c}");
+            assert!(s <= 7_500_000_000, "capped at C={c}");
+            prev = s;
+        }
+    }
+
+    #[test]
+    fn cover_dial_span_decays_into_the_tail_no_clamp_kink() {
+        // Decay, not clamp: the second difference is POSITIVE just above the tail
+        // (slope rising from 0 ⇒ convex ⇒ dk/dC → 0 into the tail), and NEGATIVE
+        // near the cap (slope falling to 0 ⇒ concave ⇒ no kink at the join).
+        let d = |c: u64| cover_dial_span_atomic(c + 1) as i128 - cover_dial_span_atomic(c) as i128;
+        assert!(d(14) > d(13), "convex into the low tail (decay, not clamp)");
+        assert!(d(76) < d(75), "concave into the cap (slope → 0, no kink)");
     }
 
     #[test]
@@ -1208,5 +1783,69 @@ mod tests {
         );
         // And it stays bounded — even a 3× shock strips less than the whole set.
         assert!(at_three.leak_frac < 1.0);
+    }
+
+    #[test]
+    fn targeting_no_attack_baseline_matches_across_modes() {
+        // At m = 0 nothing is suppressed, so both modes sit at their honest width;
+        // every per-point set is at least the same-rung baseline.
+        let r = targeting_attack();
+        let base = &r.points[0];
+        assert_eq!(base.attacker_bonds, 0);
+        assert!(base.count_uniform_set >= 1.0 && base.histogram_set >= 1.0);
+        assert!(base.count_uniform_mod_set >= 1.0 && base.histogram_mod_set >= 1.0);
+    }
+
+    #[test]
+    fn magnitude_pin_derives_c_boot_and_set_grows_with_count() {
+        let r = magnitude_pin();
+        // A bigger live-bond count buys a bigger achievable set at the knee.
+        let first = &r.rows[0];
+        let last = r.rows.last().unwrap();
+        assert!(last.set_at_knee > first.set_at_knee);
+        // Continuity-clean C_boot: the first non-zero knee. At/below it the knee is
+        // 0, so k(C)=K_sat(C) is continuous through the boundary (no step).
+        let c_boot = r.c_boot_continuity.expect("continuity C_boot derivable");
+        if let Some(below) = r.rows.iter().rev().find(|x| x.count < c_boot) {
+            assert_eq!(
+                below.k_sat, 0,
+                "knee must be 0 just below C_boot (continuity)"
+            );
+        }
+        // The "substantial" marker sits at or above the continuity boundary (where
+        // K_sat is already large) — conceding to it would re-introduce the step.
+        if let Some(cs) = r.c_substantial {
+            assert!(cs >= c_boot);
+        }
+    }
+
+    #[test]
+    fn dispersion_scalar_separates_shapes_and_narrows_the_gap() {
+        // The dispersion signal distinguishes the shapes (dispersed occupies more
+        // rungs), and feeding it into the width closes the realized-set gap that a
+        // spread-blind count-only response leaves between clustered and dispersed.
+        let r = dispersion_value();
+        let clustered = &r.rows[0];
+        let dispersed = &r.rows[1];
+        assert_eq!(clustered.shape, Dispersion::Clustered);
+        assert!(dispersed.occ_rungs > clustered.occ_rungs);
+        assert!(r.gap_count_disp <= r.gap_count_only + 1e-9);
+    }
+
+    #[test]
+    fn histogram_is_more_targetable_than_count_at_moderate_rungs() {
+        // The decision measurement: at a wide attacker mass, the per-rung response
+        // narrows a moderate (targetable) victim strictly more than the uniform
+        // response — the local signal is a small number the attacker dominates,
+        // while the global count dilutes the same mass across the whole network.
+        let r = targeting_attack();
+        let m8 = r.points.last().unwrap();
+        assert_eq!(m8.attacker_bonds, 8);
+        assert!(
+            m8.histogram_mod_set < m8.count_uniform_mod_set,
+            "histogram mod {} should be below count mod {}",
+            m8.histogram_mod_set,
+            m8.count_uniform_mod_set
+        );
     }
 }
