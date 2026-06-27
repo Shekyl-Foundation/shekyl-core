@@ -59,8 +59,9 @@ are public** (so the reconcile reader needs no view key at all).
 **The false dichotomy §3.6 invites:** "second independent scan pass (true isolation,
 double cost) **vs** piggyback on the ledger scan's decode (cheap, but shared code path =
 cross-contamination)." Landed code dissolves it: **the decode is a *pure* function**, so
-sharing the *code* leaks nothing. The firewall boundary is **not the code — it is the
-keys, the cursor, the output set, and the network**:
+sharing the *code* leaks nothing **against a chain observer**. But the firewall boundary
+is **not the code, and not only the keys** — it is **keys, state (cursor + output set),
+the operational/fetch layer, and execution**:
 
 - **Keys:** `P.view_sk` lives only in StakeEngine (already true — Model-D holds it; the
   LedgerEngine never sees it). The `P`-scan builds a `ViewPair` *from `ArchivalPKeys`*
@@ -68,18 +69,41 @@ keys, the cursor, the output set, and the network**:
 - **Cursor + output set:** `P` gets its **own** sealed cursor and output set — it **must
   not** reuse `LedgerBlock::tip` / `LedgerIndexes` (the principal's), or the two
   perspectives cross-contaminate (DQ4).
-- **Network:** the block *fetch* is the correlatable surface (a network observer seeing
-  `P` and the principal pull the same blocks over the same connection links them). That
-  is the **`P`-isolated Arti outbound path — deferred to 2d-2**. At the 2d-1 (read-side)
-  layer there is no transport yet, so 2d-1 scans a block *source* (fixture / local
-  daemon) with `P`'s keys/cursor/output-set; 2d-2 layers the isolated fetch underneath.
 
-**Resolution:** reuse the scanner's **pure primitives** (`ViewPair`, `Scanner::scan`,
-`scan_output_recover_with_ml_kem_dk`) with `P`'s keys; isolate **state (cursor + output
-set), secrets (view-key residency, DQ5), and network (2d-2)**. "Piggyback the decode" is
-safe *because* the decode is pure; the cross-contamination the firewall prevents is at
-the key/state/network layers, which `P` owns separately. This is the boundary the rest
-derives from.
+**Primary derived constraint — the operational/fetch layer (the Monero light-wallet
+lesson).** The block *fetch* is where stealth-address chains' privacy actually died: the
+cryptography was sound, but *which blocks/outputs you request* links you, and a server —
+or a **shared local cache** — that serves both identities sees the correlation the view
+key was meant to hide. So the load-bearing rule, elevated from a 2d-2 parenthetical to
+**the** constraint 2d-1 pins: **the `P`-scan's block source is an *injected, per-`P`,
+fetch-everything* interface — no selective requests, no shared buffer, no shared cache.**
+`P` fetches its **own full block range**; it never reads blocks the principal already
+pulled, even from the same local daemon. If it does, a "separate cursor" is cosmetic —
+the blocks arrived over one connection, deduped by one cache — and **2d-2 cannot isolate
+that without re-architecting 2d-1**. Pinning the fetch-everything injectable now is what
+lets 2d-2 swap the Arti transport in *underneath* without touching the scan (DQ-type).
+
+**The threat-model boundary — "pure" is source-level, not execution-level (write it
+down).** The decode is a *pure function* in source, but the *executed* scan is not
+constant-work: the FA-6/view-tag pre-filter rejects most outputs cheaply and the full
+ML-KEM/ECDH recovery runs **only on matches**, and the final ownership test is a plain
+`recovered_b_compressed != self.primary_spend_compressed` (`scan.rs:646`) — **not
+constant-time**. So per-output processing *time* is a function of whether the output is
+`P`'s — exactly Monero's view-tag timing tradeoff. Therefore: **the firewall as scoped
+defends the chain observer and (via 2d-2) the network observer; it does *not* defend a
+local/timing observer co-resident with the process.** That is a deliberate scope line, on
+the record. **If a local/timing adversary is in scope, separate keys are not enough** —
+the two scans then need **execution isolation (separate process)** *and* a **constant-time
+ownership compare**. Round 1 must pick: in-scope (pay process-isolation + CT-compare) or
+out-of-scope (stated, with the rationale). "Pure ⇒ safe" is precisely the inference that
+has bitten every side-channel-aware system that trusted it.
+
+**Resolution:** reuse the scanner's **pure primitives** (`ViewPair`/`GuaranteedViewPair`,
+`Scanner`, `scan_output_recover_with_ml_kem_dk`) with `P`'s keys; isolate **state, the
+fetch layer (per-`P` fetch-everything injectable), and — per the threat-model line —
+execution if the local adversary is in scope**. The cross-contamination the firewall
+prevents is at the key/state/fetch/execution layers, not the source-code layer. This is
+the boundary the rest derives from.
 
 ### DQ2 — the two readers are *not* the same scan (split confirmed at source)
 
@@ -95,12 +119,31 @@ miss-cost**:
 
 **Resolution:** it is **one block-iteration, two extractors**, *not* one homogeneous
 sweep. The **cursor is pinned to the stricter (reconcile) discipline** — completeness
-over the range up to the finality horizon (`ARCHIVAL_REORG_DEPTH_BLOCKS`-deep) — and the
-lag-tolerant funding reader rides on top of that for free (a finality-complete scan
-over-serves it). The reconcile extractor reads **public** bond-posts (no secret); the
-funding extractor runs the view-key ownership test. Conflating them into one
-secret-bearing sweep would have given reader (b) a privacy surface it doesn't need and
-reader (a) a completeness burden it doesn't need.
+over the range up to the finality horizon — and the lag-tolerant funding reader rides on
+top of that for free (a finality-complete scan over-serves it). The reconcile extractor
+reads **public** bond-posts (no secret); the funding extractor runs the view-key
+ownership test. Conflating them into one secret-bearing sweep would have given reader (b)
+a privacy surface it doesn't need and reader (a) a completeness burden it doesn't need.
+
+**Consequence 1 (benefit) — 2d-1 needs *no reorg machinery*.** Because the cursor commits
+only out to the finality horizon, `P` **never commits a scan result inside the reorg
+window**, so — unlike the ledger scan, which carries an explicit `RollbackToFork` — the
+`P`-scan has **no reorg-rollback path to build**: the finality lag *is* the reorg defense.
+State it deliberately, so nobody later "improves" the `P`-scan by reading closer to tip
+and silently reintroduces a rollback surface.
+
+**Consequence 2 (cost) — a network-parameterized funding-visibility lag feeds cold-start.**
+That finality horizon is **`max_reorg_depth`, which is *network-parameterized*, not a
+constant** (the cover work already moved off the hardcoded `720`: archival ≈ 720, testnet
+6 — `NetworkSafetyConstants`). `P` discovers its funding by **scanning** (the firewall-clean
+path — being *handed* the funding tx out-of-band would relink principal→`P`). So
+**cold-start "stake from the cover" inherits a `max_reorg_depth`-deep discovery latency**:
+`P` cannot see the cover output to spend it until it is finality-deep — most of a day on
+archival, trivial on testnet, so the cold-start sequence **behaves differently per
+network**, and the cover/standoff timing was pinned *without this lag in view*. **Two pins
+for Round 1:** (a) confirm `P` truly *scan-discovers* its funding (vs is handed it), and
+(b) if so, name the `max_reorg_depth` funding-visibility lag as an **explicit input to the
+cold-start sequence** — it composes with the already-pinned entry-gap standoff.
 
 ### DQ3 — the earnings-ramp signal is a *deliverable*, not an emergent hope (`C_min`)
 
@@ -149,27 +192,95 @@ the `view_sk` vault and *performs* the scan-step on request (secret never crosse
 boundary, consistent with `PersonaIdentity` being public-only), the task owning the
 cursor, block source, and cadence. Confirm against the kameo handler model in Round 1.
 
+**Hard constraint on lean (i): the scan-step is bounded and offloaded, never a blocking
+handler.** A scan-step run inline in the actor's handler blocks the **single-threaded
+mailbox** for its duration — a full sync would *freeze* the StakeEngine (no rotation, no
+sign, no activate). The actor is already shaped for this: Model-D derivation runs in
+`spawn_blocking` *off* the hot path. So the per-scan-step must do the same — **chunked
+per-block or per-batch and offloaded** — so the actor stays the `view_sk` vault that
+*dispatches* the ownership test without *blocking* on it. This is part of the resolution,
+not a Round-1 surprise.
+
+### DQ7 — scan correctness: the two ways a corrupted scan mis-sizes a *privacy parameter*
+
+`SP-4`'s inflow accrual feeds the cover's `C_min` — a **privacy** parameter — so a scan a
+local adversary can *corrupt* doesn't merely lose an output, it mis-sizes the firewall's
+runway floor off poisoned input. Two cross-chain failure shapes, both already defended in
+the tree if 2d-1 selects for them:
+
+- **Burning-bug immunity is a *variant-selection* requirement, not new code.** The scanner
+  ships a plain `ViewPair` **and** a `GuaranteedViewPair` / `GuaranteedScanner`
+  (`view_pair.rs:113`, `scan.rs:954`) that drops colliding one-time keys under a guard
+  contract (`ledger_ext.rs:154`). An adversary can send `P` colliding one-time keys; the
+  plain variant would mis-count, and `SP-4` would then size `C_min` off a corrupted
+  inflow. **SP-1 must scan with the `Guaranteed` variant** — name it, or the default plain
+  one silently undersizes the firewall.
+- **The accrual rate is computed from *confirmed* outputs, never pre-filter hits (the Zcash
+  trial-decryption-DoS lesson).** Trial-decryption is a per-output cost an adversary
+  inflates by stuffing the chain; the FA-6 pre-filter is therefore load-bearing for DoS,
+  not just speed (so the reuse is doubly justified). But `SP-4`'s rate must be computed
+  from outputs that **passed the full ownership test**, never from FA-6 *pre-filter hits*
+  (the ~1/256 false positives that pass the byte filter and burn a full recovery) — else
+  an attacker pumps the *apparent* inflow rate and skews `C_min`, the same "corrupt the
+  privacy parameter via the scan" failure, a different vector.
+
 ---
 
 ## 3. SP-# enumeration (sub-parts / deliverables)
 
 | SP | Deliverable | Notes |
 | --- | --- | --- |
-| **SP-1** | `ViewPair`-from-`ArchivalPKeys` adapter + a `P`-scan over the scanner's pure primitives | reuse `Scanner`/`scan_output_recover`; no scanner fork |
-| **SP-2** | The sealed `P`-scan **cursor** (StakingBlock-class; new version const) | DQ4; separate from `BlockchainTip` |
+| **SP-0** | The **per-`P` `BlockSource` trait** (fetch-everything; *no* selective-request or shared-buffer method exists) — the DQ1 keystone | 2d-1 ships a local impl; 2d-2 swaps Arti underneath, untouched |
+| **SP-1** | `GuaranteedViewPair`-from-`ArchivalPKeys` adapter + a `P`-scan over the scanner's pure primitives | reuse `GuaranteedScanner`/`scan_output_recover`; **immune variant** (DQ7); no scanner fork |
+| **SP-2** | The sealed `P`-scan **cursor** (StakingBlock-class; new version const) | DQ4; separate from `BlockchainTip`; no rollback path (DQ2 c1) |
 | **SP-3** | **Dual extractor** over one block-iteration: view-key funding outputs (a) + public bond-post match (b) | DQ2; cursor at reconcile-grade finality |
-| **SP-4** | The **per-epoch `P`-earnings-inflow accrual** (reader-a output `C_min` consumes) | DQ3; `AccrualRecord`-modeled |
-| **SP-5** | The scan-loop **home** — `P`-scan task owning cursor + cadence + block source; actor performs scan-step, `view_sk` never crosses | DQ6 |
+| **SP-4** | The **per-epoch `P`-earnings-inflow accrual** (reader-a output `C_min` consumes) — from **confirmed** outputs only | DQ3/DQ7; `AccrualRecord`-modeled |
+| **SP-5** | The scan-loop **home** — `P`-scan task owning cursor + cadence + `BlockSource`; actor performs the **offloaded, non-blocking** scan-step, `view_sk` never crosses | DQ6 |
 | **SP-6** | The reconcile **interface** reader (b) hands to 2d-2 (which performs the GC) | the GC *action* is 2d-2 |
 
-**Out of scope (carried to 2d-2):** the `P`-isolated Arti outbound fetch (DQ1 network
-layer), the actual `bonded_slots`/`p_slot` GC, broadcast/re-anchor. 2d-1 is **read-side
-only** — it produces the output set, the inflow accrual, and the reconcile input; it
-broadcasts and GCs nothing.
+**Round-1 gate (DQ1 threat model):** decide local/timing adversary **in-scope** (then SP-0
+runs in a separate process and SP-1's ownership compare is constant-time) or **out-of-scope**
+(stated on the record). This is the one boundary question Round 0 surfaces but does not pre-empt.
+
+**Out of scope (carried to 2d-2):** the Arti transport *impl* behind SP-0's `BlockSource`
+(the interface is pinned now; the transport is 2d-2), the actual `bonded_slots`/`p_slot`
+GC, broadcast/re-anchor. 2d-1 is **read-side only** — it produces the output set, the
+inflow accrual, and the reconcile input; it broadcasts and GCs nothing.
 
 ---
 
-## 4. Dependency posture (why this is the keystone, and parallelizable)
+## 4. Type-safety opportunities (make the firewall boundary unrepresentable to cross)
+
+Rust's type system is a reason we're here; where a constraint above is *structural*, it
+should be a **type that makes the violation unrepresentable**, not a convention a reviewer
+must police. The candidates this boundary surfaces, for Round 1 to realize:
+
+- **`BlockSource` trait with no selective-fetch method (SP-0).** The fetch-everything rule
+  is enforced by the *shape of the trait*: it exposes "give me block at height `h`" / "the
+  next block", and **no** "give me outputs matching X". A wallet-server-style selective
+  query is then literally uncallable — the Monero-light-wallet leak is unrepresentable, and
+  2d-2's Arti impl satisfies the same trait. (Make-bad-states-unrepresentable, as with the
+  `PersonaHandle` `!Clone` seal.)
+- **A typed `PScanCursor` distinct from `BlockchainTip`.** Two cursor types, not one `u64`
+  reused — so a `P`-cursor can never be passed where the principal's ledger tip is expected
+  (or vice versa), the DQ4 cross-contamination caught by the compiler, not a code review.
+- **A typed `PFundingInflow` (per-epoch), not a bare `u64`.** The `C_min`-feeding accrual
+  (SP-4) carries its unit and its *provenance invariant* in the type — constructible **only**
+  from confirmed outputs (DQ7), so a pre-filter-hit count cannot be passed to `C_min` sizing
+  even by mistake. The cover's `C_min` consumer then takes `PFundingInflow`, not `u64`.
+- **`GuaranteedViewPair` as the *only* constructor on the `P`-scan path (SP-1).** The plain
+  `ViewPair` is simply not in the `P`-scan's type surface, so the burning-bug-vulnerable
+  variant is unselectable for `P` — DQ7's variant choice enforced by construction.
+- **A typed reconcile result for SP-6** (the public bond-post match set `P` hands 2d-2),
+  distinct from the funding output set — so the two readers' outputs can't be conflated at
+  the 2d-2 boundary.
+
+The throughline: each load-bearing *don't* in §2 becomes a *can't* in the types. Round 1
+designs these alongside the per-SP work, not as a cleanup pass after.
+
+---
+
+## 5. Dependency posture (why this is the keystone, and parallelizable)
 
 - **North-Star-independent.** 2d-1 is read-side; it never broadcasts, so it does **not**
   wait on the daemon-accept gate (`e2e_fcmp_spend_accepted_by_daemon`). It parallelizes
