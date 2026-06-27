@@ -618,11 +618,37 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         }],
         priority: FeePriority::Standard,
     };
-    let pending = {
-        let mut g = arc.write().await;
-        g.build_pending_tx(&request)
-            .expect("build pending FCMP++ spend")
-    };
+
+    // The output is spendable at the TIP (`unlocked > 0`), but the FCMP++ spend
+    // selects against the REFERENCE block (tip − REF_ANCHOR_AGE) and the selected
+    // output must be spendable THERE — which lags tip-maturity by a few blocks.
+    // Build until the C2 reference-spendability gate clears (OutputNotYetSpendable
+    // ⇒ mine more so the reference catches up).
+    let mut pending = None;
+    for _ in 0..MAX_MINE_BATCHES {
+        let attempt = {
+            let mut g = arc.write().await;
+            g.build_pending_tx_async(&request).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(super::error::SendError::OutputNotYetSpendable { wait_blocks, .. }) => {
+                eprintln!("output not reference-spendable yet ({wait_blocks} blocks); mining more");
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+                Engine::start_refresh(arc.clone(), RefreshOptions::default())
+                    .await
+                    .expect("start_refresh")
+                    .join()
+                    .await
+                    .expect("refresh joins");
+            }
+            Err(e) => panic!("build pending FCMP++ spend: {e:?}"),
+        }
+    }
+    let pending = pending.expect("FCMP++ spend must build once the output is reference-spendable");
     eprintln!(
         "built spend: fee={:?}, tx_bytes={} B",
         pending.fee_atomic_units,
@@ -637,7 +663,8 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
     let tx_hash = {
         let mut g = arc.write().await;
-        g.submit_pending_tx(pending.id, pending.content_gen)
+        g.submit_pending_tx_async(pending.id, pending.content_gen)
+            .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
     };
     eprintln!("daemon accepted spend: {tx_hash:?}");

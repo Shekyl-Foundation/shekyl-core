@@ -4,37 +4,42 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Primary output claim — spend-offset scalar for signing.
+//! Output spend-offset scalar (`m_i`) — genesis-locked derivation with **no V3.0
+//! production caller**.
 //!
 //! V3.0 uses one primary receive address per account (End-state 5;
-//! `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7). The load-bearing primitive
-//! here is **not** “derive another address to give someone.” It computes
-//! the spend-side offset `mᵢ` in `x = ho + b + mᵢ` when claiming outputs
-//! paid to the wallet's primary hybrid address.
+//! `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7). Outputs the wallet receives are
+//! paid to the **base** spend key `D = b·G` (the encoded address), and the spend
+//! witness is `x = ho + b` with **no offset**: the SAL opening `O = x·G + y·T`
+//! and the key-image linkability both bind to the base key (see
+//! [`crate::output::compute_output_key_image`],
+//! `shekyl_fcmp::tree::key_image_generator`, and the engine's
+//! `LocalKeys::derive_primary_source_secrets_bundle`).
 //!
-//! ## Primary address vs signing offset (do not conflate)
+//! ## Correction (2026-06-27): the offset is NOT a signing term
 //!
-//! | Surface | Material | Notes |
-//! |---------|----------|-------|
-//! | Encoded primary address (what senders pay) | Base spend key `D` | `AllKeysBlob::classical_address_bytes` |
-//! | Output claim / signing | `m₀` at index `0` | `x = ho + b + m₀`; `m₀ ≠ 0` in general |
+//! This module — and `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md` §1 —
+//! previously stated that signing used `x = ho + b + m₀` with `m₀ ≠ 0`. That was
+//! wrong, and internally inconsistent with the same doc's §5.1 rule "ownership
+//! iff recovered `B' == base D`": an output paid to `D = b·G` opens with
+//! `x = ho + b`, so the extra `m₀·G` made the witness miss the output key (and
+//! the key image miss its leaf generator). It survived because every prior test
+//! fed a synthetic witness satisfying the relation by construction; the
+//! first daemon-verified spend (Track-2 north-star) exposed it. The offset has
+//! been removed from all production signing and change-output paths.
 //!
-//! Senders target `D`; signing uses `m₀`. That mismatch is CryptoNote
-//! inheritance, not multi-address. See
-//! `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md` §1.
-//!
-//! ## Genesis lock
+//! ## Retained: genesis-locked `m_i` for the future multi-account primitive
 //!
 //! ```text
 //! m_i = keccak256_to_scalar( "shekyl-subaddr-v1\0" || view_scalar_le32 || idx_le32 )
 //! ```
 //!
-//! V3.0 production hardcodes `idx_le32 = PRIMARY_CLAIM_INDEX_LE` (`[0,0,0,0]`).
-//! The formula is defined for every index; non-zero indices are exercised only
-//! in this module's unit tests (index-sensitivity KATs), not in product paths.
-//!
-//! The `-v1` domain-separation suffix is reserved for a future post-genesis
-//! derivation change gated on a hard fork.
+//! The derivation is kept (byte-frozen) solely as the substrate for the
+//! sanctioned P3 seed-derived **multi-account** reopening
+//! (`PRIMARY_CLAIM_DERIVATION_RENAME.md` §9.2) — *not* Monero subaddresses. It
+//! has no V3.0 production caller; the only exercise is this module's
+//! index-sensitivity KATs. The `-v1` domain-separation suffix is reserved for a
+//! future hard-fork-gated derivation change.
 
 use curve25519_dalek::Scalar;
 use zeroize::Zeroizing;
@@ -44,16 +49,18 @@ use shekyl_curve_primitives::keccak256_to_scalar;
 /// Domain-separation tag for `m_i` derivation. Genesis-locked; do not change.
 const CLAIM_DERIVATION_DOMAIN: &[u8] = b"shekyl-subaddr-v1\0";
 
-/// Little-endian encoding of the primary claim index (`0`). V3.0 production
-/// uses this exclusively in `LocalKeys::derive_primary_source_secrets_bundle`.
+/// Little-endian encoding of the primary claim index (`0`). No V3.0 production
+/// caller (signing uses `x = ho + b`, no offset); retained for the index-
+/// sensitivity KATs and the future multi-account substrate (module docs).
 pub const PRIMARY_CLAIM_INDEX_LE: [u8; 4] = [0, 0, 0, 0];
 
 /// Derive the output spend-offset scalar `m_i` from the view scalar and a
 /// 4-byte little-endian index encoding.
 ///
-/// Production callers pass [`PRIMARY_CLAIM_INDEX_LE`]. Index sensitivity for
-/// non-zero values is tested in this module only; no public API accepts a
-/// caller-chosen “which receive address” index for product flows.
+/// No V3.0 production caller — signing pays/spends at the base spend key
+/// (`x = ho + b`, no offset; see the module docs). Retained genesis-locked for
+/// the index-sensitivity KATs and the future multi-account substrate; no public
+/// API accepts a caller-chosen “which receive address” index for product flows.
 ///
 /// The view scalar is consumed via its little-endian byte encoding. The
 /// intermediate buffer holding the keccak input is wrapped in [`Zeroizing`]

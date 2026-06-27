@@ -31,10 +31,16 @@ pub struct WireEncodeInput {
     pub reference_block: [u8; 32],
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
-    /// Curve-tree depth the FCMP++ proof was built against — the prunable's
-    /// `tree_depth` (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4). The old shekyl-oxide encoder
-    /// omitted it (it put `reference_block` in the prunable instead — divergence §3.2/§3.3).
-    pub tree_depth: u8,
+    /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
+    /// consume), NOT the on-chain `curve_trees_tree_depth`. The name is distinct
+    /// on purpose: the consensus prunable field is the LMDB depth `L − 1`, so
+    /// [`build_wire_tx`] serializes `fcmp_layers - 1` and the daemon reconstructs
+    /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
+    /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4); a spendable
+    /// tx needs `L >= 2` (see [`build_wire_tx`]). The old shekyl-oxide encoder
+    /// omitted it (it put `reference_block` in the prunable instead — divergence
+    /// §3.2/§3.3).
+    pub fcmp_layers: u8,
 }
 
 /// Map key images to `shekyl_wire::Input::ToKey` (FCMP++ inputs: amount 0, no offsets).
@@ -144,6 +150,23 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
         })
         .collect();
 
+    // FCMP++ layer count `L` → on-chain `curve_trees_tree_depth` (the LMDB depth
+    // `L - 1`). The daemon reconstructs `fcmp_layers = curve_trees_tree_depth + 1`
+    // and range-checks `1 ..= current_depth` (`blockchain.cpp:4064/4119`). A
+    // spendable tx therefore needs `2 <= L <= MAX_TREE_DEPTH`. `encode_final_tx` /
+    // `phase1_payload_hashes` are public and bypass `validate_inputs`, so bound
+    // both ends here (mirroring `validate.rs`) rather than emit bytes the daemon
+    // or the prover/verifier rejects later with a confusing error.
+    if input.fcmp_layers > shekyl_fcmp::MAX_TREE_DEPTH {
+        return Err(TxBuilderError::TreeDepthTooLarge(input.fcmp_layers));
+    }
+    let curve_trees_tree_depth = u64::from(input.fcmp_layers)
+        .checked_sub(1)
+        .filter(|&depth| depth >= 1)
+        .ok_or(TxBuilderError::TreeTooShallow {
+            layers: input.fcmp_layers,
+        })?;
+
     Ok(Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
@@ -162,7 +185,12 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
             pqc_auths,
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
-                tree_depth: u64::from(input.tree_depth),
+                // `shekyl_wire::Prunable::tree_depth` IS the consensus
+                // `curve_trees_tree_depth` (LMDB depth = layer count − 1),
+                // computed + range-checked above. Both the submitted bytes and
+                // the PQC-auth signing hash route through this builder, so they
+                // agree on the value.
+                tree_depth: curve_trees_tree_depth,
                 fcmp_proof: input.fcmp_proof.clone(),
                 pseudo_outs: input.pseudo_outs.clone(),
             }),
@@ -267,7 +295,9 @@ mod tests {
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
-            tree_depth: 1,
+            // FCMP++ layer count; >= 2 so the encoded `curve_trees_tree_depth`
+            // (layers − 1) is the daemon's minimum of 1.
+            fcmp_layers: 2,
         }
     }
 
@@ -285,6 +315,41 @@ mod tests {
         let input = minimal_input();
         let hashes = phase1_payload_hashes(&input).expect("hashes");
         assert_eq!(hashes.len(), input.key_images.len());
+    }
+
+    #[test]
+    fn build_wire_tx_rejects_layer_count_below_two() {
+        // A spend needs L >= 2 so the on-chain `curve_trees_tree_depth` (L - 1)
+        // is >= 1; L of 0 or 1 must fail loudly at build, not emit a depth-0
+        // field the daemon rejects with "out of range".
+        for shallow in [0u8, 1u8] {
+            let mut input = minimal_input();
+            input.fcmp_layers = shallow;
+            assert!(
+                matches!(
+                    encode_final_tx(&input),
+                    Err(TxBuilderError::TreeTooShallow { layers }) if layers == shallow
+                ),
+                "fcmp_layers={shallow} must be rejected as TreeTooShallow"
+            );
+        }
+    }
+
+    #[test]
+    fn build_wire_tx_rejects_layer_count_above_max() {
+        // The public encoder bounds the upper end too (it bypasses
+        // `validate_inputs`): L > MAX_TREE_DEPTH would otherwise serialize bytes
+        // the prover/verifier rejects later.
+        let too_deep = shekyl_fcmp::MAX_TREE_DEPTH + 1;
+        let mut input = minimal_input();
+        input.fcmp_layers = too_deep;
+        assert!(
+            matches!(
+                encode_final_tx(&input),
+                Err(TxBuilderError::TreeDepthTooLarge(d)) if d == too_deep
+            ),
+            "fcmp_layers={too_deep} must be rejected as TreeDepthTooLarge"
+        );
     }
 
     #[test]

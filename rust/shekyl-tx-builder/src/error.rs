@@ -79,6 +79,15 @@ pub enum TxBuilderError {
     #[error("tree depth is 0")]
     ZeroTreeDepth,
 
+    /// The FCMP++ layer count is below the spendable minimum. A spend needs at
+    /// least 2 layers so the on-chain `curve_trees_tree_depth` (layers − 1) is
+    /// ≥ 1; the daemon rejects `curve_trees_tree_depth == 0` as out of range.
+    #[error("FCMP++ layer count {layers} is below the spendable minimum of 2")]
+    TreeTooShallow {
+        /// The provided FCMP++ layer count (`< 2`).
+        layers: u8,
+    },
+
     /// The tree depth exceeds the protocol maximum.
     #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
     TreeDepthTooLarge(u8),

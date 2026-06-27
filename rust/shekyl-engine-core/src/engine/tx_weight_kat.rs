@@ -34,7 +34,9 @@ pub(crate) mod support {
         }
 
         let keys = LocalKeys::from_test_seed(TEST_SEED);
-        let recipient = keys.primary_claim_spend_pk();
+        // Base spend key `b·G` — the witness is `ho + b` (no claim offset), so the
+        // synthetic output must be paid to the base key for the SAL open to hold.
+        let recipient = *keys.keys.spend_pk.as_canonical_bytes();
 
         let mut leaf_chunk = Vec::with_capacity(n_in);
         let mut spend_inputs = Vec::with_capacity(n_in);

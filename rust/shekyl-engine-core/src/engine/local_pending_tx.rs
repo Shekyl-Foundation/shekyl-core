@@ -2317,25 +2317,15 @@ mod tests {
         blob
     }
 
-    /// Primary-claim spend public key (`D + m₀·G`) so bundle recovery matches on-chain outputs.
+    /// Base spend public key `D = b·G` — the on-chain output key for an output
+    /// the wallet receives at its primary address. The spend witness is
+    /// `x = ho + b` (no claim offset; see
+    /// `LocalKeys::derive_primary_source_secrets_bundle`), so the fixture must
+    /// build to the base key for the SAL open `x·G + y·T == O` to hold. The
+    /// pre-fix `D + m₀·G` only matched the now-removed `+ m₀` witness term and
+    /// was never daemon-verified (every spend was synthetic in-process).
     fn test_recipient_spend_pk() -> [u8; 32] {
-        use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-        use curve25519_dalek::edwards::CompressedEdwardsY;
-        use curve25519_dalek::scalar::Scalar;
-        use shekyl_crypto_pq::output_claim::{output_spend_offset_scalar, PRIMARY_CLAIM_INDEX_LE};
-        use zeroize::Zeroizing;
-
-        let blob = test_account_blob();
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *blob.view_sk.as_canonical_bytes(),
-        ));
-        let spend_public = CompressedEdwardsY(*blob.spend_pk.as_canonical_bytes())
-            .decompress()
-            .expect("spend_pk decompresses");
-        let m = output_spend_offset_scalar(&view_scalar, &PRIMARY_CLAIM_INDEX_LE);
-        (spend_public + (&m * ED25519_BASEPOINT_TABLE))
-            .compress()
-            .to_bytes()
+        *test_account_blob().spend_pk.as_canonical_bytes()
     }
 
     fn test_payment_address() -> String {
@@ -3261,7 +3251,10 @@ mod tests {
                 fee,
                 ..
             } => (
-                u8::try_from(p.tree_depth).expect("tree_depth fits u8"),
+                // Wire `curve_trees_tree_depth` is the LMDB depth = proof layer
+                // count − 1 (`build_wire_tx`); `predict_weight` models the FCMP++
+                // proof size from the layer count, so add 1 back.
+                u8::try_from(p.tree_depth + 1).expect("tree_depth + 1 fits u8"),
                 *fee,
             ),
             _ => panic!("a spend is Fcmp with prunable"),
@@ -4449,7 +4442,10 @@ mod tests {
                 fee,
                 ..
             } => (
-                u8::try_from(p.tree_depth).expect("tree_depth fits u8"),
+                // Wire `curve_trees_tree_depth` is the LMDB depth = proof layer
+                // count − 1 (`build_wire_tx`); `predict_weight` models the FCMP++
+                // proof size from the layer count, so add 1 back.
+                u8::try_from(p.tree_depth + 1).expect("tree_depth + 1 fits u8"),
                 *fee,
             ),
             _ => panic!("a spend is Fcmp with prunable"),
