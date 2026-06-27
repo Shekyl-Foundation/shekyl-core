@@ -57,7 +57,9 @@ impl std::error::Error for BlockSourceError {}
 
 impl From<RpcError> for BlockSourceError {
     fn from(err: RpcError) -> Self {
-        Self::Source(format!("{err:?}"))
+        // `Display` (the `thiserror` `#[error(...)]` message), not `Debug` — this
+        // is a rendered, human-facing message, not a structural dump.
+        Self::Source(err.to_string())
     }
 }
 
@@ -77,13 +79,17 @@ impl From<RpcError> for BlockSourceError {
 // (module "Staging note"); removed when that PR wires the first real caller.
 #[allow(dead_code)]
 pub(crate) trait BlockSource {
-    /// This source's **claimed** tip height — *not* a trusted-current one.
+    /// This source's **claimed** chain height — the *count* of blocks, matching
+    /// the daemon's `get_height` (a genesis-only chain has height `1`). So the
+    /// highest existing block is `tip_height - 1`, and [`Self::block_at`] is valid
+    /// for heights in `0 .. tip_height` (half-open).
     ///
-    /// A single source can withhold or truncate its tip for free (the SP-7
-    /// stale-tip residual): forging a header chain is PoW-expensive, truncating
-    /// it is not. Establishing that a tip is *current* needs multiple
-    /// `P`-isolated sources or an out-of-band sanity-check, which is a 2d-2
-    /// transport property — this trait only reports what the source claims.
+    /// It is a *claimed* height, **not** a trusted-current one: a single source
+    /// can withhold or truncate its tip for free (the SP-7 stale-tip residual) —
+    /// forging a header chain is PoW-expensive, truncating it is not. Establishing
+    /// that a tip is *current* needs multiple `P`-isolated sources or an
+    /// out-of-band sanity-check, which is a 2d-2 transport property; this trait
+    /// only reports what the source claims.
     fn tip_height(&self) -> impl Future<Output = Result<BlockHeight, BlockSourceError>> + Send;
 
     /// Fetch the **whole** block at `height` (header + every transaction + the
@@ -130,7 +136,12 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
         let height = self.daemon.get_height().await?;
-        Ok(BlockHeight::from_raw(height as u64))
+        // Checked, fail-closed conversion — mirrors `block_at`'s discipline. The
+        // 64-bit-only build gate already makes `usize <= u64` (so this never
+        // errors), but the uniform checked form keeps the conversion honest.
+        let raw = u64::try_from(height)
+            .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
+        Ok(BlockHeight::from_raw(raw))
     }
 
     async fn block_at(
