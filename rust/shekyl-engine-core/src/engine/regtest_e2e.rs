@@ -739,17 +739,18 @@ async fn mainnet_wallet(
 /// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 38`… in
 /// practice ~684–701 drained leaves (~750 blocks, several minutes — a slow gate).
 ///
-/// **Currently RED — surfaces an open depth-3 bug (the #162 reopening trigger
-/// FIRING).** A 2026-06-27 run reached daemon depth 2 (701 leaves, height 760) and
-/// then failed at the wallet `refresh` with `CurveTreeIngest: curve-tree root
-/// mismatch vs header`: the wallet's **native** curve-tree reconstruction
-/// (`CurveTreeClient` verify-at-ingest) diverges from the daemon's header root at
-/// the **Selene branch** layer — exactly the depth-3+ case #162's partial-branch
-/// padding (in `prove`) did not cover for the tree *build*. Consensus-critical
-/// (a wallet cannot sync past depth-3). Tracked in FOLLOWUPS; this test is the
-/// repro + acceptance gate — it goes green once depth-3 reconstruction is fixed.
+/// **Validates the depth-3 fix (was the #162 reopening trigger).** Before the
+/// `db_lmdb::grow_curve_tree` → `shekyl_curve_tree_grow_upper_layers` rewiring, the
+/// wallet `refresh` at depth-3 died with `CurveTreeIngest: curve-tree root mismatch
+/// vs header`: the daemon's in-place incremental upper-layer deepening dropped the
+/// pre-existing sibling when it created the first layer-2 Selene root, so its header
+/// root diverged from the wallet's narrow `build_layers`. With the producer-side fix
+/// the daemon recomposes every upper layer narrow (== `build_layers`), so the
+/// refresh succeeds and a spend over the depth-3 tree is daemon-accepted. (Confirmed
+/// 2026-06-27 against a locally-built fixed `shekyld`: daemon depth 2 / 701 leaves,
+/// refresh OK, spend accepted.)
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks); currently RED — open depth-3 recon bug"]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks, several min)"]
 async fn e2e_fcmp_spend_over_depth3_tree() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
@@ -824,11 +825,15 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     eprintln!("spendable balance over depth-{tree_depth} tree: {unlocked:?}");
 
     // Build + submit an FCMP++ spend over the depth-3 tree (retry until the C2
-    // reference-spendability gate clears).
+    // reference-spendability gate clears). A depth-3 tree here holds ~700 small
+    // coinbase outputs, so a large self-send would select more inputs than
+    // FCMP_MAX_INPUTS (8). Spend a small amount so the input count stays bounded —
+    // the spend AMOUNT is irrelevant to what this gate validates (a daemon-accepted
+    // spend over a depth-3 tree); the depth is.
     let request = TxRequest {
         recipients: vec![TxRecipient {
             address: address.clone(),
-            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 500),
         }],
         priority: FeePriority::Standard,
     };
