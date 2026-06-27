@@ -253,9 +253,12 @@ fn check_reorg_trail_monotonic(ledger: &LedgerBlock) -> Result<(), WalletLedgerE
 /// * `spent = false` → `spent_height = None`. Any other combination
 ///   is incoherent (we cannot have a "not spent" output with a spend
 ///   height).
-/// * `spent = true`  → `spent_height = Some` AND `key_image = Some`.
-///   A spent output without a recorded key image cannot have been
-///   spent by this wallet in the first place.
+/// * `spent = true`  → `key_image = Some`. `spent_height` is `None`
+///   while the spend is **in flight** — optimistically marked when the
+///   wallet submits the spending tx, before any block confirms it — and
+///   `Some` once a refresh scans the confirming block (a reorg that
+///   orphans that block reverts the output to unspent). A spent output
+///   without a recorded key image cannot have been spent by this wallet.
 ///
 /// Separately, no two transfers may share the same `Some(key_image)`:
 /// a key image uniquely identifies the output being spent, and two
@@ -285,10 +288,15 @@ fn check_spent_state_consistent(ledger: &LedgerBlock) -> Result<(), WalletLedger
 
 fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedgerError> {
     match (t.spent, t.spent_height.is_some(), t.key_image.is_some()) {
-        // `spent = false` with no spent_height is the one valid
-        // not-yet-spent shape; key_image may be None or Some (the
-        // scanner derives it before spend).
-        (false, false, _) | (true, true, true) => Ok(()),
+        // Two valid shapes. (a) not-yet-spent: `spent = false`, no height; key_image
+        // may be None or Some (the scanner derives it before spend). (b) a spend by
+        // this wallet: `spent = true` with a key image — `spent_height` is `None`
+        // while the spend is **in flight** (optimistically marked at submit by
+        // `finalize_submit_accept`, before any block confirms it) and `Some` once a
+        // refresh scans the confirming block. The scan fills in the height; a reorg
+        // that orphans the confirming block reverts a confirmed spend to unspent
+        // (`LedgerIndexes::handle_reorg`).
+        (false, false, _) | (true, _, true) => Ok(()),
         (false, true, _) => Err(invariant_error(
             INV_SPENT_STATE_CONSISTENT,
             format!(
@@ -296,14 +304,7 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
                  output cannot carry a spend height"
             ),
         )),
-        (true, false, _) => Err(invariant_error(
-            INV_SPENT_STATE_CONSISTENT,
-            format!(
-                "transfers[{idx}] has spent = true but spent_height = None; a spent output \
-                 must record the height at which it was spent"
-            ),
-        )),
-        (true, true, false) => Err(invariant_error(
+        (true, _, false) => Err(invariant_error(
             INV_SPENT_STATE_CONSISTENT,
             format!(
                 "transfers[{idx}] has spent = true but key_image = None; a spent output must \
@@ -553,11 +554,40 @@ mod tests {
     }
 
     #[test]
-    fn spent_without_height_is_refused() {
+    fn spent_in_flight_without_height_is_allowed() {
+        // The in-flight (optimistically-spent) shape: marked spent at submit, with a
+        // key image, but no confirming height until a refresh scans the block. This is
+        // the state `finalize_submit_accept` produces; the invariant must admit it.
         let mut t = mk_transfer(1, 10);
         t.spent = true;
         t.spent_height = None;
         t.key_image = Some(KeyImage::from_canonical_bytes([1; 32]));
+        let ledger = LedgerBlock::new(
+            vec![t],
+            BlockchainTip::new(100, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            TxMetaBlock::empty(),
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        assert!(
+            w.check_invariants().is_ok(),
+            "in-flight spend (spent, no height, key_image present) must be valid"
+        );
+    }
+
+    #[test]
+    fn spent_in_flight_without_key_image_is_refused() {
+        // In flight or confirmed, a spent output must carry the key image it was spent
+        // by — relaxing the height requirement must not relax the key-image one.
+        let mut t = mk_transfer(1, 10);
+        t.spent = true;
+        t.spent_height = None;
+        t.key_image = None;
         let ledger = LedgerBlock::new(
             vec![t],
             BlockchainTip::new(100, [0xAA; 32]),

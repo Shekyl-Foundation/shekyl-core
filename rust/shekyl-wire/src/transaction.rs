@@ -997,7 +997,20 @@ impl Ct {
                 for _ in 0..inputs {
                     pqc_auths.push(PqcAuth::read(r)?);
                 }
-                let prunable = Some(Prunable::read(inputs, r)?);
+                // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**: the
+                // daemon's pruned fetch (`get_transactions prune:true`) keeps the
+                // consensus pqc_auths but drops the prunable proof
+                // (cryptonote_basic.h:523 gates `rctsig_prunable` on `!pruned`, while
+                // pqc_auths at :491-517 are written regardless of pruning). The wallet
+                // ingests this to scan spend blocks on refresh; consensus code that needs
+                // the proof takes a `FullTransaction` via `into_full()` (so a pruned spend
+                // can never reach a verifier). Distinct from the EOF-after-base case above
+                // (the fee-only / serve-credit form: empty pqc_auths, no prunable).
+                let prunable = if r.fill_buf()?.is_empty() {
+                    None
+                } else {
+                    Some(Prunable::read(inputs, r)?)
+                };
                 Ok(Ct::Fcmp {
                     fee,
                     reference_block,
