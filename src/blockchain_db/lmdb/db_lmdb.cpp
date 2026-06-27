@@ -6610,9 +6610,11 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
     memcpy(leaf_chunks.data() + static_cast<size_t>(c) * 32, v.mv_data, 32);
   }
 
-  // The total upper-layer chunk count is strictly less than num_leaf_chunks (each
-  // layer shrinks by the chunk-width ladder); +1 covers the single-leaf-chunk
-  // promotion. Tree depth is a small handful, so 16 layer slots are ample.
+  // The total upper-layer chunk count is at most num_leaf_chunks: each layer shrinks
+  // by the chunk-width ladder, and the one boundary case — a single leaf chunk, still
+  // promoted to its own Helios root — makes the count EQUAL num_leaf_chunks rather
+  // than exceed it. Size with a +1 defensive margin; tree depth is a small handful,
+  // so 16 layer-size slots are ample.
   std::vector<uint8_t> upper_chunks(static_cast<size_t>(num_leaf_chunks + 1) * 32);
   std::array<uint64_t, 16> layer_sizes = {};
   uint64_t num_upper_layers = 0;

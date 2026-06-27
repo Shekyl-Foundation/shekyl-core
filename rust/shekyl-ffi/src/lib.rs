@@ -3044,15 +3044,24 @@ pub unsafe extern "C" fn shekyl_curve_tree_grow_upper_layers(
     let chunks_out = unsafe { std::slice::from_raw_parts_mut(out_chunks_ptr, out_bytes) };
     let mut written = 0usize;
     for (li, layer) in upper.iter().enumerate() {
-        // layer.len() <= total <= num_leaf_chunks (all derived from a u64), so it fits.
-        sizes_out[li] = u64::try_from(layer.len()).unwrap_or(u64::MAX);
+        // Fail closed on the (practically impossible) usize->u64 overflow rather than
+        // emitting a sentinel size at this fallible FFI boundary. layer.len() <= total
+        // <= num_leaf_chunks (all derived from a u64), so this never trips in practice.
+        let Ok(layer_len) = u64::try_from(layer.len()) else {
+            return false;
+        };
+        sizes_out[li] = layer_len;
         for node in layer {
             chunks_out[written * 32..written * 32 + 32].copy_from_slice(node);
             written += 1;
         }
     }
+    // Same fail-closed discipline for the upper-layer count out-param.
+    let Ok(num_upper) = u64::try_from(upper.len()) else {
+        return false;
+    };
     unsafe {
-        *out_num_upper_layers = u64::try_from(upper.len()).unwrap_or(u64::MAX);
+        *out_num_upper_layers = num_upper;
         std::slice::from_raw_parts_mut(out_root_ptr, 32).copy_from_slice(&root);
     }
     true
