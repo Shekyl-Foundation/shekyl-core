@@ -3,8 +3,11 @@
 **Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md)
 §3.6 (2d-1 is 2d's first sub-part; this doc is the architecture round nested under it).
 **Status:** ROUND 0 (boundary — ratified) + ROUND 1 (per-SP design, §6) + ROUND 2 (seam
-hardening — DQ8 union-shrink, cadence-injectable, SP-6 coverage, cover-discovery split)
-— for review; no code. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
+hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) —
+for review; no code. Round-2's two source-verification action items are now **resolved**:
+DQ8's terminal-bond predicate exists (`Unbond` + Full-retirement), and the cover output's
+*form* is verified-covered (no recovery carve-out; FA-6 false-negative-free). Rounds accrete
+in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
 (firewall-load-bearing — getting the isolation boundary wrong is a privacy break, not
 a refactor, so the boundary is decided *first* and the rest derived from it).
 
@@ -276,24 +279,25 @@ degrade over time). Not a privacy break, but a long-run cost and a monotonically
 secret surface, and there is a natural bound DQ5 doesn't use.
 
 **The bound: a persona that is genuinely *done* should leave the union** — its key out of
-residency, its funding outputs out of the re-scan set. "Done" = the persona's bond obligation
-has **terminated** *and* is **finality-deep** (beyond `archival_reorg_depth_blocks`). Two
-things this round must pin:
+residency, its funding outputs out of the re-scan set. Two things to pin:
 
 1. **Retirement is a *positive* confirmation, never inference-from-absence** — the **same
    discipline as SP-6**, aimed at the lifecycle: retire a persona only on an *affirmatively
    confirmed* terminal-and-finality-deep bond state, **never** because a scan "didn't see its
    bond" (which a transport gap or a stale source also produces). A persona wrongly retired on
    absence stops scanning *live* collateral — the funds-loss mirror of SP-6's wrongful GC.
-2. **The terminal predicate must come from the bond lifecycle, which may not yet expose it.**
-   The retention crate has settlement-epoch machinery but **no first-class "bond fully unwound /
-   closed" terminal state** (`shekyl-archival-retention`). So either archival bonds *do* have a
-   terminal state — then retire on confirmed-terminal + finality-deep and the union shrinks to
-   **active** bonds — or they are effectively permanent, in which case the unbounded residency
-   is an **inherent cost of the retention guarantee** and must be acknowledged and the
-   per-sweep cost bounded another way (e.g. cold key material paged out, only active personas
-   hot). **Open:** resolve which, because it sets whether the scan set is bounded by active or
-   lifetime bonds. The retire-on-positive-confirmation rule holds either way.
+2. **The terminal predicate exists — use it (resolved at source).** Archival bonds are
+   **not** permanent: `BondPostKind::Unbond` (`bond_wire.rs:34`) is the terminal post kind —
+   after exit + the release cooldown it zeroes the persona's `bonded_total_atomic`
+   (`ARCHIVAL_BOND_GATE4.md` §4.3). Settlement-epoch / `claimed_epochs` machinery is **reward
+   accounting, *not* bond termination** — orthogonal. And the retirement predicate is already
+   named in design: **"Full retirement = bond released ∧ backlog exhausted/lapsed; then
+   `p_slot` burn"** (`PHASE_2B_FSM_RETOOL.md:209`). So a persona is wipe-eligible when its bond
+   is **Unbonded** *and* its reward **backlog window `W` has lapsed** (it can still claim for up
+   to `W ≈ 26` epochs after Unbond, so it must keep scanning until then) *and* both are
+   **finality-deep**. **Resolution:** the union shrinks to **active bonds + the `W` backlog
+   tail**, not lifetime bonds — DQ5's "bounded by bonded slots" bound is now *real*, anchored on
+   the existing Unbond + Full-retirement predicate, retired on positive confirmation per (1).
 
 ---
 
@@ -376,13 +380,22 @@ designs these alongside the per-SP work, not as a cleanup pass after.
   Before `P` can ever stake, it must **scan-discover its own `bond_floor + cover` output**,
   finality-deep — a hard *must-discover-before-proceeding*, not a "delays a re-stake" like
   reader (a). The failure case the lag framing hides: if the funding scan **misses** the cover
-  output (transport gap, a pruned source, or an FA-6 false-negative — so **verify the
-  `Guaranteed` variant's completeness guarantee covers the cover output's *form***), `P` is
-  stranded at cold-start with funds it cannot see, and the only recovery is re-funding from the
-  principal — **a second cold-start link, the exact correlation the cover exists to prevent.**
-  Missing a steady-state output delays a re-stake; missing the *cover* output forces a re-link.
-  So cover-discovery owns its own completeness assertion, separate from reader (a)'s
-  lag-tolerance, and composes with the `archival_reorg_depth_blocks` latency (DQ2 c2).
+  output, `P` is stranded at cold-start with funds it cannot see, and the only recovery is
+  re-funding from the principal — **a second cold-start link, the exact correlation the cover
+  exists to prevent.** Missing a steady-state output delays a re-stake; missing the *cover*
+  output forces a re-link. So cover-discovery owns its own completeness assertion, separate from
+  reader (a)'s lag-tolerance, composing with the `archival_reorg_depth_blocks` latency (DQ2 c2).
+  **The output *form* is verified-covered (source check):** the recovery path
+  (`scan_output_recover_with_ml_kem_dk`, `scan.rs:626–648`) has **no form-specific carve-out**
+  (no output-type / amount-encoding / coinbase branch), and the FA-6 view-tag pre-filter is
+  **false-negative-free for owned outputs** — the tag is a deterministic function of the
+  recipient's KEM keys + output index, computed identically by sender and scanner
+  (`crypto-pq/src/output.rs:509–517`) — so a **non-colliding** cover output is *guaranteed*
+  discovered regardless of form. The residuals are therefore only the **non-form** ones
+  (transport gap / pruned source — SP-6's availability rule) and **variant mis-selection**,
+  already type-pinned by SP-1's `GuaranteedViewPair`-only construction. (The `Guaranteed`
+  guarantee *drops* a colliding `output.key`, so the cover output must carry a fresh one-time
+  key — which `P`, as its own sender, controls.)
 
 ---
 
