@@ -4018,6 +4018,26 @@ sustainability is unaffected by the recalibration.
   to the non-consensus sites, then — once the "we are the hard fork" framing was
   applied — to the consensus primitive itself.
 
+- **Multisig FROST spend path needs the single-sig spend-path consensus fixes.**
+  PR #193 (first daemon-accepted FCMP++ spend) fixed four spend-path properties on
+  the *single-sig* path (`sign_bridge.rs`): (1) inputs sorted strictly descending
+  by key image before proving, (2) the biased key-image generator
+  (`shekyl_fcmp::tree::key_image_generator`), (3) `curve_trees_tree_depth =
+  layers − 1` on the wire, and (4) change paid to the base spend key
+  (`x = ho + b`, no `m₀` offset). The multisig FROST sign path
+  (`shekyl-engine-core/src/engine/signer.rs` → `shekyl-fcmp/src/frost_sal.rs`) was
+  **not** exercised by the north-star. Properties (2)/(3) ride along for free —
+  `signer.rs` routes through `tx_builder::encode_final_tx` → `build_wire_tx`, which
+  owns the depth encoding, and the key image is whatever the proof binds — but the
+  **input ordering** (does the multisig assembly sort vin descending by key image?)
+  and the **change-output destination** (does it pay to the base key?) must be
+  audited before a multisig spend can be daemon-accepted. A multisig regtest
+  spend (analogous to `e2e_fcmp_spend_accepted_by_daemon`) is the natural gate.
+
+  **Target.** Confirm against multisig's genesis scope: the spend-path rules are
+  genesis-frozen consensus, so if multisig ships at V3.0 this is pre-genesis; if
+  multisig is V3.1+, re-file there. Surfaced by PR #193's review/audit.
+
 ---
 
 ## V3.1 — audit response and stressnet gates

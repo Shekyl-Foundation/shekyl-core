@@ -378,7 +378,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 public_key: pk.clone(),
             })
             .collect(),
-        tree_depth: signed.tree_depth,
+        // `signed.tree_depth` is the FCMP++ layer count `L`; the wire encoder
+        // serializes the consensus `curve_trees_tree_depth = L - 1`.
+        fcmp_layers: signed.tree_depth,
     };
 
     let payload_hashes =

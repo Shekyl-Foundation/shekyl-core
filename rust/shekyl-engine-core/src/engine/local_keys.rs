@@ -28,9 +28,13 @@
 //!
 //! `try_claim_output` claims outputs when the recovered spend key
 //! `B' = O - ho*G - y*T` equals the wallet's primary spend public key
-//! (`AllKeysBlob::spend_pk`). Signing uses primary claim offset `m₀`
-//! via [`LocalKeys::derive_primary_source_secrets_bundle`]
-//! (`output_claim::PRIMARY_CLAIM_INDEX_LE`).
+//! `D = b*G` (`AllKeysBlob::spend_pk`). Signing uses the matching witness
+//! `x = ho + b` — the **base** spend key, **no claim offset** — via
+//! [`LocalKeys::derive_primary_source_secrets_bundle`]. (The earlier
+//! `x = ho + b + m₀` was wrong: it had no matching `m₀·G` in the on-chain
+//! output key and broke the SAL open; see `output_claim` module docs. The
+//! `m₀` derivation is retained genesis-locked only as the future
+//! multi-account substrate, with no V3.0 production caller.)
 //!
 //! # Stage-4 swap-in
 //!
@@ -91,10 +95,12 @@ struct DerivedScalars {
     /// so the in-memory copy is wiped when `LocalKeys` is dropped, in
     /// addition to `AllKeysBlob`'s own wipe path.
     ///
-    /// Read only by the signing/index-sensitivity tests (which derive
-    /// `D + m_i·G`); the production claim path uses `x = ho + b` (no offset),
-    /// so the field is unread in non-test builds.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Used only by the signing/index-sensitivity tests (which derive
+    /// `D + m_i·G`); the production claim path uses `x = ho + b` (no offset).
+    /// Gated `#[cfg(test)]` so non-test builds neither store nor materialize
+    /// this view-secret-derived copy (`35-secure-memory.mdc`: no unnecessary
+    /// secret duplication).
+    #[cfg(test)]
     view_scalar: Zeroizing<Scalar>,
 
     /// Public spend point `B = b*G` — decompressed from
@@ -167,6 +173,10 @@ impl LocalKeys {
     /// process termination, not silent continuation.
     #[allow(dead_code)] // orchestrator wiring lands in M3c+ when LocalKeys is bound at Engine::open_full / ::create.
     pub(crate) fn from_keys_blob(keys: AllKeysBlob) -> Self {
+        // Test-only: the view scalar feeds the index-sensitivity helpers; the
+        // production claim path never reads it (`x = ho + b`, no offset), so we
+        // do not materialize this view-secret copy in non-test builds.
+        #[cfg(test)]
         let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
             *keys.view_sk.as_canonical_bytes(),
         ));
@@ -183,6 +193,7 @@ impl LocalKeys {
             keys,
             account_public_address,
             derived: DerivedScalars {
+                #[cfg(test)]
                 view_scalar,
                 spend_public,
             },
@@ -244,17 +255,15 @@ impl LocalKeys {
     ///    three (the bundle's secret triple) and discards the rest
     ///    (the discarded fields wipe via `OutputSecrets`'s
     ///    `ZeroizeOnDrop` impl when the local binding is dropped).
-    /// 3. **Primary claim offset** ← `m₀ =
-    ///    output_spend_offset_scalar(view_scalar,
-    ///    PRIMARY_CLAIM_INDEX_LE)`. Genesis-locked derivation per
-    ///    `shekyl-crypto-pq::output_claim::output_spend_offset_scalar`.
-    ///    V3.0 hardcodes index `0`; the offset enters additively in step 4.
-    /// 4. **Per-input spend scalar** ← `x = ho + b + m₀` where `b`
-    ///    is the engine-owned account spend secret. Computed with
+    /// 3. **Per-input spend scalar** ← `x = ho + b` where `b` is the
+    ///    engine-owned account spend secret. **No claim offset:** outputs are
+    ///    paid to the base spend key `D = b·G`, so the SAL opening
+    ///    `O = x·G + y·T` and the key image `KI = x·Hp(O)` both bind to `b`
+    ///    (an `m₀` term would have no matching `m₀·G` in `O`). Computed with
     ///    `Scalar` arithmetic in canonical encoding; the result's
     ///    little-endian byte form is the bundle's
     ///    [`SourceSecretsBundle::spend_key_x`] field.
-    /// 5. **Bundle assembly.** `(spend_key_x, spend_key_y, commitment_mask,
+    /// 4. **Bundle assembly.** `(spend_key_x, spend_key_y, commitment_mask,
     ///    combined_ss, output_index)` packed into the
     ///    [`SourceSecretsBundle`] return value, with each
     ///    secret-bearing field wrapped in [`Zeroizing`] per
