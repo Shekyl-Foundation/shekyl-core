@@ -83,27 +83,63 @@ the blocks arrived over one connection, deduped by one cache — and **2d-2 cann
 that without re-architecting 2d-1**. Pinning the fetch-everything injectable now is what
 lets 2d-2 swap the Arti transport in *underneath* without touching the scan (DQ-type).
 
-**The threat-model boundary — "pure" is source-level, not execution-level (write it
-down).** The decode is a *pure function* in source, but the *executed* scan is not
-constant-work: the FA-6/view-tag pre-filter rejects most outputs cheaply and the full
-ML-KEM/ECDH recovery runs **only on matches**, and the final ownership test is a plain
-`recovered_b_compressed != self.primary_spend_compressed` (`scan.rs:646`) — **not
-constant-time**. So per-output processing *time* is a function of whether the output is
-`P`'s — exactly Monero's view-tag timing tradeoff. Therefore: **the firewall as scoped
-defends the chain observer and (via 2d-2) the network observer; it does *not* defend a
-local/timing observer co-resident with the process.** That is a deliberate scope line, on
-the record. **If a local/timing adversary is in scope, separate keys are not enough** —
-the two scans then need **execution isolation (separate process)** *and* a **constant-time
-ownership compare**. Round 1 must pick: in-scope (pay process-isolation + CT-compare) or
-out-of-scope (stated, with the rationale). "Pure ⇒ safe" is precisely the inference that
-has bitten every side-channel-aware system that trusted it.
+**The execution/timing boundary — "pure" is source-level, not execution-level — but it
+is the *weaker* of two side-channel families, and the family with a body count is already
+guarded.** Distinguish them, because they get conflated:
 
-**Resolution:** reuse the scanner's **pure primitives** (`ViewPair`/`GuaranteedViewPair`,
-`Scanner`, `scan_output_recover_with_ml_kem_dk`) with `P`'s keys; isolate **state, the
-fetch layer (per-`P` fetch-everything injectable), and — per the threat-model line —
-execution if the local adversary is in scope**. The cross-contamination the firewall
-prevents is at the key/state/fetch/execution layers, not the source-code layer. This is
-the boundary the rest derives from.
+- **Key-extraction side channels** (Minerva/TPM-Fail on ECDSA nonces, ROCA, power analysis
+  on Ledger/Trezor) — **catastrophic** (recover the key, steal funds). This is the family
+  that drew blood — on **signing hardware/HSMs/smartcards**, *not* exchanges-via-scanning
+  (the big exchange losses were custody, insider, and fraud). So the high-value "fix it
+  now" points at the **signing path**, not the scan. **Verified at source:** the hybrid
+  bond/spend sign is `ed25519-dalek` (deterministic RFC-8032 nonce — no nonce-sampling
+  leak) + `fips204` ML-DSA-65, behind a **four-tripwire 64-bit-only build gate** that
+  names **KyberSlash** (Bernstein et al., 2024) as the exact threat (`crypto-pq/src/lib.rs:14–48`).
+  The catastrophic family is already hardened; nothing to do here for 2d-1.
+- **Ownership/linkability side channels** (scan timing leaks *which outputs are yours*) —
+  a **deanonymization** risk, not theft, with no notable real-world loss, requiring a
+  **co-resident** observer timing the process. This is the 2d-1 question, and it is the
+  weaker cousin.
+
+And on the scan cousin, **neither "in-scope = process isolation + CT compare" nor a flat
+defer is right** — both as I first framed them are wrong:
+
+- **A CT compare alone is nearly cosmetic.** The dominant leak is the **pre-filter
+  early-exit**, not the final `!=`: the signal is *how far down the pipeline each output
+  got* (rejected at the FA-6 filter vs ran full ML-KEM recovery vs reached the compare).
+  Making the last `!=` constant-time while the filter early-exits leaves the big signal
+  intact. **Truly** closing it means running the **entire** per-output path on **every**
+  output (full ML-KEM decap + recovery + CT compare, *no early exit*) — discarding the
+  FA-6 performance win **on every wallet, every sync**: a permanent all-user tax.
+- **Process isolation does not rescue it** — cross-process / cross-VM cache attacks cross
+  the boundary. And in **self-custody**, an adversary who can time your scan can almost
+  always **read its memory** — where `P.view_sk`, the bonded-union, and the output sets
+  live; CT scanning then rearranges deck chairs while they read the keys. The *one* model
+  where timing-without-memory holds is **shared-cloud co-tenancy** (e.g. an exchange
+  running `P`-staking on shared hardware) — real, but its right mitigation is **dedicated
+  hardware**, not taxing every wallet's sync.
+
+**Resolution — build the seam, do the cheap compare, defer the tax (the third option).**
+
+- **Now, unconditionally:** (1) the **constant-time ownership compare** — free, correct
+  regardless of the scope call, no argument for a variable-time `!=` on a secret bit; and
+  (2) the **architectural seam** — the per-output extractor behind a trait whose
+  constant-time, **no-early-exit** implementation is a *drop-in swap*, not a
+  re-architecture. The expensive-to-retrofit thing is the *architecture* (where the scan
+  runs, the swappable extractor, the fetch-everything `BlockSource`); the cheap-to-add
+  thing is the CT impl *behind* that stable seam.
+- **Deferred (seam in place, rule-21 reopen):** the constant-time-**everything**
+  no-early-exit path + execution isolation. **Reopen criteria:** (a) a deployment target
+  enters scope where timing-without-memory is real (**shared-cloud staking-as-a-service**),
+  or (b) the cold-start/cover analysis shows the scan-timing channel meaningfully narrows
+  `P`'s anonymity set beyond what the **network** and **funder-scope** seams already cover.
+  Filed, named, swappable — not silently dropped.
+
+So 2d-1 reuses the scanner's primitives (`GuaranteedViewPair`, `Scanner`,
+`scan_output_recover`) with `P`'s keys; isolates **state and the fetch layer** (per-`P`
+fetch-everything `BlockSource`); does the **CT compare + the swappable extractor seam**;
+and defers constant-time-everything behind that seam. This is the boundary the rest
+derives from.
 
 ### DQ2 — the two readers are *not* the same scan (split confirmed at source)
 
@@ -232,15 +268,19 @@ the tree if 2d-1 selects for them:
 | --- | --- | --- |
 | **SP-0** | The **per-`P` `BlockSource` trait** (fetch-everything; *no* selective-request or shared-buffer method exists) — the DQ1 keystone | 2d-1 ships a local impl; 2d-2 swaps Arti underneath, untouched |
 | **SP-1** | `GuaranteedViewPair`-from-`ArchivalPKeys` adapter + a `P`-scan over the scanner's pure primitives | reuse `GuaranteedScanner`/`scan_output_recover`; **immune variant** (DQ7); no scanner fork |
+| **SP-1a** | The **CT ownership compare** + the per-output **extractor seam** (trait; CT-no-early-exit impl is a drop-in swap) | DQ1 third option — do the cheap part now, defer the perf tax behind the seam |
 | **SP-2** | The sealed `P`-scan **cursor** (StakingBlock-class; new version const) | DQ4; separate from `BlockchainTip`; no rollback path (DQ2 c1) |
 | **SP-3** | **Dual extractor** over one block-iteration: view-key funding outputs (a) + public bond-post match (b) | DQ2; cursor at reconcile-grade finality |
 | **SP-4** | The **per-epoch `P`-earnings-inflow accrual** (reader-a output `C_min` consumes) — from **confirmed** outputs only | DQ3/DQ7; `AccrualRecord`-modeled |
 | **SP-5** | The scan-loop **home** — `P`-scan task owning cursor + cadence + `BlockSource`; actor performs the **offloaded, non-blocking** scan-step, `view_sk` never crosses | DQ6 |
 | **SP-6** | The reconcile **interface** reader (b) hands to 2d-2 (which performs the GC) | the GC *action* is 2d-2 |
 
-**Round-1 gate (DQ1 threat model):** decide local/timing adversary **in-scope** (then SP-0
-runs in a separate process and SP-1's ownership compare is constant-time) or **out-of-scope**
-(stated on the record). This is the one boundary question Round 0 surfaces but does not pre-empt.
+**Scan-timing posture (DQ1, resolved — the third option, not a Round-1 binary):** Round 1
+does the **CT ownership compare** + the **swappable no-early-exit extractor seam** (SP-1a),
+and **defers** constant-time-everything + execution isolation behind that seam under a
+rule-21 reopen (shared-cloud staking-as-a-service, or a cover/cold-start anonymity finding).
+The catastrophic side-channel family (signing) is separately verified CT-and-guarded, so no
+2d-1 action there.
 
 **Out of scope (carried to 2d-2):** the Arti transport *impl* behind SP-0's `BlockSource`
 (the interface is pinned now; the transport is 2d-2), the actual `bonded_slots`/`p_slot`
@@ -271,6 +311,12 @@ must police. The candidates this boundary surfaces, for Round 1 to realize:
 - **`GuaranteedViewPair` as the *only* constructor on the `P`-scan path (SP-1).** The plain
   `ViewPair` is simply not in the `P`-scan's type surface, so the burning-bug-vulnerable
   variant is unselectable for `P` — DQ7's variant choice enforced by construction.
+- **A per-output `Extractor` trait (SP-1a) so the constant-time path is a *swap*, not a
+  rewrite.** The ownership test sits behind a trait; the default impl reuses the FA-6
+  early-exit, a future CT-no-early-exit impl satisfies the same trait. The expensive
+  scan-timing decision (DQ1) becomes a one-line impl swap behind a stable seam — the
+  architecture is pinned now, the perf tax is paid only if-and-when a co-tenancy target
+  reopens it.
 - **A typed reconcile result for SP-6** (the public bond-post match set `P` hands 2d-2),
   distinct from the funding output set — so the two readers' outputs can't be conflated at
   the 2d-2 boundary.
