@@ -62,7 +62,7 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::keys::SpendPublicKey;
 use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
-use shekyl_curve_generators::hash_to_point;
+use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
@@ -191,8 +191,11 @@ impl Message<ClaimOutput> for KeyActor {
         }
 
         // Stage 3: key image `KI = x * Hp(O)` where `x = ho + b`. A failure is
-        // a malformed `output_key`, surfaced as `NotMine`.
-        let hp_of_o = hash_to_point(input.output_key);
+        // a malformed `output_key`, surfaced as `NotMine`. `Hp` is the *biased*
+        // hash-to-point — the canonical FCMP++ key-image generator
+        // (`shekyl_fcmp::tree::key_image_generator`); the non-biased variant
+        // yields a key image the SAL linkability check rejects.
+        let hp_of_o = biased_hash_to_point(input.output_key);
         let hp_bytes = hp_of_o.compress().to_bytes();
 
         let Ok(ki_result) = compute_output_key_image(

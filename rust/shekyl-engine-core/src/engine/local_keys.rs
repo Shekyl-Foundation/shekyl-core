@@ -55,6 +55,9 @@
 //! [`KeyEngine`]: super::traits::key::KeyEngine
 //! [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]: super::error::KeyEngineError::SignTransactionTraitSurfaceIncomplete
 
+// Only the signing/index-sensitivity tests derive `D + m_i·G`; the production
+// claim path uses the base spend key (`x = ho + b`, no offset).
+#[cfg(test)]
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::{edwards::CompressedEdwardsY, EdwardsPoint, Scalar};
 use shekyl_crypto_pq::account::AllKeysBlob;
@@ -65,8 +68,9 @@ use shekyl_crypto_pq::keys::SpendPublicKey;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, recover_combined_ss, scan_output_recover,
 };
-use shekyl_crypto_pq::output_claim::{output_spend_offset_scalar, PRIMARY_CLAIM_INDEX_LE};
-use shekyl_curve_generators::hash_to_point;
+#[cfg(test)]
+use shekyl_crypto_pq::output_claim::output_spend_offset_scalar;
+use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
@@ -86,6 +90,11 @@ struct DerivedScalars {
     /// reduced mod the Ed25519 group order). Wrapped in [`Zeroizing`]
     /// so the in-memory copy is wiped when `LocalKeys` is dropped, in
     /// addition to `AllKeysBlob`'s own wipe path.
+    ///
+    /// Read only by the signing/index-sensitivity tests (which derive
+    /// `D + m_i·G`); the production claim path uses `x = ho + b` (no offset),
+    /// so the field is unread in non-test builds.
+    #[cfg_attr(not(test), allow(dead_code))]
     view_scalar: Zeroizing<Scalar>,
 
     /// Public spend point `B = b*G` — decompressed from
@@ -301,7 +310,21 @@ impl LocalKeys {
 
         let secrets = derive_output_secrets(&combined_ss.0, output_index);
 
-        // Engine-owned per-input spend scalar `x = ho + b + m₀`.
+        // Engine-owned per-input spend scalar `x = ho + b`.
+        //
+        // This MUST equal the key-image spend scalar — `compute_output_key_image`
+        // (shekyl-crypto-pq) computes `KI = (ho + b)·Hp(O)`, no offset — and it
+        // MUST satisfy the SAL output-key opening `O = x·G + y·T`. The on-chain
+        // output key is `O = ho·G + B + y·T` where `B` is the *base* spend key
+        // `b·G`: the primary address publishes the base key (no offset), so
+        // senders/miners pay to `b·G` (a miner constructing a coinbase has no
+        // way to add a view-secret-derived offset). Hence `x·G = O − y·T = (ho + b)·G`.
+        //
+        // A pre-existing `+ m₀` term (the residual CryptoNote subaddress offset)
+        // overshot every *real*, scanner-derived spend by `m₀·G`, so the SAL
+        // `OpenedInputTuple::open` failed (`(x·G + y·T) ≠ O~`). It survived
+        // because every prior test fed a synthetic `(x, y)` that satisfied the
+        // relation by construction; this is the first scanner-derived spend.
         // Each intermediate `Scalar` is wrapped in `Zeroizing<…>` so the
         // canonical-byte materializations the operation goes through
         // wipe on drop alongside the bundle's external view of `x`.
@@ -312,11 +335,7 @@ impl LocalKeys {
         let b_scalar: Zeroizing<Scalar> = Zeroizing::new(Scalar::from_bytes_mod_order(
             *self.keys.spend_sk.as_canonical_bytes(),
         ));
-        let m_0: Zeroizing<Scalar> = Zeroizing::new(output_spend_offset_scalar(
-            &self.derived.view_scalar,
-            &PRIMARY_CLAIM_INDEX_LE,
-        ));
-        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar + *m_0);
+        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar);
         let spend_key_x = Zeroizing::new(x_scalar.to_bytes());
 
         Ok(SourceSecretsBundle {
@@ -326,16 +345,6 @@ impl LocalKeys {
             combined_ss: Zeroizing::new(combined_ss.0.to_vec()),
             output_index,
         })
-    }
-
-    /// Primary-claim spend public key bytes (`D + m₀·G`).
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn primary_claim_spend_pk(&self) -> [u8; 32] {
-        let m = output_spend_offset_scalar(&self.derived.view_scalar, &PRIMARY_CLAIM_INDEX_LE);
-        (self.derived.spend_public + (&m * ED25519_BASEPOINT_TABLE))
-            .compress()
-            .to_bytes()
     }
 }
 
@@ -381,11 +390,12 @@ impl KeyEngine for LocalKeys {
             return Ok(OutputClaimResult::NotMine);
         }
 
-        // Stage 3: key image. `KI = x * Hp(O)` where `x = ho + b`.
-        // `compute_output_key_image` validates `Hp(O)` (must be
-        // torsion-free, non-identity); a failure here is a malformed
-        // output_key, surfaced as `NotMine`.
-        let hp_of_o = hash_to_point(input.output_key);
+        // Stage 3: key image. `KI = x * Hp(O)` where `x = ho + b` and `Hp` is the
+        // *biased* hash-to-point — the canonical FCMP++ key-image generator
+        // (`shekyl_fcmp::tree::key_image_generator`). `compute_output_key_image`
+        // validates `Hp(O)` (must be torsion-free, non-identity); a failure here
+        // is a malformed output_key, surfaced as `NotMine`.
+        let hp_of_o = biased_hash_to_point(input.output_key);
         let hp_bytes = hp_of_o.compress().to_bytes();
 
         let Ok(ki_result) = compute_output_key_image(
@@ -934,14 +944,16 @@ mod tests {
             )
             .expect("scan_output_recover succeeds for self-paid synthetic output");
 
-            // Hand-composed legacy bundle: spend_key_x = ho + b + m₀.
+            // Hand-composed bundle: spend_key_x = ho + b. No claim offset — the
+            // output is paid to the *base* spend key `b·G` (line above), so the
+            // spend witness is `ho + b` and the SAL open `x·G + y·T == O` holds.
+            // The pre-fix `+ m₀` term matched no on-chain output and broke the
+            // first daemon-verified spend (Track-2 north-star).
             let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(recovered.ho))
                 .expect("ho from wide_reduce is canonical");
             let b_scalar: Scalar =
                 Scalar::from_bytes_mod_order(*keys.keys.spend_sk.as_canonical_bytes());
-            let m_i: Scalar =
-                output_spend_offset_scalar(&keys.derived.view_scalar, &PRIMARY_CLAIM_INDEX_LE);
-            let legacy_x_scalar: Scalar = ho_scalar + b_scalar + m_i;
+            let legacy_x_scalar: Scalar = ho_scalar + b_scalar;
             let legacy_x = legacy_x_scalar.to_bytes();
 
             // New chain: engine-side composition.
@@ -958,6 +970,27 @@ mod tests {
                 *new_bundle.spend_key_x, legacy_x,
                 "spend_key_x byte-identity violated ({context})"
             );
+
+            // Real correctness guard (beyond engine-vs-hand-composed identity):
+            // the derived witness must open the output key — `x·G + y·T == O`.
+            // This is the SAL relation the daemon enforces; the removed `+ m₀`
+            // term violated it for every real scanned output.
+            {
+                use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+                use curve25519_dalek::edwards::CompressedEdwardsY;
+                let x: Scalar = Option::from(Scalar::from_canonical_bytes(*new_bundle.spend_key_x))
+                    .expect("x canonical");
+                let y: Scalar = Option::from(Scalar::from_canonical_bytes(*new_bundle.spend_key_y))
+                    .expect("y canonical");
+                let o = CompressedEdwardsY(constructed.output_key)
+                    .decompress()
+                    .expect("O decompresses");
+                assert_eq!(
+                    (&x * ED25519_BASEPOINT_TABLE) + (*shekyl_curve_generators::T * y),
+                    o,
+                    "SAL relation x·G + y·T == O violated ({context})"
+                );
+            }
             assert_eq!(
                 *new_bundle.spend_key_y, recovered.y,
                 "spend_key_y byte-identity violated ({context})"
@@ -1173,16 +1206,13 @@ mod tests {
         let reference_block = [0xD4u8; 32];
         let fee: u64 = 1_000;
 
-        let recipient_spend_pk = derived_spend_pk_for_test(
-            &keys.derived.view_scalar,
-            &keys.derived.spend_public,
-            PRIMARY_CLAIM_INDEX_LE,
-        );
+        // Recipient = base spend key `D = b·G`. The spend witness is `ho + b`
+        // (no claim offset), so outputs must be paid to the base key for the SAL
+        // open and key-image linkability to hold against the daemon.
+        let recipient_spend_pk = *keys.keys.spend_pk.as_canonical_bytes();
 
         for &n_in in &n_in_values {
             let context = format!("n_in={n_in}");
-
-            // Recipient = D + m₀*G so signing recovery matches bundle arithmetic.
 
             // ── Build inputs ───────────────────────────────────
             let mut input_amounts: Vec<u64> = Vec::with_capacity(n_in);
@@ -1232,9 +1262,8 @@ mod tests {
                     .expect("ho from wide_reduce is canonical");
                 let b_scalar: Scalar =
                     Scalar::from_bytes_mod_order(*keys.keys.spend_sk.as_canonical_bytes());
-                let m_i: Scalar =
-                    output_spend_offset_scalar(&keys.derived.view_scalar, &PRIMARY_CLAIM_INDEX_LE);
-                let legacy_x_bytes = (ho_scalar + b_scalar + m_i).to_bytes();
+                // x = ho + b (no claim offset — output paid to the base spend key).
+                let legacy_x_bytes = (ho_scalar + b_scalar).to_bytes();
                 let legacy_y_bytes = recovered.y;
                 let legacy_z_bytes = recovered.z;
                 let legacy_combined_ss = recovered.combined_ss;
@@ -1655,12 +1684,10 @@ mod tests {
         assert_eq!(built.vin().bond_credit, floor);
         assert_eq!(built.vin().bond_debit, 0);
 
-        // ── One funding input paid to the wallet ─────────────────────────
-        let recipient_spend_pk = derived_spend_pk_for_test(
-            &keys.derived.view_scalar,
-            &keys.derived.spend_public,
-            PRIMARY_CLAIM_INDEX_LE,
-        );
+        // ── One funding input paid to the wallet (base spend key `b·G`) ──────
+        // Witness is `ho + b` (no claim offset), so the funding output is paid to
+        // the base key for the SAL open + key-image linkability to verify.
+        let recipient_spend_pk = *keys.keys.spend_pk.as_canonical_bytes();
         let input_index: u64 = 0;
         // Funding covers the change output, the fee, and the bond credit.
         let input_amount: u64 = floor + fee + 1_000_000;

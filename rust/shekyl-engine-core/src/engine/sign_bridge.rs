@@ -18,7 +18,6 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::output::construct_output;
-use shekyl_crypto_pq::output_claim::output_spend_offset_scalar;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
@@ -34,30 +33,26 @@ use super::traits::key::{
 };
 
 struct DerivedScalars {
-    view_scalar: Zeroizing<Scalar>,
     spend_public: EdwardsPoint,
 }
 
 impl DerivedScalars {
     fn from_keys(keys: &AllKeysBlob) -> Self {
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *keys.view_sk.as_canonical_bytes(),
-        ));
         let spend_public = CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
             .decompress()
             .expect("AllKeysBlob::spend_pk decompresses");
-        Self {
-            view_scalar,
-            spend_public,
-        }
+        Self { spend_public }
     }
 
-    fn change_spend_pk(&self, subaddress_index: u32) -> [u8; 32] {
-        let idx_le = subaddress_index.to_le_bytes();
-        let m = output_spend_offset_scalar(&self.view_scalar, &idx_le);
-        (self.spend_public + (&m * ED25519_BASEPOINT_TABLE))
-            .compress()
-            .to_bytes()
+    /// Spend key for a self-paid change output: the wallet's **base** spend key
+    /// `D = b·G`. V3.0 is primary-only and the spend witness carries no claim
+    /// offset (`x = ho + b`; see `LocalKeys::derive_primary_source_secrets_bundle`),
+    /// so change MUST be paid to the base key — the same key any external sender
+    /// pays to — for the wallet to detect it (scanner `B' == D`) and spend it
+    /// (SAL open) later. The pre-fix `D + m₀·G` change was unspendable AND
+    /// invisible to the scanner.
+    fn change_spend_pk(&self) -> [u8; 32] {
+        self.spend_public.compress().to_bytes()
     }
 }
 
@@ -169,7 +164,6 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
 
     let mut payment_total = 0u64;
     let mut payment_outputs: Vec<(String, u64)> = Vec::new();
-    let mut change_index: Option<u32> = None;
     for output in &tx.outputs {
         match output {
             TxOutputContext::Payment { dest, amount } => {
@@ -178,9 +172,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                     .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
                 payment_outputs.push((dest.address.clone(), *amount));
             }
-            TxOutputContext::Change { subaddress_index } => {
-                change_index = Some(*subaddress_index);
-            }
+            // V3.0 is primary-only: change always returns to the base spend key,
+            // so the requested change index (if any) carries no signing meaning.
+            TxOutputContext::Change { .. } => {}
         }
     }
 
@@ -231,12 +225,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     }
 
     if include_change {
-        let sub_idx = change_index.unwrap_or(0);
         let change_amount = leftover
             .checked_sub(fee)
             .ok_or(KeyEngineError::InsufficientFunds { shortfall: 1 })?;
         if change_amount > 0 {
-            let change_pk = derived.change_spend_pk(sub_idx);
+            let change_pk = derived.change_spend_pk();
             let built = build_output(
                 &tx_key_secret,
                 &change_pk,
@@ -275,16 +268,30 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             &input.source_ciphertext,
             input.internal_output_index,
         )?;
-        bundles.insert(input.internal_output_index, bundle);
+        // Key by the *globally unique* output identity `(tx_hash, output_index)`,
+        // NOT `internal_output_index` alone: that index is per-transaction, so a
+        // multi-input spend over coinbase outputs (each output 0 of its own tx)
+        // would collide on key 0 and clobber all-but-one bundle, pairing every
+        // input with the wrong `(x, y)`.
+        bundles.insert((input.tx_hash, input.internal_output_index), bundle);
     }
 
     let mut spend_inputs = Vec::with_capacity(tx.inputs.len());
     let mut key_images = Vec::with_capacity(tx.inputs.len());
     let mut pqc_pubkeys = Vec::with_capacity(tx.inputs.len());
 
-    for input in &tx.inputs {
+    // Consensus requires spend inputs strictly DESCENDING by key image
+    // (`blockchain.cpp:3650`; shekyl-wire validate, `transaction.rs:1547`). The
+    // FCMP++ proof binds the input order, so sort BEFORE building witnesses, key
+    // images, and the proof — one canonical order shared by the proof, the wire
+    // key-image list, and the returned per-input pseudo-outs. Distinct UTXOs ⇒
+    // distinct key images, so the strict ordering never rejects our own tx.
+    let mut sorted_inputs: Vec<_> = tx.inputs.iter().collect();
+    sorted_inputs.sort_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
+
+    for input in sorted_inputs {
         let bundle = bundles
-            .get(&input.internal_output_index)
+            .get(&(input.tx_hash, input.internal_output_index))
             .expect("bundle inserted above");
         let combined: [u8; 64] =
             bundle.combined_ss[..64]
@@ -412,4 +419,93 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         view_tags,
         tx_extra,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::local_keys::LocalKeys;
+    use shekyl_crypto_pq::kem::HybridCiphertext;
+    use shekyl_crypto_pq::output::scan_output_recover;
+
+    /// A self-paid **change** output must return to the wallet's base spend key
+    /// `D = b·G` so the wallet can both **detect** it (the scanner recovers
+    /// `B' == D`) and **spend** it (the derived witness opens `O = x·G + y·T`).
+    ///
+    /// The pre-fix change path paid to `D + m₀·G`, which is *neither*: invisible
+    /// to the scanner (which matches the base key) and unspendable (the witness
+    /// is `x = ho + b`, no offset). The whole-tx north-star did not catch it —
+    /// the daemon accepts the change output as a valid point regardless — so this
+    /// is the direct guard against reintroducing the offset on the change side.
+    #[test]
+    fn change_output_returns_to_base_and_is_detectable_and_spendable() {
+        const SEED: [u8; 32] = [7u8; 32];
+        const TX_KEY: [u8; 32] = [11u8; 32];
+        const OUT_IDX: u64 = 0;
+        const AMOUNT: u64 = 1_000_000;
+
+        let keys = LocalKeys::from_test_seed(SEED);
+        let derived = DerivedScalars::from_keys(&keys.keys);
+
+        // (1) change spend key is the bare base key — no claim offset.
+        let change_pk = derived.change_spend_pk();
+        assert_eq!(
+            change_pk,
+            *keys.keys.spend_pk.as_canonical_bytes(),
+            "change must return to the base spend key D = b·G"
+        );
+
+        // Build the change output exactly as `sign_tx` does.
+        let constructed = construct_output(
+            &TX_KEY,
+            &keys.keys.x25519_pk,
+            &keys.keys.ml_kem_ek,
+            &change_pk,
+            AMOUNT,
+            OUT_IDX,
+        )
+        .expect("construct change output");
+
+        // (2) Detectable: the scanner recovers B' == the base spend key.
+        let recovered = scan_output_recover(
+            keys.keys.view_sk.as_canonical_bytes(),
+            keys.keys.ml_kem_dk.as_canonical_bytes(),
+            &constructed.kem_ciphertext_x25519,
+            &constructed.kem_ciphertext_ml_kem,
+            &constructed.output_key,
+            &constructed.commitment,
+            &constructed.enc_amount,
+            constructed.amount_tag,
+            &constructed.enc_label,
+            constructed.label_tag,
+            constructed.view_tag_prefilter,
+            OUT_IDX,
+        )
+        .expect("scanner detects the self-paid change output");
+        assert_eq!(
+            recovered.recovered_spend_key, change_pk,
+            "scanner must recover the base spend key for change"
+        );
+
+        // (3) Spendable: the derived witness opens the output key, x·G + y·T == O.
+        let ciphertext = HybridCiphertext {
+            x25519: constructed.kem_ciphertext_x25519,
+            ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+        };
+        let bundle = keys
+            .derive_primary_source_secrets_bundle(&ciphertext, OUT_IDX)
+            .expect("derive change-output spend bundle");
+        let x: Scalar =
+            Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).expect("x canonical");
+        let y: Scalar =
+            Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_y)).expect("y canonical");
+        let o = CompressedEdwardsY(constructed.output_key)
+            .decompress()
+            .expect("O decompresses");
+        assert_eq!(
+            (&x * ED25519_BASEPOINT_TABLE) + (*shekyl_curve_generators::T * y),
+            o,
+            "change output must open with x·G + y·T == O (spendable)"
+        );
+    }
 }

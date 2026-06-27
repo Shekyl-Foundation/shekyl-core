@@ -31,9 +31,14 @@ pub struct WireEncodeInput {
     pub reference_block: [u8; 32],
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
-    /// Curve-tree depth the FCMP++ proof was built against — the prunable's
-    /// `tree_depth` (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4). The old shekyl-oxide encoder
-    /// omitted it (it put `reference_block` in the prunable instead — divergence §3.2/§3.3).
+    /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
+    /// consume). NOTE the convention split: the on-chain prunable field
+    /// `curve_trees_tree_depth` is the LMDB depth `L − 1`, so [`build_wire_tx`]
+    /// serializes `tree_depth - 1` and the daemon reconstructs
+    /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
+    /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4). The old
+    /// shekyl-oxide encoder omitted it (it put `reference_block` in the prunable
+    /// instead — divergence §3.2/§3.3).
     pub tree_depth: u8,
 }
 
@@ -162,7 +167,16 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
             pqc_auths,
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
-                tree_depth: u64::from(input.tree_depth),
+                // `input.tree_depth` is the FCMP++ proof's *layer count* `L` (what
+                // `proof::prove`/`verify` consume). The consensus wire field
+                // `curve_trees_tree_depth` is the LMDB depth `L − 1`: the daemon
+                // verifies with `fcmp_layers = curve_trees_tree_depth + 1`
+                // (`blockchain.cpp:4119`) and range-checks `1 ..= current_depth`
+                // (`:4064`). Emit `L − 1` so the range check passes and the
+                // daemon reconstructs the same layer count the proof was built
+                // against. Covers both the submitted bytes and the PQC-auth
+                // signing hash (both route through this builder).
+                tree_depth: u64::from(input.tree_depth).saturating_sub(1),
                 fcmp_proof: input.fcmp_proof.clone(),
                 pseudo_outs: input.pseudo_outs.clone(),
             }),
