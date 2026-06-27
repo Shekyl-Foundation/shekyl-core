@@ -310,6 +310,20 @@ impl LedgerIndexes {
             }
         }
 
+        // Un-mark spends orphaned by the reorg: an output (received before the fork,
+        // so it survives the removal above) whose spend CONFIRMED at a height ≥
+        // fork_height loses that confirmation — the spending tx's block is gone — and
+        // returns to the spendable pool. A later refresh re-detects the spend if the
+        // tx re-confirms on the new chain. In-flight spends (`spent_height = None`,
+        // never in a block) are left untouched: a reorg of confirmed blocks does not
+        // affect a spend that was never confirmed.
+        for td in &mut ledger.transfers {
+            if td.spent_height.is_some_and(|h| h >= fork_height) {
+                td.spent = false;
+                td.spent_height = None;
+            }
+        }
+
         ledger.reorg_blocks.blocks.retain(|(h, _)| *h < fork_height);
 
         match ledger.reorg_blocks.blocks.last() {
@@ -438,10 +452,14 @@ impl LedgerIndexes {
             ));
         }
 
-        // 3. Spent-height consistency.
+        // 3. Spend-state consistency. A spent output must carry a key image (it
+        //    cannot have been spent by us otherwise). `spent_height` is `None` while
+        //    the spend is in flight — optimistically marked at submit, before a block
+        //    confirms it — and `Some` once a refresh scans the confirming block; a
+        //    not-yet-spent output carries no spend height.
         for (i, td) in ledger.transfers.iter().enumerate() {
-            if td.spent && td.spent_height.is_none() {
-                return Err(format!("transfers[{i}] is spent but spent_height is None"));
+            if td.spent && td.key_image.is_none() {
+                return Err(format!("transfers[{i}] is spent but has no key_image"));
             }
             if let (false, Some(h)) = (td.spent, td.spent_height) {
                 return Err(format!(
@@ -680,6 +698,37 @@ mod tests {
         assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
         assert!(indexes.key_images.contains_key(&ki(0x10)));
         assert!(!indexes.key_images.contains_key(&ki(0x20)));
+    }
+
+    #[test]
+    fn handle_reorg_unmarks_orphaned_confirmed_spend_keeps_in_flight() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        // Two outputs received well before the fork, so they survive the rewind.
+        indexes.ingest_block(
+            &mut ledger,
+            100,
+            [0xAA; 32],
+            vec![
+                mk_transfer(1, 100, Some(ki(0x10))),
+                mk_transfer(2, 100, Some(ki(0x20))),
+            ],
+        );
+        // Output 0: spend CONFIRMED at height 200 (above the fork).
+        assert!(indexes.mark_spent(&mut ledger, &ki(0x10), 200));
+        // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
+        ledger.transfers[1].spent = true;
+        // Advance the tip past the fork (empty block) so the rewind is well-formed.
+        indexes.ingest_block(&mut ledger, 250, [0xBB; 32], vec![]);
+
+        indexes.handle_reorg(&mut ledger, 150);
+
+        // The orphaned CONFIRMED spend (200 ≥ 150) returns to the spendable pool.
+        assert!(!ledger.transfers[0].spent);
+        assert_eq!(ledger.transfers[0].spent_height, None);
+        // The IN-FLIGHT spend (never confirmed) is untouched by the reorg.
+        assert!(ledger.transfers[1].spent);
+        assert_eq!(ledger.transfers[1].spent_height, None);
     }
 
     #[test]
