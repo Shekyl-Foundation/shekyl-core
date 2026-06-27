@@ -2,8 +2,9 @@
 
 **Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md)
 §3.6 (2d-1 is 2d's first sub-part; this doc is the architecture round nested under it).
-**Status:** ROUND 0 (boundary — ratified) + ROUND 1 (per-SP design, §6) — for review;
-no code. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
+**Status:** ROUND 0 (boundary — ratified) + ROUND 1 (per-SP design, §6) + ROUND 2 (seam
+hardening — DQ8 union-shrink, cadence-injectable, SP-6 coverage, cover-discovery split)
+— for review; no code. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
 (firewall-load-bearing — getting the isolation boundary wrong is a privacy break, not
 a refactor, so the boundary is decided *first* and the rest derived from it).
 
@@ -214,7 +215,9 @@ per-persona `ViewPair` dropped after that persona's scan** (don't hold all `View
 copies resident at once), and the scanned set **is** the bonded-union (Model-D's existing
 surface — bounded by lookahead + bonded slots, not "every rotated persona ever"). So
 2d-1 adds **no** secret-residency surface beyond what Model-D already holds; it only adds
-the transient per-scan `ViewPair` copies, dropped per persona.
+the transient per-scan `ViewPair` copies, dropped per persona. (That this resident set stays
+bounded by *active* rather than *lifetime* bonds is **DQ8** — "bonded never wiped" needs a
+retirement condition or it is unbounded.)
 
 ### DQ6 — where the scan loop lives (no tick exists)
 
@@ -262,6 +265,36 @@ the tree if 2d-1 selects for them:
   an attacker pumps the *apparent* inflow rate and skews `C_min`, the same "corrupt the
   privacy parameter via the scan" failure, a different vector.
 
+### DQ8 — the bonded-union must be able to *shrink*: bound residency by active, not lifetime, bonds
+
+DQ5 reuses the resident bonded-union and notes "bonded never wiped." That is correct for
+**reachability** — a retired-but-still-bonded persona's funding must keep being scanned until
+its bond obligation is genuinely over. But taken alone it means the resident `view_sk` set and
+the per-sweep scan cost grow with `P`'s **lifetime** bond history, and the secret-residency
+surface **never shrinks** — the Monero subaddress-lookahead foot-gun (unbounded scan sets that
+degrade over time). Not a privacy break, but a long-run cost and a monotonically-growing
+secret surface, and there is a natural bound DQ5 doesn't use.
+
+**The bound: a persona that is genuinely *done* should leave the union** — its key out of
+residency, its funding outputs out of the re-scan set. "Done" = the persona's bond obligation
+has **terminated** *and* is **finality-deep** (beyond `archival_reorg_depth_blocks`). Two
+things this round must pin:
+
+1. **Retirement is a *positive* confirmation, never inference-from-absence** — the **same
+   discipline as SP-6**, aimed at the lifecycle: retire a persona only on an *affirmatively
+   confirmed* terminal-and-finality-deep bond state, **never** because a scan "didn't see its
+   bond" (which a transport gap or a stale source also produces). A persona wrongly retired on
+   absence stops scanning *live* collateral — the funds-loss mirror of SP-6's wrongful GC.
+2. **The terminal predicate must come from the bond lifecycle, which may not yet expose it.**
+   The retention crate has settlement-epoch machinery but **no first-class "bond fully unwound /
+   closed" terminal state** (`shekyl-archival-retention`). So either archival bonds *do* have a
+   terminal state — then retire on confirmed-terminal + finality-deep and the union shrinks to
+   **active** bonds — or they are effectively permanent, in which case the unbounded residency
+   is an **inherent cost of the retention guarantee** and must be acknowledged and the
+   per-sweep cost bounded another way (e.g. cold key material paged out, only active personas
+   hot). **Open:** resolve which, because it sets whether the scan set is bounded by active or
+   lifetime bonds. The retire-on-positive-confirmation rule holds either way.
+
 ---
 
 ## 3. SP-# enumeration (sub-parts / deliverables)
@@ -274,8 +307,8 @@ the tree if 2d-1 selects for them:
 | **SP-2** | The sealed `P`-scan **cursor** (StakingBlock-class; new version const) | DQ4; separate from `BlockchainTip`; no rollback path (DQ2 c1) |
 | **SP-3** | **Dual extractor** over one block-iteration: view-key funding outputs (a) + public bond-post match (b) | DQ2; cursor at reconcile-grade finality |
 | **SP-4** | The **per-epoch `P`-earnings-inflow accrual** (reader-a output `C_min` consumes) — from **confirmed** outputs only | DQ3/DQ7; `AccrualRecord`-modeled |
-| **SP-5** | The scan-loop **home** — `P`-scan task owning cursor + cadence + `BlockSource`; actor performs the **offloaded, non-blocking** scan-step, `view_sk` never crosses | DQ6 |
-| **SP-6** | The reconcile **interface** reader (b) hands to 2d-2 (which performs the GC) | the GC *action* is 2d-2 |
+| **SP-5** | The scan-loop **home** — `P`-scan task owning cursor, **injectable cadence**, and `BlockSource`; actor performs the **offloaded, non-blocking** scan-step, `view_sk` never crosses | DQ6; cadence injectable (no hardwired tick) |
+| **SP-6** | The reconcile **interface** reader (b) hands to 2d-2 — matches **plus a `VerifiedRange` `covered`** (absence ≠ unscanned) | the GC *action* is 2d-2; positive-confirmation only |
 
 **Scan-timing posture (DQ1, resolved — the third option, not a Round-1 binary):** Round 1
 does the **CT ownership compare** + the **swappable no-early-exit extractor seam** (SP-1a),
@@ -321,7 +354,9 @@ must police. The candidates this boundary surfaces, for Round 1 to realize:
   reopens it.
 - **A typed reconcile result for SP-6** (the public bond-post match set `P` hands 2d-2),
   distinct from the funding output set — so the two readers' outputs can't be conflated at
-  the 2d-2 boundary.
+  the 2d-2 boundary — and carrying a `VerifiedRange` `covered`, so an *absence* can only be
+  concluded where coverage was affirmatively proven; GC-from-an-unscanned-gap is
+  unrepresentable (SP-6, DQ8).
 
 The throughline: each load-bearing *don't* in §2 becomes a *can't* in the types. Round 1
 designs these alongside the per-SP work, not as a cleanup pass after.
@@ -333,10 +368,21 @@ designs these alongside the per-SP work, not as a cleanup pass after.
 - **North-Star-independent.** 2d-1 is read-side; it never broadcasts, so it does **not**
   wait on the daemon-accept gate (`e2e_fcmp_spend_accepted_by_daemon`). It parallelizes
   the active North-Star work.
-- **Three consumers hang off it:** 2d-2's reconcile (consumes SP-3/SP-6), steady-state
-  fund-from-earnings (consumes SP-1/SP-4), and the cover's `C_min` (consumes SP-4). The
-  cover design is otherwise complete (PR #192) — `C_min` is its one unset magnitude, and
-  it is unset *because* SP-4 does not exist yet.
+- **Consumers hang off it — and they do *not* share a completeness profile.** Three are
+  **lag-tolerant**: 2d-2's reconcile (SP-3/SP-6), steady-state fund-from-earnings (SP-1/SP-4),
+  and the cover's `C_min` sizing (SP-4). The cover design is otherwise complete (PR #192) —
+  `C_min` is its one unset magnitude, unset *because* SP-4 does not exist yet.
+- **A fourth consumer is *not* lag-tolerant: cover-output *discovery* (the cold-start gate).**
+  Before `P` can ever stake, it must **scan-discover its own `bond_floor + cover` output**,
+  finality-deep — a hard *must-discover-before-proceeding*, not a "delays a re-stake" like
+  reader (a). The failure case the lag framing hides: if the funding scan **misses** the cover
+  output (transport gap, a pruned source, or an FA-6 false-negative — so **verify the
+  `Guaranteed` variant's completeness guarantee covers the cover output's *form***), `P` is
+  stranded at cold-start with funds it cannot see, and the only recovery is re-funding from the
+  principal — **a second cold-start link, the exact correlation the cover exists to prevent.**
+  Missing a steady-state output delays a re-stake; missing the *cover* output forces a re-link.
+  So cover-discovery owns its own completeness assertion, separate from reader (a)'s
+  lag-tolerance, and composes with the `archival_reorg_depth_blocks` latency (DQ2 c2).
 
 ---
 
@@ -537,6 +583,18 @@ bond-post** match (`p_canonical_id` cleartext, no secret). The cursor advances a
 `BlockSource`; the **actor** is the `view_sk` vault and *performs* the per-batch scan-step.
 `view_sk` never crosses the actor boundary — only **public** results come back.
 
+**Cadence is an injectable, not a hardwired tick (don't foreclose the third fetch-layer
+leak).** SP-0 closed output-*selectivity* and the forward-note closes fetch-*order*; the
+third fetch-layer side channel is *when and how often* `P` scans. A task that wakes on a
+fixed wall-clock tick, on wallet-open, or bursts right after a bond it cares about lands has
+a **timing signature on the wire** (under Arti: the connection's existence and request
+rhythm) that correlates with `P`'s lifecycle even though no single request is selective —
+the pattern-deanonymization lesson Lightning and Monero both learned. Fixing it is 2d-2's
+job (it's network-observable), but **not foreclosing it is 2d-1's:** SP-5 must take its
+cadence as an **injected schedule** (a `ScanSchedule`/clock trait), so 2d-2 can later make it
+constant-rate or jittered — it must **not** bake a `tokio::time::interval` or a scan-on-open
+trigger into the task. Cheap now; a retrofit once the task hardcodes its own timer.
+
 ```rust
 /// Public input — heights only. No secrets, and (SP-4) NO `PFundingInflow` inbound.
 struct ScanStep { range: BlockRange }    // BOUNDED per message (DQ6)
@@ -579,19 +637,46 @@ data, never keys — consistent with `PersonaIdentity` being public-only.
 
 ---
 
-### SP-6 — `PReconcileSet`: typed, distinct from the funding output set
+### SP-6 — `PReconcileSet`: typed, distinct, *and* carries the range it can vouch for (absence ≠ unscanned)
+
+The dangerous failure here is **availability masquerading as truth**. SP-6 feeds 2d-2's GC of
+phantom `bonded_slots`. If `P`'s isolated transport is down, censored, or the daemon serves a
+truthful-but-**stale** or selectively-**pruned** view, the reconcile sees *fewer* bond-posts
+than exist — and a GC that reasons "I didn't find this bond, so it's phantom" then
+**garbage-collects *real* collateral** on a transport outage. The finality horizon defends
+against reorgs, **not** against an adversarially-incomplete source. Monero and Zcash both treat
+"my view of the chain may be incomplete" as a first-class scanner assumption; an archival
+staker behind an isolated, censorship-prone transport is *more* exposed, not less.
+
+So `PReconcileSet` must carry **not just the matches but the range `P` can affirmatively vouch
+it completely scanned, from a source verified against the consensus root** — and the GC
+(2d-2) must be a **positive** operation: GC only a slot it *affirmatively confirmed absent over
+a range it provably covered*, **never** inferred from absence. A missing bond-post must be
+**distinguishable from an unscanned one** — the "absence of a claim is not a claim of absence"
+rule, aimed at the reconcile. The type makes the distinction unrepresentable to lose:
 
 ```rust
-/// The public bond-posts matching `P`'s `p_canonical_id`s, in the scanned range —
-/// the reconcile input `P` hands 2d-2 (which performs the GC). A DISTINCT type from
-/// the funding `OwnedOutput` set, so the two readers' outputs cannot be conflated
-/// at the 2d-2 boundary.
-pub struct PReconcileSet { matched_posts: Vec<MatchedBondPost> }
+/// A height range `P` AFFIRMATIVELY, completely scanned from a source checked against
+/// the consensus root — constructible only by the verified scan path, never by hand.
+pub struct VerifiedRange { low: BlockHeight, high: BlockHeight /* + root-anchor proof */ }
+
+/// The reconcile input `P` hands 2d-2. DISTINCT from the funding `OwnedOutput` set, and
+/// it carries its own coverage: matches are claims of PRESENCE; `covered` bounds where an
+/// *absence* may be concluded. 2d-2 may GC a slot ONLY if its height ∈ `covered` and no
+/// matched post claims it — outside `covered`, absence means "unscanned," not "phantom."
+pub struct PReconcileSet {
+    covered: VerifiedRange,
+    matched_posts: Vec<MatchedBondPost>,
+}
 ```
 
-**Enforcement point:** the type distinction — `PReconcileSet` ≠ funding output set, so
-2d-2's GC cannot be fed a funding output by mistake, and a bond-post cannot be counted as
-funding inflow. (The GC *action* is 2d-2; 2d-1 produces only this typed input.)
+**Enforcement point:** (a) the type distinction — `PReconcileSet` ≠ funding set, so the two
+readers' outputs can't be conflated; and (b) **coverage is carried, not assumed** — `covered`
+is constructible only by the verified scan path, and the GC contract keys "confirmed-absent"
+on `height ∈ covered`, so *GC-from-an-unscanned-gap is unrepresentable*. This is the most
+likely place 2d-1's design, as scoped, would otherwise lead to a real downstream bug; the
+positive-confirmation GC *action* is 2d-2, but the type that forces it is pinned here. (DQ8's
+persona-retirement is the same rule on the lifecycle side — never retire on absence.)
 
 ---
 
@@ -637,6 +722,14 @@ not as work for it.
   output-*selectivity* (SP-0), but 2d-2's impl must additionally fetch **sequentially**, never
   in any output-correlated order. Not a 2d-1 issue — a constraint carried to the same trait's
   2d-2 implementation.
+- **Scan *cadence* fingerprint (2d-2 constraint; SP-5 keeps it open).** The third fetch-layer
+  leak after selectivity and order: *when/how often* `P` scans is a wire-pattern that
+  correlates with `P`'s lifecycle. 2d-2 makes the injected `ScanSchedule` constant-rate or
+  jittered; SP-5's only obligation now is to keep cadence injectable (no hardwired tick).
+- **Positive-confirmation GC semantics (2d-2 consumes SP-6).** 2d-2 must GC a slot only when
+  it is *affirmatively confirmed absent within `PReconcileSet.covered`*, never from absence
+  outside the vouched range — the type pins the distinction, 2d-2 honors it. Same rule binds
+  DQ8's persona-retirement.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
