@@ -673,11 +673,15 @@ sustainability is unaffected by the recalibration.
   **locally-built fixed `shekyld`**: the depth-3 regtest reached daemon depth 2 (701
   leaves), the wallet `refresh` succeeded over the depth-3 tree (the root mismatch is
   gone), and the daemon **accepted** a wallet-built FCMP++ spend over that tree
-  (`e2e_fcmp_spend_over_depth3_tree` is green). **TODO in the same fix:** `BlockchainLMDB::trim_curve_tree`
-  (the reorg path) has the identical buggy incremental-upper propagation and needs the
-  same FFI recompose **plus stale-upper-chunk deletion** (trim shrinks the tree). It is
-  self-healed by the next `grow` (which now recomputes every upper layer), but a
-  pure-trim-then-query state would still report a wrong root until then.
+  (`e2e_fcmp_spend_over_depth3_tree` is green). **TRIM FIX VALIDATED (PR #197):**
+  `BlockchainLMDB::trim_curve_tree` (the reorg path) had the identical buggy
+  incremental-upper propagation; it now uses the **same FFI recompose** as grow, plus
+  a cursor delete of every `layer >= 1` chunk before rewriting (trim shrinks the tree,
+  so stale upper chunks must not survive). Validated by `e2e_trim_curve_tree_restores_grow_root`:
+  grow to depth-2 across a leaf-chunk boundary, grow further, then `pop_blocks` back —
+  the trimmed root equals the grow root exactly (`trim == grow⁻¹`; grow is the proven
+  `== build_layers` reference). The dead in-place propagation + the now-unused
+  `ct_layer_is_selene` helper were removed.
   **PERF FOLLOW-UP (not a consensus change):** `grow`/`trim` currently recompose ALL
   upper layers each block — O(num_leaf_chunks) LMDB reads + O(num_leaf_chunks/17)
   hashing — fine at genesis/early scale but a bottleneck on a long-lived chain.

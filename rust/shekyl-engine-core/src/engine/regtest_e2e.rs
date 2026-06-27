@@ -736,7 +736,7 @@ async fn mainnet_wallet(
 ///
 /// Drives by the daemon's **observed tree depth** (`get_curve_tree_info.depth`,
 /// which is `fcmp_layers - 1`, so depth-3 = daemon depth 2), not a hardcoded
-/// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 38`… in
+/// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 18`… in
 /// practice ~684–701 drained leaves (~750 blocks, several minutes — a slow gate).
 ///
 /// **Validates the depth-3 fix (was the #162 reopening trigger).** Before the
@@ -830,10 +830,20 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     // FCMP_MAX_INPUTS (8). Spend a small amount so the input count stays bounded —
     // the spend AMOUNT is irrelevant to what this gate validates (a daemon-accepted
     // spend over a depth-3 tree); the depth is.
+    // `unlocked` is far above the fee/dust floor (a depth-2+ tree means ~700 matured
+    // coinbase outputs), so /500 is non-zero in practice; assert it so a degenerate
+    // 0-amount request can never silently fail for a reason unrelated to the depth-3
+    // gate. (Clamping to 1 au instead, as suggested, would build an invalid sub-fee
+    // spend.)
+    let spend_amount = unlocked.to_raw() / 500;
+    assert!(
+        spend_amount > 0,
+        "depth-3 tree must yield a non-trivial spendable balance; got unlocked={unlocked:?}"
+    );
     let request = TxRequest {
         recipients: vec![TxRecipient {
             address: address.clone(),
-            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 500),
+            amount_atomic_units: AtomicUnits::from_raw(spend_amount),
         }],
         priority: FeePriority::Standard,
     };
@@ -875,6 +885,98 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     };
     eprintln!("daemon accepted depth-{tree_depth} spend: {tx_hash:?}");
     daemon.generate_blocks(1, &address).await;
+}
+
+/// Trim (reorg) self-consistency: popping the chain back to an earlier height must
+/// restore the EXACT curve-tree root that growing to that height produced. Grow is
+/// validated as consensus-correct (`e2e_fcmp_spend_over_depth3_tree`), so a trim that
+/// reproduces the grow root is itself correct — `trim == grow⁻¹`. The reorg crosses a
+/// Selene leaf-chunk boundary, so the pop-back recomposes the upper layer rather than
+/// only trimming a partial leaf chunk — exercising the `db_lmdb::trim_curve_tree` →
+/// `shekyl_curve_tree_grow_upper_layers` rewiring (the reorg twin of the grow fix:
+/// the old in-place incremental upper propagation had the same drop-the-sibling
+/// defect). Runs at depth-2 (a few minutes); the depth-3 deepening uses the identical
+/// FFI already validated by the grow gate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (depth-2 mine, a few min)"]
+async fn e2e_trim_curve_tree_restores_grow_root() {
+    // SELENE_CHUNK_WIDTH — outputs per Selene leaf node (a leaf-chunk boundary).
+    const SELENE_CHUNK_WIDTH: u64 = 38;
+    const MINE_BATCH_BLOCKS: u64 = 20;
+    const MAX_MINE_BATCHES: usize = 30;
+
+    async fn tree_info(daemon: &RegtestDaemon) -> (u8, u64, String) {
+        let info: serde_json::Value = daemon
+            .rpc
+            .json_rpc_call("get_curve_tree_info", None)
+            .await
+            .expect("get_curve_tree_info");
+        let depth = info
+            .get("depth")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|d| u8::try_from(d).ok())
+            .unwrap_or(0);
+        let leaf_count = info
+            .get("leaf_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let root = info
+            .get("root")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        (depth, leaf_count, root)
+    }
+
+    let daemon = RegtestDaemon::start().await;
+    let (_wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+
+    // Grow to depth-2 with >= 2 Selene leaf chunks, then record the anchor state.
+    let mut anchor = None;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        let (depth, leaf_count, root) = tree_info(&daemon).await;
+        if depth >= 1 && leaf_count >= 2 * SELENE_CHUNK_WIDTH {
+            anchor = Some((daemon.height().await, depth, leaf_count, root));
+            break;
+        }
+    }
+    let (anchor_height, anchor_depth, anchor_leaf, anchor_root) =
+        anchor.expect("tree must reach depth-2 with >= 2 leaf chunks");
+    eprintln!(
+        "anchor: height={anchor_height} depth={anchor_depth} leaf_count={anchor_leaf} root={anchor_root}"
+    );
+
+    // Grow >= 1 more leaf-chunk boundary so the pop-back must recompose the upper
+    // layer (not merely trim a single partial leaf chunk).
+    let target_leaf = anchor_leaf + SELENE_CHUNK_WIDTH;
+    let mut grew = false;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        if tree_info(&daemon).await.1 >= target_leaf {
+            grew = true;
+            break;
+        }
+    }
+    assert!(grew, "tree must grow >= 1 more leaf chunk past the anchor");
+    let grown_height = daemon.height().await;
+    assert!(grown_height > anchor_height, "chain must have advanced");
+
+    // Reorg back to the anchor height: trim must restore the grow state exactly.
+    daemon.pop_blocks(grown_height - anchor_height).await;
+    let (depth, leaf_count, root) = tree_info(&daemon).await;
+    eprintln!(
+        "after pop to height {anchor_height}: depth={depth} leaf_count={leaf_count} root={root}"
+    );
+    assert_eq!(
+        leaf_count, anchor_leaf,
+        "trim must restore the anchor leaf count"
+    );
+    assert_eq!(depth, anchor_depth, "trim must restore the anchor depth");
+    assert_eq!(
+        root, anchor_root,
+        "trim must restore the EXACT grow root (consensus-critical: trim == grow⁻¹)"
+    );
 }
 
 // ===========================================================================
