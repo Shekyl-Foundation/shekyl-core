@@ -641,16 +641,30 @@ sustainability is unaffected by the recalibration.
   regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
   curve tree to depth-3 (daemon depth 2 = 3 layers; 701 drained leaves, height 760)
   and the wallet `refresh` then **failed**: `CurveTreeIngest { context: "curve-tree
-  root mismatch vs header" }`. The wallet's **native** curve-tree reconstruction
-  (`CurveTreeClient` verify-at-ingest, `merge.rs`) diverges from the daemon's header
-  root at the **Selene branch** layer — the depth-3 case the depth-2 padding fix did
-  not cover for the tree *build* (vs the `prove` path #162 patched). **This is
-  consensus-critical: a wallet cannot sync past depth-3** (≈701 outputs — reached
-  fast on mainnet). Repro + acceptance gate is the depth-3 test (currently RED,
-  `#[ignore]`d). **Next:** diff the wallet `build_layers` partial-Selene-branch chunk
-  handling against the daemon `grow_curve_tree`; the likely fix mirrors #162 (zero-pad
-  the partial branch chunk) but in the **root construction**, not the proof. Must be
-  validated against the live daemon header root before genesis freeze.
+  root mismatch vs header" }`. The wallet's `CurveTreeClient` reconstruction (built
+  on the narrow-from-init `build_layers`) diverges from the daemon's header root at
+  the **layer-2 Selene branch**. **This is consensus-critical: a wallet cannot sync
+  past depth-3** (≈685 outputs — reached fast on mainnet).
+  **ROOT-CAUSED 2026-06-27 (all-Rust triangulation, no mining) — the DAEMON is the
+  bug, NOT `build_layers`.** `build_layers` is the narrow reference by definition
+  (`try_build_upper_layers` tree.rs:330-348 — `hash_grow(init, 0, ZERO, [all converted
+  children])`, no padding). The consensus defect is `BlockchainLMDB::grow_curve_tree`'s
+  **deepening propagation** (db_lmdb.cpp:6594-6719): it propagates only *updated*
+  chunks, so when the 685th leaf forces the first layer-2 Selene root, the pre-existing
+  Helios sibling (chunk 0 = the first 684 leaves) is omitted (fine cadence) or
+  phantom-subtracted (coarse cadence: a fresh parent chunk wrongly uses
+  `old_scalar = conv(child.old_hash)` instead of ZERO). Confirmed in-process by a
+  faithful `grow_curve_tree` replica in `shekyl-fcmp/tests/curve_tree_freeze.rs`
+  (`daemon_incremental_matches_batch_through_depth2` = faithfulness floor;
+  `daemon_incremental_drops_existing_sibling_at_depth3_deepen` = the layer-2 divergence,
+  with the exact omission pinned). **Do NOT conform `build_layers` to the daemon —
+  that would freeze a consensus defect at genesis (#162-retraction discipline).
+  Fix the producer:** a newly-created parent chunk must build from ALL its children
+  (old_scalar ZERO), reachable via deepen. Best disposition (rules 20 / consensus-port):
+  move the tree-grow orchestration into Rust (a correct `shekyl_curve_tree_grow` that
+  mirrors `build_layers`) rather than patch the C++. Changes the genesis header root ⇒
+  consensus cutover; regenerate any depth-3 fixtures. Repro/acceptance: the depth-3
+  regtest gate (`e2e_fcmp_spend_over_depth3_tree`, RED) + the curve_tree_freeze replica.
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future
