@@ -28,6 +28,7 @@ use shekyl_crypto_pq::{
 };
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_units::AtomicUnits;
+use subtle::ConstantTimeEq;
 
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
 
@@ -641,9 +642,22 @@ impl InternalScanner {
             };
 
             // --- Primary-account claim via recovered spend key B' ---
+            // Constant-time compare: `recovered_spend_key` is derived from secret
+            // scan material, so a variable-time `!=` would leak, via per-byte
+            // timing, whether this output is ours. The result branch ("is it ours")
+            // is the inherent ownership decision; what must not leak is *where* the
+            // bytes first differ. (SP-1a, `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 —
+            // the cheap, correct-regardless half of the DQ1 third option. The
+            // dominant pre-filter early-exit channel is addressed separately, by
+            // the deferred no-early-exit extractor behind the SP-1a seam.)
             let recovered_b_compressed: CompressedPoint =
                 CompressedPoint(recovered.recovered_spend_key);
-            if recovered_b_compressed != self.primary_spend_compressed {
+            let is_ours: bool = recovered_b_compressed
+                .0
+                .as_slice()
+                .ct_eq(self.primary_spend_compressed.0.as_slice())
+                .into();
+            if !is_ours {
                 continue;
             }
 
