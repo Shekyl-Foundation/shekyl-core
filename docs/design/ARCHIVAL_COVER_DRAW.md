@@ -1009,5 +1009,13 @@ span(C) = 0                                   for C ≤ 13
 (`--cover-dial`): `C=14 → 0.005 SKL` (gentle decay, no jump), `25 → 0.65`, `46 → 3.75`,
 `60 → 5.99`, `79 → 7.50` (cap). Golden vector pinned (`cover_dial_span_golden_vector`); tests
 assert monotone-and-capped and the second-difference sign (convex into the tail = decay, concave
-into the cap = no kink). C4 ports this verbatim into `shekyl-standoff` — *one* source, so it
-can't diverge and re-open the uniformity break.
+into the cap = no kink). **C4 landed:** `draw_cover_amount(count, c_min, rng)` +
+`cover_dial_span_atomic` in `shekyl-standoff::cover` (`cover ~ U[C_min, C_min + span(C)]`
+via the shared `bounded_uniform`). The three implementation checks are its acceptance tests,
+not open decisions: **variable-span uniformity** (`bounded_uniform` is exact rejection for
+any bound, golden-vectored at tail/mid/cap spans), **tail smoothness** (`span = 0 ⇒
+cover = C_min` exactly, the continuous `span→0` limit; the first non-zero span ~5.1M atomic
+is no near-constant), and **`C_min` single-sourced** (`COVER_RUNWAY_FLOOR_ATOMIC`, provisional
+pending the 2d-1 ramp; the cover golden vector is provisional-until-`C_min`-lands). The
+`shekyl-staking-sim` copy is independently golden-vectored to the same values, so the two
+can't silently diverge.
