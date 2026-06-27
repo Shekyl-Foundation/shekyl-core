@@ -6780,7 +6780,6 @@ void BlockchainLMDB::trim_curve_tree(uint64_t num_outputs_to_remove)
     if (remaining_in_chunk == 0)
     {
       // Entire chunk removed — delete it from the leaf layer.
-      mdb_del(*m_write_txn, m_curve_tree_layers, nullptr, nullptr);
       MDB_val k = {sizeof(layer_key), (void *)&layer_key};
       mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
     }
@@ -6859,23 +6858,41 @@ void BlockchainLMDB::trim_curve_tree(uint64_t num_outputs_to_remove)
   // chunks than the new one. Delete every existing upper-layer chunk (layer >= 1)
   // before rewriting; layer 0 (the leaf chunks read above) is kept. Without this a
   // shrinking tree would leave stale chunks beyond the new structure.
+  //
+  // Two passes — collect the upper-layer keys, then delete by key — rather than
+  // deleting through the cursor mid-scan. The read pass starts at MDB_FIRST (a fresh
+  // cursor is unpositioned), advances with MDB_NEXT, and treats any terminating code
+  // other than MDB_NOTFOUND as fatal, so the cleanup can't silently stop early and
+  // leave stale chunks.
   {
-    MDB_cursor *cur;
-    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to open cursor to clear upper layers in trim: ", result).c_str()));
-    MDB_val k, v;
-    while (mdb_cursor_get(cur, &k, &v, MDB_NEXT) == 0)
+    std::vector<uint64_t> stale_upper_keys;
     {
-      if (k.mv_size == sizeof(uint64_t))
+      MDB_cursor *cur;
+      int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to open cursor to clear upper layers in trim: ", result).c_str()));
+      MDB_val k, v;
+      int rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+      for (; rc == 0; rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT))
       {
+        if (k.mv_size != sizeof(uint64_t))
+          continue;
         uint64_t key_val;
         memcpy(&key_val, k.mv_data, sizeof(uint64_t));
         if ((key_val >> 56) >= 1)
-          mdb_cursor_del(cur, 0);
+          stale_upper_keys.push_back(key_val);
       }
+      mdb_cursor_close(cur);
+      if (rc != MDB_NOTFOUND)
+        throw0(DB_ERROR(lmdb_error("Failed to scan curve tree layers in trim: ", rc).c_str()));
     }
-    mdb_cursor_close(cur);
+    for (uint64_t stale_key : stale_upper_keys)
+    {
+      MDB_val k = {sizeof(stale_key), (void *)&stale_key};
+      int result = mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
+      if (result && result != MDB_NOTFOUND)
+        throw0(DB_ERROR(lmdb_error("Failed to delete stale curve tree upper chunk in trim: ", result).c_str()));
+    }
   }
 
   // The total upper-layer chunk count is at most num_leaf_chunks (equal only for a
