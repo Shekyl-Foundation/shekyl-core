@@ -1248,6 +1248,156 @@ pub fn run_targeting_report() -> TargetingReport {
     targeting_attack()
 }
 
+// ===========================================================================
+// Dispersion-value (§7.9): does count ALONE leave material anonymity on the
+// table vs count + a coarse GLOBAL dispersion scalar? §7.4 showed clustered vs
+// dispersed was load-bearing (2.1% vs 6.8% thin-tail) — but the count can't tell
+// them apart (same N_P, different spread → same uniform D). A global dispersion
+// scalar (effective-occupied-rungs) converts count into density without exposing
+// a per-rung lever (the attacker must move a whole-population measure, §7.9). The
+// arm measures the gap count-only leaves and whether count+dispersion closes it,
+// so the enrichment is taken only if it earns its place.
+// ===========================================================================
+
+/// Effective occupied rungs via the occupancy **inverse-participation-ratio**:
+/// `(Σ n_r)² / Σ n_r²` over per-rung occupancies `n_r` (`Σ n_r = N_P`). Ranges
+/// from `1` (all bonds on one rung — fully clustered) to `N_P` (one per rung —
+/// fully dispersed), so it is a far sharper spread discriminator than a raw
+/// distinct-rung count. A whole-population measure (no per-rung handle), so it
+/// keeps the §7.9 targeting-resistance.
+fn effective_occupied_rungs(pop: &[i64]) -> f64 {
+    let mut v: Vec<i64> = pop.to_vec();
+    v.sort_unstable();
+    let mut sum_sq = 0.0;
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i + 1;
+        while j < v.len() && v[j] == v[i] {
+            j += 1;
+        }
+        let n = (j - i) as f64;
+        sum_sq += n * n;
+        i = j;
+    }
+    let total = pop.len() as f64;
+    if sum_sq <= 0.0 {
+        1.0
+    } else {
+        total * total / sum_sq
+    }
+}
+
+/// Width to gather `target` neighbours at density `n_p / span`, clamped. The
+/// count-only response uses a fixed reference span (blind to spread); the
+/// count+dispersion response uses the realised occupied-rungs.
+fn density_width(target: f64, span: f64, n_p: f64) -> u64 {
+    const K_MIN: f64 = 2.0;
+    const K_SAT: f64 = 32.0;
+    if n_p <= 0.0 {
+        return K_MIN as u64;
+    }
+    (target * span.max(1.0) / n_p).clamp(K_MIN, K_SAT).round() as u64
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DispersionRow {
+    pub shape: Dispersion,
+    /// Mean distinct occupied rungs (the dispersion signal).
+    pub occ_rungs: f64,
+    /// count-only: one width from `N_P` and a fixed reference span (blind to spread).
+    pub width_count_only: f64,
+    pub set_count_only: f64,
+    /// count + dispersion: width from `N_P` and the realised occupied-rungs.
+    pub width_count_disp: f64,
+    pub set_count_disp: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DispersionReport {
+    pub n_p: u64,
+    pub mean_shards: f64,
+    pub target_set: f64,
+    pub span_ref: f64,
+    pub rows: Vec<DispersionRow>,
+    /// Spread of realised set across the clustered↔dispersed bracket, count-only.
+    pub gap_count_only: f64,
+    /// …and with the dispersion scalar — does it close the gap?
+    pub gap_count_disp: f64,
+}
+
+fn dispersion_value() -> DispersionReport {
+    let (_, n_p, mean) = SCENARIOS[0]; // thin corner.
+    let target = 8.0;
+    let trials = 60_000u64;
+    let shapes = [Dispersion::Clustered, Dispersion::Dispersed];
+
+    // Reference span = mean occupied-rungs across both shapes — the best a
+    // spread-blind count-only response can assume.
+    let mut warm = SplitMix64::new(0x0D15_0001);
+    let mut span_acc = 0.0;
+    let mut span_n = 0u64;
+    let mut pop: Vec<i64> = Vec::with_capacity(n_p as usize);
+    for &shape in &shapes {
+        for _ in 0..15_000 {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut warm, mean, shape) as i64));
+            span_acc += effective_occupied_rungs(&pop);
+            span_n += 1;
+        }
+    }
+    let span_ref = span_acc / span_n as f64;
+
+    let mut rows = Vec::new();
+    let mut seed = 0x0D15_1000u64;
+    for &shape in &shapes {
+        let mut rng = SplitMix64::new(seed);
+        seed += 1;
+        let (mut occ, mut wc, mut sc, mut wd, mut sd) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for _ in 0..trials {
+            pop.clear();
+            pop.extend((0..n_p).map(|_| draw_shard_count(&mut rng, mean, shape) as i64));
+            let span = effective_occupied_rungs(&pop);
+            let victim = (rng.next_u64() % n_p) as usize;
+
+            let w_count = density_width(target, span_ref, n_p as f64); // blind to spread.
+            let w_disp = density_width(target, span, n_p as f64); // spread-aware.
+
+            occ += span;
+            wc += w_count as f64;
+            wd += w_disp as f64;
+            sc += victim_realized_set(&mut rng, &pop, victim, w_count);
+            sd += victim_realized_set(&mut rng, &pop, victim, w_disp);
+        }
+        let t = trials as f64;
+        rows.push(DispersionRow {
+            shape,
+            occ_rungs: occ / t,
+            width_count_only: wc / t,
+            set_count_only: sc / t,
+            width_count_disp: wd / t,
+            set_count_disp: sd / t,
+        });
+    }
+
+    let gap = |get: &dyn Fn(&DispersionRow) -> f64| (get(&rows[0]) - get(&rows[1])).abs();
+    let gap_count_only = gap(&|r| r.set_count_only);
+    let gap_count_disp = gap(&|r| r.set_count_disp);
+
+    DispersionReport {
+        n_p,
+        mean_shards: mean,
+        target_set: target,
+        span_ref,
+        rows,
+        gap_count_only,
+        gap_count_disp,
+    }
+}
+
+pub fn run_dispersion_report() -> DispersionReport {
+    dispersion_value()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1404,6 +1554,19 @@ mod tests {
         assert_eq!(base.attacker_bonds, 0);
         assert!(base.count_uniform_set >= 1.0 && base.histogram_set >= 1.0);
         assert!(base.count_uniform_mod_set >= 1.0 && base.histogram_mod_set >= 1.0);
+    }
+
+    #[test]
+    fn dispersion_scalar_separates_shapes_and_narrows_the_gap() {
+        // The dispersion signal distinguishes the shapes (dispersed occupies more
+        // rungs), and feeding it into the width closes the realized-set gap that a
+        // spread-blind count-only response leaves between clustered and dispersed.
+        let r = dispersion_value();
+        let clustered = &r.rows[0];
+        let dispersed = &r.rows[1];
+        assert_eq!(clustered.shape, Dispersion::Clustered);
+        assert!(dispersed.occ_rungs > clustered.occ_rungs);
+        assert!(r.gap_count_disp <= r.gap_count_only + 1e-9);
     }
 
     #[test]

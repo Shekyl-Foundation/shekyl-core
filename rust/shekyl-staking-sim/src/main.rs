@@ -896,6 +896,58 @@ fn print_cover_targeting_report() {
     }
 }
 
+fn print_cover_dispersion_report() {
+    use cover::Dispersion;
+    let shape = |d: Dispersion| match d {
+        Dispersion::Clustered => "clustered",
+        Dispersion::Dispersed => "dispersed",
+    };
+    let report = cover::run_dispersion_report();
+    eprintln!("shekyl-staking-sim — statistic DQ: does count need the dispersion scalar? (§7.9)");
+    eprintln!("Count alone can't tell clustered from dispersed (same N_P, different spread → same");
+    eprintln!(
+        "  uniform D). A global dispersion scalar (occupied-rungs) converts count → density. We"
+    );
+    eprintln!(
+        "  size for target set {:.0} at the thin N_P corner; count-only assumes a fixed reference",
+        report.target_set
+    );
+    eprintln!(
+        "  span ({:.1}), count+disp reads the realised occupied-rungs. set = victim realised set.",
+        report.span_ref
+    );
+    eprintln!();
+    eprintln!(
+        "{:>10} {:>8} | {:>8} {:>8} | {:>8} {:>8}",
+        "shape", "occRung", "cntWid", "cntSet", "dispWid", "dispSet",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "{:>10} {:>8.1} | {:>8.1} {:>8.2} | {:>8.1} {:>8.2}",
+            shape(r.shape),
+            r.occ_rungs,
+            r.width_count_only,
+            r.set_count_only,
+            r.width_count_disp,
+            r.set_count_disp,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Clustered↔dispersed realised-set gap: count-only = {:.2}, count+dispersion = {:.2}.",
+        report.gap_count_only, report.gap_count_disp
+    );
+    eprintln!(
+        "Decision: if count-only leaves a material gap that count+dispersion closes, the scalar"
+    );
+    eprintln!("  earns its place (still global ⇒ targeting-resistant, §7.9). If the gap is small,");
+    eprintln!("  count alone suffices — take the simpler statistic.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-dispersion report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -919,6 +971,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover-targeting") {
         print_cover_targeting_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-dispersion") {
+        print_cover_dispersion_report();
         return;
     }
 
