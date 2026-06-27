@@ -224,6 +224,7 @@ pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
+pub(crate) mod pscan;
 pub mod refresh;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
