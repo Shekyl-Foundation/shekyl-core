@@ -6603,8 +6603,10 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
     MDB_val k = {sizeof(layer_key), (void *)&layer_key};
     MDB_val v;
     int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
-    if (result != 0 || v.mv_size != 32)
-      throw0(DB_ERROR("Failed to read curve tree leaf chunk for upper-layer recompose"));
+    if (result != 0)
+      throw0(DB_ERROR(lmdb_error("Failed to read curve tree leaf chunk for upper-layer recompose: ", result).c_str()));
+    if (v.mv_size != 32)
+      throw0(DB_ERROR("Curve tree leaf chunk has unexpected size (expected 32 bytes)"));
     memcpy(leaf_chunks.data() + static_cast<size_t>(c) * 32, v.mv_data, 32);
   }
 
@@ -6660,6 +6662,8 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
 
   {
     // depth = number of layers above the leaf (consensus: fcmp_layers = depth + 1).
+    if (num_upper_layers > 0xff)
+      throw0(DB_ERROR("Curve tree depth exceeds uint8_t range (FFI returned an impossible layer count)"));
     const std::string depth_key = "depth";
     const uint8_t depth = static_cast<uint8_t>(num_upper_layers);
     MDB_val k = {depth_key.size(), (void *)depth_key.data()};

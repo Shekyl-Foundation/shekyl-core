@@ -2955,8 +2955,11 @@ pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
 ///
 /// Output sizes are deterministic from `num_leaf_chunks` via the
 /// SELENE/HELIOS chunk-width ladder, so the caller pre-allocates:
-/// - `out_chunks_ptr`: upper-layer chunk hashes, layer 1 first then layer 2…, 32B each;
-/// - `out_layer_sizes_ptr`: chunk count per upper layer (`*out_num_upper_layers` entries);
+/// - `out_chunks_ptr` / `out_chunks_capacity`: capacity is a **count of 32-byte
+///   chunks** (not bytes); upper-layer chunk hashes are written layer 1 first then
+///   layer 2…, 32B each;
+/// - `out_layer_sizes_ptr` / `out_layer_sizes_capacity`: capacity is a **count of
+///   `u64` entries**; one chunk-count per upper layer (`*out_num_upper_layers` total);
 /// - `out_num_upper_layers`: number of upper layers written;
 /// - `out_root_ptr`: the 32B consensus root.
 ///
@@ -2985,21 +2988,41 @@ pub unsafe extern "C" fn shekyl_curve_tree_grow_upper_layers(
         return false;
     }
 
-    let n = usize::try_from(num_leaf_chunks).unwrap_or(0);
-    let leaf_chunks: Vec<[u8; 32]> = (0..n)
-        .map(|i| unsafe {
-            let mut b = [0u8; 32];
-            std::ptr::copy_nonoverlapping(leaf_chunks_ptr.add(i * 32), b.as_mut_ptr(), 32);
-            b
-        })
-        .collect();
+    // Every count must fit usize, and the input byte length must not overflow —
+    // fail closed rather than silently treating overflow as 0 (this is an exported,
+    // untrusted-caller boundary).
+    let (Ok(n), Ok(out_chunks_cap), Ok(out_sizes_cap)) = (
+        usize::try_from(num_leaf_chunks),
+        usize::try_from(out_chunks_capacity),
+        usize::try_from(out_layer_sizes_capacity),
+    ) else {
+        return false;
+    };
+    let Some(in_bytes) = n.checked_mul(32) else {
+        return false;
+    };
+
+    // Read the leaf-chunk layer through a slice — no raw pointer arithmetic, and no
+    // `from_raw_parts` on a null pointer when `n == 0`.
+    let leaf_chunks: Vec<[u8; 32]> = if n == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(leaf_chunks_ptr, in_bytes) }
+            .chunks_exact(32)
+            .map(|c| {
+                let mut b = [0u8; 32];
+                b.copy_from_slice(c);
+                b
+            })
+            .collect()
+    };
 
     let Some(layers) = shekyl_fcmp::tree::try_build_upper_layers(leaf_chunks, 0) else {
         return false;
     };
     // `layers[0]` is the leaf layer the caller passed; the upper layers are `[1..]`.
-    // The root is the top layer's sole node (or the empty-tree leaf-init sentinel,
-    // which `build_layers` defines).
+    // The root is the top layer's sole node (or the empty-tree leaf-init sentinel
+    // `build_layers` defines).
     let root = layers
         .last()
         .and_then(|l| l.first())
@@ -3007,27 +3030,30 @@ pub unsafe extern "C" fn shekyl_curve_tree_grow_upper_layers(
         .unwrap_or_else(shekyl_fcmp::tree::selene_hash_init);
     let upper = &layers[1..];
     let total: usize = upper.iter().map(Vec::len).sum();
-    if u64::try_from(total).unwrap_or(u64::MAX) > out_chunks_capacity
-        || u64::try_from(upper.len()).unwrap_or(u64::MAX) > out_layer_sizes_capacity
-    {
+    let Some(out_bytes) = total.checked_mul(32) else {
+        return false;
+    };
+    // Capacities are counts (32-byte chunks / u64 entries), validated before writing.
+    if total > out_chunks_cap || upper.len() > out_sizes_cap {
         return false;
     }
 
+    // Write outputs through slices (the out pointers are non-null per the guard
+    // above; a zero-length slice on a non-null pointer is well-defined).
+    let sizes_out = unsafe { std::slice::from_raw_parts_mut(out_layer_sizes_ptr, upper.len()) };
+    let chunks_out = unsafe { std::slice::from_raw_parts_mut(out_chunks_ptr, out_bytes) };
     let mut written = 0usize;
     for (li, layer) in upper.iter().enumerate() {
-        unsafe {
-            *out_layer_sizes_ptr.add(li) = u64::try_from(layer.len()).unwrap_or(0);
-        }
+        // layer.len() <= total <= num_leaf_chunks (all derived from a u64), so it fits.
+        sizes_out[li] = u64::try_from(layer.len()).unwrap_or(u64::MAX);
         for node in layer {
-            unsafe {
-                std::ptr::copy_nonoverlapping(node.as_ptr(), out_chunks_ptr.add(written * 32), 32);
-            }
+            chunks_out[written * 32..written * 32 + 32].copy_from_slice(node);
             written += 1;
         }
     }
     unsafe {
-        *out_num_upper_layers = u64::try_from(upper.len()).unwrap_or(0);
-        std::ptr::copy_nonoverlapping(root.as_ptr(), out_root_ptr, 32);
+        *out_num_upper_layers = u64::try_from(upper.len()).unwrap_or(u64::MAX);
+        std::slice::from_raw_parts_mut(out_root_ptr, 32).copy_from_slice(&root);
     }
     true
 }

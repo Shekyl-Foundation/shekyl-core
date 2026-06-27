@@ -675,6 +675,13 @@ sustainability is unaffected by the recalibration.
   same FFI recompose **plus stale-upper-chunk deletion** (trim shrinks the tree). It is
   self-healed by the next `grow` (which now recomputes every upper layer), but a
   pure-trim-then-query state would still report a wrong root until then.
+  **PERF FOLLOW-UP (not a consensus change):** `grow`/`trim` currently recompose ALL
+  upper layers each block — O(num_leaf_chunks) LMDB reads + O(num_leaf_chunks/17)
+  hashing — fine at genesis/early scale but a bottleneck on a long-lived chain.
+  Optimize to recompose only the affected *ancestor* chunks (bounded by depth ×
+  chunk-width) using the same narrow composition. This produces the **identical root**,
+  so it is a pure perf optimization, sequenced AFTER the correct version (and must be
+  proven `== build_layers` to telescope — the #162-retraction discipline).
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future

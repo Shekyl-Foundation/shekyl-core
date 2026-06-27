@@ -1096,9 +1096,12 @@ uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
 /// Output sizes are deterministic from num_leaf_chunks via the SELENE/HELIOS
 /// chunk-width ladder, so the caller pre-allocates:
 ///   leaf_chunks_ptr:      num_leaf_chunks * 32 bytes (leaf-layer chunk hashes).
-///   out_chunks_ptr:       >= (sum of upper-layer chunk counts) * 32 bytes; the
-///                         upper chunks are written layer 1 first, then layer 2, …
-///   out_layer_sizes_ptr:  >= (num upper layers) entries; chunk count per upper layer.
+///   out_chunks_ptr:       the upper chunks, layer 1 first then layer 2, …, 32B each.
+///   out_chunks_capacity:  a COUNT of 32-byte chunks (NOT bytes); must be
+///                         >= the sum of the upper-layer chunk counts.
+///   out_layer_sizes_ptr:  one chunk-count per upper layer.
+///   out_layer_sizes_capacity: a COUNT of uint64_t entries (NOT bytes); must be
+///                         >= the number of upper layers.
 ///   out_num_upper_layers: number of upper layers written.
 ///   out_root_ptr:         32 bytes — the consensus curve-tree root.
 /// Returns true on success; false on a null pointer, insufficient capacity, or a
