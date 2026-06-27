@@ -136,9 +136,14 @@ impl RegtestDaemon {
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
         // Base URL only — `Rpc::json_rpc_call` appends the `json_rpc` route itself.
-        let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-            .await
-            .expect("construct rpc client");
+        // Long timeout: `generate_blocks` late in a deep-tree mine takes well over
+        // the 30s default (each block ~2.5s; the depth-3 mine is ~750 blocks).
+        let rpc = SimpleRequestRpc::with_custom_timeout(
+            format!("http://127.0.0.1:{rpc_port}"),
+            Duration::from_secs(180),
+        )
+        .await
+        .expect("construct rpc client");
 
         let mut daemon = RegtestDaemon {
             child,
@@ -205,6 +210,17 @@ impl RegtestDaemon {
             )
             .await
             .expect("generateblocks")
+    }
+
+    /// Roll the chain back `n` blocks (FAKECHAIN-gated `/pop_blocks`, a direct
+    /// route — not `json_rpc`). Exercises the daemon's `pop_block`
+    /// deferred-insertion tree rollback (popping `H` removes the leaves of
+    /// outputs created at `H − maturity`).
+    async fn pop_blocks(&self, n: u64) {
+        self.rpc
+            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": n })))
+            .await
+            .expect("pop_blocks");
     }
 }
 
@@ -673,4 +689,498 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     daemon.generate_blocks(1, &address).await;
     let after = daemon.height().await;
     eprintln!("mined confirming block; height now {after}");
+}
+
+/// Create a Mainnet wallet (FAKECHAIN uses the mainnet address format) pointed at
+/// the daemon RPC. Returns the engine, its tempdir (caller keeps it alive — it owns
+/// the wallet files), and the encoded primary address.
+async fn mainnet_wallet(
+    rpc_port: u16,
+    seed_byte: u8,
+) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+        .await
+        .expect("wallet rpc");
+    let tmp = tempfile::tempdir().expect("wallet tempdir");
+    let wallet_path = tmp.path().join("wallet");
+    let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let creds = super::lifecycle::Credentials::password_only(b"track2");
+    let params = super::lifecycle::EngineCreateParams {
+        base_path: &wallet_path,
+        credentials: &creds,
+        network: shekyl_address::Network::Mainnet,
+        capability: super::lifecycle::CapabilityInput::Full {
+            master_seed_64: &seed,
+            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: shekyl_engine_file::SafetyOverrides::none(),
+        prefs: shekyl_engine_prefs::WalletPrefs::default(),
+    };
+    let wallet = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
+        .expect("create wallet");
+    let address = wallet.primary_address().encode().expect("encode address");
+    (wallet, tmp, address)
+}
+
+/// Depth-3+ FCMP++ verify (CT-5 / #162 reopening trigger). The partial-branch-chunk
+/// fix and CT-2 Tier-A both cover only **depth-2** (a single Helios branch). This
+/// grows the curve tree past depth-2 — to a real **Selene** branch layer — and
+/// proves a wallet-built spend over it is accepted by the daemon's consensus verify.
+///
+/// Drives by the daemon's **observed tree depth** (`get_curve_tree_info.depth`,
+/// which is `fcmp_layers - 1`, so depth-3 = daemon depth 2), not a hardcoded
+/// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 38`… in
+/// practice ~684–701 drained leaves (~750 blocks, several minutes — a slow gate).
+///
+/// **Currently RED — surfaces an open depth-3 bug (the #162 reopening trigger
+/// FIRING).** A 2026-06-27 run reached daemon depth 2 (701 leaves, height 760) and
+/// then failed at the wallet `refresh` with `CurveTreeIngest: curve-tree root
+/// mismatch vs header`: the wallet's **native** curve-tree reconstruction
+/// (`CurveTreeClient` verify-at-ingest) diverges from the daemon's header root at
+/// the **Selene branch** layer — exactly the depth-3+ case #162's partial-branch
+/// padding (in `prove`) did not cover for the tree *build*. Consensus-critical
+/// (a wallet cannot sync past depth-3). Tracked in FOLLOWUPS; this test is the
+/// repro + acceptance gate — it goes green once depth-3 reconstruction is fixed.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks); currently RED — open depth-3 recon bug"]
+async fn e2e_fcmp_spend_over_depth3_tree() {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::refresh::RefreshOptions;
+    use super::Engine;
+    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_units::AtomicUnits;
+
+    // The daemon's `get_curve_tree_depth` reports `fcmp_layers − 1`
+    // (`blockchain.cpp`: `fcmp_layers = depth + 1`). A 3-layer tree — leaf Selene +
+    // Helios branch + a real **Selene** branch (the #162 "depth-3+" target) — is
+    // therefore daemon depth **2**, reached only at
+    // `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 18 = 684` drained leaves
+    // (~684 + COINBASE_LOCK blocks). This is intentionally a **slow** gate
+    // (~750 blocks, several minutes); in-process depth-3 is already covered by
+    // `shekyl-wire`'s `fcmp_spend_e2e` (a 700-output depth-3 tree). Daemon depth 1
+    // (one Helios branch, the #162 "depth-2") is exercised by the keystone.
+    const TARGET_DAEMON_DEPTH: u8 = 2; // = fcmp_layers 3 (a Selene branch layer)
+    const MINE_BATCH_BLOCKS: u64 = 20;
+    const MAX_MINE_BATCHES: usize = 60; // up to 1200 blocks (684 leaves ≈ 745)
+
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+
+    // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
+    // tree reaches the target depth, then one more batch so the REFERENCE block
+    // (tip − REF_ANCHOR_AGE) the spend selects against is also past the transition.
+    let mut tree_depth = 0u8;
+    for _ in 0..MAX_MINE_BATCHES {
+        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+        let info: serde_json::Value = daemon
+            .rpc
+            .json_rpc_call("get_curve_tree_info", None)
+            .await
+            .expect("get_curve_tree_info");
+        tree_depth = info
+            .get("depth")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|d| u8::try_from(d).ok())
+            .unwrap_or(0);
+        if tree_depth >= TARGET_DAEMON_DEPTH {
+            eprintln!(
+                "curve tree reached daemon depth {tree_depth} (= {} layers): {info}",
+                tree_depth + 1
+            );
+            break;
+        }
+    }
+    assert!(
+        tree_depth >= TARGET_DAEMON_DEPTH,
+        "curve tree must reach daemon depth >= {TARGET_DAEMON_DEPTH} ({} layers); got {tree_depth}",
+        TARGET_DAEMON_DEPTH + 1
+    );
+    daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+
+    // Refresh so the wallet's local tree matches the daemon's depth-3 tree.
+    let arc = Arc::new(RwLock::new(wallet));
+    Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh")
+        .join()
+        .await
+        .expect("refresh joins");
+    let unlocked = {
+        let g = arc.read().await;
+        let ledger = g.ledger();
+        ledger.ledger.balance(ledger.ledger.height()).unlocked
+    };
+    assert!(
+        unlocked > AtomicUnits::ZERO,
+        "a matured coinbase must be spendable over the depth-3 tree; got {unlocked:?}"
+    );
+    eprintln!("spendable balance over depth-{tree_depth} tree: {unlocked:?}");
+
+    // Build + submit an FCMP++ spend over the depth-3 tree (retry until the C2
+    // reference-spendability gate clears).
+    let request = TxRequest {
+        recipients: vec![TxRecipient {
+            address: address.clone(),
+            amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
+        }],
+        priority: FeePriority::Standard,
+    };
+    let mut pending = None;
+    for _ in 0..MAX_MINE_BATCHES {
+        let attempt = {
+            let mut g = arc.write().await;
+            g.build_pending_tx_async(&request).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(super::error::SendError::OutputNotYetSpendable { .. }) => {
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+                Engine::start_refresh(arc.clone(), RefreshOptions::default())
+                    .await
+                    .expect("start_refresh")
+                    .join()
+                    .await
+                    .expect("refresh joins");
+            }
+            Err(e) => panic!("build pending FCMP++ spend over depth-3 tree: {e:?}"),
+        }
+    }
+    let pending = pending.expect("FCMP++ spend must build over the depth-3 tree");
+    eprintln!(
+        "built depth-{tree_depth} spend: fee={:?}, tx_bytes={} B",
+        pending.fee_atomic_units,
+        pending.tx_bytes.len()
+    );
+
+    let tx_hash = {
+        let mut g = arc.write().await;
+        g.submit_pending_tx_async(pending.id, pending.content_gen)
+            .await
+            .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
+    };
+    eprintln!("daemon accepted depth-{tree_depth} spend: {tx_hash:?}");
+    daemon.generate_blocks(1, &address).await;
+}
+
+// ===========================================================================
+// CT-2 Tier-B fixture generator
+// ===========================================================================
+
+/// Mines the CT-2 Tier-B scenarios — a **multi-tx block** (coinbase + spend), a
+/// **mixed-maturity collision** (a spend's `+10` regular outputs interleaving
+/// with `+60` coinbases at the same drain height), and a **reorg-with-spend**
+/// (rollback below a spend, re-mine + re-spend) — on a live regtest via the
+/// proven keystone spend path, then writes
+/// `shekyl-curve-tree/tests/fixtures/ct2_tier_b.json`.
+///
+/// It captures only the **deterministic projection** the reconstruct path needs
+/// — per-height curve-tree root + per-output leaf identity (`output_key`,
+/// `commitment`, `0x07`→`h_pqc`, `target`) — never raw tx blobs (random blinds /
+/// one-time keys are not reproducible across runs; `shiny-prancing-flute.md`
+/// amendment 11). The captured values ARE the on-chain ones, so `recon_tier_b.rs`
+/// reconstructs each height's root deterministically and asserts it equals the
+/// recorded consensus root.
+///
+/// Not a pass/fail gate — it regenerates the committed oracle. Run on demand:
+/// ```bash
+/// SHEKYLD_BIN=/path/to/build/bin/shekyld \
+///   cargo test -p shekyl-engine-core --lib generate_ct2_tier_b_fixture -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "regenerates ct2_tier_b.json; needs SHEKYLD_BIN + a live regtest"]
+async fn generate_ct2_tier_b_fixture() {
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+    // Roll back fewer blocks than separate the spend from the tip (the spend
+    // confirms, then MINE_BATCH_BLOCKS more are mined), so the spend survives the
+    // reorg and the re-mined tail still diverges (fresh coinbase output keys).
+    const REORG_DEPTH: u64 = 8;
+
+    let daemon = RegtestDaemon::start().await;
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
+    // A second wallet for its address only — the spend recipient (a real
+    // non-change regular output, distinct from the self-send change).
+    let (_recipient_wallet, _tmp2, recipient) = mainnet_wallet(daemon.rpc_port, 0x55).await;
+    let arc = Arc::new(RwLock::new(wallet));
+
+    // --- fund + spend (main chain): a transfer to `recipient` yields a multi-tx
+    //     block (coinbase + spend) whose +10 regular outputs (recipient + change)
+    //     are the mixed-maturity classes vs the +60 coinbases. ---
+    mine_until_spendable(&daemon, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+    submit_tier_b_spend(
+        &daemon,
+        &arc,
+        &address,
+        &recipient,
+        MINE_BATCH_BLOCKS,
+        MAX_MINE_BATCHES,
+    )
+    .await;
+    // Mine on so the spend's regular outputs mature + drain alongside later
+    // coinbases (the collision the recon orders by (maturity, gindex)).
+    daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+    let main_tip = daemon.height().await - 1;
+    let main_chain = capture_chain(&daemon, "main", main_tip).await;
+    eprintln!("captured main chain through height {main_tip}");
+
+    // --- reorg-with-spend: roll the daemon back (shallower than the spend, which
+    //     survives), refresh the wallet across the rollback, then re-mine + re-spend
+    //     a divergent tail. The post-pop `refresh` is the exact path that surfaced
+    //     the optimistic-spend state bug — it scans the block carrying the wallet's
+    //     own (optimistically-marked) spend; with that fixed (in-flight `spent`
+    //     without `spent_height` is now a valid shape, and `handle_reorg` un-marks
+    //     orphaned confirmed spends) it completes, confirming the spend and re-mining
+    //     a fresh-keyed tail whose per-height roots diverge from `main`. This drives
+    //     the wallet's reorg-refresh end-to-end (the bug #2 e2e), and the captured
+    //     chain carries both the surviving and the re-mined spend's mixed leaves. ---
+    daemon.pop_blocks(REORG_DEPTH).await;
+    refresh(&arc).await;
+    mine_until_spendable(&daemon, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+    submit_tier_b_spend(
+        &daemon,
+        &arc,
+        &address,
+        &recipient,
+        MINE_BATCH_BLOCKS,
+        MAX_MINE_BATCHES,
+    )
+    .await;
+    daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
+    let reorg_tip = daemon.height().await - 1;
+    let reorg_chain = capture_chain(&daemon, "reorg", reorg_tip).await;
+    eprintln!("captured reorg chain through height {reorg_tip}");
+
+    let fixture = json!({
+        "_comment": "CT-2 Tier-B reconstruct-root oracle (multi-tx / mixed-maturity / \
+            reorg-with-spend). Generated by generate_ct2_tier_b_fixture from a live \
+            regtest shekyld via the keystone spend path. Each chain's \
+            block[h].curve_tree_root is the C++ consensus header root; recon_tier_b.rs \
+            reconstructs it from the per-tx leaf inputs (coinbase + spend) in drain \
+            order (maturity, gindex). Deterministic projection only — no raw tx blobs.",
+        "chains": [main_chain, reorg_chain],
+    });
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../shekyl-curve-tree/tests/fixtures/ct2_tier_b.json"
+    );
+    std::fs::write(path, serde_json::to_string_pretty(&fixture).unwrap())
+        .expect("write ct2_tier_b.json");
+    eprintln!("wrote {path}");
+}
+
+/// Mine + refresh in batches until the wallet has a spendable (unlocked) balance.
+async fn mine_until_spendable(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    batch: u64,
+    max_batches: usize,
+) {
+    use shekyl_units::AtomicUnits;
+    for _ in 0..max_batches {
+        daemon.generate_blocks(batch, address).await;
+        refresh(arc).await;
+        if unlocked_balance(arc).await > AtomicUnits::ZERO {
+            return;
+        }
+    }
+    panic!("a matured coinbase must be spendable after mining + refresh");
+}
+
+/// Build (retrying past the C2 reference-spendability gate) + submit a transfer
+/// to `recipient`, then mine one confirming block.
+async fn submit_tier_b_spend(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    recipient: &str,
+    batch: u64,
+    max_batches: usize,
+) {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use shekyl_units::AtomicUnits;
+    let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
+    let request = TxRequest {
+        recipients: vec![TxRecipient {
+            address: recipient.to_string(),
+            amount_atomic_units: amount,
+        }],
+        priority: FeePriority::Standard,
+    };
+    let mut pending = None;
+    for _ in 0..max_batches {
+        let attempt = {
+            let mut g = arc.write().await;
+            g.build_pending_tx_async(&request).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(super::error::SendError::OutputNotYetSpendable { .. }) => {
+                daemon.generate_blocks(batch, address).await;
+                refresh(arc).await;
+            }
+            Err(e) => panic!("build Tier-B spend: {e:?}"),
+        }
+    }
+    let pending = pending.expect("Tier-B spend must build once reference-spendable");
+    let tx_hash = {
+        let mut g = arc.write().await;
+        g.submit_pending_tx_async(pending.id, pending.content_gen)
+            .await
+            .expect("daemon must accept the Tier-B spend (consensus verify)")
+    };
+    eprintln!("daemon accepted Tier-B spend: {tx_hash:?}");
+    daemon.generate_blocks(1, address).await;
+}
+
+async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
+    use super::refresh::RefreshOptions;
+    super::Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh")
+        .join()
+        .await
+        .expect("refresh joins");
+}
+
+async fn unlocked_balance(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+) -> shekyl_units::AtomicUnits {
+    use shekyl_scanner::LedgerBlockExt;
+    let g = arc.read().await;
+    let ledger = g.ledger();
+    ledger.ledger.balance(ledger.ledger.height()).unlocked
+}
+
+/// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).
+///
+/// Fetches each block + its **full** (unpruned) non-miner txs directly — not the
+/// engine's `default_fetch_scannable_block`, whose `prune:true` leg currently
+/// rejects an FCMP++ spend (the refresh-over-spends gap recorded in FOLLOWUPS).
+/// The fixture needs only the prefix outputs + ct-base commitments + `0x07`, all
+/// of which a full tx carries and `shekyl_wire::Transaction::from_bytes` parses.
+async fn capture_chain(daemon: &RegtestDaemon, name: &str, tip: u64) -> serde_json::Value {
+    let mut blocks = Vec::new();
+    for height in 0..=tip {
+        let block_resp: serde_json::Value = daemon
+            .rpc
+            .json_rpc_call("get_block", Some(json!({ "height": height })))
+            .await
+            .unwrap_or_else(|e| panic!("get_block {height}: {e:?}"));
+        let blob = block_resp["blob"].as_str().expect("get_block blob hex");
+        let block = shekyl_wire::Block::from_bytes(&hex_decode(blob))
+            .unwrap_or_else(|e| panic!("parse block {height}: {e:?}"));
+
+        let regular = if block.transaction_hashes.is_empty() {
+            Vec::new()
+        } else {
+            let hashes_hex: Vec<String> =
+                block.transaction_hashes.iter().map(hex::encode).collect();
+            let resp: serde_json::Value = daemon
+                .rpc
+                .rpc_call(
+                    "get_transactions",
+                    Some(json!({ "txs_hashes": hashes_hex, "prune": false })),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("get_transactions @ {height}: {e:?}"));
+            resp["txs"]
+                .as_array()
+                .expect("get_transactions txs array")
+                .iter()
+                .map(|t| {
+                    let hex_blob = t["as_hex"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .expect("full tx as_hex");
+                    shekyl_wire::Transaction::from_bytes(&hex_decode(hex_blob))
+                        .expect("parse full regular tx")
+                })
+                .collect()
+        };
+        blocks.push(capture_block(&block, &regular, height));
+    }
+    json!({ "name": name, "blocks": blocks })
+}
+
+fn hex_decode(s: &str) -> Vec<u8> {
+    hex::decode(s).expect("valid hex")
+}
+
+/// One block's deterministic projection: per-height root + every tx's outputs
+/// (coinbase first, then non-miner txs in block order), each output carrying the
+/// leaf identity the reconstruct path needs.
+fn capture_block(
+    block: &shekyl_wire::Block,
+    regular: &[shekyl_wire::Transaction],
+    height: u64,
+) -> serde_json::Value {
+    use shekyl_wire::tx_extra::TxExtraField;
+    use shekyl_wire::Ct;
+
+    let txs: Vec<serde_json::Value> = std::iter::once((true, &block.miner_transaction))
+        .chain(regular.iter().map(|tx| (false, tx)))
+        .map(|(is_miner, tx)| {
+            let base = match &tx.ct {
+                Ct::Null(b) => b,
+                Ct::Fcmp { base, .. } => base,
+            };
+            let outputs: Vec<serde_json::Value> = tx
+                .prefix
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(i, o)| {
+                    // Every output has a tree-leaf commitment (CtBase carries one
+                    // per output for both Null and Fcmp).
+                    let commitment = base
+                        .commitments
+                        .get(i)
+                        .expect("ct base has a commitment per output");
+                    json!({
+                        "output_key": hex::encode(o.key),
+                        "commitment": hex::encode(commitment),
+                        // shekyl-wire only emits tagged-key outputs (Output::write).
+                        "target": "tagged_key",
+                    })
+                })
+                .collect();
+            // The `0x07` per-output leaf-hash blob (empty if the tx carries none).
+            let blob = tx
+                .prefix
+                .parse_extra()
+                .ok()
+                .and_then(|fields| {
+                    fields.into_iter().find_map(|f| match f {
+                        TxExtraField::PqcLeafHashes(b) => Some(b),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_default();
+            json!({
+                "is_miner": is_miner,
+                "pqc_leaf_hashes": hex::encode(&blob),
+                "outputs": outputs,
+            })
+        })
+        .collect();
+
+    json!({
+        "height": height,
+        "curve_tree_root": hex::encode(block.header.curve_tree_root),
+        "txs": txs,
+    })
 }

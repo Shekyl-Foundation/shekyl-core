@@ -553,6 +553,39 @@ sustainability is unaffected by the recalibration.
   pruned resume needs an all-segment integrity sweep, or audit requires a
   startup/maintenance mode that pays the full scan cost explicitly.
 
+- **Refresh-over-spend reorg: optimistic-spend `spent_height` invariant +
+  orphaned-spend un-mark (Track-2-surfaced + FIXED 2026-06-27).**
+  Two coupled defects in the wallet's *unconfirmed-spent* state model, latent until
+  Track 2 first refreshed a wallet across a reorg that touched a spend:
+  1. `local_pending_tx::finalize_submit_accept` marks the selected inputs
+     `spent = true` at **submit** but never sets `spent_height` (the tx is not yet
+     in a block). That state — `spent && spent_height.is_none()` — violates the
+     documented ledger invariant (`invariants.rs`: "spent ⇒ spent_height = Some")
+     and is caught the next time a refresh runs `LedgerIndexes::ingest_block` (its
+     `debug_assert!(check_invariants)`), panicking `transfers[i] is spent but
+     spent_height is None`.
+  2. `LedgerIndexes::handle_reorg` removes transfers *received* at ≥ `fork_height`
+     but never un-marks an output *spent* at ≥ `fork_height` (a spend orphaned by
+     the reorg) — that output stays incorrectly `spent` (it should return to the
+     spendable pool, as `unmark_spent` does on submit-finalize failure).
+  **Fix (this branch):** `spent = true` with `spent_height = None` is now modeled
+  explicitly as the **in-flight spend** shape (an unconfirmed spend genuinely has no
+  confirming height), not a placeholder (a guessed height breaks the reorg un-mark).
+  The valid set becomes: `(spent=false, no height)` not-yet-spent; `(spent=true,
+  key_image=Some)` spent — in-flight (`spent_height=None`) or confirmed
+  (`spent_height=Some`). Both invariant checkers relaxed accordingly
+  (`invariants::check_spend_triple`, `LedgerIndexes::check_invariants`), keeping the
+  key-image requirement on any spend. `LedgerIndexes::handle_reorg` now un-marks
+  confirmed spends orphaned by the reorg (`spent_height ≥ fork_height` → back to
+  unspent; in-flight spends untouched). Tests: `spent_in_flight_without_height_is_allowed`,
+  `spent_in_flight_without_key_image_is_refused`,
+  `handle_reorg_unmarks_orphaned_confirmed_spend_keeps_in_flight`, and the live e2e
+  (`generate_ct2_tier_b_fixture`'s wallet-driven reorg — `submit` then `refresh`
+  across `pop_blocks`, the exact original repro, now green). **First refresh-over-spend
+  layer (bug #1) also fixed this branch:** refresh could not even *parse* a pruned
+  spend block (`Ct::read` rejected the storage-pruned FCMP++ form) — EOF-tolerant
+  prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
+
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
   Target: V3.0, ordered after CT-5. `recon_tier_b.rs` carries five
@@ -569,6 +602,20 @@ sustainability is unaffected by the recalibration.
   oracle. See [`docs/completed/CT2_ROUND1_CLOSEOUT.md`](./completed/CT2_ROUND1_CLOSEOUT.md)
   §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
   §8.2.
+  **Update 2026-06-27 (3 of 5 landed).** The Track-2 keystone (first
+  daemon-accepted FCMP++ spend) unblocked this: `ct2_tier_b.json` is now generated
+  from a live regtest by `shekyl-engine-core`'s `generate_ct2_tier_b_fixture` (mints
+  a real multi-tx spend block + a daemon `pop_blocks` reorg, captures the
+  deterministic projection — per-height root + per-output leaf identity — via full
+  txs). **Un-ignored + green:** `mixed_maturity_collision_orders_by_gindex`,
+  `multi_tx_block_respects_coinbase_first_and_tx_hashes_order`,
+  `reorg_with_spend_mixed_leaves`. **Still deferred** (no fake passes):
+  `staked_output_uses_max_lock_and_spendable` (needs the engine staking *send* path —
+  built separately — to mint a staked output) and
+  `scanner_extra_0x07_matches_daemon_on_adversarial_extra` (needs a hand-crafted C++
+  duplicate/malformed-`0x07` oracle). Generating the fixture surfaced + fixed a
+  refresh-over-spends parse bug (`Ct::read` could not parse a storage-pruned FCMP++
+  spend) and surfaced the reorg optimistic-spend state bug (separate FOLLOWUP above).
 
 - **CT-5 real-tree FCMP++ verify — deeper-tree + pin validation (depth-2 case
   RESOLVED 2026-06-19).** The real-tree prove→verify roundtrip
@@ -590,6 +637,20 @@ sustainability is unaffected by the recalibration.
   out as the cause: the pinned crate's own `test_single_input` passes layers 1-9.
   **Reopening trigger:** a depth-3+ real-tree verify, or the Tier-B fixture.
   Target: V3.0 with the CT-5 series.
+  **⚠ TRIGGER FIRED — REOPENED 2026-06-27 (Track-2 depth-3 regtest).** The depth-3
+  regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
+  curve tree to depth-3 (daemon depth 2 = 3 layers; 701 drained leaves, height 760)
+  and the wallet `refresh` then **failed**: `CurveTreeIngest { context: "curve-tree
+  root mismatch vs header" }`. The wallet's **native** curve-tree reconstruction
+  (`CurveTreeClient` verify-at-ingest, `merge.rs`) diverges from the daemon's header
+  root at the **Selene branch** layer — the depth-3 case the depth-2 padding fix did
+  not cover for the tree *build* (vs the `prove` path #162 patched). **This is
+  consensus-critical: a wallet cannot sync past depth-3** (≈701 outputs — reached
+  fast on mainnet). Repro + acceptance gate is the depth-3 test (currently RED,
+  `#[ignore]`d). **Next:** diff the wallet `build_layers` partial-Selene-branch chunk
+  handling against the daemon `grow_curve_tree`; the likely fix mirrors #162 (zero-pad
+  the partial branch chunk) but in the **root construction**, not the proof. Must be
+  validated against the live daemon header root before genesis freeze.
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future
