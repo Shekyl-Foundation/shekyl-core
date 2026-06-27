@@ -782,8 +782,14 @@ the scalar's real value is **capital efficiency** (right-size dense periods, les
 over-tax), **not** anonymity for the under-served tier, which is conceded to the
 `N_P`-independent seams anyway (the three-tier framing). **Verdict: count-only is
 sufficient for the *anonymity* goal; the dispersion scalar is a *deferrable*
-capital-efficiency refinement (IPR, global), not a genesis requirement** — add it
-post-testnet only if dense-period over-tax proves binding, per minimize-the-surface.
+capital-efficiency refinement (IPR, global), not a genesis requirement** — and its
+**reopen trigger is *economic*, not anonymity** (the arm measured that it doesn't move
+the anonymity floor): file it as *"deferred for capital efficiency; reopens if
+post-testnet the realized capital lock-up at the chosen `D` prices out more of the
+population than projected (the §7.5 opt-out / participation pressure); gated on the
+Arm-D targeting check when it returns."* That keeps it from being re-proposed for the
+wrong reason (anonymity, which it doesn't help) and ensures the targeting check rides
+along with it.
 
 **The response-curve spec (next), with four constraints pinned *deliberately* — not
 left to fall out of the curve's math, because each is genesis-frozen and un-revisable:**
@@ -791,6 +797,19 @@ left to fall out of the curve's math, because each is genesis-frozen and un-revi
 - **Statistic source (the §7.9 grounding gap):** define the canonical standing-bond-count
   read at the last-closed epoch boundary (a `Σ_P` gather, or a maintained aggregate) —
   the stock, **not** the serving-set close payload.
+- **Same population as the anonymity set — the metric's hinge.** The count `f` reads must
+  be the count of bonds the attacker can enumerate as candidates: **every active posted
+  bond with an observable `bond_floor`**. Checked at source: a bond-post aggregates a
+  `P`'s full `holdings` into **one** `bond_floor`, and `HoldingsUpdate`/`Rebond` mutate
+  that single bond — so **per-`P` == per-bond == per-observable-`bond_floor`** (no
+  persona-deflation; `per_p_bonded`'s per-`P_id` keying is the right per-bond unit). The
+  population matches at both edges: the *serving* set was too few (dropped idle bonds, the
+  §7.9 correction); the standing set is not too many either — an announced-but-not-posted
+  `P` has no `bond_floor` (not a candidate, not bonded), and last-closed-epoch finality
+  excludes any pending/un-final bond. Residual confirmation: the **one-active-bond-per-`P_id`
+  invariant** (lives in the connect/state machine, implied by the mutate-not-add post
+  kinds) — verify it before the read is settled, since it is what makes per-`P` == per-bond
+  airtight.
 - **Bootstrap boundary as a *stated clause*, not an extrapolation.** At epochs 0–1 the
   last-closed count ≈ 0; a smooth low-count→narrow curve would hand the earliest stakers
   the **narrowest** cover at the moment the live set is smallest and the cold-start link
