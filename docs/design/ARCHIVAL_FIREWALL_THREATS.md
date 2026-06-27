@@ -166,7 +166,7 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   independence). The lever is funding-event independence over time, not per-event
   entropy.
 
-### A2 — Induced re-link via block withholding — **UNADDRESSED (funding side)**
+### A2 — Induced re-link via block withholding — **ADDRESSED in 2d-1 (SP-7)**
 
 - **Capability:** C3 (+ C0 to observe the result).
 - **Targets:** the 2d-1 funding reader; the cover's cold-start protection.
@@ -188,8 +188,15 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   chain). A missing output must be distinguishable from an unscanned one, on the
   funding side too. This is the funding-side twin of the SP-6 rule and it is not in
   the design.
-- **Disposition:** open. Add a funding-side completeness gate; cold-start re-fund
-  must be gated on a *positively confirmed-complete* view, never on absence.
+- **Disposition:** **addressed** — built into 2d-1 as **SP-7** (the funding-side
+  completeness gate) plus the root-anchored cursor (SP-2):
+  `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6. The cold-start re-fund decision now takes a
+  typed `CoverDiscovery::AbsentVerified(VerifiedRange)` only — header-root-complete +
+  finality-deep — so a withheld block reads as `Incomplete` (wait), never as absence;
+  and even `AbsentVerified` surfaces to the operator rather than auto-re-funding (a
+  confirmed-absent cover means the original funding tx failed, so re-fund would *be*
+  the second cold-start link). Residual: the header-chain trust itself (false-tip /
+  stale-headers) leans on 2d-2's multi-source transport — named there.
 
 ### A3 — Economic / earnings-scale fingerprint — **UNADDRESSED**
 
@@ -323,8 +330,8 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
    accumulating across windows. The single-event analyses do not bound it. This is
    how privacy coins actually fall.
 3. **A2 — induced re-link via withholding (`TM-3`).** A C3 attacker *causes* the
-   re-link the cover prevents, cheaply, by controlling availability. Concrete and
-   actionable.
+   re-link the cover prevents, cheaply, by controlling availability. Was concrete and
+   actionable — **now built (SP-7)**; header-chain trust residual carried to 2d-2.
 4. **A3 — earnings-scale fingerprint (`TM-4`).** Staking publishes a continuous
    scale signal the cover never touches.
 5. **A4 — join counterparty / Sybil (`TM-5`).** A closer observer than any round
@@ -361,9 +368,10 @@ about a moment, not a security guarantee about `P`.
    correlate across an operator's personas (funding source, temporal exclusivity,
    shard-selection, claim rhythm, `W`-tail shape) and show each absent or
    independent. It gates the realism of A1–A5.
-2. **Add the funding-side completeness gate (`TM-3`)** to 2d-1 now — cold-start
-   re-fund gated on a header-root-confirmed-complete view, never on absence. This
-   is concrete and buildable in the current 2d-1 round.
+2. **[Done] Funding-side completeness gate (`TM-3`)** — built into 2d-1 as SP-7
+   (`CoverDiscovery` + root-anchored cursor): cold-start re-fund gated on a
+   header-root-confirmed-complete view, never on absence, and surfaced rather than
+   auto-triggered.
 3. **Pin SP-5 cadence as injectable (`TM-6`)** in 2d-1 now — a no-hardcoded-timer
    constraint, so 2d-2 can make the pattern constant-rate.
 4. **Open the lifetime/intersection model (`TM-2`, `TM-8`)** — the temporal

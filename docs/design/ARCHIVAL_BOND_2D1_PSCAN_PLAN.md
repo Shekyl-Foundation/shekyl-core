@@ -3,8 +3,9 @@
 **Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md)
 §3.6 (2d-1 is 2d's first sub-part; this doc is the architecture round nested under it).
 **Status:** ROUND 0 (boundary — ratified) + ROUND 1 (per-SP design, §6) + ROUND 2 (seam
-hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) —
-for review; no code. Round-2's source-verification items are **resolved at source**: DQ8's
+hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) +
+ROUND 3 (threat-model cross-check vs `ARCHIVAL_FIREWALL_THREATS.md` — SP-7 funding-side gate
+closes `TM-3`; cross-reference table marks what 2d-1 can/can't address) — for review; no code. Round-2's source-verification items are **resolved at source**: DQ8's
 terminal-bond predicate exists (`Unbond` + Full-retirement) with `W` single-sourced from
 config for production; the cover output's *form* is verified-covered (no recovery carve-out;
 FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to the
@@ -326,6 +327,7 @@ residency, its funding outputs out of the re-scan set. Two things to pin:
 | **SP-4** | The **per-epoch `P`-earnings-inflow accrual** (reader-a output `C_min` consumes) — from **confirmed** outputs only | DQ3/DQ7; `AccrualRecord`-modeled |
 | **SP-5** | The scan-loop **home** — `P`-scan task owning cursor, **injectable cadence**, and `BlockSource`; actor performs the **offloaded, non-blocking** scan-step, `view_sk` never crosses | DQ6; cadence injectable (no hardwired tick) |
 | **SP-6** | The reconcile **interface** reader (b) hands to 2d-2 — matches **plus a `VerifiedRange` `covered`** (absence ≠ unscanned) | the GC *action* is 2d-2; positive-confirmation only |
+| **SP-7** | The **funding-side completeness gate** — a typed `CoverDiscovery` so cold-start re-fund is gated on header-root-verified absence, never on a withheld block | closes `TM-3`; root-anchored cursor; surface, don't auto-re-fund |
 
 **Scan-timing posture (DQ1, resolved — the third option, not a Round-1 binary):** Round 1
 does the **CT ownership compare** + the **swappable no-early-exit extractor seam** (SP-1a),
@@ -409,8 +411,9 @@ designs these alongside the per-SP work, not as a cleanup pass after.
   **modulo the one residual: a negligible (~2⁻¹⁶⁴, ML-KEM-768) decapsulation failure** that
   would recover a different shared secret and miss the tag. Cryptographically irrelevant as a
   probability, but named, not rounded to zero, because *this* output's miss forces a re-link.
-  The other residuals are the **non-form** ones (transport gap / pruned source — SP-6's
-  availability rule) and **variant mis-selection** (already type-pinned by SP-1's
+  The other residuals are the **non-form** ones (transport gap / pruned source / **withheld
+  block** — handled by **SP-7's funding-side completeness gate**, *not* SP-6, which is the
+  reconcile reader) and **variant mis-selection** (already type-pinned by SP-1's
   `GuaranteedViewPair`-only). One correction on the fresh-key point: `Guaranteed` *drops* a
   colliding `output.key`, so the cover output needs a fresh one-time key — and the sender that
   generates it is the **principal**, not `P` (`ARCHIVAL_COVER_DRAW.md:53,99`: "principal sends
@@ -546,6 +549,12 @@ past durable outputs** (never over-claims), so a crash can only leave it *at or 
 progress, and resume re-scans the gap. The newtype stops cross-use at compile time; *integrity*
 is AEAD + version; *safety* is seal-after-durable-outputs + SP-4 idempotency. There is no
 load-time invariant to get wrong because there is no clamp.
+
+**Completeness is *root-anchored*, not source-delivered (SP-7 / `TM-3`).** The cursor advances
+only over a range `P` has confirmed complete against the **header chain** (`prev`-chained,
+PoW-committed) — so a block a withholding source silently omits is *detectable* (header present,
+body missing), and both readers' "absent" conclusions mean *provably absent*, not *undelivered*.
+This is what makes SP-6's `covered` and SP-7's `AbsentVerified` trustworthy against a C3 source.
 
 ---
 
@@ -713,6 +722,55 @@ likely place 2d-1's design, as scoped, would otherwise lead to a real downstream
 positive-confirmation GC *action* is 2d-2, but the type that forces it is pinned here. (DQ8's
 persona-retirement is the same rule on the lifecycle side — never retire on absence.)
 
+### SP-7 — the funding-side completeness gate: never re-fund on absence (closes `TM-3`)
+
+SP-6 gave reader (b) a `covered` range so the *reconcile* never GCs on absence. Reader (a) —
+**cold-start cover-discovery** — needs the **same defense, and didn't have it**: DQ2 had the
+funding reader "ride the cursor for free," but the cursor's completeness is **source-delivered**
+("I scanned every block the source handed me"), which a **withholding C3 source defeats** — it
+serves every block *except* the one carrying `P`'s cover output. The scan looks complete, `P`
+concludes its funding never arrived, and `P` **re-funds from the principal** — a *second*
+cold-start event on the attacker's infrastructure, correlated with the first. The attacker
+**induces** the exact re-link the cover exists to prevent, by controlling availability rather
+than breaking crypto (`ARCHIVAL_FIREWALL_THREATS.md` A2/`TM-3`).
+
+**The defense is header-root-verified completeness, and a gate on the re-fund decision.**
+Block headers chain (`prev[32]`, `shekyl-wire/src/block.rs:12`) and commit PoW
+(`cumulative_difficulty`, `shekyl-consensus`), so `P` can verify it holds **every block body
+the header chain says exists** up to a finality-deep `H` — a **withheld body is detectable**
+(the header is present, the body is missing), which makes "missing" *distinguishable from
+unscanned* on the funding side too. So:
+
+- **The shared cursor's completeness is *root-anchored*, not source-delivered** (strengthens
+  SP-2/DQ2): the cursor only advances over a range `P` has confirmed complete against the
+  header chain. Both readers then inherit withholding-resistance — SP-6's `covered` and SP-7's
+  absent-verdict both derive from the *same* root-anchored coverage.
+- **The cold-start re-fund decision is gated, and the gate is a type:**
+
+```rust
+/// The cover-discovery verdict. A re-fund may be considered ONLY from `AbsentVerified`
+/// (cover provably absent within a header-root-complete, finality-deep range) — never
+/// from `Incomplete` (a gap the source may simply be withholding). "Re-fund on a gap"
+/// is unrepresentable: the re-fund path does not accept `Incomplete`.
+pub enum CoverDiscovery {
+    Found(OwnedOutput),
+    AbsentVerified(VerifiedRange),   // header-root-complete AND finality-deep, cover absent
+    Incomplete,                      // view not yet provably complete — WAIT, never re-fund
+}
+```
+
+- **Even `AbsentVerified` does not *auto*-re-fund.** A header-root-complete view with the
+  expected cover absent means the **original funding tx never confirmed** — so the safe action
+  is **surface to the operator / retry-broadcast the original**, not silently mint a second
+  cold-start link. Auto-re-fund is precisely the induced-relink `TM-3` describes; the gate
+  routes `AbsentVerified` to an operator-visible decision, not a reflex.
+
+**Enforcement point:** the `CoverDiscovery` type — the re-fund path takes `AbsentVerified`
+only, so "re-fund because I haven't seen it yet" cannot be written; and the root-anchored
+cursor makes the `AbsentVerified` verdict mean *provably absent*, not *undelivered*. This is
+the funding-side twin of SP-6, and it is **buildable in this round** (the threats doc's one
+concrete 2d-1 ask, rec #2).
+
 ---
 
 ### Alignment with the raw → newtype sweep (don't create new debt)
@@ -768,7 +826,32 @@ not as work for it.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
-(`PScanCursor`, Design-B single frontier) → SP-3/SP-5 (dual extractor + bounded `ScanStep`
-handler) → SP-4 (`PFundingInflow`, idempotent recompute) → SP-6 (`PReconcileSet`). Read-side
-only; SP-2 and SP-4 land **together** as the one crash-recovery decision. Broadcasts and GCs
-nothing.
+(`PScanCursor`, Design-B single frontier, root-anchored completeness) → SP-3/SP-5 (dual
+extractor + bounded `ScanStep` handler) → SP-4 (`PFundingInflow`, idempotent recompute) → SP-6
+(`PReconcileSet`) → SP-7 (`CoverDiscovery` funding-side gate). Read-side only; SP-2 and SP-4
+land **together** as the one crash-recovery decision. Broadcasts and GCs nothing.
+
+### Threat-model cross-reference (`ARCHIVAL_FIREWALL_THREATS.md`)
+
+The adversary pass catalogs `TM-1..8`. Of those, exactly **two are 2d-1's to build**, and
+both are now in this design; the rest are either out of 2d-1's read-side scope (pre-genesis
+analyses parallel to the consensus path) or route to a downstream consumer. Stated so "did we
+cover the threats" has an explicit answer, not an implied one.
+
+| Finding | What it is | 2d-1 disposition |
+| --- | --- | --- |
+| **`TM-3`** (A2, induced re-link by block-withholding) | funding reader re-funds on a withheld cover block | **Built — SP-7** funding-side completeness gate + root-anchored cursor (SP-2); the threats doc's one concrete 2d-1 ask |
+| **`TM-6`** (A5, scan-cadence fingerprint) | *when/how-often* `P` scans leaks a wire pattern | **Built — SP-5** cadence-injectable (no hardwired tick); fix is 2d-2's, 2d-1 keeps it possible |
+| **`TM-7`** (A8, cover *outflow* fingerprint) | spending the cover re-introduces a linkable pattern | **Routes to the steady-state consumer** (reader-(a)/SP-1 feeds it); the *spend* decorrelation is that design's, not the read side's — seam named |
+| **`TM-1`** (A0, cross-persona clustering) | are `P`'s personas unlinkable from *each other*? | **Out of 2d-1 (read-side creates no on-chain event)** — but DQ8's `W`-tail is a named clustering correlate; flagged into the A0 analysis |
+| **`TM-2`/`TM-8`** (A1, lifetime intersection; temporal model) | accumulation across windows; per-event ≠ lifetime | **Out of 2d-1** — pre-genesis temporal anonymity model (cover/standoff), parallel |
+| **`TM-4`** (A3, earnings-scale fingerprint) | claim amount/cadence leaks `P`'s scale | **Out of 2d-1** — write-side claim/economics standardization, pre-genesis |
+| **`TM-5`** (A4, join counterparty / Sybil) | a co-bonder is a closer observer than C0 | **Out of 2d-1** — JoinMarket bond design, pre-genesis |
+
+**Honest bottom line.** 2d-1's read-side scope cannot address the top-of-ranking lifetime/
+clustering/economics findings (`TM-1`, `TM-2`, `TM-4`) — those are not read-side problems and
+must not be *claimed* closed here. What 2d-1 *can* foreclose, it now does: `TM-3` is built
+(was a real gap — the funding reader had no completeness gate), `TM-6` is kept open for 2d-2,
+and `TM-7`'s seam is named for the steady-state consumer. The cross-cutting `TM-8` (single-
+window vs lifetime) is the meta-reason none of 2d-1's *per-event* soundness implies lifetime
+unlinkability — a caveat this plan inherits, not resolves.
