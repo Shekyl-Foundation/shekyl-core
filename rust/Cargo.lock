@@ -4231,6 +4231,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "subtle",
  "thiserror",
  "tokio",
  "tracing",

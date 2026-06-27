@@ -14,6 +14,9 @@ license.workspace = true
 [dependencies]
 zeroize = { workspace = true }
 curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+# Constant-time equality for the per-output ownership compare (SP-1a). Already
+# in-tree via curve25519-dalek; declared directly for `ConstantTimeEq`.
+subtle = "2"
 hex = { version = "0.4", features = ["alloc"] }
 thiserror.workspace = true
 serde.workspace = true
