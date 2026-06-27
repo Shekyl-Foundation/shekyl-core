@@ -42,8 +42,8 @@ use rand_core::{RngCore, SeedableRng};
 use shekyl_fcmp::tree::{
     build_layers, hash_grow_helios, hash_grow_selene, hash_trim_helios, hash_trim_selene,
     helios_hash_init, helios_point_to_selene_scalar, layer_is_selene, selene_hash_init,
-    selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
-    SELENE_CHUNK_WIDTH,
+    selene_point_to_helios_scalar, try_build_upper_layers, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS,
+    SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
 
 const ZERO: [u8; 32] = [0u8; 32];
@@ -874,6 +874,86 @@ impl DaemonTree {
             }
             layer += 1;
         }
+    }
+}
+
+/// The PRODUCER-SIDE FIX, in incremental form. Leaf chunks are grown the same way
+/// the daemon already does (accumulating scalars at a real offset — which DOES
+/// telescope; the depth-2 floor proves it), but the upper layers are then composed
+/// **narrow** from the leaf layer via [`try_build_upper_layers`] — the same
+/// composition `build_layers` uses — instead of the daemon's per-child incremental
+/// update that mis-handles a fresh parent's `old_scalar`. A real Rust
+/// `shekyl_curve_tree_grow` would recompute only the *affected* ancestor chunks
+/// (bounded by chunk width) rather than the whole upper tree; correctness is
+/// identical, this form just makes the equivalence obvious.
+#[derive(Default)]
+struct CorrectTree {
+    layers: Vec<Vec<[u8; 32]>>,
+    leaf_outputs: usize,
+}
+
+impl CorrectTree {
+    fn drain(&mut self, new_leaf_scalars: &[[u8; 32]]) {
+        assert!(new_leaf_scalars.len().is_multiple_of(SCALARS_PER_LEAF));
+        let num_new = new_leaf_scalars.len() / SCALARS_PER_LEAF;
+        if num_new == 0 {
+            return;
+        }
+        let old_count = self.leaf_outputs;
+        let new_count = old_count + num_new;
+        self.leaf_outputs = new_count;
+        let mut leaf = self.layers.first().cloned().unwrap_or_default();
+        for chunk in (old_count / SELENE_CHUNK_WIDTH)..=((new_count - 1) / SELENE_CHUNK_WIDTH) {
+            let chunk_start = chunk * SELENE_CHUNK_WIDTH;
+            let first_new = old_count.saturating_sub(chunk_start);
+            let chunk_end = ((chunk + 1) * SELENE_CHUNK_WIDTH).min(new_count);
+            if chunk_end <= chunk_start + first_new {
+                continue;
+            }
+            let existing = leaf.get(chunk).copied().unwrap_or_else(selene_hash_init);
+            let mut ns: Vec<[u8; 32]> = Vec::new();
+            for out in (chunk_start + first_new)..chunk_end {
+                let b = (out - old_count) * SCALARS_PER_LEAF;
+                ns.extend_from_slice(&new_leaf_scalars[b..b + SCALARS_PER_LEAF]);
+            }
+            let h = hash_grow_selene(&existing, first_new * SCALARS_PER_LEAF, &ZERO, &ns)
+                .expect("leaf grow");
+            if chunk < leaf.len() {
+                leaf[chunk] = h;
+            } else {
+                leaf.push(h);
+            }
+        }
+        // Upper layers: narrow composition from the leaf layer — the fix.
+        self.layers = try_build_upper_layers(leaf, 0).expect("upper layers");
+    }
+}
+
+#[test]
+fn correct_grow_telescopes_to_batch_at_depth3() {
+    // The fix's correctness proof: leaf-incremental + narrow upper composition
+    // equals build_layers at every layer, INCLUDING the depth-3 layer-2 Selene root
+    // the daemon's incremental gets wrong. This is the reference a Rust
+    // shekyl_curve_tree_grow must reproduce (the daemon then calls it via FFI,
+    // retiring the C++ deepening orchestration).
+    for &n in &[1usize, 38, 39, 684, 685, 701, 800] {
+        let seed = 40_000 + n as u64;
+        let batch = build_layers(&{
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        });
+        let mut tree = CorrectTree::default();
+        let all = {
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        };
+        for out in 0..n {
+            tree.drain(&all[out * SCALARS_PER_LEAF..(out + 1) * SCALARS_PER_LEAF]);
+        }
+        assert_eq!(
+            tree.layers, batch,
+            "correct incremental grow != build_layers at n={n} (must telescope at every layer)"
+        );
     }
 }
 
