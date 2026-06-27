@@ -948,6 +948,64 @@ fn print_cover_dispersion_report() {
     }
 }
 
+fn print_cover_magnitudes_report() {
+    let report = cover::run_magnitude_report();
+    eprintln!("shekyl-staking-sim — §8 magnitude pass: K_sat(C) + derived C_boot (JOINT corner)");
+    eprintln!(
+        "Joint pessimistic corner: dispersed, timing_retain={:.1}, beta={:.0}, mean={:.0} (count is",
+        report.timing_retain, report.beta, report.mean_shards
+    );
+    eprintln!(
+        "  the x-axis). kSat = saturation knee at this count; covSKL = K_sat·floor; setKnee = joint"
+    );
+    eprintln!(
+        "  set there; base = k=0 (C_min-only) baseline; gain = setKnee−base; plat = robust plateau"
+    );
+    eprintln!(
+        "  width (dial rungs within 90% of peak — narrow ⇒ sharp optimum ⇒ widen conservatism)."
+    );
+    eprintln!();
+    eprintln!(
+        "{:>5} | {:>5} {:>7} {:>8} {:>6} {:>6} {:>6}",
+        "C", "kSat", "covSKL", "setKnee", "base", "gain", "plat",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "{:>5} | {:>5} {:>7.2} {:>8.2} {:>6.2} {:>6.2} {:>6}",
+            r.count,
+            r.k_sat,
+            r.cover_span_skl,
+            r.set_at_knee,
+            r.baseline_set,
+            r.set_gain,
+            r.plateau_width_rungs,
+        );
+    }
+    eprintln!();
+    match report.c_boot_continuity {
+        Some(c) => eprintln!(
+            "C_boot (recommended) = {c}: first count with K_sat>0; below it K_sat=0, so k(C)=K_sat(C) \
+             is CONTINUOUS through the boundary (cover span at it = {:.2} SKL ramps up from 0 — no",
+            report.c_boot_continuity_cover_span_skl
+        ),
+        None => eprintln!("K_sat is 0 at every swept count — the joint corner buys no usable cover."),
+    }
+    eprintln!(
+        "  step). The bootstrap clause is the k=0 TAIL of K_sat, not a glued floor (§8.4/§8.5)."
+    );
+    if let Some(cs) = report.c_substantial {
+        eprintln!(
+            "  Context: cover becomes 'substantial' (gain ≥ baseline) only at C={cs} — but conceding"
+        );
+        eprintln!("  up to there would re-introduce the step (K_sat already large), so it is NOT the cutoff.");
+    }
+    eprintln!("  C_min is economic (runway, 2d-1 ramp) — out of this arm.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing cover-magnitudes report: {e}"),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -976,6 +1034,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover-dispersion") {
         print_cover_dispersion_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-magnitudes") {
+        print_cover_magnitudes_report();
         return;
     }
 

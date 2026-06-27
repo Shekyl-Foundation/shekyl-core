@@ -1398,6 +1398,155 @@ pub fn run_dispersion_report() -> DispersionReport {
     dispersion_value()
 }
 
+// ===========================================================================
+// Magnitude pass (§8): pin the D(count) curve's numbers under the JOINT corner
+// (dispersed density × timing intersection × tight affordability) — the marginal
+// set overstates, so size against the joint set, not it. For each count C:
+// K_sat(C) (the saturation knee), the achievable set there, and the robust
+// PLATEAU WIDTH (a sharp optimum ⇒ widen conservatism, don't pin the peak).
+// C_boot is DERIVED, not guessed: the count below which even max-viable cover at
+// the knee buys less than the floor's worth of set over the k=0 baseline — so the
+// concession boundary falls out of the measured knee (§8.5).
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MagnitudeRow {
+    /// The count `f` reads (live active-bond count).
+    pub count: u64,
+    /// Saturation-knee dial at this count.
+    pub k_sat: u64,
+    /// `K_sat · floor` in SKL — the cover span the curve caps at here.
+    pub cover_span_skl: f64,
+    /// Realized joint set at the knee.
+    pub set_at_knee: f64,
+    /// Realized set at `k = 0` (the `C_min`-only / same-rung baseline).
+    pub baseline_set: f64,
+    /// What the blur buys over the baseline (`set_at_knee − baseline`).
+    pub set_gain: f64,
+    /// Robust plateau: dial values within 90% of the peak set (a wide band ⇒ safe
+    /// to pin; a narrow band ⇒ the optimum is sharp, widen the conservatism).
+    pub plateau_width_rungs: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MagnitudeReport {
+    pub mean_shards: f64,
+    pub timing_retain: f64,
+    pub beta: f64,
+    pub floor_skl: f64,
+    pub marginal_cutoff: f64,
+    pub rows: Vec<MagnitudeRow>,
+    /// **The continuity-clean `C_boot` (recommended):** the first count whose
+    /// saturation knee is non-zero (`K_sat > 0`). At/below it `K_sat = 0`, so
+    /// `k(C) = K_sat(C)` is **continuous through the boundary by construction** —
+    /// the bootstrap clause is the `k = 0` tail of `K_sat`, not a glued step (§8.4).
+    pub c_boot_continuity: Option<u64>,
+    /// The cover span just above `c_boot_continuity` — small ⇒ no step (§8.4).
+    pub c_boot_continuity_cover_span_skl: f64,
+    /// The "cover becomes substantial" marker: the first count whose knee buys ≥
+    /// the floor's worth (`set_gain ≥ baseline`). **NOT** the concession cutoff —
+    /// conceding up to here would re-introduce the §8.4 step (here `K_sat` is
+    /// already large). Reported as context only.
+    pub c_substantial: Option<u64>,
+}
+
+fn magnitude_pin() -> MagnitudeReport {
+    // Pessimistic JOINT corner: dispersed density, timing intersection on, tight
+    // affordability, pessimistic per-staker portfolio (thin mean held fixed so the
+    // x-axis is purely the count).
+    let (_, _, mean) = SCENARIOS[0];
+    let dispersion = Dispersion::Dispersed;
+    let timing_retain = 0.5;
+    let beta = 2.0;
+    let floor_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL;
+    let trials = 30_000u64;
+    let step = 2u64;
+    let ks: Vec<u64> = std::iter::once(0)
+        .chain((step..=32).step_by(step as usize))
+        .collect();
+    let counts: [u64; 14] = [2, 3, 4, 5, 6, 8, 10, 12, 15, 17, 25, 40, 79, 154];
+
+    let mut seed = 0x8A60_0001u64;
+    let mut rows = Vec::new();
+    for &count in &counts {
+        let curve: Vec<f64> = ks
+            .iter()
+            .map(|&k| {
+                seed += 1;
+                realized_payer_set_mean(
+                    count,
+                    mean,
+                    dispersion,
+                    k,
+                    timing_retain,
+                    beta,
+                    trials,
+                    seed,
+                )
+            })
+            .collect();
+        let baseline_set = curve[0]; // k = 0
+        let peak = curve.iter().cloned().fold(0.0_f64, f64::max);
+
+        // Saturation knee: first k-step whose marginal gain per rung < cutoff.
+        let mut k_sat = *ks.last().unwrap();
+        for w in 1..ks.len() {
+            let marginal = (curve[w] - curve[w - 1]) / step as f64;
+            if marginal < MARGINAL_CUTOFF {
+                k_sat = ks[w - 1];
+                break;
+            }
+        }
+        let set_at_knee = curve[ks.iter().position(|&k| k == k_sat).unwrap()];
+        // Plateau width: dial values within 90% of the peak.
+        let plateau_width_rungs = ks
+            .iter()
+            .zip(&curve)
+            .filter(|(_, &s)| s >= 0.9 * peak)
+            .count() as u64
+            * step;
+
+        rows.push(MagnitudeRow {
+            count,
+            k_sat,
+            cover_span_skl: k_sat as f64 * floor_skl,
+            set_at_knee,
+            baseline_set,
+            set_gain: set_at_knee - baseline_set,
+            plateau_width_rungs,
+        });
+    }
+
+    // Continuity-clean C_boot: the first count with a non-zero knee. Below it
+    // K_sat = 0, so k(C) = K_sat(C) is continuous through the boundary (§8.4).
+    let c_boot_continuity = rows.iter().find(|r| r.k_sat > 0).map(|r| r.count);
+    let c_boot_continuity_cover_span_skl = c_boot_continuity
+        .and_then(|c| rows.iter().find(|r| r.count == c))
+        .map(|r| r.cover_span_skl)
+        .unwrap_or(0.0);
+    // The "cover becomes substantial" marker (floor's-worth) — context, not the cutoff.
+    let c_substantial = rows
+        .iter()
+        .find(|r| r.set_gain >= r.baseline_set)
+        .map(|r| r.count);
+
+    MagnitudeReport {
+        mean_shards: mean,
+        timing_retain,
+        beta,
+        floor_skl,
+        marginal_cutoff: MARGINAL_CUTOFF,
+        rows,
+        c_boot_continuity,
+        c_boot_continuity_cover_span_skl,
+        c_substantial,
+    }
+}
+
+pub fn run_magnitude_report() -> MagnitudeReport {
+    magnitude_pin()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1554,6 +1703,29 @@ mod tests {
         assert_eq!(base.attacker_bonds, 0);
         assert!(base.count_uniform_set >= 1.0 && base.histogram_set >= 1.0);
         assert!(base.count_uniform_mod_set >= 1.0 && base.histogram_mod_set >= 1.0);
+    }
+
+    #[test]
+    fn magnitude_pin_derives_c_boot_and_set_grows_with_count() {
+        let r = magnitude_pin();
+        // A bigger live-bond count buys a bigger achievable set at the knee.
+        let first = &r.rows[0];
+        let last = r.rows.last().unwrap();
+        assert!(last.set_at_knee > first.set_at_knee);
+        // Continuity-clean C_boot: the first non-zero knee. At/below it the knee is
+        // 0, so k(C)=K_sat(C) is continuous through the boundary (no step).
+        let c_boot = r.c_boot_continuity.expect("continuity C_boot derivable");
+        if let Some(below) = r.rows.iter().rev().find(|x| x.count < c_boot) {
+            assert_eq!(
+                below.k_sat, 0,
+                "knee must be 0 just below C_boot (continuity)"
+            );
+        }
+        // The "substantial" marker sits at or above the continuity boundary (where
+        // K_sat is already large) — conceding to it would re-introduce the step.
+        if let Some(cs) = r.c_substantial {
+            assert!(cs >= c_boot);
+        }
     }
 
     #[test]
