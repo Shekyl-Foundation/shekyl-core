@@ -116,6 +116,56 @@ fn fcmp_spend_round_trips_self_consistently() {
 }
 
 #[test]
+fn pruned_fcmp_spend_round_trips_and_ingests() {
+    use shekyl_wire::PrunedError;
+    // The daemon's pruned fetch (`get_transactions prune:true`) keeps the consensus
+    // pqc_auths but drops the prunable proof (cryptonote_basic.h:523 gates
+    // `rctsig_prunable` on `!pruned`, while pqc_auths at :491-517 are written
+    // regardless). `Ct::read`'s EOF-after-pqc_auths tail must parse this
+    // storage-pruned full-spend form so the wallet can scan spend blocks on refresh
+    // (`get_transactions prune:true` → `parse_pruned_tx`); the pruned-safe ingestion
+    // validator must accept it; and `into_full()` — the one boundary to consensus
+    // code that needs the proof — must still reject it, so a pruned spend can never
+    // reach a verifier. Regression for the refresh-over-spends gap Track 2 surfaced.
+    let mut tx = synthetic_spend();
+    match &mut tx.ct {
+        Ct::Fcmp { prunable, .. } => *prunable = None,
+        Ct::Null(_) => unreachable!(),
+    }
+    let bytes = tx.serialize();
+
+    let parsed = Transaction::from_bytes(&bytes).expect("parse pruned FCMP++ spend");
+    assert_eq!(
+        parsed, tx,
+        "read(write(x)) must equal x for the pruned form"
+    );
+    assert_eq!(parsed.serialize(), bytes, "write must be deterministic");
+
+    match &parsed.ct {
+        Ct::Fcmp {
+            pqc_auths,
+            prunable,
+            ..
+        } => {
+            assert_eq!(
+                pqc_auths.len(),
+                parsed.prefix.inputs.len(),
+                "pqc_auths survive pruning (one per input)"
+            );
+            assert!(prunable.is_none(), "pruned spend carries no prunable proof");
+        }
+        Ct::Null(_) => panic!("expected Fcmp ct"),
+    }
+
+    // The pruned-safe ingestion validator (the refresh/scan boundary) accepts it.
+    parsed
+        .validate_context_free_pruned()
+        .expect("pruned spend must pass the pruned-safe ingestion validator");
+    // But consensus code that needs the proof can't reach a verifier with it.
+    assert_eq!(parsed.into_full().unwrap_err(), PrunedError);
+}
+
+#[test]
 fn fcmp_spend_rejects_trailing_bytes() {
     let mut bytes = synthetic_spend().serialize();
     bytes.push(0x00);
