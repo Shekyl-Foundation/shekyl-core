@@ -47,22 +47,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Unify the re-literaled `MAX_CLAIM_AGE_W` in `shekyl-staking-sim` to the
-  config single source (flagged 2026-06-27, 2d-1 P-scan design grounding).**
-  The consensus claim-window `W` is single-sourced: `config/consensus_constants.json:21`
-  (`max_claim_age_w: 26`) → generated into `pub const MAX_CLAIM_AGE_W` by
-  `rust/shekyl-archival-retention/build.rs:99` → consumed by the claim-window
-  (`claimed_epochs.rs:84`) and prune (`archival_ffi.rs:468`). But a **second, hand-written**
-  `pub const MAX_CLAIM_AGE_W: u64 = 26` lives in
-  `rust/shekyl-staking-sim/src/timing_cluster.rs:11`. Currently consistent, so no live
-  divergence — but it is the exact two-sources drift the single-source discipline forbids,
-  and the sim drives pre-genesis timing/cover parameter analysis, so a config change to `W`
-  would silently leave the sim validating against the old value. Pre-genesis because it
-  gates parameter-freeze correctness. Fix: have the sim import the generated const (add the
-  `shekyl-archival-retention` dep or thread the value), delete the literal. Surfaced while
-  confirming 2d-1's persona-retirement predicate (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` DQ8)
-  reads the consensus `W`, not a copy.
-
 - **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
   against the canonical spend format (flagged 2026-06-23, the tx-builder
   shekyl-wire spend cutover; resolved 2026-06-24).** `shekyl_wire::Transaction::weight()`

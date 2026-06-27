@@ -6,9 +6,9 @@
 hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) —
 for review; no code. Round-2's source-verification items are **resolved at source**: DQ8's
 terminal-bond predicate exists (`Unbond` + Full-retirement) with `W` single-sourced from
-config (re-literal flagged); the cover output's *form* is verified-covered (no recovery
-carve-out; FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to
-the **principal**. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
+config for production; the cover output's *form* is verified-covered (no recovery carve-out;
+FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to the
+**principal**. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
 (firewall-load-bearing — getting the isolation boundary wrong is a privacy break, not
 a refactor, so the boundary is decided *first* and the rest derived from it).
 
@@ -299,18 +299,18 @@ residency, its funding outputs out of the re-scan set. Two things to pin:
    **finality-deep**. **Resolution:** the union shrinks to **active bonds + the `W` backlog
    tail**, not lifetime bonds — DQ5's "bounded by bonded slots" bound is now *real*, anchored on
    the existing Unbond + Full-retirement predicate, retired on positive confirmation per (1).
-3. **`W` must be the consensus single source, not a re-literal (the one that could bite).**
-   The retirement predicate and consensus's claim-window must agree on `W` *exactly* — retire
-   a persona at a shorter `W` than consensus allows claims for, and the scan stops watching a
-   persona that can still receive reward outputs, under-counting SP-4's inflow and mis-sizing
-   `C_min` (the privacy parameter) again. `W` **is** single-sourced on the consensus side:
+3. **SP-5's retirement predicate must read the consensus `W`, not a re-literal.** The
+   predicate and consensus's claim-window must agree on `W` *exactly* — retire a persona at a
+   shorter `W` than consensus allows claims for, and the scan stops watching a persona that can
+   still receive reward outputs, under-counting SP-4's inflow and mis-sizing `C_min` (the
+   privacy parameter) again. `W` is single-sourced for consensus:
    `config/consensus_constants.json:21` (`max_claim_age_w: 26`) → generated into
    `pub const MAX_CLAIM_AGE_W` by `shekyl-archival-retention/build.rs:99` → consumed by the
-   claim-window (`claimed_epochs.rs:84`) and prune (`archival_ffi.rs:468`). **SP-5's retirement
-   logic must read *that* generated const, never a literal** — and note the live foot-gun: a
-   **second, re-literaled** `MAX_CLAIM_AGE_W = 26` already exists in
-   `shekyl-staking-sim/src/timing_cluster.rs:11` (sim-only, not consensus, but the exact
-   two-sources drift this discipline forbids — worth a FOLLOWUPS unify).
+   claim-window (`claimed_epochs.rs:84`) and prune (`archival_ffi.rs:468`). **SP-5 (production)
+   must read *that* generated const**, never a copied literal. (The independent
+   `MAX_CLAIM_AGE_W` in `shekyl-staking-sim` is *not* a violation — the sim is a
+   configuration-sweep harness, never compiled into a production binary; differing from
+   production values is its purpose.)
 
 ---
 
