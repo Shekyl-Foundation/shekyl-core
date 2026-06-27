@@ -4,10 +4,11 @@
 §3.6 (2d-1 is 2d's first sub-part; this doc is the architecture round nested under it).
 **Status:** ROUND 0 (boundary — ratified) + ROUND 1 (per-SP design, §6) + ROUND 2 (seam
 hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) —
-for review; no code. Round-2's two source-verification action items are now **resolved**:
-DQ8's terminal-bond predicate exists (`Unbond` + Full-retirement), and the cover output's
-*form* is verified-covered (no recovery carve-out; FA-6 false-negative-free). Rounds accrete
-in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
+for review; no code. Round-2's source-verification items are **resolved at source**: DQ8's
+terminal-bond predicate exists (`Unbond` + Full-retirement) with `W` single-sourced from
+config (re-literal flagged); the cover output's *form* is verified-covered (no recovery
+carve-out; FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to
+the **principal**. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
 (firewall-load-bearing — getting the isolation boundary wrong is a privacy break, not
 a refactor, so the boundary is decided *first* and the rest derived from it).
 
@@ -294,10 +295,22 @@ residency, its funding outputs out of the re-scan set. Two things to pin:
    named in design: **"Full retirement = bond released ∧ backlog exhausted/lapsed; then
    `p_slot` burn"** (`PHASE_2B_FSM_RETOOL.md:209`). So a persona is wipe-eligible when its bond
    is **Unbonded** *and* its reward **backlog window `W` has lapsed** (it can still claim for up
-   to `W ≈ 26` epochs after Unbond, so it must keep scanning until then) *and* both are
+   to `W` epochs after Unbond, so it must keep scanning until then) *and* both are
    **finality-deep**. **Resolution:** the union shrinks to **active bonds + the `W` backlog
    tail**, not lifetime bonds — DQ5's "bounded by bonded slots" bound is now *real*, anchored on
    the existing Unbond + Full-retirement predicate, retired on positive confirmation per (1).
+3. **`W` must be the consensus single source, not a re-literal (the one that could bite).**
+   The retirement predicate and consensus's claim-window must agree on `W` *exactly* — retire
+   a persona at a shorter `W` than consensus allows claims for, and the scan stops watching a
+   persona that can still receive reward outputs, under-counting SP-4's inflow and mis-sizing
+   `C_min` (the privacy parameter) again. `W` **is** single-sourced on the consensus side:
+   `config/consensus_constants.json:21` (`max_claim_age_w: 26`) → generated into
+   `pub const MAX_CLAIM_AGE_W` by `shekyl-archival-retention/build.rs:99` → consumed by the
+   claim-window (`claimed_epochs.rs:84`) and prune (`archival_ffi.rs:468`). **SP-5's retirement
+   logic must read *that* generated const, never a literal** — and note the live foot-gun: a
+   **second, re-literaled** `MAX_CLAIM_AGE_W = 26` already exists in
+   `shekyl-staking-sim/src/timing_cluster.rs:11` (sim-only, not consensus, but the exact
+   two-sources drift this discipline forbids — worth a FOLLOWUPS unify).
 
 ---
 
@@ -388,14 +401,23 @@ designs these alongside the per-SP work, not as a cleanup pass after.
   **The output *form* is verified-covered (source check):** the recovery path
   (`scan_output_recover_with_ml_kem_dk`, `scan.rs:626–648`) has **no form-specific carve-out**
   (no output-type / amount-encoding / coinbase branch), and the FA-6 view-tag pre-filter is
-  **false-negative-free for owned outputs** — the tag is a deterministic function of the
-  recipient's KEM keys + output index, computed identically by sender and scanner
-  (`crypto-pq/src/output.rs:509–517`) — so a **non-colliding** cover output is *guaranteed*
-  discovered regardless of form. The residuals are therefore only the **non-form** ones
-  (transport gap / pruned source — SP-6's availability rule) and **variant mis-selection**,
-  already type-pinned by SP-1's `GuaranteedViewPair`-only construction. (The `Guaranteed`
-  guarantee *drops* a colliding `output.key`, so the cover output must carry a fresh one-time
-  key — which `P`, as its own sender, controls.)
+  **false-negative-free for owned outputs** — the tag comes from the *single* function
+  `derive_view_tag_prefilter(ml_kem_ss, output_index)` (`crypto-pq/src/derivation.rs:263`)
+  called identically by the **sender** (`output.rs:278`) and the **scanner** (`output.rs:509`)
+  over the same recipient-recomputable shared secret, so it cannot reject an owned output.
+  A non-colliding cover output is therefore *guaranteed* discovered regardless of form —
+  **modulo the one residual: a negligible (~2⁻¹⁶⁴, ML-KEM-768) decapsulation failure** that
+  would recover a different shared secret and miss the tag. Cryptographically irrelevant as a
+  probability, but named, not rounded to zero, because *this* output's miss forces a re-link.
+  The other residuals are the **non-form** ones (transport gap / pruned source — SP-6's
+  availability rule) and **variant mis-selection** (already type-pinned by SP-1's
+  `GuaranteedViewPair`-only). One correction on the fresh-key point: `Guaranteed` *drops* a
+  colliding `output.key`, so the cover output needs a fresh one-time key — and the sender that
+  generates it is the **principal**, not `P` (`ARCHIVAL_COVER_DRAW.md:53,99`: "principal sends
+  `bond_floor + cover` to `P`"). Freshness rides the principal wallet's random tx-key (honest
+  stealth construction), so the guarantee holds — but it rests on the *principal's* correctness,
+  a **different firewall controller** than `P`; naming that precisely is the firewall's whole
+  point (`P` ≠ principal).
 
 ---
 
