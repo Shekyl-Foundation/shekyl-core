@@ -891,29 +891,53 @@ reserved for the DQ6 opt-out. Sized against **pessimistic slow early yield** (un
 re-links `P` too soon), pending the 2d-1 earnings-ramp numbers. It is the lower edge of
 every draw, independent of `C` — the envelope's floor.
 
-### 8.4 The shape `k(C)` — smooth and monotone (hard constraint)
+### 8.4 The shape `k(C)` — smooth and monotone, *continuous through `C_boot`* (hard constraint)
 
-Between the floor and the cap, `k(C)` rises **smoothly and monotonically** from `0` (at the
-bootstrap edge) toward `K_sat(C)` as `C` grows: more live bonds ⇒ wider blur, up to the
-knee. **No steps** — a step at any count threshold is the continuous analogue of the cohort
-split (§7.8), sorting bonds into below-/above-threshold cover-regimes at a public frozen
-threshold (a fingerprint, un-revisable). The exact `k(C)` magnitudes inherit the `--cover` /
-`--cover-fn` analysis under the **pessimistic** corner, pinned conservatively at genesis
-(per §2.5 the bound can't be re-tuned later); a future `f` may *confirm* but not *fix* them.
+Between the floor and the cap, `k(C)` rises **smoothly and monotonically** from `0` toward
+`K_sat(C)` as `C` grows: more live bonds ⇒ wider blur, up to the knee. **No steps** — a
+step at any count threshold is the continuous analogue of the cohort split (§7.8), sorting
+bonds into below-/above-threshold cover-regimes at a public frozen threshold (a fingerprint,
+un-revisable). The `k(C)` magnitudes inherit the `--cover` / `--cover-fn` analysis under the
+**pessimistic** corner, pinned conservatively at genesis (per §2.5 the bound can't be
+re-tuned later); a future `f` may *confirm* but not *fix* them.
 
-### 8.5 The bootstrap clause (the named low-count exception)
+**Continuity through the bootstrap boundary — the one place this can break.** The
+smooth/monotone constraint does *not* by itself enforce continuity at `C_boot`: if the curve
+jumps from `k = 0` (bootstrap) to some `k(C_boot⁺) > 0`, then `C_boot` **is** a step — the
+cohort split relocated to the bootstrap edge, and an attacker who knows the public, frozen
+`C_boot` reads a bond's cover-regime off whether its plausible cover sits at the `C_min`-only
+point or in the `k > 0` band. So **`k(C)` must decay to `0` as `C → C_boot⁺`** — the
+bootstrap clause is the **limit of the shape**, not a glued-on floor. (The alternative —
+accept the step and name it the one sanctioned discontinuity with its cost stated — is
+rejected: there is no reason to introduce the fingerprint we exclude everywhere else.)
 
-At epochs 0–1 the last-closed `C ≈ 0`. A bare smooth curve would hand the earliest stakers
-the **narrowest** cover at the moment the live set is smallest and the cold-start link most
-exposed. So pin an **explicit clause**, not an extrapolation:
+### 8.5 The bootstrap clause and `C_boot` (a *derived policy threshold*, not a confirm-not-fix magnitude)
 
-> **For `C < C_boot`, `k(C) = 0`** — the draw is `cover = C_min` exactly (runway only, no
-> blur), conceding the bootstrap cohort to the `N_P`-independent seams (network-isolation +
-> funder-scope), consistent with how `f` treats every sparse state.
+At epochs 0–1 the last-closed `C ≈ 0`. So pin an **explicit clause**, continuous with §8.4:
 
-This is a decision on the record, genesis-frozen and itself un-revisable. (`C_boot` is the
-count below which the cover's blur buys no usable set — sized with `K_sat(C)` against the
-same pessimistic populations.)
+> **As `C → C_boot⁺`, `k(C) → 0`, and for `C < C_boot`, `k(C) = 0`** — the draw is
+> `cover = C_min` (runway only, no blur), conceding the bootstrap cohort to the
+> `N_P`-independent seams (network-isolation + funder-scope), consistent with how `f` treats
+> every sparse state. On the record, genesis-frozen, un-revisable.
+
+**`C_boot` is different in *kind* from `K_sat` / `C_min`, and must be reasoned, not guessed.**
+§2.5's *confirm-not-fix* applies to `K_sat` and `C_min` (two-sided-interior, pinned against
+the pessimistic corner; post-testnet confirms the corner was adequate). `C_boot` is a
+**frozen policy threshold** — the count below which the cover gives up — and it is the one
+magnitude post-testnet **cannot** confirm, because the bootstrap population is a
+**genesis-once** event with no steady-state data to tell you where epochs 0–1 should have cut
+over. Both errors are un-recoverable and asymmetric in *who is misled*: set it **too low** and
+a thin-but-past-bootstrap population gets a near-`0` `k` from the smooth curve **while
+believing it is covered** (the gap between *openly conceded* and *nominally covered but
+effectively not* — exactly where a staker is most misled about their own protection); set it
+**too high** and you concede stakers who'd have had a real set. So **derive `C_boot` from the
+saturation structure itself** — but the two candidate derivations *conflict*, and continuity
+(the harder constraint, §8.4) decides between them (measured in §8.7): the "buys less than
+the floor's worth" bar lands where `K_sat` is already *large*, so conceding `k = 0` below it
+re-introduces the step. The continuity-clean derivation is therefore **`C_boot` = the count
+where `K_sat(C)` itself reaches `0`** (the knee vanishes) — at/below it `k(C) = K_sat(C)` is
+already `0`, so the bootstrap clause is the curve's own tail, not an override. The
+floor's-worth count is kept as the *"cover becomes substantial"* marker, **not** the cutoff.
 
 ### 8.6 Out of scope here (downstream)
 
@@ -921,4 +945,38 @@ The `draw_cover_amount` wiring (C4) and the `CoverAmount` orchestration (the
 `bond_floor + cover` send, `P`-change threading) remain 2d. The dispersion scalar stays
 deferred (§7.9, capital-efficiency, economic reopen trigger). This section pins the **frozen
 shape of `f`**; the magnitude pins (`K_sat` curve, `C_min`, `C_boot`) are the conservative
-genesis numbers the `--cover` analysis sets under the pessimistic corner.
+genesis numbers the `--cover` analysis sets under the pessimistic corner (§8.7).
+
+### 8.7 Measured magnitudes (`--cover-magnitudes`, joint corner)
+
+The pass runs the **joint** corner (dispersed, `timing_retain = 0.5`, `β = 2`, thin per-staker
+mean), `C` on the x-axis — *not* the amount-marginal set, which overstates. Per count: the
+saturation knee `K_sat(C)`, its cover span, the achievable joint set, the `k = 0` baseline,
+and the robust **plateau width** (dial rungs within 90% of peak):
+
+| `C` | `K_sat` | cover span | set@knee | baseline | gain | plateau (rungs) |
+| --- | --- | --- | --- | --- | --- | --- |
+| ≤ 12 | 0 | 0 | ≈ baseline | 1.0–1.3 | 0 | 14–34 |
+| 15 | 4 | 3.0 SKL | 2.27 | 1.41 | 0.86 | 14 |
+| 17 | 6 | 4.5 SKL | 2.79 | 1.47 | 1.31 | 14 |
+| 25 | 8 | 6.0 SKL | 3.99 | 1.71 | 2.28 | 12 |
+| 40 | 8 | 6.0 SKL | 5.84 | 2.16 | 3.68 | 10 |
+| 79 | 10 | 7.5 SKL | 11.1 | 3.29 | 7.81 | 10 |
+| 154 | 10 | 7.5 SKL | 20.6 | 5.51 | 15.1 | 10 |
+
+Three reads:
+
+- **`K_sat(C)` ramps and caps low.** It activates at `C ≈ 13–15` and caps at **`k = 10`
+  (7.5 SKL)** even at thick — the joint corner saturates low (consistent with §7.4). The
+  `K_sat(C)` curve is the **cap envelope**; the frozen `k(C)` is a smooth ramp *under* it.
+- **The pins are robust, not sharp.** Plateau widths are **10–16+ rungs** near-peak, so a
+  band around each `K_sat` stays near-peak — safe to freeze conservatively (a narrow plateau
+  would have been the signal to widen, per the magnitude-pass rule; none is).
+- **`C_boot` resolved by continuity.** "Buys ≥ floor's worth" lands at **`C = 25`** (where
+  `K_sat = 8`), so conceding below it is a `0 → 8` step. The continuity-clean cutoff is the
+  `K_sat → 0` boundary at **`C ≈ 13–15`**: below it the cap is already `0`, so the bootstrap
+  concession is intrinsic and continuous. `C = 25` is reported as the "cover becomes
+  substantial" marker only. **First-cut genesis pins:** `K_sat(C)` per the table (a smooth
+  monotone ramp under it, capping at `k = 10 / 7.5 SKL`), `C_boot ≈ 13–15`; `C_min` still
+  pending the 2d-1 ramp. Conservative-frozen per §2.5 (confirm-not-fix for `K_sat`; `C_boot`
+  reasoned-not-confirmed per §8.5).
