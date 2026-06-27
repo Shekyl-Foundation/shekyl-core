@@ -31,10 +31,12 @@ snapshot — and its **bootstrap boundary** must be pinned deliberately. The sta
 `f` trusts is now the whole ballgame. **Resolved (§7.9, `--cover-targeting`):** the
 statistic is the **bond count** (global) driving a **uniform `D`** — a histogram's
 per-rung response *is* a rung-local targeting surface (it halves a chosen victim at
-`m = 5` vs count's `> 8`, surgically vs broadly), so count-uniform is pinned (coarse
-global dispersion scalar the only sanctioned enrichment). Grounded on the existing
-epoch-close state (`consensus_state`), with last-closed-epoch keying giving finality
-for free.
+`m = 5` vs count's `> 8`, surgically vs broadly), so count-uniform is pinned (the
+dispersion scalar is a *deferrable* capital-efficiency refinement, not a genesis
+requirement — measured). **Grounding correction (§7.9):** the statistic must be the
+**standing-bond *stock*** read at the last-closed epoch boundary (final-by-construction);
+`EpochCloseInputs.bonds` is the *serving* set, not the stock, and the standing aggregate
+is audit-only today — so a canonical stock read is itself a spec item, not a ready field.
 **Parent design:** `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.4 (cover-stays-with-P,
 SETTLED) + §SP-2.d; `GENESIS_TX_WIRE_FORMAT.md` §2.0 (the security-crux flag);
 `ARCHIVAL_FIREWALL_GATE6.md` §10.12 (the funding seam); `STAKER_ARCHIVAL_SIM.md`
@@ -710,18 +712,34 @@ choices, and the manipulation surface is the one a constant never had.
 Re-grounding §7.8 on `dev` lands the abstract statistic on concrete consensus code,
 and settles its one open DQ (count vs histogram) by measurement.
 
-**The statistic source already exists.** `shekyl-archival-retention::consensus_state`
-computes `EpochCloseResult` / `EpochCloseInputs` at every settlement-epoch close, and
-`EpochCloseInputs.bonds: &[EpochCloseBond]` carries per-bond `held_shard_ids` — so the
-**live-bond count (`N_P`)** and the **rung histogram** are both derivable from it. `f`
-reads the most-recently-*closed* epoch's result, which gives two §7.8 properties **for
-free**: it is ≥ `SETTLEMENT_EPOCH_BLOCKS` (10 000) blocks deep — far below any
-`NetworkSafetyConstants::max_reorg_depth` (there is no canonical production `720`
-const; the `720` cited earlier is sim-local) — so it is **final by construction**, and
-it is **fixed for the whole current epoch**, so draw and post read the identical value.
-Reorg-desync and draw-post-desync collapse to "key to the last closed epoch"; no reorg
-machinery enters the cover path. Manipulation (and the bootstrap boundary) are all that
-remain.
+**The statistic must be a *stock*, and that needs care — corrected at source.** `f`'s
+whole manipulation/finality argument rests on the input being the **standing live-bond
+population** (a stock: slow, expensive to suppress across a full epoch), not a flow
+(per-epoch deltas) or a serving subset. Checking `consensus_state` at source:
+`EpochCloseInputs.bonds: &[EpochCloseBond]` is **not** the standing stock — its gather
+contract is "one entry per distinct `P_id` *holding at least one serve-credit row* for
+the epoch," and idle-bonded `P`s "may be omitted." So it is the **serving/credited
+set**, which both **drops posted-but-idle bonds** (wrong population — the cover mixes
+over *all* posted bonds) and measures manipulation against serving-churn, not standing
+stock. The true standing stock *is* expressible — `conservation::ConservationSnapshot`
+carries `total_bonded_atomic` and `per_p_bonded` (count = `per_p_bonded.len()`) — but
+that module is flagged **"Audit/KAT only … a full `Σ_P` scan is O(`N_P`); live
+enforcement would need incremental maintenance"**. So there is **no ready-made,
+live-maintained standing-bond-count** to read; the earlier "the source already exists in
+`EpochCloseInputs.bonds`" claim was wrong.
+
+**Consequence:** `f` needs a **canonical, deterministic standing-bond-count read at the
+last-closed epoch boundary**, defined as part of this spec — either a canonical
+epoch-boundary `Σ_P` gather (acceptable: epoch close is already a heavy consensus
+compute, and it runs once per 10 000 blocks) or a maintained standing-count aggregate.
+It must **not** read the serving-set close payload directly. Given a stock source, the
+two §7.8 finality properties still come free — keyed to the most-recently-*closed*
+epoch the value is ≥ `SETTLEMENT_EPOCH_BLOCKS` (10 000) blocks deep (far below any
+`NetworkSafetyConstants::max_reorg_depth`; the `720` cited earlier is sim-local, not a
+canonical prod const) so it is **final by construction** and **fixed for the whole
+current epoch** (draw and post read the identical value) — and the Arm-D manipulation
+numbers (measured against honest *standing* occupancy) are the right ones. Manipulation,
+the stock source, and the bootstrap boundary are what remain.
 
 **Count vs histogram — settled by `--cover-targeting`, not argument.** The histogram's
 only value over the count is a **per-rung** response (narrow where your local rung is
@@ -748,15 +766,56 @@ that the attacker's bonds dominate it; the global count (17) dilutes the same ma
 This makes the targetable design *unrepresentable* (the make-bad-states-unrepresentable
 move), keeps the one live threat — manipulation — broad, expensive, and visible, and is
 one consistent rule with the bootstrap boundary (low count → narrow → concede to the
-`N_P`-independent seams). The **only** sanctioned enrichment is a **coarse global
-dispersion scalar** (e.g. effective-occupied-rungs or an occupancy IPR) feeding the same
-uniform `D` — it recovers the clustered-vs-dispersed signal that actually moved the
-anonymity set (§7.4: 2.1% vs 6.8% thin-tail) while staying global, so it inherits the
-count's targeting-resistance (the attacker must move a whole-population measure, not
-sculpt a rung). A per-rung histogram is **rejected**.
+`N_P`-independent seams). A per-rung histogram is **rejected**.
 
-**Still open (the response-curve spec, post-this-arm):** the width response `D(count[,
-dispersion])` — target set → capped at the saturation knee → floored at `C_min`, smooth
-and monotone; the **deliberate bootstrap boundary** (epoch 0–1, count ≈ 0); the
-dispersion scalar's exact definition; and `draw_cover_amount` in `shekyl-standoff`
-(C4, the `draw_entry_gap` sibling) emitting the inert `CoverAmount` at `stake_timing.rs`.
+**The dispersion scalar buys capital, not anonymity — measured (`--cover-dispersion`).**
+The candidate enrichment is a **coarse global dispersion scalar** — the occupancy
+inverse-participation-ratio `(Σ n_r)² / Σ n_r²` (`1` = fully clustered → `N_P` = fully
+dispersed), global so it keeps the targeting-resistance. The arm tested whether count
+*alone* under-serves the dispersed bracket (§7.4's load-bearing input). It does — at the
+thin corner the dispersed victim's set is `4.3` vs clustered `7.0` under count-only (a
+real ~40% gap). But the scalar closes that gap (`2.7 → 1.4`) **almost entirely by
+narrowing the over-served clustered side** (`7.0 → 5.7`, capital saved), **not** by
+lifting the dispersed side (`4.3 → 4.4`, +0.1): the dispersed thin population is
+**saturation-limited** (§7.4) — widening can't gather neighbours that aren't there. So
+the scalar's real value is **capital efficiency** (right-size dense periods, less §7.5
+over-tax), **not** anonymity for the under-served tier, which is conceded to the
+`N_P`-independent seams anyway (the three-tier framing). **Verdict: count-only is
+sufficient for the *anonymity* goal; the dispersion scalar is a *deferrable*
+capital-efficiency refinement (IPR, global), not a genesis requirement** — add it
+post-testnet only if dense-period over-tax proves binding, per minimize-the-surface.
+
+**The response-curve spec (next), with four constraints pinned *deliberately* — not
+left to fall out of the curve's math, because each is genesis-frozen and un-revisable:**
+
+- **Statistic source (the §7.9 grounding gap):** define the canonical standing-bond-count
+  read at the last-closed epoch boundary (a `Σ_P` gather, or a maintained aggregate) —
+  the stock, **not** the serving-set close payload.
+- **Bootstrap boundary as a *stated clause*, not an extrapolation.** At epochs 0–1 the
+  last-closed count ≈ 0; a smooth low-count→narrow curve would hand the earliest stakers
+  the **narrowest** cover at the moment the live set is smallest and the cold-start link
+  most exposed. Pin it as an explicit clause — *"below `count = C_boot`, `D` is [floor /
+  the other seams carry it]"* — conceding the bootstrap cohort to network-isolation +
+  funder-scope (consistent with how `f` treats every sparse state), a decision on the
+  record. Genesis-frozen, so the clause is itself un-revisable.
+- **The saturation-knee cap is self-referential — pin it in lockstep.** The cap is
+  computed from the *same* count `f` reads, so it must stay monotone and sane as count
+  moves under a suppression attempt, or the manipulation surface closed on the width
+  re-opens on the cap. State the cap as a function of the **same slow standing-stock
+  aggregate**, not a separately-sourced number, so the whole curve moves in lockstep with
+  one final, expensive-to-move input.
+- **Smooth and monotone is a *hard constraint* on `D(count)`, not a preference.** Any step
+  is the continuous analogue of the cohort split — it sorts bonds into below-step and
+  above-step cover-regimes at a public, frozen count threshold (a fingerprint,
+  un-revisable). Monotone-and-smooth keeps every bond on one continuum.
+
+And `draw_cover_amount` in `shekyl-standoff` (C4, the `draw_entry_gap` sibling) emitting
+the inert `CoverAmount` at `stake_timing.rs`.
+
+**Dispersion scalar — deferred, *with* its Arm-D check.** If the scalar is ever added
+(post-testnet, for capital efficiency), it must first clear the **same Arm-D bar the
+histogram failed**: confirm a global IPR/occupied-rungs measure feeding a uniform `D`
+**cannot** be sculpted rung-locally (it almost certainly can't — moving a whole-population
+dispersion measure takes far more bond mass than moving one rung's local signal — but it
+is a one-arm check, not an assumption). Since count-only ships at genesis, this check is
+deferred with the scalar; if it doesn't clear cheaply, drop it and stay count-only.
