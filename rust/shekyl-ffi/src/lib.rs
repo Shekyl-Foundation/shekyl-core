@@ -2941,6 +2941,97 @@ pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
     }
 }
 
+/// Compose every curve-tree layer **above the leaf layer** from the leaf-chunk
+/// layer, the narrow way [`shekyl_fcmp::tree::build_layers`] does — the correct
+/// producer-side grow that telescopes to the reference root.
+///
+/// This is the consensus fix for the depth-3 layer-2 divergence: the daemon's
+/// in-place incremental deepening built a newly-created parent chunk from only the
+/// deepening child (db_lmdb.cpp `grow_curve_tree`), dropping the pre-existing
+/// sibling. The daemon keeps maintaining the **leaf** layer with
+/// [`shekyl_curve_tree_hash_grow_selene`] (which telescopes — proven), then calls
+/// this to recompose every layer above it and obtain the consensus root, retiring
+/// the C++ upper-layer propagation entirely.
+///
+/// Output sizes are deterministic from `num_leaf_chunks` via the
+/// SELENE/HELIOS chunk-width ladder, so the caller pre-allocates:
+/// - `out_chunks_ptr`: upper-layer chunk hashes, layer 1 first then layer 2…, 32B each;
+/// - `out_layer_sizes_ptr`: chunk count per upper layer (`*out_num_upper_layers` entries);
+/// - `out_num_upper_layers`: number of upper layers written;
+/// - `out_root_ptr`: the 32B consensus root.
+///
+/// Returns false on null pointers, insufficient output capacity, or a malformed
+/// leaf node (a node that fails the cycle-scalar conversion).
+///
+/// # Safety
+/// Caller must ensure every pointer is valid for its declared length/capacity.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_curve_tree_grow_upper_layers(
+    leaf_chunks_ptr: *const u8,
+    num_leaf_chunks: u64,
+    out_chunks_ptr: *mut u8,
+    out_chunks_capacity: u64,
+    out_layer_sizes_ptr: *mut u64,
+    out_layer_sizes_capacity: u64,
+    out_num_upper_layers: *mut u64,
+    out_root_ptr: *mut u8,
+) -> bool {
+    if out_chunks_ptr.is_null()
+        || out_layer_sizes_ptr.is_null()
+        || out_num_upper_layers.is_null()
+        || out_root_ptr.is_null()
+        || (num_leaf_chunks > 0 && leaf_chunks_ptr.is_null())
+    {
+        return false;
+    }
+
+    let n = usize::try_from(num_leaf_chunks).unwrap_or(0);
+    let leaf_chunks: Vec<[u8; 32]> = (0..n)
+        .map(|i| unsafe {
+            let mut b = [0u8; 32];
+            std::ptr::copy_nonoverlapping(leaf_chunks_ptr.add(i * 32), b.as_mut_ptr(), 32);
+            b
+        })
+        .collect();
+
+    let Some(layers) = shekyl_fcmp::tree::try_build_upper_layers(leaf_chunks, 0) else {
+        return false;
+    };
+    // `layers[0]` is the leaf layer the caller passed; the upper layers are `[1..]`.
+    // The root is the top layer's sole node (or the empty-tree leaf-init sentinel,
+    // which `build_layers` defines).
+    let root = layers
+        .last()
+        .and_then(|l| l.first())
+        .copied()
+        .unwrap_or_else(shekyl_fcmp::tree::selene_hash_init);
+    let upper = &layers[1..];
+    let total: usize = upper.iter().map(Vec::len).sum();
+    if u64::try_from(total).unwrap_or(u64::MAX) > out_chunks_capacity
+        || u64::try_from(upper.len()).unwrap_or(u64::MAX) > out_layer_sizes_capacity
+    {
+        return false;
+    }
+
+    let mut written = 0usize;
+    for (li, layer) in upper.iter().enumerate() {
+        unsafe {
+            *out_layer_sizes_ptr.add(li) = u64::try_from(layer.len()).unwrap_or(0);
+        }
+        for node in layer {
+            unsafe {
+                std::ptr::copy_nonoverlapping(node.as_ptr(), out_chunks_ptr.add(written * 32), 32);
+            }
+            written += 1;
+        }
+    }
+    unsafe {
+        *out_num_upper_layers = u64::try_from(upper.len()).unwrap_or(0);
+        std::ptr::copy_nonoverlapping(root.as_ptr(), out_root_ptr, 32);
+    }
+    true
+}
+
 // ─── FCMP++: Ed25519 → Selene scalar conversion ────────────────────────────
 
 /// Convert a compressed Ed25519 point (32 bytes) to a Selene scalar
@@ -4947,6 +5038,73 @@ mod tests {
     fn test_release_multiplier_ffi() {
         let m = shekyl_calc_release_multiplier(100, 100, 800_000, 1_300_000);
         assert_eq!(m, 1_000_000);
+    }
+
+    #[test]
+    fn grow_upper_layers_ffi_equals_build_layers() {
+        // The producer-side fix: the FFI grow over the leaf-chunk layer reproduces
+        // build_layers' upper layers + root EXACTLY, including the depth-3 layer-2
+        // Selene root the daemon's incremental deepening gets wrong. Sizes span
+        // depth-1 (≤38), depth-2 (39..684) and depth-3 (685, 701).
+        use shekyl_fcmp::tree::{build_layers, SCALARS_PER_LEAF};
+        for &n_outputs in &[1usize, 38, 39, 684, 685, 701] {
+            // Small little-endian integers are canonical Selene field elements.
+            let leaf_scalars: Vec<[u8; 32]> = (0..n_outputs * SCALARS_PER_LEAF)
+                .map(|i| {
+                    let mut b = [0u8; 32];
+                    let v = u64::try_from(i % 251).unwrap() + 1;
+                    b[..8].copy_from_slice(&v.to_le_bytes());
+                    b
+                })
+                .collect();
+            let reference = build_layers(&leaf_scalars);
+            let leaf_layer = &reference[0];
+            let leaf_flat: Vec<u8> = leaf_layer.iter().flatten().copied().collect();
+
+            let upper_total: usize = reference[1..].iter().map(Vec::len).sum();
+            let mut out_chunks = vec![0u8; (upper_total + 1) * 32];
+            let mut out_sizes = vec![0u64; 16];
+            let mut num_upper = 0u64;
+            let mut root = [0u8; 32];
+            let ok = unsafe {
+                shekyl_curve_tree_grow_upper_layers(
+                    leaf_flat.as_ptr(),
+                    u64::try_from(leaf_layer.len()).unwrap(),
+                    out_chunks.as_mut_ptr(),
+                    u64::try_from(out_chunks.len() / 32).unwrap(),
+                    out_sizes.as_mut_ptr(),
+                    u64::try_from(out_sizes.len()).unwrap(),
+                    std::ptr::addr_of_mut!(num_upper),
+                    root.as_mut_ptr(),
+                )
+            };
+            assert!(ok, "FFI grow returned false at n={n_outputs}");
+
+            let mut got: Vec<Vec<[u8; 32]>> = Vec::new();
+            let mut off = 0usize;
+            for &sz in out_sizes.iter().take(usize::try_from(num_upper).unwrap()) {
+                let sz = usize::try_from(sz).unwrap();
+                let layer: Vec<[u8; 32]> = (0..sz)
+                    .map(|k| {
+                        let mut b = [0u8; 32];
+                        b.copy_from_slice(&out_chunks[(off + k) * 32..(off + k + 1) * 32]);
+                        b
+                    })
+                    .collect();
+                off += sz;
+                got.push(layer);
+            }
+            assert_eq!(
+                got,
+                reference[1..],
+                "FFI upper layers != build_layers at n={n_outputs}"
+            );
+            assert_eq!(
+                &root,
+                reference.last().unwrap().first().unwrap(),
+                "FFI root != build_layers root at n={n_outputs}"
+            );
+        }
     }
 
     #[test]
