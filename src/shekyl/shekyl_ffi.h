@@ -1086,6 +1086,33 @@ uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
 uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
 uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
 
+/// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
+/// layer — the correct producer-side grow that telescopes to the reference root
+/// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen
+/// dropped the pre-existing sibling). The daemon keeps maintaining the leaf layer
+/// with shekyl_curve_tree_hash_grow_selene (which telescopes), then calls this to
+/// recompose every upper layer and obtain the consensus root.
+///
+/// Output sizes are deterministic from num_leaf_chunks via the SELENE/HELIOS
+/// chunk-width ladder, so the caller pre-allocates:
+///   leaf_chunks_ptr:      num_leaf_chunks * 32 bytes (leaf-layer chunk hashes).
+///   out_chunks_ptr:       >= (sum of upper-layer chunk counts) * 32 bytes; the
+///                         upper chunks are written layer 1 first, then layer 2, …
+///   out_layer_sizes_ptr:  >= (num upper layers) entries; chunk count per upper layer.
+///   out_num_upper_layers: number of upper layers written.
+///   out_root_ptr:         32 bytes — the consensus curve-tree root.
+/// Returns true on success; false on a null pointer, insufficient capacity, or a
+/// malformed leaf node.
+bool shekyl_curve_tree_grow_upper_layers(
+    const uint8_t* leaf_chunks_ptr,
+    uint64_t num_leaf_chunks,
+    uint8_t* out_chunks_ptr,
+    uint64_t out_chunks_capacity,
+    uint64_t* out_layer_sizes_ptr,
+    uint64_t out_layer_sizes_capacity,
+    uint64_t* out_num_upper_layers,
+    uint8_t* out_root_ptr);
+
 /// Ed25519 → Selene scalar conversion (Wei25519 x-coordinate).
 /// compressed_ptr: 32 bytes compressed Ed25519 point.
 /// out_scalar_ptr: 32 bytes output Selene scalar.

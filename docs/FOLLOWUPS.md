@@ -666,6 +666,15 @@ sustainability is unaffected by the recalibration.
   mirrors `build_layers`) rather than patch the C++. Changes the genesis header root ⇒
   consensus cutover; regenerate any depth-3 fixtures. Repro/acceptance: the depth-3
   regtest gate (`e2e_fcmp_spend_over_depth3_tree`, RED) + the curve_tree_freeze replica.
+  **IN PROGRESS (PR #197):** the Rust grow FFI `shekyl_curve_tree_grow_upper_layers`
+  (== `build_layers`, round-trip tested) + the C header decl + the `db_lmdb`
+  `grow_curve_tree` rewiring (reads the leaf-chunk layer, calls the FFI, persists the
+  recomposed upper layers + root + depth) are landed; pending the daemon build +
+  depth-3 regtest validation. **TODO in the same fix:** `BlockchainLMDB::trim_curve_tree`
+  (the reorg path) has the identical buggy incremental-upper propagation and needs the
+  same FFI recompose **plus stale-upper-chunk deletion** (trim shrinks the tree). It is
+  self-healed by the next `grow` (which now recomputes every upper layer), but a
+  pure-trim-then-query state would still report a wrong root until then.
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future
