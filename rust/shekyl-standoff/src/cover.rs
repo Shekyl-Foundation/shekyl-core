@@ -13,14 +13,17 @@
 //! (`ARCHIVAL_COVER_DRAW.md` §8). Same float-free discipline as the entry-gap
 //! draw: pure integer arithmetic, bit-identical across architectures, golden-
 //! vector-pinnable — because two wallets computing a different cover from the
-//! same `C` would draw from *different distributions*, the cross-wallet
-//! uniformity break the whole mechanism exists to close.
+//! same `C` would draw from *different distributions*, and that divergence **is**
+//! the cross-wallet uniformity break the whole mechanism exists to close.
 //!
-//! ## The form is single-sourced here (C4)
+//! ## The form, and why the sim's copy can't drift from it (C4)
 //!
-//! [`cover_dial_span_atomic`] is the one implementation of the §8.8 curve; the
-//! simulator imports it, the golden vector freezes it, and the wallet draws with
-//! it — so the curve cannot drift between "what we validated" and "what ships".
+//! [`cover_dial_span_atomic`] is the production implementation of the §8.8 curve:
+//! the wallet draws with it and the golden vector below freezes it. The
+//! `shekyl-staking-sim` keeps its own copy (the sim depends on this crate only as
+//! a dev-dependency, so it cannot import production code at runtime), but a sim
+//! test cross-checks that copy against this one over a sweep — so the two cannot
+//! diverge even between the sampled golden points.
 
 use crate::draw::{bounded_uniform, GapRng};
 
@@ -84,10 +87,21 @@ pub fn cover_dial_span_atomic(count: u64) -> u64 {
 ///
 /// `c_min` is taken as an explicit single-sourced input (the wallet passes
 /// [`COVER_RUNWAY_FLOOR_ATOMIC`]) rather than baked, so the pending 2d-1 `C_min`
-/// flows from one canonical constant. Caller guarantees `c_min + COVER_SPAN_CAP_ATOMIC`
-/// fits `u64` (trivially true for any realistic runway floor).
+/// flows from one canonical constant.
+///
+/// # Panics
+///
+/// Asserts `c_min ≤ u64::MAX − COVER_SPAN_CAP_ATOMIC` (deterministically, in
+/// release too) so `c_min + cover` can never silently wrap into an out-of-range
+/// amount — a wrapped cover would be a *wrong* amount, i.e. a privacy/correctness
+/// failure, which must fail loudly rather than ship. Trivially holds for any
+/// realistic runway floor.
 #[must_use]
 pub fn draw_cover_amount<R: GapRng + ?Sized>(count: u64, c_min: u64, rng: &mut R) -> u64 {
+    assert!(
+        c_min <= u64::MAX - COVER_SPAN_CAP_ATOMIC,
+        "c_min {c_min} too large: c_min + cover span would overflow u64"
+    );
     let span = cover_dial_span_atomic(count);
     c_min + bounded_uniform(rng, span)
 }

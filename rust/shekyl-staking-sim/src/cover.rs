@@ -1621,6 +1621,21 @@ mod tests {
     }
 
     #[test]
+    fn cover_dial_matches_standoff_reference() {
+        // The sim's copy must equal the production form (`shekyl-standoff`, a
+        // dev-dependency) at EVERY count — so drift between the two is
+        // unrepresentable, not merely caught at the sampled golden points. If
+        // either changes without the other, this fails.
+        for c in 0..=200u64 {
+            assert_eq!(
+                cover_dial_span_atomic(c),
+                shekyl_standoff::cover_dial_span_atomic(c),
+                "sim k(C) diverged from shekyl-standoff at C={c}"
+            );
+        }
+    }
+
+    #[test]
     fn cover_dial_span_is_monotone_and_capped() {
         let mut prev = 0u64;
         for c in 0..=200u64 {
