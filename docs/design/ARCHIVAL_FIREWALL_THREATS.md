@@ -195,8 +195,17 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   finality-deep — so a withheld block reads as `Incomplete` (wait), never as absence;
   and even `AbsentVerified` surfaces to the operator rather than auto-re-funding (a
   confirmed-absent cover means the original funding tx failed, so re-fund would *be*
-  the second cold-start link). Residual: the header-chain trust itself (false-tip /
-  stale-headers) leans on 2d-2's multi-source transport — named there.
+  the second cold-start link). **Residual — the stale-tip (verified single-source
+  today):** `AbsentVerified` is "complete up to the tip," but `BlockSource::tip_height()`
+  is one source's *claimed* tip and the engine is single-`DaemonClient`
+  (`lifecycle.rs:423`). A C3 daemon can *truncate* the tip below the cover's block for
+  free (forging a chain is PoW-expensive; withholding the tip is not). This does **not**
+  flip the type to a false re-fund — a cover above P's believed tip reads as `Incomplete`,
+  not `AbsentVerified` — so the relink re-opens only via a **liveness shortcut**.
+  2d-1 closes that half (hard rule: prolonged `Incomplete` never auto-escalates to
+  re-fund, it surfaces); the **tip-currency** half (multiple `P`-isolated sources cross-
+  checking the tip, or out-of-band difficulty/timestamp sanity) is a **2d-2** obligation,
+  consistent with DQ1 since the sources are all `P`'s, not shared with the principal.
 
 ### A3 — Economic / earnings-scale fingerprint — **UNADDRESSED**
 
@@ -364,10 +373,21 @@ about a moment, not a security guarantee about `P`.
 
 ## 7. Recommendations
 
-1. **Stand up A0 (`TM-1`) as its own analysis first** — enumerate every shared
-   correlate across an operator's personas (funding source, temporal exclusivity,
-   shard-selection, claim rhythm, `W`-tail shape) and show each absent or
-   independent. It gates the realism of A1–A5.
+1. **Stand up A0 (`TM-1`) as its own analysis first — and *soon*, for a freeze
+   reason, not only a leverage one.** Enumerate every shared correlate across an
+   operator's personas (funding source, temporal exclusivity, shard-selection, claim
+   rhythm, `W`-tail shape) and, for each, **test independence the way the cover tested
+   targeting** — a simulated multi-persona operator against a clustering adversary,
+   measuring how many personas collapse into one footprint (reasoning alone won't
+   settle it; the cover work taught that twice — saturation, the histogram bin).
+   **The urgency is a freeze deadline the other deferred analyses may not share:** the
+   correlates `TM-1` analyzes are the lifecycle shapes — the `W`-tail retirement (DQ8),
+   funding cadence, claim rhythm, shard-selection — being *authored right now* by the
+   rounds we are closing, and some are **genesis-frozen**. Unlike the cover (pin a
+   function, recalibrate later), a clustering correlate baked into a frozen lifecycle
+   shape **cannot be recalibrated post-genesis**. So `TM-1` must run **before** the
+   shapes it depends on freeze — which makes it the next round by deadline, not just by
+   leverage. It also gates the realism of A1–A5.
 2. **[Done] Funding-side completeness gate (`TM-3`)** — built into 2d-1 as SP-7
    (`CoverDiscovery` + root-anchored cursor): cold-start re-fund gated on a
    header-root-confirmed-complete view, never on absence, and surfaced rather than

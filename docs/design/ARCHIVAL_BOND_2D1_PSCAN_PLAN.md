@@ -450,6 +450,9 @@ is then uncallable — uncompilable — not a documented convention.
 /// is 2d-2). There is deliberately NO `outputs_matching` / filtered-fetch method:
 /// the selective-request leak is absent from the surface, so it cannot occur.
 pub trait BlockSource {
+    /// This source's *claimed* tip — NOT a trusted-current one. A single source can
+    /// truncate it for free (SP-7 stale-tip residual); trusted-currency is a 2d-2
+    /// multi-source / out-of-band-sanity property, not a single source's word.
     fn tip_height(&self) -> Result<u64, BlockSourceError>;
     fn block_at(&self, height: u64) -> Result<Option<ScannableBlock>, BlockSourceError>;
 }
@@ -765,11 +768,36 @@ pub enum CoverDiscovery {
   cold-start link. Auto-re-fund is precisely the induced-relink `TM-3` describes; the gate
   routes `AbsentVerified` to an operator-visible decision, not a reflex.
 
+**The residual SP-7 does *not* close on its own — the stale-tip (verified single-source today).**
+`AbsentVerified` is "complete up to the **tip**" — but `BlockSource::tip_height()` is *one
+source's word*, and the engine is **single-`DaemonClient`** today (`lifecycle.rs:423`;
+`anchor_target(scan_start_floor, daemon_height)` trusts the reported `daemon_height`). A C3
+daemon can withhold the **tip** (serve a truthful-but-stale chain ending *below* the cover's
+block) for free — `forging` a header chain is PoW-expensive, but *truncating* it is not. The
+good news: this does **not** flip the type to a false re-fund — the cover's height is then
+*above* P's believed tip, so the verdict is `Incomplete` (wait), not `AbsentVerified`. The
+relink re-opens only through a **liveness shortcut**: if anything escalates a *prolonged*
+`Incomplete` into a re-fund ("waited long enough, must have failed"). So two pins:
+
+- **Hard rule (2d-1):** prolonged `Incomplete` **never** auto-escalates to re-fund — it
+  **surfaces** ("your funding source may be stale or withholding"). Only `AbsentVerified` is a
+  re-fund input, and there is no timeout path that manufactures one. This keeps the relink
+  closed even under an indefinite stall.
+- **Tip-currency is a 2d-2 property, named here.** `AbsentVerified` is only as honest as P's
+  reason to believe its tip is *current*, which a single daemon cannot supply. That needs
+  **multiple `P`-isolated sources** cross-checking the tip (or an out-of-band difficulty/
+  timestamp progression sanity-check). This does **not** violate DQ1: per-`P` isolation is
+  about not sharing a source with the **principal**, not about using one source — the
+  cross-check is *among `P`'s own* isolated sources. Routed to 2d-2's transport (the
+  `BlockSource` impl), with SP-0's `tip_height()` documented as "*this source's claimed tip*,"
+  not a trusted-current one.
+
 **Enforcement point:** the `CoverDiscovery` type — the re-fund path takes `AbsentVerified`
-only, so "re-fund because I haven't seen it yet" cannot be written; and the root-anchored
-cursor makes the `AbsentVerified` verdict mean *provably absent*, not *undelivered*. This is
-the funding-side twin of SP-6, and it is **buildable in this round** (the threats doc's one
-concrete 2d-1 ask, rec #2).
+only, so "re-fund because I haven't seen it yet" cannot be written; the root-anchored cursor
+makes `AbsentVerified` mean *provably absent below the tip*, not *undelivered*; and the
+no-timeout-escalation rule plus the 2d-2 multi-source tip close the stale-tip path. This is the
+funding-side twin of SP-6, **buildable in this round** (the type + the no-escalation rule),
+with the tip-currency half explicitly a 2d-2 obligation.
 
 ---
 
@@ -823,6 +851,14 @@ not as work for it.
   it is *affirmatively confirmed absent within `PReconcileSet.covered`*, never from absence
   outside the vouched range — the type pins the distinction, 2d-2 honors it. Same rule binds
   DQ8's persona-retirement.
+- **Trusted-current tip — multi-source / out-of-band sanity-check (2d-2; closes SP-7's
+  stale-tip residual).** `BlockSource::tip_height()` is one source's *claimed* tip; a single
+  C3 daemon can truncate it for free. 2d-2 must supply **multiple `P`-isolated sources** that
+  cross-check the tip (or an out-of-band difficulty/timestamp progression check) so
+  `AbsentVerified` rests on a tip `P` has independent reason to believe current. Multi-source
+  is consistent with DQ1 (the sources are all `P`'s, isolated from the principal). 2d-1's job
+  is only to *not foreclose* it: `tip_height()` is documented as claimed-not-trusted, and no
+  2d-1 path treats a single source as the tip authority.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
