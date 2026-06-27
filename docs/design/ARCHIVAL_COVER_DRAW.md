@@ -891,9 +891,9 @@ reserved for the DQ6 opt-out. Sized against **pessimistic slow early yield** (un
 re-links `P` too soon), pending the 2d-1 earnings-ramp numbers. It is the lower edge of
 every draw, independent of `C` — the envelope's floor.
 
-### 8.4 The shape `k(C)` — smooth and monotone, *continuous through `C_boot`* (hard constraint)
+### 8.4 The shape `k(C)` — smooth, monotone, *decaying to zero in the low tail* (hard constraint)
 
-Between the floor and the cap, `k(C)` rises **smoothly and monotonically** from `0` toward
+Across the populated range `k(C)` rises **smoothly and monotonically** from `0` toward
 `K_sat(C)` as `C` grows: more live bonds ⇒ wider blur, up to the knee. **No steps** — a
 step at any count threshold is the continuous analogue of the cohort split (§7.8), sorting
 bonds into below-/above-threshold cover-regimes at a public frozen threshold (a fingerprint,
@@ -901,43 +901,38 @@ un-revisable). The `k(C)` magnitudes inherit the `--cover` / `--cover-fn` analys
 **pessimistic** corner, pinned conservatively at genesis (per §2.5 the bound can't be
 re-tuned later); a future `f` may *confirm* but not *fix* them.
 
-**Continuity through the bootstrap boundary — the one place this can break.** The
-smooth/monotone constraint does *not* by itself enforce continuity at `C_boot`: if the curve
-jumps from `k = 0` (bootstrap) to some `k(C_boot⁺) > 0`, then `C_boot` **is** a step — the
-cohort split relocated to the bootstrap edge, and an attacker who knows the public, frozen
-`C_boot` reads a bond's cover-regime off whether its plausible cover sits at the `C_min`-only
-point or in the `k > 0` band. So **`k(C)` must decay to `0` as `C → C_boot⁺`** — the
-bootstrap clause is the **limit of the shape**, not a glued-on floor. (The alternative —
-accept the step and name it the one sanctioned discontinuity with its cost stated — is
-rejected: there is no reason to introduce the fingerprint we exclude everywhere else.)
+**The low tail must *decay* to zero, not *clamp* to it.** Because `K_sat(C) → 0` in the low
+tail (§8.5), `k(C)` reaches zero there as the limit of the ramp — there is no separate
+bootstrap threshold to be continuous *at*. But the functional form (§8.8) must realise this as
+a **decay**: a ramp that is smooth in the body and then *clamps* to `0` at the bottom
+re-introduces a **slope discontinuity** (a kink) at the clamp count — softer than a value-step,
+but still a curvature feature at a public frozen count, the same fingerprint genre one order
+down. The form must **approach** zero (`k` *and* `dk/dC → 0` into the tail) so the bootstrap
+behaviour is the natural limit of the curve, not a clamp on it.
 
-### 8.5 The bootstrap clause and `C_boot` (a *derived policy threshold*, not a confirm-not-fix magnitude)
+### 8.5 "Bootstrap" is the `k = 0` tail of `K_sat`, not a separate threshold (`C_boot` *dissolved*)
 
-At epochs 0–1 the last-closed `C ≈ 0`. So pin an **explicit clause**, continuous with §8.4:
+The continuous resolution doesn't *pin* `C_boot` — it **dissolves** it. Earlier this section
+treated `C_boot` as a frozen policy threshold (the count below which the cover "gives up").
+The magnitude pass (§8.7) shows that was a conflation of two different things: the
+**`K_sat → 0` boundary** (`C ≈ 13–15`) is where the curve's *own math* stops offering cover —
+below it `k = 0` is **not a concession or an override, it is simply what the saturation
+structure yields**; whereas the **floor's-worth point** (`C = 25`) is where cover stops being
+*worth much*, a descriptive statement and **not a boundary at all**. The old "derive `C_boot`
+from where cover buys < a floor's worth" would have *manufactured* a discontinuity to express
+something the curve already expresses continuously by ramping toward zero.
 
-> **As `C → C_boot⁺`, `k(C) → 0`, and for `C < C_boot`, `k(C) = 0`** — the draw is
-> `cover = C_min` (runway only, no blur), conceding the bootstrap cohort to the
-> `N_P`-independent seams (network-isolation + funder-scope), consistent with how `f` treats
-> every sparse state. On the record, genesis-frozen, un-revisable.
+So there is **one envelope, `K_sat(C)`** — `0` below `C ≈ 13–15`, ramping under the §8.7 cap
+above — and **"bootstrap" is the name for its low `k = 0` tail**, not a separate regime, clause,
+or pinned constant. This is strictly better: **one fewer frozen scalar**, and the one removed is
+the policy threshold that was most exposed to being wrong with no recourse (a genesis-once value
+post-testnet couldn't confirm). The §2.5 *confirm-not-fix* discipline applies to `K_sat` and
+`C_min`; there is no third magnitude here. `C = 25` is retained only as the descriptive
+*"cover-becomes-substantial"* marker.
 
-**`C_boot` is different in *kind* from `K_sat` / `C_min`, and must be reasoned, not guessed.**
-§2.5's *confirm-not-fix* applies to `K_sat` and `C_min` (two-sided-interior, pinned against
-the pessimistic corner; post-testnet confirms the corner was adequate). `C_boot` is a
-**frozen policy threshold** — the count below which the cover gives up — and it is the one
-magnitude post-testnet **cannot** confirm, because the bootstrap population is a
-**genesis-once** event with no steady-state data to tell you where epochs 0–1 should have cut
-over. Both errors are un-recoverable and asymmetric in *who is misled*: set it **too low** and
-a thin-but-past-bootstrap population gets a near-`0` `k` from the smooth curve **while
-believing it is covered** (the gap between *openly conceded* and *nominally covered but
-effectively not* — exactly where a staker is most misled about their own protection); set it
-**too high** and you concede stakers who'd have had a real set. So **derive `C_boot` from the
-saturation structure itself** — but the two candidate derivations *conflict*, and continuity
-(the harder constraint, §8.4) decides between them (measured in §8.7): the "buys less than
-the floor's worth" bar lands where `K_sat` is already *large*, so conceding `k = 0` below it
-re-introduces the step. The continuity-clean derivation is therefore **`C_boot` = the count
-where `K_sat(C)` itself reaches `0`** (the knee vanishes) — at/below it `k(C) = K_sat(C)` is
-already `0`, so the bootstrap clause is the curve's own tail, not an override. The
-floor's-worth count is kept as the *"cover becomes substantial"* marker, **not** the cutoff.
+**Record discipline:** state this as the single envelope, or a future reader who sees a `C_boot`
+constant *and* a bootstrap clause re-introduces the step we removed. There is no `C_boot`
+constant; there is `K_sat(C)` and its low tail.
 
 ### 8.6 Out of scope here (downstream)
 
@@ -972,11 +967,47 @@ Three reads:
 - **The pins are robust, not sharp.** Plateau widths are **10–16+ rungs** near-peak, so a
   band around each `K_sat` stays near-peak — safe to freeze conservatively (a narrow plateau
   would have been the signal to widen, per the magnitude-pass rule; none is).
-- **`C_boot` resolved by continuity.** "Buys ≥ floor's worth" lands at **`C = 25`** (where
-  `K_sat = 8`), so conceding below it is a `0 → 8` step. The continuity-clean cutoff is the
-  `K_sat → 0` boundary at **`C ≈ 13–15`**: below it the cap is already `0`, so the bootstrap
-  concession is intrinsic and continuous. `C = 25` is reported as the "cover becomes
-  substantial" marker only. **First-cut genesis pins:** `K_sat(C)` per the table (a smooth
-  monotone ramp under it, capping at `k = 10 / 7.5 SKL`), `C_boot ≈ 13–15`; `C_min` still
-  pending the 2d-1 ramp. Conservative-frozen per §2.5 (confirm-not-fix for `K_sat`; `C_boot`
-  reasoned-not-confirmed per §8.5).
+- **No `C_boot` pin — the tail dissolves it (§8.5).** `K_sat(C)` is already `0` below
+  `C ≈ 13–15`, so the bootstrap concession is the curve's own `k = 0` tail, not a separate
+  threshold. The "buys ≥ floor's worth" point (`C = 25`, where `K_sat = 8`) is a *descriptive*
+  marker only — conceding out to it would re-introduce a `0 → 8` step. **First-cut genesis
+  pins:** just `K_sat(C)` per the table (a smooth monotone ramp under it, decaying to `0` in
+  the tail, capping at `k = 10 / 7.5 SKL`); `C_min` still pending the 2d-1 ramp. Two frozen
+  magnitudes, not three. Conservative-frozen per §2.5 (confirm-not-fix for `K_sat`).
+
+### 8.8 The `k(C)` functional form — float-free cubic smoothstep (`--cover-dial`, ref C4 ports)
+
+Two genesis-frozen constraints decide the form, not just "smooth and monotone":
+
+- **Decay, not clamp (§8.4).** A ramp that is smooth in the body but *clamps* to `0` at the
+  bottom leaves a **slope kink** at the clamp count — a softer fingerprint, but the same genre.
+  The form must approach zero with `k` *and* `dk/dC → 0` into the tail.
+- **Exactly float-free.** C4 (`draw_cover_amount`) is the consumer and the production draw is
+  float-free by doctrine (the standoff's integer rule). Two wallets computing even slightly
+  different `k` from the same `C` draw from **different distributions** — the cross-wallet
+  uniformity break that *is* the fingerprint the mechanism closes. So the form must be
+  **bit-identically evaluable in integer arithmetic**, golden-vector-pinnable — which rules out
+  anything transcendental and points at a fixed-point polynomial.
+
+Both are met by a **cubic smoothstep** `s(t) = t²(3 − 2t)`, whose `s'(0) = s'(1) = 0` gives zero
+slope at *both* ends (decays into the tail *and* joins the cap with no kink), and which is a
+finite integer expression. The output is the cover **span** `C_max − C_min` in atomic units (the
+draw is then `bounded_uniform` over `[C_min, C_min + span]`, the standoff's integer draw):
+
+```text
+COVER_TAIL_COUNT      = 13            # K_sat→0 tail (the dissolved C_boot)
+COVER_RAMP_END_COUNT  = 79            # ramp reaches the cap
+COVER_SPAN_CAP_ATOMIC = 7_500_000_000 # 7.5 SKL = k=10 × 0.75 (§8.7 knee)
+
+span(C) = 0                                   for C ≤ 13
+        = CAP                                 for C ≥ 79
+        = CAP · num²·(3·den − 2·num) / den³   otherwise, num = C−13, den = 66
+```
+
+`num²·(3·den − 2·num) ≤ den³`, so `span ≤ CAP` and it is monotone in `num`; the intermediate
+`CAP · num²·(…) ≤ CAP · den³ ≈ 2.16e15 < u64::MAX`, so it never overflows. Sampled
+(`--cover-dial`): `C=14 → 0.005 SKL` (gentle decay, no jump), `25 → 0.65`, `46 → 3.75`,
+`60 → 5.99`, `79 → 7.50` (cap). Golden vector pinned (`cover_dial_span_golden_vector`); tests
+assert monotone-and-capped and the second-difference sign (convex into the tail = decay, concave
+into the cap = no kink). C4 ports this verbatim into `shekyl-standoff` — *one* source, so it
+can't diverge and re-open the uniformity break.

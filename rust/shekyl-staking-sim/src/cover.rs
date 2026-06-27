@@ -1547,6 +1547,51 @@ pub fn run_magnitude_report() -> MagnitudeReport {
     magnitude_pin()
 }
 
+// ===========================================================================
+// The k(C) functional form (§8.8) — float-free reference C4 ports verbatim.
+//
+// Requirements (genesis-frozen): smooth, monotone, and DECAYING to zero in the
+// low tail (k AND dk/dC → 0, so "bootstrap" is the limit of the ramp, not a
+// clamp-kink, §8.4) — and EXACTLY evaluable in integer arithmetic, bit-identical
+// across architectures, so two wallets compute the identical span from the same
+// C (a float divergence would be a cross-wallet uniformity break, the very
+// fingerprint the mechanism closes). A cubic smoothstep `s(t) = t²(3−2t)` has
+// `s'(0) = s'(1) = 0` — zero slope at BOTH ends, so it decays into the tail and
+// joins the cap with no kink — and as a cubic it is a finite integer expression.
+// Output is the cover SPAN `C_max − C_min` in atomic units (the draw is then
+// `bounded_uniform` over `[C_min, C_min + span]`, the standoff's integer draw).
+// ===========================================================================
+
+/// `K_sat → 0` tail boundary (§8.7): at/below this count the span is 0 — the
+/// dissolved-`C_boot` bootstrap tail (§8.5).
+const COVER_TAIL_COUNT: u64 = 13;
+/// Count at which the ramp reaches the cap (the §8.7 knee plateau).
+const COVER_RAMP_END_COUNT: u64 = 79;
+/// Cover-span cap: `k = 10 rungs × 0.75 SKL = 7.5 SKL` (§8.7, joint-corner knee).
+const COVER_SPAN_CAP_ATOMIC: u64 = 7_500_000_000;
+
+/// `k(C)` as the cover span `C_max − C_min` in atomic units — the float-free
+/// reference form (§8.8). Cubic-smoothstep ramp from `0` at `COVER_TAIL_COUNT`
+/// (zero value *and* zero slope — the decay, not a clamp) to `COVER_SPAN_CAP_ATOMIC`
+/// at `COVER_RAMP_END_COUNT` (joined with zero slope), flat thereafter. Pure u64
+/// arithmetic ⇒ identical on every architecture; golden-vector-pinnable.
+pub fn cover_dial_span_atomic(count: u64) -> u64 {
+    if count <= COVER_TAIL_COUNT {
+        return 0;
+    }
+    if count >= COVER_RAMP_END_COUNT {
+        return COVER_SPAN_CAP_ATOMIC;
+    }
+    let num = count - COVER_TAIL_COUNT; // in (0, den)
+    let den = COVER_RAMP_END_COUNT - COVER_TAIL_COUNT; // 66
+                                                       // smoothstep s(t) = t²(3 − 2t) with t = num/den:
+                                                       //   s = num²·(3·den − 2·num) / den³   (≤ den³, so span ≤ cap; monotone in num)
+                                                       // span = cap · s. cap·s_num ≤ cap·den³ = 7.5e9·287_496 ≈ 2.16e15 < u64::MAX.
+    let s_num = num * num * (3 * den - 2 * num);
+    let s_den = den * den * den;
+    COVER_SPAN_CAP_ATOMIC * s_num / s_den // floor division — deterministic
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1563,6 +1608,37 @@ mod tests {
             trials: 50_000,
             seed: 1,
         }
+    }
+
+    #[test]
+    fn cover_dial_span_golden_vector() {
+        // Pinned (C, span) — C4 must reproduce these bit-for-bit (§8.8).
+        assert_eq!(cover_dial_span_atomic(0), 0);
+        assert_eq!(cover_dial_span_atomic(13), 0); // tail boundary
+        assert_eq!(cover_dial_span_atomic(46), 3_750_000_000); // midpoint t=0.5 → cap/2
+        assert_eq!(cover_dial_span_atomic(79), 7_500_000_000); // ramp end → cap
+        assert_eq!(cover_dial_span_atomic(154), 7_500_000_000); // flat above
+    }
+
+    #[test]
+    fn cover_dial_span_is_monotone_and_capped() {
+        let mut prev = 0u64;
+        for c in 0..=200u64 {
+            let s = cover_dial_span_atomic(c);
+            assert!(s >= prev, "monotone at C={c}");
+            assert!(s <= 7_500_000_000, "capped at C={c}");
+            prev = s;
+        }
+    }
+
+    #[test]
+    fn cover_dial_span_decays_into_the_tail_no_clamp_kink() {
+        // Decay, not clamp: the second difference is POSITIVE just above the tail
+        // (slope rising from 0 ⇒ convex ⇒ dk/dC → 0 into the tail), and NEGATIVE
+        // near the cap (slope falling to 0 ⇒ concave ⇒ no kink at the join).
+        let d = |c: u64| cover_dial_span_atomic(c + 1) as i128 - cover_dial_span_atomic(c) as i128;
+        assert!(d(14) > d(13), "convex into the low tail (decay, not clamp)");
+        assert!(d(76) < d(75), "concave into the cap (slope → 0, no kink)");
     }
 
     #[test]

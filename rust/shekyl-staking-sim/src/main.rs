@@ -1006,6 +1006,33 @@ fn print_cover_magnitudes_report() {
     }
 }
 
+fn print_cover_dial_report() {
+    // The §8.8 float-free k(C) form: cover span (C_max−C_min) vs count C. The
+    // dial k = span/floor (floor = 0.75 SKL). Cubic-smoothstep: decays to 0 in the
+    // tail (no clamp kink) and joins the cap with zero slope — integer-exact.
+    eprintln!("shekyl-staking-sim — §8.8 k(C) form: cover span vs count (float-free smoothstep)");
+    eprintln!(
+        "span = C_max−C_min (atomic); kEff = span/floor rungs (floor=0.75 SKL). Decays to 0 below"
+    );
+    eprintln!("  C=13, caps at 7.5 SKL above C=79, with zero slope at both ends (no kink, §8.4).");
+    eprintln!();
+    eprintln!(
+        "{:>5} | {:>13} {:>9} {:>7}",
+        "C", "span(atomic)", "spanSKL", "kEff"
+    );
+    let floor_atomic = 750_000_000u64;
+    for c in [0u64, 13, 14, 16, 20, 25, 33, 46, 60, 79, 100, 154] {
+        let span = cover::cover_dial_span_atomic(c);
+        eprintln!(
+            "{:>5} | {:>13} {:>9.3} {:>7.2}",
+            c,
+            span,
+            span as f64 / 1e9,
+            span as f64 / floor_atomic as f64,
+        );
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -1039,6 +1066,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--cover-magnitudes") {
         print_cover_magnitudes_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--cover-dial") {
+        print_cover_dial_report();
         return;
     }
 
