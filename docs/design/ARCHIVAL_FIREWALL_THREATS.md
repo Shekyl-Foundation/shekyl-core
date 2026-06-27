@@ -371,23 +371,72 @@ about a moment, not a security guarantee about `P`.
 
 ---
 
-## 7. Recommendations
+## 7. The design lens — convert every silent-compliance dependency (apply to every future round)
 
-1. **Stand up A0 (`TM-1`) as its own analysis first — and *soon*, for a freeze
-   reason, not only a leverage one.** Enumerate every shared correlate across an
-   operator's personas (funding source, temporal exclusivity, shard-selection, claim
-   rhythm, `W`-tail shape) and, for each, **test independence the way the cover tested
-   targeting** — a simulated multi-persona operator against a clustering adversary,
-   measuring how many personas collapse into one footprint (reasoning alone won't
-   settle it; the cover work taught that twice — saturation, the histogram bin).
-   **The urgency is a freeze deadline the other deferred analyses may not share:** the
-   correlates `TM-1` analyzes are the lifecycle shapes — the `W`-tail retirement (DQ8),
-   funding cadence, claim rhythm, shard-selection — being *authored right now* by the
-   rounds we are closing, and some are **genesis-frozen**. Unlike the cover (pin a
-   function, recalibrate later), a clustering correlate baked into a frozen lifecycle
-   shape **cannot be recalibrated post-genesis**. So `TM-1` must run **before** the
-   shapes it depends on freeze — which makes it the next round by deadline, not just by
-   leverage. It also gates the realism of A1–A5.
+The lifetime/accumulation attacks (`TM-1`, `TM-2`, `TM-4`) look unmodelable because they
+depend on **user behavior**, and you cannot model the user. Tor is the cautionary tale:
+unbreakable until the user logs into their real-name account over it once. But the right
+lesson from Tor is **not** "users err, so privacy is hopeless" — it is that Tor's errors are
+**invisible at the moment they are made**. You log into Gmail over Tor and nothing warns you;
+the deanonymization is silent and permanent. The user's *behavior* is unbounded, but the set
+of *places the protocol forces a privacy choice* is finite and enumerable.
+
+So the firewall's job is not to predict behavior. It is to **minimize the number of places a
+user mistake is even possible, and make the mistakes that remain loud rather than silent.**
+That converts the unmodelable problem into an auditable one: enumerate every point where the
+design currently relies on the user (or a wallet acting on defaults) to do the
+privacy-preserving thing **and a single lapse is silent and permanent**, then convert each
+into exactly one of three dispositions:
+
+1. **Enforced invariant** — the user *cannot* err; the unsafe path is unrepresentable.
+2. **Loud default** — the safe path is the easy one, and the costly path *warns at the moment
+   of choice*.
+3. **Explicit disclosed cost** — the user is told **once, at the moment of the choice**, what
+   they are trading.
+
+**Indefinite reliance on silent user compliance is the strictly-dominated fourth option** —
+it pays the full deanonymization risk for zero benefit, exactly the disposition we rejected
+for `enc_label`. If a mechanism *requires sustained correct user behavior to stay private, it
+is already failing.* You can't model the user, so don't build anything that needs you to.
+
+**`TM-3` is this lens done right (the template):** instead of trusting the wallet not to
+re-fund at the wrong moment, the unsafe path was made unrepresentable
+(`CoverDiscovery::AbsentVerified` only) **and** the residual decision was surfaced loudly
+(operator-visible, never a reflex). Enforced-invariant *plus* loud-default, on one dependency.
+
+**The silent-compliance audit (the finite worklist hiding in the "unmodelable" attacks):**
+
+| Dependency | Today relies on the user to… | Convert to |
+| --- | --- | --- |
+| **Funding-event independence** (`TM-2`) | not batch/correlate fundings over time | does the wallet *space* fundings (enforced/defaulted), or trust the user? |
+| **Earnings-claim rhythm** (`TM-4`) | claim at privacy-neutral times/sizes | is the privacy-costly claim the *easy* one? make the safe cadence the default |
+| **Bootstrap-cohort exposure** (`A7`) | (nothing — currently silent) | **disclosed cost**: tell the earliest stakers, once, they run with reduced cover |
+| **Persona hygiene** (`TM-1`) | not do something that links their own personas | can a user link their personas at all, and would they *know*? enforce or warn |
+
+Each row is finite and gets a disposition; none requires predicting behavior. This is the
+lens for **every** future firewall round, not just `TM-1`.
+
+---
+
+## 8. Recommendations
+
+1. **Next firewall round: `TM-1`, scoped as the §7 silent-compliance audit** — *not*
+   "predict user behavior" (impossible) but "find every silent-compliance dependency in
+   the persona lifecycle and convert it to enforced-invariant / loud-default /
+   disclosed-cost." That turns the unmodelable into an enumerable worklist (§7 table).
+   Enumerate every shared correlate across an operator's personas (funding source,
+   temporal exclusivity, shard-selection, claim rhythm, `W`-tail shape) and, for each,
+   **test independence the way the cover tested targeting** — a simulated multi-persona
+   operator against a clustering adversary, measuring how many personas collapse into one
+   footprint (reasoning alone won't settle it; the cover work taught that twice —
+   saturation, the histogram bin). **Freeze deadline (the urgency the other deferred
+   analyses may not share):** the correlates are lifecycle shapes — `W`-tail retirement
+   (DQ8), funding cadence, claim rhythm, shard-selection — being *authored right now* by
+   the rounds we are closing, some **genesis-frozen**; unlike the cover (recalibratable),
+   a correlate baked into a frozen shape **cannot be recalibrated post-genesis**. It does
+   **not** gate building 2d-1 (read-side; SP-0..SP-7 are invariant to its findings, and
+   the injectable cadence/funding seams absorb any constraint it adds) — **build 2d-1 now**;
+   `TM-1` is the next *analysis* round, run before those shapes freeze.
 2. **[Done] Funding-side completeness gate (`TM-3`)** — built into 2d-1 as SP-7
    (`CoverDiscovery` + root-anchored cursor): cold-start re-fund gated on a
    header-root-confirmed-complete view, never on absence, and surfaced rather than
@@ -403,7 +452,7 @@ Each opens with a rule-21 reopen anchor; `TM-3` and `TM-6` are buildable inside 
 current 2d-1 round, the rest are pre-genesis analyses parallel to the consensus
 path.
 
-## 8. Explicitly out of scope (with reasons)
+## 9. Explicitly out of scope (with reasons)
 
 - **C6 local/co-resident** beyond the CT-compare + seam (third-option resolution);
   a memory-reading adversary defeats the keys directly, so timing-only defense is
