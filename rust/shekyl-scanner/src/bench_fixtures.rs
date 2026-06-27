@@ -274,7 +274,7 @@ fn join_enc9(value: &[u8; 8], tag: u8) -> [u8; 9] {
 fn assemble_scannable_block(
     n_outputs: usize,
     recipient_pk: &HybridKemPublicKey,
-    spend_key: &[u8; 32],
+    recipient_spend_pub: &[u8; 32],
 ) -> ScannableBlock {
     // Pre-allocate the on-wire fields.
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
@@ -288,14 +288,15 @@ fn assemble_scannable_block(
             &BENCH_TX_KEY,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
-            spend_key,
+            recipient_spend_pub,
             BENCH_AMOUNT,
             output_index as u64,
         )
-        .expect(
-            "construct_output is infallible for torsion-free spend keys and \
-             valid KEM public keys; both are guaranteed by the fixture",
-        );
+        // Precondition of this fixture: `recipient_pk` is a valid hybrid KEM
+        // public key and `recipient_spend_pub` a torsion-free compressed Edwards
+        // point. Both hold for any derived persona/wallet keys; a malformed key
+        // is a test bug and panics loudly (the intended failure for a fixture).
+        .expect("construct_output succeeds for valid recipient KEM + spend-pub key material");
 
         outputs.push(Output {
             amount: 0,
@@ -419,15 +420,26 @@ pub fn build_worst_case_scannable_block(
     )
 }
 
-/// Build a [`ScannableBlock`] of `n_outputs` outputs addressed to an **arbitrary
-/// recipient** — encapsulated to `recipient_kem` with the one-time output key
-/// derived against `recipient_spend_pub`.
+/// Build a [`ScannableBlock`] of `n_outputs` outputs addressed to a
+/// **caller-supplied recipient** — encapsulated to `recipient_kem` with the
+/// one-time output key derived against `recipient_spend_pub`.
 ///
 /// Unlike [`build_worst_case_scannable_block`] (which targets the bench wallet
 /// with a placeholder spend key), this lets a caller target real key material —
 /// e.g. an archival persona's `(x25519_pk, ml_kem_ek)` and `spend_pk` — so a
 /// scanner built from the *matching* secrets recovers the output, and one built
 /// from any other secrets does not. Used to prove view-key/scanner adapters.
+///
+/// # Preconditions (test fixture — fails loud, does not return `Result`)
+///
+/// `recipient_kem` must be a valid hybrid KEM public key and `recipient_spend_pub`
+/// a torsion-free compressed Edwards point — i.e. the conditions
+/// [`shekyl_crypto_pq::output::construct_output`] requires. Any key material
+/// produced by a derivation path (`derive_archival_p_keys`, `make_bench_wallet`)
+/// satisfies this. Malformed input is a **test bug** and **panics** — the
+/// intended loud failure for a fixture; this is not a `Result`-returning API,
+/// because threading an impossible-in-tests error through every call site would
+/// add noise for no real branch.
 pub fn scannable_block_for_recipient(
     n_outputs: usize,
     recipient_kem: &HybridKemPublicKey,

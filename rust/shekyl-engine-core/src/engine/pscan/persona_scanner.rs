@@ -84,7 +84,14 @@ impl std::fmt::Display for PersonaScanError {
     }
 }
 
-impl std::error::Error for PersonaScanError {}
+impl std::error::Error for PersonaScanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ViewPair(e) => Some(e),
+            Self::SpendKeyEncoding | Self::SpendKeyOffCurve | Self::NonCanonicalViewSecret => None,
+        }
+    }
+}
 
 /// Build persona `P`'s burning-bug-immune [`GuaranteedViewPair`] from its
 /// [`ArchivalPKeys`] (SP-1).
