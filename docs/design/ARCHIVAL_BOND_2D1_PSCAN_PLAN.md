@@ -384,9 +384,17 @@ designs these alongside the per-SP work, not as a cleanup pass after.
 
 ## 5. Dependency posture (why this is the keystone, and parallelizable)
 
-- **North-Star-independent.** 2d-1 is read-side; it never broadcasts, so it does **not**
-  wait on the daemon-accept gate (`e2e_fcmp_spend_accepted_by_daemon`). It parallelizes
-  the active North-Star work.
+- **North-Star-independent *at runtime*, but the *build* waits for PR #193 to land.** 2d-1 is
+  read-side; it never broadcasts, so it does **not** depend on the daemon-accept gate
+  (`e2e_fcmp_spend_accepted_by_daemon`) *functionally* — which is why the **design** could and
+  did proceed in parallel. The **implementation**, however, branches off `dev` only **after
+  PR #193 lands** (the north-star: "first daemon-accepted FCMP++ spend"). PR #193's own scope
+  unblocks 2d (a bond-post *is* an FCMP++ spend) and reworks the **engine / prover / scanner**
+  surfaces SP-0..SP-7 sit on (witness `x = ho + b`, the per-`(tx_hash, output_index)` bundle
+  cache, strict vin sorting, the refresh-scan path). Branching 2d-1 before it lands would force
+  a rebase across exactly those consensus-alignment changes — so the SP-0 build starts from a
+  PR #193-landed, north-star-green `dev`, not before. (Logical independence ≠ build-base
+  independence.)
 - **Consumers hang off it — and they do *not* share a completeness profile.** Three are
   **lag-tolerant**: 2d-2's reconcile (SP-3/SP-6), steady-state fund-from-earnings (SP-1/SP-4),
   and the cover's `C_min` sizing (SP-4). The cover design is otherwise complete (PR #192) —
