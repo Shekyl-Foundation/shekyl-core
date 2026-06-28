@@ -12,10 +12,11 @@
 //! unrepresentable on the surface (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` SP-0 / §4).
 //!
 //! 2d-1 ships [`DaemonBlockSource`], a thin firewall-shaped view over an existing
-//! daemon connection that establishes the *interface*. 2d-2 swaps an Arti
-//! transport behind the same trait and adds the per-`P` network **isolation**
-//! (separate connection, no shared cache with the principal) this placeholder
-//! does not provide.
+//! daemon connection that establishes the *interface*. 2d-2 implements the real
+//! per-`P`-isolated transport behind the same trait — a bundled Tor-over-SOCKS
+//! client, not Arti (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §3) — adding the network
+//! **isolation** (separate connection, no shared cache with the principal) this
+//! placeholder does not provide.
 //!
 //! ## Staging note
 //!
@@ -37,8 +38,8 @@ use crate::engine::traits::DaemonEngine;
 /// Error from a [`BlockSource`].
 ///
 /// Transport-agnostic (it carries a rendered message, not a transport type) so
-/// 2d-2's Arti transport maps its own failures in without this type ever
-/// depending on a specific transport's error enum.
+/// 2d-2's transport maps its own failures in without this type ever depending on
+/// a specific transport's error enum.
 #[derive(Debug, Clone)]
 pub(crate) enum BlockSourceError {
     /// The underlying source (transport, parse, or daemon) failed.
@@ -86,10 +87,10 @@ pub(crate) trait BlockSource {
     ///
     /// It is a *claimed* height, **not** a trusted-current one: a single source
     /// can withhold or truncate its tip for free (the SP-7 stale-tip residual) —
-    /// forging a header chain is PoW-expensive, truncating it is not. Establishing
-    /// that a tip is *current* needs multiple `P`-isolated sources or an
-    /// out-of-band sanity-check, which is a 2d-2 transport property; this trait
-    /// only reports what the source claims.
+    /// forging a header chain is PoW-expensive, truncating it is not. Tip *currency*
+    /// is resolved by **posture**, not multi-source machinery
+    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports what the
+    /// source claims.
     fn tip_height(&self) -> impl Future<Output = Result<BlockHeight, BlockSourceError>> + Send;
 
     /// Fetch the **whole** block at `height` (header + every transaction + the
