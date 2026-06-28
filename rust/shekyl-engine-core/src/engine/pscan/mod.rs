@@ -13,9 +13,12 @@
 //! Build order: **SP-0** ([`block_source`]) — the per-`P` fetch-everything block
 //! source the isolation boundary (DQ1) rests on; **SP-1** ([`persona_scanner`]) —
 //! the `ArchivalPKeys` → `GuaranteedViewPair` adapter that builds a persona's
-//! burning-bug-immune scanner. Both are read-side: they produce no on-chain
-//! event and broadcast/GC nothing. Their non-test consumer is the SP-5 scan loop
-//! (not yet built), so they carry transient `#[allow(dead_code)]`.
+//! burning-bug-immune scanner; **SP-4** ([`inflow`]) — the idempotent per-epoch
+//! funding-inflow signal `C_min` consumes (paired with SP-2's `PScanCursor` in
+//! `shekyl-engine-state` as the one crash-recovery decision). All read-side: they
+//! produce no on-chain event and broadcast/GC nothing. Their non-test consumer is
+//! the SP-5 scan loop (not yet built), so they carry transient `#[allow(dead_code)]`.
 
 pub(crate) mod block_source;
+pub(crate) mod inflow;
 pub(crate) mod persona_scanner;

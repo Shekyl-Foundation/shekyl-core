@@ -40,6 +40,7 @@ pub mod ledger_indexes;
 pub mod local_label;
 pub mod payment_id;
 pub mod payment_request;
+pub mod pscan_cursor;
 pub mod safety_constants;
 pub mod schema_snapshot;
 pub mod serde_helpers;

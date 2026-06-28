@@ -220,6 +220,17 @@ scalar_u64! {
     OutputIndexInTx
 }
 
+scalar_u64! {
+    /// An archival reward **settlement-epoch** index — the epoch in whose units
+    /// a bond's rewards settle, counted in spans of `SETTLEMENT_EPOCH_BLOCKS`
+    /// (consensus), distinct from a raw [`BlockHeight`].
+    ///
+    /// The archival firewall's funding-inflow accrual and reward claims are
+    /// keyed by [`SettlementEpoch`], not a bare `u64`, so an epoch index can
+    /// never be silently passed where a block height or an amount is expected.
+    SettlementEpoch
+}
+
 hash32! {
     /// A block identity hash.
     ///
