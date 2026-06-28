@@ -362,7 +362,11 @@ pub struct ShekylWallet {
 fn map_wallet_file_err(e: &WalletFileError) -> u32 {
     match e {
         WalletFileError::Envelope(inner) => map_envelope_err(inner),
-        WalletFileError::Payload(_) => SHEKYL_WALLET_ERR_PAYLOAD,
+        // A wrong SWSP payload kind is the same framing-layer refusal as `Payload`
+        // (e.g. a swapped `.wallet` / `.wallet.pscan`); one code for the C++ side.
+        WalletFileError::Payload(_) | WalletFileError::UnexpectedPayloadKind { .. } => {
+            SHEKYL_WALLET_ERR_PAYLOAD
+        }
         WalletFileError::Ledger(_) => SHEKYL_WALLET_ERR_LEDGER,
         WalletFileError::Io(_) => SHEKYL_WALLET_ERR_IO,
         WalletFileError::KeysFileAlreadyExists { .. } => SHEKYL_WALLET_ERR_KEYS_FILE_ALREADY_EXISTS,

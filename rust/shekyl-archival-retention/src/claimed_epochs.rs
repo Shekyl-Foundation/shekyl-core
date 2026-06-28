@@ -104,11 +104,15 @@ pub fn claimed_epochs_check_and_set(
     if epoch >= current_settled_epoch {
         return Err(ClaimedEpochsError::NotSettled);
     }
-    let window_floor = claim_window_floor(current_settled_epoch);
-    if epoch < window_floor {
+    // The expired boundary is [`epoch_is_claim_expired`] — the *same* predicate the
+    // 2d-1 persona-retirement witness calls, so the two cannot drift (both resolve
+    // through this one definition, not parallel inline copies).
+    if epoch_is_claim_expired(epoch, current_settled_epoch) {
         return Err(ClaimedEpochsError::Expired);
     }
 
+    // Prune entries that have themselves fallen below the window floor.
+    let window_floor = claim_window_floor(current_settled_epoch);
     set.retain(|&e| e >= window_floor);
 
     match set.binary_search(&epoch) {
