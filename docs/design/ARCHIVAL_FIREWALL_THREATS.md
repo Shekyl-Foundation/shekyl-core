@@ -112,7 +112,7 @@ currently not analyzed at all.
 Each entry: **capability needed · mechanism targeted · intended defense · actual
 efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
 
-### A0 — Cross-persona clustering (Stage-1 enabler) — **UNADDRESSED**
+### A0 — Cross-persona clustering (Stage-1 enabler) — **ANALYZED (`TM-1` closed — disperse + disclose; cardinality structural)**
 
 - **Capability:** C0 (+ patience).
 - **Targets:** the `p_slot` persona rotation (the forward-secrecy claim).
@@ -134,10 +134,21 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   `P`'s personas are unlinkable from each other**. This is the precondition for
   A1–A5. The rotation machinery is necessary but not sufficient — forward-secrecy
   of one persona is not anonymity of the set.
-- **Disposition:** open. Needs its own analysis: enumerate every on-chain and
-  behavioral correlate shared across an operator's personas, and show each is
-  either absent or independent. Until then, assume the attacker *can* cluster, and
-  evaluate A1–A5 against `P`'s **aggregate** footprint, not a lone persona.
+- **Disposition:** **analyzed and closed — `disperse + disclose`**
+  ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md), measured in
+  `shekyl-staking-sim --clustering`/`--matcher`). The inversion: with sibling
+  portfolios fully dispersed, a C0 matcher gets shard-channel AUC **0.567** (≈ its
+  0.488 null) but partition AUC **0.969** — **the shards were never the binding
+  signal; the split partition is.** The partition splits into **onset co-timing**
+  (a user-controllable lever — full-range stagger drops it 0.99 → 0.61, route to
+  2d-2 cadence) and **split cardinality** (the number of simultaneous siblings — a
+  *structural* C0 observable, 0.78–0.91 across the K-mix, mechanism-confirmed across
+  seeds, **not** blur-able by heterogeneity). The shard channel is decorrelated by a
+  wallet dispersive default at a ~0.15 haircut where deep-tier redundancy > 1
+  (unavailable below it — the swan-2 trough — disclosed loudly). So A1–A5 should be
+  evaluated against `P`'s aggregate footprint **only via the partition** (cardinality
+  + co-timing), not via shard-set overlap, which dispersion removes. The residual
+  structural problem — masking split cardinality — is handed to **2d-2** (§8 rec 1).
 
 ### A1 — Intersection / co-occurrence across windows — **UNADDRESSED**
 
@@ -332,9 +343,12 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
 
 ## 5. Exposure ranking (what I'd actually lose sleep over)
 
-1. **A0 — cross-persona clustering (`TM-1`).** The Stage-1 enabler. If `P`'s
-   personas cluster, every other attack works on the aggregate footprint; if they
-   don't, the intersection attack starves. Highest leverage, zero current analysis.
+1. **A0 — cross-persona clustering (`TM-1`).** The Stage-1 enabler. **Analyzed and
+   closed** ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md)): the shard
+   channel is *not* the binding signal (dispersion drives it to the null); the
+   **split partition** is — and its **cardinality** sub-channel is **structural**,
+   not removable by the wallet. So `P`'s personas *do* cluster, but via the partition
+   (how many run at once + when), not the shards — the residual handed to 2d-2.
 2. **A1 — lifetime intersection (`TM-2`).** Goes around the cover and standoff by
    accumulating across windows. The single-event analyses do not bound it. This is
    how privacy coins actually fall.
@@ -420,23 +434,21 @@ lens for **every** future firewall round, not just `TM-1`.
 
 ## 8. Recommendations
 
-1. **Next firewall round: `TM-1`, scoped as the §7 silent-compliance audit** — *not*
-   "predict user behavior" (impossible) but "find every silent-compliance dependency in
-   the persona lifecycle and convert it to enforced-invariant / loud-default /
-   disclosed-cost." That turns the unmodelable into an enumerable worklist (§7 table).
-   Enumerate every shared correlate across an operator's personas (funding source,
-   temporal exclusivity, shard-selection, claim rhythm, `W`-tail shape) and, for each,
-   **test independence the way the cover tested targeting** — a simulated multi-persona
-   operator against a clustering adversary, measuring how many personas collapse into one
-   footprint (reasoning alone won't settle it; the cover work taught that twice —
-   saturation, the histogram bin). **Freeze deadline (the urgency the other deferred
-   analyses may not share):** the correlates are lifecycle shapes — `W`-tail retirement
-   (DQ8), funding cadence, claim rhythm, shard-selection — being *authored right now* by
-   the rounds we are closing, some **genesis-frozen**; unlike the cover (recalibratable),
-   a correlate baked into a frozen shape **cannot be recalibrated post-genesis**. It does
-   **not** gate building 2d-1 (read-side; SP-0..SP-7 are invariant to its findings, and
-   the injectable cadence/funding seams absorb any constraint it adds) — **build 2d-1 now**;
-   `TM-1` is the next *analysis* round, run before those shapes freeze.
+1. **[Done] `TM-1` — analyzed and closed as `disperse + disclose`**
+   ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md)). The §7 audit ran as a
+   simulated multi-persona operator against a C0 clustering matcher (`shekyl-staking-sim
+   --clustering`/`--matcher`) — and the cover's lesson held a third time: the result
+   inverted the premise. The shard-selection correlate everyone expected to be binding is
+   *not* (dispersion drives its AUC to the null); the **split partition** is. Onset
+   co-timing is a **loud-default** lever (stagger by default); **split cardinality** is a
+   **structural disclosed-cost** residual that no behavioral heterogeneity masks — handed
+   to **2d-2** as a precisely-scoped open problem ("the cardinality of a simultaneous-
+   persona split is a structural C0 observable; only a protocol cap/standardization on
+   simultaneous personas, or unobservable instantiation, can touch it"). Funding source →
+   TM-2, claim rhythm → TM-4, `W`-tail → enforced (anchor-free sliding cutover). The
+   freeze-deadline urgency is discharged: the binding correlate is the *count and timing*
+   of personas, which is a wallet-default + 2d-2 cadence question, not a genesis-frozen
+   on-chain shape — so the freeze does not lock in a clustering mistake on the shard side.
 2. **[Done] Funding-side completeness gate (`TM-3`)** — built into 2d-1 as SP-7
    (`CoverDiscovery` + root-anchored cursor): cold-start re-fund gated on a
    header-root-confirmed-complete view, never on absence, and surfaced rather than
