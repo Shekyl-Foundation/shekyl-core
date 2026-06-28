@@ -103,11 +103,17 @@ use kameo::message::{Context, Message};
 
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
+use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
+use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
+use super::pscan::scan_step::{
+    run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
+};
 use super::stake_timing::DEFAULT_ENTRY_GAP;
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
@@ -432,6 +438,44 @@ pub(crate) enum StakeEngineError {
     /// `IdentityEncode`, or `Sign`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
+
+    /// Building the bonded union's transient scanners for a [`ScanStep`] failed —
+    /// a resident persona key was malformed (corrupted in-memory state). Fail
+    /// closed and loud rather than scan with a silently-weakened key (DQ7). The
+    /// concrete cause (scanner build vs canonical-id encode) is preserved in the
+    /// wrapped [`ScanSetupError`], including its `source()` chain.
+    #[error("persona scan setup failed: {0}")]
+    ScanSetup(#[from] ScanSetupError),
+
+    /// The offloaded dual extraction itself failed (oversized step, range/block
+    /// mismatch, a scan error, or a funding-inflow overflow). The privacy
+    /// parameter `C_min` rides on this scan, so a corrupted step fails closed,
+    /// never silently.
+    #[error("scan-step extraction failed: {0}")]
+    ScanStep(#[from] DualExtractError),
+
+    /// The `spawn_blocking` task running the dual extractor failed to join (it
+    /// panicked — `spawn_blocking` tasks are not cancellable). The structured
+    /// [`JoinError`](tokio::task::JoinError) is kept (panic payload + `source()`),
+    /// not stringified, so the failure is fully diagnosable.
+    #[error("scan-step task failed to join: {0}")]
+    ScanJoin(#[from] tokio::task::JoinError),
+}
+
+/// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
+/// **malformed resident persona key** (corrupted in-memory state) — fail closed,
+/// concrete cause preserved (vs a stringified loss). Wrapped by
+/// [`StakeEngineError::ScanSetup`].
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ScanSetupError {
+    /// Building a persona's guaranteed scanner failed (SP-1 fail-closed rejection
+    /// of malformed key material).
+    #[error("building a persona's guaranteed scanner failed: {0}")]
+    Scanner(#[source] PersonaScanError),
+    /// Deriving a persona's canonical id failed — its hybrid public key did not
+    /// canonically encode.
+    #[error("deriving a persona's canonical id failed: {0}")]
+    CanonicalId(#[source] shekyl_crypto_pq::CryptoError),
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +593,40 @@ impl StakeEngine {
                 wipe_ephemeral(persona);
             }
         }
+    }
+
+    /// Build the bonded union's transient scan inputs for a [`ScanStep`]: a
+    /// [`GuaranteedScanner`] per bonded persona (SP-1, burning-bug-immune) plus
+    /// their cleartext `p_canonical_id` set (the public half of the SP-3 dual
+    /// extractor).
+    ///
+    /// These are built from the resident bundles and handed straight into the
+    /// offload closure: the scanners are transient secret copies dropped at the
+    /// end of the scan-step (DQ5), adding no resident secret surface beyond the
+    /// keys the actor already vaults. Ephemeral (lookahead, no-bond) personas are
+    /// **not** scanned — archival funding accrues only to a persona with a live
+    /// bond (the bonded tag is the available signal; SP-6 reconciles it).
+    ///
+    /// Fails closed if a resident key is malformed: a silently-weakened scanner
+    /// would mis-size the privacy parameter `C_min` (DQ7).
+    fn bonded_scan_inputs(
+        &self,
+    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<[u8; 32]>), ScanSetupError> {
+        let mut scanners = Vec::new();
+        let mut known_ids = BTreeSet::new();
+        for held in self.held.values() {
+            if let HeldPersona::Bonded(_) = held {
+                let keys = held.keys();
+                scanners
+                    .push(guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?);
+                let hybrid = keys
+                    .hybrid_bond_id()
+                    .to_canonical_bytes()
+                    .map_err(ScanSetupError::CanonicalId)?;
+                known_ids.insert(p_canonical_id_from_hybrid_pubkey(&hybrid));
+            }
+        }
+        Ok((scanners, known_ids))
     }
 }
 
@@ -900,6 +978,38 @@ impl Message<SignBond> for StakeEngine {
     }
 }
 
+// SP-5 — the actor performs the per-batch scan-step; `view_sk` never crosses the
+// boundary. The handler builds the bonded union's transient scanners from the
+// resident bundles and **offloads** the CPU+secret dual extraction to
+// `spawn_blocking`, so the secret lives only inside the closure and drops at its
+// end (DQ5). The handler holds `&mut self` across the offload `await`, so the
+// (unbounded) mailbox cannot process another message until it returns — which is
+// exactly why the task sends **bounded** `ScanStep`s, interleaving
+// rotation/sign/activate between batches (DQ6: bounded AND offloaded). Only the
+// public `ScanStepResult` comes back.
+impl Message<ScanStep> for StakeEngine {
+    type Reply = Result<ScanStepResult, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: ScanStep,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let (scanners, known_ids) = self.bonded_scan_inputs()?;
+        let ScanStep { range, blocks } = msg;
+        // The secret `scanners` are MOVED into the closure; they never reach the
+        // actor task again and are dropped at the closure's end. The two `?`
+        // surface the join failure (`ScanJoin`) and the extraction failure
+        // (`ScanStep`) via their `#[from]` conversions — structured, not
+        // stringified.
+        let result = tokio::task::spawn_blocking(move || {
+            run_dual_extractor(scanners, &known_ids, range, &blocks)
+        })
+        .await??;
+        Ok(result)
+    }
+}
+
 /// Adapts [`rand_core::OsRng`] to the [`GapRng`] trait for use in
 /// [`SignBond`]'s entry-gap draw.
 ///
@@ -1149,6 +1259,26 @@ impl StakeEngineHandle {
                 holdings,
                 tx_prefix_hash,
             })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Run one bounded, offloaded P-scan step over `blocks` (SP-3/SP-5).
+    ///
+    /// The actor dual-extracts with the bonded union's keys — view-key funding
+    /// (per-epoch deltas) + cleartext bond-post matches — and returns **only
+    /// public** [`ScanStepResult`]; `view_sk` never crosses the boundary. The
+    /// driving P-scan task (PR-B) calls this once per bounded batch, advancing the
+    /// cursor over the returned range. `blocks[i]` must be the block at
+    /// `range.start + i`.
+    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
+    pub(crate) async fn scan_step(
+        &self,
+        range: BlockRange,
+        blocks: Vec<ScannableBlock>,
+    ) -> Result<ScanStepResult, StakeEngineError> {
+        self.actor
+            .ask(ScanStep { range, blocks })
             .await
             .map_err(collapse_send_error)
     }
@@ -1671,6 +1801,114 @@ mod tests {
             ),
             "expected SlotMismatch(0, 1), got {err:?}"
         );
+    }
+
+    // ---- SP-3/SP-5: the offloaded dual-extractor scan-step ----
+
+    use shekyl_crypto_pq::kem::HybridKemPublicKey;
+    use shekyl_scanner::bench_fixtures::scannable_block_for_recipient;
+    use shekyl_types::{BlockHeight, SettlementEpoch};
+    use shekyl_units::AtomicUnits;
+    use shekyl_wire::transaction::{BondPost, BondPostKind, Input};
+    use shekyl_wire::Holdings;
+
+    /// The cleartext canonical id an on-chain bond-post carries for `slot`.
+    fn canonical_id(slot: u32) -> [u8; 32] {
+        p_canonical_id_from_hybrid_pubkey(&oracle_bond_id(slot))
+    }
+
+    /// A block with one output addressed to persona `slot`.
+    fn block_funding(slot: u32) -> ScannableBlock {
+        let p = derive_bundle(slot);
+        let kem = HybridKemPublicKey {
+            x25519: p.x25519_pk,
+            ml_kem: p.ml_kem_ek.to_vec(),
+        };
+        scannable_block_for_recipient(1, &kem, p.spend_pk.as_canonical_bytes())
+    }
+
+    /// Append a JoinMarket bond-post for persona `slot` to a block's first tx.
+    fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
+        let post = BondPost {
+            hybrid_public_key: oracle_bond_id(slot),
+            p_canonical_id: canonical_id(slot),
+            kind: BondPostKind::JoinMarket {
+                bond_spend_pk: Vec::new(),
+            },
+            holdings: Holdings::CompleteTree,
+            bonded_total_atomic: 1_000,
+            bond_credit: 1_000,
+            bond_debit: 0,
+        };
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::BondPost(Box::new(post)));
+        block
+    }
+
+    fn one_block_range(h: u64) -> BlockRange {
+        BlockRange::new(BlockHeight::from_raw(h), BlockHeight::from_raw(h + 1)).expect("range")
+    }
+
+    // SP-3/SP-5 — a bonded persona's funding *and* its bond-post both come back
+    // (public) through the actor's offloaded scan-step; `view_sk` never crosses.
+    #[tokio::test]
+    async fn scan_step_extracts_funding_and_bond_post_for_a_bonded_persona() {
+        let handle = spawn_over(&[0], &[0], None); // persona 0 held AND bonded
+        let block = with_bond_post(block_funding(0), 0);
+
+        let res = handle
+            .scan_step(one_block_range(20_001), vec![block])
+            .await
+            .expect("scan-step succeeds");
+
+        assert_eq!(
+            res.funding.len(),
+            1,
+            "the bonded persona's output is summed"
+        );
+        assert_eq!(res.funding[0].epoch, SettlementEpoch::from_raw(2)); // 20_001 / 10_000
+        assert!(res.funding[0].amount > AtomicUnits::ZERO);
+        assert_eq!(res.bond_post_matches.len(), 1, "its bond-post matched");
+        assert_eq!(res.bond_post_matches[0].p_canonical_id, canonical_id(0));
+    }
+
+    // A persona that is HELD but not BONDED is not scanned, and a foreign bond-post
+    // does not match — the bonded tag gates the scan set (DQ8; SP-6 reconciles).
+    #[tokio::test]
+    async fn scan_step_skips_non_bonded_personas_and_foreign_posts() {
+        // Persona 0 bonded; the block is addressed to persona 1 (held, not bonded)
+        // and carries persona 1's bond-post.
+        let handle = spawn_over(&[0, 1], &[0], None);
+        let block = with_bond_post(block_funding(1), 1);
+
+        let res = handle
+            .scan_step(one_block_range(20_001), vec![block])
+            .await
+            .expect("scan-step succeeds");
+
+        assert!(
+            res.funding.is_empty(),
+            "persona 1's output is not ours to recover"
+        );
+        assert!(
+            res.bond_post_matches.is_empty(),
+            "persona 1's canonical id is not in the bonded union"
+        );
+    }
+
+    // Bounded + offloaded (DQ6): the handler returns and frees the mailbox, so the
+    // actor answers the next message rather than freezing on the scan.
+    #[tokio::test]
+    async fn actor_is_responsive_after_a_scan_step() {
+        let handle = spawn_over(&[0], &[0], None);
+        let _ = handle
+            .scan_step(one_block_range(1), vec![block_funding(0)])
+            .await
+            .expect("scan-step succeeds");
+        let active = handle.active_persona().await.expect("still responsive");
+        assert!(active.is_none(), "actor processed the follow-up message");
     }
 
     /// S6 — session RNG self-cert wiring (conformance build only).
