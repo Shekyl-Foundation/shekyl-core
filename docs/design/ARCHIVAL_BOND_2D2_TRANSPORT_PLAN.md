@@ -340,7 +340,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 | **SP-T1** | **Per-`P` SOCKS-auth client + the circuit-ID verification test** — a `ureq::Agent` with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit); test asserts **control-port circuit-ID disjointness** (§15). **The keystone.** | SP-T0 |
 | **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client; the live impl replacing `DaemonBlockSource`. | SP-T1, SP-0 (landed) |
 | **SP-T3** | **v3 onion serving** (GF-9) — `P`'s inbound onion; HS key `p_slot`-bound, rotates with the persona; published only while serving; backoff-gated. | SP-T0; GATE2 serve/challenge surface |
-| **SP-T4** | **Discretionary broadcast timing** (DQ3) — wire `stake_engine`'s `_spread`/`_bond_first` over the per-`P` circuit, anchor-free draw. | SP-T1; the broadcast stub |
+| **SP-T4** | **All `P` broadcasts** — origin-in-`P`-space *always* (discretionary `_spread`/`_bond_first` **and** the deadline-critical challenge-response submission), write-side no-principal-path (CX-2); anchor-free *timing* where applicable. | SP-T1; broadcast stub |
 | **SP-T5** | **Reconcile the stale 2d-1 comments** (Arti→SOCKS, multi-source→posture) — small code-only PR. | — |
 
 **Half (B) — reconcile (completeness-critical; gated):**
@@ -364,8 +364,12 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
 - **`PCircuitTag` carries three invariants, pinned on the type — not in a comment.** It is derived
   from the active persona binding (`p_slot` / `p_canonical_id`), **not** free-form; SP-T1 computes
   the SOCKS username `derive_socks_user(tag)` from it. That derivation is load-bearing in three
-  distinct ways, so all three live in one place (a documented invariant + `debug_assert!` on
-  `derive_socks_user`):
+  distinct ways. (b) and (c) are enforced **by construction, not by `debug_assert!`** (CX-1): the
+  assert is compiled out in release — an empty username would escape (b) — and a *per-call* assert
+  cannot see a *cross-call* injectivity break (c) at all. So `derive_socks_user` returns a
+  `SocksUsername` newtype = fixed-width hex of `H(domain_sep ‖ p_canonical_id)`, **non-empty and
+  injective by construction**; a `debug_assert!` + an injectivity test then *verify*, not *enforce*
+  (the SP-0 / SP-T2 bar):
   - **(a) local-only.** The username is host↔Tor (`IsolateSOCKSAuth`), never on the wire — the only
     exposure is a local log artifact (C6/forensic), so it is **not logged.**
   - **(b) non-empty ⇒ disjoint from the principal.** This round's core invariant is *principal =
@@ -385,6 +389,9 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
 - **One Tor process, never one circuit.** `P` and the principal share the bundled Tor *process* but
   never a *circuit*: invariants (b)+(c) make "distinct usernames → distinct circuits" the only
   representable state — riding on the persona-derivation the type guarantees, not on operator config.
+  One process *does* mean a **shared guard set** — the §7 guard-level/timing residual; severing it
+  via separate instances is *worse* (a non-default config is itself a guard-visible fingerprint), so
+  the coupling is the deliberate trade, not a gap to fix (§16).
 
 ---
 
@@ -432,6 +439,10 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
 - *Enforcement:* `PBlockSource::new(client: PTorClient)` is the only way in — no principal
   `DaemonClient` path, no `Default`. This is where "P fetches on its own circuit" becomes the only
   representable state.
+- *Posture→impl (do not conflate):* *remote* posture ⇒ `PBlockSource(PTorClient)` (fetch over `P`'s
+  circuit); *local* posture ⇒ a **direct localhost** `BlockSource` (no circuit — origin-safe
+  trivially). Both origin-safe, for different reasons; the mapping is explicit so a local posture
+  cannot accidentally route its fetch over a shared network circuit.
 
 **SP-T0 — bundled-Tor lifecycle.** A managed child process with a wallet-private
 `SocksPort`/`ControlPort`; health-gate readiness before any `PTorClient` is handed out; shut down
@@ -452,9 +463,14 @@ bounds the cost regardless.)*
 persona**; published only while `P` actively serves; backoff-gated on repeated failure (the §5
 liveness model — *not* a slash trigger). Depends on the GATE2 serve/challenge surface.
 
-**SP-T4 — discretionary broadcast.** Draw an anchor-free send time and emit `_spread`/`_bond_first`
-over the `PTorClient` circuit (DQ3); the vin is public-content (§0), so the only privacy property
-is *origin-in-`P`-space*.
+**SP-T4 — all `P` broadcasts (CX-2).** Every `P`-originated tx — the discretionary
+`_spread`/`_bond_first` **and** the deadline-critical challenge-response (serve-credit) submission —
+emits over the `PTorClient` circuit, with **no constructor path that accepts the principal's
+`DaemonClient`** (the write-side mirror of SP-T2). The default broadcast-via-daemon path would
+originate from principal-space — the write-side firewall break — so origin-in-`P`-space is enforced
+by the type, not §5 prose. *Timing:* anchor-free draw for the discretionary sends (DQ3); **N/A for
+the challenge-response** (§7: its response window is public — nothing to jitter, only the origin to
+isolate).
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
@@ -462,7 +478,42 @@ Designed here, built after SP-6.
 
 ---
 
-## 16. Considered and refuted (the round's grounding journey)
+## 16. Threat-model cross-check (closing Round 0)
+
+Each SP walked against the §7 invariant — *can the adversary tie `P`'s network origin to the
+principal?* — severity-ordered. The walk found two SPs where "unrepresentable" was claimed or
+implied but **not yet built**; both are fixed into §13/§15 above, on paper, **before SP-T1** — which
+is the cross-check earning its place.
+
+| # | SP | Finding | Disposition |
+| --- | --- | --- | --- |
+| **CX-1** | SP-T1 (keystone) | `PCircuitTag` (b)/(c) cannot rest on `debug_assert!` — it is compiled out in release (an empty username escapes (b)), and a *per-call* assert cannot see a *cross-call* injectivity violation at all (so (c) is uncheckable that way). | **Fixed (§13):** `derive_socks_user` returns a `SocksUsername` newtype **non-empty by construction** (fixed-width hex of `H(domain_sep ‖ p_canonical_id)`) and **injective by construction** (collision-resistant hash over the *full* `p_canonical_id`, no truncation/modulo). `debug_assert!` + an injectivity test become *verification*, not enforcement — the SP-0/SP-T2 "make it unrepresentable" bar. |
+| **CX-2** | challenge-response broadcast | The deadline-critical serve-credit response (the §5 liveness tx) is an outbound broadcast that is **not** discretionary (SP-T4 as written), **not** a fetch (SP-T2), **not** the inbound onion (SP-T3) — it fell through the SPs, and the default broadcast path is the daemon connection (principal-space → the **write-side** break). §5 had it in prose only. | **Fixed (§12/§15):** broaden SP-T4 to **all `P` broadcasts** — origin-in-`P`-space *always* (rides `PTorClient`, no constructor accepting the principal's `DaemonClient`, the write-side mirror of SP-T2); discretionary *timing* where applicable, N/A for the response (public window). |
+
+**Two notes recorded (correct as-is — do not "fix"):**
+
+- **SP-T0 guard coupling is the deliberate §7 residual.** "One Tor process, never one circuit"
+  (§13) means `P` and the principal share one **guard set** — exactly where §7's named residual
+  (guard-level + timing correlation, the case Tor does not defeat) lives. Severing it means
+  *separate Tor instances*, which is **worse**: a non-default config is itself a fingerprint to any
+  guard observer (a weaker adversary than the correlator the shared guard exposes). Accept the
+  coupling; the doc states it so a future reader does not split instances.
+- **SP-T2 posture→impl mapping.** `PTorClient`-only closes the *remote* fetch. The *local* posture
+  fetches over **localhost** (no circuit; origin-safe trivially) — a **different** `BlockSource`
+  impl. Pin the mapping — *remote ⇒ `PBlockSource(PTorClient)`; local ⇒ direct localhost* — so the
+  local posture cannot accidentally route its fetch over a shared network circuit.
+
+**Closes clean:** SP-T3 (onion = inbound origin-isolation; GF-9 rotation = the inbound analogue of
+CX-1(c); publish/unpublish tracks `P`'s public bond, no new leak; shares the SP-T0 guard residual),
+SP-T5 (no origin surface), SP-R0 (reads ride the per-`P` transport; GC is internal/invisible — the
+DQ8-retire fetch-everything + fixed-cadence argument; gated on SP-6).
+
+**Round 0 closes with the §7 invariant shut** for the read side and the type — modulo the two fixes
+folded above, made on paper rather than retrofitted around the first build.
+
+---
+
+## 17. Considered and refuted (the round's grounding journey)
 
 Recorded deliberately — the dead ends save the next designer the rounds they cost here. The
 throughline: **ground the mechanism in the *implementation* before building on it** (read the
@@ -490,7 +541,7 @@ forecloses. This record exists so the next round starts from the grounded model.
   per-`P` `IsolateSOCKSAuth`, default-Tor, verify-by-measurement); posture taxonomy; the
   liveness model grounded in `run_sliding` (sliding-window `m`-of-`n`, not a single-shot
   cliff); serving onion with `p_slot`-bound HS rotation; the narrow origin-only threat model;
-  censorship-circumvention out of scope; §16 records the considered-and-refuted journey.
+  censorship-circumvention out of scope; §17 records the considered-and-refuted journey.
 - **2026-06-28 (Round 0):** Added the buildable decomposition (§11–§15), grounded at source:
   the transport surface map (P's seam = behind SP-0 `BlockSource`; the two `DaemonClient`s are
   the principal's); three stale 2d-1 comments reconciled to the scoping decisions (Arti→SOCKS,
@@ -506,3 +557,11 @@ forecloses. This record exists so the next round starts from the grounded model.
   the control port is already open for SP-T0 bootstrap (§14/§15). (4) Bundled Tor stands; cost bounded
   by **reuse-not-own** (Guix package + hash-pinned official binary, release-checklist update), Arti
   anchor stays on its real trigger not packaging (§15).
+- **2026-06-28 (Round 0 close — threat-model cross-check, §16):** Walked each SP against §7; found
+  and fixed two gaps **before build**. **CX-1** (keystone): `PCircuitTag` (b)/(c) moved from
+  `debug_assert!` to **by-construction** (`SocksUsername` newtype — non-empty + injective; assert +
+  test now *verify*, not enforce). **CX-2**: the challenge-response broadcast had origin-isolation in
+  §5 prose but no enforcing SP, so SP-T4 broadened to **all `P` broadcasts** (write-side
+  no-principal-path). Two correct-as-is notes recorded (SP-T0 shared-guard = the deliberate §7
+  residual; SP-T2 posture→impl mapping). §7 closes for the read side and the type.
+  Considered-and-refuted §16→§17.
