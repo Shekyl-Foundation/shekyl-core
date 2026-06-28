@@ -316,6 +316,16 @@ doc-comment claims (`shekyl-cli-daemon`) is **not wired** — `main.rs:135` pass
 no username — so today's "separate circuit" is aspirational. 2d-2 **wires** the username,
 **per-`P`**. (This is why SP-T1, not SP-T2, is the keystone: the circuit, not the fetch.)
 
+**Principal-side isolation is a separate ticket — deliberately out of this round.** The principal's
+two `DaemonClient`s sharing one no-auth circuit is *within-principal* correlation (it links two
+principal streams to one user — true, and already principal-side), so it never crosses the
+`P↔principal` boundary, and the firewall claim does not depend on it (`P` is isolated via its
+per-`P` username regardless). The sharper reason to keep it out: wiring the principal to
+`IsolateSOCKSAuth` gives the principal **non-empty** usernames, introducing a **namespace-collision
+obligation** with `P`'s usernames — and a collision (`P` + principal on one circuit) *is* the
+firewall break. This round keeps the collision-free invariant — **principal = empty, `P` =
+non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket, with its own care.
+
 ---
 
 ## 12. SP-# enumeration (half A buildable now; half B gated on SP-6)
@@ -326,8 +336,8 @@ no username — so today's "separate circuit" is aspirational. 2d-2 **wires** th
 
 | SP | Deliverable | Depends on |
 | --- | --- | --- |
-| **SP-T0** | **Bundled-Tor lifecycle** — wallet owns/launches/health-gates/shuts-down a Tor child process (`17-dependency-discipline`); exposes a ready, wallet-private SOCKS port. | — (foundation) |
-| **SP-T1** | **Per-`P` SOCKS-auth client + the different-exit verification test** — a `ureq::Agent` built with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit). **The keystone.** The test is not optional: the isolation *claim* is only real if measured. | SP-T0 |
+| **SP-T0** | **Bundled-Tor lifecycle** — wallet owns/launches/health-gates/shuts-down a Tor child process; wallet-private SOCKS + control port; **reuse-not-own packaging** (Guix + hash-pin, §15). | — (foundation) |
+| **SP-T1** | **Per-`P` SOCKS-auth client + the circuit-ID verification test** — a `ureq::Agent` with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit); test asserts **control-port circuit-ID disjointness** (§15). **The keystone.** | SP-T0 |
 | **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client; the live impl replacing `DaemonBlockSource`. | SP-T1, SP-0 (landed) |
 | **SP-T3** | **v3 onion serving** (GF-9) — `P`'s inbound onion; HS key `p_slot`-bound, rotates with the persona; published only while serving; backoff-gated. | SP-T0; GATE2 serve/challenge surface |
 | **SP-T4** | **Discretionary broadcast timing** (DQ3) — wire `stake_engine`'s `_spread`/`_bond_first` over the per-`P` circuit, anchor-free draw. | SP-T1; the broadcast stub |
@@ -339,37 +349,52 @@ no username — so today's "separate circuit" is aspirational. 2d-2 **wires** th
 | --- | --- | --- |
 | **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6** (`PReconcileSet`, not built — downstream of PR-B) |
 
+**Out of this round (separate ticket):** principal-side `IsolateSOCKSAuth` — wiring the principal's
+two `DaemonClient`s to non-empty usernames. Kept out to protect the firewall round's collision
+invariant (principal = empty, `P` = non-empty; §11 / §13(b)).
+
 ---
 
 ## 13. Type-safety — make sharing the principal's circuit *unrepresentable*
 
 SP-0 already makes the selective-fetch leak unrepresentable (no method to call). 2d-2 adds the
-*circuit* half: building a `P`-transport that rides the principal's circuit must be **uncallable**,
-not merely discouraged — the DQ1 move, one layer down.
+*circuit* half: building a `P`-transport that rides the principal's — or another persona's —
+circuit must be **uncallable**, not merely discouraged — the DQ1 move, one layer down.
 
-- **The per-`P` isolation token.** A newtype `PCircuitTag`, derived from the active persona
-  binding (`p_slot` / `p_canonical_id`), **not** free-form. SP-T1's constructor takes a
-  `PCircuitTag` and computes the SOCKS username from it (`socks_user = derive(tag)`), so the
-  username is a *function of the persona*, never a literal a caller picks — and never the
-  principal's. Two `P`s → two usernames → two circuits, structurally.
+- **`PCircuitTag` carries three invariants, pinned on the type — not in a comment.** It is derived
+  from the active persona binding (`p_slot` / `p_canonical_id`), **not** free-form; SP-T1 computes
+  the SOCKS username `derive_socks_user(tag)` from it. That derivation is load-bearing in three
+  distinct ways, so all three live in one place (a documented invariant + `debug_assert!` on
+  `derive_socks_user`):
+  - **(a) local-only.** The username is host↔Tor (`IsolateSOCKSAuth`), never on the wire — the only
+    exposure is a local log artifact (C6/forensic), so it is **not logged.**
+  - **(b) non-empty ⇒ disjoint from the principal.** This round's core invariant is *principal =
+    no-auth (empty username), `P` = always non-empty.* An empty or principal-colliding username
+    puts `P` and the principal on the **same circuit** — the firewall break itself. The derivation
+    **structurally guarantees non-empty**, so the invariant survives a future principal-isolation
+    ticket (which gives the principal non-empty usernames, and with them a collision obligation —
+    §11).
+  - **(c) injective in `p_slot` ⇒ distinct per persona.** Two personas sharing a username share a
+    circuit, **bridging the succession at the network layer** — the same temporal break as a shared
+    onion across rotation. The username derivation thus performs the **circuit-side analogue of
+    GF-9 onion-rotation**; injectivity is temporal-channel protection, not incidental.
 - **No principal path in.** SP-T2's `BlockSource` impl is constructible **only** from an SP-T1
   per-`P` client — no `From<principal DaemonClient>`, no `Default`. The principal's `DaemonClient`
   (cli or engine) cannot be coerced into `P`'s `BlockSource`; the carrying type won't take it.
   Mirrors `PScanCursor` not being passable where `BlockchainTip` is expected (DQ1).
-- **Shared daemon, never shared circuit.** `P` and the principal share one bundled Tor *process*
-  but never one *circuit*: distinct usernames → distinct circuits. The disjointness rides on the
-  username being persona-derived (the type guarantees it), not on the operator configuring it.
+- **One Tor process, never one circuit.** `P` and the principal share the bundled Tor *process* but
+  never a *circuit*: invariants (b)+(c) make "distinct usernames → distinct circuits" the only
+  representable state — riding on the persona-derivation the type guarantees, not on operator config.
 
 ---
 
 ## 14. Dependency posture — the keystone, build order, parallelism
 
-- **Keystone: SP-T1** (per-`P` client + the different-exit verification test). All of half (A)
+- **Keystone: SP-T1** (per-`P` client + the circuit-ID verification test). All of half (A)
   rides on it, and it is **buildable now** — SP-0 is landed, `ureq`+`socks-proxy` is in-tree
   (`shekyl-cli`), and `cli/daemon.rs` is a working (single-username) model. The test is
-  load-bearing: the isolation claim is only real if two `P`-circuits are *measured* to carry
-  distinct `IsolateSOCKSAuth` identities (disjoint from a principal no-auth client) — "verify at
-  source," applied to the circuit itself.
+  load-bearing and must measure the *right* property: control-port **circuit-ID disjointness**, not
+  exit-IP (unsound here — §15) — "verify at source," applied to the circuit itself.
 - **Build order:** SP-T0 ∥ SP-T1 → SP-T2 → SP-T3 ∥ SP-T4 → **SP-R0 (after SP-6)**. SP-T5
   (comment fix) any time.
 - **Parallelism:** SP-T0 and SP-T1 co-develop (T1's test needs T0's SOCKS port; the client *shape*
@@ -390,10 +415,14 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
   `PTorClient::for_persona(tag: PCircuitTag, socks: &TorSocksEndpoint)`. The username is
   `derive_socks_user(tag)` — persona-derived, never an argument; there is **no** constructor that
   takes a username or a principal client.
-- *Verification test (ships with the enabler, not deferred):* spin two `PTorClient`s for two
-  distinct tags against the bundled Tor, probe circuit identity, assert distinct `IsolateSOCKSAuth`
-  identities and disjointness from a principal no-auth client. Without it, the isolation is a
-  comment, not a property.
+- *Verification test (ships with the enabler, not deferred) — control-port circuit-ID
+  disjointness:* over `P`'s client and a principal (no-auth) client, issue one request each to
+  *distinct* targets, read the two `STREAM` events' **circuit IDs** from the Tor **control port**,
+  assert they differ. This measures circuit-disjointness *directly*. **Exit-IP comparison is
+  unsound here** and must not be used: *different exits ⟹ different circuits* but *same exit ⇏ same
+  circuit* (shared exits are normal Tor) — so an exit test cannot tell "same circuit" (the failure)
+  from "different circuits, same exit" (fine), the exact case it must distinguish. The control port
+  is **already open** for SP-T0's bootstrap read, so this is a second consumer, not a new dependency.
 
 **SP-T2 — the `BlockSource` Tor impl.**
 
@@ -404,9 +433,20 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
   `DaemonClient` path, no `Default`. This is where "P fetches on its own circuit" becomes the only
   representable state.
 
-**SP-T0 — bundled-Tor lifecycle.** A managed child process (`17` for the bundled binary): launch
-with a wallet-private `SocksPort`/`ControlPort`, health-gate readiness before any `PTorClient` is
-handed out, shut down on wallet close. Failure → the §5 backoff/posture path, not a panic.
+**SP-T0 — bundled-Tor lifecycle.** A managed child process with a wallet-private
+`SocksPort`/`ControlPort`; health-gate readiness before any `PTorClient` is handed out; shut down
+on wallet close. The `ControlPort` (cookie auth) serves *two* consumers — bootstrap-progress for the
+"Connecting…" state **and** SP-T1's circuit-ID check. **Reuse, never own, the Tor build** (`17`):
+inherit reproducible packaging where it exists (Guix ships a `tor` package → reproducibility + a
+bump-the-version update path, no maintained build) and **hash-pin the Tor Project's official
+released binary** on targets you cannot build reproducibly (Windows the obvious trusted-blob
+exception). The recurring obligation is then a **release-checklist line** — track Tor advisories →
+bump pinned version/hash → re-verify — not a per-platform build. Failure → the §5 backoff/posture
+path, not a panic. *(The Arti reopen-anchor (§10) stays anchored on its real trigger — the
+SOCKS-isolation guarantee proving unenforceable — not on packaging weight: Arti trades a
+binary-to-track for a large, fast-moving source tree, heavier on the supply-chain/Guix axes, not
+lighter. Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
+bounds the cost regardless.)*
 
 **SP-T3 — onion serving (GF-9).** A v3 HS whose key is `p_slot`-bound and **rotates with the
 persona**; published only while `P` actively serves; backoff-gated on repeated failure (the §5
@@ -457,3 +497,12 @@ forecloses. This record exists so the next round starts from the grounded model.
   multi-source→posture) and the unwired `IsolateSOCKSAuth` username flagged; SP-T0–T5 (half A)
   and SP-R0 (half B, gated on SP-6); the `PCircuitTag`/`PTorClient` type-safety move; keystone =
   SP-T1 (per-`P` client + measured different-exit test). Considered-and-refuted renumbered §11→§16.
+- **2026-06-28 (Round 0 discussion):** Resolved the four open calls. (1) Principal-side isolation →
+  separate ticket, to keep the empty-vs-non-empty collision invariant out of the firewall round's
+  core (§11/§12). (2) The `PCircuitTag` username escalated from a no-log note to **three type-pinned
+  invariants** (§13): local-only (a), non-empty/principal-disjoint (b, firewall-critical), injective
+  in `p_slot` (c, temporal-critical — the circuit-side analogue of GF-9 onion rotation). (3) SP-T1's
+  test pinned to **control-port circuit-ID disjointness** (exit-IP unsound: same-exit ⇏ same-circuit);
+  the control port is already open for SP-T0 bootstrap (§14/§15). (4) Bundled Tor stands; cost bounded
+  by **reuse-not-own** (Guix package + hash-pinned official binary, release-checklist update), Arti
+  anchor stays on its real trigger not packaging (§15).
