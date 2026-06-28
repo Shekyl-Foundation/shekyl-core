@@ -44,10 +44,6 @@ use zeroize::Zeroizing;
 /// All arms are *fail-closed* rejections of malformed key material — never a
 /// silent weakening (a weak `x25519_sk` from a malformed view key is exactly the
 /// failure mode to guard, per `30-cryptography.mdc`).
-//
-// `allow(dead_code)`: transient — the non-test consumer is the SP-5 scan loop
-// (module "Staging note" in `block_source`); removed when SP-5 lands.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum PersonaScanError {
     /// `spend_pk` is not a valid 32-byte compressed Edwards encoding.
@@ -99,7 +95,6 @@ impl std::error::Error for PersonaScanError {
 /// Fail-closed: rejects a non-canonical `view_sk`, a malformed/off-curve
 /// `spend_pk`, or a view pair the scanner refuses — it never produces a
 /// silently-weakened scanner.
-#[allow(dead_code)] // transient — SP-5 scan loop is the non-test consumer.
 pub(crate) fn archival_guaranteed_view_pair(
     p_keys: &ArchivalPKeys,
 ) -> Result<GuaranteedViewPair, PersonaScanError> {
@@ -131,7 +126,6 @@ pub(crate) fn archival_guaranteed_view_pair(
 ///
 /// Transient by design: drop it after the persona's scan-step to wipe the secrets
 /// (DQ5); it adds no resident secret surface beyond the `view_sk` Model-D holds.
-#[allow(dead_code)] // transient — SP-5 scan loop is the non-test consumer.
 pub(crate) fn guaranteed_scanner_for_persona(
     p_keys: &ArchivalPKeys,
 ) -> Result<GuaranteedScanner, PersonaScanError> {
