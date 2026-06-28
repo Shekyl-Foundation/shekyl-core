@@ -9,9 +9,9 @@
 //! across a rotation (the **temporal** channel, one-actor-one-portfolio), this
 //! harness asks the A0 question: an operator splitting its capacity across **K
 //! simultaneous personas** — are those siblings unlinkable **from each other**
-//! (the **sibling** channel)? Same correlate (the on-wire `shard_ids`,
-//! `bond_wire.rs:70`), two failure directions. The unifying invariant the whole
-//! TM-1 round is built around:
+//! (the **sibling** channel)? Same correlate (the on-wire `shard_ids` —
+//! `shekyl-archival-retention` `bond_wire::HoldingsDescriptor::shard_ids`), two
+//! failure directions. The unifying invariant the whole TM-1 round is built around:
 //!
 //! > Each persona's portfolio must be statistically indistinguishable from an
 //! > **independent** operator's — neither sibling-correlated (TM-1) nor
@@ -20,11 +20,11 @@
 //! ## What the substrate forces (verified, not assumed — the CT-5 discipline)
 //!
 //! - Shard **sets** (not just counts) are public on-wire, keyed to the persona
-//!   (`HoldingsDescriptor.shard_ids`, `bond_wire.rs:68`).
+//!   (`bond_wire::HoldingsDescriptor::shard_ids`).
 //! - Consensus scarcity is `1000/R · g(age)` with **no intrinsic per-shard
-//!   difficulty term** (`reward_arithmetic.rs:scarcity_milli`; `g_age` is the
-//!   only weight, `model.rs:388`). So a shard is "high-value" **purely because
-//!   few chose it** (demand-driven), never because it is hard to serve.
+//!   difficulty term** (`reward_arithmetic::scarcity_milli`; `g_age` is the only
+//!   weight — `model::g_age`). So a shard is "high-value" **purely because few
+//!   chose it** (demand-driven), never because it is hard to serve.
 //! - Therefore the *only* place a supply-side cost floor can originate is **(a)
 //!   aggregate operator capacity vs. shard demand** (heterogeneous archetypes +
 //!   endogenous population) and **(b)** the **retention friction** (L9 lock / L18
@@ -693,7 +693,14 @@ fn run_equilibrium(cfg: &ClusterConfig) -> Pop {
     }
 }
 
-/// Split `(storage, capital)` across `k` personas, equal or varied.
+/// Split `(storage, capital)` across `k` personas by per-persona weights (uniform
+/// when `equal`, random Dirichlet-ish when not). The integer **storage** is
+/// apportioned by **largest remainder** so the per-persona slots sum to *exactly*
+/// `storage` — never inventing or losing capacity, a bias that would otherwise
+/// leak straight into the equilibrium `R` and the matcher's size channel. Each
+/// persona gets ≥1 slot when feasible (`storage ≥ k`); the **capital** (real)
+/// splits by the same weights and sums exactly. The RNG draw count is unchanged
+/// from the prior model (`k` draws iff `!equal`), so determinism is preserved.
 fn partition(
     storage: usize,
     capital: f64,
@@ -704,19 +711,43 @@ fn partition(
     if k <= 1 {
         return vec![(storage, capital)];
     }
-    if equal {
-        let s = (storage / k).max(1);
-        let c = capital / k as f64;
-        return (0..k).map(|_| (s, c)).collect();
+    let weights: Vec<f64> = if equal {
+        vec![1.0 / k as f64; k]
+    } else {
+        let mut w: Vec<f64> = (0..k).map(|_| 0.25 + rng.unit()).collect();
+        let sum: f64 = w.iter().sum();
+        for x in w.iter_mut() {
+            *x /= sum;
+        }
+        w
+    };
+    // 1 slot each (when feasible), then distribute the remaining `pool` by floor,
+    // and hand the leftover (storage − Σ) to the largest fractional parts.
+    let base = usize::from(storage >= k);
+    let pool = storage.saturating_sub(base * k);
+    let mut slots: Vec<usize> = weights
+        .iter()
+        .map(|&x| base + (pool as f64 * x).floor() as usize)
+        .collect();
+    let mut remainder = storage.saturating_sub(slots.iter().sum());
+    let mut order: Vec<usize> = (0..k).collect();
+    let frac = |i: usize| pool as f64 * weights[i] - (pool as f64 * weights[i]).floor();
+    order.sort_by(|&a, &b| {
+        frac(b)
+            .partial_cmp(&frac(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for &idx in &order {
+        if remainder == 0 {
+            break;
+        }
+        slots[idx] += 1;
+        remainder -= 1;
     }
-    // Varied: random Dirichlet-ish weights, normalized, each persona ≥ 1 slot.
-    let mut w: Vec<f64> = (0..k).map(|_| 0.25 + rng.unit()).collect();
-    let sum: f64 = w.iter().sum();
-    for x in w.iter_mut() {
-        *x /= sum;
-    }
-    w.iter()
-        .map(|&x| (((storage as f64 * x).round() as usize).max(1), capital * x))
+    slots
+        .iter()
+        .zip(weights.iter())
+        .map(|(&s, &x)| (s, capital * x))
         .collect()
 }
 
