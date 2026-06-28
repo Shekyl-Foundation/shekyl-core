@@ -38,8 +38,8 @@ use crate::engine::traits::DaemonEngine;
 /// Error from a [`BlockSource`].
 ///
 /// Transport-agnostic (it carries a rendered message, not a transport type) so
-/// 2d-2's Arti transport maps its own failures in without this type ever
-/// depending on a specific transport's error enum.
+/// 2d-2's transport maps its own failures in without this type ever depending on
+/// a specific transport's error enum.
 #[derive(Debug, Clone)]
 pub(crate) enum BlockSourceError {
     /// The underlying source (transport, parse, or daemon) failed.
