@@ -126,9 +126,9 @@ and a single signed artifact instead of Arti's fast-moving crate graph (the surf
    [Whonix Stream Isolation](https://www.whonix.org/wiki/Stream_Isolation)). The
    architecture is **one transport
    client per network identity** carrying its own credentials — almost certainly a separate
-   `ureq::Agent` per identity (proxy/auth is per-`Agent`; **confirm against the ureq 3.x API
-   before building**), which makes the per-`P` `Agent` the typed boundary (`P` cannot use the
-   principal's `Agent`).
+   `ureq::Agent` per identity (proxy/auth is per-`Agent` — **verified in ureq 3.3.0**: `Config::proxy`,
+   no per-request override, SP-T1), which makes the per-`P` `Agent` the typed boundary (`P` cannot use
+   the principal's `Agent`).
 5. **Use Tor's defaults; do not "harden" them.** Distinct circuits may share an **exit** (that
    is the obfuscation working, not a discriminator) and **do** share the **entry guard** (Tor
    pins a small guard set — revealing only "this IP uses Tor," the anonymity set). Multi-guard
@@ -281,8 +281,8 @@ discretionary-broadcast timing (DQ3) → reconcile GC (DQ5, after PR-201).
 
 **Reopen anchors (`21`):** embedded Arti (if bundled-daemon UX/SOCKS isolation proves
 untenable); multi-source tip (if a real staker posture other than ①/② emerges that the
-posture disposition does not cover); per-`P`-`Agent` shape (if ureq 3.x configures proxy
-per-request, not per-`Agent`).
+posture disposition does not cover); per-`P`-`Agent` shape — **verified per-`Agent` in ureq 3.3.0**
+(SP-T1, PR #204), so this anchor is closed unless a future ureq moves proxy to per-request.
 
 ## 11. Round 0 — landed substrate (grounded at source, 2026-06-28)
 
@@ -367,8 +367,9 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
   distinct ways. (b) and (c) are enforced **by construction, not by `debug_assert!`** (CX-1): the
   assert is compiled out in release — an empty username would escape (b) — and a *per-call* assert
   cannot see a *cross-call* injectivity break (c) at all. So `derive_socks_user` returns a
-  `SocksUsername` newtype = fixed-width hex of `H(domain_sep ‖ p_canonical_id)`, **non-empty and
-  injective by construction**; a `debug_assert!` + an injectivity test then *verify*, not *enforce*
+  `SocksUsername` newtype = fixed-width hex of **cSHAKE256** over the full `p_canonical_id`
+  (customization `shekyl/p-socks-user-v1`, mirroring `derive_output_handle`), **non-empty and
+  injective by construction**; a pinned KAT + an injectivity test then *verify*, not *enforce*
   (the SP-0 / SP-T2 bar):
   - **(a) local-only.** The username is host↔Tor (`IsolateSOCKSAuth`), never on the wire — the only
     exposure is a local log artifact (C6/forensic), so it is **not logged.**
@@ -426,10 +427,15 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
 
 **SP-T1 — the per-`P` SOCKS-auth client (keystone).**
 
-- *Type:* `PTorClient { agent: ureq::Agent, tag: PCircuitTag }`, built by
-  `PTorClient::for_persona(tag: PCircuitTag, socks: &TorSocksEndpoint)`. The username is
-  `derive_socks_user(tag)` — persona-derived, never an argument; there is **no** constructor that
-  takes a username or a principal client.
+- *Type (landed — `shekyl-p-transport`, PR #204):* `PTorClient { agent: ureq::Agent, username:
+  SocksUsername }`, built by `PTorClient::for_persona(&PCircuitTag, &TorSocksEndpoint)`. The
+  username is `derive_socks_user(tag)` = **cSHAKE256** over the full `p_canonical_id` (customization
+  `shekyl/p-socks-user-v1`) — persona-derived, never an argument; **no** constructor takes a username
+  or a principal client. `SocksUsername` is non-empty + injective *by construction* (the CX-1
+  closure); `PCircuitTag` has a truncated `Debug`, and the proxy error carries only the `SocketAddr`
+  endpoint — never the username-bearing URI (invariant (a)); `TorSocksEndpoint` is a `SocketAddr`
+  (IPv6-safe, URL-injection-unrepresentable); `PTorClient` is `Send + Sync` (actor state). Proxy is
+  bound **per-`Agent`** in ureq 3.3.0 (verified) → one Agent per `P`.
 - *Verification test (ships with the enabler, not deferred) — control-port circuit-ID
   disjointness:* over `P`'s client and a principal (no-auth) client, issue one request each to
   *distinct* targets, read the two `STREAM` events' **circuit IDs** from the Tor **control port**,
@@ -573,3 +579,9 @@ forecloses. This record exists so the next round starts from the grounded model.
   no-principal-path). Two correct-as-is notes recorded (SP-T0 shared-guard = the deliberate §7
   residual; SP-T2 posture→impl mapping). §7 closes for the read side and the type.
   Considered-and-refuted §16→§17.
+- **2026-06-28 (SP-T1 type half landed — PR #204):** Reconciled the doc to the code. §15 type
+  sketch → the landed `PTorClient { agent, username }` + cSHAKE256 derivation; §13 names the
+  primitive (cSHAKE256, not a generic hash); §14/§10 mark the ureq per-`Agent` reopen anchor
+  **verified-clear** (3.3.0 `Config::proxy`, no per-request override). Review hardening folded into
+  the crate: `SocketAddr` endpoint (IPv6-safe), truncated `PCircuitTag` `Debug`, username-leak-free
+  proxy error, `Send + Sync`. The measured half (control-port circuit-ID test) still ships with SP-T0.
