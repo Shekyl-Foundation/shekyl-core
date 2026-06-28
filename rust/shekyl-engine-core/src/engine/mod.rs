@@ -897,6 +897,14 @@ impl<
         &self.daemon
     }
 
+    /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake
+    /// engine is running. The handle is the `view_sk`-vault actor's address; the
+    /// 2d-1 P-scan task ([`start_pscan`](Self::start_pscan)) clones it to offload
+    /// each scan-step. Cloning the handle clones an `ActorRef`, not the vault.
+    pub(crate) fn stake_handle(&self) -> Option<StakeEngineHandle> {
+        self.stake.clone()
+    }
+
     /// Test-only constructor: rebuild the engine with `refresh`
     /// substituted in place of the existing
     /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,

@@ -73,6 +73,12 @@ impl PScanConfig {
 /// The durable sink for `P`'s scan state — the `.wallet.pscan` seal, behind a
 /// trait so the loop is testable with an in-memory store and the engine layer
 /// supplies the [`WalletFile`](shekyl_engine_file::WalletFile)-backed impl.
+///
+/// **Async** because the production impl reaches the live `WalletFile` — held by
+/// value inside the `Engine` (no `Arc`, not `Clone`) — through the
+/// `Arc<RwLock<Engine>>` under a brief read lock (the seal stays single-sourced in
+/// `WalletFile::save_pscan_state`, per seam choice (b)). RPITIT `+ Send` mirrors
+/// `PersistenceEngine` so the futures cross the `tokio::spawn` boundary.
 #[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) supplies the impl.
 pub(crate) trait PScanStore: Send + Sync + 'static {
     /// The store's failure type (rendered into [`PScanTaskError::Store`]).
@@ -80,11 +86,16 @@ pub(crate) trait PScanStore: Send + Sync + 'static {
 
     /// Load the sealed state, or `None` for a wallet that has never scanned as `P`
     /// (the loop then starts at [`PScanAccrual::genesis`]).
-    fn load(&self) -> Result<Option<PScanState>, Self::Error>;
+    fn load(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<PScanState>, Self::Error>> + Send;
 
     /// Seal the state to the `P`-isolated file (cursor + accruals + pending
     /// unbonds, one atomic write).
-    fn save(&self, state: &PScanState) -> Result<(), Self::Error>;
+    fn save(
+        &self,
+        state: &PScanState,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }
 
 /// Why the scan loop failed. Transient I/O is fatal to a single sweep; the loop
@@ -162,6 +173,7 @@ where
         // batch.
         store
             .save(&accrual.to_state())
+            .await
             .map_err(|e| PScanTaskError::Store(e.to_string()))?;
     }
     Ok(())
@@ -241,7 +253,7 @@ pub(crate) async fn run_pscan_task<B, S, Sched>(
     S: PScanStore,
     Sched: ScanSchedule,
 {
-    let mut accrual = match store.load() {
+    let mut accrual = match store.load().await {
         Ok(Some(state)) => PScanAccrual::from_state(&state),
         Ok(None) => PScanAccrual::genesis(),
         Err(e) => {
@@ -344,12 +356,20 @@ mod tests {
 
     impl PScanStore for MemStore {
         type Error = MemErr;
-        fn load(&self) -> Result<Option<PScanState>, MemErr> {
-            Ok(self.0.lock().unwrap().clone())
+        fn load(
+            &self,
+        ) -> impl std::future::Future<Output = Result<Option<PScanState>, MemErr>> + Send {
+            // Sync work up front; the returned future is ready (no `self` borrow
+            // crosses the await point, so it is trivially `Send`).
+            let loaded = self.0.lock().unwrap().clone();
+            async move { Ok(loaded) }
         }
-        fn save(&self, state: &PScanState) -> Result<(), MemErr> {
+        fn save(
+            &self,
+            state: &PScanState,
+        ) -> impl std::future::Future<Output = Result<(), MemErr>> + Send {
             *self.0.lock().unwrap() = Some(state.clone());
-            Ok(())
+            async move { Ok(()) }
         }
     }
 
@@ -391,7 +411,7 @@ mod tests {
         );
         // Epoch 0 is in progress (< SETTLEMENT_EPOCH_BLOCKS), so finalized_inflow is
         // None, but the partial accrual is sealed.
-        let sealed = store.load().expect("load").expect("sealed");
+        let sealed = store.load().await.expect("load").expect("sealed");
         assert_eq!(sealed.synced_height(), BlockHeight::from_raw(2));
         assert!(
             sealed.accrual_for(SettlementEpoch::from_raw(0)) > AtomicUnits::ZERO,
@@ -415,12 +435,13 @@ mod tests {
         }
         let after_first = store
             .load()
+            .await
             .unwrap()
             .unwrap()
             .accrual_for(SettlementEpoch::from_raw(0));
 
         // "Crash + restart": reload the accrual from the store, grow the chain.
-        let mut accrual = PScanAccrual::from_state(&store.load().unwrap().unwrap());
+        let mut accrual = PScanAccrual::from_state(&store.load().await.unwrap().unwrap());
         assert_eq!(accrual.next_height(), BlockHeight::from_raw(1));
         let src = source(chain(6, &[(0, funding_block(&p)), (1, funding_block(&p))]));
         let mut retired = BTreeSet::new();
