@@ -7,7 +7,7 @@
 //! sizing consumes.
 //!
 //! The other half of the Design-B crash-recovery decision (paired with SP-2's
-//! [`PScanCursor`](../../../../shekyl_engine_state); see
+//! [`PScanCursor`](shekyl_engine_state::pscan_cursor::PScanCursor); see
 //! `docs/design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 SP-4). It is **idempotent**:
 //! recomputed once from an epoch's *complete* confirmed-output set, a pure fold,
 //! so a post-crash re-scan recomputes the **same** value rather than
