@@ -43,8 +43,9 @@ pub mod serve_eligibility;
 pub mod wire;
 
 pub use bond_floor::{
-    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
+    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
 };
 pub use bond_post::{verify_join_market_bond_post, BondPostError};
 pub use bond_rct_balance::{verify_bond_post_rct_balance, BondRctBalanceError};
@@ -58,8 +59,8 @@ pub use challenge::{
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
-    claimed_epochs_check_and_set, claimed_epochs_contains, ClaimedEpochsError,
-    MAX_CLAIMED_EPOCH_ENTRIES,
+    claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
+    epoch_is_claim_expired, ClaimedEpochsError, MAX_CLAIMED_EPOCH_ENTRIES,
 };
 pub use consensus_state::{
     epoch_close_compute, epoch_close_due_at_height, good_through, market_member_at_epoch,

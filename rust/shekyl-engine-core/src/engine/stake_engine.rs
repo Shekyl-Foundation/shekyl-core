@@ -104,7 +104,7 @@ use kameo::message::{Context, Message};
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::{HoldingsDescriptor, MAX_CLAIM_AGE_W};
+use shekyl_archival_retention::{epoch_is_claim_expired, HoldingsDescriptor};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
@@ -280,23 +280,29 @@ pub(crate) struct RetirementWitness {
 #[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
 impl RetirementWitness {
     /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
-    /// `Unbond` at `unbond_epoch` whose reward-claim window has lapsed by
-    /// `current_epoch` (`current_epoch − unbond_epoch ≥ MAX_CLAIM_AGE_W`). Returns
-    /// `None` otherwise — never retire a persona that can still claim, which would
-    /// stop scanning live reward collateral (the stuck-funds failure).
+    /// `Unbond` whose **last creditable epoch has fallen out of the consensus
+    /// claim window**. Returns `None` otherwise — never retire a persona that can
+    /// still claim, which would wipe its `bond_spend` key while live reward
+    /// collateral remains (stuck funds).
     ///
-    /// **Finality** is guaranteed upstream, not re-checked here: the scan only
-    /// surfaces bond-posts from blocks behind the cursor's reorg horizon, so a
-    /// witnessed `Unbond` is already finality-deep. **`W`** is the consensus const
-    /// `MAX_CLAIM_AGE_W`, never a re-literal — a shorter retire-`W` than the
-    /// claim-`W` would retire personas that can still receive reward outputs.
+    /// The boundary is the consensus claim window itself, not a hand-computed
+    /// `current − U ≥ W`: it calls [`epoch_is_claim_expired`], the **same**
+    /// predicate the claim check uses — so an off-by-one (which would wipe a
+    /// still-claimable persona) is structurally impossible, and the in-progress
+    /// epoch can't be used by accident (`settled_epoch` is a *finalized* epoch).
+    ///
+    /// `e_last` is the persona's last creditable epoch; the scan passes the
+    /// **conservative** `e_last = unbond_epoch` (a late retire only wastes a little
+    /// scan work, an early one is stuck funds, so round toward later). **Finality**
+    /// is guaranteed upstream — the scan surfaces bond-posts only from behind the
+    /// cursor's reorg horizon, so a witnessed `Unbond` is already finality-deep.
     pub(crate) fn from_confirmed_unbond(
         p_canonical_id: [u8; 32],
-        unbond_epoch: SettlementEpoch,
-        current_epoch: SettlementEpoch,
+        e_last: SettlementEpoch,
+        settled_epoch: SettlementEpoch,
     ) -> Option<Self> {
-        let lapsed = current_epoch.to_raw().checked_sub(unbond_epoch.to_raw())?;
-        (lapsed >= MAX_CLAIM_AGE_W).then_some(Self { p_canonical_id })
+        epoch_is_claim_expired(e_last.to_raw(), settled_epoch.to_raw())
+            .then_some(Self { p_canonical_id })
     }
 }
 
@@ -1481,6 +1487,7 @@ mod tests {
 
     use super::*;
 
+    use shekyl_archival_retention::MAX_CLAIM_AGE_W;
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 
@@ -2067,32 +2074,35 @@ mod tests {
 
     // ---- DQ8: witness-gated retirement of a terminal bonded persona ----
 
-    /// A witness exists iff the reward-claim window `W` has lapsed since the
-    /// confirmed `Unbond` — the conservative predicate that guards against
-    /// retiring a persona that can still claim (stuck funds).
+    /// A witness exists iff the persona's last creditable epoch `e_last = U` has
+    /// fallen *below* the claim window floor `settled − W`. The boundary edge —
+    /// `settled = U + W`, where `U` is still the oldest claimable epoch — must
+    /// **not** retire (it's the off-by-one that would wipe a still-claimable
+    /// persona). Eligibility begins at `settled = U + W + 1`.
     #[test]
-    fn retirement_witness_requires_the_w_window_to_lapse() {
+    fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
         let id = canonical_id(0);
         let unbond = SettlementEpoch::from_raw(10);
-        // One epoch short of W → ineligible.
-        assert!(
-            RetirementWitness::from_confirmed_unbond(
-                id,
-                unbond,
-                SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W - 1),
-            )
-            .is_none(),
-            "must not retire before W lapses"
-        );
-        // Exactly W later → eligible.
+        // settled = U + W: U is exactly the oldest claimable epoch → still claimable
+        // → must NOT retire.
         assert!(
             RetirementWitness::from_confirmed_unbond(
                 id,
                 unbond,
                 SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W),
             )
+            .is_none(),
+            "U is still claimable at settled = U + W; retiring here is stuck funds"
+        );
+        // settled = U + W + 1: U has dropped below the window floor → retire.
+        assert!(
+            RetirementWitness::from_confirmed_unbond(
+                id,
+                unbond,
+                SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W + 1),
+            )
             .is_some(),
-            "retire once W has lapsed"
+            "retire once U falls out of the claim window"
         );
     }
 
@@ -2104,7 +2114,7 @@ mod tests {
         let witness = RetirementWitness::from_confirmed_unbond(
             canonical_id(0),
             SettlementEpoch::from_raw(0),
-            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
         )
         .expect("eligible");
 
@@ -2117,7 +2127,7 @@ mod tests {
         let again = RetirementWitness::from_confirmed_unbond(
             canonical_id(0),
             SettlementEpoch::from_raw(0),
-            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
         )
         .expect("eligible");
         assert_eq!(
@@ -2135,7 +2145,7 @@ mod tests {
         let witness = RetirementWitness::from_confirmed_unbond(
             canonical_id(0),
             SettlementEpoch::from_raw(0),
-            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
         )
         .expect("eligible");
         assert_eq!(
@@ -2153,7 +2163,7 @@ mod tests {
         let witness = RetirementWitness::from_confirmed_unbond(
             canonical_id(1),
             SettlementEpoch::from_raw(0),
-            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
         )
         .expect("eligible");
         assert_eq!(

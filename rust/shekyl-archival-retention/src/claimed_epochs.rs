@@ -61,6 +61,29 @@ pub fn claimed_epochs_contains(set: &[u64], epoch: u64) -> bool {
     set.binary_search(&epoch).is_ok()
 }
 
+/// The oldest still-claimable settlement epoch — `current_settled_epoch − W`
+/// (`MAX_CLAIM_AGE_W`). An epoch strictly below this floor has fallen out of the
+/// reward-claim window.
+///
+/// **Single source of the claim-window boundary.** The claim check
+/// ([`claimed_epochs_check_and_set`]) and 2d-1's persona-retirement predicate both
+/// compute the boundary through this one function, so it cannot drift or go
+/// off-by-one between consumers — a retire boundary even one epoch shorter than the
+/// claim window would wipe a persona that can still claim (stuck funds).
+#[must_use]
+pub fn claim_window_floor(current_settled_epoch: u64) -> u64 {
+    current_settled_epoch.saturating_sub(MAX_CLAIM_AGE_W)
+}
+
+/// True when `epoch` has fallen below the claim window and can no longer be
+/// claimed (`epoch < `[`claim_window_floor`]`(current_settled_epoch)`) — the
+/// literal `Expired` boundary the claim check enforces. `current_settled_epoch`
+/// must be a **finalized** settled epoch (the in-progress epoch is not settled).
+#[must_use]
+pub fn epoch_is_claim_expired(epoch: u64, current_settled_epoch: u64) -> bool {
+    epoch < claim_window_floor(current_settled_epoch)
+}
+
 /// Record `epoch` as claimed at `current_settled_epoch`, maintaining the
 /// window.
 ///
@@ -81,7 +104,7 @@ pub fn claimed_epochs_check_and_set(
     if epoch >= current_settled_epoch {
         return Err(ClaimedEpochsError::NotSettled);
     }
-    let window_floor = current_settled_epoch.saturating_sub(MAX_CLAIM_AGE_W);
+    let window_floor = claim_window_floor(current_settled_epoch);
     if epoch < window_floor {
         return Err(ClaimedEpochsError::Expired);
     }

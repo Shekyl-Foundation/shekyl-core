@@ -65,6 +65,160 @@
             }
           }
         }
+      },
+      {
+        "name": "pending_unbonds",
+        "ty": {
+          "name": "BTreeMap<K, V>",
+          "ty": {
+            "Map": {
+              "key": {
+                "name": "[T; N]",
+                "ty": {
+                  "Tuple": [
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    }
+                  ]
+                }
+              },
+              "val": {
+                "name": "SettlementEpoch",
+                "ty": {
+                  "NewtypeStruct": {
+                    "name": "u64",
+                    "ty": "U64"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     ]
   }

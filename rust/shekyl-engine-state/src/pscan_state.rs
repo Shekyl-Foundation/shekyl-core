@@ -62,27 +62,46 @@ pub struct PScanState {
     /// [`SettlementEpoch`] — not a bare `u64` — and `BTreeMap`-ordered, so the
     /// postcard encoding is canonical (sorted) without the producer sorting.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
+    /// Confirmed-but-retire-pending personas: `p_canonical_id` → the settlement
+    /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
+    ///
+    /// The **sole durable record** that a persona is unbonded: the `Unbond` block
+    /// is behind the cursor and never re-scanned, and the StakeEngine union wipe is
+    /// not durable until SP-6 (the persona re-derives on restart with no notion of
+    /// "unbonded"). So this entry is what **re-triggers** the retire on each
+    /// restart — it is kept until SP-6 durably removes the persona, **not** dropped
+    /// when the retire fires (dropping it would let the re-derived persona regrow
+    /// the union permanently). Public content (both fields are on-chain), bounded
+    /// by `P`'s own unbonded-persona count (not adversary-controllable).
+    pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
 }
 
 impl PScanState {
-    /// A fresh state at genesis: pre-scan cursor, no accruals.
+    /// A fresh state at genesis: pre-scan cursor, no accruals, no pending unbonds.
     pub fn genesis() -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
+            pending_unbonds: BTreeMap::new(),
         }
     }
 
-    /// A state pinned to `cursor` with the given per-epoch `accruals`, stamped
-    /// with the current version. The caller (the SP-5 scan task) owns the
-    /// invariant that `accruals` covers exactly the epochs finalized behind
-    /// `cursor`.
-    pub fn new(cursor: PScanCursor, accruals: BTreeMap<SettlementEpoch, AtomicUnits>) -> Self {
+    /// A state pinned to `cursor` with the given per-epoch `accruals` and
+    /// `pending_unbonds`, stamped with the current version. The caller (the SP-5
+    /// scan task) owns the invariants that `accruals` covers exactly the epochs
+    /// finalized behind `cursor`, and `pending_unbonds` holds every persona whose
+    /// `Unbond` was confirmed but not yet durably retired (SP-6).
+    pub fn new(
+        cursor: PScanCursor,
+        accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
+        pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
+    ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
             cursor,
             accruals,
+            pending_unbonds,
         }
     }
 
@@ -104,6 +123,13 @@ impl PScanState {
     /// The per-epoch confirmed funding accruals.
     pub fn accruals(&self) -> &BTreeMap<SettlementEpoch, AtomicUnits> {
         &self.accruals
+    }
+
+    /// The confirmed-but-retire-pending personas (`p_canonical_id` → confirmed
+    /// `Unbond` epoch) — the durable record that survives restart and re-triggers
+    /// the DQ8 retire.
+    pub fn pending_unbonds(&self) -> &BTreeMap<[u8; 32], SettlementEpoch> {
+        &self.pending_unbonds
     }
 
     /// The finalized confirmed inflow for `epoch`, or [`AtomicUnits::ZERO`] if no
@@ -163,11 +189,19 @@ mod tests {
             .collect()
     }
 
+    fn pending(pairs: &[(u8, u64)]) -> BTreeMap<[u8; 32], SettlementEpoch> {
+        pairs
+            .iter()
+            .map(|&(id, e)| ([id; 32], SettlementEpoch::from_raw(e)))
+            .collect()
+    }
+
     #[test]
-    fn round_trips_cursor_and_accruals() {
+    fn round_trips_cursor_accruals_and_pending_unbonds() {
         let state = PScanState::new(
             PScanCursor::at(BlockHeight::from_raw(40_000)),
             accruals(&[(2, 100), (3, 250)]),
+            pending(&[(0xAB, 7)]),
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -176,6 +210,11 @@ mod tests {
         assert_eq!(
             back.accrual_for(SettlementEpoch::from_raw(3)),
             AtomicUnits::from_raw(250)
+        );
+        assert_eq!(
+            back.pending_unbonds().get(&[0xAB; 32]),
+            Some(&SettlementEpoch::from_raw(7)),
+            "pending unbonds round-trip through the seal"
         );
     }
 
@@ -189,7 +228,7 @@ mod tests {
 
     #[test]
     fn accrual_for_a_missing_epoch_is_zero() {
-        let state = PScanState::new(PScanCursor::genesis(), accruals(&[(5, 9)]));
+        let state = PScanState::new(PScanCursor::genesis(), accruals(&[(5, 9)]), pending(&[]));
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
             AtomicUnits::ZERO
@@ -205,13 +244,18 @@ mod tests {
         let state = PScanState::new(
             PScanCursor::genesis(),
             accruals(&[(1, 10), (2, 20), (3, 30)]),
+            pending(&[]),
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
 
     #[test]
     fn total_accrued_fails_closed_on_overflow() {
-        let state = PScanState::new(PScanCursor::genesis(), accruals(&[(1, u64::MAX), (2, 1)]));
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            accruals(&[(1, u64::MAX), (2, 1)]),
+            pending(&[]),
+        );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
 
@@ -223,6 +267,7 @@ mod tests {
             version: PSCAN_STATE_VERSION + 1,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
+            pending_unbonds: BTreeMap::new(),
         };
         let forged = wrong
             .to_postcard_bytes()

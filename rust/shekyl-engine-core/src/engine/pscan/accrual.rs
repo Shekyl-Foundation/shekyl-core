@@ -38,6 +38,7 @@
 
 use std::collections::BTreeMap;
 
+use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_engine_state::pscan_cursor::PScanCursor;
 use shekyl_engine_state::pscan_state::PScanState;
@@ -115,25 +116,32 @@ pub(crate) struct PScanAccrual {
     synced_height: BlockHeight,
     /// Per settlement-epoch accumulated confirmed funding.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
+    /// Confirmed-but-retire-pending personas (`p_canonical_id` → confirmed
+    /// `Unbond` epoch). The durable record that survives restart and re-triggers
+    /// the DQ8 retire — kept until SP-6 durably removes the persona (see
+    /// [`PScanState::pending_unbonds`]).
+    pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
 }
 
 #[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
 impl PScanAccrual {
-    /// A fresh accrual at genesis — pre-scan, no funding.
+    /// A fresh accrual at genesis — pre-scan, no funding, no pending unbonds.
     pub(crate) fn genesis() -> Self {
         Self {
             synced_height: BlockHeight::ZERO,
             accruals: BTreeMap::new(),
+            pending_unbonds: BTreeMap::new(),
         }
     }
 
-    /// Resume from a loaded [`PScanState`] (crash recovery): the sealed frontier
-    /// and the already-accumulated accruals. The task re-scans from
-    /// [`next_height`](Self::next_height).
+    /// Resume from a loaded [`PScanState`] (crash recovery): the sealed frontier,
+    /// the already-accumulated accruals, and the pending unbonds (which re-trigger
+    /// the retire). The task re-scans from [`next_height`](Self::next_height).
     pub(crate) fn from_state(state: &PScanState) -> Self {
         Self {
             synced_height: state.synced_height(),
             accruals: state.accruals().clone(),
+            pending_unbonds: state.pending_unbonds().clone(),
         }
     }
 
@@ -200,10 +208,47 @@ impl PScanAccrual {
         })
     }
 
-    /// Snapshot to the persisted [`PScanState`] for sealing — cursor + accruals as
-    /// one atomic unit (the write half of the SP-2 discipline).
+    /// Record a confirmed `Unbond` for a persona (2d-1 DQ8) — `p_canonical_id` →
+    /// the settlement epoch it was confirmed in. Idempotent: re-seeing the same
+    /// Unbond keeps the recorded epoch (a persona unbonds once; the block is never
+    /// re-scanned). Kept until SP-6 durably removes the persona — never dropped on
+    /// retire, since this is the sole durable "known-unbonded" record.
+    pub(crate) fn record_unbond(
+        &mut self,
+        p_canonical_id: [u8; 32],
+        unbond_epoch: SettlementEpoch,
+    ) {
+        self.pending_unbonds
+            .entry(p_canonical_id)
+            .or_insert(unbond_epoch);
+    }
+
+    /// The confirmed-but-retire-pending personas — the task iterates these and
+    /// builds a `RetirementWitness` per entry (the witness's claim-window check is
+    /// the eligibility gate; entries that aren't yet expired yield no witness).
+    pub(crate) fn pending_unbonds(&self) -> &BTreeMap<[u8; 32], SettlementEpoch> {
+        &self.pending_unbonds
+    }
+
+    /// The latest **finalized settled** settlement epoch — the epoch *before* the
+    /// frontier epoch (the frontier epoch is in-progress, not settled), or `None`
+    /// before the first epoch closes. This is the finalized epoch the retire
+    /// predicate must use (never the in-progress cursor epoch, which would fire
+    /// early), the same finalization discipline as [`finalized_inflow`].
+    pub(crate) fn settled_epoch(&self) -> Option<SettlementEpoch> {
+        settlement_epoch_at_height(self.synced_height.to_raw())
+            .checked_sub(1)
+            .map(SettlementEpoch::from_raw)
+    }
+
+    /// Snapshot to the persisted [`PScanState`] for sealing — cursor + accruals +
+    /// pending unbonds as one atomic unit (the write half of the SP-2 discipline).
     pub(crate) fn to_state(&self) -> PScanState {
-        PScanState::new(PScanCursor::at(self.synced_height), self.accruals.clone())
+        PScanState::new(
+            PScanCursor::at(self.synced_height),
+            self.accruals.clone(),
+            self.pending_unbonds.clone(),
+        )
     }
 }
 
@@ -331,10 +376,37 @@ mod tests {
     fn to_state_then_from_state_round_trips() {
         let mut acc = PScanAccrual::genesis();
         acc.ingest(&step(0, 10, &[(0, 7), (2, 9)])).expect("ingest");
+        acc.record_unbond([0x11; 32], epoch(0));
         let back = PScanAccrual::from_state(&acc.to_state());
         assert_eq!(
             back, acc,
-            "the in-memory accrual mirrors the persisted state"
+            "the in-memory accrual (incl. pending unbonds) mirrors the persisted state"
         );
+    }
+
+    #[test]
+    fn settled_epoch_excludes_the_in_progress_frontier_epoch() {
+        let mut acc = PScanAccrual::genesis();
+        assert_eq!(acc.settled_epoch(), None, "no epoch closed yet");
+        // Frontier mid epoch 2 (2·SEB + 1): epochs 0,1 settled; epoch 2 in progress.
+        acc.ingest(&step(0, 2 * SEB + 1, &[])).expect("ingest");
+        assert_eq!(
+            acc.settled_epoch(),
+            Some(epoch(1)),
+            "the latest settled epoch is the one before the in-progress frontier epoch"
+        );
+    }
+
+    #[test]
+    fn record_unbond_is_idempotent_and_durable() {
+        let mut acc = PScanAccrual::genesis();
+        acc.record_unbond([0xAB; 32], epoch(5));
+        // Re-seeing the same persona keeps the first recorded epoch.
+        acc.record_unbond([0xAB; 32], epoch(9));
+        assert_eq!(acc.pending_unbonds().get(&[0xAB; 32]), Some(&epoch(5)));
+
+        // It survives a seal + reload (the durable retire-trigger).
+        let back = PScanAccrual::from_state(&acc.to_state());
+        assert_eq!(back.pending_unbonds().get(&[0xAB; 32]), Some(&epoch(5)));
     }
 }
