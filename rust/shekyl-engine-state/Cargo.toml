@@ -41,11 +41,13 @@ shekyl-staking = { path = "../shekyl-staking" }
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
 # stays fork-`u64` and converts at the `commitment_bytes` serializer edge.
 shekyl-units = { path = "../shekyl-units" }
-# Canonical `TxHash` newtype for `TransferDetails::tx_hash` /
-# `PaymentRequest::matched_tx_hash`. No `schema` feature needed: those blocks
-# derive `Schema` via wire-native mirror structs, so the persisted schema and
-# its snapshot are unchanged by the newtype (it is transparent over `[u8; 32]`).
-shekyl-types = { path = "../shekyl-types" }
+# Canonical newtypes. `TxHash` (`TransferDetails::tx_hash` /
+# `PaymentRequest::matched_tx_hash`) is transparent over `[u8; 32]` via
+# wire-native mirror structs, so it alone needed no `schema`. `PScanCursor`
+# (SP-2) carries a `BlockHeight` field in a `Schema`-deriving persisted struct,
+# so the `schema` feature is now required (it gates `BlockHeight`'s
+# `postcard_schema::Schema` derive).
+shekyl-types = { path = "../shekyl-types", features = ["schema"] }
 
 [dev-dependencies]
 serde_json = "1"

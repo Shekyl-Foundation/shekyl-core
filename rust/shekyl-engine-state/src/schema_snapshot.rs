@@ -8,10 +8,11 @@
 //!
 //! This module is the mechanical half of the `block_version` discipline
 //! described in `docs/MID_REWIRE_HARDENING.md` §3.4 (hardening-pass commit
-//! 3.4). Every block type that lands on disk — [`WalletLedger`] and the
-//! five inner blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
-//! [`SyncStateBlock`], and [`StakingBlock`] — derives
-//! [`postcard_schema::Schema`](postcard_schema::Schema), producing a
+//! 3.4). Every type that lands on disk — [`WalletLedger`] and the five inner
+//! blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
+//! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
+//! [`PScanCursor`] (a separate sealed record, not a wallet-ledger sub-block) —
+//! derives [`postcard_schema::Schema`](postcard_schema::Schema), producing a
 //! compile-time [`NamedType`] tree that captures every field's wire shape.
 //! The snapshot tests in this module serialize that tree to pretty JSON and
 //! compare it against a committed `.snap` file under
@@ -30,6 +31,7 @@
 //! - `tx_meta_block.snap`          ↔  [`TX_META_BLOCK_VERSION`]
 //! - `sync_state_block.snap`       ↔  [`SYNC_STATE_BLOCK_VERSION`]
 //! - `staking_block.snap`          ↔  [`STAKING_BLOCK_VERSION`]
+//! - `pscan_cursor.snap`           ↔  [`PSCAN_CURSOR_VERSION`]
 //!
 //! The pairing is enforced in CI by
 //! `.github/workflows/schema-snapshot.yml` — any PR that touches a `.snap`
@@ -65,12 +67,14 @@
 //! [`TX_META_BLOCK_VERSION`]: crate::tx_meta_block::TX_META_BLOCK_VERSION
 //! [`SYNC_STATE_BLOCK_VERSION`]: crate::sync_state_block::SYNC_STATE_BLOCK_VERSION
 //! [`STAKING_BLOCK_VERSION`]: crate::staking_block::STAKING_BLOCK_VERSION
+//! [`PSCAN_CURSOR_VERSION`]: crate::pscan_cursor::PSCAN_CURSOR_VERSION
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 //! [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
 //! [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`StakingBlock`]: crate::staking_block::StakingBlock
+//! [`PScanCursor`]: crate::pscan_cursor::PScanCursor
 
 #[cfg(test)]
 mod tests {
@@ -85,7 +89,7 @@ mod tests {
     };
 
     use crate::{
-        bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock,
+        bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock, pscan_cursor::PScanCursor,
         staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
         wallet_ledger::WalletLedger,
     };
@@ -228,6 +232,11 @@ mod tests {
     #[test]
     fn staking_block_schema_matches_snapshot() {
         check_or_update_snapshot("staking_block", <StakingBlock as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn pscan_cursor_schema_matches_snapshot() {
+        check_or_update_snapshot("pscan_cursor", <PScanCursor as Schema>::SCHEMA);
     }
 
     /// Defense-in-depth: the rendered JSON must actually be
