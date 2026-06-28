@@ -110,7 +110,7 @@ use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
-use super::pscan::persona_scanner::guaranteed_scanner_for_persona;
+use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
     run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
 };
@@ -441,20 +441,41 @@ pub(crate) enum StakeEngineError {
 
     /// Building the bonded union's transient scanners for a [`ScanStep`] failed —
     /// a resident persona key was malformed (corrupted in-memory state). Fail
-    /// closed and loud rather than scan with a silently-weakened key (DQ7).
+    /// closed and loud rather than scan with a silently-weakened key (DQ7). The
+    /// concrete cause (scanner build vs canonical-id encode) is preserved in the
+    /// wrapped [`ScanSetupError`], including its `source()` chain.
     #[error("persona scan setup failed: {0}")]
-    ScanSetup(String),
+    ScanSetup(#[from] ScanSetupError),
 
-    /// The offloaded dual extraction itself failed (range/block mismatch, a scan
-    /// error, or a funding-inflow overflow). The privacy parameter `C_min` rides
-    /// on this scan, so a corrupted step fails closed, never silently.
+    /// The offloaded dual extraction itself failed (oversized step, range/block
+    /// mismatch, a scan error, or a funding-inflow overflow). The privacy
+    /// parameter `C_min` rides on this scan, so a corrupted step fails closed,
+    /// never silently.
     #[error("scan-step extraction failed: {0}")]
     ScanStep(#[from] DualExtractError),
 
-    /// The `spawn_blocking` task running the dual extractor panicked or was
-    /// cancelled before returning — surfaced rather than swallowed.
+    /// The `spawn_blocking` task running the dual extractor failed to join (it
+    /// panicked — `spawn_blocking` tasks are not cancellable). The structured
+    /// [`JoinError`](tokio::task::JoinError) is kept (panic payload + `source()`),
+    /// not stringified, so the failure is fully diagnosable.
     #[error("scan-step task failed to join: {0}")]
-    ScanJoin(String),
+    ScanJoin(#[from] tokio::task::JoinError),
+}
+
+/// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
+/// **malformed resident persona key** (corrupted in-memory state) — fail closed,
+/// concrete cause preserved (vs a stringified loss). Wrapped by
+/// [`StakeEngineError::ScanSetup`].
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ScanSetupError {
+    /// Building a persona's guaranteed scanner failed (SP-1 fail-closed rejection
+    /// of malformed key material).
+    #[error("building a persona's guaranteed scanner failed: {0}")]
+    Scanner(#[source] PersonaScanError),
+    /// Deriving a persona's canonical id failed — its hybrid public key did not
+    /// canonically encode.
+    #[error("deriving a persona's canonical id failed: {0}")]
+    CanonicalId(#[source] shekyl_crypto_pq::CryptoError),
 }
 
 // ---------------------------------------------------------------------------
@@ -590,20 +611,18 @@ impl StakeEngine {
     /// would mis-size the privacy parameter `C_min` (DQ7).
     fn bonded_scan_inputs(
         &self,
-    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<[u8; 32]>), StakeEngineError> {
+    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<[u8; 32]>), ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
         for held in self.held.values() {
             if let HeldPersona::Bonded(_) = held {
                 let keys = held.keys();
-                scanners.push(
-                    guaranteed_scanner_for_persona(keys)
-                        .map_err(|e| StakeEngineError::ScanSetup(e.to_string()))?,
-                );
+                scanners
+                    .push(guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?);
                 let hybrid = keys
                     .hybrid_bond_id()
                     .to_canonical_bytes()
-                    .map_err(|e| StakeEngineError::ScanSetup(e.to_string()))?;
+                    .map_err(ScanSetupError::CanonicalId)?;
                 known_ids.insert(p_canonical_id_from_hybrid_pubkey(&hybrid));
             }
         }
@@ -979,13 +998,15 @@ impl Message<ScanStep> for StakeEngine {
         let (scanners, known_ids) = self.bonded_scan_inputs()?;
         let ScanStep { range, blocks } = msg;
         // The secret `scanners` are MOVED into the closure; they never reach the
-        // actor task again and are dropped at the closure's end.
-        tokio::task::spawn_blocking(move || {
+        // actor task again and are dropped at the closure's end. The two `?`
+        // surface the join failure (`ScanJoin`) and the extraction failure
+        // (`ScanStep`) via their `#[from]` conversions — structured, not
+        // stringified.
+        let result = tokio::task::spawn_blocking(move || {
             run_dual_extractor(scanners, &known_ids, range, &blocks)
         })
-        .await
-        .map_err(|e| StakeEngineError::ScanJoin(e.to_string()))?
-        .map_err(StakeEngineError::ScanStep)
+        .await??;
+        Ok(result)
     }
 }
 

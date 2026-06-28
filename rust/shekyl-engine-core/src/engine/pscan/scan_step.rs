@@ -55,6 +55,15 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Input};
 
+/// Hard ceiling on the blocks one [`ScanStep`] may carry — the **enforced** form
+/// of DQ6's "bounded per message" (the actor holds `&mut self` across the offload,
+/// so an unbounded batch stalls its mailbox and balloons memory). This is a
+/// fail-closed **backstop** against a task bug or test misuse, *not* the tuning
+/// knob: PR-B's driving task sizes real batches far smaller (sized against the
+/// worst-case block, to interleave rotation/sign). [`run_dual_extractor`] rejects
+/// anything over it.
+pub(crate) const MAX_SCAN_STEP_BLOCKS: u64 = 1024;
+
 /// A bounded, half-open block-height range `[start, end)` — the unit of one
 /// scan-step. **Bounded per message** (DQ6): the driving task loops over small
 /// ranges so the actor interleaves rotation/sign between batches.
@@ -65,7 +74,25 @@ pub(crate) struct BlockRange {
     end: BlockHeight,
 }
 
-#[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
+impl BlockRange {
+    /// Number of blocks in the range.
+    pub(crate) fn len(&self) -> u64 {
+        self.end.to_raw() - self.start.to_raw()
+    }
+
+    /// Height of the `i`-th block in the range (`start + i`). The caller must keep
+    /// `i < len()`.
+    fn height_at(&self, i: usize) -> BlockHeight {
+        BlockHeight::from_raw(self.start.to_raw() + i as u64)
+    }
+}
+
+// Constructor + bounds accessors: consumed by tests now and by the PR-B driving
+// task (range construction + cursor bookkeeping). Held under a transient allow
+// until that task lands — kept separate from the live `impl` above so the
+// dead-code lint still covers `len`/`height_at`. (`is_empty` also pairs with
+// `len` for `clippy::len_without_is_empty`.)
+#[allow(dead_code)]
 impl BlockRange {
     /// A half-open `[start, end)` range, or `None` if `end < start`.
     pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
@@ -82,20 +109,9 @@ impl BlockRange {
         self.end
     }
 
-    /// Number of blocks in the range.
-    pub(crate) fn len(&self) -> u64 {
-        self.end.to_raw() - self.start.to_raw()
-    }
-
     /// `true` when the range covers no blocks.
     pub(crate) fn is_empty(&self) -> bool {
         self.start.to_raw() == self.end.to_raw()
-    }
-
-    /// Height of the `i`-th block in the range (`start + i`). The caller must keep
-    /// `i < len()`.
-    fn height_at(&self, i: usize) -> BlockHeight {
-        BlockHeight::from_raw(self.start.to_raw() + i as u64)
     }
 }
 
@@ -105,7 +121,6 @@ impl BlockRange {
 /// **Public input only.** Blocks are public chain data; there are no secrets and
 /// — per SP-4's anti-injection rule — **no `PFundingInflow` inbound**. The only
 /// in-crate sender is the P-scan task, which fetches from its `BlockSource`.
-#[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
 pub(crate) struct ScanStep {
     /// The bounded height range this step covers.
     pub(crate) range: BlockRange,
@@ -154,11 +169,15 @@ pub(crate) struct ScanStepResult {
 /// Why a dual-extraction failed. All arms fail **closed** — a corrupted scan
 /// mis-sizes a privacy parameter (`C_min`), so we never paper over one.
 #[derive(Debug)]
-#[allow(dead_code)] // transient — surfaced through `StakeEngineError` once SP-5 wires it.
 pub(crate) enum DualExtractError {
     /// `blocks.len()` did not equal `range.len()` — the task's range↔block
     /// alignment invariant was violated; refuse rather than mis-attribute.
     RangeBlockMismatch { range_len: u64, blocks: usize },
+    /// The step exceeded [`MAX_SCAN_STEP_BLOCKS`] — the "bounded per message"
+    /// invariant (DQ6) enforced, not merely contracted: an unbounded batch would
+    /// stall the single-threaded actor mailbox and balloon memory. Fail closed so
+    /// a task bug or test misuse cannot starve rotation/sign.
+    StepTooLarge { len: u64, max: u64 },
     /// A persona scan returned an error (malformed block / unsupported protocol).
     Scan(shekyl_scanner::ScanError),
     /// An epoch's confirmed inflow summed past `u64::MAX` (an attacker-stuffed or
@@ -173,6 +192,10 @@ impl std::fmt::Display for DualExtractError {
                 f,
                 "scan-step range covers {range_len} blocks but {blocks} were supplied"
             ),
+            Self::StepTooLarge { len, max } => write!(
+                f,
+                "scan-step covers {len} blocks, over the {max}-block bound (DQ6)"
+            ),
             Self::Scan(e) => write!(f, "persona scan failed: {e}"),
             Self::InflowOverflow { epoch } => {
                 write!(f, "funding inflow overflowed u64 at epoch {epoch:?}")
@@ -185,7 +208,9 @@ impl std::error::Error for DualExtractError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Scan(e) => Some(e),
-            Self::RangeBlockMismatch { .. } | Self::InflowOverflow { .. } => None,
+            Self::RangeBlockMismatch { .. }
+            | Self::StepTooLarge { .. }
+            | Self::InflowOverflow { .. } => None,
         }
     }
 }
@@ -205,13 +230,20 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
 ///
 /// `known_ids` is the bonded union's cleartext `p_canonical_id` set; `range` and
 /// `blocks` are aligned (`blocks[i]` at `range.start + i`).
-#[allow(dead_code)] // transient — the actor `ScanStep` handler is the non-test consumer.
 pub(crate) fn run_dual_extractor(
     mut scanners: Vec<GuaranteedScanner>,
     known_ids: &BTreeSet<[u8; 32]>,
     range: BlockRange,
     blocks: &[ScannableBlock],
 ) -> Result<ScanStepResult, DualExtractError> {
+    // Enforce DQ6's bound first, rather than trust the caller (the actor mailbox
+    // is blocked for the step's duration); then check the range↔block alignment.
+    if range.len() > MAX_SCAN_STEP_BLOCKS {
+        return Err(DualExtractError::StepTooLarge {
+            len: range.len(),
+            max: MAX_SCAN_STEP_BLOCKS,
+        });
+    }
     if blocks.len() as u64 != range.len() {
         return Err(DualExtractError::RangeBlockMismatch {
             range_len: range.len(),
@@ -219,9 +251,11 @@ pub(crate) fn run_dual_extractor(
         });
     }
 
-    // Per-epoch confirmed amounts, summed (checked) only after the whole step so
-    // an overflow fails closed rather than wrapping a running total.
-    let mut by_epoch: BTreeMap<SettlementEpoch, Vec<AtomicUnits>> = BTreeMap::new();
+    // Per-epoch confirmed amounts, accumulated with a running checked add so an
+    // overflow fails closed immediately and no per-output buffer is held. An
+    // epoch entry is created lazily (only on a recovered output), so an epoch with
+    // nothing of ours yields no delta rather than a spurious zero.
+    let mut by_epoch: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
     let mut bond_post_matches = Vec::new();
 
     for (i, block) in blocks.iter().enumerate() {
@@ -245,27 +279,24 @@ pub(crate) fn run_dual_extractor(
 
         // (a) funding — scan with each bonded persona's scanner. `scan` consumes
         // the block, so clone per scanner; an output belongs to at most one
-        // persona, so no cross-scanner double-count. The epoch accumulator is
-        // created lazily, only on a recovered output, so an epoch with nothing of
-        // ours yields no delta (rather than a spurious zero).
+        // persona, so no cross-scanner double-count.
         for scanner in &mut scanners {
             let recovered = scanner
                 .scan(block.clone())
                 .map_err(DualExtractError::Scan)?;
             for out in recovered.into_inner() {
-                by_epoch.entry(epoch).or_default().push(out.amount());
+                let acc = by_epoch.entry(epoch).or_insert(AtomicUnits::ZERO);
+                *acc = acc
+                    .checked_add(out.amount())
+                    .ok_or(DualExtractError::InflowOverflow { epoch })?;
             }
         }
     }
 
     let funding = by_epoch
         .into_iter()
-        .map(|(epoch, amts)| {
-            AtomicUnits::checked_sum(amts)
-                .map(|amount| EpochInflowDelta { epoch, amount })
-                .ok_or(DualExtractError::InflowOverflow { epoch })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(epoch, amount)| EpochInflowDelta { epoch, amount })
+        .collect();
 
     Ok(ScanStepResult {
         range,
@@ -427,6 +458,24 @@ mod tests {
                 range_len: 3,
                 blocks: 1
             }
+        ));
+    }
+
+    #[test]
+    fn rejects_a_step_over_the_dq6_bound() {
+        // A range past the bound fails closed before any block work — the guard is
+        // on the range size, so no oversized block vec is needed to exercise it.
+        let err = run_dual_extractor(
+            Vec::new(),
+            &BTreeSet::new(),
+            range(0, MAX_SCAN_STEP_BLOCKS + 1),
+            &[],
+        )
+        .expect_err("an oversized step must fail closed");
+        assert!(matches!(
+            err,
+            DualExtractError::StepTooLarge { len, max }
+                if len == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
         ));
     }
 }
