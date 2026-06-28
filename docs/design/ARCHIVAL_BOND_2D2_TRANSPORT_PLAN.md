@@ -1,6 +1,8 @@
 # 2d-2 — Archival network transport & reconcile (P-isolated Tor)
 
-**Status:** SCOPING (2026-06-28). The transport is greenfield (no Arti/Tor/onion code on
+**Status:** ROUND 0 — build decomposition (2026-06-28); scoping framing §0–§10 frozen,
+§11–§15 add the buildable SP decomposition (grounded surface map, SP enumeration, type-safety,
+dependency posture, per-SP design). The transport is greenfield (no Arti/Tor/onion code on
 dev; the only network primitive is `ureq` + `socks-proxy` in `rust/shekyl-cli/Cargo.toml:25`,
 and the wallet→daemon path is HTTP(S) `DaemonClient` over `SimpleRequestRpc`,
 `rust/shekyl-engine-core/src/engine/daemon.rs`). 2d-1 pinned the *seams* (below); 2d-2 fills
@@ -282,7 +284,145 @@ untenable); multi-source tip (if a real staker posture other than ①/② emerge
 posture disposition does not cover); per-`P`-`Agent` shape (if ureq 3.x configures proxy
 per-request, not per-`Agent`).
 
-## 11. Considered and refuted (the round's grounding journey)
+## 11. Round 0 — landed substrate (grounded at source, 2026-06-28)
+
+The scoping framing (§0–§10) is frozen. Round 0 turns it into a buildable decomposition,
+starting one layer deeper than §2: the *real* substrate, read at the function, not the seam name.
+
+**The transport surface map — three daemon-access surfaces; only one is `P`'s.**
+
+| Surface | What it is | Whose circuit | 2d-2's relationship |
+| --- | --- | --- | --- |
+| **SP-0 `BlockSource`** (`engine-core/pscan/block_source.rs`, over `shekyl-rpc-client`) | the per-`P` fetch keystone — whole-block-by-height, **no selective fetch** (isolation is the trait's *shape*). 2d-1 ships `DaemonBlockSource`, a placeholder over an existing `DaemonEngine`. | **`P`'s** | **the seam 2d-2 implements** — the real per-`P`-isolated transport goes *behind this trait* |
+| `cli/daemon.rs::DaemonClient` (`ureq` + SOCKS) | the lightweight, "independent-of-wallet2-FFI" client for unauthenticated CLI queries (`get_info`, …) | **principal's** | a circuit `P` must stay disjoint from; the `IsolateSOCKSAuth` *model* |
+| `engine-core::DaemonClient` over `SimpleRequestRpc` | the wallet2-FFI refresh path | **principal's** | the other circuit `P` must stay disjoint from |
+
+The firewall requirement is exactly: **`P`'s `BlockSource` transport shares a circuit with
+neither principal surface.** That is the whole of half (A).
+
+**What 2d-1 explicitly defers to 2d-2 (from the SP-0 trait doc), reconciled to §0–§10:**
+
+| 2d-1 `block_source.rs` says | scoping decision | Round 0 disposition |
+| --- | --- | --- |
+| "swaps an **Arti** transport behind the same trait" (:15) | DQ2: **bundled Tor over SOCKS, not Arti** | per-`P` SOCKS-auth `ureq` client, not Arti; **2d-1 comment is stale** → SP-T5 |
+| isolation: "separate connection, no shared cache" (:16-17) | §1 boundary (network-resource disjointness) | the load-bearing build → **SP-T1/SP-T2** |
+| tip-currency "needs multiple `P`-isolated sources" (:90) | DQ4: resolved by **posture**, not multi-source | posture, not machinery; **2d-1 comment is stale** → SP-T5 |
+| absence-proof "requires header-chain anchoring" (:99) | already **SP-7** (2d-1 funding gate) | unchanged — 2d-1's job |
+
+**The isolation lever, grounded.** `IsolateSOCKSAuth` keys a distinct Tor circuit on the SOCKS
+**username**. In `cli/daemon.rs` the proxy is bound **per-`Agent`** (`config_builder.proxy(…)`,
+not per-request) — so *a distinct circuit needs a distinct `Agent`*. And the username the
+doc-comment claims (`shekyl-cli-daemon`) is **not wired** — `main.rs:135` passes `--proxy` raw,
+no username — so today's "separate circuit" is aspirational. 2d-2 **wires** the username,
+**per-`P`**. (This is why SP-T1, not SP-T2, is the keystone: the circuit, not the fetch.)
+
+---
+
+## 12. SP-# enumeration (half A buildable now; half B gated on SP-6)
+
+`SP-T#` = transport (half A), `SP-R#` = reconcile (half B), to avoid collision with 2d-1's `SP-#`.
+
+**Half (A) — transport (unlinkability-critical; buildable now):**
+
+| SP | Deliverable | Depends on |
+| --- | --- | --- |
+| **SP-T0** | **Bundled-Tor lifecycle** — wallet owns/launches/health-gates/shuts-down a Tor child process (`17-dependency-discipline`); exposes a ready, wallet-private SOCKS port. | — (foundation) |
+| **SP-T1** | **Per-`P` SOCKS-auth client + the different-exit verification test** — a `ureq::Agent` built with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit). **The keystone.** The test is not optional: the isolation *claim* is only real if measured. | SP-T0 |
+| **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client; the live impl replacing `DaemonBlockSource`. | SP-T1, SP-0 (landed) |
+| **SP-T3** | **v3 onion serving** (GF-9) — `P`'s inbound onion; HS key `p_slot`-bound, rotates with the persona; published only while serving; backoff-gated. | SP-T0; GATE2 serve/challenge surface |
+| **SP-T4** | **Discretionary broadcast timing** (DQ3) — wire `stake_engine`'s `_spread`/`_bond_first` over the per-`P` circuit, anchor-free draw. | SP-T1; the broadcast stub |
+| **SP-T5** | **Reconcile the stale 2d-1 comments** (Arti→SOCKS, multi-source→posture) — small code-only PR. | — |
+
+**Half (B) — reconcile (completeness-critical; gated):**
+
+| SP | Deliverable | Gated on |
+| --- | --- | --- |
+| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6** (`PReconcileSet`, not built — downstream of PR-B) |
+
+---
+
+## 13. Type-safety — make sharing the principal's circuit *unrepresentable*
+
+SP-0 already makes the selective-fetch leak unrepresentable (no method to call). 2d-2 adds the
+*circuit* half: building a `P`-transport that rides the principal's circuit must be **uncallable**,
+not merely discouraged — the DQ1 move, one layer down.
+
+- **The per-`P` isolation token.** A newtype `PCircuitTag`, derived from the active persona
+  binding (`p_slot` / `p_canonical_id`), **not** free-form. SP-T1's constructor takes a
+  `PCircuitTag` and computes the SOCKS username from it (`socks_user = derive(tag)`), so the
+  username is a *function of the persona*, never a literal a caller picks — and never the
+  principal's. Two `P`s → two usernames → two circuits, structurally.
+- **No principal path in.** SP-T2's `BlockSource` impl is constructible **only** from an SP-T1
+  per-`P` client — no `From<principal DaemonClient>`, no `Default`. The principal's `DaemonClient`
+  (cli or engine) cannot be coerced into `P`'s `BlockSource`; the carrying type won't take it.
+  Mirrors `PScanCursor` not being passable where `BlockchainTip` is expected (DQ1).
+- **Shared daemon, never shared circuit.** `P` and the principal share one bundled Tor *process*
+  but never one *circuit*: distinct usernames → distinct circuits. The disjointness rides on the
+  username being persona-derived (the type guarantees it), not on the operator configuring it.
+
+---
+
+## 14. Dependency posture — the keystone, build order, parallelism
+
+- **Keystone: SP-T1** (per-`P` client + the different-exit verification test). All of half (A)
+  rides on it, and it is **buildable now** — SP-0 is landed, `ureq`+`socks-proxy` is in-tree
+  (`shekyl-cli`), and `cli/daemon.rs` is a working (single-username) model. The test is
+  load-bearing: the isolation claim is only real if two `P`-circuits are *measured* to carry
+  distinct `IsolateSOCKSAuth` identities (disjoint from a principal no-auth client) — "verify at
+  source," applied to the circuit itself.
+- **Build order:** SP-T0 ∥ SP-T1 → SP-T2 → SP-T3 ∥ SP-T4 → **SP-R0 (after SP-6)**. SP-T5
+  (comment fix) any time.
+- **Parallelism:** SP-T0 and SP-T1 co-develop (T1's test needs T0's SOCKS port; the client *shape*
+  designs against a fixture). SP-T3 (inbound serving) is independent of SP-T2 (outbound fetch) once
+  SP-T0 exists. SP-R0 is the only gated item.
+- **The gate, stated:** half (B) cannot land until SP-6 (`PReconcileSet`) exists (downstream of
+  PR-B). Half (A) does **not** wait on it — the transport is independent of the reconcile.
+
+---
+
+## 15. Per-SP design (enforcement-point-with-the-type)
+
+Detail for the load-bearing SPs; the rest carry their §12 contract.
+
+**SP-T1 — the per-`P` SOCKS-auth client (keystone).**
+
+- *Type:* `PTorClient { agent: ureq::Agent, tag: PCircuitTag }`, built by
+  `PTorClient::for_persona(tag: PCircuitTag, socks: &TorSocksEndpoint)`. The username is
+  `derive_socks_user(tag)` — persona-derived, never an argument; there is **no** constructor that
+  takes a username or a principal client.
+- *Verification test (ships with the enabler, not deferred):* spin two `PTorClient`s for two
+  distinct tags against the bundled Tor, probe circuit identity, assert distinct `IsolateSOCKSAuth`
+  identities and disjointness from a principal no-auth client. Without it, the isolation is a
+  comment, not a property.
+
+**SP-T2 — the `BlockSource` Tor impl.**
+
+- *Type:* `PBlockSource { client: PTorClient }` implementing the landed `BlockSource`;
+  `tip_height`/`block_at` go over `client`. Bump the trait `pub(crate)` → `pub` (the one-word
+  change the SP-0 doc anticipates) when it implements from another crate.
+- *Enforcement:* `PBlockSource::new(client: PTorClient)` is the only way in — no principal
+  `DaemonClient` path, no `Default`. This is where "P fetches on its own circuit" becomes the only
+  representable state.
+
+**SP-T0 — bundled-Tor lifecycle.** A managed child process (`17` for the bundled binary): launch
+with a wallet-private `SocksPort`/`ControlPort`, health-gate readiness before any `PTorClient` is
+handed out, shut down on wallet close. Failure → the §5 backoff/posture path, not a panic.
+
+**SP-T3 — onion serving (GF-9).** A v3 HS whose key is `p_slot`-bound and **rotates with the
+persona**; published only while `P` actively serves; backoff-gated on repeated failure (the §5
+liveness model — *not* a slash trigger). Depends on the GATE2 serve/challenge surface.
+
+**SP-T4 — discretionary broadcast.** Draw an anchor-free send time and emit `_spread`/`_bond_first`
+over the `PTorClient` circuit (DQ3); the vin is public-content (§0), so the only privacy property
+is *origin-in-`P`-space*.
+
+**SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
+**only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
+Designed here, built after SP-6.
+
+---
+
+## 16. Considered and refuted (the round's grounding journey)
 
 Recorded deliberately — the dead ends save the next designer the rounds they cost here. The
 throughline: **ground the mechanism in the *implementation* before building on it** (read the
@@ -310,4 +450,10 @@ forecloses. This record exists so the next round starts from the grounded model.
   per-`P` `IsolateSOCKSAuth`, default-Tor, verify-by-measurement); posture taxonomy; the
   liveness model grounded in `run_sliding` (sliding-window `m`-of-`n`, not a single-shot
   cliff); serving onion with `p_slot`-bound HS rotation; the narrow origin-only threat model;
-  censorship-circumvention out of scope; §11 records the considered-and-refuted journey.
+  censorship-circumvention out of scope; §16 records the considered-and-refuted journey.
+- **2026-06-28 (Round 0):** Added the buildable decomposition (§11–§15), grounded at source:
+  the transport surface map (P's seam = behind SP-0 `BlockSource`; the two `DaemonClient`s are
+  the principal's); three stale 2d-1 comments reconciled to the scoping decisions (Arti→SOCKS,
+  multi-source→posture) and the unwired `IsolateSOCKSAuth` username flagged; SP-T0–T5 (half A)
+  and SP-R0 (half B, gated on SP-6); the `PCircuitTag`/`PTorClient` type-safety move; keystone =
+  SP-T1 (per-`P` client + measured different-exit test). Considered-and-refuted renumbered §11→§16.
