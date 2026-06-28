@@ -11,7 +11,8 @@
 //! 3.4). Every type that lands on disk — [`WalletLedger`] and the five inner
 //! blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
 //! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
-//! [`PScanCursor`] (a separate sealed record, not a wallet-ledger sub-block) —
+//! [`PScanCursor`] and [`PScanState`] (separate sealed records, not
+//! wallet-ledger sub-blocks) —
 //! derives [`postcard_schema::Schema`](postcard_schema::Schema), producing a
 //! compile-time [`NamedType`] tree that captures every field's wire shape.
 //! The snapshot tests in this module serialize that tree to pretty JSON and
@@ -32,6 +33,7 @@
 //! - `sync_state_block.snap`       ↔  [`SYNC_STATE_BLOCK_VERSION`]
 //! - `staking_block.snap`          ↔  [`STAKING_BLOCK_VERSION`]
 //! - `pscan_cursor.snap`           ↔  [`PSCAN_CURSOR_VERSION`]
+//! - `pscan_state.snap`            ↔  [`PSCAN_STATE_VERSION`]
 //!
 //! The pairing is enforced in CI by
 //! `.github/workflows/schema-snapshot.yml` — any PR that touches a `.snap`
@@ -68,6 +70,7 @@
 //! [`SYNC_STATE_BLOCK_VERSION`]: crate::sync_state_block::SYNC_STATE_BLOCK_VERSION
 //! [`STAKING_BLOCK_VERSION`]: crate::staking_block::STAKING_BLOCK_VERSION
 //! [`PSCAN_CURSOR_VERSION`]: crate::pscan_cursor::PSCAN_CURSOR_VERSION
+//! [`PSCAN_STATE_VERSION`]: crate::pscan_state::PSCAN_STATE_VERSION
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 //! [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
@@ -75,6 +78,7 @@
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`StakingBlock`]: crate::staking_block::StakingBlock
 //! [`PScanCursor`]: crate::pscan_cursor::PScanCursor
+//! [`PScanState`]: crate::pscan_state::PScanState
 
 #[cfg(test)]
 mod tests {
@@ -91,8 +95,8 @@ mod tests {
 
     use crate::{
         bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock, pscan_cursor::PScanCursor,
-        staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
-        wallet_ledger::WalletLedger,
+        pscan_state::PScanState, staking_block::StakingBlock, sync_state_block::SyncStateBlock,
+        tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
     };
 
     /// Snapshot directory, relative to the `shekyl-engine-state` crate root.
@@ -238,6 +242,11 @@ mod tests {
     #[test]
     fn pscan_cursor_schema_matches_snapshot() {
         check_or_update_snapshot("pscan_cursor", <PScanCursor as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn pscan_state_schema_matches_snapshot() {
+        check_or_update_snapshot("pscan_state", <PScanState as Schema>::SCHEMA);
     }
 
     /// Meta-guard against the dual-registry divergence: the version-bump CI

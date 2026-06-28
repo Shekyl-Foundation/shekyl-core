@@ -70,6 +70,7 @@ const _: () = assert!(ATOMIC_UNITS_PER_SKL == 10u64.pow(DISPLAY_DECIMAL_POINT as
 /// (`OutputClaim` is `ZeroizeOnDrop`; this type is [`Zeroize`] so that keeps
 /// compiling).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Zeroize, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
 #[serde(transparent)]
 #[repr(transparent)]
 pub struct AtomicUnits(u64);

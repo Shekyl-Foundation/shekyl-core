@@ -40,7 +40,7 @@ shekyl-staking = { path = "../shekyl-staking" }
 # `AtomicUnits` amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md). The
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
 # stays fork-`u64` and converts at the `commitment_bytes` serializer edge.
-shekyl-units = { path = "../shekyl-units" }
+shekyl-units = { path = "../shekyl-units", features = ["schema"] }
 # Canonical newtypes. `TxHash` (`TransferDetails::tx_hash` /
 # `PaymentRequest::matched_tx_hash`) is transparent over `[u8; 32]` via
 # wire-native mirror structs, so it alone needed no `schema`. `PScanCursor`

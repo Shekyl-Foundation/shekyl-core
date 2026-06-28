@@ -4327,6 +4327,7 @@ name = "shekyl-units"
 version = "3.1.0"
 dependencies = [
  "postcard",
+ "postcard-schema",
  "proptest",
  "serde",
  "serde_json",
