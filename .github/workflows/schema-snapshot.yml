@@ -94,9 +94,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Snapshot → source-file + version-constant pairing. Must
-          # match `docs/MID_REWIRE_HARDENING.md` §3.4 and the doc-link
-          # table in `rust/shekyl-engine-state/src/schema_snapshot.rs`.
+          # Snapshot → source-file + version-constant pairing. This list and
+          # the committed `schemas/*.snap` are kept in sync by the meta-test
+          # `version_bump_registry_covers_every_snapshot` in
+          # `rust/shekyl-engine-state/src/schema_snapshot.rs`: it fails loudly
+          # (in the assert-snapshots job) if this array and the snapshot set
+          # diverge, so a new type can't add a snapshot without its pairing
+          # entry — that's what makes this second registry safe. Must also match
+          # `docs/MID_REWIRE_HARDENING.md` §3.4.
           #
           # Each entry: <snap-stem>|<source-file>|<version-constant>
           PAIRS=(

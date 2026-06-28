@@ -79,6 +79,7 @@
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeSet,
         env, fs,
         path::{Path, PathBuf},
     };
@@ -237,6 +238,64 @@ mod tests {
     #[test]
     fn pscan_cursor_schema_matches_snapshot() {
         check_or_update_snapshot("pscan_cursor", <PScanCursor as Schema>::SCHEMA);
+    }
+
+    /// Meta-guard against the dual-registry divergence: the version-bump CI
+    /// registry (the `PAIRS` array in `.github/workflows/schema-snapshot.yml`)
+    /// must list **exactly** the committed snapshots.
+    ///
+    /// The `.snap` files are the harness's de-facto registry — every type with a
+    /// `*_schema_matches_snapshot` test above writes `schemas/<stem>.snap`. The
+    /// YAML `PAIRS` is a *second*, hand-maintained registry; it exists because it
+    /// drives a **git-level** check the in-process tests cannot do (a `.snap`
+    /// changed in a PR ⟹ its `_VERSION` constant moved in the same PR — the test
+    /// has no diff to see). Two hand-mirrored registries are a silent-divergence
+    /// hazard: register a new type's snapshot without adding its `PAIRS` entry and
+    /// the `.snap`↔`_VERSION` enforcement is silently absent (CI green, guard
+    /// gone). This test makes that divergence **loud** — the two stem-sets must be
+    /// equal — so a new (or removed) type can't slip the pairing past review.
+    #[test]
+    fn version_bump_registry_covers_every_snapshot() {
+        // The committed snapshots: the set of `schemas/*.snap` stems.
+        let snap_stems: BTreeSet<String> = fs::read_dir(schemas_dir())
+            .expect("read schemas dir")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                if path.extension()? == "snap" {
+                    path.file_stem()?.to_str().map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // The YAML `PAIRS` stems. `CARGO_MANIFEST_DIR` is the crate root
+        // (`rust/shekyl-engine-state`); the workflow is two levels up, at repo root.
+        let workflow = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/workflows/schema-snapshot.yml");
+        let yaml = fs::read_to_string(&workflow)
+            .unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
+        let pair_stems: BTreeSet<String> = yaml.lines().filter_map(parse_pairs_stem).collect();
+
+        assert_eq!(
+            snap_stems, pair_stems,
+            "the `PAIRS` array in .github/workflows/schema-snapshot.yml must list \
+             exactly the committed snapshots (rust/shekyl-engine-state/schemas/*.snap). \
+             A snapshot with no `PAIRS` entry leaves its .snap<->_VERSION pairing \
+             silently unenforced; a `PAIRS` entry with no snapshot is stale. Sync them.",
+        );
+    }
+
+    /// Extract `<stem>` from a `PAIRS` line `"<stem>|<src>.rs|<VERSION>"`. Returns
+    /// `None` for any other YAML line (the shape-gate below keeps it specific).
+    fn parse_pairs_stem(line: &str) -> Option<String> {
+        let inner = line.trim().strip_prefix('"')?.strip_suffix('"')?;
+        let mut parts = inner.split('|');
+        let stem = parts.next()?;
+        let src = parts.next()?;
+        let version = parts.next()?;
+        (parts.next().is_none() && src.ends_with(".rs") && version.contains("VERSION"))
+            .then(|| stem.to_string())
     }
 
     /// Defense-in-depth: the rendered JSON must actually be

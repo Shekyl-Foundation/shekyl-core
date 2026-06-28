@@ -18,8 +18,9 @@
 //! cursor has no chain-derived anchor to clamp to (unlike the slot floor, which
 //! the bonded set anchors). On resume, `P` re-scans from the sealed
 //! `synced_height` forward to the finality horizon; the per-epoch accrual is
-//! idempotent (SP-4 [`PFundingInflow`](../../shekyl_engine_core)), so the re-scan
-//! is harmless. The safety invariant is a **write discipline**, realized by the
+//! idempotent (SP-4 `PFundingInflow`, in `shekyl-engine-core` — `pub(crate)`, so
+//! not cross-crate-linkable here), so the re-scan is harmless. The safety
+//! invariant is a **write discipline**, realized by the
 //! scan loop (SP-5): persist the confirmed outputs durably, *then* seal the
 //! cursor to that frontier — it **never seals past durable outputs**, so a crash
 //! can only leave it at-or-behind real progress.
@@ -145,10 +146,16 @@ mod tests {
 
     #[test]
     fn rejects_a_version_mismatch_on_load() {
-        // Forge a cursor whose on-wire version is wrong by encoding a (version,
-        // height) tuple in the same postcard shape.
-        let forged = postcard::to_allocvec(&(PSCAN_CURSOR_VERSION + 1, BlockHeight::from_raw(1)))
-            .expect("forge");
+        // Construct a wrong-version cursor via its private fields (reachable from
+        // this child module) and serialize it through the real `to_postcard_bytes`
+        // path — no coupling to postcard's struct-vs-tuple encoding.
+        let wrong = PScanCursor {
+            version: PSCAN_CURSOR_VERSION + 1,
+            synced_height: BlockHeight::from_raw(1),
+        };
+        let forged = wrong
+            .to_postcard_bytes()
+            .expect("serialize wrong-version cursor");
         match PScanCursor::from_postcard_bytes(&forged) {
             Err(WalletLedgerError::UnsupportedBlockVersion {
                 block,
