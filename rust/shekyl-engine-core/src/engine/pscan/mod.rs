@@ -15,17 +15,19 @@
 //! the `ArchivalPKeys` → `GuaranteedViewPair` adapter that builds a persona's
 //! burning-bug-immune scanner; **SP-3/SP-5** ([`scan_step`]) — the dual extractor
 //! (view-key funding + cleartext bond-post) run offloaded behind the actor's
-//! `ScanStep` boundary; **SP-4** ([`inflow`]) — the idempotent per-epoch
-//! funding-inflow signal `C_min` consumes (paired with SP-2's `PScanCursor` in
-//! `shekyl-engine-state` as the one crash-recovery decision). All read-side: they
-//! produce no on-chain event and broadcast/GC nothing.
+//! `ScanStep` boundary; **SP-4/SP-5** ([`accrual`]) — the accumulate-side scan
+//! accrual (`PScanAccrual`) + the finalized per-epoch funding signal
+//! (`PFundingInflow`, the finalization guard) `C_min` consumes. All read-side:
+//! they produce no on-chain event and broadcast/GC nothing.
 //!
-//! [`scan_step`] (SP-3 + the SP-5 actor scan-step) lands here; the **driving
-//! task** + the sealed P-isolated cursor/inflow persistence (the rest of SP-5)
-//! follow in PR-B. [`block_source`] and [`inflow`] are exercised only by their own
-//! tests until that task wires them, so they keep a transient `#[allow(dead_code)]`.
+//! [`scan_step`] (SP-3 + the SP-5 actor scan-step) and [`accrual`] (the accumulate
+//! model + persisted-state mirror) land here; the **driving task** that wires them
+//! to the [`block_source`] + the `.wallet.pscan` seal follows in PR-B's later
+//! commits. [`block_source`] and [`accrual`] are exercised only by their own tests
+//! until that task lands, so they keep a transient `#[allow(dead_code)]`.
 
+pub(crate) mod accrual;
 pub(crate) mod block_source;
-pub(crate) mod inflow;
+pub(crate) mod cadence;
 pub(crate) mod persona_scanner;
 pub(crate) mod scan_step;
