@@ -38,6 +38,10 @@ exploit, no double-pay. So the only "downside" of running simultaneous personas 
 self-correlation — a self-inflicted privacy choice. **Disposition: a one-line wallet
 disclosure** (don't run simultaneous personas to hide scale — it is self-defeating and
 the design's sequential rotation is what you want), **not a mechanism and not a round.**
+(For the record, so the retraction is not mistaken for sloppy work: the matcher was built
+and gate-clean, and its AUC / ablation / heterogeneity findings were *internally valid* —
+they simply measured the self-correlation of a behavior the design forecloses. Sound
+analysis, wrong question — which is the whole lesson.)
 
 The methodological lesson, named: the discipline that served this work — *believe the
 surprising number, verify at source* — will happily analyze a channel rigorously whether

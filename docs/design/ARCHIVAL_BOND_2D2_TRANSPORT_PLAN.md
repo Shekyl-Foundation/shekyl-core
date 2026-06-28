@@ -282,6 +282,27 @@ untenable); multi-source tip (if a real staker posture other than ①/② emerge
 posture disposition does not cover); per-`P`-`Agent` shape (if ureq 3.x configures proxy
 per-request, not per-`Agent`).
 
+## 11. Considered and refuted (the round's grounding journey)
+
+Recorded deliberately — the dead ends save the next designer the rounds they cost here. The
+throughline: **ground the mechanism in the *implementation* before building on it** (read the
+function, not the grep — each item below was rigorous analysis of a mechanism the code does
+not implement). The scope shrank to §0–§7 precisely *because* these collapsed.
+
+| Premise built on | Disposition | Grounded at |
+| --- | --- | --- |
+| **Serving requires a full validating node → scan is forced local → TM-3/TM-6 dissolve** | **Refuted.** The chain model is light-client (daemon serves leaves, wallet verifies vs. per-block header `curve_tree_root`); no doc requires a validating node. Remote scan is a supported posture, not a phantom. | `CURVE_TREE_CLIENT.md`; grep for "full node required" (empty) |
+| **Slash forces a *local* node** | **Refuted.** "Trusted" ≠ "local" — a self-hosted *remote* node is equally trusted. The real structure is the three-posture taxonomy (§4): trust dissolves TM-3 (local *or* own-remote); only locality dissolves TM-6. | the posture analysis, §4 |
+| **Challenge-response is a single-missed-deadline capital knife-edge** | **Refuted at the code.** The slash is **sliding-window m-of-n** — `failure_confirmation::run_sliding` slashes only when `miss_count >= miss_threshold` within the window; a single transient is a scored `false_slash` the tuning avoids. A transient is absorbed by retry + Tor failover; only *sustained* failure slashes (the mechanism working). | `run_sliding`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` |
+| **Multi-path liveness has a privacy tension (N paths = N origin exposures)** | **Dissolved.** `P` is public (§0); the vin is public-content; multi-path only keeps each path's origin in `P`-space, never the principal's — no competing privacy axis. So multi-path is a *latency nicety*, not bond protection. | §0 charter + §5 |
+| **Guard-level censorship is a hard liveness floor needing bundled PT/bridges** | **Over-scoped → out of scope.** Default-Tor guard behavior is correct (deviation creates a signature); reaching Tor where it is *blocked* is the Tor Project's cat-and-mouse — a doc pointer (§8), not our machinery — and §5's backoff makes it not a capital cliff. | Tor SOCKS/guard model (§3) |
+| **Operator runs K *simultaneous* personas; cardinality is a structural 2d-2 hand-off** | **Retracted** — the design is sequential (`stake_engine`: "never two active personas"); the channel does not exist. | `ARCHIVAL_TM1_CLUSTERING.md` §0 |
+
+The cost of not grounding first was real — several rounds of analysis on mechanisms the code
+forecloses. This record exists so the next round starts from the grounded model.
+
+---
+
 ## Revision history
 
 - **2026-06-28:** Created. Boundary (network-resource disjointness) + the §0 P-is-public
@@ -289,4 +310,4 @@ per-request, not per-`Agent`).
   per-`P` `IsolateSOCKSAuth`, default-Tor, verify-by-measurement); posture taxonomy; the
   liveness model grounded in `run_sliding` (sliding-window `m`-of-`n`, not a single-shot
   cliff); serving onion with `p_slot`-bound HS rotation; the narrow origin-only threat model;
-  censorship-circumvention out of scope.
+  censorship-circumvention out of scope; §11 records the considered-and-refuted journey.
