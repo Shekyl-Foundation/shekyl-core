@@ -1544,7 +1544,6 @@ mod tests {
 
         let kem = HybridX25519MlKem;
         let (recipient_pk, _) = kem.keypair_generate().unwrap();
-        let (_, wrong_sk) = kem.keypair_generate().unwrap();
 
         let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
@@ -1561,20 +1560,46 @@ mod tests {
         )
         .unwrap();
 
-        let result = scan_output(
-            &wrong_sk.x25519,
-            &wrong_sk.ml_kem,
-            &out.kem_ciphertext_x25519,
-            &out.kem_ciphertext_ml_kem,
-            &out.output_key,
-            &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
-            out.view_tag_prefilter,
-            &spend_key,
-            0,
+        // A wrong KEM key yields a wrong view-tag, which the 1-byte pre-filter rejects
+        // ~255/256 of the time; the ~1/256 view-tag collision takes the amount_tag
+        // path instead (covered by `scan_tampered_amount_tag_fails`). Sample until we
+        // hit the pre-filter-reject path THIS test targets, so it is deterministic
+        // rather than flaky on the view-tag collision. Match the error PAYLOAD (not
+        // its Display string) and bound the attempts, so a wording/RNG change fails
+        // fast instead of hanging. `reset_*` before each scan so the probe reflects
+        // only the final (pre-filter-reject) decap.
+        const MAX_ATTEMPTS: usize = 64; // P(all miss) = (1/256)^64 ≈ 0
+        let mut result = None;
+        for _ in 0..MAX_ATTEMPTS {
+            let (_, wrong_sk) = kem.keypair_generate().unwrap();
+            reset_ml_kem_ss_wipe_probe();
+            let r = scan_output(
+                &wrong_sk.x25519,
+                &wrong_sk.ml_kem,
+                &out.kem_ciphertext_x25519,
+                &out.kem_ciphertext_ml_kem,
+                &out.output_key,
+                &out.commitment,
+                &out.enc_amount,
+                out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
+                out.view_tag_prefilter,
+                &spend_key,
+                0,
+            );
+            if matches!(
+                &r,
+                Err(CryptoError::DecapsulationFailed(msg))
+                    if msg.contains("view tag pre-filter mismatch")
+            ) {
+                result = Some(r);
+                break;
+            }
+        }
+        let result = result.expect(
+            "a wrong KEM key must hit the view-tag pre-filter reject within 64 samples \
+             (P(miss) = (1/256)^64); exhaustion means the error payload or scan path changed",
         );
 
         assert!(result.is_err(), "scan with wrong KEM key must fail");

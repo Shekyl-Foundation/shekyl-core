@@ -641,16 +641,54 @@ sustainability is unaffected by the recalibration.
   regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
   curve tree to depth-3 (daemon depth 2 = 3 layers; 701 drained leaves, height 760)
   and the wallet `refresh` then **failed**: `CurveTreeIngest { context: "curve-tree
-  root mismatch vs header" }`. The wallet's **native** curve-tree reconstruction
-  (`CurveTreeClient` verify-at-ingest, `merge.rs`) diverges from the daemon's header
-  root at the **Selene branch** layer — the depth-3 case the depth-2 padding fix did
-  not cover for the tree *build* (vs the `prove` path #162 patched). **This is
-  consensus-critical: a wallet cannot sync past depth-3** (≈701 outputs — reached
-  fast on mainnet). Repro + acceptance gate is the depth-3 test (currently RED,
-  `#[ignore]`d). **Next:** diff the wallet `build_layers` partial-Selene-branch chunk
-  handling against the daemon `grow_curve_tree`; the likely fix mirrors #162 (zero-pad
-  the partial branch chunk) but in the **root construction**, not the proof. Must be
-  validated against the live daemon header root before genesis freeze.
+  root mismatch vs header" }`. The wallet's `CurveTreeClient` reconstruction (built
+  on the narrow-from-init `build_layers`) diverges from the daemon's header root at
+  the **layer-2 Selene branch**. **This is consensus-critical: a wallet cannot sync
+  once the chain exceeds 684 outputs** — the 685th output (`SELENE_CHUNK_WIDTH *
+  HELIOS_CHUNK_WIDTH + 1`) forces the first layer-2 Selene root; reached fast on mainnet.
+  **ROOT-CAUSED 2026-06-27 (all-Rust triangulation, no mining) — the DAEMON is the
+  bug, NOT `build_layers`.** `build_layers` is the narrow reference by definition
+  (`try_build_upper_layers` tree.rs:330-348 — `hash_grow(init, 0, ZERO, [all converted
+  children])`, no padding). The consensus defect is `BlockchainLMDB::grow_curve_tree`'s
+  **deepening propagation** (db_lmdb.cpp:6594-6719): it propagates only *updated*
+  chunks, so when the 685th leaf forces the first layer-2 Selene root, the pre-existing
+  Helios sibling (chunk 0 = the first 684 leaves) is omitted (fine cadence) or
+  phantom-subtracted (coarse cadence: a fresh parent chunk wrongly uses
+  `old_scalar = conv(child.old_hash)` instead of ZERO). Confirmed in-process by a
+  faithful `grow_curve_tree` replica in `shekyl-fcmp/tests/curve_tree_freeze.rs`
+  (`daemon_incremental_matches_batch_through_depth2` = faithfulness floor;
+  `daemon_incremental_drops_existing_sibling_at_depth3_deepen` = the layer-2 divergence,
+  with the exact omission pinned). **Do NOT conform `build_layers` to the daemon —
+  that would freeze a consensus defect at genesis (#162-retraction discipline).
+  Fix the producer:** a newly-created parent chunk must build from ALL its children
+  (old_scalar ZERO), reachable via deepen. Best disposition (rules 20 / consensus-port):
+  move the tree-grow orchestration into Rust (a correct `shekyl_curve_tree_grow` that
+  mirrors `build_layers`) rather than patch the C++. Changes the genesis header root ⇒
+  consensus cutover; regenerate any depth-3 fixtures. Repro/acceptance: the depth-3
+  regtest gate (`e2e_fcmp_spend_over_depth3_tree`) + the curve_tree_freeze replica.
+  **GROW FIX VALIDATED (PR #197):** the Rust grow FFI `shekyl_curve_tree_grow_upper_layers`
+  (== `build_layers`, round-trip tested) + the C header decl + the `db_lmdb`
+  `grow_curve_tree` rewiring (reads the leaf-chunk layer, calls the FFI, persists the
+  recomposed upper layers + root + depth). Validated end-to-end 2026-06-27 against a
+  **locally-built fixed `shekyld`**: the depth-3 regtest reached daemon depth 2 (701
+  leaves), the wallet `refresh` succeeded over the depth-3 tree (the root mismatch is
+  gone), and the daemon **accepted** a wallet-built FCMP++ spend over that tree
+  (`e2e_fcmp_spend_over_depth3_tree` is green). **TRIM FIX VALIDATED (PR #197):**
+  `BlockchainLMDB::trim_curve_tree` (the reorg path) had the identical buggy
+  incremental-upper propagation; it now uses the **same FFI recompose** as grow, plus
+  a cursor delete of every `layer >= 1` chunk before rewriting (trim shrinks the tree,
+  so stale upper chunks must not survive). Validated by `e2e_trim_curve_tree_restores_grow_root`:
+  grow to depth-2 across a leaf-chunk boundary, grow further, then `pop_blocks` back —
+  the trimmed root equals the grow root exactly (`trim == grow⁻¹`; grow is the proven
+  `== build_layers` reference). The dead in-place propagation + the now-unused
+  `ct_layer_is_selene` helper were removed.
+  **PERF FOLLOW-UP (not a consensus change):** `grow`/`trim` currently recompose ALL
+  upper layers each block — O(num_leaf_chunks) LMDB reads + O(num_leaf_chunks/17)
+  hashing — fine at genesis/early scale but a bottleneck on a long-lived chain.
+  Optimize to recompose only the affected *ancestor* chunks (bounded by depth ×
+  chunk-width) using the same narrow composition. This produces the **identical root**,
+  so it is a pure perf optimization, sequenced AFTER the correct version (and must be
+  proven `== build_layers` to telescope — the #162-retraction discipline).
 
 - **Output-class numbering-equivalence re-verification (CT-5c X3 standing
   precondition, tracked 2026-06-18).** Target: standing — applies to any future

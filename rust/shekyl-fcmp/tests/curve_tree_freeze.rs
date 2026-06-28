@@ -42,8 +42,8 @@ use rand_core::{RngCore, SeedableRng};
 use shekyl_fcmp::tree::{
     build_layers, hash_grow_helios, hash_grow_selene, hash_trim_helios, hash_trim_selene,
     helios_hash_init, helios_point_to_selene_scalar, layer_is_selene, selene_hash_init,
-    selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF,
-    SELENE_CHUNK_WIDTH,
+    selene_point_to_helios_scalar, try_build_upper_layers, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS,
+    SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
 
 const ZERO: [u8; 32] = [0u8; 32];
@@ -721,4 +721,342 @@ fn reorg_capstone_replace_at_boundary_39() {
         vec![vec![leaf0, leaf1_b], vec![root39_b]],
         "capstone: deepen->undeepen->re-deepen with different content != fresh build"
     );
+}
+
+// ===========================================================================
+// Tier 2c — multi-layer incremental vs batch, the DAEMON cadence to depth-3.
+//
+// The chunk-level Tier-2 tests prove ONE chunk's incremental grow == batch. They
+// do NOT prove the multi-LAYER propagation telescopes, and a layer-2 (intermediate
+// Selene) node is first-run only at depth-3 (>684 leaves) — exercised by neither
+// Tier-A nor depth-2. `DaemonTree` is a faithful Rust port of the consensus
+// `grow_curve_tree` (db_lmdb.cpp:6466) cadence: leaves stream in drains; each drain
+// regrows only the AFFECTED chunks up the layers with the real (offset, old_child)
+// bookkeeping — NOT a from-scratch rebuild. `build_layers` is the narrow-from-init
+// mathematical reference. Comparing them per layer localizes any divergence.
+// ===========================================================================
+
+/// `(chunk-or-pos, old, new)` — a chunk/child update threaded up the layers.
+type Upd = (usize, [u8; 32], [u8; 32]);
+/// A cycle-scalar conversion (Selene↔Helios), as build_layers/grow_curve_tree use.
+type Conv = fn(&[u8; 32]) -> Option<[u8; 32]>;
+
+/// Faithful port of `BlockchainLMDB::grow_curve_tree` (db_lmdb.cpp:6466-6719):
+/// per-drain incremental layer maintenance over the shared Rust hash primitives.
+#[derive(Default)]
+struct DaemonTree {
+    /// Per-layer chunk hashes; `layers[0]` = leaf (Selene) chunks, alternating
+    /// Helios/Selene above. Grown in place, mirroring the LMDB layer table.
+    layers: Vec<Vec<[u8; 32]>>,
+    leaf_outputs: usize,
+}
+
+impl DaemonTree {
+    /// Drain `new_leaf_scalars` (`k * SCALARS_PER_LEAF` for `k` new outputs) into
+    /// the tree the way the daemon does: update affected leaf chunks, then
+    /// propagate only the updated chunks up, carrying (pos, old_scalar, new_scalar).
+    fn drain(&mut self, new_leaf_scalars: &[[u8; 32]]) {
+        assert!(new_leaf_scalars.len().is_multiple_of(SCALARS_PER_LEAF));
+        let num_new = new_leaf_scalars.len() / SCALARS_PER_LEAF;
+        if num_new == 0 {
+            return;
+        }
+        let old_count = self.leaf_outputs;
+        let new_count = old_count + num_new;
+        self.leaf_outputs = new_count;
+        if self.layers.is_empty() {
+            self.layers.push(Vec::new());
+        }
+
+        // Leaf (Selene) layer (db_lmdb 6520-6592). (chunk, old_hash, new_hash).
+        let mut updated: Vec<Upd> = Vec::new();
+        let first_chunk = old_count / SELENE_CHUNK_WIDTH;
+        let last_chunk = (new_count - 1) / SELENE_CHUNK_WIDTH;
+        for chunk in first_chunk..=last_chunk {
+            let chunk_start = chunk * SELENE_CHUNK_WIDTH;
+            let first_new_in_chunk = old_count.saturating_sub(chunk_start);
+            let chunk_end = ((chunk + 1) * SELENE_CHUNK_WIDTH).min(new_count);
+            let num_new_in_chunk = chunk_end - (chunk_start + first_new_in_chunk);
+            if num_new_in_chunk == 0 {
+                continue;
+            }
+            let existing = self.layers[0]
+                .get(chunk)
+                .copied()
+                .unwrap_or_else(selene_hash_init);
+            let mut new_scalars: Vec<[u8; 32]> = Vec::new();
+            for out in (chunk_start + first_new_in_chunk)..chunk_end {
+                let base = (out - old_count) * SCALARS_PER_LEAF;
+                new_scalars.extend_from_slice(&new_leaf_scalars[base..base + SCALARS_PER_LEAF]);
+            }
+            let scalar_offset = first_new_in_chunk * SCALARS_PER_LEAF;
+            let new_hash = hash_grow_selene(&existing, scalar_offset, &ZERO, &new_scalars)
+                .expect("leaf chunk grow");
+            if chunk < self.layers[0].len() {
+                self.layers[0][chunk] = new_hash;
+            } else {
+                self.layers[0].push(new_hash);
+            }
+            updated.push((chunk, existing, new_hash));
+        }
+
+        // Propagate up (db_lmdb 6594-6719).
+        let mut layer = 1usize;
+        while !updated.is_empty() {
+            let is_selene = layer_is_selene(u8::try_from(layer).unwrap());
+            let parent_width = if is_selene {
+                SELENE_CHUNK_WIDTH
+            } else {
+                HELIOS_CHUNK_WIDTH
+            };
+            if layer >= self.layers.len() {
+                self.layers.push(Vec::new());
+            }
+            // (parent_chunk) -> sorted [(pos, old_scalar, new_scalar)]
+            let mut groups: std::collections::BTreeMap<usize, Vec<Upd>> =
+                std::collections::BTreeMap::new();
+            let (child_init, conv): ([u8; 32], Conv) = if is_selene {
+                (helios_hash_init(), helios_point_to_selene_scalar)
+            } else {
+                (selene_hash_init(), selene_point_to_helios_scalar)
+            };
+            for &(child_chunk, old_hash, new_hash) in &updated {
+                let new_scalar = conv(&new_hash).expect("convert new child");
+                // db_lmdb 6624/6631: an init/empty old child contributes the ZERO
+                // scalar, NOT convert(init).
+                let old_scalar = if old_hash != child_init {
+                    conv(&old_hash).expect("convert old child")
+                } else {
+                    ZERO
+                };
+                groups.entry(child_chunk / parent_width).or_default().push((
+                    child_chunk % parent_width,
+                    old_scalar,
+                    new_scalar,
+                ));
+            }
+            let mut next: Vec<Upd> = Vec::new();
+            for (parent_chunk, mut children) in groups {
+                children.sort_by_key(|c| c.0);
+                let init = if is_selene {
+                    selene_hash_init()
+                } else {
+                    helios_hash_init()
+                };
+                let before = self.layers[layer]
+                    .get(parent_chunk)
+                    .copied()
+                    .unwrap_or(init);
+                let mut h = before;
+                for (pos, old_scalar, new_scalar) in children {
+                    h = if is_selene {
+                        hash_grow_selene(&h, pos, &old_scalar, &[new_scalar])
+                    } else {
+                        hash_grow_helios(&h, pos, &old_scalar, &[new_scalar])
+                    }
+                    .expect("parent grow");
+                }
+                if parent_chunk < self.layers[layer].len() {
+                    self.layers[layer][parent_chunk] = h;
+                } else {
+                    self.layers[layer].push(h);
+                }
+                next.push((parent_chunk, before, h));
+            }
+            updated = next;
+            // Stop when the sole updated chunk is chunk 0 and this layer's children
+            // fit one parent chunk (db_lmdb 6700-6717) — that chunk is the root.
+            if updated.len() == 1
+                && updated[0].0 == 0
+                && self.layers[layer - 1].len() <= parent_width
+            {
+                break;
+            }
+            layer += 1;
+        }
+    }
+}
+
+/// The PRODUCER-SIDE FIX, in incremental form. Leaf chunks are grown the same way
+/// the daemon already does (accumulating scalars at a real offset — which DOES
+/// telescope; the depth-2 floor proves it), but the upper layers are then composed
+/// **narrow** from the leaf layer via [`try_build_upper_layers`] — the same
+/// composition `build_layers` uses — instead of the daemon's per-child incremental
+/// update that mis-handles a fresh parent's `old_scalar`. A real Rust
+/// `shekyl_curve_tree_grow` would recompute only the *affected* ancestor chunks
+/// (bounded by chunk width) rather than the whole upper tree; correctness is
+/// identical, this form just makes the equivalence obvious.
+#[derive(Default)]
+struct CorrectTree {
+    layers: Vec<Vec<[u8; 32]>>,
+    leaf_outputs: usize,
+}
+
+impl CorrectTree {
+    fn drain(&mut self, new_leaf_scalars: &[[u8; 32]]) {
+        assert!(new_leaf_scalars.len().is_multiple_of(SCALARS_PER_LEAF));
+        let num_new = new_leaf_scalars.len() / SCALARS_PER_LEAF;
+        if num_new == 0 {
+            return;
+        }
+        let old_count = self.leaf_outputs;
+        let new_count = old_count + num_new;
+        self.leaf_outputs = new_count;
+        let mut leaf = self.layers.first().cloned().unwrap_or_default();
+        for chunk in (old_count / SELENE_CHUNK_WIDTH)..=((new_count - 1) / SELENE_CHUNK_WIDTH) {
+            let chunk_start = chunk * SELENE_CHUNK_WIDTH;
+            let first_new = old_count.saturating_sub(chunk_start);
+            let chunk_end = ((chunk + 1) * SELENE_CHUNK_WIDTH).min(new_count);
+            if chunk_end <= chunk_start + first_new {
+                continue;
+            }
+            let existing = leaf.get(chunk).copied().unwrap_or_else(selene_hash_init);
+            let mut ns: Vec<[u8; 32]> = Vec::new();
+            for out in (chunk_start + first_new)..chunk_end {
+                let b = (out - old_count) * SCALARS_PER_LEAF;
+                ns.extend_from_slice(&new_leaf_scalars[b..b + SCALARS_PER_LEAF]);
+            }
+            let h = hash_grow_selene(&existing, first_new * SCALARS_PER_LEAF, &ZERO, &ns)
+                .expect("leaf grow");
+            if chunk < leaf.len() {
+                leaf[chunk] = h;
+            } else {
+                leaf.push(h);
+            }
+        }
+        // Upper layers: narrow composition from the leaf layer — the fix.
+        self.layers = try_build_upper_layers(leaf, 0).expect("upper layers");
+    }
+}
+
+#[test]
+fn correct_grow_telescopes_to_batch_at_depth3() {
+    // The fix's correctness proof: leaf-incremental + narrow upper composition
+    // equals build_layers at every layer, INCLUDING the depth-3 layer-2 Selene root
+    // the daemon's incremental gets wrong. This is the reference a Rust
+    // shekyl_curve_tree_grow must reproduce (the daemon then calls it via FFI,
+    // retiring the C++ deepening orchestration).
+    // Boundaries derived from the topology, not hard-coded: SELENE_CHUNK_WIDTH (38)
+    // leaves fill one Selene leaf node; outputs_per_node(1) (= 38*18 = 684) fill one
+    // Helios node — the last depth-2 size, so +1 (685) is the first depth-3.
+    let d2 = outputs_per_node(1);
+    for &n in &[
+        1,
+        SELENE_CHUNK_WIDTH,
+        SELENE_CHUNK_WIDTH + 1,
+        d2,
+        d2 + 1,
+        701,
+        800,
+    ] {
+        let seed = 40_000 + n as u64;
+        let batch = build_layers(&{
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        });
+        let mut tree = CorrectTree::default();
+        let all = {
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        };
+        for out in 0..n {
+            tree.drain(&all[out * SCALARS_PER_LEAF..(out + 1) * SCALARS_PER_LEAF]);
+        }
+        assert_eq!(
+            tree.layers, batch,
+            "correct incremental grow != build_layers at n={n} (must telescope at every layer)"
+        );
+    }
+}
+
+/// Drive `DaemonTree` to `n_outputs` one output per drain — the finest
+/// deterministic cadence, which maximally exercises the mutate-then-append path
+/// and isolates the deepen drain (so the layer-2 omission is exact). A coarser
+/// per-block cadence diverges differently but always diverges.
+fn daemon_layers(n_outputs: usize, seed: u64) -> Vec<Vec<[u8; 32]>> {
+    let mut rng = seeded(seed);
+    let all = rand_leaves(&mut rng, n_outputs);
+    let mut tree = DaemonTree::default();
+    for out in 0..n_outputs {
+        tree.drain(&all[out * SCALARS_PER_LEAF..(out + 1) * SCALARS_PER_LEAF]);
+    }
+    tree.layers
+}
+
+#[test]
+fn daemon_incremental_matches_batch_through_depth2() {
+    // Faithfulness floor: the daemon cadence and build_layers agree at every layer
+    // for every size up to and INCLUDING the last depth-2 tree (684 leaves = 18
+    // full Selene nodes -> one Helios root). Proves the replica + the leaf/Helios
+    // layers are exact, so a depth-3 divergence is real, not a port artifact.
+    // Up to and including the last depth-2 size (outputs_per_node(1) = 684), derived
+    // from the chunk-width topology rather than hard-coded.
+    let d2 = outputs_per_node(1);
+    for &n in &[
+        1,
+        SELENE_CHUNK_WIDTH,
+        SELENE_CHUNK_WIDTH + 1,
+        100,
+        d2 - 1,
+        d2,
+    ] {
+        let seed = 30_000 + n as u64;
+        let batch = build_layers(&{
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        });
+        let incr = daemon_layers(n, seed);
+        assert_eq!(
+            incr, batch,
+            "daemon incremental != build_layers at n={n} (<= depth-2 must agree exactly)"
+        );
+    }
+}
+
+#[test]
+fn daemon_incremental_drops_existing_sibling_at_depth3_deepen() {
+    // The decisive layer-2 case (the #162 reopening realized, daemon-side). At >684
+    // leaves the daemon cadence (propagate only UPDATED chunks) creates the first
+    // intermediate Selene root from ONLY the deepening Helios child (chunk 1); the
+    // pre-existing Helios chunk 0 (the first 684 leaves) is never in `updated`, is
+    // never read back, and is never inserted at pos 0. So the leaf + Helios layers
+    // telescope correctly, but the layer-2 root drops G_0 — the consensus bug lives
+    // in grow_curve_tree's deepening propagation (db_lmdb.cpp:6594-6719), NOT in
+    // build_layers (the narrow reference: hash_grow over BOTH children, no padding).
+    // The first depth-3 size (outputs_per_node(1) + 1 = 685, the leaf that forces the
+    // layer-2 Selene root) plus two arbitrary deeper depth-3 samples.
+    let first_depth3 = outputs_per_node(1) + 1;
+    for &n in &[first_depth3, 701, 800] {
+        let seed = 30_000 + n as u64;
+        let batch = build_layers(&{
+            let mut rng = seeded(seed);
+            rand_leaves(&mut rng, n)
+        });
+        let incr = daemon_layers(n, seed);
+        assert_eq!(batch.len(), 3, "n={n} must be depth-3 (3 layers)");
+        assert_eq!(incr.len(), batch.len(), "layer count matches at n={n}");
+        // Leaf (0) and Helios (1) layers telescope correctly on both sides.
+        assert_eq!(incr[0], batch[0], "leaf layer matches at n={n}");
+        assert_eq!(incr[1], batch[1], "Helios layer matches at n={n}");
+        // The intermediate Selene root (layer 2) diverges.
+        assert_ne!(
+            incr[2], batch[2],
+            "layer-2 Selene root UNEXPECTEDLY matched at n={n} — re-examine the deepen finding"
+        );
+        // Pin the exact omission: the narrow root is hash_grow over BOTH Helios
+        // children; the daemon's is hash_grow over ONLY the 2nd child (pos 1), so
+        // G_0 (the first 684 leaves' Helios subtree) is dropped.
+        let h0 = helios_point_to_selene_scalar(&batch[1][0]).expect("conv h0");
+        let h1 = helios_point_to_selene_scalar(&batch[1][1]).expect("conv h1");
+        let narrow_both = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &[h0, h1]).unwrap();
+        let only_second = hash_grow_selene(&selene_hash_init(), 1, &ZERO, &[h1]).unwrap();
+        assert_eq!(
+            batch[2][0], narrow_both,
+            "build_layers root = narrow hash over BOTH children (n={n})"
+        );
+        assert_eq!(
+            incr[2][0], only_second,
+            "daemon root = narrow hash over ONLY the 2nd child — G_0 dropped (n={n})"
+        );
+    }
 }
