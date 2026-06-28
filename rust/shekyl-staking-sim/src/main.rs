@@ -905,38 +905,30 @@ fn print_clustering_report() {
     };
     let report = clustering::run_clustering_report();
     eprintln!(
-        "shekyl-staking-sim — TM-1 / A0 cross-persona clustering: dispersive-default viability (C-5)"
+        "shekyl-staking-sim — TM-1 / A0 shard-portfolio linkage across SEQUENTIAL persona rotation"
     );
-    eprintln!("The dispersive-default haircut IS the local steepness of the scarcity value-curve. win=disperse");
-    eprintln!(
-        "  window: 0 = CROSS-TIER (spread over the whole value list — charges the intrinsic g(age)"
-    );
-    eprintln!("  age-premium AND abandons the scarce deep top; the kept anti-virtuous baseline); 3 = IN-TIER");
-    eprintln!("  (stay where an independent deep-concentrated operator sits, spread only WHICH deep shards —");
-    eprintln!("  isolates the flattenable 1/R component). haircut=value fraction given up; steep=top-decile/mean;");
-    eprintln!("  coloc=1−intra/baseline persona-centroid spread (0=unclusterable on co-location);");
-    eprintln!("  overlap=mean exact sibling overlap (≈0 ⇒ overlap is NOT the signal). MECHANISM: if dispersion");
-    eprintln!("  abandons the deep top, dR FALLS / dVal RISES with α. ROOM (in-tier feasibility): redun=mean");
-    eprintln!("  deep R = slack to rearrange; →1 ⇒ no room regardless of α (the honest-degradation threshold).");
+    eprintln!("The dispersive-default haircut IS the local steepness of the scarcity value-curve: the value a");
+    eprintln!("  fresh persona gives up to pick a set DISJOINT from the retired one rather than re-take the top");
+    eprintln!("  block. win=disperse window: 0 = CROSS-TIER (spread over the whole value list — charges the");
+    eprintln!("  intrinsic g(age) age-premium AND abandons the scarce deep top; the anti-virtuous baseline);");
+    eprintln!("  3 = IN-TIER (stay where an independent deep-concentrated operator sits, spread only WHICH deep");
+    eprintln!("  shards — isolates the flattenable 1/R). haircut=value fraction given up; steep=top-decile/mean.");
+    eprintln!("  MECHANISM: if cross-tier dispersion abandons the deep top, dR FALLS / dVal RISES with α. ROOM");
+    eprintln!("  (in-tier feasibility): redun=mean deep R = slack; →1 ⇒ no room regardless of α (honest-degrade).");
     eprintln!();
     eprintln!(
-        "{:>7} {:>4} {:>5} {:>5} | {:>3} {:>5} | {:>7} {:>6} | {:>6} {:>7} | {:>5} {:>5} {:>6} {:>5} | {:>6}",
-        "regime", "win", "alpha", "phi", "k", "equal", "haircut", "steep", "coloc", "overlap", "dSrv",
-        "dR", "dVal", "dHF", "redun",
+        "{:>7} {:>4} {:>5} {:>5} | {:>7} {:>6} | {:>5} {:>5} {:>6} {:>5} | {:>6}",
+        "regime", "win", "alpha", "phi", "haircut", "steep", "dSrv", "dR", "dVal", "dHF", "redun",
     );
     for p in &report.points {
         eprintln!(
-            "{:>7} {:>4} {:>5.2} {:>5.2} | {:>3} {:>5} | {:>7.3} {:>6.2} | {:>6.3} {:>7.3} | {:>5.2} {:>5.2} {:>6.3} {:>5.2} | {:>6.2}",
+            "{:>7} {:>4} {:>5.2} {:>5.2} | {:>7.3} {:>6.2} | {:>5.2} {:>5.2} {:>6.3} {:>5.2} | {:>6.2}",
             regime(p.regime),
             p.spread_window_mult,
             p.alpha,
             p.phi,
-            p.split_k,
-            p.split_equal,
             p.haircut,
             p.curve_steepness,
-            p.colocation_signal,
-            p.exact_overlap,
             p.deep_served_frac,
             p.deep_mean_r,
             p.deep_mean_value,
@@ -945,9 +937,7 @@ fn print_clustering_report() {
         );
     }
     eprintln!();
-    eprintln!(
-        "COMPARISON (α=1, φ=0, k=2) — cross-tier (anti-virtuous baseline) vs in-tier (faithful):"
-    );
+    eprintln!("COMPARISON (α=1, φ=0) — cross-tier (anti-virtuous baseline) vs in-tier (faithful):");
     eprintln!(
         "  lean:   cross-tier haircut {:.3}  →  in-tier {:.3}   (deep redundancy {:.2} — room to disperse)",
         report.lean_haircut_a1_crosstier, report.lean_haircut_a1_intier, report.lean_room_redundancy,
@@ -964,11 +954,9 @@ fn print_clustering_report() {
         },
     );
     eprintln!(
-        "  AIMING READ: point the matcher at the regime where in-tier drives the haircut toward 0 (portfolios"
+        "  Residual after dispersion is the TEMPORAL intersection (clustering the succession over a lifetime)"
     );
-    eprintln!(
-        "  decorrelated) — that is where 'does the PARTITION still leak despite decorrelation?' is the real test."
-    );
+    eprintln!("  = T-A1 / TM-2, already instrumented in fingerprint.rs — not a new problem.");
     match report.lean_flip_phi {
         Some(phi) => eprintln!(
             "Per-shard-cost SENSITIVITY (in-tier lean): haircut crosses the floor threshold at φ = {phi:.2}."
@@ -981,127 +969,6 @@ fn print_clustering_report() {
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing clustering report: {e}"),
-    }
-}
-
-fn print_matcher_report() {
-    let report = clustering::run_matcher_report();
-    eprintln!(
-        "shekyl-staking-sim — TM-1 / A0 sibling-clustering MATCHER (C0 chain observer, lean attractor,"
-    );
-    eprintln!(
-        "  α=1, in-tier/decorrelated portfolios). Pairwise 'same operator?' discrimination AUC:"
-    );
-    eprintln!("  0.5 = indistinguishable from independent operators; →1 = siblings trivially regroupable.");
-    eprintln!("  null = AUC under SHUFFLED operator labels (must be ≈0.5 — the measured baseline, not assumed).");
-    eprintln!("  Read AUCs AGAINST null, not 0.5. ABLATION: portf = which-shards features only; part = split");
-    eprintln!(
-        "  (size+onset) features only; full = both; Δ = full−portf (how much the PARTITION adds)."
-    );
-    eprintln!("  HETEROGENEITY: if part AUC stays high across varied/stagger/hetK ⇒ STRUCTURAL leak (disclose);");
-    eprintln!("  if heterogeneity collapses it toward null ⇒ BLUR-ABLE (mitigation: heterogeneous staggered splits).");
-    eprintln!();
-    eprintln!("  DECOMPOSITION: size = equal-split size-similarity (killed by VARIED splits); onset = co-timing");
-    eprintln!("  (killed by STAGGER — but partly a modelling choice). size near null + onset high ⇒ onset-driven");
-    eprintln!("  (behavioural, blur-able); size high ⇒ intrinsic to equal splitting (structural).");
-    eprintln!();
-    eprintln!(
-        "{:>30} | {:>6} | {:>6} {:>6} {:>6} | {:>6} {:>6} | {:>6}",
-        "scenario", "portf", "part", "size", "onset", "full", "null", "Δpart",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "{:>30} | {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} | {:>6.3}",
-            r.label,
-            r.auc_portfolio,
-            r.auc_partition,
-            r.auc_size,
-            r.auc_onset,
-            r.auc_full,
-            r.auc_null,
-            r.ablation_delta,
-        );
-    }
-    eprintln!();
-    let regular = report.rows.first();
-    let blurred = report
-        .rows
-        .iter()
-        .find(|r| r.label.contains("varied+stagger+hetK"));
-    if let (Some(reg), Some(blur)) = (regular, blurred) {
-        eprintln!(
-            "READ: regular split — portfolio AUC {:.3} (vs null {:.3}), partition AUC {:.3}, full {:.3}.",
-            reg.auc_portfolio, reg.auc_null, reg.auc_partition, reg.auc_full,
-        );
-        eprintln!(
-            "  ablation Δ(partition adds) = {:.3}: {}",
-            reg.ablation_delta,
-            if reg.ablation_delta > 0.10 && reg.auc_portfolio < reg.auc_null + 0.10 {
-                "the PARTITION is the signal, shards near null — dispersing shards is the easy half."
-            } else if reg.auc_portfolio > reg.auc_null + 0.15 {
-                "the SHARDS still leak (in-tier did not fully decorrelate) — it is BOTH."
-            } else {
-                "mixed — see the numbers."
-            },
-        );
-        eprintln!(
-            "  heterogeneity: full AUC regular {:.3} → varied+stagger+hetK {:.3} ({}).",
-            reg.auc_full,
-            blur.auc_full,
-            if blur.auc_full < reg.auc_null + 0.10 {
-                "collapses toward null ⇒ BLUR-ABLE: heterogeneous staggered splits are a real mitigation"
-            } else {
-                "stays above null ⇒ STRUCTURAL: the partition leak is not fixed by heterogeneity — DISCLOSE"
-            },
-        );
-    }
-    // Check B — full-range onset stagger: is the onset sub-channel a user-lever?
-    if let Some(full_stag) = report.rows.iter().find(|r| r.label.contains("FULL-range")) {
-        eprintln!(
-            "CHECK B (full-range onset stagger): onset AUC {:.3} (vs null {:.3}) — {}",
-            full_stag.auc_onset,
-            full_stag.auc_null,
-            if full_stag.auc_onset < full_stag.auc_null + 0.10 {
-                "collapses to null ⇒ onset is a USER-CONTROLLABLE lever (stagger by default); only cardinality remains."
-            } else {
-                "stays up ⇒ onset is a SECOND irreducible channel, not just a co-timing artifact."
-            },
-        );
-    }
-    // Check A — does the size-AUC re-inflation track the K-mix (mechanism not seed)?
-    eprintln!(
-        "CHECK A (heterogeneous-K mechanism): size-AUC vs high-K fraction, across {} seeds —",
-        report
-            .hetk_mechanism
-            .first()
-            .map(|p| p.n_seeds)
-            .unwrap_or(0)
-    );
-    eprintln!("  mechanism predicts size-AUC FALLS as high-K fraction rises (less K=1 background to stand out against):");
-    eprintln!("  {:>10} | {:>10} {:>8}", "highK_frac", "size_AUC", "±std");
-    for p in &report.hetk_mechanism {
-        eprintln!(
-            "  {:>10.2} | {:>10.3} {:>8.3}",
-            p.high_k_fraction, p.mean_size_auc, p.std_size_auc
-        );
-    }
-    if let (Some(lo), Some(hi)) = (report.hetk_mechanism.first(), report.hetk_mechanism.last()) {
-        eprintln!(
-            "  trend: size-AUC {:.3} @ frac {:.2} → {:.3} @ frac {:.2} ({}).",
-            lo.mean_size_auc,
-            lo.high_k_fraction,
-            hi.mean_size_auc,
-            hi.high_k_fraction,
-            if lo.mean_size_auc > hi.mean_size_auc + 0.05 {
-                "TRACKS — mechanism confirmed, the structural cardinality claim is bulletproof"
-            } else {
-                "does NOT track — re-inflation may be seed-soft; 'structural' weakens to 'under uniform K'"
-            },
-        );
-    }
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing matcher report: {e}"),
     }
 }
 
@@ -1285,11 +1152,6 @@ fn main() {
 
     if std::env::args().any(|a| a == "--clustering") {
         print_clustering_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--matcher") {
-        print_matcher_report();
         return;
     }
 
