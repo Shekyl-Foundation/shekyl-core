@@ -30,6 +30,8 @@
 //! bundled-Tor harness; this crate is buildable and testable without a running Tor
 //! — constructing a [`PTorClient`] configures the SOCKS proxy but does not dial.
 
+use std::net::{Ipv4Addr, SocketAddr};
+
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
@@ -55,7 +57,7 @@ const SOCKS_PASSWORD: &str = "shekyl-p";
 /// 32-byte hybrid-bond identity), never free-form: the engine wraps the id it
 /// derived from real persona keys (`persona_canonical_id`). It is deliberately not
 /// constructible from arbitrary strings a caller picked at the call site.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PCircuitTag([u8; 32]);
 
 impl PCircuitTag {
@@ -68,6 +70,16 @@ impl PCircuitTag {
     /// The wrapped canonical id.
     pub fn canonical_id(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+// Truncated `Debug` (first two bytes), mirroring `SpendPublicKey` in
+// `shekyl-crypto-pq`: `p_canonical_id` is public on chain, but the full id in a
+// local log or panic backtrace is a correlation artifact — 16 bits disambiguates
+// for debugging without reproducing the whole identifier in unsanitised streams.
+impl core::fmt::Debug for PCircuitTag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "PCircuitTag({:02x}{:02x}..)", self.0[0], self.0[1])
     }
 }
 
@@ -124,41 +136,50 @@ pub fn derive_socks_user(tag: &PCircuitTag) -> SocksUsername {
 
 /// The bundled Tor's SOCKS endpoint (SP-T0 owns the running instance; this is the
 /// address a [`PTorClient`] dials through).
-#[derive(Clone, Debug)]
+///
+/// A [`SocketAddr`], not a `host: String` — Tor's SOCKS port is always an IP:port,
+/// and a `SocketAddr` both renders IPv6 correctly (bracketed, `[::1]:9050`) in the
+/// proxy URI and makes a URL-injecting "host" string unrepresentable.
+#[derive(Clone, Copy, Debug)]
 pub struct TorSocksEndpoint {
-    host: String,
-    port: u16,
+    addr: SocketAddr,
 }
 
 impl TorSocksEndpoint {
     /// A loopback SOCKS endpoint — the normal case (the wallet's own Tor).
     pub fn loopback(port: u16) -> Self {
         Self {
-            host: "127.0.0.1".to_string(),
-            port,
+            addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
         }
     }
 
-    /// An explicit `host:port` (for a non-loopback test harness).
-    pub fn new(host: impl Into<String>, port: u16) -> Self {
-        Self {
-            host: host.into(),
-            port,
-        }
+    /// An explicit SOCKS address (for a non-loopback test harness).
+    pub fn new(addr: SocketAddr) -> Self {
+        Self { addr }
+    }
+
+    /// The socket address.
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
     }
 }
 
 /// Failure constructing a [`PTorClient`].
 #[derive(Debug)]
 pub enum PTransportError {
-    /// The SOCKS proxy could not be configured (malformed endpoint).
-    Proxy(String),
+    /// The SOCKS proxy could not be configured for this endpoint. Carries the
+    /// endpoint, **not** the proxy URI — the URI embeds the per-`P` username, and
+    /// invariant (a) is that the username never reaches a log, including via an
+    /// error message.
+    Proxy { endpoint: SocketAddr },
 }
 
 impl core::fmt::Display for PTransportError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Proxy(detail) => write!(f, "per-P SOCKS proxy configuration failed: {detail}"),
+            Self::Proxy { endpoint } => {
+                write!(f, "per-P SOCKS proxy configuration failed for {endpoint}")
+            }
         }
     }
 }
@@ -188,15 +209,18 @@ impl PTorClient {
         socks: &TorSocksEndpoint,
     ) -> Result<Self, PTransportError> {
         let username = derive_socks_user(tag);
+        // `SocketAddr`'s Display brackets IPv6 (`[::1]:9050`), so the URI is always
+        // well-formed. The ureq error is deliberately discarded: it would echo the
+        // proxy URI, which embeds the username (invariant (a)).
         let proxy_uri = format!(
-            "socks5://{}:{}@{}:{}",
+            "socks5://{}:{}@{}",
             username.as_str(),
             SOCKS_PASSWORD,
-            socks.host,
-            socks.port
+            socks.addr
         );
-        let proxy =
-            ureq::Proxy::new(&proxy_uri).map_err(|e| PTransportError::Proxy(e.to_string()))?;
+        let proxy = ureq::Proxy::new(&proxy_uri).map_err(|_| PTransportError::Proxy {
+            endpoint: socks.addr,
+        })?;
         let agent = ureq::Agent::config_builder()
             .proxy(Some(proxy))
             .build()
@@ -289,5 +313,35 @@ mod tests {
         let client = PTorClient::for_persona(&t, &TorSocksEndpoint::loopback(9050))
             .expect("proxy config is well-formed");
         assert_eq!(client.username(), &derive_socks_user(&t));
+    }
+
+    #[test]
+    fn for_persona_accepts_ipv6_endpoint() {
+        // Regression: a `SocketAddr` brackets IPv6 in the URI, so an IPv6 SOCKS
+        // endpoint no longer fails proxy parsing.
+        let addr: SocketAddr = "[::1]:9050".parse().expect("valid v6 socket addr");
+        let client = PTorClient::for_persona(&tag(3), &TorSocksEndpoint::new(addr))
+            .expect("ipv6 proxy config is well-formed");
+        assert_eq!(client.username().as_str().len(), 64);
+    }
+
+    #[test]
+    fn pcircuittag_debug_is_truncated() {
+        // The full canonical id must not appear in a `Debug` rendering.
+        let mut id = [0xabu8; 32];
+        id[0] = 0xde;
+        id[1] = 0xad;
+        let rendered = format!("{:?}", PCircuitTag::from_canonical_id(id));
+        assert_eq!(rendered, "PCircuitTag(dead..)");
+        assert!(!rendered.contains("abab"));
+    }
+
+    #[test]
+    fn transport_types_are_send_sync() {
+        // The scan actor holds a `PTorClient` in its state — it must be `Send + Sync`.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PTorClient>();
+        assert_send_sync::<SocksUsername>();
+        assert_send_sync::<PCircuitTag>();
     }
 }
