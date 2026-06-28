@@ -641,7 +641,9 @@ sustainability is unaffected by the recalibration.
   (`== build_layers`); validated end-to-end against a locally-built daemon. The
   consensus cutover is documented in
   [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md)
-  and the binding decision in `V3_WALLET_DECISION_LOG.md` (2026-06-27). The
+  and the binding decision in `V3_WALLET_DECISION_LOG.md` (2026-06-27). This was the
+  **last open CT-5 validation gate** — the CT-5 series is now closed; see
+  [`docs/completed/CT5_SERIES_CLOSEOUT.md`](completed/CT5_SERIES_CLOSEOUT.md). The
   diagnosis below is retained for the record.
   **⚠ TRIGGER FIRED — REOPENED 2026-06-27 (Track-2 depth-3 regtest).** The depth-3
   regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
