@@ -404,6 +404,14 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
   exit-IP (unsound here — §15) — "verify at source," applied to the circuit itself.
 - **Build order:** SP-T0 ∥ SP-T1 → SP-T2 → SP-T3 ∥ SP-T4 → **SP-R0 (after SP-6)**. SP-T5
   (comment fix) any time.
+- **SP-T1 splits — sequence so the measured half doesn't stall.** The *type half* (`SocksUsername`
+  newtype, `PTorClient::for_persona`, the no-principal-path / no-`Default` enforcement — where the
+  CX-1/CX-2 closures become *code*) is buildable **now**, no Tor needed: it is what makes sharing a
+  circuit unrepresentable at compile time. The *measured half* (the control-port circuit-ID test) is
+  the entire reason SP-T1 is the keystone — *"design → measured property"* — and it needs SP-T0's
+  running Tor (SOCKS + control port). So build the type half immediately **and stand up SP-T0's
+  Tor-with-control-port harness alongside** (even a minimal test instance), rather than treating
+  SP-T0 as strictly downstream — or the keystone's load-bearing half waits on an unstarted SP-T0.
 - **Parallelism:** SP-T0 and SP-T1 co-develop (T1's test needs T0's SOCKS port; the client *shape*
   designs against a fixture). SP-T3 (inbound serving) is independent of SP-T2 (outbound fetch) once
   SP-T0 exists. SP-R0 is the only gated item.
