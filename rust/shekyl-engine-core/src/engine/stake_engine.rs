@@ -104,11 +104,12 @@ use kameo::message::{Context, Message};
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_archival_retention::{HoldingsDescriptor, MAX_CLAIM_AGE_W};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
+use shekyl_types::SettlementEpoch;
 
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
@@ -242,6 +243,78 @@ struct EphemeralPersona(ArchivalPKeys);
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 fn wipe_ephemeral(persona: EphemeralPersona) {
     drop(persona);
+}
+
+/// Wipe a **retired** (terminal) bonded persona — the DQ8 exception to typed
+/// contract #4.
+///
+/// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
+/// persona, and it is reached only through the witness-gated retire handler
+/// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
+/// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
+/// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
+#[allow(dead_code)] // transient — the SP-5 retire path is the consumer.
+fn wipe_bonded(persona: BondedPersona) {
+    drop(persona);
+}
+
+/// Positive-confirmation evidence that a bonded persona is **terminal** and may
+/// leave the scan union (2d-1 DQ8).
+///
+/// Constructible only when the retirement predicate holds, so a witness *existing*
+/// is proof the persona is retire-eligible — and since the actor has no chain to
+/// re-verify against, the witness **is** the guard. Mirrors the
+/// [`PersistedBondTicket`](super::stake_persist::PersistedBondTicket) /
+/// [`PersonaHandle`] evidence-typestate pattern. The discipline is the same
+/// positive-confirmation, never-absence rule as SP-6's GC and SP-7's
+/// `AbsentVerified`: a *wrong* retire wipes a still-live persona's `bond_spend`
+/// key → can't unbond → **stuck funds**, the exact mirror of a wrongful GC, which
+/// the conservative predicate guards against.
+#[allow(dead_code)] // transient — the SP-5 scan task builds it; the retire handler consumes it.
+pub(crate) struct RetirementWitness {
+    /// The cleartext canonical id of the persona to retire (from its confirmed
+    /// `Unbond` bond-post). The actor matches it against the bonded union.
+    p_canonical_id: [u8; 32],
+}
+
+#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
+impl RetirementWitness {
+    /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
+    /// `Unbond` at `unbond_epoch` whose reward-claim window has lapsed by
+    /// `current_epoch` (`current_epoch − unbond_epoch ≥ MAX_CLAIM_AGE_W`). Returns
+    /// `None` otherwise — never retire a persona that can still claim, which would
+    /// stop scanning live reward collateral (the stuck-funds failure).
+    ///
+    /// **Finality** is guaranteed upstream, not re-checked here: the scan only
+    /// surfaces bond-posts from blocks behind the cursor's reorg horizon, so a
+    /// witnessed `Unbond` is already finality-deep. **`W`** is the consensus const
+    /// `MAX_CLAIM_AGE_W`, never a re-literal — a shorter retire-`W` than the
+    /// claim-`W` would retire personas that can still receive reward outputs.
+    pub(crate) fn from_confirmed_unbond(
+        p_canonical_id: [u8; 32],
+        unbond_epoch: SettlementEpoch,
+        current_epoch: SettlementEpoch,
+    ) -> Option<Self> {
+        let lapsed = current_epoch.to_raw().checked_sub(unbond_epoch.to_raw())?;
+        (lapsed >= MAX_CLAIM_AGE_W).then_some(Self { p_canonical_id })
+    }
+}
+
+/// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
+/// valid (no error): the retire is **idempotent** — re-handing the same witness
+/// after the persona is gone is a no-op ([`Self::NotHeld`]).
+#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RetireOutcome {
+    /// The bonded persona was found and wiped from the union.
+    Retired { slot: PSlot },
+    /// No bonded persona matched the witness — already retired this session, or
+    /// never held (idempotent no-op).
+    NotHeld,
+    /// The matching persona is the **active** slot; left in place. A terminal
+    /// persona should not be active, but if it is we do not wipe it mid-use — the
+    /// next rotation moves `active` away and the retire re-fires.
+    SkippedActive { slot: PSlot },
 }
 
 /// An operation-scoped capability to **activate** a held persona (typed
@@ -619,15 +692,55 @@ impl StakeEngine {
                 let keys = held.keys();
                 scanners
                     .push(guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?);
-                let hybrid = keys
-                    .hybrid_bond_id()
-                    .to_canonical_bytes()
-                    .map_err(ScanSetupError::CanonicalId)?;
-                known_ids.insert(p_canonical_id_from_hybrid_pubkey(&hybrid));
+                let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
+                known_ids.insert(id);
             }
         }
         Ok((scanners, known_ids))
     }
+
+    /// Retire a now-terminal bonded persona (2d-1 DQ8): wipe its key and drop it
+    /// from the scan union, identified by the witness's `p_canonical_id`.
+    ///
+    /// The witness already proves eligibility; this only *applies* it. **Idempotent
+    /// and conservative:** a persona already gone is a [`RetireOutcome::NotHeld`]
+    /// no-op, and the **active** persona is left in place ([`RetireOutcome::
+    /// SkippedActive`]) — a terminal persona should not be active, but we never wipe
+    /// the active slot mid-use. Only [`HeldPersona::Bonded`] is matched (an
+    /// ephemeral persona has no bond to be terminal).
+    fn retire_bonded(&mut self, witness: &RetirementWitness) -> RetireOutcome {
+        // Find the bonded persona whose canonical id matches the witness. A key
+        // that fails to encode is skipped (it cannot be the match); the scan that
+        // produced the witness already encoded it.
+        let slot = self.held.iter().find_map(|(slot, held)| match held {
+            HeldPersona::Bonded(_) => {
+                let id = persona_canonical_id(held.keys()).ok()?;
+                (id == witness.p_canonical_id).then_some(*slot)
+            }
+            HeldPersona::Ephemeral(_) => None,
+        });
+        let Some(slot) = slot else {
+            return RetireOutcome::NotHeld;
+        };
+        if self.active == Some(slot) {
+            return RetireOutcome::SkippedActive { slot };
+        }
+        // Remove + wipe the now-terminal bonded persona. The match re-confirms the
+        // `Bonded` variant, so `wipe_bonded` (typed contract #4's DQ8 exception) is
+        // reached only here.
+        if let Some(HeldPersona::Bonded(persona)) = self.held.remove(&slot) {
+            wipe_bonded(persona);
+        }
+        RetireOutcome::Retired { slot }
+    }
+}
+
+/// `P`'s cleartext canonical id from its keys — `cSHAKE256` over the canonical
+/// `hybrid_bond_id` bytes, the same value an on-chain bond-post carries. `Err` if
+/// the hybrid key does not canonically encode (a corrupted resident key).
+fn persona_canonical_id(keys: &ArchivalPKeys) -> Result<[u8; 32], shekyl_crypto_pq::CryptoError> {
+    let hybrid = keys.hybrid_bond_id().to_canonical_bytes()?;
+    Ok(p_canonical_id_from_hybrid_pubkey(&hybrid))
 }
 
 /// Failure surface of [`StakeEngine`]'s spawn ([`Actor::on_start`]).
@@ -1010,6 +1123,31 @@ impl Message<ScanStep> for StakeEngine {
     }
 }
 
+/// Retire a now-terminal bonded persona from the scan union (2d-1 DQ8), wiping its
+/// key. Carries the [`RetirementWitness`] — the positive-confirmation evidence
+/// that gates the wipe (the actor cannot re-verify). Sent by the SP-5 scan task
+/// when it confirms an `Unbond` + `W`-lapse + finality-deep.
+#[allow(dead_code)] // transient — the SP-5 scan task is the lib sender.
+pub(crate) struct RetireBondedPersona {
+    pub witness: RetirementWitness,
+}
+
+// The retire is infallible at the actor — all outcomes are valid and idempotent,
+// so the handler always returns `Ok`. The `Result` reply matches the other
+// handlers (and lets the handle's `ask` surface a stopped actor as
+// `StakeActorUnavailable`); the `Err` arm is only ever the actor being gone.
+impl Message<RetireBondedPersona> for StakeEngine {
+    type Reply = Result<RetireOutcome, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: RetireBondedPersona,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.retire_bonded(&msg.witness))
+    }
+}
+
 /// Adapts [`rand_core::OsRng`] to the [`GapRng`] trait for use in
 /// [`SignBond`]'s entry-gap draw.
 ///
@@ -1279,6 +1417,22 @@ impl StakeEngineHandle {
     ) -> Result<ScanStepResult, StakeEngineError> {
         self.actor
             .ask(ScanStep { range, blocks })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Retire a now-terminal bonded persona from the scan union (DQ8), wiping its
+    /// key. The `witness` proves eligibility (`Unbond` + `W`-lapse + finality-deep)
+    /// — the actor cannot re-verify, so the witness is the guard. Idempotent: a
+    /// persona already gone returns [`RetireOutcome::NotHeld`]. The SP-5 task calls
+    /// this when it confirms a persona is terminal.
+    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
+    pub(crate) async fn retire_bonded_persona(
+        &self,
+        witness: RetirementWitness,
+    ) -> Result<RetireOutcome, StakeEngineError> {
+        self.actor
+            .ask(RetireBondedPersona { witness })
             .await
             .map_err(collapse_send_error)
     }
@@ -1909,6 +2063,103 @@ mod tests {
             .expect("scan-step succeeds");
         let active = handle.active_persona().await.expect("still responsive");
         assert!(active.is_none(), "actor processed the follow-up message");
+    }
+
+    // ---- DQ8: witness-gated retirement of a terminal bonded persona ----
+
+    /// A witness exists iff the reward-claim window `W` has lapsed since the
+    /// confirmed `Unbond` — the conservative predicate that guards against
+    /// retiring a persona that can still claim (stuck funds).
+    #[test]
+    fn retirement_witness_requires_the_w_window_to_lapse() {
+        let id = canonical_id(0);
+        let unbond = SettlementEpoch::from_raw(10);
+        // One epoch short of W → ineligible.
+        assert!(
+            RetirementWitness::from_confirmed_unbond(
+                id,
+                unbond,
+                SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W - 1),
+            )
+            .is_none(),
+            "must not retire before W lapses"
+        );
+        // Exactly W later → eligible.
+        assert!(
+            RetirementWitness::from_confirmed_unbond(
+                id,
+                unbond,
+                SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W),
+            )
+            .is_some(),
+            "retire once W has lapsed"
+        );
+    }
+
+    /// The witness retires (wipes) a terminal bonded persona, and the retire is
+    /// idempotent: re-handing it after the persona is gone is a `NotHeld` no-op.
+    #[tokio::test]
+    async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
+        let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
+        let witness = RetirementWitness::from_confirmed_unbond(
+            canonical_id(0),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+        )
+        .expect("eligible");
+
+        assert_eq!(
+            handle.retire_bonded_persona(witness).await.expect("retire"),
+            RetireOutcome::Retired { slot: PSlot(0) }
+        );
+
+        // Gone now → a fresh witness for the same persona is a no-op.
+        let again = RetirementWitness::from_confirmed_unbond(
+            canonical_id(0),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+        )
+        .expect("eligible");
+        assert_eq!(
+            handle.retire_bonded_persona(again).await.expect("retire"),
+            RetireOutcome::NotHeld,
+            "retiring an already-gone persona is an idempotent no-op"
+        );
+    }
+
+    /// The active persona is never wiped mid-use — retire skips it (the next
+    /// rotation moves `active` away, then the retire re-fires).
+    #[tokio::test]
+    async fn retire_skips_the_active_persona() {
+        let handle = spawn_over(&[0], &[0], Some(0)); // persona 0 bonded AND active
+        let witness = RetirementWitness::from_confirmed_unbond(
+            canonical_id(0),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+        )
+        .expect("eligible");
+        assert_eq!(
+            handle.retire_bonded_persona(witness).await.expect("retire"),
+            RetireOutcome::SkippedActive { slot: PSlot(0) }
+        );
+    }
+
+    /// A witness for a persona we do not hold (never bonded, or another wallet's)
+    /// is a `NotHeld` no-op — the actor matches only its own bonded union.
+    #[tokio::test]
+    async fn retire_an_unheld_persona_is_notheld() {
+        let handle = spawn_over(&[0], &[0], None); // we hold persona 0
+                                                   // A witness for persona 1 (not held).
+        let witness = RetirementWitness::from_confirmed_unbond(
+            canonical_id(1),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(MAX_CLAIM_AGE_W),
+        )
+        .expect("eligible");
+        assert_eq!(
+            handle.retire_bonded_persona(witness).await.expect("retire"),
+            RetireOutcome::NotHeld
+        );
     }
 
     /// S6 — session RNG self-cert wiring (conformance build only).
