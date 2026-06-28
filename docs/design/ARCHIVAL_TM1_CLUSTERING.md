@@ -135,8 +135,8 @@ modest, bounded cost:
 
 | regime | α=1 haircut (cross-tier) | α=1 haircut (in-tier, faithful) | deep redundancy | within-tier room |
 | --- | --- | --- | --- | --- |
-| **lean attractor** | 0.569 | **0.151** | 3.52 | available |
-| **swan-2 trough** | 0.247 | 0.104 | 1.05 | **runs out** |
+| **lean attractor** | 0.567 | **0.156** | 3.55 | available |
+| **swan-2 trough** | 0.239 | 0.108 | 1.02 | **runs out** |
 
 Two results, both load-bearing for the disclosure:
 
@@ -152,7 +152,7 @@ Two results, both load-bearing for the disclosure:
   predict the failure). When redundancy → 1 (the trough, the small-network case),
   there is no slack to rotate a persona onto a fresh deep shard without a reward
   hit, so **within-tier dispersion runs out regardless of α**. The trough's *low*
-  in-tier haircut (0.104) is "nothing moved," not decorrelation.
+  in-tier haircut (0.108) is "nothing moved," not decorrelation.
 
 So the shard-channel disposition is a **loud default with a disclosed network-size
 limit**: disperse where redundancy > 1; below it, tell the user decorrelation is
@@ -184,11 +184,11 @@ two sub-channels with *different* mitigations:
 | scenario | portf | partition | **size** | **onset** | full | null |
 | --- | --- | --- | --- | --- | --- | --- |
 | regular (equal, co-onset, uniform-K) | 0.567 | 0.969 | 0.759 | 0.990 | 0.842 | 0.488 |
-| varied size (uniform-K) | 0.558 | 0.823 | **0.535** | 0.991 | 0.746 | 0.485 |
+| varied size (uniform-K) | 0.564 | 0.845 | **0.586** | 0.991 | 0.747 | 0.496 |
 | staggered onset (w=96) | 0.572 | 0.905 | 0.794 | 0.788 | 0.812 | 0.515 |
 | **full-range stagger (w=240)** | 0.527 | 0.814 | 0.792 | **0.612** | 0.727 | 0.512 |
-| heterogeneous K | 0.575 | 0.998 | **0.896** | 0.991 | 0.853 | 0.498 |
-| varied+stagger+hetK (full blur) | 0.574 | 0.909 | 0.811 | 0.802 | 0.793 | 0.506 |
+| heterogeneous K | 0.650 | 0.997 | **0.898** | 0.991 | 0.880 | 0.507 |
+| varied+stagger+hetK (full blur) | 0.559 | 0.917 | 0.845 | 0.802 | 0.786 | 0.516 |
 
 - **Onset (co-timing) is a user-controllable lever.** It is dominant (0.990) but
   partly a modelling choice (siblings made near-perfectly co-onset). **Check B**
@@ -197,19 +197,19 @@ two sub-channels with *different* mitigations:
   (+0.10) survives wallet-local staggering; full elimination needs a population-wide
   origin, not the operator's own base height.
 - **Size (cardinality) is the structural irreducible core.** It is killed *only* by
-  varied sizes *under uniform K* (0.535) — but real populations have heterogeneous K
+  varied sizes *under uniform K* (0.586) — but real populations have heterogeneous K
   (some operators run 1 persona, some run 5), and **Check A** confirms heterogeneous
-  K *re-inflates* it to 0.896 and that this **tracks the mechanism across seeds**:
+  K *re-inflates* it to 0.898 and that this **tracks the mechanism across seeds**:
 
   | high-K fraction | 0.10 | 0.20 | 0.35 | 0.50 | 0.75 |
   | --- | --- | --- | --- | --- | --- |
-  | size-AUC (6 seeds) | 0.898 | 0.912 | 0.861 | 0.833 | 0.781 |
-  | ±std | 0.013 | 0.009 | 0.007 | 0.006 | 0.003 |
+  | size-AUC (6 seeds) | 0.903 | 0.893 | 0.853 | 0.822 | 0.773 |
+  | ±std | 0.007 | 0.006 | 0.004 | 0.010 | 0.005 |
 
   Size-AUC **falls as the high-K fraction rises** — exactly the predicted mechanism
   (more K=1 background → a K=5 operator's equal-small siblings are *more* distinctive,
   not less) — with tiny seed variance (not an artifact), and it **never approaches
-  null** (0.78–0.91 across the entire K-mix). The cardinality of a simultaneous-
+  null** (0.77–0.90 across the entire K-mix). The cardinality of a simultaneous-
   persona split is a structural C0 observable that behavioral heterogeneity does not
   mask.
 
@@ -230,7 +230,7 @@ Every correlate shared across an operator's personas, each given exactly one of
 | **Key independence** | crypto | **Enforced invariant** (closed) | Per-persona keys are HKDF-PRF-independent (`shekyl-archival-retention/src/archival_p.rs`); not an attack surface. |
 | **Shard portfolio** (which shards) | C-2/C-5 shard channel | **Loud default** (dispersive default) **+ disclosed network-size limit** | §4: in-tier dispersion drives portfolio AUC to ≈ null at ~0.15 haircut where deep redundancy > 1; below redundancy 1 it is unavailable (disclose). |
 | **Persona onset** (co-timing of siblings) | partition sub-channel | **Loud default** (stagger onset by default) | §5 Check B: full-range stagger drops onset AUC 0.99 → 0.61; jitter it the way the standoff jitters entry timing. |
-| **Split cardinality** (how many siblings) | partition sub-channel | **Disclosed cost** + **named open problem (2d-2)** | §5 Check A: structural across the K-mix (0.78–0.91), not blur-able; no behavioral lever. §8. |
+| **Split cardinality** (how many siblings) | partition sub-channel | **Disclosed cost** + **named open problem (2d-2)** | §5 Check A: structural across the K-mix (0.77–0.90), not blur-able; no behavioral lever. §8. |
 | **Funding source / cadence** | C-3 | **Routed to TM-2** | Funding-event independence over time; TM-2's territory (`ARCHIVAL_FIREWALL_THREATS.md` A1/TM-2). |
 | **Claim rhythm / temporal exclusivity** | C-4 | **Routed to TM-4** | Earnings-scale fingerprint; TM-4 (`ARCHIVAL_FIREWALL_THREATS.md` A3/TM-4). |
 | **`W`-tail retirement shape** | C-1 | **Enforced invariant** (anchor-free sliding cutover) + secondary | DQ8's terminal predicate; the residual post-DQ8 claim tail is closed by the anchor-free sliding-cutover retirement shape. Contributing, not binding (the matcher shows cardinality/onset dominate). |
@@ -286,7 +286,7 @@ with different tractability:
 
 This is the difference between handing 2d-2 a cadence problem it can already solve
 and a structural problem that needs new mechanism. The cardinality question is the
-latter, and it is now scoped with a number behind it (AUC 0.78–0.91 at the null).
+latter, and it is now scoped with a number behind it (AUC 0.77–0.90 at the null).
 
 ---
 

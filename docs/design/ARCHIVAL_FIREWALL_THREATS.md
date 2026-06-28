@@ -142,12 +142,12 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   signal; the split partition is.** The partition splits into **onset co-timing**
   (a user-controllable lever — full-range stagger drops it 0.99 → 0.61, route to
   2d-2 cadence) and **split cardinality** (the number of simultaneous siblings — a
-  *structural* C0 observable, 0.78–0.91 across the K-mix, mechanism-confirmed across
+  *structural* C0 observable, 0.77–0.90 across the K-mix, mechanism-confirmed across
   seeds, **not** blur-able by heterogeneity). The shard channel is decorrelated by a
   wallet dispersive default at a ~0.15 haircut where deep-tier redundancy > 1
   (unavailable below it — the swan-2 trough — disclosed loudly). So A1–A5 should be
   evaluated against `P`'s aggregate footprint **only via the partition** (cardinality
-  + co-timing), not via shard-set overlap, which dispersion removes. The residual
+  and co-timing), not via shard-set overlap, which dispersion removes. The residual
   structural problem — masking split cardinality — is handed to **2d-2** (§8 rec 1).
 
 ### A1 — Intersection / co-occurrence across windows — **UNADDRESSED**
