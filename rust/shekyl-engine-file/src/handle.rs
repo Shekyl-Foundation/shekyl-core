@@ -58,9 +58,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::{
-    derive_wrap_key_region_2, open_keys_file, open_state_file, rewrap_keys_file_password,
-    seal_keys_file, seal_state_file, seal_state_file_with_wrap_key_region_2, CapabilityContent,
-    KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
+    derive_wrap_key_region_2, open_keys_file, open_state_file,
+    open_state_file_with_wrap_key_region_2, rewrap_keys_file_password, seal_keys_file,
+    seal_state_file, seal_state_file_with_wrap_key_region_2, CapabilityContent, KdfParams,
+    OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
 use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
 use shekyl_engine_prefs::{
@@ -76,7 +77,7 @@ use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
 use crate::overrides::SafetyOverrides;
-use crate::paths::{keys_path_from, state_path_from};
+use crate::paths::{keys_path_from, pscan_state_path_from, state_path_from};
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
 
 /// Outcome of a successful [`WalletFile::open`]. The happy path
@@ -209,6 +210,11 @@ struct WalletFileState {
 pub struct WalletFile {
     keys_path: PathBuf,
     state_path: PathBuf,
+    /// The `P`-isolated archival-scan state path (`.wallet.pscan`, 2d-1 SP-5) —
+    /// a sibling of `state_path`, sealed under the same region-2 envelope but a
+    /// structurally separate file (the firewall keeps `P`'s scan state out of the
+    /// principal ledger).
+    pscan_path: PathBuf,
     state: Mutex<WalletFileState>,
     opened_keys: Zeroizing<OpenedKeysFileOwned>,
     /// Decoded once at open/create time so the public `network()` and
@@ -240,6 +246,7 @@ impl std::fmt::Debug for WalletFile {
         f.debug_struct("WalletFile")
             .field("keys_path", &self.keys_path)
             .field("state_path", &self.state_path)
+            .field("pscan_path", &self.pscan_path)
             .field("state", &"<redacted>")
             .field("opened_keys", &"<redacted>")
             .field("network", &self.network)
@@ -296,6 +303,7 @@ impl WalletFile {
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
         let keys_path = keys_path_from(params.base_path);
         let state_path = state_path_from(params.base_path);
+        let pscan_path = pscan_state_path_from(params.base_path);
 
         if keys_path.exists() {
             return Err(WalletFileError::KeysFileAlreadyExists {
@@ -347,6 +355,7 @@ impl WalletFile {
         Ok(Self {
             keys_path,
             state_path,
+            pscan_path,
             state: Mutex::new(WalletFileState {
                 keys_file_bytes: keys_bytes,
             }),
@@ -408,6 +417,7 @@ impl WalletFile {
     ) -> Result<(Self, OpenOutcome), WalletFileError> {
         let keys_path = keys_path_from(base_path);
         let state_path = state_path_from(base_path);
+        let pscan_path = pscan_state_path_from(base_path);
 
         let lock = KeysFileLock::acquire(&keys_path)?;
 
@@ -478,6 +488,7 @@ impl WalletFile {
         let handle = Self {
             keys_path,
             state_path,
+            pscan_path,
             state: Mutex::new(WalletFileState {
                 keys_file_bytes: keys_bytes,
             }),
@@ -518,6 +529,77 @@ impl WalletFile {
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
         atomic_write_file(&self.state_path, &state_bytes)?;
         Ok(())
+    }
+
+    /// Seal and atomically write `P`'s scan state to the `P`-isolated
+    /// `.wallet.pscan` file (2d-1 SP-5).
+    ///
+    /// Reuses [`Self::save_state`]'s region-2 envelope and session-cached
+    /// `wrap_key_region_2`, but a **distinct** [`PayloadKind::PScanStatePostcard`]
+    /// — so a swapped `.wallet` / `.wallet.pscan` is a loud refusal on load, not a
+    /// postcard decode at a random offset. `body` is the postcard-encoded
+    /// `PScanState` (the engine layer owns its serialization, mirroring how
+    /// `save_state` takes an already-postcard-able `WalletLedger`). Crash-atomic
+    /// via [`atomic_write_file`]; this is the write half of the SP-2 discipline.
+    pub fn save_pscan_state(
+        &self,
+        wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+        body: &[u8],
+    ) -> Result<(), WalletFileError> {
+        let framed = encode_payload(PayloadKind::PScanStatePostcard, body)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let sealed =
+            seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
+        atomic_write_file(&self.pscan_path, &sealed)?;
+        Ok(())
+    }
+
+    /// Load `P`'s scan state from `.wallet.pscan` using the session-cached
+    /// `wrap_key_region_2` (no password needed at runtime).
+    ///
+    /// Returns `Ok(None)` when the file does not exist yet — a wallet that has
+    /// never scanned as `P` — so the caller can start from
+    /// `PScanState::genesis()`. `Ok(Some(body))` is the postcard-encoded
+    /// `PScanState` for the engine layer to decode. Refuses a wrong payload kind
+    /// ([`WalletFileError::UnexpectedPayloadKind`]) — the swap-detection guard.
+    pub fn open_pscan_state(
+        &self,
+        wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+    ) -> Result<Option<Vec<u8>>, WalletFileError> {
+        let file_bytes = match std::fs::read(&self.pscan_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(WalletFileError::Io(e)),
+        };
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let framed = open_state_file_with_wrap_key_region_2(
+            wrap_key_region_2,
+            &keys_file_bytes,
+            &file_bytes,
+        )?;
+        let decoded = decode_payload(&framed)?;
+        if decoded.payload_kind != PayloadKind::PScanStatePostcard {
+            return Err(WalletFileError::UnexpectedPayloadKind {
+                expected: PayloadKind::PScanStatePostcard as u8,
+                got: decoded.payload_kind as u8,
+            });
+        }
+        Ok(Some(decoded.body.to_vec()))
+    }
+
+    /// The `.wallet.pscan` (`P`-isolated scan state) path.
+    pub fn pscan_path(&self) -> &Path {
+        &self.pscan_path
     }
 
     /// Rotate the wallet password. Rewrites `.wallet.keys` with a
@@ -1084,6 +1166,77 @@ mod tests {
             WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
         let ledger_back = outcome.into_ledger();
         assert_eq!(ledger_back.format_version, ledger.format_version);
+    }
+
+    #[test]
+    fn pscan_state_seals_and_opens_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        let handle = {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+        let wk = *handle.session_wrap_key_region_2();
+
+        // A wallet that never scanned as P ⇒ no .wallet.pscan ⇒ None, not error.
+        assert!(
+            handle
+                .open_pscan_state(&wk)
+                .expect("open absent pscan")
+                .is_none(),
+            "absent .wallet.pscan must be None"
+        );
+
+        // Seal an opaque P-state body (the engine owns postcard); read it back.
+        let body = b"opaque-postcard-pscan-state".to_vec();
+        handle.save_pscan_state(&wk, &body).expect("save pscan");
+        let back = handle
+            .open_pscan_state(&wk)
+            .expect("open pscan")
+            .expect("present");
+        assert_eq!(back, body, ".wallet.pscan round-trips the sealed body");
+
+        // It is a distinct sibling file, not the principal state file.
+        assert_eq!(handle.pscan_path(), pscan_state_path_from(&base));
+        assert_ne!(handle.pscan_path(), handle.state_path());
+        assert!(handle.pscan_path().exists());
+    }
+
+    #[test]
+    fn pscan_loader_refuses_a_swapped_principal_state_file() {
+        // A `.wallet` (kind 0x01) dropped into the `.wallet.pscan` slot decrypts
+        // under the same region-2 key but must be refused on the kind byte — the
+        // swap-detection guard.
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        let handle = {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+        let wk = *handle.session_wrap_key_region_2();
+        std::fs::copy(handle.state_path(), handle.pscan_path()).expect("copy principal → pscan");
+
+        let err = handle
+            .open_pscan_state(&wk)
+            .expect_err("a swapped principal state file must be refused");
+        assert!(
+            matches!(
+                err,
+                WalletFileError::UnexpectedPayloadKind {
+                    expected: 0x02,
+                    got: 0x01
+                }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]

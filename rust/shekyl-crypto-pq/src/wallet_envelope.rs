@@ -1140,6 +1140,63 @@ pub fn open_state_file(
     Ok(region2_plain)
 }
 
+/// Open a state file using a session-cached `wrap_key_region_2` — the read-side
+/// mirror of [`seal_state_file_with_wrap_key_region_2`].
+///
+/// Skips the password → Argon2id → `file_kek` → `wrap_key` derivation that
+/// [`open_state_file`] performs, so a background task (e.g. the 2d-1 `P`-scan
+/// loop) can decrypt the `P`-isolated `.wallet.pscan` at runtime from the cached
+/// key, without the password. It still binds to the companion `.wallet.keys` via
+/// `seed_block_tag` (AAD), so a state file from another wallet fails closed. The
+/// inner SWSP `payload_kind` (not this layer) discriminates `.wallet` from
+/// `.wallet.pscan`.
+pub fn open_state_file_with_wrap_key_region_2(
+    wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+    keys_file_bytes: &[u8],
+    state_file_bytes: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, WalletEnvelopeError> {
+    // Validate the state-file header.
+    expect_at_least(state_file_bytes, S_OFF_CT + AEAD_TAG_BYTES)?;
+    if &state_file_bytes[S_OFF_MAGIC..S_OFF_MAGIC + 8] != STATE_FILE_MAGIC {
+        return Err(WalletEnvelopeError::BadMagic);
+    }
+    let sv = state_file_bytes[S_OFF_VERSION];
+    if sv > STATE_FILE_FORMAT_VERSION {
+        return Err(WalletEnvelopeError::FormatVersionTooNew {
+            got: sv,
+            max: STATE_FILE_FORMAT_VERSION,
+        });
+    }
+    // `seed_block_tag` = last 16 bytes of the keys file (AAD binding).
+    expect_at_least(keys_file_bytes, AEAD_TAG_BYTES)?;
+    let mut seed_block_tag = [0u8; AEAD_TAG_BYTES];
+    seed_block_tag.copy_from_slice(&keys_file_bytes[keys_file_bytes.len() - AEAD_TAG_BYTES..]);
+
+    let region2_nonce: [u8; AEAD_NONCE_BYTES] = state_file_bytes[S_OFF_NONCE..S_OFF_CT]
+        .try_into()
+        .expect("pinned");
+    let region2_ct_end = state_file_bytes.len() - AEAD_TAG_BYTES;
+    let mut region2_plain: Zeroizing<Vec<u8>> =
+        Zeroizing::new(state_file_bytes[S_OFF_CT..region2_ct_end].to_vec());
+    let region2_tag: [u8; AEAD_TAG_BYTES] = state_file_bytes[region2_ct_end..]
+        .try_into()
+        .expect("pinned");
+    let magic_version = &state_file_bytes[S_OFF_MAGIC..S_OFF_NONCE];
+    let aad = state_aad(magic_version, &seed_block_tag);
+    if aead_decrypt(
+        wrap_key_region_2,
+        &region2_nonce,
+        &aad,
+        region2_plain.as_mut_slice(),
+        &region2_tag,
+    )
+    .is_err()
+    {
+        return Err(WalletEnvelopeError::StateSeedBlockMismatch);
+    }
+    Ok(region2_plain)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

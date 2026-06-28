@@ -120,6 +120,34 @@ pub fn curve_tree_store_path_from(base: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// Extension suffix appended to the base path to derive the `P`-isolated
+/// archival-scan state path (2d-1 SP-5). Appended as raw bytes (same rule as
+/// [`KEYS_FILE_SUFFIX`]) so a base like `primary.wallet` becomes
+/// `primary.wallet.pscan` — a visible sibling of the `.wallet` / `.wallet.keys`
+/// pair, structurally separate from the principal ledger (the firewall keeps the
+/// `P` scan state out of the principal state file).
+pub const PSCAN_STATE_SUFFIX: &str = ".pscan";
+
+/// Derive the `.wallet.pscan` `P`-scan state path from a user-provided base, the
+/// same way [`keys_path_from`] / [`curve_tree_store_path_from`] do (append to the
+/// full base, not `set_extension`).
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::pscan_state_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     pscan_state_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.pscan"),
+/// );
+/// ```
+pub fn pscan_state_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(PSCAN_STATE_SUFFIX);
+    PathBuf::from(os)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
