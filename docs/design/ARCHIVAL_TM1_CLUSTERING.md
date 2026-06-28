@@ -276,17 +276,33 @@ with different tractability:
   Inherited, solvable with existing machinery.
 - **Cardinality → structural, genuinely new.** *The number of simultaneous personas
   an operator runs is a structural C0 observable that behavioral heterogeneity does
-  not mask* (§5 Check A, in evidence). You cannot jitter "how many," and varying
-  split sizes does not hide it (it re-inflates under realistic heterogeneous K). The
-  only levers that touch it are **structural**: a protocol-level cap or
-  standardization on simultaneous personas per funding lineage, or making persona
-  instantiation itself unobservable. Both are real designs with real costs, and both
-  belong to 2d-2 (the network/broadcast firewall) where instantiation/funding
-  cadence lives — not to the shard channel this round closed.
+  not mask* (§5 Check A, in evidence). It is structural **specifically because the
+  operator cannot make it unobservable by behaving differently**: you cannot jitter
+  "how many," and varying the siblings' sizes does not mask it (it re-inflates under
+  realistic heterogeneous K). Behavioral levers — the only ones a wallet owns — are
+  exhausted. So 2d-2 inherits a **two-lever structural design space**, named here
+  (even where one is likely rejected) so the round opens on the *shape* of the
+  problem, not a blank page:
 
-This is the difference between handing 2d-2 a cadence problem it can already solve
-and a structural problem that needs new mechanism. The cardinality question is the
-latter, and it is now scoped with a number behind it (AUC 0.77–0.90 at the null).
+  - **Lever A — standardize or cap simultaneous personas per funding lineage.**
+    Removes the cardinality *variance* the matcher keys on (if every operator
+    presents the same count, count carries no operator signal). **Cost:** a
+    flexibility / consensus-rule cost (it constrains how an operator may structure
+    its archival operation, and it is a genesis-frozen parameter); the standardized
+    count must be chosen against the same regime bound this round surfaced (a count
+    that is fine at the lean attractor may be coercive in the trough).
+  - **Lever B — make persona instantiation itself unobservable.** Would hide the
+    count at the source rather than flatten it. **Cost:** likely *impossible against
+    C0* — bond posts are public by construction (`bond_wire` is cleartext), so a pure
+    chain observer counts an operator's simultaneous bonds directly; this lever can
+    at best be partial and probably reduces to Lever A plus network-layer hygiene.
+
+Both belong to 2d-2 (the network/broadcast firewall) where instantiation/funding
+cadence lives — not to the shard channel this round closed. This is the difference
+between handing 2d-2 a cadence problem it can already solve and a structural problem
+that needs new mechanism: the cardinality question is the latter, **scoped with a
+measured floor 2d-2 must beat** (AUC 0.77–0.90 at the null) and a named candidate
+lever pair (A viable-but-costly, B likely-foreclosed-against-C0).
 
 ---
 
@@ -299,10 +315,21 @@ latter, and it is now scoped with a number behind it (AUC 0.77–0.90 at the nul
   the protocol ever tiers shards by size/difficulty** (a plausible future), C-5
   reopens, and this arm says at what cost magnitude the attractor flips
   virtuous → floored.
-- **Onset residual.** Wallet-local full-range staggering leaves onset AUC ~0.61
-  (not fully at null 0.51). Reopen the onset-lever claim if the realized wallet
-  default cannot stagger across a population-wide origin (only the operator's own
-  base), in which case onset rejoins the disclosed residual.
+- **Onset residual — population-wide-origin stagger (rule-21, numeric trigger).**
+  Wallet-local full-range staggering drives onset AUC from 0.99 to **~0.61** — most
+  of the way down, but a residual **+0.10 above the 0.51 null** survives because a
+  sibling staggers against the *operator's own* base height, not a shared chain
+  origin. **Rejected now:** the population-wide-origin stagger arm is not built,
+  because the cardinality core is structural regardless (§8), so driving onset to
+  null sharpens only the *disclosure*, not the verdict. **Reopen when (the number,
+  not a vibe):** 2d-2's cardinality mitigation lands and its combined-partition
+  residual target cannot be met with onset stuck at the ~0.61 wallet-local floor —
+  i.e. onset becomes the *binding* term in the combined residual rather than a
+  sharpening one. **Re-evaluation:** add the population-wide-origin stagger arm to
+  `--matcher`; if it drives onset to the null, onset moves from disclosed-residual
+  to enforced-default and the combined-residual claim is available; if it does not,
+  onset stays disclosed and 2d-2's target must be met on cardinality alone. Without
+  this trigger the residual is a TODO that rots; with it, it is a decision.
 - **Matcher feature ceiling.** Portfolio AUC 0.567 is "near null *with these
   features*"; a richer shard-adversary is the floor, not the ceiling. This does not
   move the verdict (partition is already near-ceiling, so a better adversary raises
