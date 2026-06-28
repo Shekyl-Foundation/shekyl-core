@@ -702,6 +702,32 @@ rotation/sign between batches.
 `PFundingInflow` (built inside `run_dual_extractor`'s confirmed path). The actor returns
 data, never keys — consistent with `PersonaIdentity` being public-only.
 
+**Build status (split into two PRs by validation surface):** **PR-A landed in PR #201** —
+SP-3's `run_dual_extractor` (`engine/pscan/scan_step.rs`) and the SP-5 **actor half**
+(`Message<ScanStep> for StakeEngine`, offloaded to `spawn_blocking`; `view_sk` never crosses,
+DQ5/DQ6). Two refinements over the sketch above, with their rationale:
+
+- **The `ScanStep` message carries the already-fetched blocks, not heights-only.** The *task*
+  owns the `BlockSource` and fetches (this section, above); carrying public blocks keeps network
+  I/O out of the single-threaded actor mailbox (the DQ6 anti-blocking concern) without weakening
+  SP-4's anti-injection rule (the message carries blocks, never a `PFundingInflow`).
+- **A scan-step returns per-epoch *deltas*, not a finalized `PFundingInflow`.** A step is a
+  *partial* epoch (`SETTLEMENT_EPOCH_BLOCKS = 10 000` blocks ≫ a bounded step), so it cannot
+  satisfy SP-4's "recompute over the epoch's *complete* confirmed set." `run_dual_extractor`
+  therefore emits `EpochInflowDelta`s; **PR-B** accumulates them across steps and finalizes
+  `PFundingInflow` at epoch-close. (This *corrects* the enforcement-point line above, which had
+  the step return a finished `PFundingInflow`.)
+
+  PR-A also enforces DQ6's "bounded per message" as an invariant (`MAX_SCAN_STEP_BLOCKS`
+  fail-closed backstop), not a contract.
+
+**PR-B (remaining SP-5):** the driving P-scan **task** + injectable cadence (`ScanSchedule`);
+the **new sealed P-isolated cursor/inflow persistence** (the write-discipline: persist outputs
+→ seal cursor; rule-42 schema + version const — the genesis-freeze-sensitive surface that
+motivated the split); `PFundingInflow` finalization at epoch-close; `Engine::start_pscan`
+wiring; and the DQ8 retirement/union-shrink reading consensus `W`. `block_source` and `inflow`
+keep their transient `#[allow(dead_code)]` until that task wires them.
+
 ---
 
 ### SP-6 — `PReconcileSet`: typed, distinct, *and* carries the range it can vouch for (absence ≠ unscanned)
