@@ -256,6 +256,18 @@ mod tests {
     /// equal — so a new (or removed) type can't slip the pairing past review.
     #[test]
     fn version_bump_registry_covers_every_snapshot() {
+        // Assert-mode only: this invariant is about the *committed* snapshot set.
+        // Under `UPDATE_SNAPSHOTS=1` the `.snap` files are being (re)generated, so
+        // `schemas/` may not exist yet and — because Rust runs tests in a
+        // non-deterministic order — the set is only transiently complete while the
+        // per-type writers run. Comparing it to `PAIRS` mid-regeneration is
+        // meaningless and would fail spuriously. CI's assert-snapshots job runs
+        // *without* the flag, so the guard still fires where it gates merges. (Same
+        // `UPDATE_SNAPSHOTS` branch the snapshot writers above take.)
+        if env::var_os("UPDATE_SNAPSHOTS").is_some() {
+            return;
+        }
+
         // The committed snapshots: the set of `schemas/*.snap` stems.
         let snap_stems: BTreeSet<String> = fs::read_dir(schemas_dir())
             .expect("read schemas dir")
