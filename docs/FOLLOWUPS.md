@@ -47,6 +47,27 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Single-source the schema-snapshot registry (rule-21; flagged 2026-06-27, PR #199
+  SP-2 added `pscan_cursor`).** A persisted-type's `.snap`↔`_VERSION` pairing is
+  registered in **two** hand-mirrored places: the in-process harness
+  (`rust/shekyl-engine-state/src/schema_snapshot.rs`) and the `PAIRS` array in
+  `.github/workflows/schema-snapshot.yml`. Registering a new type in only one leaves
+  its pairing **silently unenforced** — CI stays green while the guard is absent (the
+  worst failure: a guard that looks present and isn't). The stopgap (all three synced,
+  incl. the module doc) holds *this once*; it does not remove the trap, which is the
+  schema-CI instance of the same N-places-divergence hazard the `W` constant and the
+  two-frontier cursor were about. **Diagnostic that picks the fix:** what does the YAML
+  `PAIRS` enforce that the harness can't? (a) If redundant — both check schema↔snap —
+  delete `PAIRS`, have the YAML just run the harness. (b) If the YAML does a *git-level*
+  check the in-process test can't see (a `.snap` changed in this PR ⟹ its `_VERSION`
+  line moved), the mapping is genuine but must come from **one** registry both read
+  (harness `--list` emits it, YAML consumes), so a type is registered once. (c) Fallback:
+  a meta-test asserting `PAIRS` == the harness registry, so the next divergence is **loud
+  (CI red)**, not silent. Principle: a registration remembered in N places is a
+  silent-divergence hazard — make N=1, or make N>1 divergence loud. **Reopen-on:** the
+  next persisted type added to the snapshot set (likely SP-6/SP-7 or other 2d work) —
+  fix it structurally then rather than syncing a third time on attention.
+
 - **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
   against the canonical spend format (flagged 2026-06-23, the tx-builder
   shekyl-wire spend cutover; resolved 2026-06-24).** `shekyl_wire::Transaction::weight()`
