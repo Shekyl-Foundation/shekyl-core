@@ -7203,6 +7203,30 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **Principal-side `IsolateSOCKSAuth` — give the principal's `DaemonClient`s isolated circuits
+  (2d-2 Round 0, deliberately a separate ticket).** Today the principal's two daemon surfaces
+  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `SimpleRequestRpc`)
+  share **one no-auth circuit** — *within-principal* correlation, not a firewall leak (both
+  endpoints are already principal-side), so it was kept out of the firewall round. **Implementation
+  precondition (load-bearing — this is *why* it was deferred, not a nice-to-have):** giving the
+  principal **non-empty** SOCKS usernames introduces a **namespace-collision obligation** with `P`'s
+  `SocksUsername` space — a `P`/principal username collision puts both on **one circuit**, which
+  *is* the firewall break. Any principal-side wiring must keep the principal username space
+  **provably disjoint** from `derive_socks_user(p_canonical_id)`'s range (a reserved,
+  structurally-distinct prefix — not "different by convention"). Until this lands, the safe
+  invariant is *principal = empty, `P` = non-empty*. **Target:** V3.x (with the 2d-2 transport
+  build). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md)
+  §11 / §13(b).
+- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport (gated
+  on SP-6).** Half (B) of 2d-2: consume the `P`-scan reconcile set to garbage-collect archival
+  state no longer on chain. **Gate:** cannot land until 2d-1 **SP-6** (`PReconcileSet`) exists —
+  downstream of PR-B; SP-6 is unbuilt (0 files on dev, 2026-06-28). **Rule (load-bearing — travels
+  with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
+  can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
+  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x (after
+  SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
+  (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
+  SP-6/SP-7.
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of
