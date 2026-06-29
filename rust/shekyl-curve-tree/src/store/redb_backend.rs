@@ -186,6 +186,23 @@ pub enum StoreError {
     },
 }
 
+impl StoreError {
+    /// `true` iff this wraps redb's
+    /// [`DatabaseAlreadyOpen`](redb::Error::DatabaseAlreadyOpen) — the
+    /// single-writer lock is held by another live handle to the same file.
+    ///
+    /// This is the **only transient** open failure: it clears the instant the
+    /// holding [`crate::CurveTreeClient`] drops (the `close → reopen` / respawn
+    /// lock-release lag — see [`crate::ClientError::is_already_open`]). Every
+    /// other variant is a standing condition — corruption, schema mismatch, I/O,
+    /// a permission error — that re-opening cannot fix, so callers must surface
+    /// those immediately rather than poll-retrying out a grace window.
+    #[must_use]
+    pub fn is_already_open(&self) -> bool {
+        matches!(self, StoreError::Redb(e) if matches!(**e, redb::Error::DatabaseAlreadyOpen))
+    }
+}
+
 impl From<redb::Error> for StoreError {
     fn from(e: redb::Error) -> Self {
         Self::Redb(Box::new(e))

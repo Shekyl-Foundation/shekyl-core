@@ -218,6 +218,21 @@ pub enum ClientError {
     Poisoned,
 }
 
+impl ClientError {
+    /// `true` iff this is a [`StoreError::is_already_open`] store failure: the
+    /// redb single-writer lock is *transiently* held by a not-yet-dropped handle
+    /// (the `close → reopen` / respawn race, where kameo drops the old client —
+    /// and its lock — only after `wait_for_shutdown` resolves).
+    ///
+    /// The actor layer uses this to poll-retry **only** the transient case and
+    /// surface every other open error immediately, rather than spinning a
+    /// permanently-failing open out to the grace-window timeout.
+    #[must_use]
+    pub fn is_already_open(&self) -> bool {
+        matches!(self, ClientError::Store(e) if e.is_already_open())
+    }
+}
+
 /// Block-derived curve-tree client with persistent [`LeafStore`] (CT-1).
 ///
 /// Holds leaf candidates and writes block deltas (drained + pending) into
