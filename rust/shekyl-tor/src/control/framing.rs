@@ -69,11 +69,27 @@ pub enum FramingError {
     /// A reply line was not valid UTF-8.
     InvalidUtf8,
     /// A framing line was shorter than the `XYZ<sep>` minimum (4 bytes).
-    ShortLine(String),
-    /// The 3-character status prefix was not three ASCII digits.
-    NonNumericStatus(String),
-    /// The separator (4th byte) was not one of `' '`, `'-'`, `'+'`.
-    BadSeparator(char),
+    ///
+    /// Carries only the length — never the bytes. The control port is a forensic
+    /// surface: a desynced line may be misaligned payload (circuit IDs, targets)
+    /// that must not reach a log via the error's `Display` *or* `Debug`. The other
+    /// content-free variants below share this reason.
+    ShortLine {
+        /// Byte length of the runt line.
+        len: usize,
+    },
+    /// The 3-character status prefix was not three ASCII digits (content-free; see
+    /// [`Self::ShortLine`]).
+    NonNumericStatus {
+        /// Byte length of the offending line.
+        len: usize,
+    },
+    /// The separator (4th byte) was not one of `' '`, `'-'`, `'+'` (content-free;
+    /// see [`Self::ShortLine`]).
+    BadSeparator {
+        /// Byte length of the offending line.
+        len: usize,
+    },
     /// Two framing lines of one reply disagreed on the status code.
     StatusMismatch {
         /// Status code set by the reply's first framing line.
@@ -87,9 +103,16 @@ impl std::fmt::Display for FramingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUtf8 => write!(f, "control reply line was not valid UTF-8"),
-            Self::ShortLine(line) => write!(f, "control framing line too short: {line:?}"),
-            Self::NonNumericStatus(s) => write!(f, "control status prefix not numeric: {s:?}"),
-            Self::BadSeparator(c) => write!(f, "control framing line has invalid separator {c:?}"),
+            Self::ShortLine { len } => write!(f, "control framing line too short ({len} bytes)"),
+            Self::NonNumericStatus { len } => {
+                write!(f, "control status prefix not numeric ({len}-byte line)")
+            }
+            Self::BadSeparator { len } => {
+                write!(
+                    f,
+                    "control framing line has an invalid separator ({len}-byte line)"
+                )
+            }
             Self::StatusMismatch { first, found } => {
                 write!(f, "control reply status codes disagree: {first} != {found}")
             }
@@ -153,13 +176,13 @@ impl ReplyFramer {
 
             let bytes = line.as_bytes();
             if bytes.len() < 4 {
-                return Err(FramingError::ShortLine(line));
+                return Err(FramingError::ShortLine { len: bytes.len() });
             }
             if !(bytes[0].is_ascii_digit()
                 && bytes[1].is_ascii_digit()
                 && bytes[2].is_ascii_digit())
             {
-                return Err(FramingError::NonNumericStatus(line));
+                return Err(FramingError::NonNumericStatus { len: bytes.len() });
             }
             // Three ASCII digits → no overflow (≤ 999) and byte index 4 is a
             // char boundary (digits + an ASCII separator are single-byte).
@@ -181,22 +204,25 @@ impl ReplyFramer {
                 b' ' => {
                     // End of reply.
                     self.lines.push(line[4..].to_owned());
-                    return Ok(Some(self.finish()));
+                    return Ok(Some(self.finish(status)));
                 }
                 b'-' => self.lines.push(line[4..].to_owned()),
                 b'+' => {
                     self.lines.push(line[4..].to_owned());
                     self.in_data_block = true;
                 }
-                other => return Err(FramingError::BadSeparator(other as char)),
+                _ => return Err(FramingError::BadSeparator { len: bytes.len() }),
             }
         }
         Ok(None)
     }
 
-    /// Take ownership of the assembled reply and reset for the next one.
-    fn finish(&mut self) -> ControlReply {
-        let status = self.status.take().unwrap_or_default();
+    /// Take the assembled reply and reset for the next one. `status` is threaded
+    /// from the framing line that closed the reply (always `== self.status`), so
+    /// there is no status `Option` to unwrap — "a finished reply with no status"
+    /// is unrepresentable here, rather than a `0` papered over a logic bug.
+    fn finish(&mut self, status: u16) -> ControlReply {
+        self.status = None;
         let lines = std::mem::take(&mut self.lines);
         ControlReply { status, lines }
     }
@@ -335,17 +361,19 @@ mod tests {
 
     #[test]
     fn errors_on_non_numeric_status() {
+        // "2x0 OK" is 6 bytes; the error carries the length, not the content.
         assert_eq!(
             frame_all(b"2x0 OK\r\n"),
-            Err(FramingError::NonNumericStatus("2x0 OK".to_owned())),
+            Err(FramingError::NonNumericStatus { len: 6 }),
         );
     }
 
     #[test]
     fn errors_on_bad_separator() {
+        // "250|OK" is 6 bytes.
         assert_eq!(
             frame_all(b"250|OK\r\n"),
-            Err(FramingError::BadSeparator('|')),
+            Err(FramingError::BadSeparator { len: 6 }),
         );
     }
 
@@ -353,8 +381,26 @@ mod tests {
     fn errors_on_short_line() {
         assert_eq!(
             frame_all(b"25\r\n"),
-            Err(FramingError::ShortLine("25".to_owned())),
+            Err(FramingError::ShortLine { len: 2 })
         );
+    }
+
+    #[test]
+    fn framing_errors_never_carry_stream_content() {
+        // The control port is a forensic surface — circuit IDs / targets must not
+        // be logged. A desync error must leak none of the offending line through
+        // *either* `Display` or `Debug`; only non-sensitive metadata (a length).
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(b"sensitive-target-and-circuit-id|x\r\n");
+        let err = framer
+            .next_reply()
+            .expect_err("a non-numeric prefix desyncs the stream");
+        for rendered in [format!("{err}"), format!("{err:?}")] {
+            assert!(
+                !rendered.contains("sensitive") && !rendered.contains("target"),
+                "framing error leaked stream content: {rendered}"
+            );
+        }
     }
 
     #[test]
