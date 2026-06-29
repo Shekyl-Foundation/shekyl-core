@@ -42,7 +42,7 @@ use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_engine_state::pscan_cursor::PScanCursor;
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use super::scan_step::ScanStepResult;
@@ -116,11 +116,11 @@ pub(crate) struct PScanAccrual {
     synced_height: BlockHeight,
     /// Per settlement-epoch accumulated confirmed funding.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
-    /// Confirmed-but-retire-pending personas (`p_canonical_id` → confirmed
+    /// Confirmed-but-retire-pending personas ([`PCanonicalId`] → confirmed
     /// `Unbond` epoch). The durable record that survives restart and re-triggers
     /// the DQ8 retire — kept until SP-6 durably removes the persona (see
     /// [`PScanState::pending_unbonds`]).
-    pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
+    pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
 }
 
 #[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
@@ -215,7 +215,7 @@ impl PScanAccrual {
     /// retire, since this is the sole durable "known-unbonded" record.
     pub(crate) fn record_unbond(
         &mut self,
-        p_canonical_id: [u8; 32],
+        p_canonical_id: PCanonicalId,
         unbond_epoch: SettlementEpoch,
     ) {
         self.pending_unbonds
@@ -226,7 +226,7 @@ impl PScanAccrual {
     /// The confirmed-but-retire-pending personas — the task iterates these and
     /// builds a `RetirementWitness` per entry (the witness's claim-window check is
     /// the eligibility gate; entries that aren't yet expired yield no witness).
-    pub(crate) fn pending_unbonds(&self) -> &BTreeMap<[u8; 32], SettlementEpoch> {
+    pub(crate) fn pending_unbonds(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
         &self.pending_unbonds
     }
 
@@ -376,7 +376,7 @@ mod tests {
     fn to_state_then_from_state_round_trips() {
         let mut acc = PScanAccrual::genesis();
         acc.ingest(&step(0, 10, &[(0, 7), (2, 9)])).expect("ingest");
-        acc.record_unbond([0x11; 32], epoch(0));
+        acc.record_unbond(PCanonicalId::from_bytes([0x11; 32]), epoch(0));
         let back = PScanAccrual::from_state(&acc.to_state());
         assert_eq!(
             back, acc,
@@ -399,14 +399,15 @@ mod tests {
 
     #[test]
     fn record_unbond_is_idempotent_and_durable() {
+        let id = PCanonicalId::from_bytes([0xAB; 32]);
         let mut acc = PScanAccrual::genesis();
-        acc.record_unbond([0xAB; 32], epoch(5));
+        acc.record_unbond(id, epoch(5));
         // Re-seeing the same persona keeps the first recorded epoch.
-        acc.record_unbond([0xAB; 32], epoch(9));
-        assert_eq!(acc.pending_unbonds().get(&[0xAB; 32]), Some(&epoch(5)));
+        acc.record_unbond(id, epoch(9));
+        assert_eq!(acc.pending_unbonds().get(&id), Some(&epoch(5)));
 
         // It survives a seal + reload (the durable retire-trigger).
         let back = PScanAccrual::from_state(&acc.to_state());
-        assert_eq!(back.pending_unbonds().get(&[0xAB; 32]), Some(&epoch(5)));
+        assert_eq!(back.pending_unbonds().get(&id), Some(&epoch(5)));
     }
 }

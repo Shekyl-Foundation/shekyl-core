@@ -15,11 +15,13 @@
 //! results do.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::{BondPostKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use tokio_util::sync::CancellationToken;
 
 use super::accrual::{AccrualError, PScanAccrual};
@@ -31,7 +33,17 @@ use crate::engine::stake_engine::{
 };
 
 /// The wire post-kind byte of an `Unbond` bond-post — the terminal post that makes
-/// a persona retire-eligible (DQ8). Single-sourced from the consensus enum.
+/// a persona retire-eligible (DQ8). Single-sourced from the consensus
+/// [`BondPostKind`] enum, which *is* the on-chain byte assignment; `shekyl-wire`
+/// transports that byte unchanged (`Other(b)`), so the comparison in
+/// [`record_unbonds`] is the consensus definition, not a parallel constant.
+///
+/// **Genesis-dormant.** `shekyl-wire` is JoinMarket-only at genesis
+/// (`shekyl_wire::transaction::BondPostKind`), so no `Unbond` post is wire-valid
+/// yet — this retire path is forward-looking and cannot fire until `Unbond` posts
+/// are added to the wire post-genesis. The byte equivalence (wire `Other(2)` ==
+/// `BondPostKind::Unbond as u8`) is pinned by a `scan_step` test so the two crates'
+/// assignments cannot drift before the wire format freezes.
 const UNBOND_POST_KIND: u8 = BondPostKind::Unbond as u8;
 
 /// Default per-step batch size — the bounded `ScanStep` the actor offloads (DQ6).
@@ -67,6 +79,63 @@ impl PScanConfig {
     /// batch would stall or never progress).
     fn batch(&self) -> u64 {
         self.batch_blocks.clamp(1, MAX_SCAN_STEP_BLOCKS)
+    }
+}
+
+/// Single-flight slot for the per-wallet `P`-scan task — mirrors
+/// [`RefreshSlot`](crate::engine::refresh::RefreshSlot). At most one scan task runs
+/// per wallet, so two `start_pscan` calls cannot race read-modify-seal on the same
+/// `.wallet.pscan` (the atomic-coupling idempotency in [`PScanAccrual`] defends a
+/// crash — one writer — not two concurrent writers). Cloneable; the slot is
+/// reference-counted — the engine holds one handle, the running task's
+/// [`PScanSlotGuard`] holds another for its lifetime.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) claims it.
+pub(crate) struct PScanSlot {
+    flag: Arc<AtomicBool>,
+}
+
+#[allow(dead_code)] // transient — `Engine::start_pscan` is the claim site.
+impl PScanSlot {
+    /// A fresh slot in the released state. Built once at `Engine::assemble`.
+    pub(crate) fn new() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Claim the slot, or `None` if a scan task already holds it. Single CAS
+    /// (`Acquire` on success, pairs with the guard's `Release` on drop).
+    pub(crate) fn try_claim(&self) -> Option<PScanSlotGuard> {
+        match self
+            .flag
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        {
+            Ok(_) => Some(PScanSlotGuard {
+                flag: self.flag.clone(),
+            }),
+            Err(_) => None,
+        }
+    }
+
+    /// Whether a scan task currently holds the slot (for the engine's `Debug`).
+    pub(crate) fn is_claimed(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+}
+
+/// RAII guard for [`PScanSlot`]. Held by the running task; `Drop` releases the slot
+/// whether the task returned, was cancelled, or panicked. Not `Clone` — the claim
+/// is unique, which is the point of single-flight.
+#[derive(Debug)]
+#[allow(dead_code)] // transient — held by `run_pscan_task` once the Engine spawns it.
+pub(crate) struct PScanSlotGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for PScanSlotGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
     }
 }
 
@@ -112,9 +181,10 @@ pub(crate) enum PScanTaskError {
     /// Folding a step into the accrual failed (non-contiguous / overflow).
     #[error("accrual failed: {0}")]
     Accrual(#[from] AccrualError),
-    /// Sealing the P-scan state failed.
+    /// Sealing the P-scan state failed. Boxed (not stringified) so the store's
+    /// typed error stays walkable as a `source()` chain for tracing.
     #[error("persisting the P-scan state failed: {0}")]
-    Store(String),
+    Store(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// A block below the finality horizon was absent — a withholding/short source.
     /// The 2d-1 `DaemonBlockSource` cannot *prove* absence, so this is a fetch
     /// failure, not a proven gap (SP-7's root-anchored job).
@@ -132,8 +202,9 @@ async fn pscan_sweep<B, S>(
     stake: &StakeEngineHandle,
     store: &S,
     accrual: &mut PScanAccrual,
-    retired_this_session: &mut BTreeSet<[u8; 32]>,
+    retired_this_session: &mut BTreeSet<PCanonicalId>,
     config: &PScanConfig,
+    cancel: &CancellationToken,
 ) -> Result<(), PScanTaskError>
 where
     B: BlockSource + Sync,
@@ -146,8 +217,14 @@ where
     let batch = config.batch();
 
     while accrual.next_height().to_raw() < horizon {
+        // Cancellation is checked per batch, not just between sweeps: a cold-start
+        // catch-up is many batches, and shutdown must not wait for the whole sweep.
+        // Each batch already sealed, so bailing mid-catch-up loses no progress.
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         let start = accrual.next_height().to_raw();
-        let end = (start + batch).min(horizon);
+        let end = start.saturating_add(batch).min(horizon);
         // `start < horizon <= end` and `start < end`, so the range is non-empty
         // and within the batch bound — `new` cannot fail here.
         let range = BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
@@ -174,7 +251,7 @@ where
         store
             .save(&accrual.to_state())
             .await
-            .map_err(|e| PScanTaskError::Store(e.to_string()))?;
+            .map_err(|e| PScanTaskError::Store(Box::new(e)))?;
     }
     Ok(())
 }
@@ -202,13 +279,13 @@ fn record_unbonds(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
 async fn dispatch_retires(
     stake: &StakeEngineHandle,
     accrual: &PScanAccrual,
-    retired_this_session: &mut BTreeSet<[u8; 32]>,
+    retired_this_session: &mut BTreeSet<PCanonicalId>,
 ) -> Result<(), PScanTaskError> {
     let Some(settled) = accrual.settled_epoch() else {
         return Ok(()); // no epoch settled yet → nothing can have expired
     };
     // Snapshot the candidates so the await loop holds no borrow of `accrual`.
-    let candidates: Vec<([u8; 32], SettlementEpoch)> = accrual
+    let candidates: Vec<(PCanonicalId, SettlementEpoch)> = accrual
         .pending_unbonds()
         .iter()
         .filter(|(id, _)| !retired_this_session.contains(*id))
@@ -236,32 +313,43 @@ async fn dispatch_retires(
     Ok(())
 }
 
-/// The long-running `P`-scan task: resume from the sealed state (or genesis), then
-/// loop — wait for the injected cadence, run one catch-up sweep, repeat — until
-/// cancelled. A sweep failure is **logged and retried** on the next tick (a
-/// transient transport blip must not kill the firewalled scan).
-#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) spawns it.
+/// The long-running `P`-scan task: resume from `initial` (the state `start_pscan`
+/// loaded, or `None` for genesis), then loop — wait for the injected cadence, run
+/// one catch-up sweep, repeat — until cancelled. A sweep failure is **logged and
+/// retried** on the next tick (a transient transport blip must not kill the
+/// firewalled scan).
+///
+/// `_slot_guard` is the single-flight claim ([`PScanSlot`]); it is held for the
+/// task's whole life and releases the slot on exit (cancel or panic), so the next
+/// `start_pscan` can claim. The initial load is done by `start_pscan` (not here),
+/// so a corrupt/version-mismatched seal surfaces as a `start_pscan` error rather
+/// than a silent task death.
+#[allow(dead_code)]
+// transient — `Engine::start_pscan` (later commit) spawns it.
+// `too_many_arguments`: each is a distinct spawn input (source, vault, store,
+// cadence, config, resume-state, cancel, single-flight guard); grouping them into a
+// struct would only move the same fields behind one more name. Mirrors the
+// many-parameter `run_refresh_task` spawn entry-point.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_pscan_task<B, S, Sched>(
     block_source: B,
     stake: StakeEngineHandle,
     store: S,
     mut schedule: Sched,
     config: PScanConfig,
+    initial: Option<PScanState>,
     cancel: CancellationToken,
+    _slot_guard: PScanSlotGuard,
 ) where
     B: BlockSource + Sync,
     S: PScanStore,
     Sched: ScanSchedule,
 {
-    let mut accrual = match store.load().await {
-        Ok(Some(state)) => PScanAccrual::from_state(&state),
-        Ok(None) => PScanAccrual::genesis(),
-        Err(e) => {
-            tracing::error!(error = %e, "P-scan: cannot load sealed state; not starting");
-            return;
-        }
+    let mut accrual = match initial {
+        Some(state) => PScanAccrual::from_state(&state),
+        None => PScanAccrual::genesis(),
     };
-    let mut retired_this_session: BTreeSet<[u8; 32]> = BTreeSet::new();
+    let mut retired_this_session: BTreeSet<PCanonicalId> = BTreeSet::new();
 
     loop {
         tokio::select! {
@@ -276,6 +364,7 @@ pub(crate) async fn run_pscan_task<B, S, Sched>(
             &mut accrual,
             &mut retired_this_session,
             &config,
+            &cancel,
         )
         .await
         {
@@ -311,7 +400,7 @@ mod tests {
             .expect("derive persona")
     }
 
-    fn canonical_id(p: &ArchivalPKeys) -> [u8; 32] {
+    fn canonical_id(p: &ArchivalPKeys) -> PCanonicalId {
         use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
         p_canonical_id_from_hybrid_pubkey(&p.hybrid_bond_id().to_canonical_bytes().expect("id"))
     }
@@ -400,9 +489,17 @@ mod tests {
         let mut accrual = PScanAccrual::genesis();
         let mut retired = BTreeSet::new();
 
-        pscan_sweep(&src, &stake, &store, &mut accrual, &mut retired, &cfg(4, 1))
-            .await
-            .expect("sweep");
+        pscan_sweep(
+            &src,
+            &stake,
+            &store,
+            &mut accrual,
+            &mut retired,
+            &cfg(4, 1),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("sweep");
 
         assert_eq!(
             accrual.next_height(),
@@ -429,9 +526,17 @@ mod tests {
             let src = source(chain(5, &[(0, funding_block(&p))]));
             let mut accrual = PScanAccrual::genesis();
             let mut retired = BTreeSet::new();
-            pscan_sweep(&src, &stake, &store, &mut accrual, &mut retired, &cfg(4, 4))
-                .await
-                .expect("sweep 1");
+            pscan_sweep(
+                &src,
+                &stake,
+                &store,
+                &mut accrual,
+                &mut retired,
+                &cfg(4, 4),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("sweep 1");
         }
         let after_first = store
             .load()
@@ -446,9 +551,17 @@ mod tests {
         let src = source(chain(6, &[(0, funding_block(&p)), (1, funding_block(&p))]));
         let mut retired = BTreeSet::new();
         // tip = 6, horizon = 2 → scan [1, 2) only (block 0 already counted).
-        pscan_sweep(&src, &stake, &store, &mut accrual, &mut retired, &cfg(4, 4))
-            .await
-            .expect("sweep 2");
+        pscan_sweep(
+            &src,
+            &stake,
+            &store,
+            &mut accrual,
+            &mut retired,
+            &cfg(4, 4),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("sweep 2");
 
         let after_second = accrual.to_state().accrual_for(SettlementEpoch::from_raw(0));
         assert_eq!(

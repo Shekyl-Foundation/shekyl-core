@@ -134,7 +134,7 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
     let (hybrid_pk, hybrid_sk) = integration_keypair(pinned_pk_hex, pinned_sk_hex);
     let hybrid_pk_bytes = hybrid_pk.to_canonical_bytes().expect("pk bytes");
     let _hybrid_sk_bytes = hybrid_sk.to_canonical_bytes().expect("sk bytes");
-    let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+    let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
 
     let (leaf_bytes, rk, path, layer_scalars) = ct2_founder_opening();
     let shard_id = 42u64;

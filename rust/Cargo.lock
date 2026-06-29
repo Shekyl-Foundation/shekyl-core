@@ -3666,6 +3666,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-rct-balance",
+ "shekyl-types",
  "shekyl-units",
  "thiserror",
 ]

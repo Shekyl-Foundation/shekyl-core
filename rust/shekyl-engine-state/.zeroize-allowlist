@@ -73,17 +73,9 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 # audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
-# ── pscan_state.rs ────────────────────────────────────────────────────
-#
-# `pending_unbonds` maps a persona's canonical id (`p_canonical_id`,
-# 32 bytes) to the settlement epoch its `Unbond` was confirmed in. The
-# map key is a **public** on-chain value — it is exactly the cleartext
-# canonical id carried in the persona's bond-post (gate-4 §3.4.1), the
-# 2d-1 firewall's public-by-design pseudonym id (`P` is public by
-# function; the firewall protects only `P`↔principal). Not secret
-# material; the value is a `SettlementEpoch` (not byte-shaped). See
-# `PScanState::pending_unbonds`.
-rust/shekyl-engine-state/src/pscan_state.rs|pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>
+# `pscan_state.rs`: `PScanState::pending_unbonds` keys on the `PCanonicalId`
+# newtype (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
+# it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype sweeps had.
 
 # ── sync_state_block.rs ───────────────────────────────────────────────
 #

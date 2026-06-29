@@ -152,7 +152,8 @@ pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
     let pubkey = unsafe { std::slice::from_raw_parts(hybrid_pubkey_ptr, hybrid_pubkey_len) };
     let pid = p_canonical_id_from_hybrid_pubkey(pubkey);
     unsafe {
-        std::ptr::copy_nonoverlapping(pid.as_ptr(), out_p_id, 32);
+        // `PCanonicalId` is the domain newtype; take the raw bytes at the C edge.
+        std::ptr::copy_nonoverlapping(pid.as_bytes().as_ptr(), out_p_id, 32);
     }
     1
 }

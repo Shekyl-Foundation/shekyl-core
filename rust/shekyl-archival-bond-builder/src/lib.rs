@@ -123,7 +123,9 @@ pub fn build_join_market_vin(
         .hybrid_bond_id()
         .to_canonical_bytes()
         .map_err(BondBuildError::IdentityEncode)?;
-    let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key);
+    // The producer returns the `PCanonicalId` domain newtype; the wire vin stores
+    // the raw `[u8; 32]`, so lift it out at this wire-construction edge.
+    let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
 
     // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
     // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).

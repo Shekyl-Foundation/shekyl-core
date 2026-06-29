@@ -56,6 +56,16 @@ pub(crate) enum PScanStartError {
     /// [`StakeEngine`]: crate::engine::stake_engine::StakeEngine
     #[error("no archival-bond stake engine is running; nothing to scan as P")]
     NoStakeEngine,
+    /// A `P`-scan task is already running for this wallet — the single-flight slot
+    /// ([`PScanSlot`](super::task::PScanSlot)) is held. Two tasks would race the
+    /// read-modify-seal of the same `.wallet.pscan`.
+    #[error("a P-scan task is already running for this wallet")]
+    AlreadyRunning,
+    /// The sealed `P`-scan state could not be loaded (corrupt / version mismatch).
+    /// Surfaced here, before the spawn, rather than as a silent task death — the
+    /// caller learns the firewall scan did not start.
+    #[error("loading the sealed P-scan state failed: {0}")]
+    LoadFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// A running P-scan task: the cancel token plus the spawned task's join handle.
@@ -226,26 +236,44 @@ where
     ///
     /// # Errors
     ///
-    /// [`PScanStartError::NoStakeEngine`] if no stake engine is running. All
-    /// per-sweep failures are recoverable and logged by the loop, not surfaced
-    /// here.
+    /// - [`PScanStartError::NoStakeEngine`] if no stake engine is running.
+    /// - [`PScanStartError::AlreadyRunning`] if a P-scan task already holds the
+    ///   single-flight slot for this wallet.
+    /// - [`PScanStartError::LoadFailed`] if the sealed state cannot be loaded.
+    ///
+    /// All per-sweep failures are recoverable and logged by the loop, not here.
     #[allow(dead_code)] // transient — the lifecycle layer is the call site (next).
     pub(crate) async fn start_pscan(
         self_arc: Arc<RwLock<Self>>,
         config: PScanConfig,
         cadence: Duration,
     ) -> Result<PScanHandle, PScanStartError> {
-        // Brief read borrow to clone the spawn inputs; dropped before the spawn.
-        let (daemon, stake) = {
+        // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
+        // Stake is checked first so a non-staker never claims-then-releases; the
+        // slot guard is RAII, so any error below releases it on the early return.
+        let (daemon, stake, slot_guard) = {
             let g = self_arc.read().await;
-            (g.daemon().clone(), g.stake_handle())
+            let stake = g.stake_handle().ok_or(PScanStartError::NoStakeEngine)?;
+            let slot_guard = g
+                .pscan_slot
+                .try_claim()
+                .ok_or(PScanStartError::AlreadyRunning)?;
+            (g.daemon().clone(), stake, slot_guard)
         };
-        let stake = stake.ok_or(PScanStartError::NoStakeEngine)?;
 
         let block_source = DaemonBlockSource::new(daemon);
         let store = WalletFilePScanStore {
             engine: self_arc.clone(),
         };
+
+        // Load the sealed state up front (#4): a corrupt / version-mismatched seal
+        // surfaces here, not as a silent task death. `slot_guard` drops on this
+        // early return, releasing the slot.
+        let initial = store
+            .load()
+            .await
+            .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
+
         let schedule = FixedRateSchedule::new(cadence);
         let cancel_token = CancellationToken::new();
 
@@ -255,7 +283,9 @@ where
             store,
             schedule,
             config,
+            initial,
             cancel_token.clone(),
+            slot_guard,
         ));
 
         Ok(PScanHandle {
@@ -274,7 +304,7 @@ mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_state::pscan_cursor::PScanCursor;
     use shekyl_rpc_transport::SimpleRequestRpc;
-    use shekyl_types::{BlockHeight, SettlementEpoch};
+    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
 
@@ -320,10 +350,15 @@ mod tests {
             .collect()
     }
 
-    fn pending(pairs: &[(u8, u64)]) -> BTreeMap<[u8; 32], SettlementEpoch> {
+    fn pending(pairs: &[(u8, u64)]) -> BTreeMap<PCanonicalId, SettlementEpoch> {
         pairs
             .iter()
-            .map(|&(id, e)| ([id; 32], SettlementEpoch::from_raw(e)))
+            .map(|&(id, e)| {
+                (
+                    PCanonicalId::from_bytes([id; 32]),
+                    SettlementEpoch::from_raw(e),
+                )
+            })
             .collect()
     }
 
@@ -397,6 +432,26 @@ mod tests {
         match result {
             Err(PScanStartError::NoStakeEngine) => {}
             Ok(_) => panic!("expected NoStakeEngine, got a running handle"),
+            Err(other) => panic!("expected NoStakeEngine, got {other:?}"),
         }
+    }
+
+    /// Single-flight (#1): the slot admits exactly one claimant; a second
+    /// `try_claim` fails until the first guard drops, then succeeds again. This is
+    /// the primitive `start_pscan` rests on to stop two tasks racing the
+    /// `.wallet.pscan` seal (the full path needs a staking engine, exercised by the
+    /// lifecycle layer; here we pin the guarantee at the slot).
+    #[test]
+    fn pscan_slot_admits_one_claimant_at_a_time() {
+        let slot = crate::engine::pscan::task::PScanSlot::new();
+        assert!(!slot.is_claimed());
+
+        let guard = slot.try_claim().expect("first claim succeeds");
+        assert!(slot.is_claimed());
+        assert!(slot.try_claim().is_none(), "second claim is refused");
+
+        drop(guard);
+        assert!(!slot.is_claimed(), "dropping the guard releases the slot");
+        assert!(slot.try_claim().is_some(), "the slot can be reclaimed");
     }
 }

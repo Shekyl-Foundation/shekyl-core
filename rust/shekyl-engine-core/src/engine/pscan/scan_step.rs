@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Input};
 
@@ -148,8 +148,9 @@ pub(crate) struct EpochInflowDelta {
 pub(crate) struct BondPostMatch {
     /// Height of the block carrying the post (from the step's range).
     pub(crate) height: BlockHeight,
-    /// The matched persona's cleartext canonical id.
-    pub(crate) p_canonical_id: [u8; 32],
+    /// The matched persona's cleartext canonical id (the domain newtype; the wire
+    /// `[u8; 32]` is lifted at the match site below).
+    pub(crate) p_canonical_id: PCanonicalId,
     /// Wire post-kind byte (`0` = JoinMarket; otherwise the `Other` tag).
     pub(crate) post_kind: u8,
 }
@@ -232,7 +233,7 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
 /// `blocks` are aligned (`blocks[i]` at `range.start + i`).
 pub(crate) fn run_dual_extractor(
     mut scanners: Vec<GuaranteedScanner>,
-    known_ids: &BTreeSet<[u8; 32]>,
+    known_ids: &BTreeSet<PCanonicalId>,
     range: BlockRange,
     blocks: &[ScannableBlock],
 ) -> Result<ScanStepResult, DualExtractError> {
@@ -266,10 +267,13 @@ pub(crate) fn run_dual_extractor(
         for tx in &block.transactions {
             for input in &tx.prefix.inputs {
                 if let Input::BondPost(bp) = input {
-                    if known_ids.contains(&bp.p_canonical_id) {
+                    // Lift the wire `[u8; 32]` into the domain id once, at the
+                    // wire→domain boundary, then match + carry the typed value.
+                    let id = PCanonicalId::from_bytes(bp.p_canonical_id);
+                    if known_ids.contains(&id) {
                         bond_post_matches.push(BondPostMatch {
                             height,
-                            p_canonical_id: bp.p_canonical_id,
+                            p_canonical_id: id,
                             post_kind: post_kind_byte(&bp.kind),
                         });
                     }
@@ -329,7 +333,7 @@ mod tests {
     }
 
     /// The cleartext canonical id the way an on-chain bond-post carries it.
-    fn canonical_id(p: &ArchivalPKeys) -> [u8; 32] {
+    fn canonical_id(p: &ArchivalPKeys) -> PCanonicalId {
         let bytes = p
             .hybrid_bond_id()
             .to_canonical_bytes()
@@ -350,7 +354,7 @@ mod tests {
     fn bond_post_for(p: &ArchivalPKeys) -> BondPost {
         BondPost {
             hybrid_public_key: p.hybrid_bond_id().to_canonical_bytes().expect("encode"),
-            p_canonical_id: canonical_id(p),
+            p_canonical_id: canonical_id(p).to_bytes(),
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: Vec::new(),
             },
@@ -419,6 +423,38 @@ mod tests {
         assert!(
             res.funding.is_empty(),
             "no outputs we own in a foreign block"
+        );
+    }
+
+    /// The Unbond-detection seam (2d-1 DQ8): the extractor carries the wire kind
+    /// byte unchanged, and that byte equals the consensus `Unbond` discriminant the
+    /// task's `record_unbonds` matches on. Pins the cross-crate byte equivalence
+    /// (`shekyl-wire` `Other(b)` ↔ `archival_retention::BondPostKind::Unbond`)
+    /// end-to-end so it cannot drift before the wire format freezes — the seam was
+    /// otherwise only covered by tests that hand-set `post_kind`.
+    #[test]
+    fn extractor_carries_the_consensus_unbond_byte() {
+        let unbond_byte = shekyl_archival_retention::BondPostKind::Unbond as u8;
+        assert_eq!(unbond_byte, 2, "genesis-frozen Unbond discriminant");
+
+        let mine = persona(0);
+        let mut block = build_typical_case_scannable_block(1);
+        let tx = block.transactions.get_mut(0).expect("a non-miner tx");
+        // An Unbond bond-post: the consensus Unbond byte on the wire as `Other(b)`
+        // (genesis wire is JoinMarket-only, so this models the post-genesis form).
+        let mut post = bond_post_for(&mine);
+        post.kind = BondPostKind::Other(unbond_byte);
+        tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
+
+        let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
+        let known = BTreeSet::from([canonical_id(&mine)]);
+        let res =
+            run_dual_extractor(vec![scanner], &known, range(5, 6), &[block]).expect("extract");
+
+        assert_eq!(res.bond_post_matches.len(), 1);
+        assert_eq!(
+            res.bond_post_matches[0].post_kind, unbond_byte,
+            "the extractor carries the wire kind byte unchanged through to record_unbonds"
         );
     }
 

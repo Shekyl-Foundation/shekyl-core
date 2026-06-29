@@ -34,7 +34,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletLedgerError;
@@ -62,7 +62,7 @@ pub struct PScanState {
     /// [`SettlementEpoch`] — not a bare `u64` — and `BTreeMap`-ordered, so the
     /// postcard encoding is canonical (sorted) without the producer sorting.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
-    /// Confirmed-but-retire-pending personas: `p_canonical_id` → the settlement
+    /// Confirmed-but-retire-pending personas: [`PCanonicalId`] → the settlement
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
     ///
     /// The **sole durable record** that a persona is unbonded: the `Unbond` block
@@ -71,9 +71,10 @@ pub struct PScanState {
     /// "unbonded"). So this entry is what **re-triggers** the retire on each
     /// restart — it is kept until SP-6 durably removes the persona, **not** dropped
     /// when the retire fires (dropping it would let the re-derived persona regrow
-    /// the union permanently). Public content (both fields are on-chain), bounded
-    /// by `P`'s own unbonded-persona count (not adversary-controllable).
-    pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
+    /// the union permanently). Public content (the id is a public on-chain
+    /// pseudonym handle), bounded by `P`'s own unbonded-persona count (not
+    /// adversary-controllable).
+    pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
 }
 
 impl PScanState {
@@ -95,7 +96,7 @@ impl PScanState {
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
-        pending_unbonds: BTreeMap<[u8; 32], SettlementEpoch>,
+        pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -128,7 +129,7 @@ impl PScanState {
     /// The confirmed-but-retire-pending personas (`p_canonical_id` → confirmed
     /// `Unbond` epoch) — the durable record that survives restart and re-triggers
     /// the DQ8 retire.
-    pub fn pending_unbonds(&self) -> &BTreeMap<[u8; 32], SettlementEpoch> {
+    pub fn pending_unbonds(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
         &self.pending_unbonds
     }
 
@@ -189,10 +190,15 @@ mod tests {
             .collect()
     }
 
-    fn pending(pairs: &[(u8, u64)]) -> BTreeMap<[u8; 32], SettlementEpoch> {
+    fn pending(pairs: &[(u8, u64)]) -> BTreeMap<PCanonicalId, SettlementEpoch> {
         pairs
             .iter()
-            .map(|&(id, e)| ([id; 32], SettlementEpoch::from_raw(e)))
+            .map(|&(id, e)| {
+                (
+                    PCanonicalId::from_bytes([id; 32]),
+                    SettlementEpoch::from_raw(e),
+                )
+            })
             .collect()
     }
 
@@ -212,7 +218,8 @@ mod tests {
             AtomicUnits::from_raw(250)
         );
         assert_eq!(
-            back.pending_unbonds().get(&[0xAB; 32]),
+            back.pending_unbonds()
+                .get(&PCanonicalId::from_bytes([0xAB; 32])),
             Some(&SettlementEpoch::from_raw(7)),
             "pending unbonds round-trip through the seal"
         );

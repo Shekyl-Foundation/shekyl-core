@@ -109,7 +109,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
-use shekyl_types::SettlementEpoch;
+use shekyl_types::{PCanonicalId, SettlementEpoch};
 
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
@@ -274,7 +274,7 @@ fn wipe_bonded(persona: BondedPersona) {
 pub(crate) struct RetirementWitness {
     /// The cleartext canonical id of the persona to retire (from its confirmed
     /// `Unbond` bond-post). The actor matches it against the bonded union.
-    p_canonical_id: [u8; 32],
+    p_canonical_id: PCanonicalId,
 }
 
 #[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
@@ -297,7 +297,7 @@ impl RetirementWitness {
     /// is guaranteed upstream — the scan surfaces bond-posts only from behind the
     /// cursor's reorg horizon, so a witnessed `Unbond` is already finality-deep.
     pub(crate) fn from_confirmed_unbond(
-        p_canonical_id: [u8; 32],
+        p_canonical_id: PCanonicalId,
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
     ) -> Option<Self> {
@@ -690,7 +690,7 @@ impl StakeEngine {
     /// would mis-size the privacy parameter `C_min` (DQ7).
     fn bonded_scan_inputs(
         &self,
-    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<[u8; 32]>), ScanSetupError> {
+    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<PCanonicalId>), ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
         for held in self.held.values() {
@@ -744,7 +744,9 @@ impl StakeEngine {
 /// `P`'s cleartext canonical id from its keys — `cSHAKE256` over the canonical
 /// `hybrid_bond_id` bytes, the same value an on-chain bond-post carries. `Err` if
 /// the hybrid key does not canonically encode (a corrupted resident key).
-fn persona_canonical_id(keys: &ArchivalPKeys) -> Result<[u8; 32], shekyl_crypto_pq::CryptoError> {
+fn persona_canonical_id(
+    keys: &ArchivalPKeys,
+) -> Result<PCanonicalId, shekyl_crypto_pq::CryptoError> {
     let hybrid = keys.hybrid_bond_id().to_canonical_bytes()?;
     Ok(p_canonical_id_from_hybrid_pubkey(&hybrid))
 }
@@ -1974,7 +1976,7 @@ mod tests {
     use shekyl_wire::Holdings;
 
     /// The cleartext canonical id an on-chain bond-post carries for `slot`.
-    fn canonical_id(slot: u32) -> [u8; 32] {
+    fn canonical_id(slot: u32) -> PCanonicalId {
         p_canonical_id_from_hybrid_pubkey(&oracle_bond_id(slot))
     }
 
@@ -1992,7 +1994,7 @@ mod tests {
     fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
         let post = BondPost {
             hybrid_public_key: oracle_bond_id(slot),
-            p_canonical_id: canonical_id(slot),
+            p_canonical_id: canonical_id(slot).to_bytes(),
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: Vec::new(),
             },
