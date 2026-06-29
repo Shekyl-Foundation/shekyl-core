@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use super::accrual::{AccrualError, PScanAccrual};
 use super::block_source::{BlockSource, BlockSourceError};
 use super::cadence::ScanSchedule;
+use super::exhaustiveness::{verify_exhaustive, ExhaustivenessError};
 use super::scan_step::{BlockRange, BondPostMatch, MAX_SCAN_STEP_BLOCKS};
 use crate::engine::stake_engine::{
     RetireOutcome, RetirementWitness, StakeEngineError, StakeEngineHandle,
@@ -190,6 +191,27 @@ pub(crate) enum PScanTaskError {
     /// failure, not a proven gap (SP-7's root-anchored job).
     #[error("block {height} missing below the finality horizon")]
     MissingBlock { height: u64 },
+    /// Chain-exhaustiveness verification failed: a fetched batch did not chain to the
+    /// stored verified frontier, or a body did not match its committed hash.
+    ///
+    /// **This is unlike every other arm: it is fatal to the *task*, not just the
+    /// sweep.** The scan stays below `ARCHIVAL_REORG_DEPTH_BLOCKS`, so **given an
+    /// honest tip** the verified frontier sits beneath the reorg horizon and an
+    /// ordinary reorg cannot reach it — a mismatch is then a **beyond-finality
+    /// anomaly**. That finality-depth is *conditional*: the horizon is `tip −
+    /// reorg_depth` where `tip` is the source's **claimed** height (tip-honesty is a
+    /// posture / 2d-2 property, not one this layer establishes alone). Under an
+    /// over-claiming source the horizon is too high, the frontier can sit *within*
+    /// reorg range, and this mismatch may instead be an **ordinary reorg** — still
+    /// correctly caught as a halt, because 2d-1 cannot distinguish the two and a loud
+    /// halt is the safe response to both. Either way [`run_pscan_task`] **halts
+    /// loudly** instead of retrying: it does not rewind the cursor and does not
+    /// re-derive the anchor (either would be the resume-splice the verified
+    /// `(height, hash)` frontier exists to forbid — the cursor's `frontier_hash` is the
+    /// only anchor a forging source cannot change). Resolution is a posture / 2d-2
+    /// concern, not a re-fetch.
+    #[error("chain-exhaustiveness verification failed: {0}")]
+    Exhaustiveness(#[from] ExhaustivenessError),
 }
 
 /// Run one **catch-up sweep**: scan every bounded range from the accrual frontier
@@ -238,12 +260,47 @@ where
                 .block_at(BlockHeight::from_raw(height))
                 .await?
                 .ok_or(PScanTaskError::MissingBlock { height })?;
+            // Tripwire only: the scan trusts the *anchored* position (`height`), never
+            // the coinbase's self-claimed height, so a height-lying block is not
+            // exploitable here — but in tests a source serving misaligned blocks should
+            // fail fast, and this documents that the two are expected to agree.
+            debug_assert_eq!(
+                block.block.number(),
+                Some(height),
+                "coinbase self-claimed height must match the anchored fetch position"
+            );
             blocks.push(block);
         }
 
+        // SP-6 exhaustiveness gate (seam choice (b)): before extracting anything,
+        // prove this batch chains to *our own sealed* verified frontier and that
+        // every body matches its committed hash. The anchor is the stored
+        // `frontier_hash`, never a freshly re-derived one — re-deriving it would let
+        // a source splice a different chain at the resume boundary (and under
+        // no-wallet-PoW a fabricated fork is free, so the stored hash is the only
+        // thing a forging source cannot change). A failure halts the task loudly
+        // (the `?` lifts it via `#[from]` into `PScanTaskError::Exhaustiveness`); the
+        // cursor never advances past it. The verified batch hands back the recomputed
+        // frontier hash, so the new anchor is the value continuity chained through —
+        // not a separate re-hash of the last block that must merely agree.
+        //
+        // This gate is deliberately run in the *task*, before the blocks enter the
+        // actor — keeping the public exhaustiveness check out of the `view_sk` context
+        // and making it decide whether the secret scan runs at all. The cost is one
+        // extra pass over the batch (hash here, decode in the actor), the right trade
+        // for the firewall boundary. It hashes inline rather than via `spawn_blocking`
+        // like `scan_step`; bounded by `MAX_SCAN_STEP_BLOCKS` that is fine, and it is
+        // the natural second offload candidate if batch sizes ever grow materially.
+        let verified = verify_exhaustive(
+            BlockHeight::from_raw(start),
+            accrual.frontier_hash(),
+            &blocks,
+        )?;
+        let next_frontier_hash = verified.frontier_hash();
+
         // Offloaded dual extraction behind the actor; only public results return.
         let result = stake.scan_step(range, blocks).await?;
-        accrual.ingest(&result)?;
+        accrual.ingest(&result, next_frontier_hash)?;
         record_unbonds(accrual, &result.bond_post_matches);
         dispatch_retires(stake, accrual, retired_this_session).await?;
 
@@ -326,7 +383,11 @@ async fn dispatch_retires(
 /// loaded, or `None` for genesis), then loop — wait for the injected cadence, run
 /// one catch-up sweep, repeat — until cancelled. A sweep failure is **logged and
 /// retried** on the next tick (a transient transport blip must not kill the
-/// firewalled scan).
+/// firewalled scan) — with **one exception**: a [`PScanTaskError::Exhaustiveness`]
+/// failure (the served chain diverged from the sealed verified frontier below the
+/// finality horizon) **halts the task loudly** instead of retrying, because a
+/// beyond-finality anomaly cannot clear by re-fetching and a silent retry would risk
+/// absorbing a resume-splice.
 ///
 /// `_slot_guard` is the single-flight claim ([`PScanSlot`]); it is held for the
 /// task's whole life and releases the slot on exit (cancel or panic), so the next
@@ -377,7 +438,31 @@ pub(crate) async fn run_pscan_task<B, S, Sched>(
         )
         .await
         {
-            tracing::warn!(error = %e, "P-scan sweep failed; retrying next tick");
+            match &e {
+                // The served chain diverged from our *own sealed* verified frontier.
+                // Given an honest tip this is a beyond-finality anomaly (the frontier is
+                // below `ARCHIVAL_REORG_DEPTH_BLOCKS` of the *real* tip, so an ordinary
+                // reorg can't reach it); under an over-claiming source it may instead be
+                // an ordinary reorg the too-high horizon let the frontier advance into
+                // — tip-honesty is posture/2d-2 (see `PScanTaskError::Exhaustiveness`).
+                // The response is the same for both, which is why halting is right:
+                // retrying just re-fetches the same forked material and re-fails;
+                // rewinding the cursor or re-deriving the anchor would silently absorb
+                // the splice the verified frontier exists to refuse. So halt loudly and
+                // let the guard release the slot — not 2d-1's to resolve.
+                PScanTaskError::Exhaustiveness(_) => {
+                    tracing::error!(
+                        error = %e,
+                        "P-scan: chain-exhaustiveness verification failed below the \
+                         finality horizon — halting (no rewind, no re-fetch); resolution \
+                         is a posture / 2d-2 concern"
+                    );
+                    return;
+                }
+                // Transient transport / parse / actor / seal blip: log and retry next
+                // tick. A blip must not kill the firewalled scan.
+                _ => tracing::warn!(error = %e, "P-scan sweep failed; retrying next tick"),
+            }
         }
     }
 }
@@ -425,12 +510,38 @@ mod tests {
 
     /// A chain of `len` blocks: `recipient_at[i]` (if present) is addressed to the
     /// persona; the rest are foreign dummies. Length sets the source's tip.
+    ///
+    /// The blocks are made **exhaustiveness-verifiable** (the sweep now runs
+    /// `verify_exhaustive` before extracting): each non-miner body is committed to its
+    /// real hash (the bench fixture writes a `[0xAA; 32]` placeholder, which the
+    /// per-body check would reject), and each block is chained to the recomputed hash
+    /// of its predecessor (anchored at the genesis `[0; 32]`). Linking is
+    /// deterministic, so an identical prefix in two `chain(..)` calls produces an
+    /// identical frontier hash — which is what lets the resume test carry an anchor
+    /// across a rebuilt chain.
     fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<ScannableBlock> {
         let mut c: Vec<ScannableBlock> = (0..len)
             .map(|h| make_synthetic_block(h as u64, [0u8; 32]))
             .collect();
         for (i, b) in recipient_blocks {
             c[*i] = b.clone();
+        }
+        let mut prev = [0u8; 32];
+        for (h, sb) in c.iter_mut().enumerate() {
+            // The coinbase claims its own height. The bench fixture hard-codes `Gen(0)`,
+            // so set it to the position — both to keep the F5 fetch-loop tripwire honest
+            // (a real coinbase claims its height) and because it is folded into the hash
+            // recomputed below. The synthetic dummies already carry `Gen(h)`.
+            if let Some(input) = sb.block.miner_transaction.prefix.inputs.first_mut() {
+                *input = shekyl_wire::Input::Gen(h as u64);
+            }
+            sb.block.transaction_hashes = sb
+                .transactions
+                .iter()
+                .map(shekyl_wire::Transaction::hash)
+                .collect();
+            sb.block.header.previous = prev;
+            prev = sb.block.hash();
         }
         c
     }
@@ -585,6 +696,76 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sweep_halts_and_surfaces_on_a_boundary_mismatch_without_rewinding() {
+        // The resume-splice (b) exists to forbid: the source serves a chain that does
+        // NOT attach to our *own sealed* verified frontier. The cursor resumes at a
+        // sealed `(height, hash)` frontier, but the served block's `previous` is a
+        // different chain's hash. Given an honest tip this is a beyond-finality anomaly
+        // (the frontier is below `ARCHIVAL_REORG_DEPTH_BLOCKS` of the real tip); under
+        // an over-claiming source it could be an ordinary reorg the too-high horizon
+        // admitted — either way the sweep must RAISE it, never silently rewind or
+        // re-derive the anchor, because a silent recovery here re-introduces the (a)
+        // vulnerability through the error path. (No fork-point machinery, unlike the
+        // principal refresh: 2d-1 can't distinguish the two and halting is safe for both.)
+        let p = persona(0);
+        // tip=6, horizon=2 → scan [1, 2). Served block[1] chains to block[0], a hash
+        // our (deliberately wrong) seeded anchor will not match.
+        let src = source(chain(6, &[(1, funding_block(&p))]));
+        let stake = spawn_stake(&[0]);
+        let store = MemStore::default();
+
+        let wrong_anchor = [0xEE; 32];
+        let seeded = PScanState::new(
+            PScanCursor::at(BlockHeight::from_raw(1), wrong_anchor),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        store.save(&seeded).await.expect("seed");
+        let mut accrual = PScanAccrual::from_state(&seeded);
+        let mut retired = BTreeSet::new();
+
+        let err = pscan_sweep(
+            &src,
+            &stake,
+            &store,
+            &mut accrual,
+            &mut retired,
+            &cfg(4, 4),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("a boundary mismatch must surface, not be absorbed");
+
+        // 1. RAISED as an exhaustiveness failure (the loud halt), not a transient that
+        //    `run_pscan_task` would retry.
+        assert!(
+            matches!(err, PScanTaskError::Exhaustiveness(_)),
+            "expected an exhaustiveness halt, got {err:?}"
+        );
+        // 2. The cursor did NOT advance past the mismatch.
+        assert_eq!(
+            accrual.next_height(),
+            BlockHeight::from_raw(1),
+            "the cursor must not advance over an unverified batch"
+        );
+        // 3. The anchor was NOT rewound and NOT re-derived from the served chain — a
+        //    silent re-fetch of a new anchor IS the resume-splice (b) forbids.
+        assert_eq!(
+            accrual.frontier_hash(),
+            wrong_anchor,
+            "the sealed anchor is untouched: no silent rewind, no re-derived anchor"
+        );
+        // 4. Nothing was sealed past the mismatch (the store still holds the pre-sweep
+        //    frontier — the halt left no partial advance behind).
+        let sealed = store.load().await.expect("load").expect("state");
+        assert_eq!(
+            sealed.synced_height(),
+            BlockHeight::from_raw(1),
+            "no advance was sealed across the halt"
+        );
+    }
+
     #[test]
     fn record_unbonds_records_only_unbond_posts() {
         let p = persona(0);
@@ -627,7 +808,8 @@ mod tests {
         let mut pending = BTreeMap::new();
         pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
         let state = PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(cursor_height)),
+            // Built for `dispatch_retires` (no sweep), so the frontier hash is inert.
+            PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
         );
@@ -669,7 +851,8 @@ mod tests {
         let mut pending = BTreeMap::new();
         pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
         let accrual = PScanAccrual::from_state(&PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(cursor_height)),
+            // Built for `dispatch_retires` (no sweep), so the frontier hash is inert.
+            PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
         ));

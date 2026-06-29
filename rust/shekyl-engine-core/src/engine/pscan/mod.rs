@@ -31,6 +31,7 @@
 pub(crate) mod accrual;
 pub(crate) mod block_source;
 pub(crate) mod cadence;
+pub(crate) mod exhaustiveness;
 pub(crate) mod persona_scanner;
 pub(crate) mod scan_step;
 pub(crate) mod start;

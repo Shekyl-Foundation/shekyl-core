@@ -114,6 +114,11 @@ pub(crate) struct PScanAccrual {
     /// The scan frontier: every block below this height has been scanned and its
     /// confirmed funding folded into `accruals`.
     synced_height: BlockHeight,
+    /// The recomputed hash of the last verified block (`block[synced_height − 1]`),
+    /// or `[0; 32]` at genesis — the anchor the next batch must chain to (SP-6
+    /// exhaustiveness). Advances together with `synced_height` (the verified
+    /// `(height, hash)` frontier); mirrors [`PScanCursor::frontier_hash`].
+    frontier_hash: [u8; 32],
     /// Per settlement-epoch accumulated confirmed funding.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas ([`PCanonicalId`] → confirmed
@@ -129,6 +134,7 @@ impl PScanAccrual {
     pub(crate) fn genesis() -> Self {
         Self {
             synced_height: BlockHeight::ZERO,
+            frontier_hash: [0u8; 32],
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
         }
@@ -140,6 +146,7 @@ impl PScanAccrual {
     pub(crate) fn from_state(state: &PScanState) -> Self {
         Self {
             synced_height: state.synced_height(),
+            frontier_hash: state.cursor().frontier_hash(),
             accruals: state.accruals().clone(),
             pending_unbonds: state.pending_unbonds().clone(),
         }
@@ -151,30 +158,58 @@ impl PScanAccrual {
         self.synced_height
     }
 
+    /// The verified-frontier anchor: the recomputed hash of the last verified block
+    /// (`[0; 32]` at genesis). The sweep passes this to `verify_exhaustive` as the
+    /// hash the next batch's first block must chain to.
+    pub(crate) fn frontier_hash(&self) -> [u8; 32] {
+        self.frontier_hash
+    }
+
     /// Ingest one scan-step result: accumulate its confirmed per-epoch deltas and
-    /// advance the frontier to the step's end.
+    /// advance the frontier to the step's end, recording `frontier_hash` (the
+    /// recomputed hash of the step's last block) as the new verified-frontier
+    /// anchor — `synced_height` and `frontier_hash` advance **together**.
     ///
     /// The step's range **must begin at the frontier** — a gap would skip blocks,
     /// an overlap would double-count. That contiguity, plus the monotone frontier
     /// and the atomic seal, is what makes accumulation idempotent (see the module
-    /// docs on atomic coupling).
-    pub(crate) fn ingest(&mut self, result: &ScanStepResult) -> Result<(), AccrualError> {
+    /// docs on atomic coupling). The caller has already exhaustiveness-verified the
+    /// step (`verify_exhaustive`) and supplies the resulting frontier hash.
+    pub(crate) fn ingest(
+        &mut self,
+        result: &ScanStepResult,
+        frontier_hash: [u8; 32],
+    ) -> Result<(), AccrualError> {
         if result.range.start() != self.synced_height {
             return Err(AccrualError::NonContiguous {
                 frontier: self.synced_height,
                 step_start: result.range.start(),
             });
         }
+        // Stage every delta against the live totals BEFORE mutating `self`, so a
+        // later-delta overflow cannot leave earlier deltas partially applied. `ingest`
+        // is **all-or-nothing**: a failed ingest is a no-op, so when `run_pscan_task`
+        // retries a non-exhaustiveness error and re-ingests the same range, there is no
+        // partially-applied prefix to double-count. This is the in-memory twin of the
+        // seal's atomic coupling — the accrual advances together-or-not-at-all, exactly
+        // as the persisted `(frontier, accruals)` pair does. `staged` holds only the
+        // epochs this batch touches (one or two), not the whole map.
+        let mut staged: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
         for delta in &result.funding {
-            let acc = self
-                .accruals
-                .entry(delta.epoch)
-                .or_insert(AtomicUnits::ZERO);
-            *acc = acc
+            let base = staged
+                .get(&delta.epoch)
+                .copied()
+                .or_else(|| self.accruals.get(&delta.epoch).copied())
+                .unwrap_or(AtomicUnits::ZERO);
+            let updated = base
                 .checked_add(delta.amount)
                 .ok_or(AccrualError::InflowOverflow { epoch: delta.epoch })?;
+            staged.insert(delta.epoch, updated);
         }
+        // Every delta validated — commit the new totals and the frontier atomically.
+        self.accruals.extend(staged);
         self.synced_height = result.range.end();
+        self.frontier_hash = frontier_hash;
         Ok(())
     }
 
@@ -245,7 +280,7 @@ impl PScanAccrual {
     /// pending unbonds as one atomic unit (the write half of the SP-2 discipline).
     pub(crate) fn to_state(&self) -> PScanState {
         PScanState::new(
-            PScanCursor::at(self.synced_height),
+            PScanCursor::at(self.synced_height, self.frontier_hash),
             self.accruals.clone(),
             self.pending_unbonds.clone(),
         )
@@ -283,8 +318,10 @@ mod tests {
     fn ingest_accumulates_across_steps_and_advances_the_frontier() {
         // Two steps within epoch 0, then a step finishing it.
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, 4_000, &[(0, 100)])).expect("step1");
-        acc.ingest(&step(4_000, SEB, &[(0, 50)])).expect("step2");
+        acc.ingest(&step(0, 4_000, &[(0, 100)]), [0u8; 32])
+            .expect("step1");
+        acc.ingest(&step(4_000, SEB, &[(0, 50)]), [0u8; 32])
+            .expect("step2");
         assert_eq!(acc.next_height(), BlockHeight::from_raw(SEB));
         // Epoch 0 is now finalized (close == SEB <= frontier) → 100 + 50.
         let inflow = acc.finalized_inflow(epoch(0)).expect("epoch 0 finalized");
@@ -296,7 +333,8 @@ mod tests {
     fn finalized_inflow_refuses_an_in_progress_epoch() {
         // Frontier mid epoch 0 ⇒ epoch 0's accrual is partial ⇒ no PFundingInflow.
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, 4_000, &[(0, 100)])).expect("partial");
+        acc.ingest(&step(0, 4_000, &[(0, 100)]), [0u8; 32])
+            .expect("partial");
         assert!(
             acc.finalized_inflow(epoch(0)).is_none(),
             "an in-progress epoch must not yield a (partial) PFundingInflow"
@@ -307,7 +345,8 @@ mod tests {
     fn finalized_empty_epoch_is_a_real_zero_distinct_from_unfinalized() {
         // Scan past epoch 0 with nothing of ours in it.
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, SEB, &[(1, 5)])).expect("ingest");
+        acc.ingest(&step(0, SEB, &[(1, 5)]), [0u8; 32])
+            .expect("ingest");
         // Epoch 0 finalized with no funding → Some(ZERO); epoch 1 in progress → None.
         assert_eq!(
             acc.finalized_inflow(epoch(0))
@@ -325,7 +364,8 @@ mod tests {
     fn resume_from_a_sealed_state_continues_without_double_count() {
         // Scan a partial epoch 0, seal, "crash" (snapshot → reload), then finish it.
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, 6_000, &[(0, 50)])).expect("step1");
+        acc.ingest(&step(0, 6_000, &[(0, 50)]), [0u8; 32])
+            .expect("step1");
         let sealed = acc.to_state();
 
         let mut resumed = PScanAccrual::from_state(&sealed);
@@ -335,7 +375,7 @@ mod tests {
 
         // Continue from the frontier to the epoch boundary — same epoch accrues.
         resumed
-            .ingest(&step(6_000, SEB, &[(0, 25)]))
+            .ingest(&step(6_000, SEB, &[(0, 25)]), [0u8; 32])
             .expect("step2");
         assert_eq!(
             resumed
@@ -351,7 +391,7 @@ mod tests {
     fn rejects_a_non_contiguous_step() {
         let mut acc = PScanAccrual::genesis(); // frontier = 0
         let err = acc
-            .ingest(&step(5, 6, &[(0, 1)]))
+            .ingest(&step(5, 6, &[(0, 1)]), [0u8; 32])
             .expect_err("a gap must fail closed");
         assert_eq!(
             err,
@@ -365,22 +405,73 @@ mod tests {
     #[test]
     fn accrual_overflow_fails_closed() {
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, 1, &[(0, u64::MAX)])).expect("near-max");
+        acc.ingest(&step(0, 1, &[(0, u64::MAX)]), [0u8; 32])
+            .expect("near-max");
         let err = acc
-            .ingest(&step(1, 2, &[(0, 1)]))
+            .ingest(&step(1, 2, &[(0, 1)]), [0u8; 32])
             .expect_err("overflow must fail closed");
         assert_eq!(err, AccrualError::InflowOverflow { epoch: epoch(0) });
     }
 
     #[test]
+    fn ingest_overflow_is_a_no_op_so_a_retry_cannot_double_count() {
+        // Epoch 0 seeded near the ceiling; the frontier sits at height 1.
+        let mut acc = PScanAccrual::genesis();
+        acc.ingest(&step(0, 1, &[(0, u64::MAX)]), [0x11; 32])
+            .expect("seed epoch 0 near max");
+
+        // A batch whose deltas would partially apply under a naive loop: a benign
+        // epoch-1 delta lands first, then an epoch-0 delta overflows. With atomic
+        // ingest the whole batch is rejected and `self` is untouched.
+        let err = acc
+            .ingest(&step(1, 2, &[(1, 5), (0, 1)]), [0x22; 32])
+            .expect_err("the overflowing delta must reject the batch");
+        assert_eq!(err, AccrualError::InflowOverflow { epoch: epoch(0) });
+
+        // No partial mutation: the benign epoch-1 delta did NOT survive, the frontier
+        // did not advance, and the anchor was not changed — so the sweep's retry of
+        // [1, 2) re-ingests from a clean state instead of double-counting.
+        let sealed = acc.to_state();
+        assert_eq!(
+            sealed.accrual_for(epoch(1)),
+            AtomicUnits::ZERO,
+            "the benign delta from the failed batch must not have been applied"
+        );
+        assert_eq!(
+            sealed.accrual_for(epoch(0)),
+            AtomicUnits::from_raw(u64::MAX),
+            "epoch 0 is unchanged by the rejected batch"
+        );
+        assert_eq!(
+            acc.next_height(),
+            BlockHeight::from_raw(1),
+            "the frontier did not advance over the rejected batch"
+        );
+        assert_eq!(
+            acc.frontier_hash(),
+            [0x11; 32],
+            "the verified-frontier anchor was not changed by the rejected batch"
+        );
+    }
+
+    #[test]
     fn to_state_then_from_state_round_trips() {
         let mut acc = PScanAccrual::genesis();
-        acc.ingest(&step(0, 10, &[(0, 7), (2, 9)])).expect("ingest");
+        // A non-zero frontier hash so the round-trip exercises the verified-frontier
+        // anchor, not just the height.
+        acc.ingest(&step(0, 10, &[(0, 7), (2, 9)]), [0x42; 32])
+            .expect("ingest");
         acc.record_unbond(PCanonicalId::from_bytes([0x11; 32]), epoch(0));
+        assert_eq!(acc.frontier_hash(), [0x42; 32]);
         let back = PScanAccrual::from_state(&acc.to_state());
         assert_eq!(
             back, acc,
-            "the in-memory accrual (incl. pending unbonds) mirrors the persisted state"
+            "the in-memory accrual (incl. frontier hash + pending unbonds) mirrors the persisted state"
+        );
+        assert_eq!(
+            back.frontier_hash(),
+            [0x42; 32],
+            "the verified-frontier anchor round-trips through the seal"
         );
     }
 
@@ -388,8 +479,20 @@ mod tests {
     fn settled_epoch_excludes_the_in_progress_frontier_epoch() {
         let mut acc = PScanAccrual::genesis();
         assert_eq!(acc.settled_epoch(), None, "no epoch closed yet");
-        // Frontier mid epoch 2 (2·SEB + 1): epochs 0,1 settled; epoch 2 in progress.
-        acc.ingest(&step(0, 2 * SEB + 1, &[])).expect("ingest");
+        // Edge case (the retire-boundary off-by-one): frontier EXACTLY on the epoch-2
+        // boundary (`2·SEB`) — epoch 1 fully scanned, epoch 2 not yet started. The
+        // just-completed epoch is settled; the empty in-progress epoch is not. Guards
+        // against a cursor-shape change silently shifting the boundary by one.
+        acc.ingest(&step(0, 2 * SEB, &[]), [0u8; 32])
+            .expect("to edge");
+        assert_eq!(
+            acc.settled_epoch(),
+            Some(epoch(1)),
+            "on the epoch boundary, the just-completed epoch settles, not the in-progress one"
+        );
+        // Frontier mid epoch 2 (2·SEB + 1): still epochs 0,1 settled; epoch 2 in progress.
+        acc.ingest(&step(2 * SEB, 2 * SEB + 1, &[]), [0u8; 32])
+            .expect("past edge");
         assert_eq!(
             acc.settled_epoch(),
             Some(epoch(1)),

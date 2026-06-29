@@ -413,7 +413,7 @@ mod tests {
 
         // Seal an initial state; reopen it through the real file.
         let state_a = PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(5_000)),
+            PScanCursor::at(BlockHeight::from_raw(5_000), [0x1A; 32]),
             accruals(&[(0, 100), (1, 250)]),
             pending(&[(0xAB, 1)]),
         );
@@ -427,7 +427,7 @@ mod tests {
 
         // Crash-recovery: the latest seal is the single durable resume point.
         let state_b = PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(9_000)),
+            PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
         );

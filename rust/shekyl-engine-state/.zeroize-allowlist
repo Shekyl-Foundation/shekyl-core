@@ -73,6 +73,14 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 # audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
+# ── pscan_cursor.rs ───────────────────────────────────────────────────
+#
+# `PScanCursor::frontier_hash` is the recomputed 32-byte hash of the last
+# verified block — the verified-frontier anchor the next scan batch must
+# chain to (SP-6 exhaustiveness). A block hash is published chain state;
+# no secret material.
+rust/shekyl-engine-state/src/pscan_cursor.rs|frontier_hash: [u8; 32]
+
 # `pscan_state.rs`: `PScanState::pending_unbonds` keys on the `PCanonicalId`
 # newtype (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
 # it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype sweeps had.

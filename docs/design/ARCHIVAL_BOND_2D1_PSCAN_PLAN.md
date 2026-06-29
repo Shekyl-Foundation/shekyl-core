@@ -553,6 +553,9 @@ crash-window bugs), and on a read-side scan the redundant post-crash re-scan is 
 pub struct PScanCursor {
     version: u32,                 // rejected (not migrated) on mismatch — StakingBlock precedent
     synced_height: BlockHeight,   // the one authoritative durable scan frontier
+    frontier_hash: [u8; 32],      // AS BUILT (v2): recomputed hash of block[synced_height-1],
+                                  // [0;32] at genesis — the verified-frontier anchor the next
+                                  // batch must chain to (see "Exhaustiveness, as built" below)
 }
 
 impl PScanCursor {
@@ -574,10 +577,13 @@ is AEAD + version; *safety* is seal-after-durable-outputs + SP-4 idempotency. Th
 load-time invariant to get wrong because there is no clamp.
 
 **Completeness is *root-anchored*, not source-delivered (SP-7 / `TM-3`).** The cursor advances
-only over a range `P` has confirmed complete against the **header chain** (`prev`-chained,
-PoW-committed) — so a block a withholding source silently omits is *detectable* (header present,
-body missing), and both readers' "absent" conclusions mean *provably absent*, not *undelivered*.
-This is what makes SP-6's `covered` and SP-7's `AbsentVerified` trustworthy against a C3 source.
+only over a range `P` has confirmed complete against the **header chain** (`prev`-chained) — so a
+block a withholding source silently omits is *detectable* (a continuity break or a body that does
+not match its committed hash), and both readers' "absent" conclusions mean *provably absent*, not
+*undelivered*. This is what makes SP-6's `covered` and SP-7's `AbsentVerified` trustworthy against
+a C3 source. *(Refined by the trust-anchor resolution + "Exhaustiveness, as built" below: the
+2d-1 check is recompute-and-chain continuity + per-body tx-hash — **exhaustiveness**, no wallet
+PoW; canonicity and full withheld-body/tip robustness are posture/2d-2.)*
 
 ---
 
@@ -750,11 +756,12 @@ rule, aimed at the reconcile. The type makes the distinction unrepresentable to 
 
 ```rust
 /// A height range `P` AFFIRMATIVELY, EXHAUSTIVELY scanned on the chain it was served
-/// (per-block `curve_tree_root` match + `prev`-chain continuity) — constructible only by
-/// the verified scan path, never by hand. Claims *exhaustiveness*, NOT *canonicity*: that
-/// `[low, high]` is the most-work chain is a separate token the 2d-2 GC requires alongside
-/// this (see the trust-anchor resolution — most-work needs competitors a single source
-/// cannot supply, so there is no wallet-side PoW here).
+/// (recompute-and-chain `prev` continuity + per-body tx-hash — AS BUILT; the
+/// `curve_tree_root` match lives in the decode/*matches* half, not here) —
+/// constructible only by the verified scan path, never by hand. Claims *exhaustiveness*,
+/// NOT *canonicity*: that `[low, high]` is the most-work chain is a separate token the
+/// 2d-2 GC requires alongside this (see the trust-anchor resolution — most-work needs
+/// competitors a single source cannot supply, so there is no wallet-side PoW here).
 pub struct VerifiedRange { low: BlockHeight, high: BlockHeight }
 
 /// The reconcile input `P` hands 2d-2. DISTINCT from the funding `OwnedOutput` set, and
@@ -858,11 +865,16 @@ properties; naming them resolves the SP-2 (`:909` build-order) vs SP-7 (`:925` T
 `block_source.rs` three-way pointing, and fixes each property's home:
 
 1. **Exhaustiveness** — "I scanned *every* block in `[A,B]` on the chain I was served." Cheap,
-   local, single-source: per-block `curve_tree_root` match (the block's contents commit to its
-   header's root) + `header.previous` continuity (the reorg-detection half already in
-   `local_refresh`) + the cursor advances **only** over the contiguous verified range + a gap or
-   missing body is a verification **`Err`**, never a silent skip or a fabricated `None`. **This
-   is the whole of the 2d-1 completeness unit.**
+   local, single-source. **As built** (`verify_exhaustive`): **recompute-and-chain `header.previous`
+   continuity** — each block's `previous` is checked against the hash *recomputed from received
+   material* (`Block::hash` rebuilds the tx-tree from the inline miner body + the received
+   `transaction_hashes`), so a held tx set that is not the committed one is caught, not just a
+   consistent link — **plus per-body tx-hash** (`transactions[i].hash() == transaction_hashes[i]`,
+   the miner body covered inline). The `curve_tree_root` match was **re-homed to the decode/*matches*
+   half**, where it belongs; exhaustiveness does not need it. The cursor advances **only** over the
+   contiguous verified range, and a gap, continuity break, or missing/tampered body is a verification
+   **`Err`**, never a silent skip or a fabricated `None`. **This is the whole of the 2d-1
+   completeness unit.**
 2. **Canonicity** — "`[A,B]` is the *most-work* chain, not a fork." Most-work is a comparison
    against competitors a single source **structurally cannot provide**: a mined valid-PoW
    *minority* fork passes a valid-PoW check identically to the real chain, and the wire header
@@ -901,11 +913,13 @@ wallet PoW to anchor): below it, trusted; above it, exhaustiveness-verified by 2
 canonicity-confirmed by posture/transport at the GC.
 
 **Build-order consequence.** The heavy "root-anchored completeness prereq" dissolves: the 2d-1
-piece is the light exhaustiveness primitive (continuity + `curve_tree_root`), small enough to
-land **inside SP-6**, with **no PoW prerequisite PR** — SP-6 builds `PReconcileSet` on a
-daemon-trusted, continuity-checked `covered`. (Impl-PR carry: correct `block_source.rs`'s
-comment — exhaustiveness is 2d-1; withheld-body / fork / tip robustness is 2d-2 transport —
-dropping the "SP-7's root-anchored job" PoW framing.)
+piece is the light exhaustiveness primitive (recompute-and-chain continuity + per-body tx-hash),
+small enough to land **inside the SP-6 area**, with **no PoW prerequisite PR**. *As built,* the
+primitive (`exhaustiveness.rs`) + its sweep wiring landed first (see "Exhaustiveness, as built"
+below); `PReconcileSet` is the remaining SP-6 piece, built on the daemon-trusted, continuity-checked
+`covered`. (Impl-PR carry — **done:** `block_source.rs`'s `block_at` comment now frames withheld-body
+detection as a 2d-2 transport property, not "SP-7's root-anchored job"; exhaustiveness is 2d-1, and
+withheld-body / fork / tip robustness is 2d-2 transport.)
 
 ### Records-driven retirement: the authoritative done-side slot ledger (design round, 2026-06-29)
 
@@ -965,6 +979,90 @@ high-water mark catches a reverted/mis-seeded cursor, not a chance clash.
 **SP-6 notes invariant (one sentence, so it can't drift):** *the slot ledger is authoritative
 for retirement and monotonicity, advisory for live bonds* — encoding the frozen hint-not-truth
 (live) and the authoritative-records insight (done) at once.
+
+### Exhaustiveness, as built (2026-06-29): the verified `(height, hash)` frontier
+
+The exhaustiveness primitive + its sweep wiring landed ahead of `PReconcileSet` (commits
+`644939ab0` the primitive, `9bd415c16` the wiring). This subsection is the as-built record; where
+it refines the design above, it wins.
+
+**The primitive — `verify_exhaustive` (`shekyl-engine-core/.../pscan/exhaustiveness.rs`).** Given a
+contiguous batch starting at `first_height` and an `anchor` (the recomputed hash of the block
+*before* the batch, or the genesis `previous`), it returns a `VerifiedRange [first, first+n)` or an
+`ExhaustivenessError`. Two checks, recompute-from-received not compare-to-claimed:
+
+- **Continuity (the hash list is complete-and-committed):** each block's `header.previous` must
+  equal the hash *recomputed* from the predecessor's received material — `Block::hash` rebuilds
+  `tx_tree_hash` from the inline miner body + the received `transaction_hashes`, reforms the
+  `pow_blob`, and hashes it. Comparing against a *stored* or *source-claimed* hash would verify the
+  links but not that the tx set `P` holds is the committed one; recompute proves both. The first
+  block checks against `anchor` (→ `AnchorMismatch`), the rest against the running predecessor hash
+  (→ `ContinuityBreak`).
+- **Per-body (each body matches its committed hash):** `transactions[i].hash() ==
+  transaction_hashes[i]`; a count mismatch is `BodyCountMismatch`, a value mismatch `BodyMismatch`.
+  The miner tx is covered automatically (inline body, first Merkle leaf in `Block::hash`).
+
+No `curve_tree_root` here — that match is the decode/*matches* half. This is **exhaustiveness**
+(no block silently skipped on the chain served), **not canonicity** (most-work), per the
+trust-anchor resolution: `VerifiedRange` is constructible only by `verify_exhaustive`, so a value
+of that type *is* proof the verified path produced it, and the 2d-2 GC will require a separate
+canonicity token alongside it.
+
+**The cursor is now a verified `(height, hash)` frontier.** `PScanCursor` (and its working twin
+`PScanAccrual`, and the persisted `PScanState`) carry `frontier_hash` — the recomputed hash of the
+last verified block, `[0;32]` at genesis (the anchor block 0 chains to). `synced_height` and
+`frontier_hash` advance **together** in `ingest`. This is seam choice **(b)**: the sweep anchors
+`verify_exhaustive` on the **stored** `frontier_hash`, never a freshly re-derived one — so the next
+batch's first block must chain to *a hash already in our own sealed state*. A height-only cursor
+structurally cannot refuse a resume-splice (it cannot say *which* chain's height N), and under
+no-wallet-PoW a fabricated fork is free, so the sealed hash is the one thing a forging source
+cannot change. (Option (a) — re-derive the anchor from the source on resume — would make
+`VerifiedRange` unsound; rejected.)
+
+**`VerifiedRange` and `frontier_hash` are the same guarantee from two directions.** Both assert
+"verified-to-here, on one coherent chain": the range is what `verify_exhaustive` *returns*, the
+frontier hash is what the next sweep *resumes from*. They must not drift apart — in particular, an
+"optimization" that re-fetched the anchor from the source on resume would break the frontier's
+coherence **without touching `VerifiedRange`**, and is exactly the option-(a) regression this
+design rejects. A change to one is a change to both.
+
+**Mismatch is a loud halt, not a rewind or a re-fetch.** The sweep runs `verify_exhaustive` before
+extracting; an `ExhaustivenessError` becomes `PScanTaskError::Exhaustiveness`, and `run_pscan_task`
+**halts** (returns, releasing the single-flight slot) instead of retrying — unlike a transient
+transport blip, which it logs and retries next tick. The cursor does **not** advance over the
+unverified batch, is **not** rewound, and the anchor is **not** re-derived; nothing is sealed past
+the mismatch. The justification is finality depth — but it is **conditional on an honest tip**, and
+that condition is worth stating because the layer does not establish it alone. The horizon is
+`tip − reorg_depth` where `tip` is the source's **claimed** height; given an honest tip the verified
+frontier sits beneath the reorg horizon of the *real* tip and an ordinary reorg cannot reach it (a
+**beyond-finality anomaly**). Under an **over-claiming source** the horizon is too high, the frontier
+can advance *within* reorg range, and the same mismatch may instead be an **ordinary reorg** — still
+correctly caught as a halt, since 2d-1 cannot distinguish the two and halting + surfacing is the safe
+response to both. (Tip-honesty is a posture/2d-2 property by our own three-property split, so the
+finality-depth here is tip-honesty-dependent, not unconditional.) Either way the response is the
+same, which is *why* there is no fork-point / re-org-rewind machinery here, where the principal's
+refresh has it. A test asserts the anomaly is **raised, not absorbed** (Err surfaced, no advance,
+frontier hash untouched, nothing sealed).
+
+**Schema — bump without migration (two gates, not one).** `PSCAN_CURSOR_VERSION` and
+`PSCAN_STATE_VERSION` went `1 → 2` with regenerated snapshots. The decision separates into two
+independent gates that the `pending_unbonds` precedent only *looked* fused:
+
+- *Migration code* is gated on **forward-persistence** — and there is none. The `.wallet.pscan`
+  writer (`start_pscan` / the scan task) is dead-code-unwired; no deployed wallet (RC tags
+  included) has ever persisted a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration
+  code**.
+- *The version number* is gated on **rule-42's snapshot guard** — a post-merge `.snap` diff forces
+  the paired constant to move in the same PR (mechanical, persistence-independent). `pending_unbonds`
+  needed no bump only because it rode v1's *creating* PR (a fresh `+` const line — a new, not a
+  changed, version); this is a post-merge amend, so the bump is **forced**. It also honestly marks
+  the real `height → verified-frontier` shape change. No rule-42 escape was taken: suppressing the
+  guard to preserve a "true amend" would weaken a mechanical, self-documenting invariant on
+  sealed funds-bearing state to save one integer — a bad trade.
+
+**Still to build (the rest of SP-6):** `PReconcileSet` (the typed match-set carrying `covered`, so
+absence ≠ unscanned), then the 2d-2 GC that consumes `VerifiedRange` **+ a canonicity token**.
+`frontier_hash` is a public block hash (allowlisted in `.zeroize-allowlist`, like `tip_hash`).
 
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
@@ -1027,9 +1125,9 @@ not as work for it.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
-(`PScanCursor`, Design-B single frontier, **exhaustiveness** completeness — continuity +
-`curve_tree_root`, no PoW; canonicity/tip-honesty are posture/2d-2, see the trust-anchor
-resolution) → SP-3/SP-5 (dual
+(`PScanCursor`, Design-B single frontier, now a verified `(height, hash)` frontier —
+**exhaustiveness** completeness via recompute-and-chain continuity + per-body tx-hash, no PoW;
+canonicity/tip-honesty are posture/2d-2, see the trust-anchor resolution) → SP-3/SP-5 (dual
 extractor + bounded `ScanStep` handler) → SP-4 (`PFundingInflow`, idempotent recompute) → SP-6
 (`PReconcileSet`) → SP-7 (`CoverDiscovery` funding-side gate). Read-side only; SP-2 and SP-4
 land **together** as the one crash-recovery decision. Broadcasts and GCs nothing.

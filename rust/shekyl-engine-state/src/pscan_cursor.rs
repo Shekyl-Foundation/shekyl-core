@@ -39,10 +39,14 @@ use shekyl_types::BlockHeight;
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the `P`-scan cursor. V3.0 ships version `1`. Any field
+/// Schema version of the `P`-scan cursor. V1 was a bare `synced_height`; **v2 adds
+/// the verified-frontier `frontier_hash`** — the cursor is now a `(height, hash)`
+/// verified frontier, not a bare height (see the struct docs for why). Any field
 /// addition / removal / renaming bumps this; loads that see a different version
-/// **refuse rather than migrate** (the `StakingBlock` precedent).
-pub const PSCAN_CURSOR_VERSION: u32 = 1;
+/// **refuse rather than migrate** (the `StakingBlock` precedent). No v1→v2 migration
+/// exists because no deployed wallet ever persisted a v1 `.wallet.pscan` (the scan
+/// task that writes it is not yet wired into the lifecycle).
+pub const PSCAN_CURSOR_VERSION: u32 = 2;
 
 /// `P`'s single authoritative durable scan frontier (SP-2).
 ///
@@ -54,28 +58,50 @@ pub struct PScanCursor {
     /// Per-cursor schema version — `PSCAN_CURSOR_VERSION` on construction,
     /// version-gated on load.
     version: u32,
-    /// The one authoritative durable scan frontier: `P` has scanned every block
-    /// up to (and including the seal-discipline's) this height.
+    /// The one authoritative durable scan frontier: `P` has exhaustively verified
+    /// every block up to (and including the seal-discipline's) this height.
     synced_height: BlockHeight,
+    /// The recomputed block hash of the last verified block (`block[synced_height −
+    /// 1]`), or the genesis `previous` (`[0; 32]`) at `synced_height == 0`.
+    ///
+    /// This makes the cursor a **verified `(height, hash)` frontier**, not a bare
+    /// height: on resume the next batch's first block must chain to *this exact
+    /// hash*, so a source cannot splice a different chain at the resume boundary. A
+    /// height-only cursor structurally cannot refuse that splice (it can't say
+    /// *which* chain's height N) — and under no-wallet-PoW a fabricated fork is free,
+    /// so the only thing a forging source cannot change is a hash already in our own
+    /// sealed state. Parity with the principal refresh's per-height `block_hash_at`
+    /// continuity. A block hash is public chain state, not a secret.
+    frontier_hash: [u8; 32],
 }
 
 impl PScanCursor {
-    /// A fresh cursor at genesis (`synced_height = 0`) — the pre-scan state.
+    /// A fresh cursor at genesis (`synced_height = 0`, `frontier_hash = [0; 32]`) —
+    /// the pre-scan state. The zero `frontier_hash` is the anchor block 0 chains to
+    /// (its `previous`), matching `verify_exhaustive`'s genesis-anchor case.
     pub fn genesis() -> Self {
-        Self::at(BlockHeight::ZERO)
+        Self::at(BlockHeight::ZERO, [0u8; 32])
     }
 
-    /// A cursor pinned to `synced_height`, stamped with the current version.
-    pub fn at(synced_height: BlockHeight) -> Self {
+    /// A cursor pinned to `synced_height` with the recomputed hash of the last
+    /// verified block (`frontier_hash`), stamped with the current version.
+    pub fn at(synced_height: BlockHeight, frontier_hash: [u8; 32]) -> Self {
         Self {
             version: PSCAN_CURSOR_VERSION,
             synced_height,
+            frontier_hash,
         }
     }
 
     /// The scan frontier.
     pub fn synced_height(&self) -> BlockHeight {
         self.synced_height
+    }
+
+    /// The recomputed hash of the last verified block — the anchor the next batch's
+    /// first block must chain to on resume (the verified-frontier invariant).
+    pub fn frontier_hash(&self) -> [u8; 32] {
+        self.frontier_hash
     }
 
     /// The on-cursor schema version.
@@ -119,23 +145,33 @@ mod tests {
 
     #[test]
     fn round_trips_and_preserves_frontier() {
-        let cursor = PScanCursor::at(BlockHeight::from_raw(12_345));
+        let cursor = PScanCursor::at(BlockHeight::from_raw(12_345), [0xC9; 32]);
         let bytes = cursor.to_postcard_bytes().expect("serialize");
         let back = PScanCursor::from_postcard_bytes(&bytes).expect("deserialize");
         assert_eq!(back, cursor);
         assert_eq!(back.synced_height(), BlockHeight::from_raw(12_345));
+        assert_eq!(
+            back.frontier_hash(),
+            [0xC9; 32],
+            "the frontier hash round-trips"
+        );
     }
 
     #[test]
-    fn genesis_is_height_zero_current_version() {
+    fn genesis_is_height_zero_zero_anchor_current_version() {
         let cursor = PScanCursor::genesis();
         assert_eq!(cursor.synced_height(), BlockHeight::ZERO);
+        assert_eq!(
+            cursor.frontier_hash(),
+            [0u8; 32],
+            "genesis anchor is the zero `previous` block 0 chains to"
+        );
         assert_eq!(cursor.version(), PSCAN_CURSOR_VERSION);
     }
 
     #[test]
     fn postcard_encoding_is_byte_stable() {
-        let cursor = PScanCursor::at(BlockHeight::from_raw(777));
+        let cursor = PScanCursor::at(BlockHeight::from_raw(777), [0x5A; 32]);
         let a = cursor.to_postcard_bytes().expect("serialize a");
         let b = PScanCursor::from_postcard_bytes(&a)
             .expect("deserialize")
@@ -152,6 +188,7 @@ mod tests {
         let wrong = PScanCursor {
             version: PSCAN_CURSOR_VERSION + 1,
             synced_height: BlockHeight::from_raw(1),
+            frontier_hash: [0u8; 32],
         };
         let forged = wrong
             .to_postcard_bytes()
