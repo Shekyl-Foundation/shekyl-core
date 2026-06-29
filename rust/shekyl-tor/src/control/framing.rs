@@ -188,7 +188,7 @@ impl std::error::Error for FramingError {}
 /// them; pull complete replies with [`Self::next_reply`] until it returns
 /// `Ok(None)` (need more bytes). Reply state persists across calls, so a reply
 /// may span any number of `push_bytes` chunks.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ReplyFramer {
     /// Raw bytes not yet split into a complete `CRLF`-terminated line.
     buf: Vec<u8>,
@@ -214,6 +214,26 @@ pub struct ReplyFramer {
     scan_from: usize,
 }
 
+// Redacting `Debug` (not derived): `buf` holds raw control bytes mid-assembly and
+// `lines` holds the in-progress reply's payload — circuit IDs / targets — the same
+// forensic surface `ControlReply` redacts. The framer is `pub` (and the actor that
+// owns one would otherwise expose it), so it must not leak that content via a stray
+// `{:?}` or a panic backtrace: render only non-sensitive shape (lengths, offsets,
+// the status code), never `buf` or `lines` content.
+impl std::fmt::Debug for ReplyFramer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplyFramer")
+            .field("buf_len", &self.buf.len())
+            .field("line_count", &self.lines.len())
+            .field("status", &self.status)
+            .field("in_data_block", &self.in_data_block)
+            .field("reply_bytes", &self.reply_bytes)
+            .field("read_pos", &self.read_pos)
+            .field("scan_from", &self.scan_from)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ReplyFramer {
     /// A fresh framer with no buffered bytes.
     #[must_use]
@@ -235,12 +255,7 @@ impl ReplyFramer {
             // Bound an un-terminated reply: many valid lines with no end line grow
             // `self.lines` without bound. (`take_line` separately bounds a single
             // un-terminated *line*.) `reply_bytes` resets in `finish`.
-            self.reply_bytes += line.len();
-            if self.reply_bytes > MAX_REPLY_BYTES {
-                return Err(FramingError::ReplyTooLarge {
-                    limit: MAX_REPLY_BYTES,
-                });
-            }
+            self.charge_reply_bytes(line.len())?;
             // Inside a `+` data block every line is verbatim data until a lone
             // `.`; nothing here is a framing line.
             if self.in_data_block {
@@ -254,6 +269,10 @@ impl ReplyFramer {
                         last.push('\n');
                         last.push_str(data);
                     }
+                    // The folded `\n` is real buffered state the `line.len()` charge
+                    // above misses — without it a flood of empty data lines grows
+                    // the entry unbounded while `reply_bytes` stays flat. Charge it.
+                    self.charge_reply_bytes(1)?;
                 }
                 continue;
             }
@@ -299,6 +318,21 @@ impl ReplyFramer {
             }
         }
         Ok(None)
+    }
+
+    /// Charge `n` bytes toward the in-progress reply and trip the cap if exceeded.
+    /// Called with each line's length **and** the `\n` a data-block fold inserts,
+    /// so the running total conservatively bounds the buffered reply memory —
+    /// closing the hole where a folded `\n` (e.g. a flood of empty data lines)
+    /// would otherwise go uncounted.
+    fn charge_reply_bytes(&mut self, n: usize) -> Result<(), FramingError> {
+        self.reply_bytes += n;
+        if self.reply_bytes > MAX_REPLY_BYTES {
+            return Err(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            });
+        }
+        Ok(())
     }
 
     /// Take the assembled reply and reset for the next one. `status` is threaded
@@ -712,5 +746,44 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, n);
+    }
+
+    #[test]
+    fn caps_a_flood_of_empty_data_lines() {
+        // A `+` data block then endless EMPTY data lines (`\r\n`, each
+        // `line.len() == 0`) must still trip the cap: each fold inserts a `\n` —
+        // real buffered state the raw `line.len()` charge alone would miss, which
+        // would let the entry grow unbounded with `reply_bytes` flat. Regression.
+        let mut wire = b"250+k=\r\n".to_vec();
+        for _ in 0..(MAX_REPLY_BYTES + 8) {
+            wire.extend_from_slice(b"\r\n");
+        }
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(&wire);
+        assert_eq!(
+            framer.next_reply(),
+            Err(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            }),
+        );
+    }
+
+    #[test]
+    fn framer_debug_redacts_payload_and_buffer() {
+        // The framer holds the same forensic payload `ControlReply` redacts — the
+        // in-progress `lines` — plus raw control bytes in `buf` mid-assembly. Its
+        // `Debug` must render only shape, never that content (the no-log invariant
+        // applies one layer up from `ControlReply`, not just to it).
+        let mut framer = ReplyFramer::new();
+        // A complete mid-line lands in `lines`; the partial tail stays in `buf`.
+        framer.push_bytes(b"250-x=secret-target.onion\r\n650 also-secret");
+        assert_eq!(framer.next_reply().unwrap(), None, "reply still incomplete");
+        let rendered = format!("{framer:?}");
+        assert!(
+            !rendered.contains("secret-target") && !rendered.contains("also-secret"),
+            "framer Debug leaked content: {rendered}"
+        );
+        // Non-sensitive shape stays visible.
+        assert!(rendered.contains("line_count") && rendered.contains("buf_len"));
     }
 }
