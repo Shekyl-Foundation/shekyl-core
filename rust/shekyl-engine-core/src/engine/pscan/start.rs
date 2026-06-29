@@ -133,6 +133,22 @@ where
     engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
 }
 
+/// Run a synchronous file-I/O closure off the async executor's critical path.
+///
+/// [`tokio::task::block_in_place`] yields the worker for the blocking call, but it
+/// **panics** on a `current_thread` runtime — and this crate builds those (e.g.
+/// [`drive_persistence`](crate::engine::lifecycle), via `Builder::new_current_thread`).
+/// So gate on the flavor: yield the worker on a multi-threaded runtime, and call
+/// directly on `current_thread` (where there is no sibling worker to free anyway).
+/// The P-scan seal/open is small, infrequent file I/O, so the direct-call block on
+/// a single-threaded runtime is acceptable; the point is to never *panic*.
+fn run_blocking_io<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::current().runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
 /// Failures of the file-backed store: either the `WalletFile` seal/open layer, or
 /// postcard (de)serialization of the [`PScanState`] body.
 #[derive(Debug, thiserror::Error)]
@@ -165,12 +181,12 @@ where
             // Read + open under the lock; the guard drops before we decode. The
             // seal stays single-sourced in `WalletFile` (seam b), which is held by
             // value behind the lock and so cannot move into `spawn_blocking`;
-            // `block_in_place` instead frees the tokio worker for the synchronous
+            // `run_blocking_io` instead frees the tokio worker for the synchronous
             // file I/O without relocating the `WalletFile` (no await spans it, so
             // the read guard is fine).
             let body = {
                 let g = engine.read().await;
-                tokio::task::block_in_place(|| {
+                run_blocking_io(|| {
                     g.persistence()
                         .open_pscan_state(g.state_wrap_key().as_bytes())
                 })?
@@ -196,10 +212,11 @@ where
         async move {
             let body = body.map_err(WalletFilePScanStoreError::Codec)?;
             let g = engine.read().await;
-            // `block_in_place` for the synchronous seal + atomic write: frees the
-            // tokio worker without moving the lock-held `WalletFile` (seam b keeps
-            // the seal single-sourced there). No await spans the guard.
-            tokio::task::block_in_place(|| {
+            // `run_blocking_io` for the synchronous seal + atomic write: frees the
+            // tokio worker (on a multi-threaded runtime) without moving the
+            // lock-held `WalletFile` (seam b keeps the seal single-sourced there).
+            // No await spans the guard.
+            run_blocking_io(|| {
                 g.persistence()
                     .save_pscan_state(g.state_wrap_key().as_bytes(), &body)
             })?;
@@ -465,5 +482,20 @@ mod tests {
         drop(guard);
         assert!(!slot.is_claimed(), "dropping the guard releases the slot");
         assert!(slot.try_claim().is_some(), "the slot can be reclaimed");
+    }
+
+    /// The store's blocking-I/O helper must not panic on a `current_thread` runtime
+    /// — a bare `tokio::task::block_in_place` would. `drive_persistence` builds such
+    /// runtimes, so the flavor gate is load-bearing, not theoretical.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_blocking_io_does_not_panic_on_a_current_thread_runtime() {
+        let v = run_blocking_io(|| 42);
+        assert_eq!(v, 42, "falls back to a direct call instead of panicking");
+    }
+
+    /// And it still runs (via `block_in_place`) on a multi-threaded runtime.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_blocking_io_runs_on_a_multi_thread_runtime() {
+        assert_eq!(run_blocking_io(|| 7), 7);
     }
 }

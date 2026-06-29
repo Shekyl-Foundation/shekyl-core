@@ -290,7 +290,7 @@ async fn dispatch_retires(
     let candidates: Vec<(PCanonicalId, SettlementEpoch)> = accrual
         .pending_unbonds()
         .iter()
-        .filter(|(id, _)| !retired_this_session.contains(*id))
+        .filter(|&(id, _)| !retired_this_session.contains(id))
         .map(|(&id, &unbond)| (id, unbond))
         .collect();
 
