@@ -166,6 +166,14 @@ impl VerifiedBatch {
     /// `#[cfg(test)]`, so the verification gate stays intact in production.
     #[cfg(test)]
     pub(crate) fn for_test(low: u64, high: u64, frontier_hash: [u8; 32]) -> Self {
+        // A real `VerifiedRange` always has `low <= high` (verify_exhaustive returns
+        // `[first, first + n)`; `extend` only widens). Assert it here so a test that
+        // passes a backwards range fails fast with a clear message instead of producing
+        // a nonsensical range that confuses `extend`/`reconcile` downstream.
+        assert!(
+            low <= high,
+            "VerifiedBatch::for_test requires low <= high, got [{low}, {high})"
+        );
         Self {
             range: VerifiedRange {
                 low: BlockHeight::from_raw(low),

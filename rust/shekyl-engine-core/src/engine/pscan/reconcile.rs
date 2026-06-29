@@ -16,10 +16,14 @@
 //! The binding is the type-safety spine: `VerifiedRange` (the exhaustiveness evidence)
 //! and `BondPostMatch` (the matches) exist separately, but **nothing should let a
 //! consumer reason about a match set's absence over a range it was not gathered for**.
-//! [`PReconcileSet`] is that binding — its constructor takes a [`VerifiedRange`], which
-//! only [`verify_exhaustive`](super::exhaustiveness::verify_exhaustive) can produce, so
-//! a value of this type is proof its matches are complete within an
-//! exhaustively-verified range and the absence query is gated on that range.
+//! [`PReconcileSet`] is that binding — its constructor takes a [`VerifiedRange`], which is
+//! produced **only** by the verification-gated path (per-batch
+//! [`verify_exhaustive`](super::exhaustiveness::verify_exhaustive), the
+//! [`extend`](super::exhaustiveness::VerifiedRange::extend)-by-`VerifiedBatch` advance, or — at
+//! the one seal-trust boundary — reconstruction from our own sealed verified frontier), **never
+//! by hand** (see `VerifiedRange`'s verified-advance discipline). So a value of this type is proof
+//! its matches are complete within an exhaustively-verified range, and the absence query is gated
+//! on that range.
 //!
 //! **Exhaustiveness, not canonicity.** `covered` claims "scanned every block in
 //! `[low, high)` on the chain served," not "this is the most-work chain." The GC
@@ -123,10 +127,11 @@ mod tests {
     use crate::engine::pscan::exhaustiveness::verify_exhaustive;
     use crate::engine::test_support::make_synthetic_block;
 
-    /// A real [`VerifiedRange`] `[first, first + len)` from a verified synthetic chain —
-    /// the only way to obtain one, since `verify_exhaustive` is its sole constructor.
-    /// This keeps the tests honest: a `PReconcileSet` here is built from genuinely
-    /// verified evidence, not a hand-forged range.
+    /// A real [`VerifiedRange`] `[first, first + len)` produced through the **verified
+    /// production path** — `verify_exhaustive` over a synthetic chain — rather than the
+    /// `genesis_empty` / seal-reconstruct lifecycle constructors. This keeps the tests
+    /// honest: a `PReconcileSet` here is built from genuinely verified evidence, not a
+    /// hand-forged range.
     fn covered_range(first: u64, len: u64) -> VerifiedRange {
         let mut blocks = Vec::new();
         let mut prev = [0u8; 32];
