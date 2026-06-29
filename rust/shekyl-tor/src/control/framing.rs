@@ -37,13 +37,26 @@
 /// distinct from a synchronous command reply (control-spec §4.1).
 pub const ASYNC_EVENT_STATUS: u16 = 650;
 
+/// Upper bound on the bytes the framer will buffer for a single in-progress
+/// reply — both one un-terminated line and the running total of an un-terminated
+/// reply. Past it, [`ReplyFramer::next_reply`] returns
+/// [`FramingError::ReplyTooLarge`] so the caller tears the connection down rather
+/// than buffering forever.
+///
+/// The wallet's control replies are small (a status + short value, or a `STREAM`
+/// event), so 256 KiB is generous; it caps a misbehaving — or compromised —
+/// local Tor without risking a legitimate reply. The control port is
+/// loopback-local, so this is defense-in-depth (DoS-never-theft), not an
+/// adversarial-network bound.
+const MAX_REPLY_BYTES: usize = 256 * 1024;
+
 /// A complete, framed control-port reply — either a synchronous command reply or
 /// an asynchronous event (distinguished by [`Self::is_async_event`]).
 ///
 /// `lines` carries the payload with the status code and its separator stripped;
 /// a `+`-introduced data block is folded, dot-unstuffed, into the single
 /// `\n`-joined entry the `+` line began.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ControlReply {
     /// The 3-digit status code shared by every framing line of the reply.
     pub status: u16,
@@ -58,6 +71,21 @@ impl ControlReply {
     #[must_use]
     pub fn is_async_event(&self) -> bool {
         self.status == ASYNC_EVENT_STATUS
+    }
+}
+
+// Redacting `Debug` (not derived): `lines` carries the control-port payload — a
+// `STREAM` event's circuit IDs and targets, a `GETINFO` value — and the crate's
+// no-log invariant says that must not reach a log, including via a stray `{:?}`,
+// an `assert_eq!` failure message, or a panic backtrace. Render only the
+// non-sensitive shape (`status` + line count); the `..` marks `lines` omitted.
+// Same posture as `SocksUsername` in `shekyl-p-transport`.
+impl std::fmt::Debug for ControlReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlReply")
+            .field("status", &self.status)
+            .field("line_count", &self.lines.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -97,6 +125,14 @@ pub enum FramingError {
         /// Conflicting code on a later framing line.
         found: u16,
     },
+    /// A single line, or the running total of one reply, exceeded the
+    /// `MAX_REPLY_BYTES` buffer cap without terminating — an un-terminated
+    /// line/reply that would otherwise buffer without bound (DoS). Content-free:
+    /// only the limit.
+    ReplyTooLarge {
+        /// The byte cap that was exceeded (`MAX_REPLY_BYTES`).
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for FramingError {
@@ -115,6 +151,9 @@ impl std::fmt::Display for FramingError {
             }
             Self::StatusMismatch { first, found } => {
                 write!(f, "control reply status codes disagree: {first} != {found}")
+            }
+            Self::ReplyTooLarge { limit } => {
+                write!(f, "control reply exceeded the {limit}-byte buffer cap")
             }
         }
     }
@@ -137,6 +176,10 @@ pub struct ReplyFramer {
     status: Option<u16>,
     /// `true` while inside a `XYZ+ … .` multi-line data block.
     in_data_block: bool,
+    /// Wire bytes consumed into the in-progress reply so far (every framing/data
+    /// line). Bounds an un-terminated *reply* (many valid lines, no end line)
+    /// against [`MAX_REPLY_BYTES`]; reset when a reply completes.
+    reply_bytes: usize,
 }
 
 impl ReplyFramer {
@@ -157,6 +200,15 @@ impl ReplyFramer {
     /// desynced — tear the connection down.
     pub fn next_reply(&mut self) -> Result<Option<ControlReply>, FramingError> {
         while let Some(line) = self.take_line()? {
+            // Bound an un-terminated reply: many valid lines with no end line grow
+            // `self.lines` without bound. (`take_line` separately bounds a single
+            // un-terminated *line*.) `reply_bytes` resets in `finish`.
+            self.reply_bytes += line.len();
+            if self.reply_bytes > MAX_REPLY_BYTES {
+                return Err(FramingError::ReplyTooLarge {
+                    limit: MAX_REPLY_BYTES,
+                });
+            }
             // Inside a `+` data block every line is verbatim data until a lone
             // `.`; nothing here is a framing line.
             if self.in_data_block {
@@ -223,6 +275,7 @@ impl ReplyFramer {
     /// is unrepresentable here, rather than a `0` papered over a logic bug.
     fn finish(&mut self, status: u16) -> ControlReply {
         self.status = None;
+        self.reply_bytes = 0;
         let lines = std::mem::take(&mut self.lines);
         ControlReply { status, lines }
     }
@@ -231,8 +284,22 @@ impl ReplyFramer {
     /// complete line is buffered yet. Strict UTF-8 (control replies are ASCII).
     fn take_line(&mut self) -> Result<Option<String>, FramingError> {
         let Some(pos) = self.buf.windows(2).position(|w| w == b"\r\n") else {
+            // No terminator yet. With no `CRLF` anywhere, the whole buffer is one
+            // partial line; if it already exceeds the cap the peer will never
+            // terminate it (or is flooding) — refuse rather than buffer on.
+            if self.buf.len() > MAX_REPLY_BYTES {
+                return Err(FramingError::ReplyTooLarge {
+                    limit: MAX_REPLY_BYTES,
+                });
+            }
             return Ok(None);
         };
+        // A single terminated line longer than the cap is abuse, too.
+        if pos > MAX_REPLY_BYTES {
+            return Err(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            });
+        }
         let line = std::str::from_utf8(&self.buf[..pos])
             .map_err(|_| FramingError::InvalidUtf8)?
             .to_owned();
@@ -413,5 +480,81 @@ mod tests {
     fn empty_payload_end_line_is_fine() {
         // `250 ` then CRLF: a valid end line with an empty payload.
         assert_eq!(frame_all(b"250 \r\n").unwrap(), vec![reply(250, &[""])]);
+    }
+
+    #[test]
+    fn control_reply_debug_redacts_the_payload() {
+        // `lines` may carry a `STREAM` event's circuit IDs / targets; `Debug` must
+        // render only the shape, never the content (the crate's no-log invariant).
+        let event = frame_all(b"650 STREAM 42 SENTCONNECT 7 secret-target.onion:80\r\n")
+            .unwrap()
+            .pop()
+            .expect("one event");
+        let rendered = format!("{event:?}");
+        assert!(
+            !rendered.contains("secret-target") && !rendered.contains("STREAM"),
+            "ControlReply Debug leaked the payload: {rendered}"
+        );
+        // The non-sensitive shape stays visible for debugging.
+        assert!(rendered.contains("status: 650") && rendered.contains("line_count: 1"));
+    }
+
+    #[test]
+    fn caps_an_unterminated_line() {
+        // A single line that never sends `CRLF` must not buffer without bound.
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(&vec![b'x'; MAX_REPLY_BYTES + 1]);
+        assert_eq!(
+            framer.next_reply(),
+            Err(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            }),
+        );
+    }
+
+    #[test]
+    fn caps_an_unterminated_reply() {
+        // Many large *valid* mid-lines with no end line trip the per-reply cap
+        // (each line is individually under the per-line cap, so only the running
+        // total catches it).
+        let big_mid = format!("250-{}\r\n", "x".repeat(60_000)); // ~60 KB mid-line
+        let mut framer = ReplyFramer::new();
+        let mut hit = None;
+        for _ in 0..8 {
+            framer.push_bytes(big_mid.as_bytes());
+            if let Err(e) = framer.next_reply() {
+                hit = Some(e);
+                break;
+            }
+        }
+        assert_eq!(
+            hit,
+            Some(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            }),
+        );
+    }
+
+    #[test]
+    fn a_large_batch_of_small_replies_is_not_capped() {
+        // Pushing many *complete* small replies at once is the caller's choice, not
+        // a never-terminated stream: the counter resets per reply, so none is
+        // capped (no false positive).
+        let n = 1000;
+        let mut batch = Vec::new();
+        for _ in 0..n {
+            batch.extend_from_slice(b"250 OK\r\n");
+        }
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(&batch);
+        let mut count = 0;
+        while framer
+            .next_reply()
+            .expect("a batch of valid replies must not be capped")
+            .is_some()
+        {
+            count += 1;
+        }
+        assert_eq!(count, n);
     }
 }

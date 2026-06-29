@@ -46,7 +46,12 @@ const CONTROLLER_TO_SERVER_KEY: &[u8] = b"Tor safe cookie authentication control
 /// Secret key material: whoever holds it can authenticate to — and so drive —
 /// the control port. Zeroized on drop (rule 35); its [`Debug`] never renders the
 /// bytes. Owned in Rust and used only to derive the auth HMACs (rule 36).
-#[derive(Clone, ZeroizeOnDrop)]
+///
+/// **Not `Clone`** — duplicating secret material is a handling anti-pattern (each
+/// copy is another live secret to wipe), matching the convention on secret
+/// wrappers like `TxSecretKey`. The auth functions borrow `&ControlCookie`, so no
+/// copy is needed; the actor reads the cookie file into exactly one of these.
+#[derive(ZeroizeOnDrop)]
 pub struct ControlCookie([u8; 32]);
 
 impl ControlCookie {
