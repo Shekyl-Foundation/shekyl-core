@@ -7227,6 +7227,18 @@ one place to confirm each item's relationship to the wallet stack.
   SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
   (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
   SP-6/SP-7.
+- **2d-2 SP-T1 — take `shekyl-types::PCanonicalId` and delete `PCircuitTag` (gated on #205).**
+  `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw `[u8; 32]` and mints a local
+  `PCircuitTag` wrapper — correct against *today's* dev, but PR-B (#205) promotes `p_canonical_id` to
+  a `shekyl_types::PCanonicalId` newtype (used across `pscan_state`/`accrual`/`stake_engine`). Once
+  #205 lands, **change `derive_socks_user`/`for_persona` to take `&PCanonicalId` and delete
+  `PCircuitTag`** — keeping both is two newtypes over the same 32 bytes (the uniformity-driven
+  re-wrap of public material this file warns against). **Named criterion (`21`):** `shekyl-types` is
+  verified a serde+zeroize leaf (no engine-core, no weight), so the dependency is free → take
+  `&PCanonicalId`, drop `PCircuitTag`; **reopen only if** `shekyl-types` grows a heavy transitive
+  dep. **Target:** V3.x (immediately after #205). See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §15 and
+  `rust/shekyl-p-transport/src/lib.rs`.
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of
