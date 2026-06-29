@@ -7232,9 +7232,8 @@ one place to confirm each item's relationship to the wallet stack.
   `derive_socks_user`/`for_persona` now take `&PCanonicalId` and `PCircuitTag` is deleted. The change
   is **byte-preserving** — the pinned SOCKS-username KATs are unchanged (same 32 bytes → same
   cSHAKE256) — and `shekyl-types` was confirmed a serde+zeroize leaf, so the `21` criterion held (not
-  reopened). Original rationale follows.
-
-  `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw `[u8; 32]` and mints a local
+  reopened). Original rationale: `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw
+  `[u8; 32]` and mints a local
   `PCircuitTag` wrapper — correct against *today's* dev, but PR-B (#205) promotes `p_canonical_id` to
   a `shekyl_types::PCanonicalId` newtype (used across `pscan_state`/`accrual`/`stake_engine`). Once
   #205 lands, **change `derive_socks_user`/`for_persona` to take `&PCanonicalId` and delete

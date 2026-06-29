@@ -100,7 +100,48 @@ macro_rules! scalar_u64 {
 /// Defines a `[u8; 32]`-backed, transparent identity-hash newtype with
 /// `from_bytes` / `to_bytes` / `as_bytes` and a lowercase-hex `Display`.
 macro_rules! hash32 {
+    // Default `Debug` renders the full hex — public, non-correlating hashes
+    // (`TxHash`, `BlockHash`, …) where the whole value aids debugging and the
+    // chain already publishes it.
     ($(#[$doc:meta])* $name:ident) => {
+        hash32!(@body $(#[$doc])* $name);
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                // Delegate to the hex `Display` rather than dumping the raw byte
+                // array; `debug_tuple().field(...)` keeps the single field
+                // represented so `missing_fields_in_debug` is satisfied.
+                f.debug_tuple(stringify!($name))
+                    .field(&format_args!("{self}"))
+                    .finish()
+            }
+        }
+    };
+
+    // `redact` opts a correlation-sensitive identity into a **truncated** `Debug`
+    // (first two bytes only). The value is public on chain, but the *full* id in a
+    // local log or panic backtrace is an origin-edge correlation artifact — it
+    // links the principal's machine to the persona. 16 bits disambiguates for
+    // debugging without reproducing the whole identifier in an unsanitised stream.
+    // `Display` is deliberately left full: it is the canonical hex *encoding*, not
+    // a log line.
+    ($(#[$doc:meta])* $name:ident, redact) => {
+        hash32!(@body $(#[$doc])* $name);
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    f,
+                    concat!(stringify!($name), "({:02x}{:02x}..)"),
+                    self.0[0], self.0[1]
+                )
+            }
+        }
+    };
+
+    // Shared body — derives, accessors, `AsRef`, `Display`; **not** `Debug`, which
+    // the arms above add per redaction policy.
+    (@body $(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         // `PartialOrd`/`Ord` (lexicographic over the bytes) so these hashes
         // can key the `BTreeMap`/`BTreeSet`s that wallet-state uses for
@@ -161,16 +202,6 @@ macro_rules! hash32 {
             }
         }
 
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                // Delegate to the hex `Display` rather than dumping the raw
-                // byte array; `debug_tuple().field(...)` keeps the single
-                // field represented so `missing_fields_in_debug` is satisfied.
-                f.debug_tuple(stringify!($name))
-                    .field(&format_args!("{self}"))
-                    .finish()
-            }
-        }
     };
 }
 
@@ -261,7 +292,12 @@ hash32! {
     /// their edge via [`PCanonicalId::as_bytes`] / [`PCanonicalId::from_bytes`].
     /// Distinct from [`TxHash`] / [`BlockHash`] so a hash of one kind can never be
     /// passed where another is expected.
-    PCanonicalId
+    ///
+    /// `Debug` is **truncated** (`redact`): the full persona id in a local log or
+    /// panic backtrace would correlate the principal's machine to `P` — the exact
+    /// `P`↔principal edge the firewall protects. `Display` stays full hex (it is
+    /// the canonical encoding, not a log line).
+    PCanonicalId, redact
 }
 
 // ── BlockHeight ↔ BlockCount algebra ────────────────────────────────────────

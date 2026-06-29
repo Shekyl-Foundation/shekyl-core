@@ -120,6 +120,34 @@ fn hash_display_is_lowercase_hex() {
 }
 
 #[test]
+fn pcanonical_id_debug_is_truncated_but_display_is_full() {
+    // `PCanonicalId` is the persona identity: the *full* id in a local log or
+    // panic backtrace is a `P`↔principal correlation artifact (the firewall edge),
+    // so its `Debug` is truncated to the first two bytes. `Display` stays the full
+    // hex encoding. (This replaces the safety property the deleted local
+    // `PCircuitTag::Debug` used to carry, now on the type itself.)
+    let mut bytes = [0xABu8; 32];
+    bytes[0] = 0xDE;
+    bytes[1] = 0xAD;
+    let id = PCanonicalId::from_bytes(bytes);
+
+    // Truncated Debug: two bytes then `..`, and nothing of the tail leaks.
+    assert_eq!(format!("{id:?}"), "PCanonicalId(dead..)");
+    assert!(!format!("{id:?}").contains("abab"));
+
+    // Display is unchanged — the canonical 64-hex encoding.
+    let shown = id.to_string();
+    assert_eq!(shown.len(), 64);
+    assert!(shown.starts_with("dead") && shown.ends_with("ab"));
+
+    // Targeting: a non-persona hash (`TxHash`) keeps its full-hex Debug.
+    assert_eq!(
+        format!("{:?}", TxHash::from_bytes(bytes)),
+        format!("TxHash({shown})")
+    );
+}
+
+#[test]
 fn hashes_order_lexicographically_for_btree_keys() {
     // Hashes must be `Ord` so they can key the `BTreeMap`/`BTreeSet`s that
     // wallet-state uses for deterministic txid ordering (PR C). Ordering is
