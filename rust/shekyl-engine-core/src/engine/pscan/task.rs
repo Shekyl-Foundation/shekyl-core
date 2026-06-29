@@ -249,7 +249,14 @@ where
 
         // Seal (cursor + accruals + pending unbonds) atomically — the write half
         // of the SP-2 discipline, after every step so a crash re-scans at most one
-        // batch.
+        // batch. `to_state()` clones the maps, but that clone is *not* the cost
+        // here: `accruals` grows ~1 entry per 10k-block settlement epoch (hundreds
+        // over the chain's life), so the few-KB clone is dwarfed by the postcard
+        // serialize (itself O(#epochs)) + AEAD seal + `atomic_write_file` fsync.
+        // Keeping the persisted `PScanState` (engine-state) distinct from the
+        // working `PScanAccrual` (engine-core) is worth that clone; the lever if
+        // per-batch persistence ever profiles hot is seal *cadence* (trade the
+        // at-most-one-batch crash re-scan), not a borrowed-codec micro-opt.
         store
             .save(&accrual.to_state())
             .await
