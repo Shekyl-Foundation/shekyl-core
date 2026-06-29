@@ -98,9 +98,11 @@ pub(crate) trait BlockSource {
     ///
     /// `Ok(None)` means the source can *prove* there is no block at `height`
     /// (above tip / pruned) — a capability that requires header-chain anchoring
-    /// and is therefore a 2d-2 transport property. The 2d-1 [`DaemonBlockSource`]
-    /// surfaces a missing block as `Err`: it cannot *prove* absence (that is
-    /// SP-7's root-anchored job), so it never fabricates a `None`.
+    /// and is therefore a 2d-2 transport property (withheld-body robustness; see
+    /// the trust-anchor resolution — exhaustiveness is 2d-1, withheld-body / fork /
+    /// tip robustness is 2d-2, not a wallet-side PoW/root-anchoring job). The 2d-1
+    /// [`DaemonBlockSource`] surfaces a missing block as `Err`: it cannot *prove*
+    /// absence, so it never fabricates a `None`.
     fn block_at(
         &self,
         height: BlockHeight,
