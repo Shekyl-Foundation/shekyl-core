@@ -28,4 +28,4 @@ pub mod framing;
 pub mod safecookie;
 
 pub use framing::{ControlReply, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
-pub use safecookie::{client_hash, verify_server_hash, ControlCookie};
+pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};

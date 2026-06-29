@@ -23,6 +23,11 @@
 //! arguments). Isolating it keeps the crypto on a pinned-vector unit gate
 //! (rule 30) rather than reachable only through a live Tor.
 //!
+//! The verify-*before*-authenticate ordering in step 3 is not left to caller
+//! discipline: it is a typestate. [`ServerVerified`] — minted only by
+//! [`verify_server_hash`] returning `Some` — is the sole path to the client hash,
+//! so "send `AUTHENTICATE` without a successful verify" does not type-check.
+//!
 //! The cookie is secret key material — anyone holding it can drive the control
 //! port — so it lives in a [`ControlCookie`] that zeroizes on drop (rule 35) and
 //! never renders its bytes.
@@ -93,37 +98,103 @@ fn auth_hmac(
     mac
 }
 
-/// Compute the `CLIENTHASH` the controller returns in `AUTHENTICATE`:
-/// `HMAC-SHA256(controller→server key, cookie ‖ client_nonce ‖ server_nonce)`.
-#[must_use]
-pub fn client_hash(
-    cookie: &ControlCookie,
-    client_nonce: &[u8; 32],
-    server_nonce: &[u8; 32],
-) -> [u8; 32] {
-    auth_hmac(CONTROLLER_TO_SERVER_KEY, cookie, client_nonce, server_nonce)
+/// Proof that Tor's `SERVERHASH` verified against the cookie — and the **sole**
+/// path to the `CLIENTHASH` that `AUTHENTICATE` carries.
+///
+/// SAFECOOKIE's security rests on the controller verifying `SERVERHASH` *before*
+/// it sends `AUTHENTICATE` (mutual auth — §3.24). This typestate makes "send
+/// `AUTHENTICATE` without a successful verify" **unrepresentable** rather than
+/// merely discouraged: the only way to reach the client hash is
+/// [`ServerVerified::client_hash`], and the only way to obtain a `ServerVerified`
+/// is [`verify_server_hash`] returning `Some`.
+///
+/// **Non-forgeable by construction** — a private field, no `Default`, no public
+/// constructor — so no caller can mint one without a real verify. (Same
+/// sole-constructor discipline `PTorClient::for_persona` enforces in
+/// `shekyl-p-transport`.) A stray `pub fn new` or a derived `Default` would turn
+/// the guarantee into theatre, so neither exists.
+///
+/// The proof is a **pair**, because a `compile_fail` passes on *any* compile error
+/// — on its own a broken path or a typo would "pass" while silently testing
+/// nothing. The positive doctest anchors that the public path resolves and the
+/// legitimate route compiles and computes; the negative one is then left with
+/// nothing to fail on but the private field:
+///
+/// ```
+/// // Legitimate route: a real verify is the sole path to a client hash.
+/// use shekyl_tor::control::{verify_server_hash, ControlCookie, ServerVerified};
+/// let cookie = ControlCookie::new([0u8; 32]);
+/// let verified: Option<ServerVerified<'_>> =
+///     verify_server_hash(&cookie, &[1u8; 32], &[2u8; 32], &[3u8; 32]);
+/// if let Some(v) = verified {
+///     let _client_hash: [u8; 32] = v.client_hash();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// // Forge attempt: private fields, no constructor ⇒ uninstantiable from outside.
+/// use shekyl_tor::control::ServerVerified;
+/// let _ = ServerVerified { cookie: todo!(), client_nonce: [0u8; 32], server_nonce: [0u8; 32] };
+/// ```
+///
+/// It **borrows** the cookie (`&'a ControlCookie`) rather than owning it: the
+/// cookie is `!Clone` + `ZeroizeOnDrop`, so it cannot be copied and is not moved
+/// out of the actor, and the borrow scopes this token to the handshake window —
+/// a stale verification cannot be stashed and reused, and the cookie zeroizes the
+/// moment `AUTHENTICATE` lands and the actor drops it. The lifetime *is* the
+/// security property.
+pub struct ServerVerified<'a> {
+    cookie: &'a ControlCookie,
+    client_nonce: [u8; 32],
+    server_nonce: [u8; 32],
+}
+
+impl ServerVerified<'_> {
+    /// The `CLIENTHASH` to send in `AUTHENTICATE`:
+    /// `HMAC-SHA256(controller→server key, cookie ‖ client_nonce ‖ server_nonce)`.
+    /// Reachable only after a successful [`verify_server_hash`].
+    #[must_use]
+    pub fn client_hash(&self) -> [u8; 32] {
+        auth_hmac(
+            CONTROLLER_TO_SERVER_KEY,
+            self.cookie,
+            &self.client_nonce,
+            &self.server_nonce,
+        )
         .finalize()
         .into_bytes()
         .into()
+    }
 }
 
 /// Verify the `SERVERHASH` Tor returned in its `AUTHCHALLENGE` reply — the
-/// mutual-authentication step proving Tor holds the same cookie.
+/// mutual-authentication step proving Tor holds the same cookie — and on success
+/// mint the [`ServerVerified`] token that unlocks the client hash.
 ///
 /// The comparison is **constant-time** (HMAC `verify_slice`); a mismatch *or* a
-/// wrong-length `received` both return `false`. Authentication must abort on
-/// `false`: it means the cookie disagrees (a wrong file, or an impostor on the
-/// control port).
+/// wrong-length `received` both yield `None`. `None` means the cookie disagrees
+/// (a wrong file, or an impostor on the control port) and authentication must
+/// abort — which, because the client hash is unreachable without the `Some`, is
+/// the *only* thing a caller can then do.
 #[must_use]
-pub fn verify_server_hash(
-    cookie: &ControlCookie,
+pub fn verify_server_hash<'a>(
+    cookie: &'a ControlCookie,
     client_nonce: &[u8; 32],
     server_nonce: &[u8; 32],
     received: &[u8],
-) -> bool {
-    auth_hmac(SERVER_TO_CONTROLLER_KEY, cookie, client_nonce, server_nonce)
+) -> Option<ServerVerified<'a>> {
+    if auth_hmac(SERVER_TO_CONTROLLER_KEY, cookie, client_nonce, server_nonce)
         .verify_slice(received)
         .is_ok()
+    {
+        Some(ServerVerified {
+            cookie,
+            client_nonce: *client_nonce,
+            server_nonce: *server_nonce,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -160,58 +231,54 @@ mod tests {
     }
 
     #[test]
-    fn client_hash_matches_independent_vector() {
-        assert_eq!(
-            client_hash(&cookie(), &seq(32), &seq(64)),
-            hex32(CLIENT_HASH_HEX),
-        );
+    fn verified_client_hash_matches_independent_vector() {
+        // The single end-to-end pin: a successful verify yields the token, and the
+        // token's client hash matches the independent reference. A wrong client
+        // hash (swapped key, ignored input) fails *here*.
+        let cookie = cookie();
+        let verified = verify_server_hash(&cookie, &seq(32), &seq(64), &hex32(SERVER_HASH_HEX))
+            .expect("the pinned SERVERHASH must verify against the pinned inputs");
+        assert_eq!(verified.client_hash(), hex32(CLIENT_HASH_HEX));
     }
 
     #[test]
-    fn server_hash_verifies_against_independent_vector() {
-        assert!(verify_server_hash(
-            &cookie(),
-            &seq(32),
-            &seq(64),
-            &hex32(SERVER_HASH_HEX),
-        ));
+    fn verify_accepts_the_pinned_server_hash() {
+        let cookie = cookie();
+        assert!(verify_server_hash(&cookie, &seq(32), &seq(64), &hex32(SERVER_HASH_HEX)).is_some());
     }
 
     #[test]
-    fn server_hash_rejects_a_flipped_bit() {
+    fn verify_rejects_a_flipped_bit() {
+        let cookie = cookie();
         let mut tampered = hex32(SERVER_HASH_HEX);
         tampered[0] ^= 0x01;
-        assert!(!verify_server_hash(
-            &cookie(),
-            &seq(32),
-            &seq(64),
-            &tampered
-        ));
+        assert!(verify_server_hash(&cookie, &seq(32), &seq(64), &tampered).is_none());
     }
 
     #[test]
-    fn server_hash_rejects_wrong_length() {
+    fn verify_rejects_wrong_length() {
+        let cookie = cookie();
         let short = &hex32(SERVER_HASH_HEX)[..31];
-        assert!(!verify_server_hash(&cookie(), &seq(32), &seq(64), short));
+        assert!(verify_server_hash(&cookie, &seq(32), &seq(64), short).is_none());
     }
 
     #[test]
     fn directions_use_distinct_keys() {
-        // Same input, different key string ⇒ the client hash must not collide
+        // Same inputs, different key string ⇒ the client hash must not collide
         // with the server hash (a swapped-key bug would surface here).
-        assert_ne!(
-            client_hash(&cookie(), &seq(32), &seq(64)),
-            hex32(SERVER_HASH_HEX),
-        );
+        let cookie = cookie();
+        let verified = verify_server_hash(&cookie, &seq(32), &seq(64), &hex32(SERVER_HASH_HEX))
+            .expect("verifies");
+        assert_ne!(verified.client_hash(), hex32(SERVER_HASH_HEX));
     }
 
     #[test]
-    fn a_different_cookie_changes_the_hash() {
+    fn a_different_cookie_does_not_verify() {
+        // The pinned SERVERHASH is bound to the seq(0) cookie; a different cookie
+        // must not verify it — a wrong cookie file cannot authenticate, and so
+        // never reaches a client hash at all.
         let other = ControlCookie::new(seq(1));
-        assert_ne!(
-            client_hash(&other, &seq(32), &seq(64)),
-            hex32(CLIENT_HASH_HEX),
-        );
+        assert!(verify_server_hash(&other, &seq(32), &seq(64), &hex32(SERVER_HASH_HEX)).is_none());
     }
 
     #[test]
