@@ -16,6 +16,12 @@ sha3 = { version = "0.10", default-features = false }
 # Same ureq as shekyl-cli's daemon client (already vetted + in the lock): rustls
 # TLS, SOCKS5 proxy. No new supply-chain surface, a new internal consumer.
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
+# The persona canonical id as a workspace newtype (`PCanonicalId`) — the same
+# type PR-B (#205) threads through `pscan_state`/`accrual`/`stake_engine`, so the
+# engine hands this crate `&PCanonicalId` directly rather than raw `[u8; 32]`.
+# Foundational, light (serde + zeroize); no `schema` feature — we hash the id,
+# never persist it.
+shekyl-types = { path = "../shekyl-types" }
 
 [lints]
 workspace = true

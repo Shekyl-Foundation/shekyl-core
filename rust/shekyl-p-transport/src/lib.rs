@@ -39,6 +39,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
+use shekyl_types::PCanonicalId;
 
 /// SP 800-185 cSHAKE256 customization string for the per-`P` SOCKS-username
 /// derivation (rule 30: explicit label + version suffix; mirrors
@@ -54,38 +55,6 @@ const SOCKS_USER_DIGEST_LEN: usize = 32;
 /// username, so the password is a constant whose only job is to select SOCKS5
 /// user/pass auth so the username is actually sent.
 const SOCKS_PASSWORD: &str = "shekyl-p";
-
-/// The per-`P` circuit identity — the input to the SOCKS-username derivation.
-///
-/// Minted from the **active persona's** canonical id (`p_canonical_id`, the
-/// 32-byte hybrid-bond identity), never free-form: the engine wraps the id it
-/// derived from real persona keys (`persona_canonical_id`). It is deliberately not
-/// constructible from arbitrary strings a caller picked at the call site.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PCircuitTag([u8; 32]);
-
-impl PCircuitTag {
-    /// Wrap a persona's canonical id. The caller is the engine, which obtained
-    /// `p_canonical_id` from the active persona's keys.
-    pub fn from_canonical_id(p_canonical_id: [u8; 32]) -> Self {
-        Self(p_canonical_id)
-    }
-
-    /// The wrapped canonical id.
-    pub fn canonical_id(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-// Truncated `Debug` (first two bytes), mirroring `SpendPublicKey` in
-// `shekyl-crypto-pq`: `p_canonical_id` is public on chain, but the full id in a
-// local log or panic backtrace is a correlation artifact — 16 bits disambiguates
-// for debugging without reproducing the whole identifier in unsanitised streams.
-impl core::fmt::Debug for PCircuitTag {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PCircuitTag({:02x}{:02x}..)", self.0[0], self.0[1])
-    }
-}
 
 /// A per-`P` SOCKS username — the Tor `IsolateSOCKSAuth` isolation key.
 ///
@@ -113,7 +82,7 @@ impl core::fmt::Debug for SocksUsername {
     }
 }
 
-/// Derive the per-`P` SOCKS username from the circuit tag — the CX-1 closure.
+/// Derive the per-`P` SOCKS username from the persona's canonical id — the CX-1 closure.
 ///
 /// `username = hex(cSHAKE256(p_canonical_id, customization = "shekyl/p-socks-user-v1"))`,
 /// the domain separator carried natively in cSHAKE's customization parameter
@@ -121,10 +90,10 @@ impl core::fmt::Debug for SocksUsername {
 /// id (no truncation/modulo), so distinct personas get distinct usernames except with
 /// negligible probability of a cSHAKE256 collision (invariant (c)); the 64-hex output
 /// is never empty (invariant (b), absolute — a fixed-width value cannot be empty).
-pub fn derive_socks_user(tag: &PCircuitTag) -> SocksUsername {
+pub fn derive_socks_user(id: &PCanonicalId) -> SocksUsername {
     let core = CShake256Core::new(SOCKS_USER_CUSTOMIZATION);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
-    hasher.update(tag.canonical_id());
+    hasher.update(id.as_bytes());
     let mut reader = hasher.finalize_xof();
     let mut digest = [0u8; SOCKS_USER_DIGEST_LEN];
     reader.read(&mut digest);
@@ -203,16 +172,16 @@ pub struct PTorClient {
 }
 
 impl PTorClient {
-    /// Build a transport bound to persona `tag`'s own Tor circuit through `socks`.
+    /// Build a transport bound to persona `id`'s own Tor circuit through `socks`.
     ///
     /// Configures the agent's SOCKS proxy with the persona-derived username; it does
     /// **not** dial, so this is callable without a running Tor — the measured
     /// circuit-ID check is SP-T0's job.
     pub fn for_persona(
-        tag: &PCircuitTag,
+        id: &PCanonicalId,
         socks: &TorSocksEndpoint,
     ) -> Result<Self, PTransportError> {
-        let username = derive_socks_user(tag);
+        let username = derive_socks_user(id);
         // `SocketAddr`'s Display brackets IPv6 (`[::1]:9050`), so the URI is always
         // well-formed. The ureq error is deliberately discarded: it would echo the
         // proxy URI, which embeds the username (invariant (a)).
@@ -249,16 +218,16 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn tag(seed: u8) -> PCircuitTag {
+    fn pid(seed: u8) -> PCanonicalId {
         let mut id = [0u8; 32];
         id[0] = seed;
-        PCircuitTag::from_canonical_id(id)
+        PCanonicalId::from_bytes(id)
     }
 
     #[test]
     fn username_is_non_empty_fixed_width_lowercase_hex() {
         // (b): structurally non-empty + the shape callers rely on.
-        let u = derive_socks_user(&tag(1));
+        let u = derive_socks_user(&pid(1));
         assert_eq!(u.as_str().len(), 64);
         assert!(u
             .as_str()
@@ -268,7 +237,7 @@ mod tests {
 
     #[test]
     fn username_is_deterministic() {
-        assert_eq!(derive_socks_user(&tag(9)), derive_socks_user(&tag(9)));
+        assert_eq!(derive_socks_user(&pid(9)), derive_socks_user(&pid(9)));
     }
 
     #[test]
@@ -279,7 +248,7 @@ mod tests {
         // ignored its input or collapsed the output space.
         let mut seen = HashSet::new();
         for s in 0u8..=255 {
-            let u = derive_socks_user(&tag(s));
+            let u = derive_socks_user(&pid(s));
             assert!(
                 seen.insert(u.as_str().to_owned()),
                 "username collision at seed {s}"
@@ -294,13 +263,14 @@ mod tests {
         // encoding, output length, hex) to exact bytes. These are
         // implementation-stability tripwires, not correctness proofs — the
         // underlying cSHAKE256 is verified by the `sha3` crate's own KAT suite.
-        // A change to the label, primitive, or encoding trips these.
+        // A change to the label, primitive, or encoding trips these. Unchanged by
+        // the `PCircuitTag` → `PCanonicalId` migration: same 32 bytes in, same out.
         assert_eq!(
-            derive_socks_user(&PCircuitTag::from_canonical_id([0u8; 32])).as_str(),
+            derive_socks_user(&PCanonicalId::from_bytes([0u8; 32])).as_str(),
             "7af8ee1cd5f16fcc1fdb9b2ac89ea421cc473c9c85988ad42d961d06f84247ce"
         );
         assert_eq!(
-            derive_socks_user(&PCircuitTag::from_canonical_id([0x11u8; 32])).as_str(),
+            derive_socks_user(&PCanonicalId::from_bytes([0x11u8; 32])).as_str(),
             "88b7d63a98c4185a4192ed48e6aa7e6e03f0f9add26e0bf847155cdf8c87fe3c"
         );
     }
@@ -308,7 +278,7 @@ mod tests {
     #[test]
     fn debug_redacts_the_username() {
         // (a): the value must not appear in a `Debug` rendering.
-        let u = derive_socks_user(&tag(7));
+        let u = derive_socks_user(&pid(7));
         let rendered = format!("{u:?}");
         assert_eq!(rendered, "SocksUsername(<redacted>)");
         assert!(!rendered.contains(u.as_str()));
@@ -316,10 +286,10 @@ mod tests {
 
     #[test]
     fn for_persona_builds_without_tor_and_carries_persona_username() {
-        let t = tag(42);
-        let client = PTorClient::for_persona(&t, &TorSocksEndpoint::loopback(9050))
+        let id = pid(42);
+        let client = PTorClient::for_persona(&id, &TorSocksEndpoint::loopback(9050))
             .expect("proxy config is well-formed");
-        assert_eq!(client.username(), &derive_socks_user(&t));
+        assert_eq!(client.username(), &derive_socks_user(&id));
     }
 
     #[test]
@@ -327,20 +297,9 @@ mod tests {
         // Regression: a `SocketAddr` brackets IPv6 in the URI, so an IPv6 SOCKS
         // endpoint no longer fails proxy parsing.
         let addr: SocketAddr = "[::1]:9050".parse().expect("valid v6 socket addr");
-        let client = PTorClient::for_persona(&tag(3), &TorSocksEndpoint::new(addr))
+        let client = PTorClient::for_persona(&pid(3), &TorSocksEndpoint::new(addr))
             .expect("ipv6 proxy config is well-formed");
         assert_eq!(client.username().as_str().len(), 64);
-    }
-
-    #[test]
-    fn pcircuittag_debug_is_truncated() {
-        // The full canonical id must not appear in a `Debug` rendering.
-        let mut id = [0xabu8; 32];
-        id[0] = 0xde;
-        id[1] = 0xad;
-        let rendered = format!("{:?}", PCircuitTag::from_canonical_id(id));
-        assert_eq!(rendered, "PCircuitTag(dead..)");
-        assert!(!rendered.contains("abab"));
     }
 
     #[test]
@@ -349,6 +308,6 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<PTorClient>();
         assert_send_sync::<SocksUsername>();
-        assert_send_sync::<PCircuitTag>();
+        assert_send_sync::<PCanonicalId>();
     }
 }

@@ -7227,8 +7227,13 @@ one place to confirm each item's relationship to the wallet stack.
   SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
   (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
   SP-6/SP-7.
-- **2d-2 SP-T1 — take `shekyl-types::PCanonicalId` and delete `PCircuitTag` (gated on #205).**
-  `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw `[u8; 32]` and mints a local
+- **[Done] 2d-2 SP-T1 — take `shekyl-types::PCanonicalId` and delete `PCircuitTag` (was gated on #205).**
+  Done on branch `feat/2d2-sp-t1-pcanonicalid`: #205 landed, so `PCanonicalId` exists;
+  `derive_socks_user`/`for_persona` now take `&PCanonicalId` and `PCircuitTag` is deleted. The change
+  is **byte-preserving** — the pinned SOCKS-username KATs are unchanged (same 32 bytes → same
+  cSHAKE256) — and `shekyl-types` was confirmed a serde+zeroize leaf, so the `21` criterion held (not
+  reopened). Original rationale: `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw
+  `[u8; 32]` and mints a local
   `PCircuitTag` wrapper — correct against *today's* dev, but PR-B (#205) promotes `p_canonical_id` to
   a `shekyl_types::PCanonicalId` newtype (used across `pscan_state`/`accrual`/`stake_engine`). Once
   #205 lands, **change `derive_socks_user`/`for_persona` to take `&PCanonicalId` and delete
