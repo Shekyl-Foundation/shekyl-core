@@ -55,7 +55,7 @@ fn build_gate4_document() -> Value {
         .as_str()
         .expect("integration pk");
     let hybrid_pk_bytes = decode_hex(hybrid_pk_hex);
-    let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+    let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
 
     let join_vin = ArchivalBondPostVin {
         hybrid_public_key: hybrid_pk_bytes,
@@ -385,5 +385,8 @@ fn gate4_join_wire_p_id_matches_recomputed_pubkey() {
     let serve = &kat["serve_e_first"];
     let pk_bytes = decode_hex(serve["bond_hybrid_pubkey_hex"].as_str().expect("hybrid pk"));
     let expected = decode_hex32(kat["join"]["p_canonical_id_hex"].as_str().expect("p_id"));
-    assert_eq!(p_canonical_id_from_hybrid_pubkey(&pk_bytes), expected);
+    assert_eq!(
+        p_canonical_id_from_hybrid_pubkey(&pk_bytes).to_bytes(),
+        expected
+    );
 }

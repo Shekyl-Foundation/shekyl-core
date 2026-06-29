@@ -247,6 +247,23 @@ hash32! {
     TxHash
 }
 
+hash32! {
+    /// An archival-bond persona's **canonical id** — `cSHAKE256` over the persona's
+    /// canonical hybrid bond-id bytes
+    /// (`shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey`), the
+    /// public identifier an on-chain bond-post carries.
+    ///
+    /// The 2d-1 firewall's public-by-design pseudonym handle: `P` is public by
+    /// function (the firewall protects only `P`↔principal), and this id is how a
+    /// bond-post, a scan match, the funding accrual, and the DQ8 retire path all
+    /// name the *same* persona. A domain type, not a wire field: low-level consensus
+    /// wire structs store the raw `[u8; 32]` (rule 18 byte-layout) and convert at
+    /// their edge via [`PCanonicalId::as_bytes`] / [`PCanonicalId::from_bytes`].
+    /// Distinct from [`TxHash`] / [`BlockHash`] so a hash of one kind can never be
+    /// passed where another is expected.
+    PCanonicalId
+}
+
 // ── BlockHeight ↔ BlockCount algebra ────────────────────────────────────────
 //
 // All arithmetic is checked: with `overflow-checks = true` across every

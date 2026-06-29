@@ -73,6 +73,10 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 # audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
+# `pscan_state.rs`: `PScanState::pending_unbonds` keys on the `PCanonicalId`
+# newtype (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
+# it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype sweeps had.
+
 # ── sync_state_block.rs ───────────────────────────────────────────────
 #
 # Creation-anchor hash is the 32-byte block hash at wallet creation

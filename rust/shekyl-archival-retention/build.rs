@@ -88,6 +88,16 @@ fn main() {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or_else(|| panic!("missing max_claim_age_w in {}", config_path.display()));
 
+    let archival_reorg_depth_blocks = map
+        .get("archival_reorg_depth_blocks")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing archival_reorg_depth_blocks in {}",
+                config_path.display()
+            )
+        });
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("archival_bond_floor_generated.rs");
     let output = format!(
@@ -96,7 +106,8 @@ fn main() {
          pub const ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI: u64 = {plateau_value};\n\
          pub const ARCHIVAL_REWARD_PLATEAU_WORK_MILLI: u64 = {plateau_work};\n\
          pub const ARCHIVAL_REWARD_AGE_WEIGHT_MILLI: u64 = {age_weight};\n\
-         pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n"
+         pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
+         pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n"
     );
     fs::write(&out_file, output).expect("failed writing archival bond floor constant");
 }

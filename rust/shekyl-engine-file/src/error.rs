@@ -64,6 +64,13 @@ pub enum WalletFileError {
     #[error("payload framing error: {0}")]
     Payload(#[from] PayloadError),
 
+    /// The decrypted SWSP frame carried a payload kind other than the one the
+    /// loader expected (e.g. a `.wallet` swapped in where `.wallet.pscan` was
+    /// expected, 2d-1 SP-5). The envelope AEAD authenticated the bytes, so this
+    /// is a file-swap / mis-wiring guard, not corruption.
+    #[error("unexpected payload kind: expected 0x{expected:02x}, got 0x{got:02x}")]
+    UnexpectedPayloadKind { expected: u8, got: u8 },
+
     /// Inner-ledger encode/decode failure: postcard corruption or a
     /// bundle/block version mismatch that survived the SWSP frame.
     /// These errors indicate either on-disk corruption that the AEAD

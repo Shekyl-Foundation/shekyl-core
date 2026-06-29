@@ -23,6 +23,8 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # this; construct uses the same definitions — ARCHIVAL_BOND_CONSTRUCTION.md §7.2).
 shekyl-rct-balance = { path = "../shekyl-rct-balance" }
 shekyl-units = { path = "../shekyl-units" }
+# `PCanonicalId` domain newtype returned by `id::p_canonical_id_from_hybrid_pubkey`.
+shekyl-types = { path = "../shekyl-types" }
 
 [build-dependencies]
 serde_json = { workspace = true }

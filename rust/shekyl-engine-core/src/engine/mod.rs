@@ -568,6 +568,13 @@ pub struct Engine<
     /// task exit (RAII).
     refresh_slot: refresh::RefreshSlot,
 
+    /// Single-flight slot for the 2d-1 `P`-scan task — independent of
+    /// `refresh_slot`. The running task holds a
+    /// [`PScanSlotGuard`](pscan::task::PScanSlotGuard) that releases it on exit
+    /// (RAII), so [`start_pscan`](Self::start_pscan) enforces one scan task per
+    /// wallet (no two tasks racing the `.wallet.pscan` seal).
+    pscan_slot: pscan::task::PScanSlot,
+
     /// Producer-side [`RefreshEngine`] implementor.
     ///
     /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5,
@@ -741,6 +748,7 @@ impl<
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("refresh_running", &self.refresh_slot.is_claimed())
+            .field("pscan_running", &self.pscan_slot.is_claimed())
             .field("refresh", &"<redacted: RefreshEngine>")
             .field("refresh_kind", &std::any::type_name::<R>())
             .field("economics_kind", &std::any::type_name::<E>())
@@ -897,6 +905,14 @@ impl<
         &self.daemon
     }
 
+    /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake
+    /// engine is running. The handle is the `view_sk`-vault actor's address; the
+    /// 2d-1 P-scan task ([`start_pscan`](Self::start_pscan)) clones it to offload
+    /// each scan-step. Cloning the handle clones an `ActorRef`, not the vault.
+    pub(crate) fn stake_handle(&self) -> Option<StakeEngineHandle> {
+        self.stake.clone()
+    }
+
     /// Test-only constructor: rebuild the engine with `refresh`
     /// substituted in place of the existing
     /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
@@ -978,6 +994,7 @@ impl<
             network,
             capability,
             refresh_slot,
+            pscan_slot,
             refresh: _old,
             economics,
             stake,
@@ -997,6 +1014,7 @@ impl<
             network,
             capability,
             refresh_slot,
+            pscan_slot,
             refresh: std::sync::Arc::new(refresh),
             economics,
             stake,
@@ -1031,6 +1049,7 @@ impl<
             network,
             capability,
             refresh_slot,
+            pscan_slot,
             refresh,
             economics,
             stake,
@@ -1050,6 +1069,7 @@ impl<
             network,
             capability,
             refresh_slot,
+            pscan_slot,
             refresh,
             economics,
             stake,

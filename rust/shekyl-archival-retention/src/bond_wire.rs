@@ -274,7 +274,7 @@ mod tests {
         let hybrid_pk = vec![0xAB; 64];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk),
+            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
@@ -295,7 +295,7 @@ mod tests {
         let hybrid_pk = vec![0x01; 32];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk),
+            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
@@ -316,7 +316,7 @@ mod tests {
         let hybrid_pk = vec![0xCD; 48];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk),
+            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,

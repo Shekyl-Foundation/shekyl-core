@@ -11,6 +11,14 @@ build = "build.rs"
 [dependencies]
 zeroize = { workspace = true }
 serde = { workspace = true }
+# `postcard_schema::Schema` is opt-in (mirrors `shekyl-types`): only crates that
+# persist `AtomicUnits` inside a schema-snapshotted block (e.g. the P-scan
+# accruals in `shekyl-engine-state`) enable the `schema` feature. Same `0.2` pin
+# as the rest of the workspace's postcard-schema usage.
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"], optional = true }
+
+[features]
+schema = ["dep:postcard-schema"]
 
 [build-dependencies]
 serde_json = "1"
