@@ -1,0 +1,17 @@
+[package]
+name = "shekyl-tor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wallet-owned Tor integration: control-port client + lifecycle (2d-2 SP-T0)"
+publish = false
+
+# No dependencies in the SP-T0a framing slice: the reply demux is a pure,
+# sans-IO state machine over `std` only. Later slices add `hmac`/`sha2` for the
+# SAFECOOKIE handshake and `tokio` for the socket/actor layer — each justified
+# at the point it lands, not provisioned ahead of need.
+
+[lints]
+workspace = true
