@@ -79,6 +79,14 @@ fn auth_hmac(
 ) -> HmacSha256 {
     // HMAC accepts a key of any length, so this is infallible.
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    // rule-35 note (known-accepted, not overlooked): `update` copies the cookie
+    // into the HMAC block buffer, which the `hmac` crate does not zeroize on drop,
+    // so a transient unwiped copy outlives the [`ControlCookie`]'s `ZeroizeOnDrop`.
+    // Accepted under *this* secret's threat model — a local-process auth token Tor
+    // itself wrote to a user-readable file, not a long-lived spend key — so a
+    // process-memory adversary that could scrape the buffer can already read the
+    // cookie file. Revisit if this construction is ever reused for higher-value
+    // key material.
     mac.update(&cookie.0);
     mac.update(client_nonce);
     mac.update(server_nonce);

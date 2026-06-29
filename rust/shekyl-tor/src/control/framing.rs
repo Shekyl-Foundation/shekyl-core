@@ -56,7 +56,13 @@ const MAX_REPLY_BYTES: usize = 256 * 1024;
 /// `lines` carries the payload with the status code and its separator stripped;
 /// a `+`-introduced data block is folded, dot-unstuffed, into the single
 /// `\n`-joined entry the `+` line began.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// **Not `Clone`**: `lines` is a forensic surface (a `STREAM` event's circuit IDs
+/// / targets), so duplicating it is an explicit, reviewed choice rather than a
+/// default — the value-side counterpart of the redacting `Debug` below. The
+/// framer yields it by value and the actor consumes it by value, so no copy is
+/// needed.
+#[derive(PartialEq, Eq)]
 pub struct ControlReply {
     /// The 3-digit status code shared by every framing line of the reply.
     pub status: u16,
@@ -180,6 +186,10 @@ pub struct ReplyFramer {
     /// line). Bounds an un-terminated *reply* (many valid lines, no end line)
     /// against [`MAX_REPLY_BYTES`]; reset when a reply completes.
     reply_bytes: usize,
+    /// `buf` index from which the next `CRLF` search resumes. The search picks up
+    /// where it left off instead of rescanning from `0` each call, so trickled
+    /// bytes frame in O(n) rather than O(n²) up to [`MAX_REPLY_BYTES`].
+    scan_from: usize,
 }
 
 impl ReplyFramer {
@@ -282,8 +292,14 @@ impl ReplyFramer {
 
     /// Split the next `CRLF`-terminated line out of `buf`, or `Ok(None)` if no
     /// complete line is buffered yet. Strict UTF-8 (control replies are ASCII).
+    ///
+    /// Resumes the `CRLF` search from [`Self::scan_from`] rather than rescanning
+    /// the whole buffer, so a trickled, never-terminated line stays O(n).
     fn take_line(&mut self) -> Result<Option<String>, FramingError> {
-        let Some(pos) = self.buf.windows(2).position(|w| w == b"\r\n") else {
+        let Some(rel) = self.buf[self.scan_from..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+        else {
             // No terminator yet. With no `CRLF` anywhere, the whole buffer is one
             // partial line; if it already exceeds the cap the peer will never
             // terminate it (or is flooding) — refuse rather than buffer on.
@@ -292,8 +308,12 @@ impl ReplyFramer {
                     limit: MAX_REPLY_BYTES,
                 });
             }
+            // Resume next time from the last byte: it may be the `\r` of a `\r\n`
+            // that the next chunk completes.
+            self.scan_from = self.buf.len().saturating_sub(1);
             return Ok(None);
         };
+        let pos = self.scan_from + rel;
         // A single terminated line longer than the cap is abuse, too.
         if pos > MAX_REPLY_BYTES {
             return Err(FramingError::ReplyTooLarge {
@@ -303,7 +323,13 @@ impl ReplyFramer {
         let line = std::str::from_utf8(&self.buf[..pos])
             .map_err(|_| FramingError::InvalidUtf8)?
             .to_owned();
+        // Front-drain is O(remaining): a read cursor (compact occasionally instead
+        // of draining per line) would make consuming a burst of buffered lines O(n)
+        // rather than O(n²). Known-accepted, not done: control traffic is low-volume
+        // and loopback, and `MAX_REPLY_BYTES` already bounds one buffer.
         self.buf.drain(..pos + 2);
+        // The buffer shifted; restart the cursor.
+        self.scan_from = 0;
         Ok(Some(line))
     }
 }
@@ -556,5 +582,74 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, n);
+    }
+
+    #[test]
+    fn caps_an_unterminated_data_block() {
+        // A `+` data block that opens but never sends a closing `.` floods data
+        // lines — these count toward `reply_bytes` too, so the same per-reply cap
+        // catches it (the twin of `caps_an_unterminated_reply`, different path).
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(b"250+k=\r\n");
+        assert_eq!(
+            framer.next_reply().unwrap(),
+            None,
+            "block opened, no data yet"
+        );
+        let big_data = format!("{}\r\n", "x".repeat(60_000)); // ~60 KB data line
+        let mut hit = None;
+        for _ in 0..8 {
+            framer.push_bytes(big_data.as_bytes());
+            if let Err(e) = framer.next_reply() {
+                hit = Some(e);
+                break;
+            }
+        }
+        assert_eq!(
+            hit,
+            Some(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            }),
+        );
+    }
+
+    #[test]
+    fn reassembles_a_line_with_crlf_split_across_pushes() {
+        // The `\r` and `\n` of one terminator can land in different chunks; the
+        // resume cursor must still find it (regression for the take_line offset).
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(b"250 OK\r"); // ends mid-CRLF
+        assert_eq!(framer.next_reply().unwrap(), None, "CRLF incomplete");
+        framer.push_bytes(b"\n");
+        assert_eq!(framer.next_reply().unwrap(), Some(reply(250, &["OK"])));
+    }
+
+    #[test]
+    fn frames_a_byte_at_a_time_trickle() {
+        // Bytes arriving one at a time must frame correctly — exercises the O(n)
+        // resume path and that the cursor never skips the terminator.
+        let wire = b"250-key=value\r\n250 OK\r\n";
+        let mut framer = ReplyFramer::new();
+        let mut out = Vec::new();
+        for b in wire {
+            framer.push_bytes(&[*b]);
+            if let Some(reply) = framer.next_reply().unwrap() {
+                out.push(reply);
+            }
+        }
+        assert_eq!(out, vec![reply(250, &["key=value", "OK"])]);
+    }
+
+    #[test]
+    fn empty_plus_payload_folds_wire_faithfully() {
+        // A `250+` line with an *empty* payload is degenerate — real Tor `+` lines
+        // always carry `keyword=`. If it did occur, the fold stays wire-faithful:
+        // every wire line is `\n`-joined, so an empty `+` line contributes a
+        // leading `\n` before the data (consistent with the non-empty case, where
+        // the `+` line's payload precedes the same `\n`). Locked so it can't drift.
+        assert_eq!(
+            frame_all(b"250+\r\nabc\r\n.\r\n250 OK\r\n").unwrap(),
+            vec![reply(250, &["\nabc", "OK"])],
+        );
     }
 }
