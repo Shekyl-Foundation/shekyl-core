@@ -496,7 +496,34 @@ isolate).
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
-Designed here, built after SP-6.
+Designed here, built after SP-6. **Frame the removal around the slot ledger** (2d-1 records-driven
+retirement): the done-side record is *authoritative*, the live `bonded_slots` is *advisory*, and
+no-reuse is already enforced by `StakingBlock::monotone_current_slot` (`staking_block.rs:75`) — so
+SP-R0's job is the *removal*, not the trigger, and `covered` *corroborates* the presence-events the
+ledger expects.
+
+**Carried from the SP-6 part-2 (PR #211) review — pin so SP-R0 picks them up:**
+
+- **Prune-on-retire (correctness, not optional).** SP-6's match set accumulates **monotonically**:
+  `ingest` only appends (`accrual.rs`), nothing prunes — correct for SP-6 (a match must survive until
+  SP-R0 corroborates it, ~`MAX_CLAIM_AGE_W`≈270k blocks later), but it means **SP-R0's durable removal
+  must prune a persona's matches when it retires the slot**, in the *same atomic step* that drops the
+  `bonded_slots` entry (and the `pending_unbonds` entry). Otherwise the persisted `bond_post_matches`
+  set grows unbounded over the wallet's life. The seal-cost comment already flags the per-post growth
+  profile; the **bound on that growth is this retire-time prune** — it belongs with the slot-ledger
+  removal, not as a separate pass.
+- **`reconcile()` index (optimization, only if it profiles hot).** `PReconcileSet::reconcile` is a
+  linear scan over `matches` per persona — fine here (the GC is infrequent and `bonded_slots` is
+  small), but if SP-R0 ever reconciles *many* phantom slots against a *large* match set, build a
+  `HashMap<PCanonicalId, &BondPostMatch>` once at reconcile time to turn `O(slots × matches)` into
+  `O(slots)`. **Premature to build now** — note it, don't pre-optimize.
+
+**Defense-in-depth recorded (free, no action):** the GC's "absent ⇒ phantom" inference is fail-safe
+even if the genesis-start assumption were violated. `covered` starts at `[0, 0)` and `P` scans from
+height 0 (required for "absent anywhere" to be meaningful), but if `covered.low()` were ever non-zero,
+the half-open gate in `reconcile()` returns `OutsideCovered` for the unscanned prefix — **never** a
+wrong `AbsentWithinCovered`. The exhaustiveness-from-genesis invariant is enforced by the cursor and
+*fails safe at the query* if it were ever violated.
 
 ---
 
