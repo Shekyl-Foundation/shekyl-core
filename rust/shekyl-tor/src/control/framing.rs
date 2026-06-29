@@ -50,27 +50,43 @@ pub const ASYNC_EVENT_STATUS: u16 = 650;
 /// adversarial-network bound.
 const MAX_REPLY_BYTES: usize = 256 * 1024;
 
+/// Reclaim the consumed prefix of `buf` once it passes this size, so the buffer
+/// does not retain already-returned lines indefinitely. Keeps a steady stream of
+/// small replies bounded without compacting on every line.
+const COMPACT_THRESHOLD: usize = 8 * 1024;
+
 /// A complete, framed control-port reply — either a synchronous command reply or
 /// an asynchronous event (distinguished by [`Self::is_async_event`]).
 ///
-/// `lines` carries the payload with the status code and its separator stripped;
-/// a `+`-introduced data block is folded, dot-unstuffed, into the single
-/// `\n`-joined entry the `+` line began.
-///
-/// **Not `Clone`**: `lines` is a forensic surface (a `STREAM` event's circuit IDs
-/// / targets), so duplicating it is an explicit, reviewed choice rather than a
-/// default — the value-side counterpart of the redacting `Debug` below. The
-/// framer yields it by value and the actor consumes it by value, so no copy is
-/// needed.
+/// The payload (`status`, and the lines with status + separator stripped and `+`
+/// data blocks folded + dot-unstuffed) is reached through [`Self::status`] /
+/// [`Self::lines`], **not** public fields. `lines` is a forensic surface (a
+/// `STREAM` event's circuit IDs / targets), so the whole posture — private
+/// fields, a borrowing accessor, a redacting `Debug`, no `Clone` — keeps the
+/// crate's no-log invariant from being bypassed by a casual `reply.lines`
+/// grab-and-log. Same shape as `SocksUsername` in `shekyl-p-transport`.
 #[derive(PartialEq, Eq)]
 pub struct ControlReply {
     /// The 3-digit status code shared by every framing line of the reply.
-    pub status: u16,
+    status: u16,
     /// Payload lines, status + separator stripped; data blocks folded in.
-    pub lines: Vec<String>,
+    lines: Vec<String>,
 }
 
 impl ControlReply {
+    /// The reply's 3-digit status code.
+    #[must_use]
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+
+    /// The reply's payload lines (status + separator stripped, `+` data blocks
+    /// folded). A **forensic surface** — parse it, never log it.
+    #[must_use]
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
     /// `true` iff this is an asynchronous event (status `650`) rather than a
     /// command reply — the control loop's demux discriminator: events route to
     /// the `SETEVENTS` drain, command replies to the awaiting command.
@@ -182,13 +198,19 @@ pub struct ReplyFramer {
     status: Option<u16>,
     /// `true` while inside a `XYZ+ … .` multi-line data block.
     in_data_block: bool,
-    /// Wire bytes consumed into the in-progress reply so far (every framing/data
-    /// line). Bounds an un-terminated *reply* (many valid lines, no end line)
-    /// against [`MAX_REPLY_BYTES`]; reset when a reply completes.
+    /// Payload bytes accumulated into the in-progress reply so far — each line's
+    /// content, **CRLF stripped** (so it tracks the stored `lines` memory, the
+    /// thing the cap protects, not raw wire size). Bounds an un-terminated *reply*
+    /// (many valid lines, no end line) against [`MAX_REPLY_BYTES`]; reset when a
+    /// reply completes.
     reply_bytes: usize,
-    /// `buf` index from which the next `CRLF` search resumes. The search picks up
-    /// where it left off instead of rescanning from `0` each call, so trickled
-    /// bytes frame in O(n) rather than O(n²) up to [`MAX_REPLY_BYTES`].
+    /// Start of the unconsumed bytes in `buf`. [`Self::take_line`] advances this
+    /// rather than front-draining per line, and [`Self::compact`] reclaims the
+    /// consumed prefix occasionally — so consuming a burst of buffered lines is
+    /// O(n), not O(n²).
+    read_pos: usize,
+    /// `buf` index (≥ `read_pos`) from which the next `CRLF` search resumes, so a
+    /// trickled line is scanned once rather than rescanned each call.
     scan_from: usize,
 }
 
@@ -300,37 +322,55 @@ impl ReplyFramer {
             .windows(2)
             .position(|w| w == b"\r\n")
         else {
-            // No terminator yet. With no `CRLF` anywhere, the whole buffer is one
-            // partial line; if it already exceeds the cap the peer will never
-            // terminate it (or is flooding) — refuse rather than buffer on.
-            if self.buf.len() > MAX_REPLY_BYTES {
+            // No terminator yet. Everything from `read_pos` is one partial line; if
+            // it already exceeds the cap the peer will never terminate it (or is
+            // flooding) — refuse rather than buffer on.
+            if self.buf.len() - self.read_pos > MAX_REPLY_BYTES {
                 return Err(FramingError::ReplyTooLarge {
                     limit: MAX_REPLY_BYTES,
                 });
             }
             // Resume next time from the last byte: it may be the `\r` of a `\r\n`
-            // that the next chunk completes.
-            self.scan_from = self.buf.len().saturating_sub(1);
+            // the next chunk completes (never before `read_pos`).
+            self.scan_from = self.buf.len().saturating_sub(1).max(self.read_pos);
             return Ok(None);
         };
-        let pos = self.scan_from + rel;
+        let crlf = self.scan_from + rel;
         // A single terminated line longer than the cap is abuse, too.
-        if pos > MAX_REPLY_BYTES {
+        if crlf - self.read_pos > MAX_REPLY_BYTES {
             return Err(FramingError::ReplyTooLarge {
                 limit: MAX_REPLY_BYTES,
             });
         }
-        let line = std::str::from_utf8(&self.buf[..pos])
+        let line = std::str::from_utf8(&self.buf[self.read_pos..crlf])
             .map_err(|_| FramingError::InvalidUtf8)?
             .to_owned();
-        // Front-drain is O(remaining): a read cursor (compact occasionally instead
-        // of draining per line) would make consuming a burst of buffered lines O(n)
-        // rather than O(n²). Known-accepted, not done: control traffic is low-volume
-        // and loopback, and `MAX_REPLY_BYTES` already bounds one buffer.
-        self.buf.drain(..pos + 2);
-        // The buffer shifted; restart the cursor.
-        self.scan_from = 0;
+        // Advance the cursor past the line + its `CRLF` rather than front-draining,
+        // so consuming a burst of buffered lines is O(n); `compact` reclaims the
+        // consumed prefix occasionally.
+        self.read_pos = crlf + 2;
+        self.scan_from = self.read_pos;
+        self.compact();
         Ok(Some(line))
+    }
+
+    /// Reclaim the consumed prefix `buf[..read_pos]` (already-returned lines) when
+    /// it is fully consumed or has grown past [`COMPACT_THRESHOLD`] — keeping the
+    /// buffer bounded under a steady stream without compacting on every line.
+    fn compact(&mut self) {
+        if self.read_pos == 0 {
+            return;
+        }
+        if self.read_pos >= self.buf.len() {
+            // Everything consumed — clear outright.
+            self.buf.clear();
+            self.read_pos = 0;
+            self.scan_from = 0;
+        } else if self.read_pos >= COMPACT_THRESHOLD {
+            self.buf.drain(..self.read_pos);
+            self.scan_from = self.scan_from.saturating_sub(self.read_pos);
+            self.read_pos = 0;
+        }
     }
 }
 
@@ -651,5 +691,26 @@ mod tests {
             frame_all(b"250+\r\nabc\r\n.\r\n250 OK\r\n").unwrap(),
             vec![reply(250, &["\nabc", "OK"])],
         );
+    }
+
+    #[test]
+    fn drains_a_large_burst_across_compaction() {
+        // A burst larger than COMPACT_THRESHOLD must frame correctly across the
+        // mid-stream buffer compaction — i.e. the read cursor and scan cursor
+        // survive `compact`'s `drain` and shift. (`a_large_batch_…` stays under the
+        // threshold; this one crosses it several times.)
+        let n = 4000; // 4000 * 8 B = 32 KiB > COMPACT_THRESHOLD
+        let mut batch = Vec::new();
+        for _ in 0..n {
+            batch.extend_from_slice(b"250 OK\r\n");
+        }
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(&batch);
+        let mut count = 0;
+        while let Some(r) = framer.next_reply().expect("burst must frame cleanly") {
+            assert_eq!(r, reply(250, &["OK"]), "reply {count} mis-framed");
+            count += 1;
+        }
+        assert_eq!(count, n);
     }
 }
