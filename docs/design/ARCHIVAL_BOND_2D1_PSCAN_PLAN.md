@@ -907,6 +907,65 @@ daemon-trusted, continuity-checked `covered`. (Impl-PR carry: correct `block_sou
 comment — exhaustiveness is 2d-1; withheld-body / fork / tip robustness is 2d-2 transport —
 dropping the "SP-7's root-anchored job" PoW framing.)
 
+### Records-driven retirement: the authoritative done-side slot ledger (design round, 2026-06-29)
+
+The retire's last absence-inference dissolves once the wallet keeps an **authoritative
+done-side record**. Today's hazard is the GC reasoning "persona done" from *not seeing*
+activity on a chain a source could forge — absence-driven, the reason canonicity arose. But
+retirement is **presence-and-own-records-driven**: the wallet *bonded* slot N (its own recorded
+action), *observed* the `Unbond` (presence, not absence), and the claim window *expired* (a
+clock, not a chain-absence). Driving retirement from that record **removes** the
+absence-inference failure mode — it doesn't recover from a wrong GC, it stops the GC from
+guessing. **Canonicity shrinks to corroboration:** `covered` confirms the presence-events the
+ledger expects; it is no longer the trigger.
+
+**The live/done line — the load-bearing reconciliation with the frozen `bonded_slots`
+decision.** `staking_block.rs:47-63` deliberately makes `bonded_slots` a **hint, not truth**:
+an authoritative *live*-bond record goes stale and "would derive that slot forever, every open,
+for nothing" (`:53-54`), so "no aggregator invariant treats `bonded_slots` as truth — adding
+one would contradict" (`:62`). The done-side ledger does **not** reopen that — it is the *other*
+half of the lifecycle. The frozen objection was the *absence of retirement status*; an
+authoritative **retired**-record supplies exactly that: the thing that says "**stop deriving
+slot N**," the fix the forever-derive problem was waiting for. **Authoritative-for-done
+completes hint-for-live; opposite ends of one lifecycle, never in conflict.** It is not new
+architecture — it is the formalization of `pending_unbonds` (PR-B) + SP-6's durable removal into
+**one coherent done-side ledger**, retirement records-driven rather than re-inferred from
+absence each open.
+
+**Placement makes the line a *physical file boundary*, not just a sentence.** The done-side
+ledger (retired-records + the high-water mark) rides in **`PScanState` (`.wallet.pscan`)** with
+`pending_unbonds` — its done-side sibling — while the **live** `bonded_slots`/`p_slot` stay in
+`StakingBlock` (`.wallet`, hint). So `StakingBlock`/`.wallet` = live = hint and
+`PScanState`/`.wallet.pscan` = done = authoritative: the split is enforced by the file boundary,
+which is what keeps the next reader from collapsing "authoritative for done" into "authoritative
+for live." Both region-2-sealed (slot indices are "public" only in the *not-a-zeroize-key* sense
+of `staking_block.rs:87` — sealed either way; the done ledger is derivable-but-worth-persisting,
+P-isolated for the same firewall discipline as `pending_unbonds`).
+
+**Mechanism.** `spawn_stake_engine_if_staker` (derives `bonded_slots ∪ lookahead` from
+`StakingBlock` at open) must also read the `PScanState` retired-record and **subtract** retired
+slots — that is how "stop deriving N" takes effect. A cross-file read, but both files are
+available at open; it is the cost of the P-isolated done-side, and the records-driven
+replacement for absence-driven GC of the live hint.
+
+**Crisp caution — authoritative about *itself*, not the *chain*.** The ledger makes retirement
+safe from the wallet's own records; it does **not** make the wallet authoritative about chain
+state. The presence-events it still reads — the `Unbond` observation and the claim-window clock
+against the *settled tip* — keep their existing trust model (exhaustiveness/tip-honesty do not
+vanish). The ledger removes the *absence-inference*, not the dependence on honest *presence*
+data; do not oversell it to "retirement needs no chain."
+
+**No-reuse is already enforced — reference, don't rebuild.** `StakingBlock::monotone_current_slot`
+(`staking_block.rs:74-77`): `current = max(persisted p_slot, highest_bonded_slot_seen + 1)`, so
+the active slot can never sit at or below a slot with observed activity; rotation is sequential
+(`:17`). This is a **restore-safety** invariant ("the cursor never goes backwards") and a
+**privacy** one (re-using a retired persona links its activities) — not a collision defense; the
+high-water mark catches a reverted/mis-seeded cursor, not a chance clash.
+
+**SP-6 notes invariant (one sentence, so it can't drift):** *the slot ledger is authoritative
+for retirement and monotonicity, advisory for live bonds* — encoding the frozen hint-not-truth
+(live) and the authoritative-records insight (done) at once.
+
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
 A large raw-primitive → domain-newtype migration runs at the end of Stage 2
