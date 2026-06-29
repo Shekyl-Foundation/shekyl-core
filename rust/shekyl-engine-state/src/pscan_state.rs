@@ -40,12 +40,16 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. V3.0 ships version `1`. Any field
-/// addition / removal / renaming bumps this; loads that see a different version
-/// **refuse rather than migrate** (the `StakingBlock` precedent). Distinct from
-/// the inner [`PScanCursor`]'s own version (nested, like the wallet ledger over
-/// its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 1;
+/// Schema version of the durable P-scan state. **v2** tracks the nested
+/// [`PScanCursor`] gaining its verified-frontier `frontier_hash` (v1 → v2; the snap
+/// changed because the cursor's shape did, so the rule-42 guard pairs this bump with
+/// the regenerated snapshot). Any field addition / removal / renaming bumps this;
+/// loads that see a different version **refuse rather than migrate** (the
+/// `StakingBlock` precedent). No v1→v2 migration: no deployed wallet persisted a v1
+/// `.wallet.pscan` (the scan task that writes it is not yet wired). Distinct from
+/// the inner [`PScanCursor`]'s own version (nested, like the wallet ledger over its
+/// sub-blocks).
+pub const PSCAN_STATE_VERSION: u32 = 2;
 
 /// `P`'s durable scan state (SP-5): the [`PScanCursor`] frontier plus the
 /// per-epoch confirmed funding accruals, the unit the engine seals to the
@@ -205,7 +209,7 @@ mod tests {
     #[test]
     fn round_trips_cursor_accruals_and_pending_unbonds() {
         let state = PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(40_000)),
+            PScanCursor::at(BlockHeight::from_raw(40_000), [0x9C; 32]),
             accruals(&[(2, 100), (3, 250)]),
             pending(&[(0xAB, 7)]),
         );
@@ -213,6 +217,11 @@ mod tests {
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
         assert_eq!(back, state);
         assert_eq!(back.synced_height(), BlockHeight::from_raw(40_000));
+        assert_eq!(
+            back.cursor().frontier_hash(),
+            [0x9C; 32],
+            "the verified-frontier anchor round-trips through the state seal"
+        );
         assert_eq!(
             back.accrual_for(SettlementEpoch::from_raw(3)),
             AtomicUnits::from_raw(250)
