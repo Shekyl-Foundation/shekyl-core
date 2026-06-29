@@ -47,8 +47,14 @@ surface (like the SOCKS username): its data (circuit IDs, our own targets) **mus
 The Tor process is a wallet-session resource with a real lifecycle (start → bootstrap → ready →
 shutdown) and is the natural failure boundary. **Lean: a dedicated `TorService` actor** (kameo) owns
 the child + the control connection; `PTorClient` construction and the measurement are its consumers.
-Launch via `tokio::process::Command` with a wallet-private `SocksPort` + `ControlPort`, cookie auth,
-and an ephemeral `DataDirectory`; shut down on wallet close (SIGTERM + wait). No `PTorClient` is handed
+Launch via `tokio::process::Command` with a wallet-private `SocksPort` + `ControlPort` and
+cookie/SAFECOOKIE auth (the `DataDirectory` / guard-persistence choice is **DQ-T0.7**, not an
+incidental flag). Shut down on wallet close (SIGTERM + wait) — **and issue `TAKEOWNERSHIP` post-auth
+(or launch with `__OwningControllerProcess`)** so the child Tor exits when the controlling connection
+drops. That covers the **crash-orphan** case SIGTERM+wait does not: a panic / SIGKILL / power loss
+sends no SIGTERM, leaving an orphaned Tor with a live SOCKS port **and the powerful control port that
+DQ-T0.2's security pin exists to contain**. The parent plan already chose `__OwningControllerProcess`
+(§3, "the daemon dies with the wallet"); this reconciles the lifecycle to it. No `PTorClient` is handed
 out until bootstrap completes (DQ-T0.3).
 
 ### DQ-T0.2 — the control-port client (the keystone dependency call, `17`)
@@ -62,17 +68,31 @@ re-decided at SP-T3. The full command surface across 2d-2:
 | SP-T0 bootstrap gate (DQ-T0.3) | `GETINFO status/bootstrap-phase` (or `SETEVENTS STATUS_CLIENT`) |
 | SP-T1 measured test (DQ-T0.4) | `SETEVENTS STREAM` + the stream→circuit attach |
 | **SP-T3 onion serving (GF-9)** | **`ADD_ONION` / `DEL_ONION`** — publish `P`'s `p_slot`-bound v3 HS, rotate it with the persona |
+| Lifecycle (DQ-T0.1) | **`TAKEOWNERSHIP`** — the child Tor dies with the controlling connection (the crash-orphan cover) |
 
 Each command is line-based and individually simple, so a **roll-our-own minimal client is defensible**
 (the own-the-thin-glue / minimize-deps posture) — *if* the surface stays this small. What a maintained
 crate (`torut`, arti control surfaces — **verify at source, `17`; do not take maintenance/security on
-faith**) actually amortizes is the protocol's *edge cases*: **async events interleaved with command
-replies**, **multi-line / quoted `GETINFO` replies**, and the **cookie/SAFECOOKIE handshake**. That is
-the real trade — not lines of code, but who owns those edge cases.
+faith**) amortizes is the protocol's *edge cases* — and they are **not co-equal**:
 
-**Lean: roll-our-own minimal**, scoped to exactly the table above, pinned with **KATs against a real
-Tor**; reopen to a crate only if it is clearly lighter on the rule-17 axes (audit + vendor + Guix
-reproduce).
+- **The structural hazard (one): async events interleaved with command replies.** The control protocol
+  multiplexes async event lines (`6xx`) with synchronous command replies on a single socket; a reader
+  that mis-frames one event **poisons every subsequent read**. If the roll-our-own lean holds, **the
+  event/reply demuxer is where the reference-grade design and the bulk of the KATs go** — the risk is
+  concentrated there, not spread across the commands.
+- **Bounded parsing nuisances (two): multi-line / quoted `GETINFO` replies, and the auth handshake.**
+  Real, but local and individually testable.
+
+**Coupling — the security pin and the dependency call are not independent.** The pin (below) chose
+**SAFECOOKIE**, the most complex auth path (the `AUTHCHALLENGE` HMAC handshake) and the single largest
+contributor to the "handshake" nuisance — so a roll-our-own owes a **SAFECOOKIE-handshake KAT against a
+real Tor specifically**, on top of the generic per-command KATs.
+
+**Lean: roll-our-own minimal**, scoped to exactly the table above, with the **demuxer as the reference
+surface** and SAFECOOKIE-handshake + per-command KATs against a real Tor; reopen to a crate only if it
+is clearly lighter on the rule-17 axes (audit + vendor + Guix reproduce). **The grounded
+`torut`-vs-arti-vs-roll-our-own decision matrix is SP-T0a's opener — DQ-T0.2 resolves from it, not from
+this lean.**
 
 **Security-surface pin (load-bearing).** The control port is *powerful* — `GETINFO` can deanonymize,
 `SETCONF` can reconfigure, `ADD_ONION` manages services. Keep it **wallet-private + loopback-only +
@@ -111,10 +131,14 @@ gate. Closes the keystone the SP-T1 crate doc points forward to.
 ### DQ-T0.5 — packaging (reuse-not-own, §15)
 
 Do **not** own a Tor build. Inherit reproducible packaging where it exists (Guix `tor`); **hash-pin**
-the Tor Project's official released binary on non-reproducible targets (Windows the trusted-blob
-exception). The recurring obligation is a **release-checklist line** — track Tor advisories → bump the
-pinned version/hash → re-verify — not a maintained build. (Per-target Guix coverage for macOS/Windows
-is a packaging detail to work; reuse-don't-own bounds the cost regardless.) The Arti reopen-anchor
+the Tor Project's official released binary — the **Tor Expert Bundle**
+(<https://www.torproject.org/download/tor/>), the standalone `tor` artifact for embedders — on targets
+you cannot build reproducibly (Windows the trusted-blob exception). The recurring obligation is a **release-checklist line** — watch the Expert Bundle page for releases/advisories → bump the
+pinned version/hash → re-verify — not a maintained build. **This line is an explicit SP-T0c
+deliverable:** `docs/RELEASE_CHECKLIST.md` carries no Tor entry today, and a duty that lives only in a
+design doc evaporates — SP-T0c's definition of done is "the bundle **and** the checklist line," not just
+the bundle. (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
+bounds the cost regardless.) The Arti reopen-anchor
 (§10) stays on its real trigger — SOCKS-isolation proving unenforceable — which **DQ-T0.4 is what
 would detect**.
 
@@ -124,6 +148,30 @@ Tor crash / control-socket drop / bootstrap timeout → the §5 liveness path (b
 **never a panic**. The `TorService` actor is the failure boundary; `PTorClient` construction
 **fails closed** — no silent fallback to a non-isolated connection.
 
+### DQ-T0.7 — `DataDirectory` / cross-session guard posture (don't decide this by accident)
+
+The `DataDirectory` choice silently sets the **entry-guard rotation policy** — a privacy-relevant
+property — so it gets a named decision, not one word in a launch sentence.
+
+- **Within-session** — the §7 residual (`P` and the principal share one guard) — is **unaffected**
+  either way: same process, same guards.
+- **Cross-session** is the real fork. **Ephemeral** `DataDirectory` → a *fresh entry guard every
+  wallet session*; **persistent** → a stable guard set across sessions.
+
+The tradeoff cuts both ways:
+
+- **Persistent (Tor's own design):** guards exist precisely to *minimise lifetime exposure* — a stable,
+  probably-honest guard is safer than repeatedly drawing fresh ones, each a new chance to draw a
+  malicious one; frequent rotation is what the guard spec **discourages**. And **§3's own "deviation
+  from Tor defaults = a signature"** principle points the same way: persistent *is* the default.
+- **Ephemeral (wallet-forensic):** no on-disk Tor identity / guard history — a C6/local-forensic win.
+
+**Lean: persistent**, with the forensic concern met by a **wallet-private, encrypted-at-rest**
+`DataDirectory` (no plaintext on-disk identity, *without* fighting Tor's guard design or deviating from
+defaults). **Reopen to ephemeral** if an encrypted wallet-private data dir proves infeasible on a
+target, or if a cross-session-guard correlation against the §7 model is shown to outweigh the
+malicious-guard-draw risk. (Cross-ref §7.)
+
 ---
 
 ## 3. SP decomposition (sub-PRs)
@@ -132,7 +180,7 @@ Tor crash / control-socket drop / bootstrap timeout → the §5 liveness path (b
 | --- | --- | --- |
 | **SP-T0a** | **Control-port client** (DQ-T0.2) — the minimal client + KATs against a real Tor (auth, bootstrap, `STREAM`, **and `ADD_ONION`/`DEL_ONION` for SP-T3**). | The keystone; buildable against a *system* Tor before bundling. The rule-17 call (scoped over the whole consumer set) lives here. |
 | **SP-T0b** | **`TorService` lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. | Develops against a system Tor. |
-| **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin + release-checklist; the bundled-binary discovery/launch. | The ship step. |
+| **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin the **Tor Expert Bundle**; bundled-binary discovery/launch; **add the watch/bump/re-verify line to `docs/RELEASE_CHECKLIST.md`** (DoD, not just the bundle). | The ship step. |
 | **SP-T1-measured** | **Circuit-ID disjointness test** (DQ-T0.4) — over SP-T0a+b; closes the SP-T1 keystone. | Integration job. **Gated on SP-T0 alone — not #205** (§5). |
 
 ---
@@ -188,3 +236,11 @@ Tor crash / control-socket drop / bootstrap timeout → the §5 liveness path (b
   test (**M1 same-target + negative control, M2 `P_A`-vs-`P_B`, M3 CircID at attach not `NEW`, M4
   bounded timeout**), reuse-not-own packaging, the origin-only cross-check, and the **gate lattice**
   (measured test → SP-T0 alone; `PCanonicalId` alignment/`PCircuitTag` deletion → #205; SP-T2 → both).
+- **2026-06-28 (round-0 review):** T1 — crash-orphan cover via `TAKEOWNERSHIP`/`__OwningControllerProcess`
+  (reconciles DQ-T0.1 to parent §3), added to the DQ-T0.2 command surface. T2 — promoted the
+  `DataDirectory` choice to **DQ-T0.7** (cross-session guard posture; lean persistent + encrypted
+  wallet-private dir, per Tor's guard design and §3 deviation-is-signature). T3 — DQ-T0.2 names the
+  **async event/reply demux as the one structural hazard** (vs. bounded nuisances) and the SAFECOOKIE
+  coupling (a dedicated handshake KAT). Minor — DQ-T0.5/SP-T0c pin the **Tor Expert Bundle**
+  (torproject.org/download/tor) as the hash-pin source and make the `RELEASE_CHECKLIST.md` line an
+  explicit SP-T0c deliverable.
