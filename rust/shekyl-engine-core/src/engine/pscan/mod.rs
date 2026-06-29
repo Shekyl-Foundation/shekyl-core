@@ -17,14 +17,16 @@
 //! (view-key funding + cleartext bond-post) run offloaded behind the actor's
 //! `ScanStep` boundary; **SP-4/SP-5** ([`accrual`]) — the accumulate-side scan
 //! accrual (`PScanAccrual`) + the finalized per-epoch funding signal
-//! (`PFundingInflow`, the finalization guard) `C_min` consumes. All read-side:
-//! they produce no on-chain event and broadcast/GC nothing.
+//! (`PFundingInflow`, the finalization guard) `C_min` consumes; **SP-5** the
+//! [`cadence`] (injectable fixed-rate schedule), the driving [`task`]
+//! (`run_pscan_task`), and [`start`] (`Engine::start_pscan`, the wiring to the
+//! daemon + the `.wallet.pscan` seal). All read-side: they produce no on-chain
+//! event and broadcast/GC nothing.
 //!
-//! [`scan_step`] (SP-3 + the SP-5 actor scan-step) and [`accrual`] (the accumulate
-//! model + persisted-state mirror) land here; the **driving task** that wires them
-//! to the [`block_source`] + the `.wallet.pscan` seal follows in PR-B's later
-//! commits. [`block_source`] and [`accrual`] are exercised only by their own tests
-//! until that task lands, so they keep a transient `#[allow(dead_code)]`.
+//! The full SP-3/SP-5 layer — extractor, accrual, cadence, driving task, and the
+//! `Engine::start_pscan` wiring — lands in this PR (PR-B). The lifecycle layer that
+//! *calls* `start_pscan` is the only remaining consumer, so the modules carry
+//! transient `#[allow(dead_code)]` on the items it will reach until it lands.
 
 pub(crate) mod accrual;
 pub(crate) mod block_source;

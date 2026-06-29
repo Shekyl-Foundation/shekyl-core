@@ -311,6 +311,22 @@ impl WalletFile {
             });
         }
 
+        // A freshly created wallet must start in a consistent "never scanned as P"
+        // state. A stale `.wallet.pscan` orphaned at this base path (a prior wallet
+        // deleted here — the keys-exists guard above does not cover it) was sealed
+        // under the *old* wallet's keys, so the new wallet could never open it and
+        // `start_pscan` would refuse on the envelope seed-block mismatch. Remove it:
+        // unlike the write-once `.wallet.keys`, the P-scan state is regenerable (a
+        // re-scan rebuilds it), so clearing an unreadable orphan is the right clean
+        // slate, not a refuse-to-create. (This `create` only runs when `.wallet.keys`
+        // is absent, so any `.wallet.pscan` here is necessarily orphaned, never the
+        // current wallet's live state.)
+        match std::fs::remove_file(&pscan_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(WalletFileError::Io(e)),
+        }
+
         let keys_bytes = seal_keys_file(
             params.password,
             params.network.as_u8(),
@@ -1110,6 +1126,34 @@ mod tests {
             kdf: Fixture::fast_kdf(),
             initial_ledger: ledger,
         }
+    }
+
+    #[test]
+    fn create_clears_a_stale_orphaned_pscan_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        // An orphaned `.wallet.pscan` from a prior wallet deleted at this base path
+        // (its `.wallet.keys` is gone, so `create` proceeds past the keys guard).
+        let pscan = pscan_state_path_from(&base);
+        std::fs::write(&pscan, b"stale orphaned pscan bytes").unwrap();
+        assert!(pscan.exists(), "precondition: stale .wallet.pscan present");
+
+        let handle = {
+            let params = make_params(&fx, &base, b"correct horse battery staple", &ledger, &cap);
+            WalletFile::create(&params).expect("create must succeed over a stale .wallet.pscan")
+        };
+
+        // The orphan (sealed under the old wallet's keys, unreadable here) is cleared
+        // so the fresh wallet starts in a consistent "never scanned as P" state.
+        assert!(
+            !pscan.exists(),
+            "create must remove an orphaned .wallet.pscan for a clean-slate wallet"
+        );
+        drop(handle);
     }
 
     #[test]
