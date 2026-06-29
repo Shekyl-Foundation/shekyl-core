@@ -186,15 +186,28 @@ impl PScanAccrual {
                 step_start: result.range.start(),
             });
         }
+        // Stage every delta against the live totals BEFORE mutating `self`, so a
+        // later-delta overflow cannot leave earlier deltas partially applied. `ingest`
+        // is **all-or-nothing**: a failed ingest is a no-op, so when `run_pscan_task`
+        // retries a non-exhaustiveness error and re-ingests the same range, there is no
+        // partially-applied prefix to double-count. This is the in-memory twin of the
+        // seal's atomic coupling — the accrual advances together-or-not-at-all, exactly
+        // as the persisted `(frontier, accruals)` pair does. `staged` holds only the
+        // epochs this batch touches (one or two), not the whole map.
+        let mut staged: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
         for delta in &result.funding {
-            let acc = self
-                .accruals
-                .entry(delta.epoch)
-                .or_insert(AtomicUnits::ZERO);
-            *acc = acc
+            let base = staged
+                .get(&delta.epoch)
+                .copied()
+                .or_else(|| self.accruals.get(&delta.epoch).copied())
+                .unwrap_or(AtomicUnits::ZERO);
+            let updated = base
                 .checked_add(delta.amount)
                 .ok_or(AccrualError::InflowOverflow { epoch: delta.epoch })?;
+            staged.insert(delta.epoch, updated);
         }
+        // Every delta validated — commit the new totals and the frontier atomically.
+        self.accruals.extend(staged);
         self.synced_height = result.range.end();
         self.frontier_hash = frontier_hash;
         Ok(())
@@ -398,6 +411,47 @@ mod tests {
             .ingest(&step(1, 2, &[(0, 1)]), [0u8; 32])
             .expect_err("overflow must fail closed");
         assert_eq!(err, AccrualError::InflowOverflow { epoch: epoch(0) });
+    }
+
+    #[test]
+    fn ingest_overflow_is_a_no_op_so_a_retry_cannot_double_count() {
+        // Epoch 0 seeded near the ceiling; the frontier sits at height 1.
+        let mut acc = PScanAccrual::genesis();
+        acc.ingest(&step(0, 1, &[(0, u64::MAX)]), [0x11; 32])
+            .expect("seed epoch 0 near max");
+
+        // A batch whose deltas would partially apply under a naive loop: a benign
+        // epoch-1 delta lands first, then an epoch-0 delta overflows. With atomic
+        // ingest the whole batch is rejected and `self` is untouched.
+        let err = acc
+            .ingest(&step(1, 2, &[(1, 5), (0, 1)]), [0x22; 32])
+            .expect_err("the overflowing delta must reject the batch");
+        assert_eq!(err, AccrualError::InflowOverflow { epoch: epoch(0) });
+
+        // No partial mutation: the benign epoch-1 delta did NOT survive, the frontier
+        // did not advance, and the anchor was not changed — so the sweep's retry of
+        // [1, 2) re-ingests from a clean state instead of double-counting.
+        let sealed = acc.to_state();
+        assert_eq!(
+            sealed.accrual_for(epoch(1)),
+            AtomicUnits::ZERO,
+            "the benign delta from the failed batch must not have been applied"
+        );
+        assert_eq!(
+            sealed.accrual_for(epoch(0)),
+            AtomicUnits::from_raw(u64::MAX),
+            "epoch 0 is unchanged by the rejected batch"
+        );
+        assert_eq!(
+            acc.next_height(),
+            BlockHeight::from_raw(1),
+            "the frontier did not advance over the rejected batch"
+        );
+        assert_eq!(
+            acc.frontier_hash(),
+            [0x11; 32],
+            "the verified-frontier anchor was not changed by the rejected batch"
+        );
     }
 
     #[test]
