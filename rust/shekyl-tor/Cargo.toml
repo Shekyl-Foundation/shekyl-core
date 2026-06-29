@@ -16,12 +16,20 @@ publish = false
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 # Structural wiping of the 32-byte control auth cookie (rule 35): it is secret
-# key material — whoever holds it can drive the control port.
-zeroize = { version = "1", default-features = false, features = ["derive"] }
+# key material — whoever holds it can drive the control port. `alloc` adds the
+# `Vec<u8>` zeroize impl for the cookie-file read buffer (we read into a buffer we
+# wipe rather than leaving the bytes in a dropped allocation).
+zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 
 # The reply-framing slice (`control::framing`) is pure `std`; the `tokio` socket
 # actor that drives it lands with the live-Tor integration slice, justified
 # there rather than provisioned ahead of need.
+
+[dev-dependencies]
+# The cookie-file reader KATs write a real 32-byte file and read it back (the
+# length gate is the point); tempfile is the workspace's standard test fixture,
+# already vetted and locked.
+tempfile = "3"
 
 [lints]
 workspace = true

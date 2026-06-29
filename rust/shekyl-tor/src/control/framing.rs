@@ -56,7 +56,7 @@ const MAX_REPLY_BYTES: usize = 256 * 1024;
 const COMPACT_THRESHOLD: usize = 8 * 1024;
 
 /// A complete, framed control-port reply — either a synchronous command reply or
-/// an asynchronous event (distinguished by [`Self::is_async_event`]).
+/// an asynchronous event (forked apart by [`Self::classify`] into [`Framed`]).
 ///
 /// The payload (`status`, and the lines with status + separator stripped and `+`
 /// data blocks folded + dot-unstuffed) is reached through [`Self::status`] /
@@ -88,12 +88,46 @@ impl ControlReply {
     }
 
     /// `true` iff this is an asynchronous event (status `650`) rather than a
-    /// command reply — the control loop's demux discriminator: events route to
-    /// the `SETEVENTS` drain, command replies to the awaiting command.
+    /// command reply. **Private:** the async/command split is reachable only
+    /// through [`Self::classify`], so no downstream code can re-derive it — that
+    /// is what makes routing a command's reply to an event (or vice versa)
+    /// unrepresentable rather than merely unlikely.
     #[must_use]
-    pub fn is_async_event(&self) -> bool {
+    fn is_async_event(&self) -> bool {
         self.status == ASYNC_EVENT_STATUS
     }
+
+    /// Fork this reply into [`Framed`] — the **one site** at which the
+    /// async/command split is decided (status `650` ⇒ event). Consuming `self`
+    /// hands the reply to exactly one arm, so it cannot be classified twice or
+    /// routed to both; downstream code receives the already-typed `Framed` and
+    /// never re-checks the status.
+    #[must_use]
+    pub fn classify(self) -> Framed {
+        if self.is_async_event() {
+            Framed::AsyncEvent(self)
+        } else {
+            Framed::CommandReply(self)
+        }
+    }
+}
+
+/// The two things a control reply can be, split once at ingress by
+/// [`ControlReply::classify`]. Routing on this enum — instead of re-checking a
+/// status downstream — is what makes "a command's reply path receives an async
+/// event" unrepresentable: the command path is handed a [`Framed::CommandReply`],
+/// never a raw reply it must classify itself.
+///
+/// The derived `Debug` delegates to [`ControlReply`]'s redacting one, so the
+/// control-port payload stays unlogged here too.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Framed {
+    /// A synchronous command reply (status ≠ `650`) — the answer to the single
+    /// in-flight command.
+    CommandReply(ControlReply),
+    /// An asynchronous `SETEVENTS` event (status `650`) — routed to the event
+    /// drain, never matched to a command.
+    AsyncEvent(ControlReply),
 }
 
 // Redacting `Debug` (not derived): `lines` carries the control-port payload — a
@@ -479,14 +513,38 @@ mod tests {
     }
 
     #[test]
-    fn classifies_async_events_by_status_650() {
+    fn classify_forks_async_events_by_status_650() {
         let replies = frame_all(b"650 STREAM 1 NEW 0\r\n250 OK\r\n").unwrap();
         assert_eq!(
             replies,
             vec![reply(650, &["STREAM 1 NEW 0"]), reply(250, &["OK"])],
         );
-        assert!(replies[0].is_async_event(), "650 is an async event");
-        assert!(!replies[1].is_async_event(), "250 is a command reply");
+        // The single fork: 650 ⇒ AsyncEvent, everything else ⇒ CommandReply.
+        let mut framed = replies.into_iter().map(ControlReply::classify);
+        assert!(
+            matches!(framed.next(), Some(Framed::AsyncEvent(_))),
+            "650 is an async event",
+        );
+        assert!(
+            matches!(framed.next(), Some(Framed::CommandReply(_))),
+            "250 is a command reply",
+        );
+    }
+
+    #[test]
+    fn framed_debug_does_not_leak_the_payload() {
+        // The forensic no-log invariant must survive the new wrapper: Framed's
+        // derived Debug has to delegate to ControlReply's redacting Debug.
+        let framed = frame_all(b"650 STREAM 42 NEW target.example\r\n")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .classify();
+        let rendered = format!("{framed:?}");
+        assert!(rendered.contains("AsyncEvent"), "renders the variant/shape");
+        assert!(!rendered.contains("STREAM"), "no payload keyword");
+        assert!(!rendered.contains("target.example"), "no target");
     }
 
     #[test]

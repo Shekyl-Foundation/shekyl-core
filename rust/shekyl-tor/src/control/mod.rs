@@ -13,19 +13,23 @@
 //!
 //! [`framing`] is that place: a **sans-IO** state machine (no socket, no async)
 //! that turns a control byte stream into [`ControlReply`]s, leaving the
-//! async/command split to the one-line [`ControlReply::is_async_event`]
-//! discriminator. Keeping it sans-IO is what lets the bulk of the demux KATs run
+//! async/command split to a single ingress fork — [`ControlReply::classify`]
+//! into [`Framed`]. Keeping it sans-IO is what lets the bulk of the demux KATs run
 //! in the normal unit gate rather than only against a live Tor — and (per the
 //! design doc's co-validation note) the live measured test then doubles as the
 //! acceptance gate for the `STREAM`/CircID read path layered on top.
 //!
-//! Later slices add the SAFECOOKIE handshake, the command layer (`GETINFO`,
-//! `SETEVENTS`, `ADD_ONION`/`DEL_ONION`, `TAKEOWNERSHIP`), and the `tokio` socket
-//! actor that drives this framer with the poll/phase discipline the reference
-//! (Gosling) validates.
+//! [`safecookie`] is the SAFECOOKIE crypto + the verify→authenticate typestate;
+//! [`auth`] is the handshake plumbing (cookie-file read, `AUTHCHALLENGE` parse).
+//! Later slices add the command layer (`GETINFO`, `SETEVENTS`,
+//! `ADD_ONION`/`DEL_ONION`, `TAKEOWNERSHIP`) and the `tokio` socket actor that
+//! drives this framer with the poll/phase discipline the reference (Gosling)
+//! validates.
 
+pub mod auth;
 pub mod framing;
 pub mod safecookie;
 
-pub use framing::{ControlReply, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
+pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
+pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
