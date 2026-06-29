@@ -88,11 +88,35 @@ faith**) amortizes is the protocol's *edge cases* — and they are **not co-equa
 contributor to the "handshake" nuisance — so a roll-our-own owes a **SAFECOOKIE-handshake KAT against a
 real Tor specifically**, on top of the generic per-command KATs.
 
-**Lean: roll-our-own minimal**, scoped to exactly the table above, with the **demuxer as the reference
-surface** and SAFECOOKIE-handshake + per-command KATs against a real Tor; reopen to a crate only if it
-is clearly lighter on the rule-17 axes (audit + vendor + Guix reproduce). **The grounded
-`torut`-vs-arti-vs-roll-our-own decision matrix is SP-T0a's opener — DQ-T0.2 resolves from it, not from
-this lean.**
+**Resolution (grounded — rule-17 source-check, 2026-06).** Verified the candidates at source, not by
+reputation:
+
+| Candidate | Maintained? | Legacy deps | Fit |
+| --- | --- | --- | --- |
+| `torut` | **No** — 0.2.1, Oct 2021; self-described "does not implement all methods" | sha2/sha3/ed25519-dalek/hmac/serde | unmaintained → out |
+| `tor_control` | **No** — last release 2017 | — | out |
+| arti | yes, but it **is** Tor, not a C-Tor *controller* (its RPC controls arti) | heavy | the §10 "be-Tor" anchor, not a control client |
+| **`tor-interface`** (Gosling) | **Yes** — 0.6.7, Apr 2026; security-project pedigree | **hmac/sha2/zeroize** (minimal) | launches/bootstraps Tor + v3 onion — but a high-level `TorProvider` (connect/onion → `OnionStream`); **no raw SOCKS-port getter, no raw `SETEVENTS`/`STREAM`/CircID** in its docs |
+| roll-our-own | us | none new | exactly our surface, **raw** |
+
+**Verdict: roll-our-own minimal — grounded in the *mismatch*, not in "nothing is maintained."** The
+maintained option (`tor-interface`) abstracts away exactly the two raw capabilities our design rests
+on: the **raw SOCKS port** (SP-T1's per-`P` `IsolateSOCKSAuth` `ureq` clients dial it directly) and
+**raw `STREAM`/CircID events** (the DQ-T0.4 measurement). A `TorProvider` that owns the connection
+(`OnionStream`) and hides the control port cannot drive per-`P` SOCKS isolation or measure circuit
+disjointness; adopting it means a thin process-launch slice while still rolling our own for the
+load-bearing raw layer — the worst of both.
+
+**De-risk with the reference, not the dependency.** `tor-interface`/Gosling is MIT-licensed and
+maintained, so **read it as the reference implementation** for the exact edge cases T3 flags — the
+event/reply **demux**, the **SAFECOOKIE** handshake, **`ADD_ONION`** — without taking the dependency.
+Raw access *and* a battle-tested reference for the hard parts. Scope to exactly the §DQ-T0.2 table;
+SAFECOOKIE-handshake + per-command + demux KATs against a real Tor.
+
+**Reopen (`21`):** if `tor-interface` (or another maintained crate) is found to expose the raw
+SOCKS-port address **and** raw control events cleanly — confirm in its *source* as SP-T0a's first step
+(its docs are 65% covered, leaving a small chance of an undocumented getter) — reconsider adopting it
+for the lifecycle layer.
 
 **Security-surface pin (load-bearing).** The control port is *powerful* — `GETINFO` can deanonymize,
 `SETCONF` can reconfigure, `ADD_ONION` manages services. Keep it **wallet-private + loopback-only +
@@ -244,3 +268,11 @@ malicious-guard-draw risk. (Cross-ref §7.)
   coupling (a dedicated handshake KAT). Minor — DQ-T0.5/SP-T0c pin the **Tor Expert Bundle**
   (torproject.org/download/tor) as the hash-pin source and make the `RELEASE_CHECKLIST.md` line an
   explicit SP-T0c deliverable.
+- **2026-06-28 (DQ-T0.2 resolved — rule-17 source-check):** verified the control-client candidates at
+  source. `torut` (Oct 2021) and `tor_control` (2017) are unmaintained; arti is *be-Tor*, not a
+  controller. The one maintained, minimal-dep option — **`tor-interface`/Gosling (Apr 2026,
+  hmac/sha2/zeroize)** — is a high-level `TorProvider` that **abstracts away the raw SOCKS port and raw
+  `STREAM`/CircID events** our per-`P` isolation + measurement need. **Verdict: roll-our-own minimal**,
+  grounded in that mismatch (not "nothing maintained"), **with Gosling read as the reference impl** for
+  the demux / SAFECOOKIE / `ADD_ONION` edge cases. Reopen if a crate cleanly exposes raw SOCKS + raw
+  events (confirm in source).
