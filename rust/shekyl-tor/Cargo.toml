@@ -1,0 +1,27 @@
+[package]
+name = "shekyl-tor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wallet-owned Tor integration: control-port client + lifecycle (2d-2 SP-T0)"
+publish = false
+
+[dependencies]
+# SAFECOOKIE control-port authentication (control-spec §3.24): HMAC-SHA256 over
+# the auth cookie + client/server nonces. The same hmac/sha2 the workspace
+# crypto crates already vet (and the same minimal set the Gosling reference
+# uses) — no new supply-chain surface, new internal consumers.
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+# Structural wiping of the 32-byte control auth cookie (rule 35): it is secret
+# key material — whoever holds it can drive the control port.
+zeroize = { version = "1", default-features = false, features = ["derive"] }
+
+# The reply-framing slice (`control::framing`) is pure `std`; the `tokio` socket
+# actor that drives it lands with the live-Tor integration slice, justified
+# there rather than provisioned ahead of need.
+
+[lints]
+workspace = true

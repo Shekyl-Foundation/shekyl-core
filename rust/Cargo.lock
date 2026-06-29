@@ -4307,6 +4307,15 @@ name = "shekyl-stats"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-tor"
+version = "3.1.0"
+dependencies = [
+ "hmac",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-tx-builder"
 version = "3.1.0"
 dependencies = [
