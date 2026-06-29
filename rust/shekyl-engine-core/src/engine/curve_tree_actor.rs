@@ -502,7 +502,30 @@ impl CurveTreeHandle {
     ///
     /// Panics if called with no ambient Tokio runtime (see [`Self::spawn`]).
     pub(crate) fn open_and_spawn(path: impl AsRef<Path>) -> Result<Self, ClientError> {
-        let client = CurveTreeClient::open(path)?;
+        let path = path.as_ref();
+        // Reopen-after-shutdown race (the same one [`Self::respawn`] documents):
+        // a just-closed wallet's actor may not have released the redb
+        // single-writer lock yet, because kameo drops the actor value — and its
+        // [`CurveTreeClient`] — *after* `wait_for_shutdown` resolves. A fresh
+        // open immediately after a close (`close` → `open_full`) therefore races
+        // that drop and hits `redb::DatabaseAlreadyOpen`. Poll-retry the open,
+        // bounded by [`REOPEN_LOCK_RELEASE_TIMEOUT`], mirroring `respawn` —
+        // synchronously, since this is the non-async initial/reopen open path.
+        // The retry only fires on contention; an uncontended fresh open succeeds
+        // on the first attempt, and a genuinely corrupt/externally-held store
+        // surfaces its error after the grace window rather than spinning.
+        let deadline = std::time::Instant::now() + REOPEN_LOCK_RELEASE_TIMEOUT;
+        let client = loop {
+            match CurveTreeClient::open(path) {
+                Ok(client) => break client,
+                Err(e) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    std::thread::sleep(REOPEN_LOCK_RELEASE_POLL);
+                }
+            }
+        };
         Ok(Self::spawn(client))
     }
 
