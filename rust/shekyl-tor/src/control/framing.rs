@@ -198,11 +198,16 @@ pub struct ReplyFramer {
     status: Option<u16>,
     /// `true` while inside a `XYZ+ … .` multi-line data block.
     in_data_block: bool,
-    /// Payload bytes accumulated into the in-progress reply so far — each line's
-    /// content, **CRLF stripped** (so it tracks the stored `lines` memory, the
-    /// thing the cap protects, not raw wire size). Bounds an un-terminated *reply*
-    /// (many valid lines, no end line) against [`MAX_REPLY_BYTES`]; reset when a
-    /// reply completes.
+    /// Running DoS charge for the in-progress reply: each line's **wire length,
+    /// `CRLF` stripped** (`line.len()`), plus the `\n` every `+` fold inserts. This
+    /// is *not* the exact stored byte count — a framing line stores only `line[4..]`
+    /// (dropping the 3-digit status + separator) — and that is **deliberate**:
+    /// charging the whole line keeps a 4-byte margin per line that offsets the
+    /// per-entry `String`/`Vec` overhead a flood of tiny lines would otherwise hide,
+    /// so the cap bounds the real `self.lines` memory to within a small factor.
+    /// Charging only `line[4..]` would let empty mid-lines (`250-\r\n`, payload `""`)
+    /// grow the `Vec` with `reply_bytes` flat. Bounds an un-terminated *reply* (many
+    /// lines, no end line) against [`MAX_REPLY_BYTES`]; reset when a reply completes.
     reply_bytes: usize,
     /// Start of the unconsumed bytes in `buf`. [`Self::take_line`] advances this
     /// rather than front-draining per line, and [`Self::compact`] reclaims the
@@ -785,5 +790,26 @@ mod tests {
         );
         // Non-sensitive shape stays visible.
         assert!(rendered.contains("line_count") && rendered.contains("buf_len"));
+    }
+
+    #[test]
+    fn caps_a_flood_of_empty_mid_lines() {
+        // Empty mid-lines (`250-\r\n`, payload `""`) store an empty entry, but the
+        // cap must still trip: `reply_bytes` charges the full wire line (incl. the
+        // 4-byte prefix), which offsets the per-entry `Vec`/`String` overhead.
+        // Regression against charging only `line[4..]` (which would be 0 here, so
+        // the `Vec` would grow unbounded with the cap flat).
+        let mut wire = Vec::new();
+        for _ in 0..(MAX_REPLY_BYTES / 4 + 8) {
+            wire.extend_from_slice(b"250-\r\n"); // each charges 4
+        }
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(&wire);
+        assert_eq!(
+            framer.next_reply(),
+            Err(FramingError::ReplyTooLarge {
+                limit: MAX_REPLY_BYTES,
+            }),
+        );
     }
 }
