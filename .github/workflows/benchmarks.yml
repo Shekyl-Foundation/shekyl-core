@@ -137,13 +137,15 @@ jobs:
 
       - name: install gungraun-runner
         run: |
-          # Pin to the lib-side version declared in the bench crates'
-          # Cargo.toml (0.19.x today); SemVer-compatible patch drift
-          # is fine, but we do not want a surprise 0.20 slipping in
-          # and breaking the handshake protocol. Migrated from
-          # `iai-callgrind-runner ^0.16` per
+          # EXACT-pin the runner to the lib version in `rust/Cargo.lock`.
+          # gungraun refuses to run when the runner is *newer* than the
+          # `gungraun` library ("runner X is newer than gungraun Y"), so a
+          # `^0.19` install silently drifts ahead the moment a new patch
+          # publishes (0.19.3 did exactly that) and breaks every bench run.
+          # Keep this `=` pin in lockstep with the lock: bump both together.
+          # Migrated from `iai-callgrind-runner ^0.16` per
           # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
-          cargo install gungraun-runner --version '^0.19' --locked
+          cargo install gungraun-runner --version '=0.19.3' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -409,7 +411,9 @@ jobs:
           restore-keys: bench-rust-${{ runner.os }}-
 
       - name: install gungraun-runner
-        run: cargo install gungraun-runner --version '^0.19' --locked
+        # EXACT-pin in lockstep with `rust/Cargo.lock` (see the install step in
+        # the capture-pr job above for why `^0.19` drifts and breaks the run).
+        run: cargo install gungraun-runner --version '=0.19.3' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
