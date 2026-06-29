@@ -162,11 +162,18 @@ where
     ) -> impl std::future::Future<Output = Result<Option<PScanState>, Self::Error>> + Send {
         let engine = self.engine.clone();
         async move {
-            // Read + open under the lock; the guard drops before we decode.
+            // Read + open under the lock; the guard drops before we decode. The
+            // seal stays single-sourced in `WalletFile` (seam b), which is held by
+            // value behind the lock and so cannot move into `spawn_blocking`;
+            // `block_in_place` instead frees the tokio worker for the synchronous
+            // file I/O without relocating the `WalletFile` (no await spans it, so
+            // the read guard is fine).
             let body = {
                 let g = engine.read().await;
-                g.persistence()
-                    .open_pscan_state(g.state_wrap_key().as_bytes())?
+                tokio::task::block_in_place(|| {
+                    g.persistence()
+                        .open_pscan_state(g.state_wrap_key().as_bytes())
+                })?
             };
             match body {
                 Some(b) => Ok(Some(
@@ -189,8 +196,13 @@ where
         async move {
             let body = body.map_err(WalletFilePScanStoreError::Codec)?;
             let g = engine.read().await;
-            g.persistence()
-                .save_pscan_state(g.state_wrap_key().as_bytes(), &body)?;
+            // `block_in_place` for the synchronous seal + atomic write: frees the
+            // tokio worker without moving the lock-held `WalletFile` (seam b keeps
+            // the seal single-sourced there). No await spans the guard.
+            tokio::task::block_in_place(|| {
+                g.persistence()
+                    .save_pscan_state(g.state_wrap_key().as_bytes(), &body)
+            })?;
             Ok(())
         }
     }

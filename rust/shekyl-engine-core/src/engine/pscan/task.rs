@@ -225,12 +225,14 @@ where
         }
         let start = accrual.next_height().to_raw();
         let end = start.saturating_add(batch).min(horizon);
-        // `start < horizon <= end` and `start < end`, so the range is non-empty
-        // and within the batch bound — `new` cannot fail here.
+        // `start < horizon` (loop guard) and `batch >= 1`, so `start < end <= horizon`:
+        // the range is non-empty and within the batch bound — `new` cannot fail here.
         let range = BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
             .expect("start < end by loop invariant");
 
-        let mut blocks = Vec::new();
+        // `end - start` is the bounded batch (≤ MAX_SCAN_STEP_BLOCKS), so it fits
+        // `usize`; preallocate to avoid repeated reallocation as blocks are fetched.
+        let mut blocks = Vec::with_capacity(usize::try_from(end - start).unwrap_or(0));
         for height in start..end {
             let block = block_source
                 .block_at(BlockHeight::from_raw(height))
