@@ -593,3 +593,10 @@ forecloses. This record exists so the next round starts from the grounded model.
   **verified-clear** (3.3.0 `Config::proxy`, no per-request override). Review hardening folded into
   the crate: `SocketAddr` endpoint (IPv6-safe), truncated `PCircuitTag` `Debug`, username-leak-free
   proxy error, `Send + Sync`. The measured half (control-port circuit-ID test) still ships with SP-T0.
+- **2026-06-29 (SP-T1 type follow-up landed — PR #209):** `PCircuitTag` was the **placeholder** named
+  throughout §13/§15/CX-1; #205 having promoted the persona id to `shekyl_types::PCanonicalId`, SP-T1's
+  `derive_socks_user`/`for_persona` now take `&PCanonicalId` and `PCircuitTag` is **deleted**
+  (byte-preserving — the pinned username KATs are unchanged). **Read every `PCircuitTag` above as
+  `PCanonicalId`:** the type-safety rationale (the three CX-1 invariants on `SocksUsername`, the
+  unrepresentability bar) holds verbatim — only the *input* newtype changed from a local placeholder to
+  the workspace type the engine already threads.

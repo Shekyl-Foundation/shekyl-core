@@ -327,3 +327,7 @@ malicious-guard-draw risk. (Cross-ref §7.)
   / `NEW` read) makes the same-username leg falsely green while the different-username leg fails, so the
   pair catches a broken reader; co-develop them. A green measured test asserts *reader-correctness*, not
   just isolation.
+- **2026-06-29 (PCanonicalId alignment landed — PR #209):** §5's `PCircuitTag` → `PCanonicalId`
+  dependency (gated on #205) is **done** — `shekyl-p-transport` now takes `&PCanonicalId` and
+  `PCircuitTag` is deleted (byte-preserving). §5's `PCircuitTag::from_canonical_id` →
+  `PCanonicalId::from_bytes` note is now historical; SP-T0a's measured test consumes the clean type.
