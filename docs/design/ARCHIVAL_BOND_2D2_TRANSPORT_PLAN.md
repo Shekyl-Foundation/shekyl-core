@@ -368,8 +368,9 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
   assert is compiled out in release — an empty username would escape (b) — and a *per-call* assert
   cannot see a *cross-call* injectivity break (c) at all. So `derive_socks_user` returns a
   `SocksUsername` newtype = fixed-width hex of **cSHAKE256** over the full `p_canonical_id`
-  (customization `shekyl/p-socks-user-v1`, mirroring `derive_output_handle`), **non-empty and
-  injective by construction**; a pinned KAT + an injectivity test then *verify*, not *enforce*
+  (customization `shekyl/p-socks-user-v1`, mirroring `derive_output_handle`), **non-empty by
+  construction** (b, absolute) and **collision-resistant** (c, negligible-collision — not literal
+  injectivity); a pinned KAT + an injectivity test then *verify*, not *enforce*
   (the SP-0 / SP-T2 bar):
   - **(a) local-only.** The username is host↔Tor (`IsolateSOCKSAuth`), never on the wire — the only
     exposure is a local log artifact (C6/forensic), so it is **not logged.**
@@ -379,10 +380,13 @@ circuit must be **uncallable**, not merely discouraged — the DQ1 move, one lay
     **structurally guarantees non-empty**, so the invariant survives a future principal-isolation
     ticket (which gives the principal non-empty usernames, and with them a collision obligation —
     §11).
-  - **(c) injective in `p_slot` ⇒ distinct per persona.** Two personas sharing a username share a
-    circuit, **bridging the succession at the network layer** — the same temporal break as a shared
-    onion across rotation. The username derivation thus performs the **circuit-side analogue of
-    GF-9 onion-rotation**; injectivity is temporal-channel protection, not incidental.
+  - **(c) per-persona distinct (collision-resistant, not literal injectivity).** Two personas
+    sharing a username would share a circuit, **bridging the succession at the network layer** — the
+    same temporal break as a shared onion across rotation. The username derivation thus performs the
+    **circuit-side analogue of GF-9 onion-rotation**; this per-persona distinctness is
+    temporal-channel protection, not incidental. It is collision-resistance, not a literal injection:
+    two personas collide only on a cSHAKE256 collision — negligible at 256-bit width (and an operator
+    runs only a handful of personas).
 - **No principal path in.** SP-T2's `BlockSource` impl is constructible **only** from an SP-T1
   per-`P` client — no `From<principal DaemonClient>`, no `Default`. The principal's `DaemonClient`
   (cli or engine) cannot be coerced into `P`'s `BlockSource`; the carrying type won't take it.
