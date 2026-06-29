@@ -20,7 +20,10 @@
 //!   logged ([`SocksUsername`]'s `Debug` redacts).
 //! - **(b) non-empty ⇒ principal-disjoint** — [`SocksUsername`] is a fixed-width
 //!   64-byte value, so it cannot be empty; the principal's circuit is the
-//!   *empty-username* (no-auth) one, so a persona username can never collide into it.
+//!   *empty-username* (no-auth) one, so a persona username cannot collide into it
+//!   **while the principal stays no-auth**. The durable guarantee is the deferred
+//!   principal-side namespace obligation (FOLLOWUPS): when the principal gains non-empty
+//!   usernames they must be namespace-disjoint from this derivation's range.
 //! - **(c) per-persona distinct (collision-resistant, not literally injective)** — the
 //!   username is a collision-resistant hash of the **full** `p_canonical_id` (no
 //!   truncation/modulo), so two personas share a circuit only on a cSHAKE256 collision:
@@ -269,8 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn username_is_injective_over_distinct_personas() {
-        // (c): distinct canonical ids -> distinct usernames (no shared circuit).
+    fn distinct_personas_get_distinct_usernames() {
+        // (c): a sampled distinctness/determinism check over 256 single-byte-distinct
+        // canonical ids — not an injectivity *proof* (collision resistance is the real
+        // property; a literal proof is impossible for a hash). Catches a derivation that
+        // ignored its input or collapsed the output space.
         let mut seen = HashSet::new();
         for s in 0u8..=255 {
             let u = derive_socks_user(&tag(s));
