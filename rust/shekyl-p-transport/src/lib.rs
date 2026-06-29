@@ -21,10 +21,11 @@
 //! - **(b) non-empty ⇒ principal-disjoint** — [`SocksUsername`] is a fixed-width
 //!   64-byte value, so it cannot be empty; the principal's circuit is the
 //!   *empty-username* (no-auth) one, so a persona username can never collide into it.
-//! - **(c) injective in the persona id ⇒ per-persona distinct** — the username is a
-//!   collision-resistant hash of the **full** `p_canonical_id` (no truncation/
-//!   modulo), so two personas never share a circuit (the circuit-side analogue of
-//!   GF-9 onion rotation).
+//! - **(c) per-persona distinct (collision-resistant, not literally injective)** — the
+//!   username is a collision-resistant hash of the **full** `p_canonical_id` (no
+//!   truncation/modulo), so two personas share a circuit only on a cSHAKE256 collision:
+//!   cryptographically negligible at 256-bit width (and an operator runs only a handful
+//!   of personas). The circuit-side analogue of GF-9 onion rotation.
 //!
 //! The *measured* half (control-port circuit-ID disjointness) lands with SP-T0's
 //! bundled-Tor harness; this crate is buildable and testable without a running Tor
@@ -114,9 +115,9 @@ impl core::fmt::Debug for SocksUsername {
 /// `username = hex(cSHAKE256(p_canonical_id, customization = "shekyl/p-socks-user-v1"))`,
 /// the domain separator carried natively in cSHAKE's customization parameter
 /// (mirrors `derive_output_handle`). Collision-resistant over the **full** canonical
-/// id (no truncation/modulo), so the persona→username map is injective for all
-/// practical purposes (invariant (c)), and the 64-hex output is never empty
-/// (invariant (b)).
+/// id (no truncation/modulo), so distinct personas get distinct usernames except with
+/// negligible probability of a cSHAKE256 collision (invariant (c)); the 64-hex output
+/// is never empty (invariant (b), absolute — a fixed-width value cannot be empty).
 pub fn derive_socks_user(tag: &PCircuitTag) -> SocksUsername {
     let core = CShake256Core::new(SOCKS_USER_CUSTOMIZATION);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
