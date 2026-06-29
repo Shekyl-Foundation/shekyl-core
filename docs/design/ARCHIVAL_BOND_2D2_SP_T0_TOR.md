@@ -242,6 +242,51 @@ malicious-guard-draw risk. (Cross-ref §7.)
 | **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin the **Tor Expert Bundle**; bundled-binary discovery/launch; **add the watch/bump/re-verify line to `docs/RELEASE_CHECKLIST.md`** (DoD, not just the bundle). | The ship step. |
 | **SP-T1-measured** | **Circuit-ID disjointness test** (DQ-T0.4) — over SP-T0a+b; closes the SP-T1 keystone. | Integration job. **Gated on SP-T0 alone — not #205** (§5). |
 
+### 3a. SP-T0a actor boundary — type obligations for the integration half
+
+A hindsight review of the **pure core** (PR #208 — `shekyl-tor::control::framing` +
+`safecookie`) confirmed the primitives are correct and shaped for the poll/phase
+actor (SAFECOOKIE key strings + HMAC message order, constant-time `verify_slice`,
+the data-block / dot-unstuff / status-mismatch corners, redaction on `Display`
+*and* `Debug`). The framer and crypto correctly stay **sans-IO / pure**, so the
+next bugs live at the **seams the actor consumes** — recorded here so PR-2 designs
+them in rather than discovers them:
+
+- **Verify→authenticate as a typestate (single highest-value evolution).**
+  SAFECOOKIE's property is that the controller verifies `SERVERHASH` *before*
+  sending `AUTHENTICATE`. Today `verify_server_hash(…) -> bool` (`#[must_use]`) and
+  `client_hash(…) -> [u8; 32]` are independent calls — nothing makes *skipping* the
+  verify a type error. When the handshake actor lands, evolve the return to
+  `verify_server_hash(…) -> Option<ServerVerified>`, where `ServerVerified`
+  carries/borrows the cookie+nonces and is the **only** way to reach the client
+  hash (`verified.client_hash()`). Then "send `AUTHENTICATE` without a successful
+  verify" is unrepresentable. The current `bool` is the seam this attaches to.
+- **The demux as a typed fork at ingress.** `ControlReply::is_async_event()` is the
+  right primitive and the framer stays dumb, but a `bool` on a shared `ControlReply`
+  lets the command-correlation path receive an event by mistake. At the one point
+  the actor drains the framer, fork into
+  `enum Framed { CommandReply(ControlReply), AsyncEvent(ControlReply) }` so the
+  awaiting-command path and the `SETEVENTS` drain each handle only their own
+  variant. The framer produces `ControlReply`; the actor classifies **once**, at
+  the boundary — the poll/phase pathway made unmisusable.
+- **Deferred actor obligations (pin with the same rigor the two files model):**
+  - **CSPRNG client nonce, fresh per handshake.** The `&[u8; 32]` nonce is the seam;
+    the actor must source it from a vetted CSPRNG — never a counter, never reused —
+    or the challenge-response is gutted (rule 30/35).
+  - **`AUTHCHALLENGE` reply parsing** is the deferred security-critical step:
+    decoding `SERVERHASH=`/`SERVERNONCE=` hex and length-checking the nonce is where
+    parsing bugs hide. The type discipline already sets the bar — the nonce is
+    `[u8; 32]` (the parser must validate exactly 32 bytes at decode), while
+    `verify_server_hash`'s `received: &[u8]` is variable and `verify_slice` tolerates
+    any length. Carry the independent-KAT discipline into that parser.
+  - **Cookie-file length.** `ControlCookie::new([u8; 32])` forces reading exactly 32
+    bytes and rejecting a truncated/oversized `control_auth_cookie` at the boundary —
+    keep it; do **not** add a `from_slice` escape hatch that bypasses it.
+  - **`Err` → teardown → §5.** Every `FramingError` is a desync with no safe resync
+    (the type says so); wire each to **DQ-T0.6**'s failure path so a desync
+    deterministically becomes the backoff/§5 posture, never a silent reconnect that
+    retries into the same corruption.
+
 ---
 
 ## 4. Threat-model cross-check (origin-only — §7)
@@ -331,3 +376,8 @@ malicious-guard-draw risk. (Cross-ref §7.)
   dependency (gated on #205) is **done** — `shekyl-p-transport` now takes `&PCanonicalId` and
   `PCircuitTag` is deleted (byte-preserving). §5's `PCircuitTag::from_canonical_id` →
   `PCanonicalId::from_bytes` note is now historical; SP-T0a's measured test consumes the clean type.
+- **2026-06-29 (SP-T0a pure-core review → §3a):** A hindsight pass over PR #208 (framer + SAFECOOKIE)
+  found no correctness bugs and surfaced the actor-boundary type work for PR-2 — added §3a: the
+  verify→authenticate typestate (`-> Option<ServerVerified>`), the `Framed` event/command fork at
+  ingress, and the four deferred actor obligations (CSPRNG nonce, `AUTHCHALLENGE` parsing, cookie-file
+  length, `Err` → DQ-T0.6 teardown). The pure modules correctly defer these; PR-2 designs them in.
