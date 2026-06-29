@@ -48,13 +48,14 @@ use shekyl_types::BlockHeight;
 /// module docs. Constructible **only** by [`verify_exhaustive`], never by hand, so a
 /// `VerifiedRange` value is proof the verified scan path produced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // transient — SP-6's `PReconcileSet` + the cursor advance are the lib consumers.
 pub(crate) struct VerifiedRange {
     low: BlockHeight,
     high: BlockHeight,
 }
 
-#[allow(dead_code)] // transient — consumers land with SP-6 / the sweep wiring.
+// transient — the accessors are consumed by SP-6's `PReconcileSet` + the exhaustiveness
+// tests; lib-dead until `PReconcileSet` lands (the sweep reads `VerifiedBatch`, not these).
+#[allow(dead_code)]
 impl VerifiedRange {
     /// The first verified height (inclusive).
     pub(crate) fn low(&self) -> BlockHeight {
@@ -72,11 +73,41 @@ impl VerifiedRange {
     }
 }
 
+/// The full result of verifying one batch: the [`VerifiedRange`] it exhaustively
+/// covered **and** the recomputed hash of its last block — the anchor the *next*
+/// batch must chain to. The two are the same "verified-to-here on one coherent chain"
+/// guarantee from two directions (the range is what was verified; `frontier_hash` is
+/// where verification left off), so `verify_exhaustive` returns them **together** and
+/// the caller never recomputes the anchor separately — a re-derived anchor would be
+/// the resume-splice the verified frontier exists to forbid (and re-hashing the last
+/// block duplicates the most expensive part of the gate). `frontier_hash` equals the
+/// `anchor` for an empty batch — the frontier does not move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VerifiedBatch {
+    range: VerifiedRange,
+    frontier_hash: [u8; 32],
+}
+
+impl VerifiedBatch {
+    /// The exhaustively-verified height range (the evidence 2d-2 consumes as
+    /// `covered`).
+    // transient — consumed by SP-6's `PReconcileSet`; lib-dead until it lands.
+    #[allow(dead_code)]
+    pub(crate) fn range(&self) -> VerifiedRange {
+        self.range
+    }
+
+    /// The recomputed hash of the last verified block — the anchor the next batch
+    /// must chain to (the verified-frontier resume point).
+    pub(crate) fn frontier_hash(&self) -> [u8; 32] {
+        self.frontier_hash
+    }
+}
+
 /// Why exhaustiveness verification failed. Every arm is a refusal to advance the
 /// verified frontier — the cursor stays where the last block verified, never past a
 /// gap or a tampered block.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[allow(dead_code)] // transient — surfaced through the sweep once wired.
 pub(crate) enum ExhaustivenessError {
     /// The first block's `previous` did not match `anchor` (the recomputed hash of
     /// the block before the batch). The batch does not attach to the verified
@@ -104,19 +135,21 @@ pub(crate) enum ExhaustivenessError {
 /// Verify that `blocks` — a contiguous batch starting at `first_height`, in height
 /// order — is an exhaustively-scanned chain attaching to `anchor` (the recomputed
 /// hash of the block before `blocks[0]`, or the genesis `previous` when `blocks[0]`
-/// is genesis). Returns the [`VerifiedRange`] `[first_height, first_height + n)`.
+/// is genesis). Returns a [`VerifiedBatch`] — the [`VerifiedRange`]
+/// `[first_height, first_height + n)` **plus** the recomputed frontier hash (the next
+/// batch's anchor), so the caller reuses the verified computation rather than
+/// re-hashing the last block.
 ///
 /// Each block's `previous` is checked against the running recomputed hash (the
 /// `anchor` for the first, [`Block::hash`] of the prior for the rest), and every
 /// fetched body is checked against its committed hash. The first failure stops
 /// verification with an [`ExhaustivenessError`] — the caller advances the cursor
 /// only over the returned range, never past a refusal.
-#[allow(dead_code)] // transient — the sweep + SP-6 are the lib consumers.
 pub(crate) fn verify_exhaustive(
     first_height: BlockHeight,
     anchor: [u8; 32],
     blocks: &[ScannableBlock],
-) -> Result<VerifiedRange, ExhaustivenessError> {
+) -> Result<VerifiedBatch, ExhaustivenessError> {
     let first = first_height.to_raw();
     let mut expected_previous = anchor;
 
@@ -155,9 +188,16 @@ pub(crate) fn verify_exhaustive(
         expected_previous = sb.block.hash();
     }
 
-    Ok(VerifiedRange {
-        low: first_height,
-        high: BlockHeight::from_raw(first + blocks.len() as u64),
+    Ok(VerifiedBatch {
+        range: VerifiedRange {
+            low: first_height,
+            high: BlockHeight::from_raw(first + blocks.len() as u64),
+        },
+        // `expected_previous` is the `anchor` for an empty batch, else the recomputed
+        // hash of the last block — exactly the value continuity chained through. The
+        // frontier the caller seals is therefore provably the verified one, never a
+        // parallel recompute that merely happens to agree.
+        frontier_hash: expected_previous,
     })
 }
 
@@ -185,18 +225,30 @@ mod tests {
     #[test]
     fn accepts_a_correctly_chained_batch() {
         let blocks = chain(100, 4);
-        let covered = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &blocks)
+        let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &blocks)
             .expect("a correctly chained, body-consistent batch verifies");
-        assert_eq!(covered.low(), BlockHeight::from_raw(100));
-        assert_eq!(covered.high(), BlockHeight::from_raw(104));
-        assert!(!covered.is_empty());
+        assert_eq!(verified.range().low(), BlockHeight::from_raw(100));
+        assert_eq!(verified.range().high(), BlockHeight::from_raw(104));
+        assert!(!verified.range().is_empty());
+        // The returned frontier hash is the recomputed hash of the last block — the
+        // value continuity chained through, so the caller seals it without re-hashing.
+        assert_eq!(
+            verified.frontier_hash(),
+            blocks.last().expect("non-empty").block.hash(),
+            "the frontier hash is the verified last-block hash, not a separate recompute"
+        );
     }
 
     #[test]
     fn empty_batch_is_an_empty_range() {
-        let covered = verify_exhaustive(BlockHeight::from_raw(7), ANCHOR, &[]).expect("empty");
-        assert!(covered.is_empty());
-        assert_eq!(covered.low(), covered.high());
+        let verified = verify_exhaustive(BlockHeight::from_raw(7), ANCHOR, &[]).expect("empty");
+        assert!(verified.range().is_empty());
+        assert_eq!(verified.range().low(), verified.range().high());
+        assert_eq!(
+            verified.frontier_hash(),
+            ANCHOR,
+            "an empty batch does not move the frontier — the anchor is unchanged"
+        );
     }
 
     #[test]
@@ -244,9 +296,9 @@ mod tests {
         let body = sb.block.miner_transaction.clone();
         sb.block.transaction_hashes = vec![body.hash()];
         sb.transactions = vec![body];
-        let covered = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
+        let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
             .expect("a body matching its committed hash verifies");
-        assert_eq!(covered.high(), BlockHeight::from_raw(101));
+        assert_eq!(verified.range().high(), BlockHeight::from_raw(101));
     }
 
     #[test]

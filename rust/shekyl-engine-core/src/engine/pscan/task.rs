@@ -263,21 +263,16 @@ where
         // a source splice a different chain at the resume boundary (and under
         // no-wallet-PoW a fabricated fork is free, so the stored hash is the only
         // thing a forging source cannot change). A failure halts the task loudly
-        // (see `PScanTaskError::Exhaustiveness`); the cursor never advances past it.
-        verify_exhaustive(
+        // (the `?` lifts it via `#[from]` into `PScanTaskError::Exhaustiveness`); the
+        // cursor never advances past it. The verified batch hands back the recomputed
+        // frontier hash, so the new anchor is the value continuity chained through —
+        // not a separate re-hash of the last block that must merely agree.
+        let verified = verify_exhaustive(
             BlockHeight::from_raw(start),
             accrual.frontier_hash(),
             &blocks,
-        )
-        .map_err(PScanTaskError::Exhaustiveness)?;
-        // The new verified-frontier anchor: the recomputed hash of the batch's last
-        // block. `blocks` is non-empty here (`start < end` by the loop invariant), so
-        // `last()` is `Some`; the fallback only guards the vacuous case. Computed
-        // before `blocks` moves into the actor.
-        let next_frontier_hash = blocks
-            .last()
-            .map(|sb| sb.block.hash())
-            .unwrap_or_else(|| accrual.frontier_hash());
+        )?;
+        let next_frontier_hash = verified.frontier_hash();
 
         // Offloaded dual extraction behind the actor; only public results return.
         let result = stake.scan_step(range, blocks).await?;
