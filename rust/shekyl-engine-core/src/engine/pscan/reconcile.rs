@@ -60,8 +60,8 @@ pub(crate) enum ReconcileVerdict {
 /// The reconcile evidence `P` hands 2d-2: every matched bond-post **plus** the
 /// [`VerifiedRange`] they were gathered over. Constructible only via
 /// [`from_verified_scan`](Self::from_verified_scan), which takes a [`VerifiedRange`]
-/// (producible only by `verify_exhaustive`), so the match set can never be divorced
-/// from the verified range its absence is valid over.
+/// (producible only by the verification-gated path, never by hand), so the match set can
+/// never be divorced from the verified range its absence is valid over.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // transient — producer is the SP-5 sweep; consumer is 2d-2 SP-R0.
 pub(crate) struct PReconcileSet {
@@ -94,11 +94,24 @@ impl PReconcileSet {
         &self.matches
     }
 
-    /// Reconcile one persona whose bond evidence would appear at `evidence_height`
-    /// (the height the GC asserts presence-or-absence as of — typically the slot's bond
-    /// height). The three-valued [`ReconcileVerdict`] makes absence-≠-unscanned
-    /// unrepresentable: a caller **cannot** obtain `AbsentWithinCovered` for a height
-    /// the scan did not cover — it gets `OutsideCovered` and must not GC.
+    /// Reconcile one persona against the verified evidence. `evidence_height` is the
+    /// height whose coverage makes the verdict **meaningful** — typically the slot's bond
+    /// height: an absence is only sound if the range since the persona could first have
+    /// posted was exhaustively scanned. It gates the verdict on `evidence_height ∈
+    /// covered`; it is **not** a temporal "as-of" filter on presence.
+    ///
+    /// **Presence is ANY matched post for the persona within `covered`.** A persona that
+    /// posted *anywhere* it could is not phantom — there is deliberately no "only posts ≤
+    /// `evidence_height`" filter. A real persona whose bond-post lands a block or two
+    /// *after* `evidence_height` must never read `AbsentWithinCovered`: that would be a
+    /// wrongful **permanent** GC — the exact stuck-funds failure this design forbids. If
+    /// SP-R0 ever needs a finer temporal policy it filters [`matches`](Self::matches)
+    /// itself; the type's job is the absence-≠-unscanned gate, not the GC's presence
+    /// policy.
+    ///
+    /// The three-valued [`ReconcileVerdict`] makes absence-≠-unscanned unrepresentable: a
+    /// caller **cannot** obtain `AbsentWithinCovered` for a height the scan did not cover
+    /// — it gets `OutsideCovered` and must not GC.
     pub(crate) fn reconcile(
         &self,
         persona: PCanonicalId,
@@ -110,6 +123,10 @@ impl PReconcileSet {
         if evidence_height < self.covered.low() || evidence_height >= self.covered.high() {
             return ReconcileVerdict::OutsideCovered;
         }
+        // Presence = the persona posted *anywhere* in `covered`, NOT only at/before
+        // `evidence_height` (see the docstring: a temporal filter here would wrongly GC a
+        // real persona that posted later). `find` returns the earliest match in scan
+        // order, reported as the representative post.
         match self.matches.iter().find(|m| m.p_canonical_id == persona) {
             Some(m) => ReconcileVerdict::Present {
                 height: m.height,
@@ -210,6 +227,31 @@ mod tests {
             set.reconcile(unmatched, BlockHeight::from_raw(500)),
             ReconcileVerdict::OutsideCovered,
             "off-range, the same 'not found' is unknown, not absent"
+        );
+    }
+
+    #[test]
+    fn presence_is_any_post_in_covered_not_an_as_of_filter() {
+        // The persona's only post lands AFTER the asserted evidence_height. It must read
+        // Present — a temporal "absent if posted after evidence_height" filter would
+        // wrongly GC a real persona (permanent stuck funds). Presence = posted anywhere
+        // in covered.
+        let set = PReconcileSet::from_verified_scan(
+            covered_range(0, 10),   // [0, 10)
+            vec![post(7, 0xAA, 0)], // the persona's post is at height 7
+        );
+        assert_eq!(
+            set.reconcile(persona(0xAA), BlockHeight::from_raw(2)), // asserted as of height 2
+            ReconcileVerdict::Present {
+                height: BlockHeight::from_raw(7),
+                post_kind: 0,
+            },
+            "a post anywhere in covered is Present, even when it lands after evidence_height"
+        );
+        // The covered gate still applies: a height the scan didn't reach is OutsideCovered.
+        assert_eq!(
+            set.reconcile(persona(0xAA), BlockHeight::from_raw(50)),
+            ReconcileVerdict::OutsideCovered
         );
     }
 

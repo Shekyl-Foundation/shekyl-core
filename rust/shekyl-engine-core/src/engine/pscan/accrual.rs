@@ -120,7 +120,11 @@ pub(crate) enum AccrualError {
 
 /// The task's in-memory scan accrual: the frontier plus the per-epoch accumulated
 /// confirmed funding. The mutable working copy of [`PScanState`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written (below) to redact `bond_post_matches` — the in-memory twin of
+/// `PScanState`'s persona-history, under the same no-clear-`Debug` discipline (including
+/// its count), symmetric to the redacted [`BondPostMatch`]/`BondPostRecord` records.
+#[derive(Clone, PartialEq, Eq)]
 #[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
 pub(crate) struct PScanAccrual {
     /// The scan frontier: every block below this height has been scanned and its
@@ -152,6 +156,22 @@ pub(crate) struct PScanAccrual {
     /// of `P`'s persona-activity history — so [`BondPostMatch`] carries a redacting
     /// `Debug` (no clear log/`{:?}` path), unlike the public amount-deltas.
     bond_post_matches: Vec<BondPostMatch>,
+}
+
+impl std::fmt::Debug for PScanAccrual {
+    /// Redacts `bond_post_matches` to a constant placeholder (not even its length) — the
+    /// persona-history must not leak its count through a `{:?}` / log path. Other fields
+    /// render normally (`frontier_hash` / `covered` are public chain state).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PScanAccrual")
+            .field("synced_height", &self.synced_height)
+            .field("frontier_hash", &self.frontier_hash)
+            .field("covered", &self.covered)
+            .field("accruals", &self.accruals)
+            .field("pending_unbonds", &self.pending_unbonds)
+            .field("bond_post_matches", &"<redacted persona-history>")
+            .finish()
+    }
 }
 
 #[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.

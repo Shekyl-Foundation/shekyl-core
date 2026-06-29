@@ -85,7 +85,14 @@ impl std::fmt::Debug for BondPostRecord {
 /// `P`'s durable scan state (SP-5): the [`PScanCursor`] frontier, the per-epoch
 /// confirmed funding accruals, and the accumulated bond-post matches — the unit the
 /// engine seals to the `P`-isolated file.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+///
+/// `Debug` is **hand-written** (not derived) so it redacts `bond_post_matches` — even a
+/// derived `Debug` that renders each [`BondPostRecord`] as `<redacted>` would still leak
+/// the **match count** + structure (`P`'s persona-activity *volume*) through any `{:?}` /
+/// log path, and the persisted state is the form most likely to hit one (a deserialize
+/// error). The other fields render normally — `bond_post_matches` is the high-bar field
+/// (see the field doc + the redacting `BondPostRecord::Debug`).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PScanState {
     /// Per-state schema version — [`PSCAN_STATE_VERSION`] on construction,
     /// version-gated on load.
@@ -118,6 +125,22 @@ pub struct PScanState {
     /// terminal post at retire time. Ordered by scan (height); public and bounded by
     /// `P`'s own posting.
     bond_post_matches: Vec<BondPostRecord>,
+}
+
+impl std::fmt::Debug for PScanState {
+    /// Renders every field except `bond_post_matches`, which is redacted to a constant
+    /// placeholder (not even its length): it is `P`'s persona-activity history and its
+    /// *count* alone is behavioral metadata the firewall keeps off-log. See the type
+    /// docs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PScanState")
+            .field("version", &self.version)
+            .field("cursor", &self.cursor)
+            .field("accruals", &self.accruals)
+            .field("pending_unbonds", &self.pending_unbonds)
+            .field("bond_post_matches", &"<redacted persona-history>")
+            .finish()
+    }
 }
 
 impl PScanState {
@@ -312,6 +335,27 @@ mod tests {
         assert!(
             !rendered.contains("123456") && !rendered.contains("171"),
             "neither the height nor the id byte may appear: {rendered}"
+        );
+    }
+
+    #[test]
+    fn pscan_state_debug_redacts_bond_post_matches_including_count() {
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            accruals(&[]),
+            pending(&[]),
+            bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
+        );
+        let rendered = format!("{state:?}");
+        assert!(
+            rendered.contains("<redacted"),
+            "matches must be redacted in the state's Debug: {rendered}"
+        );
+        // No contents and — critically — no per-entry structure, so the match *count*
+        // (behavioral metadata) does not leak either.
+        assert!(
+            !rendered.contains("123456") && !rendered.contains("BondPostRecord"),
+            "neither contents nor per-entry structure (the count) may appear: {rendered}"
         );
     }
 
