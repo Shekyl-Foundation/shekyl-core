@@ -72,6 +72,9 @@ members = [
     "shekyl-rpc-client",
     "shekyl-rpc-transport",
 
+    # Per-P archival-firewall network transport (2d-2 SP-T1)
+    "shekyl-p-transport",
+
     # Shekyl-native scanner crate
     "shekyl-scanner",
 

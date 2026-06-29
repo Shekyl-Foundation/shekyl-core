@@ -1,0 +1,21 @@
+[package]
+name = "shekyl-p-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Per-P archival-firewall network transport: persona-isolated Tor circuits (2d-2 SP-T1)"
+publish = false
+
+[dependencies]
+# cSHAKE256 for the per-P SOCKS-username derivation — the modern-not-inherited
+# posture (FOLLOWUPS V3.0), mirroring `derive_output_handle`. Same `sha3 0.10` the
+# crypto crates already vet; no new surface.
+sha3 = { version = "0.10", default-features = false }
+# Same ureq as shekyl-cli's daemon client (already vetted + in the lock): rustls
+# TLS, SOCKS5 proxy. No new supply-chain surface, a new internal consumer.
+ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
+
+[lints]
+workspace = true
