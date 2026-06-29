@@ -462,7 +462,11 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
   trivially). Both origin-safe, for different reasons; the mapping is explicit so a local posture
   cannot accidentally route its fetch over a shared network circuit.
 
-**SP-T0 — bundled-Tor lifecycle.** A managed child process with a wallet-private
+**SP-T0 — bundled-Tor lifecycle.** *(Round 0:
+[`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](ARCHIVAL_BOND_2D2_SP_T0_TOR.md) — the buildable plan: the
+control-port-client dependency call (lean roll-our-own), the `TorService` lifecycle + bootstrap
+gate, the measured circuit-ID test that closes the keystone, reuse-not-own packaging.)* A managed
+child process with a wallet-private
 `SocksPort`/`ControlPort`; health-gate readiness before any `PTorClient` is handed out; shut down
 on wallet close. The `ControlPort` (cookie auth) serves *two* consumers — bootstrap-progress for the
 "Connecting…" state **and** SP-T1's circuit-ID check. **Reuse, never own, the Tor build** (`17`):
