@@ -197,7 +197,19 @@ pinned version/hash → re-verify — not a maintained build. **This line is an 
 deliverable:** `docs/RELEASE_CHECKLIST.md` carries no Tor entry today, and a duty that lives only in a
 design doc evaporates — SP-T0c's definition of done is "the bundle **and** the checklist line," not just
 the bundle. (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
-bounds the cost regardless.) The Arti reopen-anchor
+bounds the cost regardless.)
+
+**Dev pin (recorded 2026-06-29 — the seed for that checklist entry):** verified
+`tor-expert-bundle-linux-x86_64-15.0.16.tar.gz` (Tor `0.4.9.9`) — SHA256
+`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`, GPG-signed by the **Tor Browser
+Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
+`CAAE408AEBE2288E96FC5D5E157432CF78A65729`). The durable pin is *that signing key*, not just this one
+hash — a version bump re-verifies the new manifest's signature against the same fingerprint, then records
+the new tarball hash. Dev/CI integration KATs discover the launchable binary via the
+`SHEKYL_TEST_TOR_BINARY` env var (skip-if-unset), so the unit gate and CI-without-Tor stay green; only an
+integration job with a bundled Tor exercises the live path.
+
+The Arti reopen-anchor
 (§10) stays on its real trigger — SOCKS-isolation proving unenforceable — which **DQ-T0.4 is what
 would detect**.
 
@@ -257,10 +269,24 @@ them in rather than discovers them:
   sending `AUTHENTICATE`. Today `verify_server_hash(…) -> bool` (`#[must_use]`) and
   `client_hash(…) -> [u8; 32]` are independent calls — nothing makes *skipping* the
   verify a type error. When the handshake actor lands, evolve the return to
-  `verify_server_hash(…) -> Option<ServerVerified>`, where `ServerVerified`
-  carries/borrows the cookie+nonces and is the **only** way to reach the client
-  hash (`verified.client_hash()`). Then "send `AUTHENTICATE` without a successful
-  verify" is unrepresentable. The current `bool` is the seam this attaches to.
+  `verify_server_hash(…) -> Option<ServerVerified<'a>>`, the **sole** path to the
+  client hash (`verified.client_hash()`). Two properties make it *actually*
+  unforgeable, not merely intended to be — pin both, or it is theatre:
+  - **Non-forgeable by construction.** `ServerVerified` has a **private field, no
+    `Default`, no public constructor** — mintable *only* by `verify_server_hash`
+    returning `Some`. This is the same sole-constructor discipline
+    `PTorClient::for_persona` already enforces in `shekyl-p-transport`; it's the
+    established pattern, not a fresh call. A stray `pub fn new` or a derived
+    `Default` quietly undoes the whole typestate.
+  - **Borrow, don't own.** `ServerVerified<'a>` holds `&'a ControlCookie` + the two
+    `[u8; 32]` nonces; `client_hash(&self)`. The borrow is *forced* by the cookie
+    being `!Clone` + `ZeroizeOnDrop` (can't copy it, won't move it out of the actor)
+    and it **scopes the token to the handshake window** — a stale verification can't
+    be stashed and reused, and the cookie zeroizes the moment `AUTHENTICATE` lands.
+    The lifetime *is* the security property.
+
+  Then "send `AUTHENTICATE` without a successful verify" is unrepresentable. The
+  current `bool`/standalone-`client_hash` pair is the seam this attaches to.
 - **The demux as a typed fork at ingress.** `ControlReply::is_async_event()` is the
   right primitive and the framer stays dumb, but a `bool` on a shared `ControlReply`
   lets the command-correlation path receive an event by mistake. At the one point
@@ -316,9 +342,18 @@ them in rather than discovers them:
   - **`PCanonicalId` alignment → #205** (the type must exist; FOLLOWUPS — and it *deletes* `PCircuitTag`).
   - **SP-T2 (`PBlockSource`) → SP-T0 + #205** (needs SP-T0b's SOCKS endpoint, PR-B's generic `task.rs`
     plus the `BlockSource` `pub(crate)` → `pub` bump, and `PCanonicalId`).
-- **Build order:** SP-T0a ∥ SP-T0b (against system Tor) → **SP-T1-measured** (gated on SP-T0 alone) →
-  SP-T0c (packaging). SP-T3 shares SP-T0a's client (the `ADD_ONION` surface — DQ-T0.2). SP-T2 lands
-  when SP-T0 + #205 are both in.
+- **Build order:** SP-T0a is **two PRs of one actor** — PR-1 (landed pure core) → **PR-2** (the `tokio`
+  actor + the *authed* control connection) — then **SP-T0b layers onto the same actor**, it is **not** a
+  parallel crate. §0/§3 put *one* `TorService` actor over both the child and the control connection, and
+  SP-T0b's load-bearing pieces both ride PR-2's authed connection: the bootstrap gate reads progress over
+  the control port (`GETINFO`/`SETEVENTS STATUS_CLIENT`), and `TAKEOWNERSHIP` (the T1 orphan-prevention)
+  is a post-auth control command. So **serialize**: PR-2 freezes the actor's shape (struct fields, message
+  enum, poll/phase loop) first; SP-T0b builds child-management + bootstrap-gate + `TAKEOWNERSHIP` on top.
+  The *only* genuinely PR-2-independent slice is the bare child-spawn + SIGTERM-on-clean-close — pre-stage
+  that for concurrency **only once PR-2 has frozen the actor shape**, else two agents collide on the one
+  shared object and you reconcile a merge instead of a design. Then → **SP-T1-measured** (gated on SP-T0
+  alone) → SP-T0c (packaging). SP-T3 shares SP-T0a's client (the `ADD_ONION` surface — DQ-T0.2). SP-T2
+  lands when SP-T0 + #205 are both in.
 - **Independent of PR-B (#205):** SP-T0 doesn't touch the scan loop, so it can start now.
 
 ---
