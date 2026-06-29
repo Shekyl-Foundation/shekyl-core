@@ -749,9 +749,13 @@ a range it provably covered*, **never** inferred from absence. A missing bond-po
 rule, aimed at the reconcile. The type makes the distinction unrepresentable to lose:
 
 ```rust
-/// A height range `P` AFFIRMATIVELY, completely scanned from a source checked against
-/// the consensus root — constructible only by the verified scan path, never by hand.
-pub struct VerifiedRange { low: BlockHeight, high: BlockHeight /* + root-anchor proof */ }
+/// A height range `P` AFFIRMATIVELY, EXHAUSTIVELY scanned on the chain it was served
+/// (per-block `curve_tree_root` match + `prev`-chain continuity) — constructible only by
+/// the verified scan path, never by hand. Claims *exhaustiveness*, NOT *canonicity*: that
+/// `[low, high]` is the most-work chain is a separate token the 2d-2 GC requires alongside
+/// this (see the trust-anchor resolution — most-work needs competitors a single source
+/// cannot supply, so there is no wallet-side PoW here).
+pub struct VerifiedRange { low: BlockHeight, high: BlockHeight }
 
 /// The reconcile input `P` hands 2d-2. DISTINCT from the funding `OwnedOutput` set, and
 /// it carries its own coverage: matches are claims of PRESENCE; `covered` bounds where an
@@ -847,6 +851,62 @@ with the tip-currency half explicitly a 2d-2 obligation.
 
 ---
 
+### Trust-anchor resolution (design round, 2026-06-29): exhaustiveness vs canonicity vs tip-honesty — **no wallet-side PoW**
+
+The "root-anchored completeness" of SP-2/SP-6/SP-7 was one word over **three** distinct
+properties; naming them resolves the SP-2 (`:909` build-order) vs SP-7 (`:925` TM-3 row) vs
+`block_source.rs` three-way pointing, and fixes each property's home:
+
+1. **Exhaustiveness** — "I scanned *every* block in `[A,B]` on the chain I was served." Cheap,
+   local, single-source: per-block `curve_tree_root` match (the block's contents commit to its
+   header's root) + `header.previous` continuity (the reorg-detection half already in
+   `local_refresh`) + the cursor advances **only** over the contiguous verified range + a gap or
+   missing body is a verification **`Err`**, never a silent skip or a fabricated `None`. **This
+   is the whole of the 2d-1 completeness unit.**
+2. **Canonicity** — "`[A,B]` is the *most-work* chain, not a fork." Most-work is a comparison
+   against competitors a single source **structurally cannot provide**: a mined valid-PoW
+   *minority* fork passes a valid-PoW check identically to the real chain, and the wire header
+   carries **no `cumulative_difficulty`**, so the wallet can neither sum work nor see the
+   competing chain. Canonicity therefore comes from **trusting the node** (posture ①/② — the
+   node already ran most-work selection) or **multiple `P`-isolated sources** (posture ③ — 2d-2
+   transport). It is **not** standalone and never was.
+3. **Tip-honesty** — "nothing is withheld *above* my frontier" — already homed in 2d-2 (SP-7's
+   stale-tip residual, multi-source tip-currency).
+
+**Disposition — no RandomX in the wallet (`21-reversion-clause-discipline`).** Re-deriving PoW
+in the wallet is **dominated in every posture**: redundant where the node is trusted (it
+already validated PoW + most-work), **insufficient** where it isn't (it cannot reject a mined
+valid-PoW *minority* fork without a second source — the patient C3 the threat model assumes),
+and a 256 MiB RandomX dependency either way. It catches only an *invalid*-PoW fork, which
+multi-source also catches — so it adds no capability the posture/transport doesn't already
+give, while failing the standalone canonicity it reaches for. **Reopen** only if a header ever
+gains an in-band cumulative-work field **and** single-source most-work proof becomes possible —
+neither exists today.
+
+**`VerifiedRange` = exhaustiveness only.** Refines the SP-6 type: `covered` claims
+*"exhaustively scanned `[A,B]` on the chain served,"* **not** "on the canonical chain." The
+permanent GC (2d-2) consumes `VerifiedRange` **plus a canonicity token** (a trusted-posture
+marker or a multi-source proof); its signature makes **"GC on exhaustive-but-uncanonical
+evidence" unrepresentable** — the same shape as "absence ≠ unscanned." That type-level handoff
+keeps the 2d-1/2d-2 split from leaking at the seam.
+
+**Scope-limiter — canonicity strength only where the consequence is permanent.** Only the
+irreversible `bonded_slots` GC needs canonicity at this strength. The **funding view** inherits
+the existing daemon-trust model (a fork there yields a *recoverable* wrong balance, exactly as
+the principal's refresh does today) — we gate the permanent removal on canonicity, and nothing
+else.
+
+**`creation_anchor_hash` / release checkpoint = trust floor, not a PoW anchor** (there is no
+wallet PoW to anchor): below it, trusted; above it, exhaustiveness-verified by 2d-1 and
+canonicity-confirmed by posture/transport at the GC.
+
+**Build-order consequence.** The heavy "root-anchored completeness prereq" dissolves: the 2d-1
+piece is the light exhaustiveness primitive (continuity + `curve_tree_root`), small enough to
+land **inside SP-6**, with **no PoW prerequisite PR** — SP-6 builds `PReconcileSet` on a
+daemon-trusted, continuity-checked `covered`. (Impl-PR carry: correct `block_source.rs`'s
+comment — exhaustiveness is 2d-1; withheld-body / fork / tip robustness is 2d-2 transport —
+dropping the "SP-7's root-anchored job" PoW framing.)
+
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
 A large raw-primitive → domain-newtype migration runs at the end of Stage 2
@@ -908,7 +968,9 @@ not as work for it.
 
 **Build order (each SP a small, reviewable unit):** SP-0 (`BlockSource` + local impl) →
 SP-1/1a (`GuaranteedViewPair` adapter + `OutputExtractor` seam + CT compare) → SP-2
-(`PScanCursor`, Design-B single frontier, root-anchored completeness) → SP-3/SP-5 (dual
+(`PScanCursor`, Design-B single frontier, **exhaustiveness** completeness — continuity +
+`curve_tree_root`, no PoW; canonicity/tip-honesty are posture/2d-2, see the trust-anchor
+resolution) → SP-3/SP-5 (dual
 extractor + bounded `ScanStep` handler) → SP-4 (`PFundingInflow`, idempotent recompute) → SP-6
 (`PReconcileSet`) → SP-7 (`CoverDiscovery` funding-side gate). Read-side only; SP-2 and SP-4
 land **together** as the one crash-recovery decision. Broadcasts and GCs nothing.
