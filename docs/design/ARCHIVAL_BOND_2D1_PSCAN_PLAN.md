@@ -1060,9 +1060,55 @@ independent gates that the `pending_unbonds` precedent only *looked* fused:
   guard to preserve a "true amend" would weaken a mechanical, self-documenting invariant on
   sealed funds-bearing state to save one integer — a bad trade.
 
-**Still to build (the rest of SP-6):** `PReconcileSet` (the typed match-set carrying `covered`, so
-absence ≠ unscanned), then the 2d-2 GC that consumes `VerifiedRange` **+ a canonicity token**.
-`frontier_hash` is a public block hash (allowlisted in `.zeroize-allowlist`, like `tip_hash`).
+**Still to build (after this round):** the 2d-2 GC (SP-R0) that consumes `PReconcileSet`'s
+`covered` **+ a canonicity token**. `frontier_hash` is a public block hash (allowlisted in
+`.zeroize-allowlist`, like `tip_hash`).
+
+### `PReconcileSet` + durable reconcile evidence, as built (2026-06-29): the binding, the storage, the structural `covered`
+
+SP-6 part 2 landed the reconcile evidence `P` hands 2d-2 — the type-safety spine plus the
+durable storage that makes it correct across restart. Where this refines the design above, it
+wins.
+
+**The binding (`reconcile.rs`).** `PReconcileSet { covered: VerifiedRange, matches:
+Vec<BondPostMatch> }`, constructible only via `from_verified_scan(covered, matches)`, which takes
+a `VerifiedRange` (producible only by the verified path) — so a match set can **never** be paired
+with an unverified range. The query is three-valued: `reconcile(persona, evidence_height) ->
+ReconcileVerdict` returns `Present` / `AbsentWithinCovered` / **`OutsideCovered`**, so "absence ≠
+unscanned" is *unrepresentable* — the same unmatched persona yields `AbsentWithinCovered` inside
+`covered` but `OutsideCovered` off-range, and the GC cannot obtain a confirmed-absence verdict for
+a height the scan did not cover. This unblocks 2d-2 SP-R0 (which was gated on this type existing).
+
+**Durable, because in-memory can't reach the consumer.** The matches persist in `PScanState`
+(`bond_post_matches`, schema bump **`PSCAN_STATE_VERSION` 2 → 3**, snapshot regenerated, no
+migration — the writer is still unwired). This is *forced*, not a preference: Design B never
+re-scans below the cursor, and SP-R0 corroborates an `Unbond` ~`MAX_CLAIM_AGE_W` epochs (~270k
+blocks) after it was observed — by which point the block is far behind the cursor and gone. An
+in-memory, per-session match set would be structurally absent exactly when SP-R0 needs it. Durable
+is also the *superset*: it supports corroboration at observation-time **or** retire-time, so it
+does not bet on SP-R0's still-settling shape. The accrual accumulates matches inside the same
+all-or-nothing `ingest` commit as the funding deltas, and converts them to the state-shaped twin
+`BondPostRecord` at the seal (rule 18, like the cursor/accrual split).
+
+**The match set is the most privacy-sensitive field in `PScanState`.** It is `P`'s
+persona-activity history (id × height × post-kind) — the exact thing the firewall keeps
+off-disk-in-the-clear; public on-chain, but *correlated and co-located off-chain is the leak*. So
+both `BondPostMatch` and `BondPostRecord` carry a **redacting `Debug`** (no clear log / `{:?}` /
+export path the public amount-deltas never trigger), and the per-batch seal-cost note now records
+that `bond_post_matches` grows per matched post (thousands over a long active lifetime), not on
+`accruals`' bounded per-epoch schedule.
+
+**`covered` is a structural verified-advance, not a `height → range` constructor (load-bearing).**
+A free `covered() -> [0, synced_height)` would rest "everything below the frontier was verified" on
+a cross-method invariant a future fast-forward could silently break — minting `VerifiedRange`s for
+unverified ranges, so the GC removes personas on **forged absence**. Instead the accrual owns
+`covered` as a `VerifiedRange` *token* that grows **only** through `VerifiedRange::extend(&VerifiedBatch)`
+— and `ingest` takes the `VerifiedBatch` (not a bare hash), so the frontier cannot advance without
+verification. The only height-taking constructors are `genesis_empty()` (`[0,0)`) and the one
+seal-trust boundary `reconstruct_from_sealed_frontier` (`from_state` restoring `[0, synced_height)`
+— justified because the sealed frontier could only have been reached *through* `extend`), both
+`pub(in pscan)`. A scan/verify range divergence fails closed (`AccrualError::FrontierGap`) rather
+than recording a `covered` with an unverified hole.
 
 ### Alignment with the raw → newtype sweep (don't create new debt)
 

@@ -144,7 +144,13 @@ pub(crate) struct EpochInflowDelta {
 /// extractor, for SP-6 reconcile. Carries the height and post-kind byte so a
 /// later reconcile pass can act on lifecycle posts (e.g. `Unbond`) without a
 /// re-scan.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is **redacted**: the `(p_canonical_id, height, post_kind)` tuple is a row of
+/// `P`'s persona-activity history (the firewall's whole purpose is to keep that
+/// off-disk/off-log in the clear), so it carries the same no-clear-`Debug` discipline as
+/// its persisted twin [`BondPostRecord`](shekyl_engine_state::pscan_state::BondPostRecord),
+/// not the looser treatment a public amount-delta gets.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct BondPostMatch {
     /// Height of the block carrying the post (from the step's range).
     pub(crate) height: BlockHeight,
@@ -153,6 +159,14 @@ pub(crate) struct BondPostMatch {
     pub(crate) p_canonical_id: PCanonicalId,
     /// Wire post-kind byte (`0` = JoinMarket; otherwise the `Other` tag).
     pub(crate) post_kind: u8,
+}
+
+impl std::fmt::Debug for BondPostMatch {
+    /// Redacted — see the type docs. Never render the persona-history contents through
+    /// a log / error / `{:?}` path.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BondPostMatch(<redacted persona-history>)")
+    }
 }
 
 /// Public result of one scan-step — only public extraction outputs cross the
