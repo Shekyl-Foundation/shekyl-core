@@ -121,7 +121,7 @@ macro_rules! hash32 {
     // `redact` opts a correlation-sensitive identity into a **truncated** `Debug`
     // (first two bytes only). The value is public on chain, but the *full* id in a
     // local log or panic backtrace is an origin-edge correlation artifact — it
-    // links the principal's machine to the persona. 16 bits disambiguates for
+    // links the principal's machine to the persona. 16 bits disambiguate for
     // debugging without reproducing the whole identifier in an unsanitised stream.
     // `Display` is deliberately left full: it is the canonical hex *encoding*, not
     // a log line.

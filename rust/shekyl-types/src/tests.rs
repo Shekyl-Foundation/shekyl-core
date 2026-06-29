@@ -140,11 +140,10 @@ fn pcanonical_id_debug_is_truncated_but_display_is_full() {
     assert_eq!(shown.len(), 64);
     assert!(shown.starts_with("dead") && shown.ends_with("ab"));
 
-    // Targeting: a non-persona hash (`TxHash`) keeps its full-hex Debug.
-    assert_eq!(
-        format!("{:?}", TxHash::from_bytes(bytes)),
-        format!("TxHash({shown})")
-    );
+    // Targeting: a non-persona hash (`TxHash`) keeps its full-hex Debug — computed
+    // from `TxHash` itself, not coupled to `PCanonicalId`'s `Display`.
+    let tx = TxHash::from_bytes(bytes);
+    assert_eq!(format!("{tx:?}"), format!("TxHash({tx})"));
 }
 
 #[test]
