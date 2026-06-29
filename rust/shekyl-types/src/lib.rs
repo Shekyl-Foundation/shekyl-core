@@ -130,11 +130,12 @@ macro_rules! hash32 {
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    concat!(stringify!($name), "({:02x}{:02x}..)"),
-                    self.0[0], self.0[1]
-                )
+                // Render through the debug builder, like the default arm — one idiom
+                // for both, just truncated content. `format_args!` (Debug) emits the
+                // two bytes unquoted, so the output is `Name(dead..)`.
+                f.debug_tuple(stringify!($name))
+                    .field(&format_args!("{:02x}{:02x}..", self.0[0], self.0[1]))
+                    .finish()
             }
         }
     };
