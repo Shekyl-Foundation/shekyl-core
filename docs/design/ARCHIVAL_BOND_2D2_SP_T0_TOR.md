@@ -172,6 +172,17 @@ CircID") is the **false-positive-prone** version; the corrected measurement:
 - **M4 — bounded attach timeout.** Wait for attach with a bounded timeout (Tor up but a circuit stalls
   → the test *fails*, never hangs); harness-gated.
 
+**Co-validation — build M1's pair *with* the SP-T0a control client, not after it.** This measurement is
+the first end-to-end exercise of SP-T0a's `STREAM`-event/CircID-read path, so M1's two legs are *also*
+the control client's **event-parsing acceptance test**, not only the isolation proof. The failure they
+jointly catch: a mis-framed demux, or reading CircID at `NEW` (=0) instead of attach (M3), makes *every*
+stream read `0` — the **same-username** leg then passes trivially (`0==0`, a false green) while the
+**different-username** (isolation) leg *fails* (`0` vs `0` reads as "same circuit"). So the **pair**
+surfaces a broken reader that either leg alone would miss, and a green measured test is simultaneously
+asserting *the reader is correct* **and** *the circuits are disjoint* — do not read it as purely the
+latter. Co-develop the DQ-T0.4 pair with SP-T0a against the system-Tor harness; the keystone measurement
+hands you the read-path acceptance test for free.
+
 It measures circuit-disjointness *directly* — exit-IP is unsound here (§16). A control-port
 **integration** test (real Tor): runs in an integration job / `#[ignore]` in unit runs, not the unit
 gate. Closes the keystone the SP-T1 crate doc points forward to.
@@ -311,3 +322,8 @@ malicious-guard-draw risk. (Cross-ref §7.)
   **and** raw CircID. Pinned the reference (`legacy_tor_controller.rs`): SAFECOOKIE §3.5 +
   `ADD_ONION`/`DEL_ONION` §3.27/§3.38, and its **poll/phase demux** (not a concurrent reader) as the
   model SP-T0a's `TorService` actor adopts for free.
+- **2026-06-29 (DQ-T0.4 co-validation note):** the M1 same/different-username pair (with M3's
+  attach-time read) is *also* SP-T0a's event-parsing acceptance test — a zeroed-CircID reader (bad demux
+  / `NEW` read) makes the same-username leg falsely green while the different-username leg fails, so the
+  pair catches a broken reader; co-develop them. A green measured test asserts *reader-correctness*, not
+  just isolation.
