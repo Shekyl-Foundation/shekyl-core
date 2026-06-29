@@ -195,14 +195,21 @@ pub(crate) enum PScanTaskError {
     /// stored verified frontier, or a body did not match its committed hash.
     ///
     /// **This is unlike every other arm: it is fatal to the *task*, not just the
-    /// sweep.** The scan stays below `ARCHIVAL_REORG_DEPTH_BLOCKS`, so the verified
-    /// frontier sits beneath the reorg horizon — an ordinary reorg structurally
-    /// cannot reach it. A mismatch is therefore a **beyond-finality anomaly** that
-    /// 2d-1 cannot resolve, so [`run_pscan_task`] **halts loudly** instead of
-    /// retrying: it does not rewind the cursor and does not re-derive the anchor
-    /// (either would be the resume-splice the verified `(height, hash)` frontier
-    /// exists to forbid — the cursor's `frontier_hash` is the only anchor a forging
-    /// source cannot change). Resolution is a posture / 2d-2 concern, not a re-fetch.
+    /// sweep.** The scan stays below `ARCHIVAL_REORG_DEPTH_BLOCKS`, so **given an
+    /// honest tip** the verified frontier sits beneath the reorg horizon and an
+    /// ordinary reorg cannot reach it — a mismatch is then a **beyond-finality
+    /// anomaly**. That finality-depth is *conditional*: the horizon is `tip −
+    /// reorg_depth` where `tip` is the source's **claimed** height (tip-honesty is a
+    /// posture / 2d-2 property, not one this layer establishes alone). Under an
+    /// over-claiming source the horizon is too high, the frontier can sit *within*
+    /// reorg range, and this mismatch may instead be an **ordinary reorg** — still
+    /// correctly caught as a halt, because 2d-1 cannot distinguish the two and a loud
+    /// halt is the safe response to both. Either way [`run_pscan_task`] **halts
+    /// loudly** instead of retrying: it does not rewind the cursor and does not
+    /// re-derive the anchor (either would be the resume-splice the verified
+    /// `(height, hash)` frontier exists to forbid — the cursor's `frontier_hash` is the
+    /// only anchor a forging source cannot change). Resolution is a posture / 2d-2
+    /// concern, not a re-fetch.
     #[error("chain-exhaustiveness verification failed: {0}")]
     Exhaustiveness(#[from] ExhaustivenessError),
 }
@@ -253,6 +260,15 @@ where
                 .block_at(BlockHeight::from_raw(height))
                 .await?
                 .ok_or(PScanTaskError::MissingBlock { height })?;
+            // Tripwire only: the scan trusts the *anchored* position (`height`), never
+            // the coinbase's self-claimed height, so a height-lying block is not
+            // exploitable here — but in tests a source serving misaligned blocks should
+            // fail fast, and this documents that the two are expected to agree.
+            debug_assert_eq!(
+                block.block.number(),
+                Some(height),
+                "coinbase self-claimed height must match the anchored fetch position"
+            );
             blocks.push(block);
         }
 
@@ -267,6 +283,14 @@ where
         // cursor never advances past it. The verified batch hands back the recomputed
         // frontier hash, so the new anchor is the value continuity chained through —
         // not a separate re-hash of the last block that must merely agree.
+        //
+        // This gate is deliberately run in the *task*, before the blocks enter the
+        // actor — keeping the public exhaustiveness check out of the `view_sk` context
+        // and making it decide whether the secret scan runs at all. The cost is one
+        // extra pass over the batch (hash here, decode in the actor), the right trade
+        // for the firewall boundary. It hashes inline rather than via `spawn_blocking`
+        // like `scan_step`; bounded by `MAX_SCAN_STEP_BLOCKS` that is fine, and it is
+        // the natural second offload candidate if batch sizes ever grow materially.
         let verified = verify_exhaustive(
             BlockHeight::from_raw(start),
             accrual.frontier_hash(),
@@ -415,13 +439,17 @@ pub(crate) async fn run_pscan_task<B, S, Sched>(
         .await
         {
             match &e {
-                // Beyond-finality anomaly: the served chain diverged from our *own
-                // sealed* verified frontier below `ARCHIVAL_REORG_DEPTH_BLOCKS`, where
-                // an ordinary reorg cannot reach. Retrying just re-fetches the same
-                // forged/forked material and re-fails; rewinding the cursor or
-                // re-deriving the anchor would silently absorb the splice the verified
-                // frontier exists to refuse. So halt loudly and let the guard release
-                // the slot — this is not 2d-1's to resolve (posture / 2d-2).
+                // The served chain diverged from our *own sealed* verified frontier.
+                // Given an honest tip this is a beyond-finality anomaly (the frontier is
+                // below `ARCHIVAL_REORG_DEPTH_BLOCKS` of the *real* tip, so an ordinary
+                // reorg can't reach it); under an over-claiming source it may instead be
+                // an ordinary reorg the too-high horizon let the frontier advance into
+                // — tip-honesty is posture/2d-2 (see `PScanTaskError::Exhaustiveness`).
+                // The response is the same for both, which is why halting is right:
+                // retrying just re-fetches the same forked material and re-fails;
+                // rewinding the cursor or re-deriving the anchor would silently absorb
+                // the splice the verified frontier exists to refuse. So halt loudly and
+                // let the guard release the slot — not 2d-1's to resolve.
                 PScanTaskError::Exhaustiveness(_) => {
                     tracing::error!(
                         error = %e,
@@ -499,7 +527,14 @@ mod tests {
             c[*i] = b.clone();
         }
         let mut prev = [0u8; 32];
-        for sb in &mut c {
+        for (h, sb) in c.iter_mut().enumerate() {
+            // The coinbase claims its own height. The bench fixture hard-codes `Gen(0)`,
+            // so set it to the position — both to keep the F5 fetch-loop tripwire honest
+            // (a real coinbase claims its height) and because it is folded into the hash
+            // recomputed below. The synthetic dummies already carry `Gen(h)`.
+            if let Some(input) = sb.block.miner_transaction.prefix.inputs.first_mut() {
+                *input = shekyl_wire::Input::Gen(h as u64);
+            }
             sb.block.transaction_hashes = sb
                 .transactions
                 .iter()
@@ -666,12 +701,13 @@ mod tests {
         // The resume-splice (b) exists to forbid: the source serves a chain that does
         // NOT attach to our *own sealed* verified frontier. The cursor resumes at a
         // sealed `(height, hash)` frontier, but the served block's `previous` is a
-        // different chain's hash. Below `ARCHIVAL_REORG_DEPTH_BLOCKS` this is a
-        // beyond-finality anomaly (an ordinary reorg cannot reach the frontier), so
-        // the sweep must RAISE it, never silently rewind or re-derive the anchor —
-        // a silent recovery here would re-introduce the (a) vulnerability through the
-        // error path. (No fork-point machinery, unlike the principal refresh, precisely
-        // because a finality-deep mismatch is not 2d-1's to reconcile.)
+        // different chain's hash. Given an honest tip this is a beyond-finality anomaly
+        // (the frontier is below `ARCHIVAL_REORG_DEPTH_BLOCKS` of the real tip); under
+        // an over-claiming source it could be an ordinary reorg the too-high horizon
+        // admitted — either way the sweep must RAISE it, never silently rewind or
+        // re-derive the anchor, because a silent recovery here re-introduces the (a)
+        // vulnerability through the error path. (No fork-point machinery, unlike the
+        // principal refresh: 2d-1 can't distinguish the two and halting is safe for both.)
         let p = persona(0);
         // tip=6, horizon=2 → scan [1, 2). Served block[1] chains to block[0], a hash
         // our (deliberately wrong) seeded anchor will not match.

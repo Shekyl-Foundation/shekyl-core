@@ -425,9 +425,20 @@ mod tests {
     fn settled_epoch_excludes_the_in_progress_frontier_epoch() {
         let mut acc = PScanAccrual::genesis();
         assert_eq!(acc.settled_epoch(), None, "no epoch closed yet");
-        // Frontier mid epoch 2 (2·SEB + 1): epochs 0,1 settled; epoch 2 in progress.
-        acc.ingest(&step(0, 2 * SEB + 1, &[]), [0u8; 32])
-            .expect("ingest");
+        // Edge case (the retire-boundary off-by-one): frontier EXACTLY on the epoch-2
+        // boundary (`2·SEB`) — epoch 1 fully scanned, epoch 2 not yet started. The
+        // just-completed epoch is settled; the empty in-progress epoch is not. Guards
+        // against a cursor-shape change silently shifting the boundary by one.
+        acc.ingest(&step(0, 2 * SEB, &[]), [0u8; 32])
+            .expect("to edge");
+        assert_eq!(
+            acc.settled_epoch(),
+            Some(epoch(1)),
+            "on the epoch boundary, the just-completed epoch settles, not the in-progress one"
+        );
+        // Frontier mid epoch 2 (2·SEB + 1): still epochs 0,1 settled; epoch 2 in progress.
+        acc.ingest(&step(2 * SEB, 2 * SEB + 1, &[]), [0u8; 32])
+            .expect("past edge");
         assert_eq!(
             acc.settled_epoch(),
             Some(epoch(1)),

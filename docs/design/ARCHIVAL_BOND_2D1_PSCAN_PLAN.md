@@ -1031,12 +1031,18 @@ extracting; an `ExhaustivenessError` becomes `PScanTaskError::Exhaustiveness`, a
 **halts** (returns, releasing the single-flight slot) instead of retrying — unlike a transient
 transport blip, which it logs and retries next tick. The cursor does **not** advance over the
 unverified batch, is **not** rewound, and the anchor is **not** re-derived; nothing is sealed past
-the mismatch. The justification is finality depth: the scan stays below
-`ARCHIVAL_REORG_DEPTH_BLOCKS`, so the verified frontier sits beneath the reorg horizon and an
-ordinary reorg structurally cannot reach it — a mismatch there is a **beyond-finality anomaly** for
-posture/2d-2 to resolve, not 2d-1's. That is *why* there is no fork-point / re-org-rewind machinery
-here, where the principal's refresh has it. A test asserts the anomaly is **raised, not absorbed**
-(Err surfaced, no advance, frontier hash untouched, nothing sealed).
+the mismatch. The justification is finality depth — but it is **conditional on an honest tip**, and
+that condition is worth stating because the layer does not establish it alone. The horizon is
+`tip − reorg_depth` where `tip` is the source's **claimed** height; given an honest tip the verified
+frontier sits beneath the reorg horizon of the *real* tip and an ordinary reorg cannot reach it (a
+**beyond-finality anomaly**). Under an **over-claiming source** the horizon is too high, the frontier
+can advance *within* reorg range, and the same mismatch may instead be an **ordinary reorg** — still
+correctly caught as a halt, since 2d-1 cannot distinguish the two and halting + surfacing is the safe
+response to both. (Tip-honesty is a posture/2d-2 property by our own three-property split, so the
+finality-depth here is tip-honesty-dependent, not unconditional.) Either way the response is the
+same, which is *why* there is no fork-point / re-org-rewind machinery here, where the principal's
+refresh has it. A test asserts the anomaly is **raised, not absorbed** (Err surfaced, no advance,
+frontier hash untouched, nothing sealed).
 
 **Schema — bump without migration (two gates, not one).** `PSCAN_CURSOR_VERSION` and
 `PSCAN_STATE_VERSION` went `1 → 2` with regenerated snapshots. The decision separates into two

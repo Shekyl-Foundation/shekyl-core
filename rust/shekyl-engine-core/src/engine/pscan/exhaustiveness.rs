@@ -145,6 +145,15 @@ pub(crate) enum ExhaustivenessError {
 /// fetched body is checked against its committed hash. The first failure stops
 /// verification with an [`ExhaustivenessError`] — the caller advances the cursor
 /// only over the returned range, never past a refusal.
+///
+/// On failure the **whole batch is discarded** — no partial [`VerifiedRange`] is
+/// returned, so a continuity break at block `N` of `[A, B)` throws away the
+/// already-verified `[A, N)`. This is **intentional**: the cursor stays put and the
+/// prefix is simply re-verified next sweep (conservative, and free for a batch bounded
+/// by `MAX_SCAN_STEP_BLOCKS`). Do **not** "optimize" this into returning the partial
+/// range so the cursor can advance before halting — that turns a clean halt into a
+/// silent partial-advance. (If batches ever grow materially, the considered change is a
+/// separate `Err`-with-partial-range variant the caller opts into, never a default.)
 pub(crate) fn verify_exhaustive(
     first_height: BlockHeight,
     anchor: [u8; 32],
