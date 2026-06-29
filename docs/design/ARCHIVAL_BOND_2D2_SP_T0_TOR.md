@@ -96,7 +96,7 @@ reputation:
 | `torut` | **No** — 0.2.1, Oct 2021; self-described "does not implement all methods" | sha2/sha3/ed25519-dalek/hmac/serde | unmaintained → out |
 | `tor_control` | **No** — last release 2017 | — | out |
 | arti | yes, but it **is** Tor, not a C-Tor *controller* (its RPC controls arti) | heavy | the §10 "be-Tor" anchor, not a control client |
-| **`tor-interface`** (Gosling) | **Yes** — 0.6.7, Apr 2026; security-project pedigree | **hmac/sha2/zeroize** (minimal) | launches/bootstraps Tor + v3 onion — but a high-level `TorProvider` (connect/onion → `OnionStream`); **no raw SOCKS-port getter, no raw `SETEVENTS`/`STREAM`/CircID** in its docs |
+| **`tor-interface`** (Gosling) | **Yes** — 0.6.7, Apr 2026; security-project pedigree | **hmac/sha2/zeroize** (minimal) | launches/bootstraps Tor + v3 onion — but a high-level `TorProvider` (connect/onion → `OnionStream`); **confirmed in 0.6.7 source** — no raw SOCKS port (`Socks5ProxyConfig` user/pass is *upstream*-proxy creds, the **opposite direction** from `IsolateSOCKSAuth`); no raw `STREAM`/CircID (`AsyncEvent` is `pub(crate)`, controller/control-stream are private `mod`, only `TorEvent` public) |
 | roll-our-own | us | none new | exactly our surface, **raw** |
 
 **Verdict: roll-our-own minimal — grounded in the *mismatch*, not in "nothing is maintained."** The
@@ -105,18 +105,42 @@ on: the **raw SOCKS port** (SP-T1's per-`P` `IsolateSOCKSAuth` `ureq` clients di
 **raw `STREAM`/CircID events** (the DQ-T0.4 measurement). A `TorProvider` that owns the connection
 (`OnionStream`) and hides the control port cannot drive per-`P` SOCKS isolation or measure circuit
 disjointness; adopting it means a thin process-launch slice while still rolling our own for the
-load-bearing raw layer — the worst of both.
+load-bearing raw layer — the worst of both. Both disqualifiers are now confirmed in the 0.6.7
+*source* (the table row), and they are **independent** — either alone is sufficient.
 
 **De-risk with the reference, not the dependency.** `tor-interface`/Gosling is MIT-licensed and
-maintained, so **read it as the reference implementation** for the exact edge cases T3 flags — the
-event/reply **demux**, the **SAFECOOKIE** handshake, **`ADD_ONION`** — without taking the dependency.
+maintained, so **read it as the reference implementation** without taking the dependency — the modules
+are `legacy_tor_controller.rs` / `legacy_tor_control_stream.rs`, control-spec-section-annotated:
+
+- **SAFECOOKIE** — `AuthenticateMethod::SafeCookie`, the `AUTHCHALLENGE SERVERHASH/SERVERNONCE` parse,
+  `authenticate_cmd` (control-spec §3.5) — the reference for the dedicated SAFECOOKIE KAT.
+- **`ADD_ONION`/`DEL_ONION`** — `add_onion_cmd`/`del_onion_cmd`
+  (key/flags/max_streams/virt_port/client_auth, §3.27/§3.38) — exactly the SP-T3 surface.
+- **The demux — adopt its *poll/phase* model, not a concurrent reader.** Gosling's demux is **not** a
+  fully-async reader: `read_reply()` returns `Option<Reply>` tagged with a `StatusCode`, and
+  `wait_async_events()` drains the `650`s at controlled points (the public `update()` is the same
+  poll-to-drain). It *sidesteps* the hardest interleaving — a `650` arriving mid command-reply — by
+  **phasing** command-issue and event-drain rather than reading concurrently. **SP-T0a should adopt the
+  same discipline**, which the kameo `TorService` actor (DQ-T0.1) affords for free: drain events
+  between command handlers in its message loop. The reference does **not** validate a fully-async reader
+  handling events on a separate task while a command is in flight — that harder demux is SP-T0a's to own
+  if it ever reaches for it, so don't. (For DQ-T0.4 the hazard is milder anyway: the measurement request
+  goes out the **SOCKS** connection while events are read on the **control** connection — different
+  sockets, naturally decoupled.)
+
 Raw access *and* a battle-tested reference for the hard parts. Scope to exactly the §DQ-T0.2 table;
 SAFECOOKIE-handshake + per-command + demux KATs against a real Tor.
 
-**Reopen (`21`):** if `tor-interface` (or another maintained crate) is found to expose the raw
-SOCKS-port address **and** raw control events cleanly — confirm in its *source* as SP-T0a's first step
-(its docs are 65% covered, leaving a small chance of an undocumented getter) — reconsider adopting it
-for the lifecycle layer.
+**Reopen (`21`) — conjunctive, both axes; `CircuitToken` is a false door.** `tor-interface` *does*
+offer circuit isolation, but via an **opaque `CircuitToken`** (`generate_token`/`release_token`) — which
+is **not** a reopen, for two independent reasons. (1) **Isolation-contract ownership (CX-1):** a token
+moves token→circuit injectivity into *tor-interface*'s internal contract, whereas Shekyl's CX-1 closure
+requires the isolation key be Shekyl's *own* persona-derived `derive_socks_user`, unrepresentable-to-
+share **in Shekyl's types**. (2) **Measurement (DQ-T0.4):** raw CircID is still hidden, so even granted
+isolation, it can't be *verified*. So reopen **only if a future `tor-interface` exposes BOTH** the raw
+isolation key (so Shekyl owns `derive_socks_user`, not an opaque token) **and** raw `STREAM`/CircID (so
+DQ-T0.4 is performable). A version that merely surfaced `CircuitToken`'s underlying username still fails
+axis 2 — the criterion must not trip on it.
 
 **Security-surface pin (load-bearing).** The control port is *powerful* — `GETINFO` can deanonymize,
 `SETCONF` can reconfigure, `ADD_ONION` manages services. Keep it **wallet-private + loopback-only +
@@ -245,8 +269,10 @@ malicious-guard-draw risk. (Cross-ref §7.)
 
 ## 6. Reopen anchors (`21`)
 
-- **control-port client = roll-our-own** — reopen if a maintained crate proves clearly lighter on the
-  rule-17 axes (verify the candidates first).
+- **control-port client = roll-our-own** — reopen **only if** a maintained crate exposes **both** the
+  raw isolation key (so Shekyl owns `derive_socks_user`) **and** raw `STREAM`/CircID (so DQ-T0.4 is
+  performable); `tor-interface`'s opaque `CircuitToken` is a *false door* that satisfies neither (see
+  DQ-T0.2's reopen). Verify in source, not docs.
 - **embedded Arti** (the §10 anchor) — unchanged, on its real trigger (SOCKS-isolation unenforceable);
   DQ-T0.4 is the detector for that trigger.
 - **packaging targets** — the per-target Guix / hash-pin split is a detail to work at SP-T0c.
@@ -276,3 +302,12 @@ malicious-guard-draw risk. (Cross-ref §7.)
   grounded in that mismatch (not "nothing maintained"), **with Gosling read as the reference impl** for
   the demux / SAFECOOKIE / `ADD_ONION` edge cases. Reopen if a crate cleanly exposes raw SOCKS + raw
   events (confirm in source).
+- **2026-06-29 (DQ-T0.2 — confirmed at source):** read `tor-interface-0.6.7` directly (closing the
+  65%-doc-coverage caveat). Both disqualifiers verified and **independent**: no raw SOCKS port
+  (`Socks5ProxyConfig` is *upstream*-proxy creds, the opposite direction from `IsolateSOCKSAuth`); no raw
+  `STREAM`/CircID (`AsyncEvent` `pub(crate)`, controller/control-stream private `mod`, only `TorEvent`
+  public). Tightened the reopen to a **conjunctive** criterion — the opaque `CircuitToken` is a *false
+  door* (fails CX-1 ownership **and** DQ-T0.4 measurement); reopen needs **both** the raw isolation key
+  **and** raw CircID. Pinned the reference (`legacy_tor_controller.rs`): SAFECOOKIE §3.5 +
+  `ADD_ONION`/`DEL_ONION` §3.27/§3.38, and its **poll/phase demux** (not a concurrent reader) as the
+  model SP-T0a's `TorService` actor adopts for free.
