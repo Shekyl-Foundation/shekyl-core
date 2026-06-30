@@ -641,10 +641,19 @@ impl StakeEngine {
         if handle.generation != self.generation {
             return Err(StakeEngineError::StaleHandle);
         }
-        // A current-generation handle proves the slot was held at mint, and no
-        // wipe has happened since (a wipe advances the generation), so this is a
-        // defensive belt-and-braces check that should hold by construction.
+        // A current-generation handle proves the slot was held at mint, and no wipe has
+        // happened since (a wipe advances the generation), so this branch is unreachable by
+        // construction. If it *does* fire with a matching generation, a wipe failed to
+        // advance the generation — a real invariant bug, NOT an ordinary stale handle.
+        // Make it loud in dev rather than silently collapse it into `StaleHandle` (which
+        // would mask the distinct failure); still fail closed in release, where
+        // `StaleHandle` is the safe response either way.
         if !self.held.contains_key(&handle.p_slot) {
+            debug_assert!(
+                false,
+                "validate_handle: a current-generation handle names an unheld slot — a wipe \
+                 did not advance the generation (invariant violation, not a stale handle)"
+            );
             return Err(StakeEngineError::StaleHandle);
         }
         Ok(())

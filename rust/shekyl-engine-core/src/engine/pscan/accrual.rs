@@ -38,8 +38,7 @@
 
 use std::collections::BTreeMap;
 
-use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
-use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+use shekyl_archival_retention::consensus_state::{epoch_close_height, settlement_epoch_at_height};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
 use shekyl_engine_state::pscan_state::{BondPostRecord, PScanState};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
@@ -316,10 +315,10 @@ impl PScanAccrual {
     pub(crate) fn finalized_inflow(&self, epoch: SettlementEpoch) -> Option<PFundingInflow> {
         // The first height past `epoch` (its close); finalized iff the frontier
         // has reached it. Checked — an absurdly-distant epoch can't be finalized.
-        let epoch_end = epoch
-            .to_raw()
-            .checked_add(1)
-            .and_then(|next| next.checked_mul(SETTLEMENT_EPOCH_BLOCKS))?;
+        // Single-sourced close-boundary formula (shared with the consensus crate) rather
+        // than a hand-inlined `(epoch+1)·SEB`, so this genesis-frozen mapping can't drift.
+        // `None` on overflow (an absurdly-distant epoch can't be finalized) — fail closed.
+        let epoch_end = epoch_close_height(epoch.to_raw())?;
         if epoch_end > self.synced_height.to_raw() {
             return None; // frontier still inside (or before) this epoch → partial
         }
@@ -401,6 +400,8 @@ impl PScanAccrual {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+
     use crate::engine::pscan::reconcile::ReconcileVerdict;
     use crate::engine::pscan::scan_step::{BlockRange, EpochInflowDelta, ScanStepResult};
 

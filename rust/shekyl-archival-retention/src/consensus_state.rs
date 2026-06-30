@@ -38,6 +38,19 @@ pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
     Some(block_height / SETTLEMENT_EPOCH_BLOCKS - 1)
 }
 
+/// The block height at which settlement epoch `epoch` closes — the inverse of
+/// [`epoch_close_due_at_height`]. Epoch `E` covers `[E·SEB, (E+1)·SEB)`, so it closes at
+/// `(E+1)·SEB` (the first height of the next epoch). Returns `None` if `(E+1)·SEB` would
+/// overflow `u64` (an impossible epoch). Single-sources the close-boundary formula so
+/// callers needing "is epoch `E` finalized at height `H`?" (`epoch_close_height(E) <= H`)
+/// do not re-derive `(E+1)·SEB` by hand and risk drift from this genesis-frozen mapping.
+#[must_use]
+pub fn epoch_close_height(epoch: u64) -> Option<u64> {
+    epoch
+        .checked_add(1)
+        .and_then(|next| next.checked_mul(SETTLEMENT_EPOCH_BLOCKS))
+}
+
 /// Prune horizon at `block_height`: epochs strictly below the returned value
 /// are unclaimable (`E < tip − MAX_CLAIM_AGE_W`, ARCHIVAL_CONSENSUS_STATE.md §5)
 /// and may be deleted. `None` while the chain is younger than the window.
@@ -614,6 +627,24 @@ mod tests {
             epoch_close_due_at_height(7 * SETTLEMENT_EPOCH_BLOCKS),
             Some(6)
         );
+    }
+
+    #[test]
+    fn epoch_close_height_is_the_inverse_of_epoch_close_due() {
+        // The genesis-frozen close-boundary mapping, single-sourced here so callers don't
+        // re-derive `(E+1)·SEB` and drift. Epoch E closes at (E+1)·SEB, and the inverse
+        // round-trips.
+        for epoch in 0..6u64 {
+            let close = epoch_close_height(epoch).expect("no overflow for small epochs");
+            assert_eq!(close, (epoch + 1) * SETTLEMENT_EPOCH_BLOCKS);
+            assert_eq!(
+                epoch_close_due_at_height(close),
+                Some(epoch),
+                "epoch_close_due_at_height ∘ epoch_close_height is identity at the boundary"
+            );
+        }
+        // Fails closed on overflow rather than wrapping.
+        assert_eq!(epoch_close_height(u64::MAX), None);
     }
 
     #[test]
