@@ -18,8 +18,9 @@
 //!   handshake runs *synchronously* in [`on_start`](TorControl) — reading the
 //!   framer by hand, which is safe because no async `650` events can arrive before
 //!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` + `TAKEOWNERSHIP`
-//!   succeed is the read half wrapped as a [`Stream<Item = Framed>`](ReplyStream)
-//!   and handed to [`ActorRef::attach_stream`]. The stream then feeds the mailbox:
+//!   succeed is the read half wrapped as a `Stream<Item = Framed>` (the internal
+//!   `ReplyStream`) and handed to [`ActorRef::attach_stream`]. The stream then feeds
+//!   the mailbox:
 //!   every reply arrives as `StreamMessage::Next(Framed)` whether or not a command
 //!   is in flight, so idle async-event drain is automatic. A handshake `Err` fails
 //!   the spawn (DQ-T0.6); the ordering matters — the stream can't take the read
@@ -101,7 +102,7 @@ pub enum ControlError {
     Nonce,
     /// The connection closed mid-handshake (EOF before a complete reply).
     ConnectionClosed,
-    /// A handshake read exceeded [`HANDSHAKE_READ_TIMEOUT`].
+    /// A handshake read exceeded `HANDSHAKE_READ_TIMEOUT`.
     Timeout,
     /// A command reply arrived with no command in flight — an unsolicited reply,
     /// i.e. the stream is out of step. The actor fails rather than guess.
@@ -195,7 +196,7 @@ pub struct TorControlConfig {
 /// The control-port actor (one `TorService` actor — SP-T0a now, SP-T0b later).
 ///
 /// Owns the write half and the in-flight bookkeeping; the read half lives in the
-/// attached [`ReplyStream`]. The `child`/`bootstrap` fields are the **SP-T0b
+/// attached `ReplyStream`. The `child`/`bootstrap` fields are the **SP-T0b
 /// seam** — present now (unused) so SP-T0b adds behaviour without reshaping the
 /// struct.
 pub struct TorControl {
@@ -449,7 +450,7 @@ async fn write_line(writer: &mut OwnedWriteHalf, line: &str) -> Result<(), Contr
     Ok(())
 }
 
-/// Read one complete reply, bounded by [`HANDSHAKE_READ_TIMEOUT`].
+/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT`.
 async fn read_reply(
     reader: &mut OwnedReadHalf,
     framer: &mut ReplyFramer,

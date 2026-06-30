@@ -88,20 +88,21 @@ impl ControlReply {
     }
 
     /// `true` iff this is an asynchronous event (status `650`) rather than a
-    /// command reply. **Private:** the async/command split is reachable only
-    /// through [`Self::classify`], so no downstream code can re-derive it — that
-    /// is what makes routing a command's reply to an event (or vice versa)
-    /// unrepresentable rather than merely unlikely.
+    /// command reply. Private — it is the discriminant [`Self::classify`] uses;
+    /// [`Self::classify`] is the intended fork. (`status()` and
+    /// [`ASYNC_EVENT_STATUS`] stay public — `status()` is needed to check
+    /// command-reply codes — so the split *can* still be re-derived by hand; this
+    /// is the canonical fork, not a hard prohibition.)
     #[must_use]
     fn is_async_event(&self) -> bool {
         self.status == ASYNC_EVENT_STATUS
     }
 
-    /// Fork this reply into [`Framed`] — the **one site** at which the
-    /// async/command split is decided (status `650` ⇒ event). Consuming `self`
-    /// hands the reply to exactly one arm, so it cannot be classified twice or
-    /// routed to both; downstream code receives the already-typed `Framed` and
-    /// never re-checks the status.
+    /// Fork this reply into [`Framed`] (status `650` ⇒ event). Consuming `self`
+    /// classifies it exactly once — a `Framed` value cannot be classified twice or
+    /// routed to both arms. A consumer that routes on the result (the control actor
+    /// does, at its read-loop boundary) then hands its command path an
+    /// already-classified reply rather than re-checking the status.
     #[must_use]
     pub fn classify(self) -> Framed {
         if self.is_async_event() {
@@ -112,11 +113,12 @@ impl ControlReply {
     }
 }
 
-/// The two things a control reply can be, split once at ingress by
-/// [`ControlReply::classify`]. Routing on this enum — instead of re-checking a
-/// status downstream — is what makes "a command's reply path receives an async
-/// event" unrepresentable: the command path is handed a [`Framed::CommandReply`],
-/// never a raw reply it must classify itself.
+/// The two things a control reply can be, separated by [`ControlReply::classify`].
+/// A consumer that routes on this enum hands its command path a
+/// [`Framed::CommandReply`] — a reply already classified as a command, so an async
+/// event cannot reach the command path. The control actor classifies once, at its
+/// read-loop boundary, and routes on `Framed` for exactly this reason (rather than
+/// re-checking a status at each use site).
 ///
 /// The derived `Debug` delegates to [`ControlReply`]'s redacting one, so the
 /// control-port payload stays unlogged here too.
