@@ -313,6 +313,26 @@ them in rather than discovers them:
     deterministically becomes the backoff/§5 posture, never a silent reconnect that
     retries into the same corruption.
 
+### 3b. SP-T0b — the bootstrap-routing seam (decide it, don't discover it)
+
+A hindsight review of the **landed** actor (PR #212) surfaced one seam SP-T0b must
+choose deliberately — not a PR-212 defect. `TorControl` reserves a
+`bootstrap: BootstrapState` field, implying the actor holds bootstrap state
+*internally* — but every async `650` event, `STATUS_CLIENT` (which carries
+`BOOTSTRAP PROGRESS`) included, currently routes straight out to the external
+`EventSink`. The field implies an internal gate; the routing implements an external
+one. SP-T0b's fork:
+
+- **External gate** — the sink's consumer watches `STATUS_CLIENT` for `PROGRESS=100`
+  (leaving `bootstrap` vestigial; drop the field).
+- **Internal tap** — the `StreamMessage` handler taps `STATUS_CLIENT` to update
+  `self.bootstrap` and forwards only `STREAM` to the sink.
+
+**Lean: the internal tap.** The DQ-T0.4 measurement already reads `STREAM` off that
+same sink, so keeping the sink `STREAM`-only and making `self.bootstrap` the gate is
+the cleaner separation (one concern per channel). But it is **SP-T0b's call** —
+recorded here so it's chosen, not discovered.
+
 ---
 
 ## 4. Threat-model cross-check (origin-only — §7)
