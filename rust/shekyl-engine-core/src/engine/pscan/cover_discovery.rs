@@ -207,11 +207,11 @@ impl CoverDiscovery {
     /// `covered` range, over the `cover_window` where the cover could appear.
     ///
     /// **Gate-first** (the funding-side "absence concludable only within `covered`"):
-    /// `AbsentVerified` is returned **only** when the *whole, non-empty* `cover_window`
-    /// lies within `covered`. A window reaching beyond the verified frontier is
-    /// `Incomplete` (wait), never `AbsentVerified` — otherwise a source could induce a
-    /// re-fund by serving an exhaustive range that simply does not reach the cover's
-    /// height.
+    /// `AbsentVerified` is returned **only** when the whole `cover_window` lies within
+    /// `covered` (the window is non-empty by construction — [`BlockRange`](super::scan_step::BlockRange)
+    /// enforces it). A window reaching beyond the verified frontier is `Incomplete` (wait),
+    /// never `AbsentVerified` — otherwise a source could induce a re-fund by serving an
+    /// exhaustive range that simply does not reach the cover's height.
     ///
     /// `cover_found` and `covered` must come from the **same scan** — that consistency is
     /// the producer's (call-site's) obligation; the *consumer* sees only the bound
@@ -221,14 +221,6 @@ impl CoverDiscovery {
         cover_found: Option<BlockHeight>,
         covered: VerifiedRange,
     ) -> Self {
-        // An empty `cover_window` is a caller bug (the cover must have *somewhere* to
-        // appear). Catch it loudly in dev, AND fail closed in release via the non-empty
-        // check in the `AbsentVerified` gate below — never mint a vacuous "provably absent
-        // over an empty window," which would open a `RefundConsideration` path on nonsense.
-        debug_assert!(
-            cover_window.start() < cover_window.end(),
-            "cover_window must be non-empty (the range where the cover could appear)"
-        );
         if let Some(height) = cover_found {
             // A recovered cover is conclusive wherever it sits (presence is unconditional —
             // see the module doc on why `Found` needs no token), but it should fall within
@@ -239,13 +231,10 @@ impl CoverDiscovery {
             );
             return Self::Found(CoverFound::at(height));
         }
-        // Not found. Provably absent ONLY if the entire, **non-empty** window was
-        // exhaustively scanned. An empty window fails the first conjunct and falls to
-        // `Incomplete` — the release fail-closed for the dev `debug_assert` above.
-        if cover_window.start() < cover_window.end()
-            && covered.low() <= cover_window.start()
-            && cover_window.end() <= covered.high()
-        {
+        // Not found. Provably absent ONLY if the entire window was exhaustively scanned —
+        // i.e. `cover_window ⊆ covered`. The window is non-empty by construction
+        // (`BlockRange`), so there is no empty-window edge to guard here.
+        if covered.low() <= cover_window.start() && cover_window.end() <= covered.high() {
             // Carry BOTH: the absence is over `cover_window`, proven by the exhaustive scan
             // of `covered ⊇ cover_window`. Keeping the window (not just the evidence) makes
             // the verdict self-describing — a consumer can't mistake the evidence range for
@@ -415,16 +404,6 @@ mod tests {
         // stops a source inducing a re-fund by under-serving the window's tail).
         let v = CoverDiscovery::classify(window(100, 110), None, covered_range(0, 105));
         assert_eq!(v, CoverDiscovery::Incomplete);
-    }
-
-    #[test]
-    #[should_panic(expected = "cover_window must be non-empty")]
-    fn empty_cover_window_is_rejected_in_dev() {
-        // An empty window is a caller bug: it would vacuously satisfy whole-window
-        // containment and mint AbsentVerified (→ a re-fund path on nonsense). The dev
-        // debug_assert rejects it loudly; the non-empty conjunct in the AbsentVerified gate
-        // is the release fail-closed (→ Incomplete) behind it.
-        let _ = CoverDiscovery::classify(window(100, 100), None, covered_range(0, 200));
     }
 
     #[test]

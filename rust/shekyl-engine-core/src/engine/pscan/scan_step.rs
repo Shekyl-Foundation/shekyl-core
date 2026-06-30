@@ -75,8 +75,9 @@ pub(crate) struct BlockRange {
 }
 
 impl BlockRange {
-    /// Number of blocks in the range.
-    pub(crate) fn len(&self) -> u64 {
+    /// Number of blocks in the range — always `>= 1`, since the type is **non-empty by
+    /// construction** (see [`new`](Self::new)).
+    pub(crate) fn block_count(&self) -> u64 {
         self.end.to_raw() - self.start.to_raw()
     }
 
@@ -90,13 +91,16 @@ impl BlockRange {
 // Constructor + bounds accessors: consumed by tests now and by the PR-B driving
 // task (range construction + cursor bookkeeping). Held under a transient allow
 // until that task lands — kept separate from the live `impl` above so the
-// dead-code lint still covers `len`/`height_at`. (`is_empty` also pairs with
-// `len` for `clippy::len_without_is_empty`.)
+// dead-code lint still covers `block_count`/`height_at`.
 #[allow(dead_code)]
 impl BlockRange {
-    /// A half-open `[start, end)` range, or `None` if `end < start`.
+    /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
+    /// inverted (`start >= end`). Non-emptiness is the type invariant — a scan-step over zero
+    /// blocks is meaningless, and downstream gates ([`CoverDiscovery::classify`](super::cover_discovery::CoverDiscovery))
+    /// rely on every `BlockRange` covering at least one block — so the check lives here once
+    /// rather than being re-asserted at each use.
     pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
-        (start.to_raw() <= end.to_raw()).then_some(Self { start, end })
+        (start.to_raw() < end.to_raw()).then_some(Self { start, end })
     }
 
     /// Inclusive lower bound.
@@ -107,11 +111,6 @@ impl BlockRange {
     /// Exclusive upper bound.
     pub(crate) fn end(&self) -> BlockHeight {
         self.end
-    }
-
-    /// `true` when the range covers no blocks.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.start.to_raw() == self.end.to_raw()
     }
 }
 
@@ -253,15 +252,15 @@ pub(crate) fn run_dual_extractor(
 ) -> Result<ScanStepResult, DualExtractError> {
     // Enforce DQ6's bound first, rather than trust the caller (the actor mailbox
     // is blocked for the step's duration); then check the range↔block alignment.
-    if range.len() > MAX_SCAN_STEP_BLOCKS {
+    if range.block_count() > MAX_SCAN_STEP_BLOCKS {
         return Err(DualExtractError::StepTooLarge {
-            len: range.len(),
+            len: range.block_count(),
             max: MAX_SCAN_STEP_BLOCKS,
         });
     }
-    if blocks.len() as u64 != range.len() {
+    if blocks.len() as u64 != range.block_count() {
         return Err(DualExtractError::RangeBlockMismatch {
-            range_len: range.len(),
+            range_len: range.block_count(),
             blocks: blocks.len(),
         });
     }
@@ -381,6 +380,25 @@ mod tests {
 
     fn range(start: u64, end: u64) -> BlockRange {
         BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end)).expect("range")
+    }
+
+    #[test]
+    fn block_range_is_non_empty_by_construction() {
+        // The invariant the cover-discovery gate (and the scan loop) rely on: a `BlockRange`
+        // always covers at least one block. Empty (`start == end`) and inverted
+        // (`start > end`) both fail closed to `None`, so no empty range can ever reach a
+        // consumer — there is no empty-window edge to re-guard downstream.
+        assert!(
+            BlockRange::new(BlockHeight::from_raw(5), BlockHeight::from_raw(5)).is_none(),
+            "empty range rejected"
+        );
+        assert!(
+            BlockRange::new(BlockHeight::from_raw(6), BlockHeight::from_raw(5)).is_none(),
+            "inverted range rejected"
+        );
+        let r = BlockRange::new(BlockHeight::from_raw(5), BlockHeight::from_raw(6))
+            .expect("single-block range is valid");
+        assert_eq!(r.block_count(), 1);
     }
 
     #[test]

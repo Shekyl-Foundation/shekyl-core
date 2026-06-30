@@ -1167,10 +1167,11 @@ present on a served fork, absent on canonical) is **bounded and detectable** (po
 finality-gated — `P` can't spend until finality-deep so a transient fork reorgs out — and a
 fork-only spend produces a bond-post invalid on canonical, a *visible stake failure*), whereas a
 wrong-`AbsentVerified` is a *silent, permanent* re-link. The token gates the silent-irreversible
-side and only that side. (2) **An empty `cover_window` fails closed** — it would vacuously satisfy
-whole-window containment and mint `AbsentVerified`, so the gate requires a non-empty window (release
-fail-closed → `Incomplete`; a dev `debug_assert` catches the upstream bug loudly), and a found
-cover's height is `debug_assert`-checked within the window (a scan/window-alignment tripwire).
+side and only that side. (2) **An empty `cover_window` is unrepresentable** — it would vacuously
+satisfy whole-window containment and mint `AbsentVerified`, so the non-emptiness is enforced **at
+the type**: `BlockRange::new` rejects `start >= end`, so every `cover_window` covers at least one
+block by construction and `classify` carries no runtime empty-window guard. A found cover's height
+is still `debug_assert`-checked within the window (a scan/window-alignment tripwire).
 
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
