@@ -64,53 +64,69 @@ use shekyl_wire::transaction::{BondPostKind, Input};
 /// anything over it.
 pub(crate) const MAX_SCAN_STEP_BLOCKS: u64 = 1024;
 
-/// A bounded, half-open block-height range `[start, end)` — the unit of one
-/// scan-step. **Bounded per message** (DQ6): the driving task loops over small
-/// ranges so the actor interleaves rotation/sign between batches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BlockRange {
-    start: BlockHeight,
-    /// Exclusive upper bound.
-    end: BlockHeight,
-}
+pub(crate) use block_range::BlockRange;
 
-impl BlockRange {
-    /// Number of blocks in the range — always `>= 1`, since the type is **non-empty by
-    /// construction** (see [`new`](Self::new)).
-    pub(crate) fn block_count(&self) -> u64 {
-        self.end.to_raw() - self.start.to_raw()
+// `BlockRange` lives in its own module purely for **field privacy**: with `start`/`end`
+// private to `block_range`, even `scan_step` itself (and its `tests`) can only obtain one via
+// `BlockRange::new`. That turns non-emptiness into a *structural* invariant rather than a
+// same-module convention a future edit or a `BlockRange { .. }` literal could silently break.
+mod block_range {
+    use shekyl_types::BlockHeight;
+
+    /// A bounded, half-open block-height range `[start, end)` — the unit of one scan-step.
+    /// **Bounded per message** (DQ6): the driving task loops over small ranges so the actor
+    /// interleaves rotation/sign between batches.
+    ///
+    /// **Non-empty by construction.** The `start`/`end` fields are private to this module, so
+    /// the *only* way to obtain a `BlockRange` anywhere — including inside `scan_step` and its
+    /// tests — is [`BlockRange::new`], which rejects `start >= end`. Every `BlockRange` that
+    /// exists therefore covers at least one block, which is why the cover-discovery gate can
+    /// drop its empty-window check without relying on a convention.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct BlockRange {
+        start: BlockHeight,
+        /// Exclusive upper bound.
+        end: BlockHeight,
     }
 
-    /// Height of the `i`-th block in the range (`start + i`). The caller must keep
-    /// `i < block_count()`.
-    fn height_at(&self, i: usize) -> BlockHeight {
-        BlockHeight::from_raw(self.start.to_raw() + i as u64)
-    }
-}
+    impl BlockRange {
+        /// Number of blocks in the range — always `>= 1` (non-empty by construction).
+        pub(crate) fn block_count(&self) -> u64 {
+            self.end.to_raw() - self.start.to_raw()
+        }
 
-// Constructor + bounds accessors: consumed by tests now and by the PR-B driving
-// task (range construction + cursor bookkeeping). Held under a transient allow
-// until that task lands — kept separate from the live `impl` above so the
-// dead-code lint still covers `block_count`/`height_at`.
-#[allow(dead_code)]
-impl BlockRange {
-    /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
-    /// inverted (`start >= end`). Non-emptiness is the type invariant — a scan-step over zero
-    /// blocks is meaningless, and downstream gates ([`CoverDiscovery::classify`](super::cover_discovery::CoverDiscovery))
-    /// rely on every `BlockRange` covering at least one block — so the check lives here once
-    /// rather than being re-asserted at each use.
-    pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
-        (start.to_raw() < end.to_raw()).then_some(Self { start, end })
+        /// Height of the `i`-th block in the range (`start + i`). The caller must keep `i` a
+        /// valid offset — `(i as u64) < block_count()`, which at the aligned call site is
+        /// exactly `i < blocks.len()`. `pub(super)` because only `scan_step`'s
+        /// `run_dual_extractor` iterates a range against its aligned blocks.
+        pub(super) fn height_at(&self, i: usize) -> BlockHeight {
+            BlockHeight::from_raw(self.start.to_raw() + i as u64)
+        }
     }
 
-    /// Inclusive lower bound.
-    pub(crate) fn start(&self) -> BlockHeight {
-        self.start
-    }
+    // Constructor + bounds accessors. Held under a transient allow until the PR-B driving
+    // task fully wires them — kept separate from the live `impl` above so the dead-code lint
+    // still covers `block_count`/`height_at`.
+    #[allow(dead_code)]
+    impl BlockRange {
+        /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
+        /// inverted (`start >= end`). The **sole** constructor: with the fields private to
+        /// this module, non-emptiness holds for *every* `BlockRange` value — not merely those
+        /// built by external consumers — so the cover-discovery gate relies on it structurally
+        /// and the check lives here once rather than being re-asserted at each use.
+        pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
+            (start.to_raw() < end.to_raw()).then_some(Self { start, end })
+        }
 
-    /// Exclusive upper bound.
-    pub(crate) fn end(&self) -> BlockHeight {
-        self.end
+        /// Inclusive lower bound.
+        pub(crate) fn start(&self) -> BlockHeight {
+            self.start
+        }
+
+        /// Exclusive upper bound.
+        pub(crate) fn end(&self) -> BlockHeight {
+            self.end
+        }
     }
 }
 
