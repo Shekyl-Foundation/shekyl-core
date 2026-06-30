@@ -238,18 +238,24 @@ where
     let horizon = tip.to_raw().saturating_sub(config.reorg_depth);
     let batch = config.batch();
 
-    // Observability: when the horizon is at or below the frontier the loop below never
-    // runs and the sweep returns `Ok(())` — indistinguishable from "nothing new." That
-    // happens on a young chain (`tip < reorg_depth`) *or* when a source claims a
-    // stale/truncated tip (the SP-7 tip-honesty residual, deferred to 2d-2). Emit a trace
-    // so a permanently-idle scan is at least visible; it is not an error (the safe action
-    // is to keep waiting — never re-fund/GC on a stale tip), so it stays at `trace`.
-    if horizon <= accrual.next_height().to_raw() {
+    // Observability: when the horizon is at or below the frontier the loop below never runs
+    // and the sweep returns `Ok(())`. The COMMON cause is benign — the frontier has caught
+    // up to the finality horizon, so there are simply no new reorg-deep blocks to scan this
+    // tick (normal steady-state). The same condition also covers a young chain
+    // (`tip < reorg_depth`) or a source claiming a stale/truncated tip — but those are only
+    // distinguishable when *persistent* (the SP-7 tip-honesty residual, deferred to 2d-2).
+    // Emit a neutral trace so a persistently-idle scan is visible without painting normal
+    // catch-up as tip dishonesty; it is not an error (the safe action is to keep waiting —
+    // never re-fund/GC on a stale tip), so it stays at `trace`.
+    let frontier = accrual.next_height().to_raw();
+    if horizon <= frontier {
         tracing::trace!(
             tip = tip.to_raw(),
             horizon,
-            frontier = accrual.next_height().to_raw(),
-            "P-scan sweep made no progress: finality horizon at/below the frontier (young chain or stale/withheld tip)"
+            frontier,
+            "P-scan sweep: frontier reached the finality horizon — no new final blocks this tick \
+             (normal when caught up; only a persistently non-advancing horizon indicates a young \
+             chain or a stale/withheld tip)"
         );
     }
 

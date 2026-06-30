@@ -651,8 +651,11 @@ impl StakeEngine {
         if !self.held.contains_key(&handle.p_slot) {
             debug_assert!(
                 false,
-                "validate_handle: a current-generation handle names an unheld slot — a wipe \
-                 did not advance the generation (invariant violation, not a stale handle)"
+                "validate_handle: a current-generation handle names an unheld slot \
+                 (p_slot={:?}, handle.generation={}, engine.generation={}) — a wipe did not \
+                 advance the generation (invariant violation, not a stale handle). The two \
+                 generations are equal here by the check above; if they differ, that is the bug.",
+                handle.p_slot, handle.generation, self.generation
             );
             return Err(StakeEngineError::StaleHandle);
         }
