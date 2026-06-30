@@ -29,8 +29,10 @@ pub mod actor;
 pub mod auth;
 pub mod framing;
 pub mod safecookie;
+pub mod stream;
 
 pub use actor::{Command, CommandResult, ControlError, EventSink, TorControl, TorControlConfig};
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
+pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
