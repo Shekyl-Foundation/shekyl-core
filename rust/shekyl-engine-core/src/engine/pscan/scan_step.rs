@@ -64,54 +64,69 @@ use shekyl_wire::transaction::{BondPostKind, Input};
 /// anything over it.
 pub(crate) const MAX_SCAN_STEP_BLOCKS: u64 = 1024;
 
-/// A bounded, half-open block-height range `[start, end)` — the unit of one
-/// scan-step. **Bounded per message** (DQ6): the driving task loops over small
-/// ranges so the actor interleaves rotation/sign between batches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BlockRange {
-    start: BlockHeight,
-    /// Exclusive upper bound.
-    end: BlockHeight,
-}
+pub(crate) use block_range::BlockRange;
 
-impl BlockRange {
-    /// Number of blocks in the range.
-    pub(crate) fn len(&self) -> u64 {
-        self.end.to_raw() - self.start.to_raw()
+// `BlockRange` lives in its own module purely for **field privacy**: with `start`/`end`
+// private to `block_range`, even `scan_step` itself (and its `tests`) can only obtain one via
+// `BlockRange::new`. That turns non-emptiness into a *structural* invariant rather than a
+// same-module convention a future edit or a `BlockRange { .. }` literal could silently break.
+mod block_range {
+    use shekyl_types::BlockHeight;
+
+    /// A bounded, half-open block-height range `[start, end)` — the unit of one scan-step.
+    /// **Bounded per message** (DQ6): the driving task loops over small ranges so the actor
+    /// interleaves rotation/sign between batches.
+    ///
+    /// **Non-empty by construction.** The `start`/`end` fields are private to this module, so
+    /// the *only* way to obtain a `BlockRange` anywhere — including inside `scan_step` and its
+    /// tests — is [`BlockRange::new`], which rejects `start >= end`. Every `BlockRange` that
+    /// exists therefore covers at least one block, which is why the cover-discovery gate can
+    /// drop its empty-window check without relying on a convention.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct BlockRange {
+        start: BlockHeight,
+        /// Exclusive upper bound.
+        end: BlockHeight,
     }
 
-    /// Height of the `i`-th block in the range (`start + i`). The caller must keep
-    /// `i < len()`.
-    fn height_at(&self, i: usize) -> BlockHeight {
-        BlockHeight::from_raw(self.start.to_raw() + i as u64)
-    }
-}
+    impl BlockRange {
+        /// Number of blocks in the range — always `>= 1` (non-empty by construction).
+        pub(crate) fn block_count(&self) -> u64 {
+            self.end.to_raw() - self.start.to_raw()
+        }
 
-// Constructor + bounds accessors: consumed by tests now and by the PR-B driving
-// task (range construction + cursor bookkeeping). Held under a transient allow
-// until that task lands — kept separate from the live `impl` above so the
-// dead-code lint still covers `len`/`height_at`. (`is_empty` also pairs with
-// `len` for `clippy::len_without_is_empty`.)
-#[allow(dead_code)]
-impl BlockRange {
-    /// A half-open `[start, end)` range, or `None` if `end < start`.
-    pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
-        (start.to_raw() <= end.to_raw()).then_some(Self { start, end })
+        /// Height of the `i`-th block in the range (`start + i`). The caller must keep `i` a
+        /// valid offset — `(i as u64) < block_count()`, which at the aligned call site is
+        /// exactly `i < blocks.len()`. `pub(super)` because only `scan_step`'s
+        /// `run_dual_extractor` iterates a range against its aligned blocks.
+        pub(super) fn height_at(&self, i: usize) -> BlockHeight {
+            BlockHeight::from_raw(self.start.to_raw() + i as u64)
+        }
     }
 
-    /// Inclusive lower bound.
-    pub(crate) fn start(&self) -> BlockHeight {
-        self.start
-    }
+    // Constructor + bounds accessors. Held under a transient allow until the PR-B driving
+    // task fully wires them — kept separate from the live `impl` above so the dead-code lint
+    // still covers `block_count`/`height_at`.
+    #[allow(dead_code)]
+    impl BlockRange {
+        /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
+        /// inverted (`start >= end`). The **sole** constructor: with the fields private to
+        /// this module, non-emptiness holds for *every* `BlockRange` value — not merely those
+        /// built by external consumers — so the cover-discovery gate relies on it structurally
+        /// and the check lives here once rather than being re-asserted at each use.
+        pub(crate) fn new(start: BlockHeight, end: BlockHeight) -> Option<Self> {
+            (start.to_raw() < end.to_raw()).then_some(Self { start, end })
+        }
 
-    /// Exclusive upper bound.
-    pub(crate) fn end(&self) -> BlockHeight {
-        self.end
-    }
+        /// Inclusive lower bound.
+        pub(crate) fn start(&self) -> BlockHeight {
+            self.start
+        }
 
-    /// `true` when the range covers no blocks.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.start.to_raw() == self.end.to_raw()
+        /// Exclusive upper bound.
+        pub(crate) fn end(&self) -> BlockHeight {
+            self.end
+        }
     }
 }
 
@@ -125,7 +140,7 @@ pub(crate) struct ScanStep {
     /// The bounded height range this step covers.
     pub(crate) range: BlockRange,
     /// Blocks aligned to `range`: `blocks[i]` is the block at `range.start + i`.
-    /// `blocks.len()` must equal `range.len()`.
+    /// `blocks.len()` must equal `range.block_count()`.
     pub(crate) blocks: Vec<ScannableBlock>,
 }
 
@@ -185,14 +200,17 @@ pub(crate) struct ScanStepResult {
 /// mis-sizes a privacy parameter (`C_min`), so we never paper over one.
 #[derive(Debug)]
 pub(crate) enum DualExtractError {
-    /// `blocks.len()` did not equal `range.len()` — the task's range↔block
+    /// `blocks.len()` did not equal `range.block_count()` — the task's range↔block
     /// alignment invariant was violated; refuse rather than mis-attribute.
-    RangeBlockMismatch { range_len: u64, blocks: usize },
+    RangeBlockMismatch {
+        range_block_count: u64,
+        blocks: usize,
+    },
     /// The step exceeded [`MAX_SCAN_STEP_BLOCKS`] — the "bounded per message"
     /// invariant (DQ6) enforced, not merely contracted: an unbounded batch would
     /// stall the single-threaded actor mailbox and balloon memory. Fail closed so
     /// a task bug or test misuse cannot starve rotation/sign.
-    StepTooLarge { len: u64, max: u64 },
+    StepTooLarge { block_count: u64, max: u64 },
     /// A persona scan returned an error (malformed block / unsupported protocol).
     Scan(shekyl_scanner::ScanError),
     /// An epoch's confirmed inflow summed past `u64::MAX` (an attacker-stuffed or
@@ -203,13 +221,16 @@ pub(crate) enum DualExtractError {
 impl std::fmt::Display for DualExtractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RangeBlockMismatch { range_len, blocks } => write!(
+            Self::RangeBlockMismatch {
+                range_block_count,
+                blocks,
+            } => write!(
                 f,
-                "scan-step range covers {range_len} blocks but {blocks} were supplied"
+                "scan-step range covers {range_block_count} blocks but {blocks} were supplied"
             ),
-            Self::StepTooLarge { len, max } => write!(
+            Self::StepTooLarge { block_count, max } => write!(
                 f,
-                "scan-step covers {len} blocks, over the {max}-block bound (DQ6)"
+                "scan-step covers {block_count} blocks, over the {max}-block bound (DQ6)"
             ),
             Self::Scan(e) => write!(f, "persona scan failed: {e}"),
             Self::InflowOverflow { epoch } => {
@@ -253,15 +274,15 @@ pub(crate) fn run_dual_extractor(
 ) -> Result<ScanStepResult, DualExtractError> {
     // Enforce DQ6's bound first, rather than trust the caller (the actor mailbox
     // is blocked for the step's duration); then check the range↔block alignment.
-    if range.len() > MAX_SCAN_STEP_BLOCKS {
+    if range.block_count() > MAX_SCAN_STEP_BLOCKS {
         return Err(DualExtractError::StepTooLarge {
-            len: range.len(),
+            block_count: range.block_count(),
             max: MAX_SCAN_STEP_BLOCKS,
         });
     }
-    if blocks.len() as u64 != range.len() {
+    if blocks.len() as u64 != range.block_count() {
         return Err(DualExtractError::RangeBlockMismatch {
-            range_len: range.len(),
+            range_block_count: range.block_count(),
             blocks: blocks.len(),
         });
     }
@@ -381,6 +402,25 @@ mod tests {
 
     fn range(start: u64, end: u64) -> BlockRange {
         BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end)).expect("range")
+    }
+
+    #[test]
+    fn block_range_is_non_empty_by_construction() {
+        // The invariant the cover-discovery gate (and the scan loop) rely on: a `BlockRange`
+        // always covers at least one block. Empty (`start == end`) and inverted
+        // (`start > end`) both fail closed to `None`, so no empty range can ever reach a
+        // consumer — there is no empty-window edge to re-guard downstream.
+        assert!(
+            BlockRange::new(BlockHeight::from_raw(5), BlockHeight::from_raw(5)).is_none(),
+            "empty range rejected"
+        );
+        assert!(
+            BlockRange::new(BlockHeight::from_raw(6), BlockHeight::from_raw(5)).is_none(),
+            "inverted range rejected"
+        );
+        let r = BlockRange::new(BlockHeight::from_raw(5), BlockHeight::from_raw(6))
+            .expect("single-block range is valid");
+        assert_eq!(r.block_count(), 1);
     }
 
     #[test]
@@ -505,7 +545,7 @@ mod tests {
         assert!(matches!(
             err,
             DualExtractError::RangeBlockMismatch {
-                range_len: 3,
+                range_block_count: 3,
                 blocks: 1
             }
         ));
@@ -524,8 +564,8 @@ mod tests {
         .expect_err("an oversized step must fail closed");
         assert!(matches!(
             err,
-            DualExtractError::StepTooLarge { len, max }
-                if len == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
+            DualExtractError::StepTooLarge { block_count, max }
+                if block_count == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
         ));
     }
 }
