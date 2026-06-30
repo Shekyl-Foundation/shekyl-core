@@ -114,10 +114,12 @@ impl ServerNonce {
 /// A non-`250` status is [`AuthError::ChallengeRejected`] immediately — an error
 /// line is never scanned for `SERVERHASH=`.
 ///
-/// **Parse by token name, not position.** The two values are matched by
-/// `SERVERHASH=`/`SERVERNONCE=`; a missing, duplicate, or unknown token, or a
-/// value that is not exactly 64 hex digits, is [`AuthError::MalformedChallenge`].
-/// Failing closed is the right posture for a pinned protocol.
+/// **Parse by token name, not position.** The strict shape is exactly
+/// `AUTHCHALLENGE SERVERHASH=… SERVERNONCE=…` — the keyword and both values, each
+/// present **exactly once**. A missing, duplicate, or unknown token (the keyword
+/// included), or a value that is not exactly 64 hex digits, is
+/// [`AuthError::MalformedChallenge`]. Failing closed is the right posture for a
+/// pinned protocol.
 pub fn parse_authchallenge(reply: &ControlReply) -> Result<(ServerHash, ServerNonce), AuthError> {
     if reply.status() != 250 {
         return Err(AuthError::ChallengeRejected {
@@ -127,6 +129,7 @@ pub fn parse_authchallenge(reply: &ControlReply) -> Result<(ServerHash, ServerNo
 
     let mut server_hash: Option<[u8; 32]> = None;
     let mut server_nonce: Option<[u8; 32]> = None;
+    let mut saw_keyword = false;
     for token in reply
         .lines()
         .iter()
@@ -135,17 +138,25 @@ pub fn parse_authchallenge(reply: &ControlReply) -> Result<(ServerHash, ServerNo
         match token.split_once('=') {
             Some(("SERVERHASH", hex)) => set_once(&mut server_hash, hex)?,
             Some(("SERVERNONCE", hex)) => set_once(&mut server_nonce, hex)?,
-            // The one legitimate bare token is the echoed `AUTHCHALLENGE` keyword.
-            None if token == "AUTHCHALLENGE" => {}
+            // The echoed `AUTHCHALLENGE` keyword — required exactly once, so a
+            // duplicate is as malformed as a missing one (same strictness as the
+            // value tokens).
+            None if token == "AUTHCHALLENGE" => {
+                if saw_keyword {
+                    return Err(AuthError::MalformedChallenge);
+                }
+                saw_keyword = true;
+            }
             // Any other `key=value` token, or any other bare token, is unexpected
             // — fail closed.
             Some(_) | None => return Err(AuthError::MalformedChallenge),
         }
     }
 
-    match (server_hash, server_nonce) {
-        (Some(hash), Some(nonce)) => Ok((ServerHash(hash), ServerNonce(nonce))),
-        // A missing `SERVERHASH` or `SERVERNONCE`.
+    // The strict shape is exactly `AUTHCHALLENGE SERVERHASH=… SERVERNONCE=…`: the
+    // keyword and both values, each present exactly once.
+    match (saw_keyword, server_hash, server_nonce) {
+        (true, Some(hash), Some(nonce)) => Ok((ServerHash(hash), ServerNonce(nonce))),
         _ => Err(AuthError::MalformedChallenge),
     }
 }
@@ -312,6 +323,33 @@ mod tests {
             "250 AUTHCHALLENGE SERVERHASH={} SERVERHASH={} SERVERNONCE={}\r\n",
             hex_of(0xA1),
             hex_of(0xA2),
+            hex_of(0xB2),
+        );
+        assert_eq!(
+            parse_authchallenge(&frame_one(wire.as_bytes())),
+            Err(AuthError::MalformedChallenge),
+        );
+    }
+
+    #[test]
+    fn rejects_a_reply_missing_the_keyword() {
+        // Both values present but no `AUTHCHALLENGE` keyword — not Tor's shape.
+        let wire = format!(
+            "250 SERVERHASH={} SERVERNONCE={}\r\n",
+            hex_of(0xA1),
+            hex_of(0xB2),
+        );
+        assert_eq!(
+            parse_authchallenge(&frame_one(wire.as_bytes())),
+            Err(AuthError::MalformedChallenge),
+        );
+    }
+
+    #[test]
+    fn rejects_a_duplicate_keyword() {
+        let wire = format!(
+            "250 AUTHCHALLENGE AUTHCHALLENGE SERVERHASH={} SERVERNONCE={}\r\n",
+            hex_of(0xA1),
             hex_of(0xB2),
         );
         assert_eq!(
