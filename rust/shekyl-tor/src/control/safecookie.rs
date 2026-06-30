@@ -117,8 +117,9 @@ fn auth_hmac(
 /// The proof is a **pair**, because a `compile_fail` passes on *any* compile error
 /// — on its own a broken path or a typo would "pass" while silently testing
 /// nothing. The positive doctest anchors that the public path resolves and the
-/// legitimate route compiles and computes; the negative one is then left with
-/// nothing to fail on but the private field:
+/// `verify_server_hash` → `client_hash` route type-checks (it does not assert a
+/// hash — the pinned-vector unit tests below verify it *computes* the right one);
+/// the negative one is then left with nothing to fail on but the private field:
 ///
 /// ```
 /// // Legitimate route: a real verify is the sole path to a client hash.

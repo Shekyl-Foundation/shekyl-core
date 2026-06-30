@@ -234,9 +234,11 @@ pub struct TorControl {
     events: EventSink,
     /// The command currently on the wire, awaiting its reply (`DelegatedReply`).
     pending: Option<ReplySender<CommandResult>>,
-    /// Commands that arrived while one was on the wire — drained FIFO as each
-    /// reply lands, so order (the only reply correlation there is) is preserved.
-    queue: VecDeque<(Command, ReplySender<CommandResult>)>,
+    /// Commands that arrived while one was on the wire — their **already-validated
+    /// wire lines** — drained FIFO as each reply lands, so order (the only reply
+    /// correlation there is) is preserved. Storing the rendered line (not the
+    /// `Command`) means `to_wire` runs exactly once per command.
+    queue: VecDeque<(String, ReplySender<CommandResult>)>,
     /// SP-T0b seam: the managed `tor` child process. `None` until SP-T0b owns it.
     #[allow(dead_code)]
     child: Option<TorChild>,
@@ -332,28 +334,12 @@ impl Actor for TorControl {
 }
 
 impl TorControl {
-    /// Write a command line (`<cmd>\r\n`) to the control port. Callers validate via
-    /// [`Command::to_wire`] before enqueuing, so the only failure reaching the wire
-    /// here is [`ControlError::Io`].
-    async fn write_command(&mut self, cmd: &Command) -> Result<(), ControlError> {
-        let line = cmd.to_wire()?;
-        self.writer
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|_| ControlError::Io)?;
-        self.writer
-            .write_all(b"\r\n")
-            .await
-            .map_err(|_| ControlError::Io)?;
-        Ok(())
-    }
-
     /// Fail every in-flight and queued caller with `err` — the actor is stopping.
     fn fail_all_pending(&mut self, err: &ControlError) {
         if let Some(tx) = self.pending.take() {
             tx.send(Err(err.clone()));
         }
-        for (_cmd, tx) in self.queue.drain(..) {
+        for (_line, tx) in self.queue.drain(..) {
             tx.send(Err(err.clone()));
         }
     }
@@ -368,23 +354,25 @@ impl Message<Command> for TorControl {
         // command whose reply has nowhere to go and would desync the stream, so a
         // tell is dropped rather than written.
         if let Some(tx) = reply_sender {
-            if let Err(e) = cmd.to_wire() {
-                // A forbidden token — reject this command without touching the wire
-                // or the queue. A caller error, not a connection failure: the actor
-                // keeps running (and nothing was written, so FIFO stays intact).
-                tx.send(Err(e));
-            } else if self.pending.is_some() {
-                // One already on the wire — queue (validated above) to preserve FIFO
+            // Render + validate the wire line exactly once, here.
+            match cmd.to_wire() {
+                // Malformed — reject to the caller without touching the wire or the
+                // queue. A caller error, not a connection failure: the actor keeps
+                // running (nothing was written, so FIFO stays intact).
+                Err(e) => tx.send(Err(e)),
+                // One already on the wire — queue the validated line to preserve FIFO
                 // + one-on-the-wire.
-                self.queue.push_back((cmd, tx));
-            } else if let Err(e) = self.write_command(&cmd).await {
-                // The command validated, so this can only be an Io failure mid-write
-                // — the wire is disturbed; fail the actor.
-                tx.send(Err(e.clone()));
-                self.fail_all_pending(&e);
-                ctx.stop();
-            } else {
-                self.pending = Some(tx);
+                Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx)),
+                // The wire is free — write the line now.
+                Ok(line) => match write_line(&mut self.writer, &line).await {
+                    Ok(()) => self.pending = Some(tx),
+                    // An Io failure mid-write disturbs the wire; fail the actor.
+                    Err(e) => {
+                        tx.send(Err(e.clone()));
+                        self.fail_all_pending(&e);
+                        ctx.stop();
+                    }
+                },
             }
         }
         delegated
@@ -416,13 +404,14 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
             StreamMessage::Next(Ok(Framed::CommandReply(reply))) => match self.pending.take() {
                 Some(tx) => {
                     tx.send(Ok(reply));
-                    if let Some((next_cmd, next_tx)) = self.queue.pop_front() {
-                        if let Err(e) = self.write_command(&next_cmd).await {
-                            next_tx.send(Err(e.clone()));
-                            self.fail_all_pending(&e);
-                            ctx.stop();
-                        } else {
-                            self.pending = Some(next_tx);
+                    if let Some((next_line, next_tx)) = self.queue.pop_front() {
+                        match write_line(&mut self.writer, &next_line).await {
+                            Ok(()) => self.pending = Some(next_tx),
+                            Err(e) => {
+                                next_tx.send(Err(e.clone()));
+                                self.fail_all_pending(&e);
+                                ctx.stop();
+                            }
                         }
                     }
                 }
@@ -694,7 +683,7 @@ mod live_tests {
 
     /// Spawn an **offline** `tor` (`DisableNetwork 1`) with a cookie-authed control
     /// port on an OS-assigned port written to `ControlPortWriteToFile`.
-    fn spawn_offline_tor() -> TestTor {
+    async fn spawn_offline_tor() -> TestTor {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().to_path_buf();
         let port_file = data_dir.join("control_port");
@@ -722,7 +711,7 @@ mod live_tests {
         let guard = KillOnDrop(Some(child));
         // Same not-yet-written startup race the cookie reader models: poll the
         // control-port file until it parses, with a bounded backoff.
-        let control_addr = wait_for_control_port(&port_file, Duration::from_secs(30));
+        let control_addr = wait_for_control_port(&port_file, Duration::from_secs(30)).await;
         let child = guard.disarm();
         let cookie_path = data_dir.join("control_auth_cookie");
         TestTor {
@@ -734,8 +723,9 @@ mod live_tests {
     }
 
     /// Poll the `ControlPortWriteToFile` until it carries a parseable
-    /// `PORT=<addr>:<port>` line.
-    fn wait_for_control_port(port_file: &Path, timeout: Duration) -> SocketAddr {
+    /// `PORT=<addr>:<port>` line. Async so the backoff yields the runtime instead
+    /// of blocking a worker thread with `std::thread::sleep`.
+    async fn wait_for_control_port(port_file: &Path, timeout: Duration) -> SocketAddr {
         let deadline = Instant::now() + timeout;
         loop {
             if let Ok(contents) = std::fs::read_to_string(port_file) {
@@ -751,14 +741,14 @@ mod live_tests {
                 Instant::now() < deadline,
                 "tor control port file not ready within {timeout:?}",
             );
-            std::thread::sleep(Duration::from_millis(100));
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
     async fn handshake_and_getinfo_against_offline_tor() {
-        let tor = spawn_offline_tor();
+        let tor = spawn_offline_tor().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let actor = TorControl::spawn(TorControlConfig {
             control_addr: tor.control_addr,
