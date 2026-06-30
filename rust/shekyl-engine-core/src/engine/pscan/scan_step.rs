@@ -184,14 +184,17 @@ pub(crate) struct ScanStepResult {
 /// mis-sizes a privacy parameter (`C_min`), so we never paper over one.
 #[derive(Debug)]
 pub(crate) enum DualExtractError {
-    /// `blocks.len()` did not equal `range.len()` — the task's range↔block
+    /// `blocks.len()` did not equal `range.block_count()` — the task's range↔block
     /// alignment invariant was violated; refuse rather than mis-attribute.
-    RangeBlockMismatch { range_len: u64, blocks: usize },
+    RangeBlockMismatch {
+        range_block_count: u64,
+        blocks: usize,
+    },
     /// The step exceeded [`MAX_SCAN_STEP_BLOCKS`] — the "bounded per message"
     /// invariant (DQ6) enforced, not merely contracted: an unbounded batch would
     /// stall the single-threaded actor mailbox and balloon memory. Fail closed so
     /// a task bug or test misuse cannot starve rotation/sign.
-    StepTooLarge { len: u64, max: u64 },
+    StepTooLarge { block_count: u64, max: u64 },
     /// A persona scan returned an error (malformed block / unsupported protocol).
     Scan(shekyl_scanner::ScanError),
     /// An epoch's confirmed inflow summed past `u64::MAX` (an attacker-stuffed or
@@ -202,13 +205,16 @@ pub(crate) enum DualExtractError {
 impl std::fmt::Display for DualExtractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RangeBlockMismatch { range_len, blocks } => write!(
+            Self::RangeBlockMismatch {
+                range_block_count,
+                blocks,
+            } => write!(
                 f,
-                "scan-step range covers {range_len} blocks but {blocks} were supplied"
+                "scan-step range covers {range_block_count} blocks but {blocks} were supplied"
             ),
-            Self::StepTooLarge { len, max } => write!(
+            Self::StepTooLarge { block_count, max } => write!(
                 f,
-                "scan-step covers {len} blocks, over the {max}-block bound (DQ6)"
+                "scan-step covers {block_count} blocks, over the {max}-block bound (DQ6)"
             ),
             Self::Scan(e) => write!(f, "persona scan failed: {e}"),
             Self::InflowOverflow { epoch } => {
@@ -254,13 +260,13 @@ pub(crate) fn run_dual_extractor(
     // is blocked for the step's duration); then check the range↔block alignment.
     if range.block_count() > MAX_SCAN_STEP_BLOCKS {
         return Err(DualExtractError::StepTooLarge {
-            len: range.block_count(),
+            block_count: range.block_count(),
             max: MAX_SCAN_STEP_BLOCKS,
         });
     }
     if blocks.len() as u64 != range.block_count() {
         return Err(DualExtractError::RangeBlockMismatch {
-            range_len: range.block_count(),
+            range_block_count: range.block_count(),
             blocks: blocks.len(),
         });
     }
@@ -523,7 +529,7 @@ mod tests {
         assert!(matches!(
             err,
             DualExtractError::RangeBlockMismatch {
-                range_len: 3,
+                range_block_count: 3,
                 blocks: 1
             }
         ));
@@ -542,8 +548,8 @@ mod tests {
         .expect_err("an oversized step must fail closed");
         assert!(matches!(
             err,
-            DualExtractError::StepTooLarge { len, max }
-                if len == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
+            DualExtractError::StepTooLarge { block_count, max }
+                if block_count == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
         ));
     }
 }
