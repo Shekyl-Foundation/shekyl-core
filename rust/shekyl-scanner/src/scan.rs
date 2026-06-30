@@ -540,8 +540,8 @@ impl InternalScanner {
         // "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
         // `validate_context_free_pruned` rejects at ingestion, so a canonical
         // daemon can never serve such a tx and no wire-sourced tx on the live
-        // path carries it. An adversarial daemon could (pre-consensus rejection);
-        // recovering outputs from a tx consensus would reject would surface
+        // path carries it. An adversarial daemon could (pre-consensus rejection),
+        // and recovering outputs from a consensus-invalid tx would surface
         // phantom balance. As with the size gate above, this is the scanner's own
         // self-protection for the in-memory caller path the ingestion validator
         // never saw — refuse to recover ANY output, same skip-and-warn shape.
