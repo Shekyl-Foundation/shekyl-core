@@ -18,19 +18,20 @@
 //!   handshake runs *synchronously* in [`on_start`](TorControl) — reading the
 //!   framer by hand, which is safe because no async `650` events can arrive before
 //!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` + `TAKEOWNERSHIP`
-//!   succeed is the read half wrapped as a `Stream<Item = Framed>` (the internal
-//!   `ReplyStream`) and handed to [`ActorRef::attach_stream`]. The stream then feeds
-//!   the mailbox:
-//!   every reply arrives as `StreamMessage::Next(Framed)` whether or not a command
-//!   is in flight, so idle async-event drain is automatic. A handshake `Err` fails
-//!   the spawn (DQ-T0.6); the ordering matters — the stream can't take the read
-//!   half until the handshake's synchronous reads are done.
+//!   succeed is the read half wrapped as the internal `ReplyStream`
+//!   (`Stream<Item = Result<Framed, ControlError>>`) and handed to
+//!   [`ActorRef::attach_stream`]. The stream then feeds the mailbox: each reply
+//!   arrives as `StreamMessage::Next(Ok(Framed))` whether or not a command is in
+//!   flight (so idle async-event drain is automatic), and a framing/socket error as
+//!   `Next(Err(..))` so the actor fails with the specific cause. A handshake `Err`
+//!   fails the spawn (DQ-T0.6); the ordering matters — the stream can't take the
+//!   read half until the handshake's synchronous reads are done.
 //! - **One in-flight command, FIFO, via `DelegatedReply` + `pending`/`queue`.** The
 //!   control protocol has no request IDs, so a reply is correlated purely by order.
 //!   A [`Command`] handler writes the bytes, stashes its [`ReplySender`] in
 //!   `pending`, and returns a [`DelegatedReply`] marker *without* replying inline;
-//!   the `StreamMessage::Next(CommandReply)` handler pops `pending` and sends the
-//!   reply. Because `DelegatedReply` lets a *second* command's handler run while
+//!   the `StreamMessage::Next(Ok(CommandReply))` handler pops `pending` and sends
+//!   the reply. Because `DelegatedReply` lets a *second* command's handler run while
 //!   `pending` is still set, the slot alone is not enough — a `queue` holds
 //!   commands that arrive while one is on the wire, so "two commands on the wire"
 //!   is unrepresentable rather than merely avoided by callers.
@@ -107,9 +108,14 @@ pub enum ControlError {
     /// A command reply arrived with no command in flight — an unsolicited reply,
     /// i.e. the stream is out of step. The actor fails rather than guess.
     Desync,
-    /// The reply stream ended (socket close or framing desync); the connection can
-    /// no longer be served.
+    /// The reply stream ended cleanly (EOF / socket close); the connection can no
+    /// longer be served.
     StreamClosed,
+    /// A command carried a token with a forbidden character (ASCII control or
+    /// space) — refused before reaching the wire, so it cannot inject an extra
+    /// control line or desync the FIFO reply correlation. A caller error: the
+    /// command is rejected, the connection is untouched.
+    InvalidCommand,
 }
 
 impl std::fmt::Display for ControlError {
@@ -128,6 +134,7 @@ impl std::fmt::Display for ControlError {
             Self::Timeout => write!(f, "control handshake read timed out"),
             Self::Desync => write!(f, "unsolicited control reply (no command in flight)"),
             Self::StreamClosed => write!(f, "control reply stream ended"),
+            Self::InvalidCommand => write!(f, "control command contained a forbidden character"),
         }
     }
 }
@@ -171,12 +178,25 @@ pub enum Command {
 }
 
 impl Command {
-    /// The wire line (without the trailing CRLF).
-    fn to_wire(&self) -> String {
-        match self {
-            Self::GetInfo(keys) => format!("GETINFO {}", keys.join(" ")),
-            Self::SetEvents(events) => format!("SETEVENTS {}", events.join(" ")),
+    /// The wire line (without the trailing CRLF), or [`ControlError::InvalidCommand`]
+    /// if any token carries a forbidden character.
+    ///
+    /// Tokens are space-joined into one control line, so a token containing a space
+    /// (the separator) or an ASCII control byte — notably `\r`/`\n` — could split
+    /// into extra control commands and desync the no-request-ID FIFO correlation.
+    /// Validating *before* the line is built makes that injection unrepresentable
+    /// on the wire.
+    fn to_wire(&self) -> Result<String, ControlError> {
+        let (verb, tokens) = match self {
+            Self::GetInfo(keys) => ("GETINFO", keys),
+            Self::SetEvents(events) => ("SETEVENTS", events),
+        };
+        for token in tokens {
+            if token.is_empty() || token.bytes().any(|b| b == b' ' || b.is_ascii_control()) {
+                return Err(ControlError::InvalidCommand);
+            }
         }
+        Ok(format!("{verb} {}", tokens.join(" ")))
     }
 }
 
@@ -286,6 +306,7 @@ impl Actor for TorControl {
             ReplyStream {
                 read: reader,
                 framer,
+                done: false,
             },
             (),
             (),
@@ -303,9 +324,11 @@ impl Actor for TorControl {
 }
 
 impl TorControl {
-    /// Write a command line (`<cmd>\r\n`) to the control port.
+    /// Write a command line (`<cmd>\r\n`) to the control port. Callers validate via
+    /// [`Command::to_wire`] before enqueuing, so the only failure reaching the wire
+    /// here is [`ControlError::Io`].
     async fn write_command(&mut self, cmd: &Command) -> Result<(), ControlError> {
-        let line = cmd.to_wire();
+        let line = cmd.to_wire()?;
         self.writer
             .write_all(line.as_bytes())
             .await
@@ -337,10 +360,18 @@ impl Message<Command> for TorControl {
         // command whose reply has nowhere to go and would desync the stream, so a
         // tell is dropped rather than written.
         if let Some(tx) = reply_sender {
-            if self.pending.is_some() {
-                // One already on the wire — queue to preserve FIFO + one-on-the-wire.
+            if let Err(e) = cmd.to_wire() {
+                // A forbidden token — reject this command without touching the wire
+                // or the queue. A caller error, not a connection failure: the actor
+                // keeps running (and nothing was written, so FIFO stays intact).
+                tx.send(Err(e));
+            } else if self.pending.is_some() {
+                // One already on the wire — queue (validated above) to preserve FIFO
+                // + one-on-the-wire.
                 self.queue.push_back((cmd, tx));
             } else if let Err(e) = self.write_command(&cmd).await {
+                // The command validated, so this can only be an Io failure mid-write
+                // — the wire is disturbed; fail the actor.
                 tx.send(Err(e.clone()));
                 self.fail_all_pending(&e);
                 ctx.stop();
@@ -352,23 +383,29 @@ impl Message<Command> for TorControl {
     }
 }
 
-impl Message<StreamMessage<Framed, (), ()>> for TorControl {
+impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl {
     type Reply = ();
 
     async fn handle(
         &mut self,
-        msg: StreamMessage<Framed, (), ()>,
+        msg: StreamMessage<Result<Framed, ControlError>, (), ()>,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         match msg {
             // Stream just attached — nothing to do (the handshake is already done).
             StreamMessage::Started(()) => {}
+            // A framing desync or socket error ended the read stream — fail with the
+            // specific cause (DQ-T0.6); no reconnect into the same desync.
+            StreamMessage::Next(Err(e)) => {
+                self.fail_all_pending(&e);
+                ctx.stop();
+            }
             // An async event — route to the sink, never to a command (the item-3
             // fork already separated it).
-            StreamMessage::Next(Framed::AsyncEvent(reply)) => self.events.route(reply),
+            StreamMessage::Next(Ok(Framed::AsyncEvent(reply))) => self.events.route(reply),
             // A command reply — complete the in-flight command, then put the next
             // queued command (if any) on the wire.
-            StreamMessage::Next(Framed::CommandReply(reply)) => match self.pending.take() {
+            StreamMessage::Next(Ok(Framed::CommandReply(reply))) => match self.pending.take() {
                 Some(tx) => {
                     tx.send(Ok(reply));
                     if let Some((next_cmd, next_tx)) = self.queue.pop_front() {
@@ -387,8 +424,8 @@ impl Message<StreamMessage<Framed, (), ()>> for TorControl {
                     ctx.stop();
                 }
             },
-            // The read stream ended (socket close / framing desync) — fail so the
-            // supervisor restarts (DQ-T0.6); no reconnect into the same desync.
+            // The read stream ended cleanly (EOF / socket close) — fail so the
+            // supervisor restarts (DQ-T0.6).
             StreamMessage::Finished(()) => {
                 self.fail_all_pending(&ControlError::StreamClosed);
                 ctx.stop();
@@ -397,28 +434,38 @@ impl Message<StreamMessage<Framed, (), ()>> for TorControl {
     }
 }
 
-/// The control read half wrapped as a `Stream<Item = Framed>` for
-/// [`ActorRef::attach_stream`]. Owns the read side + framer; each polled item is
-/// one already-classified [`Framed`]. Stream end (EOF, socket error, or framing
-/// desync) terminates the stream, which kameo delivers as
-/// `StreamMessage::Finished` so the actor fails closed.
+/// The control read half wrapped as a `Stream<Item = Result<Framed, ControlError>>`
+/// for [`ActorRef::attach_stream`]. Owns the read side + framer; each polled item
+/// is one already-classified [`Framed`], or the **specific** error that ended the
+/// stream — a framing desync ([`ControlError::Framing`]) or a socket error
+/// ([`ControlError::Io`]) — so the actor can fail with the right cause rather than
+/// flatten everything to "closed". A clean EOF ends the stream with `None`, which
+/// kameo delivers as `StreamMessage::Finished` ([`ControlError::StreamClosed`]).
+/// After an error the stream is terminal (`done`) and yields `None` thereafter.
 struct ReplyStream {
     read: OwnedReadHalf,
     framer: ReplyFramer,
+    done: bool,
 }
 
 impl Stream for ReplyStream {
-    type Item = Framed;
+    type Item = Result<Framed, ControlError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Framed>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
         loop {
             match this.framer.next_reply() {
-                Ok(Some(reply)) => return Poll::Ready(Some(reply.classify())),
+                Ok(Some(reply)) => return Poll::Ready(Some(Ok(reply.classify()))),
                 // Not enough buffered yet — read more below.
                 Ok(None) => {}
-                // Framing desync — end the stream; the actor fails closed.
-                Err(_) => return Poll::Ready(None),
+                // Framing desync — surface it specifically, then terminate.
+                Err(e) => {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(ControlError::Framing(e))));
+                }
             }
             let mut tmp = [0u8; READ_CHUNK];
             let mut rb = ReadBuf::new(&mut tmp);
@@ -426,11 +473,16 @@ impl Stream for ReplyStream {
                 Poll::Ready(Ok(())) => {
                     let filled = rb.filled();
                     if filled.is_empty() {
-                        return Poll::Ready(None); // EOF
+                        // Clean EOF — end with no error (delivered as Finished).
+                        this.done = true;
+                        return Poll::Ready(None);
                     }
                     this.framer.push_bytes(filled);
                 }
-                Poll::Ready(Err(_)) => return Poll::Ready(None), // socket error
+                Poll::Ready(Err(_)) => {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(ControlError::Io)));
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -509,13 +561,32 @@ mod tests {
             "version".to_owned(),
             "status/bootstrap-phase".to_owned(),
         ]);
-        assert_eq!(cmd.to_wire(), "GETINFO version status/bootstrap-phase");
+        assert_eq!(
+            cmd.to_wire().unwrap(),
+            "GETINFO version status/bootstrap-phase"
+        );
     }
 
     #[test]
     fn setevents_renders_space_separated_events() {
         let cmd = Command::SetEvents(vec!["STREAM".to_owned(), "STATUS_CLIENT".to_owned()]);
-        assert_eq!(cmd.to_wire(), "SETEVENTS STREAM STATUS_CLIENT");
+        assert_eq!(cmd.to_wire().unwrap(), "SETEVENTS STREAM STATUS_CLIENT");
+    }
+
+    #[test]
+    fn to_wire_rejects_injection_and_empty_tokens() {
+        // CRLF would split into extra control commands and desync correlation.
+        let crlf = Command::GetInfo(vec!["version\r\nQUIT".to_owned()]);
+        assert_eq!(crlf.to_wire(), Err(ControlError::InvalidCommand));
+        // A space inside a token would be read as two tokens.
+        let space = Command::SetEvents(vec!["STREAM STATUS_CLIENT".to_owned()]);
+        assert_eq!(space.to_wire(), Err(ControlError::InvalidCommand));
+        // Other ASCII control bytes are refused too.
+        let nul = Command::GetInfo(vec!["ver\0sion".to_owned()]);
+        assert_eq!(nul.to_wire(), Err(ControlError::InvalidCommand));
+        // As is an empty token.
+        let empty = Command::GetInfo(vec![String::new()]);
+        assert_eq!(empty.to_wire(), Err(ControlError::InvalidCommand));
     }
 
     #[test]
@@ -582,6 +653,28 @@ mod live_tests {
         }
     }
 
+    /// Kills the wrapped child on drop unless [disarmed](Self::disarm) — guards the
+    /// `wait_for_control_port` window so a timeout *panic* kills `tor` on unwind
+    /// rather than leaking an orphaned process into CI.
+    struct KillOnDrop(Option<Child>);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                child.kill().ok();
+                child.wait().ok();
+            }
+        }
+    }
+
+    impl KillOnDrop {
+        /// Take the child back once the wait succeeded; the guard's drop is then a
+        /// no-op and ownership passes to [`TestTor`].
+        fn disarm(mut self) -> Child {
+            self.0.take().expect("child present until disarmed")
+        }
+    }
+
     /// Spawn an **offline** `tor` (`DisableNetwork 1`) with a cookie-authed control
     /// port on an OS-assigned port written to `ControlPortWriteToFile`.
     fn spawn_offline_tor() -> TestTor {
@@ -607,9 +700,13 @@ mod live_tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn tor");
+        // Guard the wait: if wait_for_control_port times out (panics), the child is
+        // killed on unwind rather than orphaned. Disarmed once the port is ready.
+        let guard = KillOnDrop(Some(child));
         // Same not-yet-written startup race the cookie reader models: poll the
         // control-port file until it parses, with a bounded backoff.
         let control_addr = wait_for_control_port(&port_file, Duration::from_secs(30));
+        let child = guard.disarm();
         let cookie_path = data_dir.join("control_auth_cookie");
         TestTor {
             child,
