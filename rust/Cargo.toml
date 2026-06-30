@@ -33,10 +33,10 @@ members = [
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
 
-    # Single-sourced RCT cleartext balance equation + typed-side terms, imported
+    # Single-sourced CT cleartext balance equation + typed-side terms, imported
     # by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention)
     # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2 / §11.1 Q2)
-    "shekyl-rct-balance",
+    "shekyl-ct-balance",
 
     # Construct side of the archival bond: JoinMarket vin + hybrid signature +
     # credit balance term, mirroring the shekyl-archival-retention verify side

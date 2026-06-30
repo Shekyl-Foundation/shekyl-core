@@ -293,7 +293,7 @@ namespace
         mask_flat.reserve(rv.outPk.size() * 32);
         for (const ctkey &op : rv.outPk)
           mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
-        const uint8_t balance_rc = shekyl_archival_verify_bond_post_rct_balance(
+        const uint8_t balance_rc = shekyl_archival_verify_bond_post_ct_balance(
             pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
             rv.p.pseudoOuts.size(),
             mask_flat.empty() ? nullptr : mask_flat.data(),
@@ -301,7 +301,7 @@ namespace
             rv.txnFee,
             bond_credit,
             bond_debit);
-        if (balance_rc != SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK)
+        if (balance_rc != SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK)
         {
           LOG_PRINT_L1("Bond-post sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
           return false;

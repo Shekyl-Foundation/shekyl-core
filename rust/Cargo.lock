@@ -3658,7 +3658,7 @@ dependencies = [
  "curve25519-dalek",
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
- "shekyl-rct-balance",
+ "shekyl-ct-balance",
  "shekyl-units",
  "thiserror",
 ]
@@ -3672,11 +3672,11 @@ dependencies = [
  "serde_json",
  "sha3",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
- "shekyl-rct-balance",
  "shekyl-types",
  "shekyl-units",
  "thiserror",
@@ -3780,6 +3780,15 @@ dependencies = [
  "thiserror",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-ct-balance"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-curve-generators",
+ "shekyl-units",
 ]
 
 [[package]]
@@ -4193,15 +4202,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-rct-balance"
-version = "3.1.0"
-dependencies = [
- "curve25519-dalek",
- "shekyl-curve-generators",
- "shekyl-units",
-]
-
-[[package]]
 name = "shekyl-rpc-client"
 version = "0.1.0"
 dependencies = [
@@ -4336,11 +4336,11 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
- "shekyl-rct-balance",
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
@@ -4381,11 +4381,11 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
- "shekyl-rct-balance",
  "shekyl-tx-builder",
  "shekyl-units",
 ]

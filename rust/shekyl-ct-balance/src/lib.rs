@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Single-sourced RCT cleartext balance equation and typed-side terms.
+//! Single-sourced CT cleartext balance equation and typed-side terms.
 //!
-//! The consensus balance an RCT transaction must satisfy over curve25519
+//! The consensus balance an CT transaction must satisfy over curve25519
 //! Pedersen commitments is
 //!
 //! ```text
@@ -19,7 +19,7 @@
 //! (construct) and `shekyl-archival-retention` (verify) so the two cannot
 //! diverge on a genesis-frozen consensus rule
 //! (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 / §11.1 Q2). The verify
-//! equation previously lived in `shekyl-archival-retention::bond_rct_balance`
+//! equation previously lived in `shekyl-archival-retention::bond_ct_balance`
 //! and migrated here; that module now wraps this crate with the bond-specific
 //! term rigidity.
 //!
@@ -81,9 +81,9 @@ impl OutputTerm {
     }
 }
 
-/// RCT balance failure modes.
+/// CT balance failure modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RctBalanceError {
+pub enum CtBalanceError {
     /// A flat commitment buffer was not a multiple of 32, or a key was not a
     /// canonical torsion-free prime-order point.
     InvalidPoint,
@@ -109,32 +109,30 @@ pub fn amount_commitment(amount: AtomicUnits) -> EdwardsPoint {
     d2h_scalar(amount.to_raw()) * *H_POINT_LAZY
 }
 
-fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, RctBalanceError> {
+fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, CtBalanceError> {
     let point = CompressedEdwardsY::from_slice(bytes)
-        .map_err(|_| RctBalanceError::InvalidPoint)?
+        .map_err(|_| CtBalanceError::InvalidPoint)?
         .decompress()
-        .ok_or(RctBalanceError::InvalidPoint)?;
+        .ok_or(CtBalanceError::InvalidPoint)?;
     if !point.is_torsion_free() {
-        return Err(RctBalanceError::InvalidPoint);
+        return Err(CtBalanceError::InvalidPoint);
     }
     Ok(point)
 }
 
-fn sum_commitments_flat(flat: &[u8]) -> Result<EdwardsPoint, RctBalanceError> {
+fn sum_commitments_flat(flat: &[u8]) -> Result<EdwardsPoint, CtBalanceError> {
     if !flat.len().is_multiple_of(32) {
-        return Err(RctBalanceError::InvalidPoint);
+        return Err(CtBalanceError::InvalidPoint);
     }
     let mut sum = EdwardsPoint::default();
     for chunk in flat.chunks_exact(32) {
-        let key: &[u8; 32] = chunk
-            .try_into()
-            .map_err(|_| RctBalanceError::InvalidPoint)?;
+        let key: &[u8; 32] = chunk.try_into().map_err(|_| CtBalanceError::InvalidPoint)?;
         sum += decompress_point(key)?;
     }
     Ok(sum)
 }
 
-/// Verify the RCT cleartext balance over flattened `N x 32` commitment keys.
+/// Verify the CT cleartext balance over flattened `N x 32` commitment keys.
 ///
 /// Checks
 /// `sum(pseudoOuts) + sum(extra_inputs) = sum(out_masks) + fee + sum(extra_outputs)`
@@ -143,14 +141,14 @@ fn sum_commitments_flat(flat: &[u8]) -> Result<EdwardsPoint, RctBalanceError> {
 /// compile-time property; this function never has to ask which side a term is
 /// on. The caller is responsible for any domain-specific rigidity on the terms
 /// (e.g. the bond credit-xor-debit rule lives in
-/// `shekyl-archival-retention::bond_rct_balance`).
-pub fn verify_rct_balance(
+/// `shekyl-archival-retention::bond_ct_balance`).
+pub fn verify_ct_balance(
     pseudo_outs_flat: &[u8],
     out_masks_flat: &[u8],
     fee: AtomicUnits,
     extra_inputs: &[InputTerm],
     extra_outputs: &[OutputTerm],
-) -> Result<(), RctBalanceError> {
+) -> Result<(), CtBalanceError> {
     let mut left = sum_commitments_flat(pseudo_outs_flat)?;
     for term in extra_inputs {
         left += amount_commitment(term.amount());
@@ -165,7 +163,7 @@ pub fn verify_rct_balance(
     if left == right {
         Ok(())
     } else {
-        Err(RctBalanceError::SumMismatch)
+        Err(CtBalanceError::SumMismatch)
     }
 }
 
@@ -190,7 +188,7 @@ mod tests {
 
     #[test]
     fn empty_balance_with_zero_fee_is_ok() {
-        assert!(verify_rct_balance(&[], &[], AtomicUnits::ZERO, &[], &[]).is_ok());
+        assert!(verify_ct_balance(&[], &[], AtomicUnits::ZERO, &[], &[]).is_ok());
     }
 
     #[test]
@@ -198,10 +196,10 @@ mod tests {
         const FEE: u64 = 12_345;
         // pseudoOut carries FEE*H so input == out_masks(empty) + fee.
         let pseudo = h_only(FEE);
-        assert!(verify_rct_balance(&pseudo, &[], au(FEE), &[], &[]).is_ok());
+        assert!(verify_ct_balance(&pseudo, &[], au(FEE), &[], &[]).is_ok());
         assert_eq!(
-            verify_rct_balance(&pseudo, &[], au(FEE - 1), &[], &[]),
-            Err(RctBalanceError::SumMismatch)
+            verify_ct_balance(&pseudo, &[], au(FEE - 1), &[], &[]),
+            Err(CtBalanceError::SumMismatch)
         );
     }
 
@@ -210,7 +208,7 @@ mod tests {
         // bond_credit case: pseudoOut = credit*H, single OutputTerm = credit.
         const CREDIT: u64 = 750_000_000;
         let pseudo = h_only(CREDIT);
-        assert!(verify_rct_balance(
+        assert!(verify_ct_balance(
             &pseudo,
             &[],
             AtomicUnits::ZERO,
@@ -220,14 +218,14 @@ mod tests {
         .is_ok());
         // Same amount on the wrong side does not balance.
         assert_eq!(
-            verify_rct_balance(
+            verify_ct_balance(
                 &pseudo,
                 &[],
                 AtomicUnits::ZERO,
                 &[InputTerm::new(au(CREDIT))],
                 &[]
             ),
-            Err(RctBalanceError::SumMismatch)
+            Err(CtBalanceError::SumMismatch)
         );
     }
 
@@ -239,7 +237,7 @@ mod tests {
         let mask = Scalar::from_bytes_mod_order([7u8; 32]);
         let out_mask = commit(DEBIT, mask);
         let pseudo = commit(0, mask);
-        assert!(verify_rct_balance(
+        assert!(verify_ct_balance(
             &pseudo,
             &out_mask,
             AtomicUnits::ZERO,
@@ -248,22 +246,22 @@ mod tests {
         )
         .is_ok());
         assert_eq!(
-            verify_rct_balance(
+            verify_ct_balance(
                 &pseudo,
                 &out_mask,
                 AtomicUnits::ZERO,
                 &[],
                 &[OutputTerm::new(au(DEBIT))]
             ),
-            Err(RctBalanceError::SumMismatch)
+            Err(CtBalanceError::SumMismatch)
         );
     }
 
     #[test]
     fn rejects_non_multiple_of_32() {
         assert_eq!(
-            verify_rct_balance(&[0u8; 31], &[], AtomicUnits::ZERO, &[], &[]),
-            Err(RctBalanceError::InvalidPoint)
+            verify_ct_balance(&[0u8; 31], &[], AtomicUnits::ZERO, &[], &[]),
+            Err(CtBalanceError::InvalidPoint)
         );
     }
 
@@ -278,14 +276,14 @@ mod tests {
             b
         };
         assert_eq!(
-            verify_rct_balance(
+            verify_ct_balance(
                 &torsion,
                 &[],
                 AtomicUnits::ZERO,
                 &[],
                 &[OutputTerm::new(au(1))]
             ),
-            Err(RctBalanceError::InvalidPoint)
+            Err(CtBalanceError::InvalidPoint)
         );
     }
 }

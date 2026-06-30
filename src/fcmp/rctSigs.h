@@ -97,7 +97,7 @@ namespace rct {
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
     // Fee-only RCT (empty FCMP++ proof and pseudo-outs); used by archival serve-credit.
     bool verRctSemanticsFeeOnly(const rctSig &rv);
-    // Bond-post RCT balance: sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit
+    // Bond-post CT balance: sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit
     // (gate-4 ARCHIVAL_BOND_GATE4.md section 3.2).
     bool verRctSemanticsBondPost(const rctSig &rv, uint64_t bond_credit, uint64_t bond_debit);
     key get_tx_prehash(const rctSig &rv, hw::device &hwdev);

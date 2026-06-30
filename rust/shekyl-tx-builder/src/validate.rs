@@ -7,7 +7,7 @@
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
-use shekyl_rct_balance::{InputTerm, OutputTerm};
+use shekyl_ct_balance::{InputTerm, OutputTerm};
 use shekyl_units::AtomicUnits;
 
 /// Prover-side input validation for FCMP++ signing.

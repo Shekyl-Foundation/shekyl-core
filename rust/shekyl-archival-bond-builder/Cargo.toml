@@ -18,7 +18,7 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `ArchivalPKeys` (P identity + bond-spend hybrid keys) and hybrid signing.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Typed-side cleartext balance terms (bond_credit -> OutputTerm — §7.2).
-shekyl-rct-balance = { path = "../shekyl-rct-balance" }
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-units = { path = "../shekyl-units" }
 thiserror.workspace = true
 

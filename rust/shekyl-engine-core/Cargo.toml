@@ -296,9 +296,9 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # through `tx_builder::sign_transaction_with_terms` over the same synthetic
 # depth-1 FCMP++ tree the M3c test uses, then checks the prover-emitted
 # commitments against the `shekyl-archival-retention` verify side
-# (`verify_join_market_bond_post`, `verify_bond_post_rct_balance`). Both crates
+# (`verify_join_market_bond_post`, `verify_bond_post_ct_balance`). Both crates
 # are first-party Shekyl path-deps; their transitive third-party edges
-# (`curve25519-dalek`, `thiserror`, `shekyl-crypto-pq`, `shekyl-rct-balance`,
+# (`curve25519-dalek`, `thiserror`, `shekyl-crypto-pq`, `shekyl-ct-balance`,
 # `shekyl-units`) are all already in the workspace lockfile, so no new
 # supply-chain surface enters here (`17-dependency-discipline.mdc`). Neither
 # crate depends on `shekyl-engine-core`, so the dev-dep introduces no cycle.
