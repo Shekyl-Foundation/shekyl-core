@@ -89,6 +89,21 @@ const _: () = assert!(
     "shekyl-scanner MAX_OUTPUTS must match shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
 );
 
+// Pin the belt-and-suspenders gate to the *primary* bound. The wire reader
+// (`shekyl_wire::Transaction::read`) rejects `n_outputs > MAX_OUTPUTS` at parse,
+// and `validate_context_free_pruned` re-checks it at ingestion — those are the
+// authoritative gates on the live (wire-sourced) path. This scanner gate is the
+// library's input-boundary self-protection for callers that hand it an in-memory
+// `Transaction` the wire reader never saw (the type system does not yet prove
+// wire provenance). Asserting equality with the wire constant keeps the secondary
+// gate from silently drifting below the primary one. `shekyl-wire` cannot mirror
+// the curve-generators assertion itself (it deps the crate only as a dev-dep), so
+// the scanner — which deps both — is where wire ↔ CRS-size agreement is pinned.
+const _: () = assert!(
+    MAX_OUTPUTS == shekyl_wire::transaction::MAX_OUTPUTS,
+    "shekyl-scanner MAX_OUTPUTS must match shekyl_wire::transaction::MAX_OUTPUTS (the parse-time primary bound)",
+);
+
 /// A block paired with its wallet-scannable transaction set and the global
 /// output index of its first output.
 ///
@@ -479,8 +494,24 @@ impl InternalScanner {
         // hostile daemon could (pre-consensus rejection) deliver
         // transactions whose output count exceeds the FCMP++
         // Bulletproofs+ CRS size and inflate the per-tx scan budget
-        // arbitrarily. Bound the per-tx work at the scanner's own
-        // entry rather than depending on consensus validation timing.
+        // arbitrarily.
+        //
+        // The *primary* bound is now enforced upstream of the scanner:
+        // `shekyl_wire::Transaction::read` rejects `n_outputs > MAX_OUTPUTS`
+        // at parse, and `validate_context_free_pruned` re-checks it at
+        // ingestion (`block_fetch`), so no wire-sourced tx reaching the live
+        // refresh path can exceed the bound. This gate is retained — not
+        // retired — as the scanner's own input-boundary self-protection: the
+        // scan API accepts an in-memory `Transaction` (see the unit tests, and
+        // any future cache-replay caller) that the wire reader never parsed,
+        // and the type system does not yet prove wire provenance. `MAX_OUTPUTS`
+        // is pinned to that primary bound by the `const _` assertions above, so
+        // the secondary gate cannot silently drift below the parse-time one.
+        // (True retirement is gated on newtyping the scanner input at the parse
+        // edge — minting a `ParsedTransaction` only via `Transaction::read`, so an
+        // unbounded-output tx is unrepresentable at the scanner boundary — the
+        // rule-21 reopen recorded under the block-height-only `unlock_time` entry
+        // in docs/FOLLOWUPS.md.)
         //
         // Skip-and-log shape: an oversized transaction is silently
         // skipped (returns the empty `Timelocked`) and a `WARN` event
@@ -510,14 +541,16 @@ impl InternalScanner {
         // `unlock_time`. The CryptoNote/Monero timestamp form
         // (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
         // "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
-        // `shekyl_wire::Transaction::validate` rejects, so a canonical daemon
-        // can never serve such a tx. An adversarial daemon could (pre-consensus
-        // rejection); recovering outputs from a tx consensus would reject would
-        // surface phantom balance. Refuse to recover ANY output from it, the
-        // same skip-and-warn shape as the `MAX_OUTPUTS` gate above. This also
-        // keeps `timelock_from_unlock_time` unreachable with timestamp-form
-        // input — belt-and-suspenders, since `Timelock` is block-height-only and
-        // the timestamp form is not representable anyway.
+        // `validate_context_free_pruned` rejects at ingestion, so a canonical
+        // daemon can never serve such a tx and no wire-sourced tx on the live
+        // path carries it. An adversarial daemon could (pre-consensus rejection),
+        // and recovering outputs from a consensus-invalid tx would surface
+        // phantom balance. As with the size gate above, this is the scanner's own
+        // self-protection for the in-memory caller path the ingestion validator
+        // never saw — refuse to recover ANY output, same skip-and-warn shape.
+        // It also keeps `timelock_from_unlock_time` unreachable with
+        // timestamp-form input — belt-and-suspenders, since `Timelock` is
+        // block-height-only and the timestamp form is not representable anyway.
         //
         // Like the size gate, this is O(1) at function entry and not subject to
         // the cancellation check (it fires before any per-output derivation).

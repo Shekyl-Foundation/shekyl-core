@@ -1,7 +1,11 @@
 # shekyl-oxide Un-vendor — Restructure Plan (slice 2)
 
-**Status:** Design draft (2026-06-20). **This is the second slice of the
-`shekyl-oxide` un-vendor.** Slice 1 is the genesis wire-format extraction
+**Status:** Landed (2026-06-30) — merged to `dev`. Track A (crypto re-pin to
+`2753111c50`, PR #181) and Track B (relocations PR #188, dissolve PR #189,
+post-merge docstring/comment + `LockTier` type sweeps PR #190/#191) shipped; the
+remaining deferred items are tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the
+block-height-only `unlock_time` entry). This doc is the binding record. **This is
+the second slice of the `shekyl-oxide` un-vendor.** Slice 1 is the genesis wire-format extraction
 ([`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) Decision 4): it stands
 up the clean wire crate, retires `shekyl-oxide`'s `block`/`transaction`/`fcmp`
 serializer, and migrates the ~58 `shekyl_oxide::{block,transaction}` sites. This
