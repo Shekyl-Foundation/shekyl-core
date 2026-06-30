@@ -41,6 +41,11 @@
 //! means Tor exits when this connection drops, so a crash one millisecond later is
 //! still orphan-protected.
 //!
+//! One property to know (not a defect): kameo runs handlers to completion on a
+//! single task, so a slow `write_line` inside a command handler stalls event
+//! draining (head-of-line). The loopback transport + tiny command lines make that
+//! non-practical here.
+//!
 //! [`framing`]: super::framing
 //! [`safecookie`]: super::safecookie
 //! [`auth`]: super::auth
@@ -149,6 +154,12 @@ impl std::error::Error for ControlError {}
 /// bootstrap gate / measurement consumer. The actor only ever *sends* into it.
 ///
 /// Carries [`ControlReply`]s, a forensic surface, so it is not `Debug`.
+///
+/// **Unbounded by design:** the actor must never block on its consumer — `route`
+/// is non-blocking and drops on a closed receiver, so a slow consumer can't stall
+/// the read loop. The deliberate residual is that a *stalled* (alive-but-not-
+/// draining) consumer grows memory without bound; this is bounded in practice by
+/// the loopback control port's low event rate.
 pub struct EventSink(mpsc::UnboundedSender<ControlReply>);
 
 impl EventSink {
