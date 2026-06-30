@@ -21,15 +21,16 @@
 //!
 //! [`safecookie`] is the SAFECOOKIE crypto + the verify→authenticate typestate;
 //! [`auth`] is the handshake plumbing (cookie-file read, `AUTHCHALLENGE` parse).
-//! Later slices add the command layer (`GETINFO`, `SETEVENTS`,
-//! `ADD_ONION`/`DEL_ONION`, `TAKEOWNERSHIP`) and the `tokio` socket actor that
-//! drives this framer with the poll/phase discipline the reference (Gosling)
-//! validates.
+//! [`actor`] is the `tokio` + `kameo` driver: it runs the handshake in `on_start`,
+//! then `attach_stream`s the read half so kameo merges replies into the mailbox,
+//! with one-in-flight FIFO command correlation via `DelegatedReply`.
 
+pub mod actor;
 pub mod auth;
 pub mod framing;
 pub mod safecookie;
 
+pub use actor::{Command, CommandResult, ControlError, EventSink, TorControl, TorControlConfig};
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};

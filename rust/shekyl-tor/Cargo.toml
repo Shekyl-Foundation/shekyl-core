@@ -21,9 +21,15 @@ sha2 = { version = "0.10", default-features = false }
 # wipe rather than leaving the bytes in a dropped allocation).
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 
-# The reply-framing slice (`control::framing`) is pure `std`; the `tokio` socket
-# actor that drives it lands with the live-Tor integration slice, justified
-# there rather than provisioned ahead of need.
+# The control-port actor (`control::actor`): tokio socket I/O driving the sans-IO
+# framer through one kameo actor. tokio + kameo are the workspace's established
+# actor stack (shekyl-engine-core); futures-core is just the `Stream` trait
+# `attach_stream` consumes (the read half is wrapped as a `Stream<Item = Framed>`);
+# getrandom is the OS CSPRNG for the SAFECOOKIE client nonce.
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+kameo = { workspace = true }
+futures-core = "0.3"
+getrandom = "0.2"
 
 [dev-dependencies]
 # The cookie-file reader KATs write a real 32-byte file and read it back (the
