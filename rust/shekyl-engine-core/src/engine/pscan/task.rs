@@ -238,6 +238,27 @@ where
     let horizon = tip.to_raw().saturating_sub(config.reorg_depth);
     let batch = config.batch();
 
+    // Observability: when the horizon is at or below the frontier the loop below never runs
+    // and the sweep returns `Ok(())`. The COMMON cause is benign — the frontier has caught
+    // up to the finality horizon, so there are simply no new reorg-deep blocks to scan this
+    // tick (normal steady-state). The same condition also covers a young chain
+    // (`tip < reorg_depth`) or a source claiming a stale/truncated tip — but those are only
+    // distinguishable when *persistent* (the SP-7 tip-honesty residual, deferred to 2d-2).
+    // Emit a neutral trace so a persistently-idle scan is visible without painting normal
+    // catch-up as tip dishonesty; it is not an error (the safe action is to keep waiting —
+    // never re-fund/GC on a stale tip), so it stays at `trace`.
+    let frontier = accrual.next_height().to_raw();
+    if horizon <= frontier {
+        tracing::trace!(
+            tip = tip.to_raw(),
+            horizon,
+            frontier,
+            "P-scan sweep: frontier reached the finality horizon — no new final blocks this tick \
+             (normal when caught up; only a persistently non-advancing horizon indicates a young \
+             chain or a stale/withheld tip)"
+        );
+    }
+
     while accrual.next_height().to_raw() < horizon {
         // Cancellation is checked per batch, not just between sweeps: a cold-start
         // catch-up is many batches, and shutdown must not wait for the whole sweep.
@@ -304,7 +325,6 @@ where
         // `VerifiedBatch` (the structural reconcile-evidence guard).
         accrual.ingest(&result, &verified)?;
         record_unbonds(accrual, &result.bond_post_matches);
-        dispatch_retires(stake, accrual, retired_this_session).await?;
 
         // Seal (cursor + accruals + pending unbonds + bond-post matches) atomically —
         // the write half of the SP-2 discipline, after every step so a crash re-scans
@@ -322,6 +342,16 @@ where
             .save(&accrual.to_state())
             .await
             .map_err(|e| PScanTaskError::Store(Box::new(e)))?;
+
+        // Retire AFTER the seal, not before — **seal-then-act**. `retire_bonded_persona`
+        // irreversibly wipes the persona's bond_spend key in the actor; its durable
+        // *trigger* is the `pending_unbonds` entry just sealed above. Sealing first means a
+        // crash between seal and wipe leaves the trigger durable (the retire re-fires from
+        // it on restart, the persona re-derives from seed), whereas wiping first could lose
+        // the trigger if the seal never landed. The wipe is idempotent (re-firing re-wipes),
+        // so applying it after the seal is safe; the ordering makes the irreversible side
+        // effect strictly follow the durability of what justifies it.
+        dispatch_retires(stake, accrual, retired_this_session, cancel).await?;
     }
     Ok(())
 }
@@ -331,6 +361,13 @@ where
 fn record_unbonds(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
     for m in matches {
         if m.post_kind == UNBOND_POST_KIND {
+            // Record the **containing** epoch (floor division). Load-bearing for the
+            // stuck-funds guard: `dispatch_retires` feeds this as `e_last` to
+            // `RetirementWitness::from_confirmed_unbond`, whose claim-window check rounds
+            // **conservatively** (toward a later expiry). Recording the *settling* epoch
+            // instead would silently shorten the window → premature retire → stuck funds.
+            // Keep it the containing epoch — see the conservative `e_last` contract at the
+            // witness builder.
             let unbond_epoch =
                 SettlementEpoch::from_raw(settlement_epoch_at_height(m.height.to_raw()));
             accrual.record_unbond(m.p_canonical_id, unbond_epoch);
@@ -350,6 +387,7 @@ async fn dispatch_retires(
     stake: &StakeEngineHandle,
     accrual: &PScanAccrual,
     retired_this_session: &mut BTreeSet<PCanonicalId>,
+    cancel: &CancellationToken,
 ) -> Result<(), PScanTaskError> {
     let Some(settled) = accrual.settled_epoch() else {
         return Ok(()); // no epoch settled yet → nothing can have expired
@@ -363,6 +401,13 @@ async fn dispatch_retires(
         .collect();
 
     for (id, unbond_epoch) in candidates {
+        // Shutdown responsiveness: the candidate set can be large (the module notes
+        // thousands of rows for a long-lived operator) and each retire is an actor
+        // round-trip, so a cancel must not wait for the whole list to drain. A half-done
+        // pass is safe — pending entries are durable and re-fire next sweep.
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         // `e_last = unbond_epoch` (conservative); the witness exists only if it has
         // fallen out of the claim window.
         let Some(witness) = RetirementWitness::from_confirmed_unbond(id, unbond_epoch, settled)
@@ -827,7 +872,7 @@ mod tests {
 
         let stake = spawn_stake(&[0]);
         let mut retired = BTreeSet::new();
-        dispatch_retires(&stake, &accrual, &mut retired)
+        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
             .await
             .expect("dispatch");
         assert!(
@@ -838,7 +883,7 @@ mod tests {
         // Dedup within the session: a second dispatch sends nothing new (the entry
         // stays in the accrual — the durable retire-trigger — but is suppressed).
         let before = retired.clone();
-        dispatch_retires(&stake, &accrual, &mut retired)
+        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
             .await
             .expect("dispatch 2");
         assert_eq!(retired, before, "no re-dispatch within the session");
@@ -870,7 +915,7 @@ mod tests {
 
         let stake = spawn_stake(&[0]);
         let mut retired = BTreeSet::new();
-        dispatch_retires(&stake, &accrual, &mut retired)
+        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
             .await
             .expect("dispatch");
         assert!(

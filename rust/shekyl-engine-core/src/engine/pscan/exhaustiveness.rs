@@ -85,13 +85,25 @@ impl VerifiedRange {
         self.low == self.high
     }
 
+    /// The **sole** runtime constructor — the one place the `low <= high` invariant is
+    /// enforced. Every other constructor (`genesis_empty`, `reconstruct_from_sealed_
+    /// frontier`, `extend`, and `verify_exhaustive`'s success path) routes through it, so
+    /// a backwards/overflow-wrapped range can never become a `VerifiedRange` value. This
+    /// makes the invariant **structural** rather than a comment + a test-only assert —
+    /// load-bearing because every downstream half-open comparison (`extend`, `reconcile`,
+    /// `classify`) reads `low`/`high` and a `high < low` would silently corrupt every
+    /// verdict (a forged-absence primitive). Returns `None` on `low > high`.
+    fn checked(low: BlockHeight, high: BlockHeight) -> Option<Self> {
+        if low > high {
+            return None;
+        }
+        Some(Self { low, high })
+    }
+
     /// The empty verified range at genesis (`[0, 0)`) — the accrual's `covered` token
     /// before it has ingested any verified batch. Carries no verification claim.
     pub(in crate::engine::pscan) fn genesis_empty() -> Self {
-        Self {
-            low: BlockHeight::ZERO,
-            high: BlockHeight::ZERO,
-        }
+        Self::checked(BlockHeight::ZERO, BlockHeight::ZERO).expect("[0, 0) satisfies low <= high")
     }
 
     /// Reconstruct the cumulative covered range `[0, synced_height)` from a **sealed,
@@ -106,10 +118,8 @@ impl VerifiedRange {
     pub(in crate::engine::pscan) fn reconstruct_from_sealed_frontier(
         synced_height: BlockHeight,
     ) -> Self {
-        Self {
-            low: BlockHeight::ZERO,
-            high: synced_height,
-        }
+        Self::checked(BlockHeight::ZERO, synced_height)
+            .expect("[0, synced_height) satisfies low <= high")
     }
 
     /// Grow the cumulative covered range by one **verified** batch — the *only* way to
@@ -123,10 +133,9 @@ impl VerifiedRange {
         if self.high != batch.range.low {
             return None;
         }
-        Some(Self {
-            low: self.low,
-            high: batch.range.high,
-        })
+        // `self.low <= self.high == batch.range.low <= batch.range.high`, so `checked`
+        // yields `Some`; routing through it keeps the `low <= high` invariant single-sourced.
+        Self::checked(self.low, batch.range.high)
     }
 }
 
@@ -210,6 +219,12 @@ pub(crate) enum ExhaustivenessError {
         bodies: usize,
         hashes: usize,
     },
+    /// The batch's height arithmetic (`first_height + len`) would overflow `u64` — an
+    /// impossible-on-the-honest-chain input (`first_height` is the bounded scan cursor),
+    /// but this primitive is the gate for adversarial/malformed input, so fail closed
+    /// rather than wrap `high` below `low` and mint a backwards range.
+    #[error("height overflow verifying a batch at first_height {first} with {len} blocks")]
+    HeightOverflow { first: u64, len: usize },
 }
 
 /// Verify that `blocks` — a contiguous batch starting at `first_height`, in height
@@ -240,10 +255,31 @@ pub(crate) fn verify_exhaustive(
     blocks: &[ScannableBlock],
 ) -> Result<VerifiedBatch, ExhaustivenessError> {
     let first = first_height.to_raw();
+    // Guard the height arithmetic up front: `first + blocks.len()` (and therefore every
+    // `first + offset` in the loop, since `offset < len`) must not overflow `u64`. An
+    // overflow would wrap `high` below `low` and mint a backwards `VerifiedRange` — a
+    // forged-absence primitive. Impossible on the honest chain (`first_height` is the
+    // bounded scan cursor), but this function is the gate for malformed input, so fail
+    // closed. `u64::try_from` (not `as`) keeps that honest: a `blocks.len()` beyond `u64`
+    // — only reachable on a hypothetical >64-bit `usize` — fails closed here rather than
+    // truncating to a smaller length and minting a too-short `high`.
+    let len = u64::try_from(blocks.len()).map_err(|_| ExhaustivenessError::HeightOverflow {
+        first,
+        len: blocks.len(),
+    })?;
+    let high_raw = first
+        .checked_add(len)
+        .ok_or(ExhaustivenessError::HeightOverflow {
+            first,
+            len: blocks.len(),
+        })?;
     let mut expected_previous = anchor;
 
     for (offset, sb) in blocks.iter().enumerate() {
-        let height = first + offset as u64;
+        // `offset < blocks.len()`, which fit in `u64` above, so this `try_from` cannot
+        // fail and `first + offset < high_raw` (the checked_add guarded it). No `as` cast.
+        let offset = u64::try_from(offset).expect("offset < blocks.len(), which fit in u64");
+        let height = first + offset;
 
         // Continuity: this block's `previous` must match the recomputed hash of its
         // predecessor (the anchor for the first block, else the prior block's hash).
@@ -278,10 +314,10 @@ pub(crate) fn verify_exhaustive(
     }
 
     Ok(VerifiedBatch {
-        range: VerifiedRange {
-            low: first_height,
-            high: BlockHeight::from_raw(first + blocks.len() as u64),
-        },
+        // `high_raw = first + len >= first`, so `checked` yields `Some`; routing the
+        // success path through it keeps the `low <= high` invariant single-sourced.
+        range: VerifiedRange::checked(first_height, BlockHeight::from_raw(high_raw))
+            .expect("first_height <= first_height + len (guarded by the checked_add above)"),
         // `expected_previous` is the `anchor` for an empty batch, else the recomputed
         // hash of the last block — exactly the value continuity chained through. The
         // frontier the caller seals is therefore provably the verified one, never a
@@ -337,6 +373,37 @@ mod tests {
             verified.frontier_hash(),
             ANCHOR,
             "an empty batch does not move the frontier — the anchor is unchanged"
+        );
+    }
+
+    #[test]
+    fn checked_rejects_a_backwards_range() {
+        // The structural `low <= high` gate: a backwards range can never become a
+        // VerifiedRange (the invariant lives in the constructor, not a test assert).
+        assert!(
+            VerifiedRange::checked(BlockHeight::from_raw(10), BlockHeight::from_raw(5)).is_none()
+        );
+        assert!(
+            VerifiedRange::checked(BlockHeight::from_raw(5), BlockHeight::from_raw(5)).is_some(),
+            "empty [n, n) is valid"
+        );
+        assert!(
+            VerifiedRange::checked(BlockHeight::from_raw(5), BlockHeight::from_raw(10)).is_some()
+        );
+    }
+
+    #[test]
+    fn verify_exhaustive_fails_closed_on_height_overflow() {
+        // first_height near u64::MAX so `first + len` overflows → HeightOverflow, never a
+        // wrapped backwards range. Unreachable on the honest chain (the cursor is bounded);
+        // this is the gate for adversarial input. The overflow guard fires before the loop,
+        // so the (mismatched) chain contents are irrelevant.
+        let blocks = chain(0, 2);
+        let err = verify_exhaustive(BlockHeight::from_raw(u64::MAX), [0u8; 32], &blocks)
+            .expect_err("first_height near u64::MAX must fail closed, not wrap");
+        assert!(
+            matches!(err, ExhaustivenessError::HeightOverflow { .. }),
+            "got {err:?}"
         );
     }
 
