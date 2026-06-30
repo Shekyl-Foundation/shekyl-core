@@ -411,11 +411,25 @@ mod tests {
         );
         assert!(!pscan_path.exists(), "no seal exists before the first save");
 
-        // Seal an initial state; reopen it through the real file.
+        // Seal an initial state; reopen it through the real file. Include bond-post
+        // matches so the privacy-sensitive reconcile evidence is exercised through the
+        // real `.wallet.pscan` AEAD seal + atomic write, not just postcard.
         let state_a = PScanState::new(
             PScanCursor::at(BlockHeight::from_raw(5_000), [0x1A; 32]),
             accruals(&[(0, 100), (1, 250)]),
             pending(&[(0xAB, 1)]),
+            vec![
+                shekyl_engine_state::pscan_state::BondPostRecord {
+                    height: BlockHeight::from_raw(1_200),
+                    p_canonical_id: PCanonicalId::from_bytes([0xAB; 32]),
+                    post_kind: 0,
+                },
+                shekyl_engine_state::pscan_state::BondPostRecord {
+                    height: BlockHeight::from_raw(4_900),
+                    p_canonical_id: PCanonicalId::from_bytes([0xCD; 32]),
+                    post_kind: 2,
+                },
+            ],
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -430,6 +444,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
+            Vec::new(),
         );
         store.save(&state_b).await.expect("save B");
         assert_eq!(

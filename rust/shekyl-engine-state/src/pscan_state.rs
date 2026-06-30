@@ -40,21 +40,59 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v2** tracks the nested
-/// [`PScanCursor`] gaining its verified-frontier `frontier_hash` (v1 → v2; the snap
-/// changed because the cursor's shape did, so the rule-42 guard pairs this bump with
-/// the regenerated snapshot). Any field addition / removal / renaming bumps this;
-/// loads that see a different version **refuse rather than migrate** (the
-/// `StakingBlock` precedent). No v1→v2 migration: no deployed wallet persisted a v1
-/// `.wallet.pscan` (the scan task that writes it is not yet wired). Distinct from
-/// the inner [`PScanCursor`]'s own version (nested, like the wallet ledger over its
-/// sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 2;
+/// Schema version of the durable P-scan state. **v3** adds the durable
+/// `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked the nested
+/// [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any field
+/// addition / removal / renaming bumps this; loads that see a different version
+/// **refuse rather than migrate** (the `StakingBlock` precedent). No migration at any
+/// step: no deployed wallet persisted a `.wallet.pscan` (the scan task that writes it
+/// is not yet wired). Distinct from the inner [`PScanCursor`]'s own version (nested,
+/// like the wallet ledger over its sub-blocks).
+pub const PSCAN_STATE_VERSION: u32 = 3;
 
-/// `P`'s durable scan state (SP-5): the [`PScanCursor`] frontier plus the
-/// per-epoch confirmed funding accruals, the unit the engine seals to the
-/// `P`-isolated file.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+/// A persisted archival bond-post match (SP-6 reconcile evidence): an on-chain
+/// bond-post whose `p_canonical_id` is one of `P`'s personas. The **durable, sealed
+/// twin** of the engine-core extractor's transform-shaped `BondPostMatch` (rule 18):
+/// `P` accumulates these as it scans so the reconcile set survives restart — the
+/// cursor never re-scans below its frontier, so a match seen in an earlier run would
+/// otherwise be unavailable when 2d-2 SP-R0 corroborates an `Unbond` at retire time
+/// (`MAX_CLAIM_AGE_W` epochs after it was observed). All fields are public: a
+/// bond-post and its id are on-chain — but **correlated and co-located off-chain is
+/// the leak** the firewall exists to prevent, so this type follows the persona-key
+/// no-clear-`Debug` discipline (see the `Debug` impl), not the looser treatment a
+/// public amount-delta gets.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct BondPostRecord {
+    /// Height of the block carrying the post.
+    pub height: BlockHeight,
+    /// The matched persona's canonical id (a public on-chain pseudonym handle).
+    pub p_canonical_id: PCanonicalId,
+    /// Wire post-kind byte (`0` = JoinMarket; otherwise the `Other` tag).
+    pub post_kind: u8,
+}
+
+impl std::fmt::Debug for BondPostRecord {
+    /// **Redacted on purpose.** The `(p_canonical_id, height, post_kind)` tuple is a
+    /// row of `P`'s bond-post history — the persona-activity ledger the firewall keeps
+    /// off-disk-in-the-clear. A derived `Debug` would leak it through any log / error /
+    /// `{:?}` path that the public amount-deltas and epochs never trigger, so we never
+    /// render the contents. This is the same discipline the persona keys carry.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BondPostRecord(<redacted persona-history>)")
+    }
+}
+
+/// `P`'s durable scan state (SP-5): the [`PScanCursor`] frontier, the per-epoch
+/// confirmed funding accruals, and the accumulated bond-post matches — the unit the
+/// engine seals to the `P`-isolated file.
+///
+/// `Debug` is **hand-written** (not derived) so it redacts `bond_post_matches` — even a
+/// derived `Debug` that renders each [`BondPostRecord`] as `<redacted>` would still leak
+/// the **match count** + structure (`P`'s persona-activity *volume*) through any `{:?}` /
+/// log path, and the persisted state is the form most likely to hit one (a deserialize
+/// error). The other fields render normally — `bond_post_matches` is the high-bar field
+/// (see the field doc + the redacting `BondPostRecord::Debug`).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PScanState {
     /// Per-state schema version — [`PSCAN_STATE_VERSION`] on construction,
     /// version-gated on load.
@@ -79,34 +117,65 @@ pub struct PScanState {
     /// pseudonym handle), bounded by `P`'s own unbonded-persona count (not
     /// adversary-controllable).
     pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+    /// Matched archival bond-posts (`p_canonical_id` ∈ `P`'s personas) accumulated
+    /// across the scan — the **reconcile evidence** SP-6 binds to the verified
+    /// `covered` range (the engine-core `PReconcileSet`). Durable for the same reason
+    /// `pending_unbonds` is: the cursor never re-scans below its frontier, so a match
+    /// from an earlier run must persist to be available when SP-R0 corroborates a
+    /// terminal post at retire time. Ordered by scan (height); public and bounded by
+    /// `P`'s own posting.
+    bond_post_matches: Vec<BondPostRecord>,
+}
+
+impl std::fmt::Debug for PScanState {
+    /// Renders every field except `bond_post_matches`, which is redacted to a constant
+    /// placeholder (not even its length): it is `P`'s persona-activity history and its
+    /// *count* alone is behavioral metadata the firewall keeps off-log. See the type
+    /// docs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PScanState")
+            .field("version", &self.version)
+            .field("cursor", &self.cursor)
+            .field("accruals", &self.accruals)
+            .field("pending_unbonds", &self.pending_unbonds)
+            .field("bond_post_matches", &"<redacted persona-history>")
+            .finish()
+    }
 }
 
 impl PScanState {
-    /// A fresh state at genesis: pre-scan cursor, no accruals, no pending unbonds.
+    /// A fresh state at genesis: pre-scan cursor, no accruals, no pending unbonds, no
+    /// matches.
     pub fn genesis() -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
+            bond_post_matches: Vec::new(),
         }
     }
 
-    /// A state pinned to `cursor` with the given per-epoch `accruals` and
-    /// `pending_unbonds`, stamped with the current version. The caller (the SP-5
-    /// scan task) owns the invariants that `accruals` covers exactly the epochs
-    /// finalized behind `cursor`, and `pending_unbonds` holds every persona whose
-    /// `Unbond` was confirmed but not yet durably retired (SP-6).
+    /// A state pinned to `cursor` with the given per-epoch `accruals`,
+    /// `pending_unbonds`, and `bond_post_matches`, stamped with the current version.
+    /// The caller (the SP-5 scan task) owns the invariants that `accruals` covers
+    /// exactly the epochs finalized behind `cursor`, `pending_unbonds` holds every
+    /// persona whose `Unbond` was confirmed but not yet durably retired (SP-6), and
+    /// `bond_post_matches` holds every bond-post matched in `[0, cursor.synced_height)`
+    /// (the reconcile evidence — complete because the scan is exhaustive over that
+    /// verified range).
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
         pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+        bond_post_matches: Vec<BondPostRecord>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
             cursor,
             accruals,
             pending_unbonds,
+            bond_post_matches,
         }
     }
 
@@ -135,6 +204,12 @@ impl PScanState {
     /// the DQ8 retire.
     pub fn pending_unbonds(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
         &self.pending_unbonds
+    }
+
+    /// The accumulated bond-post matches — the SP-6 reconcile evidence, complete over
+    /// `[0, synced_height)` (the exhaustively-scanned verified range).
+    pub fn bond_post_matches(&self) -> &[BondPostRecord] {
+        &self.bond_post_matches
     }
 
     /// The finalized confirmed inflow for `epoch`, or [`AtomicUnits::ZERO`] if no
@@ -206,12 +281,23 @@ mod tests {
             .collect()
     }
 
+    fn bond_posts(rows: &[(u64, u8, u8)]) -> Vec<BondPostRecord> {
+        rows.iter()
+            .map(|&(height, id, post_kind)| BondPostRecord {
+                height: BlockHeight::from_raw(height),
+                p_canonical_id: PCanonicalId::from_bytes([id; 32]),
+                post_kind,
+            })
+            .collect()
+    }
+
     #[test]
-    fn round_trips_cursor_accruals_and_pending_unbonds() {
+    fn round_trips_cursor_accruals_pending_and_matches() {
         let state = PScanState::new(
             PScanCursor::at(BlockHeight::from_raw(40_000), [0x9C; 32]),
             accruals(&[(2, 100), (3, 250)]),
             pending(&[(0xAB, 7)]),
+            bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -232,6 +318,45 @@ mod tests {
             Some(&SettlementEpoch::from_raw(7)),
             "pending unbonds round-trip through the seal"
         );
+        assert_eq!(
+            back.bond_post_matches(),
+            bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]).as_slice(),
+            "the bond-post reconcile evidence round-trips through the seal"
+        );
+    }
+
+    #[test]
+    fn bond_post_record_debug_is_redacted() {
+        let rendered = format!("{:?}", bond_posts(&[(123_456, 0xAB, 2)])[0]);
+        assert!(
+            rendered.contains("redacted"),
+            "Debug must redact the persona-history row: {rendered}"
+        );
+        assert!(
+            !rendered.contains("123456") && !rendered.contains("171"),
+            "neither the height nor the id byte may appear: {rendered}"
+        );
+    }
+
+    #[test]
+    fn pscan_state_debug_redacts_bond_post_matches_including_count() {
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            accruals(&[]),
+            pending(&[]),
+            bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
+        );
+        let rendered = format!("{state:?}");
+        assert!(
+            rendered.contains("<redacted"),
+            "matches must be redacted in the state's Debug: {rendered}"
+        );
+        // No contents and — critically — no per-entry structure, so the match *count*
+        // (behavioral metadata) does not leak either.
+        assert!(
+            !rendered.contains("123456") && !rendered.contains("BondPostRecord"),
+            "neither contents nor per-entry structure (the count) may appear: {rendered}"
+        );
     }
 
     #[test]
@@ -244,7 +369,12 @@ mod tests {
 
     #[test]
     fn accrual_for_a_missing_epoch_is_zero() {
-        let state = PScanState::new(PScanCursor::genesis(), accruals(&[(5, 9)]), pending(&[]));
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            accruals(&[(5, 9)]),
+            pending(&[]),
+            bond_posts(&[]),
+        );
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
             AtomicUnits::ZERO
@@ -261,6 +391,7 @@ mod tests {
             PScanCursor::genesis(),
             accruals(&[(1, 10), (2, 20), (3, 30)]),
             pending(&[]),
+            bond_posts(&[]),
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
@@ -271,6 +402,7 @@ mod tests {
             PScanCursor::genesis(),
             accruals(&[(1, u64::MAX), (2, 1)]),
             pending(&[]),
+            bond_posts(&[]),
         );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
@@ -284,6 +416,7 @@ mod tests {
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
+            bond_post_matches: Vec::new(),
         };
         let forged = wrong
             .to_postcard_bytes()

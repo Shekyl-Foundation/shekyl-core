@@ -296,24 +296,28 @@ where
             accrual.frontier_hash(),
             &blocks,
         )?;
-        let next_frontier_hash = verified.frontier_hash();
 
         // Offloaded dual extraction behind the actor; only public results return.
         let result = stake.scan_step(range, blocks).await?;
-        accrual.ingest(&result, next_frontier_hash)?;
+        // Ingest against the *verified batch* (not a bare hash): it is what advances the
+        // accrual's verified-`covered` range, so the frontier can only move behind a
+        // `VerifiedBatch` (the structural reconcile-evidence guard).
+        accrual.ingest(&result, &verified)?;
         record_unbonds(accrual, &result.bond_post_matches);
         dispatch_retires(stake, accrual, retired_this_session).await?;
 
-        // Seal (cursor + accruals + pending unbonds) atomically — the write half
-        // of the SP-2 discipline, after every step so a crash re-scans at most one
-        // batch. `to_state()` clones the maps, but that clone is *not* the cost
-        // here: `accruals` grows ~1 entry per 10k-block settlement epoch (hundreds
-        // over the chain's life), so the few-KB clone is dwarfed by the postcard
-        // serialize (itself O(#epochs)) + AEAD seal + `atomic_write_file` fsync.
-        // Keeping the persisted `PScanState` (engine-state) distinct from the
-        // working `PScanAccrual` (engine-core) is worth that clone; the lever if
-        // per-batch persistence ever profiles hot is seal *cadence* (trade the
-        // at-most-one-batch crash re-scan), not a borrowed-codec micro-opt.
+        // Seal (cursor + accruals + pending unbonds + bond-post matches) atomically —
+        // the write half of the SP-2 discipline, after every step so a crash re-scans
+        // at most one batch. `to_state()` clones the maps + the match vec, but that
+        // clone is not the cost here: it is dwarfed by the postcard serialize + AEAD
+        // seal + `atomic_write_file` fsync. Note the growth profiles differ — `accruals`
+        // is bounded (~1 entry per 10k-block settlement epoch, hundreds over the chain),
+        // but `bond_post_matches` grows per matched bond-post, so for a long-lived active
+        // operator it can reach thousands of tiny rows, not hundreds. Still small in
+        // absolute terms; the lever if per-batch persistence ever profiles hot is seal
+        // *cadence* (trade the at-most-one-batch crash re-scan), not a borrowed-codec
+        // micro-opt. Keeping the persisted `PScanState` (engine-state) distinct from the
+        // working `PScanAccrual` (engine-core) is worth the clone.
         store
             .save(&accrual.to_state())
             .await
@@ -720,6 +724,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(1), wrong_anchor),
             BTreeMap::new(),
             BTreeMap::new(),
+            Vec::new(),
         );
         store.save(&seeded).await.expect("seed");
         let mut accrual = PScanAccrual::from_state(&seeded);
@@ -812,6 +817,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
+            Vec::new(),
         );
         let accrual = PScanAccrual::from_state(&state);
         assert_eq!(
@@ -855,6 +861,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
+            Vec::new(),
         ));
         assert_eq!(
             accrual.settled_epoch(),

@@ -45,8 +45,21 @@ use shekyl_types::BlockHeight;
 ///
 /// Claims **exhaustiveness**, NOT **canonicity**: that `[low, high)` is the
 /// most-work chain is a separate token the 2d-2 GC requires alongside this — see the
-/// module docs. Constructible **only** by [`verify_exhaustive`], never by hand, so a
-/// `VerifiedRange` value is proof the verified scan path produced it.
+/// module docs.
+///
+/// **Verified-advance discipline (load-bearing).** A `VerifiedRange` value means "this
+/// range was verified," so the *only* ways to obtain or grow one are gated on
+/// verification: [`verify_exhaustive`] produces a per-batch range, and
+/// [`extend`](Self::extend) grows the cumulative range — and it *requires* a
+/// [`VerifiedBatch`], so the frontier cannot advance without verification. There is no
+/// by-hand `height → range` constructor: the only height-taking constructors
+/// ([`genesis_empty`](Self::genesis_empty), the trivial `[0,0)`, and
+/// [`reconstruct_from_sealed_frontier`](Self::reconstruct_from_sealed_frontier), the
+/// one seal-trust boundary) are `pub(in pscan)` and used only by the accrual's
+/// `covered`-token lifecycle. This keeps "everything below the frontier was verified"
+/// **structural** — true because the only advance goes through `extend` — rather than a
+/// cross-method invariant a future fast-forward could silently break (which would let
+/// the GC remove personas on forged absence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedRange {
     low: BlockHeight,
@@ -70,6 +83,50 @@ impl VerifiedRange {
     /// Whether the range covers no blocks (`low == high`).
     pub(crate) fn is_empty(&self) -> bool {
         self.low == self.high
+    }
+
+    /// The empty verified range at genesis (`[0, 0)`) — the accrual's `covered` token
+    /// before it has ingested any verified batch. Carries no verification claim.
+    pub(in crate::engine::pscan) fn genesis_empty() -> Self {
+        Self {
+            low: BlockHeight::ZERO,
+            high: BlockHeight::ZERO,
+        }
+    }
+
+    /// Reconstruct the cumulative covered range `[0, synced_height)` from a **sealed,
+    /// verified-advanced** frontier (crash recovery). This is the one seal-trust
+    /// boundary: because the live advance is gated on a [`VerifiedBatch`]
+    /// ([`extend`](Self::extend)), `synced_height` can only have reached its sealed
+    /// value *through* verification, so restoring `[0, synced_height)` trusts our own
+    /// prior seal exactly as loading `synced_height` does — no more. It is **not** a
+    /// general constructor: `pub(in pscan)`, called only by `PScanAccrual::from_state`,
+    /// and with no frontier-advance path that skips `extend`, a future fast-forward
+    /// cannot mint an unverified range through it.
+    pub(in crate::engine::pscan) fn reconstruct_from_sealed_frontier(
+        synced_height: BlockHeight,
+    ) -> Self {
+        Self {
+            low: BlockHeight::ZERO,
+            high: synced_height,
+        }
+    }
+
+    /// Grow the cumulative covered range by one **verified** batch — the *only* way to
+    /// advance a `VerifiedRange` in memory. Requires a [`VerifiedBatch`] (which only
+    /// [`verify_exhaustive`] produces), so this is the structural gate that keeps the
+    /// verified-frontier honest. Returns `None` if the batch is not contiguous with this
+    /// range (`self.high != batch.range.low`) — a fail-closed guard against a
+    /// verified-frontier ↔ scan-frontier divergence, which the caller turns into a
+    /// refused ingest rather than a silent gap in `covered`.
+    pub(crate) fn extend(self, batch: &VerifiedBatch) -> Option<Self> {
+        if self.high != batch.range.low {
+            return None;
+        }
+        Some(Self {
+            low: self.low,
+            high: batch.range.high,
+        })
     }
 }
 
@@ -101,6 +158,29 @@ impl VerifiedBatch {
     /// must chain to (the verified-frontier resume point).
     pub(crate) fn frontier_hash(&self) -> [u8; 32] {
         self.frontier_hash
+    }
+
+    /// Test-only constructor: a `VerifiedBatch` for `[low, high)` with `frontier_hash`,
+    /// without running `verify_exhaustive`. Lets accrual/sweep tests drive `ingest`
+    /// (which takes a `VerifiedBatch`) without building a synthetic chain per call.
+    /// `#[cfg(test)]`, so the verification gate stays intact in production.
+    #[cfg(test)]
+    pub(crate) fn for_test(low: u64, high: u64, frontier_hash: [u8; 32]) -> Self {
+        // A real `VerifiedRange` always has `low <= high` (verify_exhaustive returns
+        // `[first, first + n)`; `extend` only widens). Assert it here so a test that
+        // passes a backwards range fails fast with a clear message instead of producing
+        // a nonsensical range that confuses `extend`/`reconcile` downstream.
+        assert!(
+            low <= high,
+            "VerifiedBatch::for_test requires low <= high, got [{low}, {high})"
+        );
+        Self {
+            range: VerifiedRange {
+                low: BlockHeight::from_raw(low),
+                high: BlockHeight::from_raw(high),
+            },
+            frontier_hash,
+        }
     }
 }
 
