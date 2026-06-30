@@ -537,3 +537,138 @@ mod tests {
         );
     }
 }
+
+/// Live-Tor integration KATs (item 5) — the actor's I/O paths against a real
+/// `tor`. `#[ignore]`-gated (off the unit lane); on the integration lane the
+/// binary is **required**, so a missing `SHEKYL_TEST_TOR_BINARY` hard-fails rather
+/// than letting a read-path test pass by not running.
+///
+/// This holds the **fast path** (offline `tor` under `DisableNetwork 1`):
+/// handshake + command correlation + read loop, no circuits. The bootstrapped
+/// `STREAM`/CircID measurement (DQ-T0.4) needs a `DisableNetwork 0` instance with
+/// network egress and lands next.
+#[cfg(test)]
+mod live_tests {
+    use super::{Command, EventSink, TorControl, TorControlConfig};
+    use kameo::actor::Spawn;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command as ProcCommand, Stdio};
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc;
+
+    /// The bundled `tor` binary path; **hard-fail** (not skip) when the test runs.
+    fn tor_binary() -> PathBuf {
+        std::env::var("SHEKYL_TEST_TOR_BINARY")
+            .map(PathBuf::from)
+            .expect("SHEKYL_TEST_TOR_BINARY must point at a tor binary on the integration lane")
+    }
+
+    /// A spawned test `tor` + its temp `DataDirectory`. Kills `tor` and cleans up
+    /// on drop (TAKEOWNERSHIP usually exits it first; this is belt-and-braces).
+    struct TestTor {
+        child: Child,
+        _dir: tempfile::TempDir,
+        control_addr: SocketAddr,
+        cookie_path: PathBuf,
+    }
+
+    impl Drop for TestTor {
+        fn drop(&mut self) {
+            // Best-effort teardown — TAKEOWNERSHIP usually exits tor first.
+            self.child.kill().ok();
+            self.child.wait().ok();
+        }
+    }
+
+    /// Spawn an **offline** `tor` (`DisableNetwork 1`) with a cookie-authed control
+    /// port on an OS-assigned port written to `ControlPortWriteToFile`.
+    fn spawn_offline_tor() -> TestTor {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_path_buf();
+        let port_file = data_dir.join("control_port");
+        let child = ProcCommand::new(tor_binary())
+            .arg("--DataDirectory")
+            .arg(&data_dir)
+            .arg("--ControlPort")
+            .arg("auto")
+            .arg("--ControlPortWriteToFile")
+            .arg(&port_file)
+            .arg("--CookieAuthentication")
+            .arg("1")
+            .arg("--SocksPort")
+            .arg("0")
+            .arg("--DisableNetwork")
+            .arg("1")
+            .arg("--Log")
+            .arg("warn stderr")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn tor");
+        // Same not-yet-written startup race the cookie reader models: poll the
+        // control-port file until it parses, with a bounded backoff.
+        let control_addr = wait_for_control_port(&port_file, Duration::from_secs(30));
+        let cookie_path = data_dir.join("control_auth_cookie");
+        TestTor {
+            child,
+            _dir: dir,
+            control_addr,
+            cookie_path,
+        }
+    }
+
+    /// Poll the `ControlPortWriteToFile` until it carries a parseable
+    /// `PORT=<addr>:<port>` line.
+    fn wait_for_control_port(port_file: &Path, timeout: Duration) -> SocketAddr {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(port_file) {
+                if let Some(addr) = contents
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PORT="))
+                    .and_then(|a| a.trim().parse::<SocketAddr>().ok())
+                {
+                    return addr;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tor control port file not ready within {timeout:?}",
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn handshake_and_getinfo_against_offline_tor() {
+        let tor = spawn_offline_tor();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let actor = TorControl::spawn(TorControlConfig {
+            control_addr: tor.control_addr,
+            cookie_path: tor.cookie_path.clone(),
+            events: EventSink::new(tx),
+        });
+
+        // GETINFO version: proves the handshake (on_start), the DelegatedReply
+        // correlation, and the read loop end-to-end against real Tor.
+        let reply = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version after a clean handshake");
+        assert_eq!(reply.status(), 250);
+        assert!(
+            reply.lines().iter().any(|l| l.contains("version=")),
+            "GETINFO version returns a version= line",
+        );
+
+        // SETEVENTS is the subscribe path the measurement rides; a clean 250 here
+        // proves a second correlated command after the first.
+        let reply = actor
+            .ask(Command::SetEvents(vec!["STATUS_CLIENT".to_owned()]))
+            .await
+            .expect("SETEVENTS");
+        assert_eq!(reply.status(), 250);
+    }
+}
