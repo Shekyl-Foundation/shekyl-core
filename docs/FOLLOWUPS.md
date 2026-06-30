@@ -262,11 +262,9 @@ sustainability is unaffected by the recalibration.
     the values ever produced), so `shekyl-types` stays free of an io/curve dep. The
     timestamp form is no longer representable, so it can never be materialized
     regardless of caller; `timelock_from_unlock_time`'s `>= sentinel → None` arm is
-    now belt-and-suspenders. **Remaining:** the scanner's redundant defense-in-depth
-    gates (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates)
-    stay as-is — retiring them is a *security-surface* change (rule 19/21), tracked
-    for a focused follow-up alongside the daemon-side enforcement below, not bundled
-    into the type-move.
+    now belt-and-suspenders. (The scanner's `MAX_OUTPUTS` / timestamp-form gates were
+    likewise reviewed and *kept* as belt-and-suspenders — see the validator sub-item's
+    resolution below.)
   - **[Done 2026-06-23, this slice] A pruned-safe context-free ingestion validator now
     lives in `shekyl-wire`, called from `block_fetch.rs`.**
     `Transaction::validate_context_free_pruned` enforces the full context-free reject set
@@ -280,9 +278,20 @@ sustainability is unaffected by the recalibration.
     `parse_pruned_tx` additionally rejects a coinbase-shaped tx (`Transaction::is_coinbase`)
     on the `get_transactions` path — the coinbase belongs in the block blob, never here.
     The scattered ad-hoc checks (the standalone `unlock_time` reject) are retired into the
-    validator. **Remaining:** retire the scanner's now-redundant defense-in-depth gates
-    (`scan_transaction_with_cancel`'s `MAX_OUTPUTS` / timestamp-form gates) to true
-    belt-and-suspenders when the application-layer un-vendor lands.
+    validator. **[Resolved 2026-06-30, un-vendor follow-up] The scanner's defense-in-depth
+    gates are kept, not removed.** A source-anchored review found the "redundant" framing
+    holds only on the wire-sourced live path: `scan_transaction_with_cancel` accepts an
+    in-memory `Transaction` (the unit tests construct one directly; likewise any future
+    cache-replay caller) with no type-level proof it came through the wire reader, so the
+    `MAX_OUTPUTS` / timestamp-form gates remain the scanner's input-boundary self-protection.
+    They are demoted to true belt-and-suspenders behind the primary parse-time
+    (`Transaction::read`) and ingestion (`validate_context_free_pruned`) gates, and the size
+    bound is now single-sourced to the parse bound by a `const _` assertion
+    (`MAX_OUTPUTS == shekyl_wire::transaction::MAX_OUTPUTS`) so the secondary gate cannot
+    silently drift below the primary one. Rule-21 reopen for *true* removal: when the scanner
+    input is newtyped at the parse edge (a `ParsedTransaction` minted only by
+    `Transaction::read`), making an unbounded-output tx unrepresentable at the scanner
+    boundary.
   - **Daemon-side enforcement.** A canonical daemon should reject timestamp-form
     `unlock_time` at consensus so it can never *serve* one; the wallet's ingestion
     reject is then pure defense against a buggy/adversarial node. (User: "bring the
@@ -293,8 +302,9 @@ sustainability is unaffected by the recalibration.
   Not genesis-blocking (the scan path is already safe end-to-end; the pruned-safe
   validator above now enforces the full context-free reject set at ingestion). **Target:
   V3.x**, landing with the rest of the `shekyl-oxide` application-layer un-vendor.
-  Reopen-now criterion: when the native `WalletOutput`/`Timelock` types land — fold the
-  two remaining sub-items (native `Timelock`, daemon-side enforcement) into that work.
+  Reopen-now criterion: the one genuinely-remaining sub-item is daemon-side enforcement
+  (consensus-side, C++), which rides the daemon's own block-height-only audit; the native
+  `Timelock` and scanner-gate sub-items are now resolved above.
 
 - **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
