@@ -27,12 +27,6 @@ use sha3::{Digest, Keccak256};
 use shekyl_curve_generators::H;
 use shekyl_curve_io::*;
 
-mod unreduced_scalar;
-pub use unreduced_scalar::UnreducedScalar;
-
-#[cfg(test)]
-mod tests;
-
 // On std, we cache some variables in statics.
 #[cfg(feature = "std")]
 static INV_EIGHT_CELL: LazyLock<Scalar> = LazyLock::new(|| Scalar::from(8u8).invert());
