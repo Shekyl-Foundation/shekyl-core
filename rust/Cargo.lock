@@ -4315,6 +4315,8 @@ dependencies = [
  "hmac",
  "kameo",
  "sha2",
+ "shekyl-p-transport",
+ "shekyl-types",
  "tempfile",
  "tokio",
  "zeroize",
