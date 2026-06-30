@@ -111,10 +111,11 @@ pub enum ControlError {
     /// The reply stream ended cleanly (EOF / socket close); the connection can no
     /// longer be served.
     StreamClosed,
-    /// A command carried a token with a forbidden character (ASCII control or
-    /// space) — refused before reaching the wire, so it cannot inject an extra
-    /// control line or desync the FIFO reply correlation. A caller error: the
-    /// command is rejected, the connection is untouched.
+    /// A command was malformed — an empty token list, an empty token, or a token
+    /// with a forbidden character (ASCII control or space). Refused before reaching
+    /// the wire, so it cannot send a malformed line, inject an extra control line,
+    /// or desync the FIFO reply correlation. A caller error: the command is
+    /// rejected, the connection is untouched.
     InvalidCommand,
 }
 
@@ -134,7 +135,10 @@ impl std::fmt::Display for ControlError {
             Self::Timeout => write!(f, "control handshake read timed out"),
             Self::Desync => write!(f, "unsolicited control reply (no command in flight)"),
             Self::StreamClosed => write!(f, "control reply stream ended"),
-            Self::InvalidCommand => write!(f, "control command contained a forbidden character"),
+            Self::InvalidCommand => write!(
+                f,
+                "control command was malformed (empty or forbidden character)"
+            ),
         }
     }
 }
@@ -179,18 +183,22 @@ pub enum Command {
 
 impl Command {
     /// The wire line (without the trailing CRLF), or [`ControlError::InvalidCommand`]
-    /// if any token carries a forbidden character.
+    /// if the token list is empty or any token carries a forbidden character.
     ///
-    /// Tokens are space-joined into one control line, so a token containing a space
+    /// Tokens are space-joined into one control line. An **empty** list would render
+    /// as a malformed trailing-space line (`"GETINFO "`); a token containing a space
     /// (the separator) or an ASCII control byte — notably `\r`/`\n` — could split
     /// into extra control commands and desync the no-request-ID FIFO correlation.
-    /// Validating *before* the line is built makes that injection unrepresentable
-    /// on the wire.
+    /// Validating *before* the line is built keeps both off the wire. (We never
+    /// issue an argument-less command, `SETEVENTS`-clear-all included.)
     fn to_wire(&self) -> Result<String, ControlError> {
         let (verb, tokens) = match self {
             Self::GetInfo(keys) => ("GETINFO", keys),
             Self::SetEvents(events) => ("SETEVENTS", events),
         };
+        if tokens.is_empty() {
+            return Err(ControlError::InvalidCommand);
+        }
         for token in tokens {
             if token.is_empty() || token.bytes().any(|b| b == b' ' || b.is_ascii_control()) {
                 return Err(ControlError::InvalidCommand);
@@ -587,6 +595,15 @@ mod tests {
         // As is an empty token.
         let empty = Command::GetInfo(vec![String::new()]);
         assert_eq!(empty.to_wire(), Err(ControlError::InvalidCommand));
+        // And an empty token list — it would render as "GETINFO "/"SETEVENTS ".
+        assert_eq!(
+            Command::GetInfo(vec![]).to_wire(),
+            Err(ControlError::InvalidCommand)
+        );
+        assert_eq!(
+            Command::SetEvents(vec![]).to_wire(),
+            Err(ControlError::InvalidCommand)
+        );
     }
 
     #[test]
