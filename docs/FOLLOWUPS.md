@@ -7254,6 +7254,34 @@ one place to confirm each item's relationship to the wallet stack.
   dep. **Target:** V3.x (immediately after #205). See
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §15 and
   `rust/shekyl-p-transport/src/lib.rs`.
+- **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
+  DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
+  puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at
+  `SENTCONNECT`. It measures that over a **general-purpose exit circuit** on purpose: the dial's
+  destination is irrelevant (the CircID is captured at attach, *before* the exit connects — the dial
+  is expected to fail with a 0-byte result), and an exit circuit is simply the **cheapest circuit a
+  SOCKS dial builds**, which makes the per-username isolation observable with the least apparatus.
+  Crucially, the isolation it measures is **transport-agnostic**: it is a property of the SOCKS
+  port's per-username circuit *selection*, not of where the circuit *terminates*, so the result
+  transfers to onion (rendezvous) circuits for free — if usernames yield distinct exit circuits they
+  yield distinct rendezvous circuits too. **What it therefore does NOT prove, and SP-T3 owns:** that
+  the **onion path itself works end-to-end** — `ADD_ONION` service publication, HSDir descriptor
+  upload/lookup, the rendezvous handshake, and isolation measured *over rendezvous circuits to a
+  reachable `.onion`*. That is a genuinely different test (onion reachability + isolation-over-
+  rendezvous), with more moving parts in the hermetic net (a descriptor-publishing hidden service)
+  and a more-confounded signal (the service side participates in circuit construction) — which is
+  exactly why DQ-T0.4 does **not** fold it in. Production peer transport is **onion-to-onion and
+  never builds exit circuits** (client → 3 hops → rendezvous → 3 hops → service, no exit seeing
+  plaintext or destination); the exit circuit appears in the DQ-T0.4 harness **only as a measurement
+  scaffold**, pinned as such in the harness comments so it never reads as a production egress path.
+  **Rule-`21` framing (reject-now-with-reopening-criteria, not pre-provisioned flexibility):** keep
+  the exit-circuit dial for DQ-T0.4 (right measurement of the right property, cheapest observable);
+  the onion-route validation lands **when SP-T3 builds the onion serving surface**, not before — it
+  has nothing to validate until `ADD_ONION` exists. **Target:** V3.x (with the SP-T3 onion-service
+  build). See [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md) (DQ-T0.4
+  measurement + the exit-as-scaffold note) and
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (SP-T3 onion
+  surface).
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of
