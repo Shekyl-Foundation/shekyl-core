@@ -1110,6 +1110,52 @@ seal-trust boundary `reconstruct_from_sealed_frontier` (`from_state` restoring `
 `pub(in pscan)`. A scan/verify range divergence fails closed (`AccrualError::FrontierGap`) rather
 than recording a `covered` with an unverified hole.
 
+### `CoverDiscovery`, as built (2026-06-30): the funding-side completeness gate (SP-7)
+
+SP-7 (`cover_discovery.rs`) landed as the funding-side twin of SP-6, closing `TM-3`. Three
+refinements vs the §SP-7 sketch, all surfaced at source:
+
+**The verdict is a wrap, not a new scan.** Cover *identification* is already guaranteed — the FA-6
+view-tag pre-filter is false-negative-free, so the funding scan cannot reject an owned output. So
+SP-7 does **not** build cover identification; it composes the funding-scan result (did the cover
+recover, at what height?) with SP-6's [`VerifiedRange`] into the three-valued verdict, the
+funding-side mirror of `PReconcileSet::reconcile`. Gate-first: `CoverDiscovery::classify` returns
+`AbsentVerified` **only** when the *whole* cover window lies within `covered`; a window reaching
+past the verified frontier is `Incomplete` (never `AbsentVerified`) — the funding-side "absence
+concludable only within `covered`," which stops a source inducing a re-fund by under-serving the
+window's tail.
+
+**`Found` carries a redacted descriptor, not `OwnedOutput`.** The §SP-7 sketch's
+`Found(OwnedOutput)` predates PR-A's firewall: `OwnedOutput` does not exist, and the secret outputs
+stay inside the actor. So `Found` carries a minimal public `CoverFound` (the diagnostic height) —
+the cover is already accrued in the actor's funding state; the verdict only signals it *arrived*.
+That descriptor is `P`'s cold-start cover-funding moment (persona-history, on-chain-public but
+correlated), so `CoverFound` carries a **redacting `Debug`**, the same discipline as
+`BondPostMatch` / `BondPostRecord`.
+
+**The real 2d-2 dependency is the tip-currency token, not the scan.** `verify_exhaustive` catches a
+*gap* (a stripped cover-tx → continuity break → `Incomplete`) but **not** a complete-but-stale or
+fork chain — it *passes* on a fork where the cover is absent-on-served-chain yet present-on-real-chain.
+So `AbsentVerified` alone cannot authorize a re-fund; it needs a `TipCurrencyToken` certifying the
+served chain is current — exactly SP-6's GC needing a canonicity token alongside
+`AbsentWithinCovered` (same shape, same handoff). Cover-discovery is the one **non-lag-tolerant**
+consumer (it decides at cold-start, time-sensitively — where a withholding source attacks by
+claiming a stale tip and hiding the cover above it), which is *why* tip-currency is SP-7's
+load-bearing dependency. The token is **posture-supplied**: trusted postures ①/② supply it by trust
+(`TipCurrencyToken::trusted_node()`) so the gate **works now**; only the untrusted-posture ③
+multi-source producer is deferred to 2d-2 §4 (rule-21 reopen: 2d-2 §4 lands). The gate's signature
+requires the token *now*, so "re-fund on exhaustive-but-stale evidence" is unrepresentable
+regardless of when ③ arrives.
+
+**The re-fund gate — surface, never auto.** A `RefundConsideration` is constructible **only** via
+`CoverDiscovery::refund_consideration` from `AbsentVerified` **plus** a token — never from
+`Incomplete` or token-less absence, so "re-fund on a gap" and "re-fund on stale evidence" are both
+unrepresentable. Even a valid consideration is a *consideration*: the consumer routes it to an
+operator decision (the original funding likely never confirmed → retry-broadcast), never an
+auto-re-fund (the induced relink `TM-3` describes). A prolonged `Incomplete` surfaces a warning;
+there is no timeout path that manufactures a re-fund. The producer that supplies the funding-scan
+result + the cover window is the cold-start lifecycle (unwired, like the rest of the pscan layer).
+
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
 A large raw-primitive → domain-newtype migration runs at the end of Stage 2
