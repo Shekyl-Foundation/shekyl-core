@@ -1156,6 +1156,17 @@ auto-re-fund (the induced relink `TM-3` describes). A prolonged `Incomplete` sur
 there is no timeout path that manufactures a re-fund. The producer that supplies the funding-scan
 result + the cover window is the cold-start lifecycle (unwired, like the rest of the pscan layer).
 
+**Two dispositions written into the module doc (deliberate, not gaps).** (1) **`Found` needs no
+token** while `AbsentVerified` does — the asymmetry is intentional: a wrong-`Found` (a fork-cover
+present on a served fork, absent on canonical) is **bounded and detectable** (posture-resolved,
+finality-gated — `P` can't spend until finality-deep so a transient fork reorgs out — and a
+fork-only spend produces a bond-post invalid on canonical, a *visible stake failure*), whereas a
+wrong-`AbsentVerified` is a *silent, permanent* re-link. The token gates the silent-irreversible
+side and only that side. (2) **An empty `cover_window` fails closed** — it would vacuously satisfy
+whole-window containment and mint `AbsentVerified`, so the gate requires a non-empty window (release
+fail-closed → `Incomplete`; a dev `debug_assert` catches the upstream bug loudly), and a found
+cover's height is `debug_assert`-checked within the window (a scan/window-alignment tripwire).
+
 ### Alignment with the raw → newtype sweep (don't create new debt)
 
 A large raw-primitive → domain-newtype migration runs at the end of Stage 2

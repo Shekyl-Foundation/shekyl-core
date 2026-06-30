@@ -51,6 +51,26 @@
 //! the cover above it), which is *why* tip-currency is SP-7's load-bearing 2d-2 dependency
 //! and not a footnote.
 //!
+//! ## Why `Found` needs no token — the asymmetry is deliberate
+//!
+//! `AbsentVerified` is token-gated; `Found` is not, and `classify` returns `Found` for any
+//! recovered cover regardless of `covered`. That is intentional. The symmetric attack is a
+//! **fork-cover**: a source serves a cover present on a served fork but absent on the
+//! canonical chain, so `P` sees `Found` and proceeds. The wrong-`Found` harm is **bounded
+//! and detectable**, categorically unlike the wrong-`AbsentVerified` silent re-link — which
+//! is *exactly* why the token gates one side and not the other:
+//!
+//! - **Posture-resolved** — a trusted node (①/②) serves the canonical chain; an untrusted
+//!   remote (③) is the same bounded-risk posture as everywhere else in 2d-2.
+//! - **Finality-gated** — `P` cannot spend the cover until it is finality-deep, so a
+//!   transient fork reorgs out before the spend.
+//! - **Detectable, not silent** — spending a fork-only cover produces a bond-post invalid
+//!   on the canonical chain: the stake **visibly fails** (a loud error), not a silent
+//!   origin correlation.
+//!
+//! So wrong-`Found` is a detectable stake failure; wrong-`AbsentVerified` is a silent,
+//! permanent re-link. The token gates the silent-and-irreversible side, and only that side.
+//!
 //! ## And even then — surface, never auto-re-fund
 //!
 //! A re-fund input requires `AbsentVerified` **plus** a tip-currency token
@@ -159,20 +179,45 @@ impl CoverDiscovery {
     /// `covered` range, over the `cover_window` where the cover could appear.
     ///
     /// **Gate-first** (the funding-side "absence concludable only within `covered`"):
-    /// `AbsentVerified` is returned **only** when the *whole* `cover_window` lies within
-    /// `covered`. A window reaching beyond the verified frontier is `Incomplete` (wait),
-    /// never `AbsentVerified` — otherwise a source could induce a re-fund by serving an
-    /// exhaustive range that simply does not reach the cover's height.
+    /// `AbsentVerified` is returned **only** when the *whole, non-empty* `cover_window`
+    /// lies within `covered`. A window reaching beyond the verified frontier is
+    /// `Incomplete` (wait), never `AbsentVerified` — otherwise a source could induce a
+    /// re-fund by serving an exhaustive range that simply does not reach the cover's
+    /// height.
+    ///
+    /// `cover_found` and `covered` must come from the **same scan** — that consistency is
+    /// the producer's (call-site's) obligation; the *consumer* sees only the bound
+    /// [`CoverDiscovery`] / [`RefundConsideration`], never the raw inputs.
     pub(crate) fn classify(
         cover_window: BlockRange,
         cover_found: Option<BlockHeight>,
         covered: VerifiedRange,
     ) -> Self {
+        // An empty `cover_window` is a caller bug (the cover must have *somewhere* to
+        // appear). Catch it loudly in dev, AND fail closed in release via the non-empty
+        // check in the `AbsentVerified` gate below — never mint a vacuous "provably absent
+        // over an empty window," which would open a `RefundConsideration` path on nonsense.
+        debug_assert!(
+            cover_window.start() < cover_window.end(),
+            "cover_window must be non-empty (the range where the cover could appear)"
+        );
         if let Some(height) = cover_found {
+            // A recovered cover is conclusive wherever it sits (presence is unconditional —
+            // see the module doc on why `Found` needs no token), but it should fall within
+            // the queried window: a tripwire for a scan/window misalignment.
+            debug_assert!(
+                cover_window.start() <= height && height < cover_window.end(),
+                "recovered cover height outside the cover window (scan/window misalignment)"
+            );
             return Self::Found(CoverFound::at(height));
         }
-        // Not found. Provably absent ONLY if the entire window was exhaustively scanned.
-        if covered.low() <= cover_window.start() && cover_window.end() <= covered.high() {
+        // Not found. Provably absent ONLY if the entire, **non-empty** window was
+        // exhaustively scanned. An empty window fails the first conjunct and falls to
+        // `Incomplete` — the release fail-closed for the dev `debug_assert` above.
+        if cover_window.start() < cover_window.end()
+            && covered.low() <= cover_window.start()
+            && cover_window.end() <= covered.high()
+        {
             Self::AbsentVerified(covered)
         } else {
             Self::Incomplete
@@ -285,6 +330,16 @@ mod tests {
         // stops a source inducing a re-fund by under-serving the window's tail).
         let v = CoverDiscovery::classify(window(100, 110), None, covered_range(0, 105));
         assert_eq!(v, CoverDiscovery::Incomplete);
+    }
+
+    #[test]
+    #[should_panic(expected = "cover_window must be non-empty")]
+    fn empty_cover_window_is_rejected_in_dev() {
+        // An empty window is a caller bug: it would vacuously satisfy whole-window
+        // containment and mint AbsentVerified (→ a re-fund path on nonsense). The dev
+        // debug_assert rejects it loudly; the non-empty conjunct in the AbsentVerified gate
+        // is the release fail-closed (→ Incomplete) behind it.
+        let _ = CoverDiscovery::classify(window(100, 100), None, covered_range(0, 200));
     }
 
     #[test]
