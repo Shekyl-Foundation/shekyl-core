@@ -47,6 +47,45 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **CT-balance FFI cutover — `verRctSemanticsSimple` + `verRctSemanticsFeeOnly`
+  → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
+  is the last native-C++ island in an otherwise-FFI'd FCMP++ verify path
+  (`src/fcmp/rctSigs.cpp`); the bond-post sibling already routes through the
+  single-sourced `shekyl-ct-balance::verify_ct_balance`. Cut both general balance
+  verifiers over to it.
+  - **Gate F-1 [ratified 2026-06-30]:** the canonical prime-order
+    commitment-point rule is a binding genesis decision —
+    `GENESIS_TX_WIRE_FORMAT.md` §2.3 (CT section). Consistency-restoring (BP+
+    clears the cofactor on `out_masks` at `bulletproofs_plus.cc:931`; the balance
+    sums raw points), closing a torsion-**malleability** surface (matched order-8
+    `T` → second tx-hash for the same economic tx); adversarial-only.
+  - **Gate F-2 [pre-cutover, must be green before any re-point]:** a
+    three-class differential corpus (C++ oracle vs Rust FFI), green on the
+    **aarch64 determinism lane**:
+    1. **valid canonical** → both accept. Bulk: large batches, the empty-pseudoOut
+       fee-only shape, **and the live bond-post path as a regression anchor** (the
+       cutover + rename share `verify_ct_balance`/the FFI helpers — bond-post is
+       the proof the shared code did not move under it).
+    2. **torsion-laden, matched `T` both sides** (sum still balances) → C++ accept
+       / Rust reject. The malleability vector; must-have. Sub-case: torsion on a
+       `pseudoOut` with **no** matching `out_mask` `T` (sum does **not** balance)
+       → both reject, but pins that Rust rejects for the right reason —
+       `INVALID_POINT` (decompress) ordered **ahead of** `SUM_MISMATCH` (FFI
+       error-precedence determinism; the C++ oracle need not match the *reason*).
+    3. **non-canonical field encoding** (non-reduced `y`, sign-bit edges) →
+       *characterized* against `ge_frombytes_vartime`, not assumed; any divergence
+       is ratified, not discovered post-flip.
+  - **Sequence [rule 07 atomic]:** ratify (done) → rename (below) → corpus green
+    → ONE commit bundling the `shekyl_verify_ct_balance` export, both
+    `rctSigs.cpp` swaps, deletion of the native `addKeys`/`equalKeys` blocks, and
+    retirement of the C++ oracle. No dual-path drift window.
+  - **Tradeoff [noted, not accidental]:** per-rv FFI call inside the batch
+    verifier (N× boundary crossings/batch); correctness over perf (priority
+    hierarchy); a batched FFI is deferred, not overlooked.
+  - Coinbase emission is a different equation — out of scope.
+  - **Depends on** the `rct`→`ct` Rust rename landing first (below), so the new
+    export is born on clean `ct` names (avoids F-6 double-churn). **Target: V3.0.**
+
 - **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
   against the canonical spend format (flagged 2026-06-23, the tx-builder
   shekyl-wire spend cutover; resolved 2026-06-24).** `shekyl_wire::Transaction::weight()`

@@ -347,6 +347,47 @@ The genesis freeze nails it shut. Sources:
 `rust/shekyl-ffi/src/lib.rs:3593` (ungated), `curve_tree_decode.rs:189,245`
 (`zero_enc_label()` sentinel emission).
 
+**CT commitment point validity — BINDING consensus rule (genesis).** Every
+curve25519 point entering the CT balance equation — each `pseudoOut` and each
+output commitment mask (`outPk[i].mask`) — MUST be a canonical, prime-order
+(torsion-free) encoding. A non-canonical encoding or any order-8 (cofactor)
+component is **rejected** (`shekyl_verify_ct_balance → INVALID_POINT`); the
+balance sum is never computed over it (`decompress_point` errors before any
+addition in `sum_commitments_flat`).
+
+*Consistency, not hardening.* The inherited C++ verify path is internally
+inconsistent on cofactors: the Bulletproofs+ **verifier multiplies each output
+commitment `V` by 8** (`bulletproofs_plus.cc:931`,
+`scalarmult8(proof8_V[i], proof.V[i])` — the comment is explicit, "ensures that
+all such group elements are in the prime-order subgroup"), clearing any order-8
+component before the multiexp (`:965`), while the balance check
+(`addKeys`/`equalKeys`) sums the **raw** points and clears nothing. A
+torsion-laden `out_mask` thus passes the range proof (cofactor silently cleared)
+but enters the balance sum un-cleared; and `pseudoOut`s never enter `proof.V`, so
+they carry no range proof at all and nothing checks their cofactor. Shekyl
+resolves the inconsistency in the one direction that makes the two agree:
+canonical prime-order points everywhere. `is_torsion_free()` is therefore the
+**sole** cofactor gate on `out_masks` and an **independent** gate on `pseudoOut`s
+— not redundant with BP+ (which clears, not rejects) or FCMP++.
+
+*Threat closed: transaction malleability — not value forgery.* Absent this rule a
+prover adds a matched order-8 component `T` to one `pseudoOut` and one `out_mask`;
+the `T`s cancel in `Σpseudo = Σmask + fee`, BP+ clears them, and the result is a
+**second valid serialization of the same economic transaction with a different
+tx-hash** — breaking tx-ID stability (payment tracking, double-spend-by-id).
+Honest `aG + bH` construction never yields a torsion component, so the rule is
+**adversarial-only**: no valid transaction is affected.
+
+*Safe to freeze pre-genesis.* No installed base ever ran the lax C++ rule; every
+node ships canonical-prime-order from block 0, so "stricter than the inherited
+C++" cannot fork a network that never ran it (rule 07's split concern is between
+live verifiers — there are none). The single shared verify path
+(`tx_verification_utils.cpp`, mempool + block) makes the rule uniform across the
+daemon. Single home: `shekyl-ct-balance::verify_ct_balance` (renamed from the
+inherited `rct` token in the V3.0 ct sweep), shared by construct
+(`shekyl-tx-builder`) and verify (`shekyl-archival-retention`), exposed to C++
+consensus via the `shekyl_verify_ct_balance` FFI export.
+
 ### 2.4 Coinbase construction
 
 | Element | Source | Disposition |
