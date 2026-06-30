@@ -508,7 +508,10 @@ impl InternalScanner {
         // is pinned to that primary bound by the `const _` assertions above, so
         // the secondary gate cannot silently drift below the parse-time one.
         // (True retirement is gated on newtyping the scanner input at the parse
-        // edge — see docs/FOLLOWUPS.md, the block-height-only unlock_time entry.)
+        // edge — minting a `ParsedTransaction` only via `Transaction::read`, so an
+        // unbounded-output tx is unrepresentable at the scanner boundary — the
+        // rule-21 reopen recorded under the block-height-only `unlock_time` entry
+        // in docs/FOLLOWUPS.md.)
         //
         // Skip-and-log shape: an oversized transaction is silently
         // skipped (returns the empty `Timelocked`) and a `WARN` event
