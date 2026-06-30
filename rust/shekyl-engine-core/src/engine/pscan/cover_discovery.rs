@@ -163,10 +163,17 @@ impl TipCurrencyToken {
 pub(crate) enum CoverDiscovery {
     /// The cover arrived (found within the scanned range) — no re-fund.
     Found(CoverFound),
-    /// The cover-expected window was **exhaustively scanned** (within this
-    /// [`VerifiedRange`]) and the cover was **not** found — provably absent, not merely
-    /// undelivered. A re-fund input *only* when paired with a [`TipCurrencyToken`].
-    AbsentVerified(VerifiedRange),
+    /// The cover is **provably absent in `window`** — the cover-expected `window` was
+    /// scanned without finding the cover, and `window` lies within the exhaustively-verified
+    /// `evidence` range (so the absence is real, not merely undelivered). Two distinct
+    /// ranges, deliberately: `window` is the **absence window** (where the cover could have
+    /// appeared, and provably did not); `evidence` is the **exhaustiveness proof** that
+    /// `window` was fully scanned — a (possibly strict) superset of `window`, **not** itself
+    /// the absence window. A re-fund input *only* when paired with a [`TipCurrencyToken`].
+    AbsentVerified {
+        window: BlockRange,
+        evidence: VerifiedRange,
+    },
     /// The view is not (yet) provably complete over the cover window — a gap the source
     /// may be withholding. **Wait**; surface if prolonged; **never** a re-fund input.
     Incomplete,
@@ -218,7 +225,14 @@ impl CoverDiscovery {
             && covered.low() <= cover_window.start()
             && cover_window.end() <= covered.high()
         {
-            Self::AbsentVerified(covered)
+            // Carry BOTH: the absence is over `cover_window`, proven by the exhaustive scan
+            // of `covered ⊇ cover_window`. Keeping the window (not just the evidence) makes
+            // the verdict self-describing — a consumer can't mistake the evidence range for
+            // the absence window.
+            Self::AbsentVerified {
+                window: cover_window,
+                evidence: covered,
+            }
         } else {
             Self::Incomplete
         }
@@ -238,8 +252,9 @@ impl CoverDiscovery {
         tip: Option<TipCurrencyToken>,
     ) -> Option<RefundConsideration> {
         match (self, tip) {
-            (Self::AbsentVerified(covered), Some(token)) => Some(RefundConsideration {
-                covered,
+            (Self::AbsentVerified { window, evidence }, Some(token)) => Some(RefundConsideration {
+                window,
+                evidence,
                 _tip: token,
             }),
             _ => None,
@@ -247,11 +262,16 @@ impl CoverDiscovery {
     }
 }
 
-/// Proof that a cold-start re-fund **may be considered**: the cover is provably absent
-/// over a [`VerifiedRange`] **and** the served chain is current (a [`TipCurrencyToken`]).
-/// Constructible **only** via [`CoverDiscovery::refund_consideration`] from an
-/// `AbsentVerified` verdict plus a token — there is no path from `Incomplete` or from
-/// token-less absence.
+/// Proof that a cold-start re-fund **may be considered**: the cover is provably absent in
+/// a `window`, that `window` lies within an exhaustively-verified `evidence` range, **and**
+/// the served chain is current (a [`TipCurrencyToken`]). Constructible **only** via
+/// [`CoverDiscovery::refund_consideration`] from an `AbsentVerified` verdict plus a token —
+/// there is no path from `Incomplete` or from token-less absence.
+///
+/// The two ranges are distinct on purpose (the source of two prior doc confusions):
+/// [`absent_window`](Self::absent_window) is *where the cover is absent*; [`evidence`](Self::evidence)
+/// is the *exhaustiveness proof that the window was scanned* (a superset of the window),
+/// **not** itself the absence window.
 ///
 /// **A consideration is not an authorization.** The consumer surfaces it to the operator
 /// (the original funding tx likely never confirmed → retry-broadcast it, or decide to
@@ -260,7 +280,13 @@ impl CoverDiscovery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // transient — the cold-start operator-surface is the lib consumer.
 pub(crate) struct RefundConsideration {
-    covered: VerifiedRange,
+    /// The **absence window** — the cover-expected range that was scanned without finding
+    /// the cover.
+    window: BlockRange,
+    /// The **exhaustiveness evidence** — the verified range `window` lies within (proof the
+    /// window was fully scanned, not merely undelivered). A superset of `window`, not the
+    /// absence window itself.
+    evidence: VerifiedRange,
     // Held as proof the served chain was certified current. `_`-prefixed: the verdict it
     // gated is the value; the token need not be re-read, only required to construct this.
     _tip: TipCurrencyToken,
@@ -268,10 +294,18 @@ pub(crate) struct RefundConsideration {
 
 #[allow(dead_code)] // transient — the cold-start operator-surface is the lib consumer.
 impl RefundConsideration {
-    /// The verified range over which the cover was provably absent (for the operator
-    /// surface: "no cover in `[low, high)`, on a chain certified current").
-    pub(crate) fn covered(&self) -> VerifiedRange {
-        self.covered
+    /// The window the cover is **provably absent in** — what the operator surface reports
+    /// ("no cover output appeared in blocks `[start, end)`"). This is the absence claim.
+    pub(crate) fn absent_window(&self) -> BlockRange {
+        self.window
+    }
+
+    /// The **exhaustiveness evidence**: the verified range the [`absent_window`](Self::absent_window)
+    /// lies within — proof the window was fully scanned (not merely undelivered), a superset
+    /// of the window. **Not** the absence window; do not report it as "where the cover is
+    /// absent."
+    pub(crate) fn evidence(&self) -> VerifiedRange {
+        self.evidence
     }
 }
 
@@ -319,7 +353,23 @@ mod tests {
         // Window [100, 110) entirely within covered [0, 200), cover not found → provably
         // absent.
         let v = CoverDiscovery::classify(window(100, 110), None, covered_range(0, 200));
-        assert!(matches!(v, CoverDiscovery::AbsentVerified(_)), "got {v:?}");
+        // The verdict carries BOTH the absence window and the (superset) exhaustiveness
+        // evidence — distinct ranges, so the two can't be conflated.
+        match v {
+            CoverDiscovery::AbsentVerified {
+                window: absent,
+                evidence,
+            } => {
+                assert_eq!(
+                    absent,
+                    window(100, 110),
+                    "absence window is the cover window"
+                );
+                assert_eq!(evidence.low(), BlockHeight::from_raw(0));
+                assert_eq!(evidence.high(), BlockHeight::from_raw(200));
+            }
+            other => panic!("expected AbsentVerified, got {other:?}"),
+        }
     }
 
     #[test]
@@ -346,9 +396,14 @@ mod tests {
     fn refund_consideration_needs_absent_verified_and_a_token() {
         let absent = CoverDiscovery::classify(window(100, 110), None, covered_range(0, 200));
         // AbsentVerified + a trusted-posture token → a consideration (works now).
-        assert!(absent
+        let consideration = absent
             .refund_consideration(Some(TipCurrencyToken::trusted_node()))
-            .is_some());
+            .expect("AbsentVerified + token yields a consideration");
+        // Self-describing: the absence window (cover window) is distinct from the
+        // (superset) exhaustiveness evidence — the operator surface reports the former.
+        assert_eq!(consideration.absent_window(), window(100, 110));
+        assert_eq!(consideration.evidence().low(), BlockHeight::from_raw(0));
+        assert_eq!(consideration.evidence().high(), BlockHeight::from_raw(200));
         // AbsentVerified WITHOUT a token (exhaustive but not provably current) → none.
         assert!(absent.refund_consideration(None).is_none());
     }

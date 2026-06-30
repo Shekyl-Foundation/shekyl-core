@@ -1155,6 +1155,11 @@ operator decision (the original funding likely never confirmed → retry-broadca
 auto-re-fund (the induced relink `TM-3` describes). A prolonged `Incomplete` surfaces a warning;
 there is no timeout path that manufactures a re-fund. The producer that supplies the funding-scan
 result + the cover window is the cold-start lifecycle (unwired, like the rest of the pscan layer).
+`AbsentVerified` / `RefundConsideration` carry **two distinct ranges**, not one: the **absence
+window** (the cover window — where the cover provably did not appear, what the operator surface
+reports) and the **exhaustiveness evidence** (the verified range the window lies within — a
+superset, proof the window was fully scanned). They are separate accessors (`absent_window()` vs
+`evidence()`) so a consumer cannot report the evidence range as the absence window.
 
 **Two dispositions written into the module doc (deliberate, not gaps).** (1) **`Found` needs no
 token** while `AbsentVerified` does — the asymmetry is intentional: a wrong-`Found` (a fork-cover
