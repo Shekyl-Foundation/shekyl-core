@@ -19,6 +19,7 @@
 //! [`safecookie`]: super::safecookie
 //! [`ServerVerified`]: super::safecookie::ServerVerified
 
+use std::io::Read;
 use std::path::Path;
 
 use zeroize::Zeroizing;
@@ -88,9 +89,10 @@ pub struct ServerNonce([u8; 32]);
 
 impl ServerHash {
     /// The 32 raw bytes — the `received` `SERVERHASH` passed to
-    /// `safecookie::verify_server_hash`.
+    /// `safecookie::verify_server_hash` (coerces to `&[u8]` at the call site).
+    /// Returns `&[u8; 32]` so the 32-byte length stays a type-level fact.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn as_array(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -185,13 +187,22 @@ fn decode_hex32(hex: &str) -> Option<[u8; 32]> {
 /// [`ControlCookie::new`] already takes `[u8; 32]`, so the gate cannot be
 /// sidestepped.
 ///
-/// The heap read buffer is zeroized; the cookie zeroizes on drop. (As with the
-/// HMAC note in `safecookie`, a transient stack copy of these 32 bytes is within
-/// the cookie's threat model — a local-process token Tor wrote to a user-readable
-/// file — not a spend key.)
+/// The read is **bounded to 33 bytes** (32 + 1 to detect an over-long file), so a
+/// path pointed — accidentally or via a symlink — at a huge file can never be
+/// slurped into memory; we only ever need 32 bytes. The read buffer is zeroized;
+/// the cookie zeroizes on drop. (As with the HMAC note in `safecookie`, a
+/// transient stack copy of these 32 bytes is within the cookie's threat model — a
+/// local-process token Tor wrote to a user-readable file — not a spend key.)
 pub fn read_cookie_file(path: &Path) -> Result<ControlCookie, AuthError> {
-    let raw = Zeroizing::new(std::fs::read(path).map_err(|_| AuthError::CookieUnreadable)?);
+    let mut raw = Zeroizing::new(Vec::with_capacity(33));
+    std::fs::File::open(path)
+        .map_err(|_| AuthError::CookieUnreadable)?
+        .take(33)
+        .read_to_end(&mut raw)
+        .map_err(|_| AuthError::CookieUnreadable)?;
     if raw.len() != 32 {
+        // An over-long file reads exactly 33 (the cap) and is rejected as such —
+        // it is never read in full.
         return Err(AuthError::CookieWrongLength { len: raw.len() });
     }
     let mut exact = Zeroizing::new([0u8; 32]);
@@ -230,7 +241,7 @@ mod tests {
         assert_eq!(hash, ServerHash([0xA1; 32]));
         assert_eq!(nonce, ServerNonce([0xB2; 32]));
         // The accessors hand the bytes to `safecookie` in the right shapes.
-        assert_eq!(hash.as_bytes(), &[0xA1u8; 32][..]);
+        assert_eq!(hash.as_array(), &[0xA1; 32]);
         assert_eq!(nonce.as_array(), &[0xB2; 32]);
     }
 
@@ -344,6 +355,19 @@ mod tests {
                 AuthError::CookieWrongLength { len },
             );
         }
+    }
+
+    #[test]
+    fn over_long_cookie_file_is_bounded_not_slurped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge");
+        std::fs::write(&path, vec![0u8; 4096]).expect("write");
+        // The read stops at 33 bytes: a 4 KiB file is rejected as length 33 (the
+        // cap), never read in full — so a symlink to a huge file can't be slurped.
+        assert_eq!(
+            read_cookie_file(&path).unwrap_err(),
+            AuthError::CookieWrongLength { len: 33 },
+        );
     }
 
     #[test]
