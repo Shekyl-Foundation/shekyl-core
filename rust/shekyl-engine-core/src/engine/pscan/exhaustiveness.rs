@@ -260,19 +260,26 @@ pub(crate) fn verify_exhaustive(
     // overflow would wrap `high` below `low` and mint a backwards `VerifiedRange` — a
     // forged-absence primitive. Impossible on the honest chain (`first_height` is the
     // bounded scan cursor), but this function is the gate for malformed input, so fail
-    // closed. (`offset as u64` / `len as u64` are widening casts — no truncation.)
-    let high_raw =
-        first
-            .checked_add(blocks.len() as u64)
-            .ok_or(ExhaustivenessError::HeightOverflow {
-                first,
-                len: blocks.len(),
-            })?;
+    // closed. `u64::try_from` (not `as`) keeps that honest: a `blocks.len()` beyond `u64`
+    // — only reachable on a hypothetical >64-bit `usize` — fails closed here rather than
+    // truncating to a smaller length and minting a too-short `high`.
+    let len = u64::try_from(blocks.len()).map_err(|_| ExhaustivenessError::HeightOverflow {
+        first,
+        len: blocks.len(),
+    })?;
+    let high_raw = first
+        .checked_add(len)
+        .ok_or(ExhaustivenessError::HeightOverflow {
+            first,
+            len: blocks.len(),
+        })?;
     let mut expected_previous = anchor;
 
     for (offset, sb) in blocks.iter().enumerate() {
-        // Safe: `offset < blocks.len()`, so `first + offset < high_raw` (guarded above).
-        let height = first + offset as u64;
+        // `offset < blocks.len()`, which fit in `u64` above, so this `try_from` cannot
+        // fail and `first + offset < high_raw` (the checked_add guarded it). No `as` cast.
+        let offset = u64::try_from(offset).expect("offset < blocks.len(), which fit in u64");
+        let height = first + offset;
 
         // Continuity: this block's `previous` must match the recomputed hash of its
         // predecessor (the anchor for the first block, else the prior block's hash).
