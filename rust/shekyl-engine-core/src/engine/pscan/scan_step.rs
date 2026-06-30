@@ -82,7 +82,7 @@ impl BlockRange {
     }
 
     /// Height of the `i`-th block in the range (`start + i`). The caller must keep
-    /// `i < len()`.
+    /// `i < block_count()`.
     fn height_at(&self, i: usize) -> BlockHeight {
         BlockHeight::from_raw(self.start.to_raw() + i as u64)
     }
@@ -124,7 +124,7 @@ pub(crate) struct ScanStep {
     /// The bounded height range this step covers.
     pub(crate) range: BlockRange,
     /// Blocks aligned to `range`: `blocks[i]` is the block at `range.start + i`.
-    /// `blocks.len()` must equal `range.len()`.
+    /// `blocks.len()` must equal `range.block_count()`.
     pub(crate) blocks: Vec<ScannableBlock>,
 }
 
