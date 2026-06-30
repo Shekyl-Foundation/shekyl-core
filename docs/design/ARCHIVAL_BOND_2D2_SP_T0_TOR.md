@@ -313,25 +313,65 @@ them in rather than discovers them:
     deterministically becomes the backoff/§5 posture, never a silent reconnect that
     retries into the same corruption.
 
-### 3b. SP-T0b — the bootstrap-routing seam (decide it, don't discover it)
+### 3b. SP-T0b bootstrap readiness — the pinned contract (decided: internal tap)
 
-A hindsight review of the **landed** actor (PR #212) surfaced one seam SP-T0b must
-choose deliberately — not a PR-212 defect. `TorControl` reserves a
-`bootstrap: BootstrapState` field, implying the actor holds bootstrap state
-*internally* — but every async `650` event, `STATUS_CLIENT` (which carries
-`BOOTSTRAP PROGRESS`) included, currently routes straight out to the external
-`EventSink`. The field implies an internal gate; the routing implements an external
-one. SP-T0b's fork:
+A hindsight review of the **landed** actor (PR #212) surfaced one seam: `TorControl`
+reserves a `bootstrap: BootstrapState` field (implying the actor holds the state
+*internally*), but `STATUS_CLIENT` (which carries `BOOTSTRAP PROGRESS`) currently
+routes straight out to the external `EventSink`. The field implies an internal gate;
+the routing implements an external one. **Decided: the internal tap** — pinned here
+for SP-T0b the way §3a was pinned for PR-2.
 
-- **External gate** — the sink's consumer watches `STATUS_CLIENT` for `PROGRESS=100`
-  (leaving `bootstrap` vestigial; drop the field).
-- **Internal tap** — the `StreamMessage` handler taps `STATUS_CLIENT` to update
-  `self.bootstrap` and forwards only `STREAM` to the sink.
+**Why (the principle, not just elegance).** A consumer should depend on what it
+*needs* — a one-bit "is the transport usable yet?" fact — not on *how the actor
+learned it*. The external-gate option makes every consumer reimplement
+bootstrap-detection against the `STATUS_CLIENT` wire format, subscription lifecycle,
+and `PROGRESS=` parsing; the day Tor changes the event shape (or we swap to **Arti**,
+which reports readiness completely differently) *every* consumer breaks instead of
+just the actor. Deeper: it is a **leak of the abstraction the `TorService` exists to
+provide** — the actor *is* the boundary between "the Tor control protocol" and "the
+rest of the wallet"; a consumer parsing `STATUS_CLIENT` has reached across that
+boundary, so it is no longer a boundary. The internal tap confines the protocol
+knowledge to the one component that already speaks it, and hands everyone else the bit.
 
-**Lean: the internal tap.** The DQ-T0.4 measurement already reads `STREAM` off that
-same sink, so keeping the sink `STREAM`-only and making `self.bootstrap` the gate is
-the cleaner separation (one concern per channel). But it is **SP-T0b's call** —
-recorded here so it's chosen, not discovered.
+**The pinned contract (for SP-T0b):**
+
+1. **The actor subscribes `STATUS_CLIENT` itself, at startup** — never engine-driven.
+   A consumer never sends that `SETEVENTS`; if it had to, it would be back to knowing
+   the protocol.
+   - **`SETEVENTS`-union invariant.** `SETEVENTS` is **not** additive — each call
+     *replaces* the subscription set. The actor therefore owns the **union** of its
+     internal needs (`STATUS_CLIENT`) and the consumer's (e.g. the measurement's
+     `STREAM`): a `SetEvents(["STREAM"])` command must put `SETEVENTS STREAM
+     STATUS_CLIENT` on the wire, never bare `STREAM`, or it silently unsubscribes its
+     own bootstrap feed. Track the active event set inside the actor; never let a
+     `SetEvents` command clobber `STATUS_CLIENT`. (It works until the measurement runs
+     and then the gate goes dark — exactly why it's pinned.)
+2. **Tap, don't route.** The `StreamMessage` handler consumes `STATUS_CLIENT`
+   internally — `STATUS_CLIENT → self.bootstrap` — and does **not** forward it to the
+   sink. `STREAM` still flows to the sink (the measurement's input), so the sink
+   becomes single-purpose, which also cleans up the measurement (no bootstrap chatter
+   to filter from its `STREAM` reads).
+3. **Readiness is a fact, not an event:** expose `tokio::sync::watch<BootstrapState>`.
+   A consumer `await`s "ready" and gets the bit, with no notion of how many events it
+   took. `watch` over `broadcast` because a late subscriber sees the **current** state
+   immediately — a `ShardService` that starts *after* bootstrap completed must not
+   wait forever for an event that already fired. The `BootstrapState` transitions
+   (`Unknown → … → Ready`) are the actor's to drive.
+4. **Detection (actor) vs policy (SP-T0b) — the same coupling discipline one level
+   up.** *Detection:* the actor parses `STATUS_CLIENT`, drives `self.bootstrap`,
+   publishes the watch — it knows Tor is at 100%, nothing more. *Policy:* SP-T0b's
+   lifecycle decides how long to wait, the backoff, and timeout → fail → §5; it awaits
+   the readiness bit and acts on it, parsing nothing. So the protocol knowledge lives
+   in exactly one place — the control actor — and both consumers *and* SP-T0b's own
+   lifecycle depend only on the bit.
+
+> **Note for the DQ-T0.4 measurement (built before SP-T0b):** it gates its first dial
+> on bootstrap=100% via a `GETINFO status/bootstrap-phase` poll — its own apparatus (a
+> test, not a production consumer) — so it does not block on this contract. When
+> SP-T0b lands the readiness `watch`, the measurement can migrate to awaiting the bit;
+> invariant (1) is what keeps its `STREAM` subscription from killing the bootstrap feed
+> once the actor subscribes `STATUS_CLIENT`.
 
 ---
 
