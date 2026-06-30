@@ -158,7 +158,12 @@ impl TipCurrencyToken {
 
 /// The cold-start cover-discovery verdict (the funding-side twin of SP-6's reconcile). See
 /// the module docs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Debug` is hand-written (below) to **redact** the payload: the variant *shape* is safe to
+/// log, but the cover window / evidence heights are `P`'s cold-start timing (persona history),
+/// under the same no-clear-`Debug` discipline as [`CoverFound`] and
+/// [`BondPostMatch`](super::scan_step::BondPostMatch).
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // transient — the cold-start lifecycle is the lib consumer (unwired).
 pub(crate) enum CoverDiscovery {
     /// The cover arrived (found within the scanned range) — no re-fund.
@@ -177,6 +182,22 @@ pub(crate) enum CoverDiscovery {
     /// The view is not (yet) provably complete over the cover window — a gap the source
     /// may be withholding. **Wait**; surface if prolonged; **never** a re-fund input.
     Incomplete,
+}
+
+impl std::fmt::Debug for CoverDiscovery {
+    /// Redacted. The verdict *shape* (the variant) is safe — callers branch on it and a log
+    /// of "absent"/"incomplete"/"found" carries no persona history. But the `window` /
+    /// `evidence` heights are `P`'s cold-start timing, so the payload is never printed (same
+    /// discipline as [`CoverFound`]'s redacted `Debug`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Found(_) => f.write_str("Found(<redacted persona-history>)"),
+            Self::AbsentVerified { .. } => {
+                f.write_str("AbsentVerified { <redacted persona-history> }")
+            }
+            Self::Incomplete => f.write_str("Incomplete"),
+        }
+    }
 }
 
 #[allow(dead_code)] // transient — the cold-start lifecycle is the lib consumer.
@@ -277,7 +298,11 @@ impl CoverDiscovery {
 /// (the original funding tx likely never confirmed → retry-broadcast it, or decide to
 /// re-fund) — it must **never** auto-mint a second cold-start link, which is the induced
 /// relink `TM-3` exists to prevent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Debug` is hand-written (below) to **redact**: the `window` / `evidence` heights are `P`'s
+/// cold-start timing (persona history), reachable only through the explicit accessors, never a
+/// `{:?}` path — same no-clear-`Debug` discipline as [`CoverFound`].
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // transient — the cold-start operator-surface is the lib consumer.
 pub(crate) struct RefundConsideration {
     /// The **absence window** — the cover-expected range that was scanned without finding
@@ -306,6 +331,16 @@ impl RefundConsideration {
     /// absent."
     pub(crate) fn evidence(&self) -> VerifiedRange {
         self.evidence
+    }
+}
+
+impl std::fmt::Debug for RefundConsideration {
+    /// Redacted — a `RefundConsideration` is `P`'s cold-start absence window + exhaustiveness
+    /// evidence (persona history). Print only the type; the ranges reach the consumer through
+    /// [`absent_window`](Self::absent_window) / [`evidence`](Self::evidence), never a `{:?}` /
+    /// log path. Same discipline as [`CoverFound`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RefundConsideration(<redacted persona-history>)")
     }
 }
 
@@ -431,5 +466,38 @@ mod tests {
             !rendered.contains("123456"),
             "the funding height must not appear: {rendered}"
         );
+    }
+
+    #[test]
+    fn verdict_and_consideration_debug_are_redacted() {
+        // The verdict + consideration carry `P`'s cold-start timing (the window/evidence
+        // heights); their `Debug` must redact the payload while still showing the verdict
+        // *shape* (which is safe to log). Heights 700/710/900 are chosen distinct so a leak
+        // would be obvious.
+        let verdict = CoverDiscovery::classify(window(700, 710), None, covered_range(0, 900));
+        let v = format!("{verdict:?}");
+        assert!(v.contains("AbsentVerified"), "shape is preserved: {v}");
+        assert!(v.contains("redacted"), "payload is redacted: {v}");
+        for leak in ["700", "710", "900"] {
+            assert!(
+                !v.contains(leak),
+                "height {leak} leaked through verdict Debug: {v}"
+            );
+        }
+
+        let consideration = verdict
+            .refund_consideration(Some(TipCurrencyToken::trusted_node()))
+            .expect("AbsentVerified + token");
+        let c = format!("{consideration:?}");
+        assert!(c.contains("redacted"), "consideration Debug redacts: {c}");
+        for leak in ["700", "710", "900"] {
+            assert!(
+                !c.contains(leak),
+                "height {leak} leaked through consideration Debug: {c}"
+            );
+        }
+
+        // `Incomplete` has no payload — its shape is fine to show in full.
+        assert_eq!(format!("{:?}", CoverDiscovery::Incomplete), "Incomplete");
     }
 }
