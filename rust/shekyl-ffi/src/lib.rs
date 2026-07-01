@@ -1593,7 +1593,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// `7=TreeDepthTooLarge`, `8=InputCountMismatch` (`po_count != pqc_hash_count`). Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
 /// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
-/// [`shekyl_emission_mldsa_gate_verify`].
+/// [`shekyl_emission_hybrid_auth_verify`].
 ///
 /// # Safety
 /// Every pointer must be valid for its stated length; `tree_root_ptr` and
@@ -1688,29 +1688,41 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     }
 }
 
-/// Reward-emission ML-DSA vin-auth **gate** primitive (PR-E1; the C-1 hard-gate core).
-pub const SHEKYL_EMISSION_MLDSA_OK: u8 = 0;
+/// Reward-emission **hybrid** vin-auth verify primitive (PR-E1; the C-1 hard-gate core).
+///
+/// The auth is hybrid (Ed25519 + ML-DSA-65), matching every other signature in the
+/// system, **not** ML-DSA-only. This is the ratified posture: the emission auth is a
+/// proof-of-possession-plus-binding, and the live threat the Ed25519 leg closes is a
+/// *classical cryptanalytic break of ML-DSA-65* (orthogonal to seed compromise, where
+/// the jointly-derived halves are possession-equivalent). Auth-P (stake-side) has **no**
+/// membership-proof classical fallback, so ML-DSA-only there would be a single point of
+/// cryptographic failure — disqualifying on a quantum-posture-priority system. See
+/// `REWARD_EMISSION_VIN_PLAN.md` R1.A(2) (retracted) / §8.0.2.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_OK: u8 = 0;
 /// A required pointer was null.
-pub const SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR: u8 = 1;
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR: u8 = 1;
 /// The supplied `P_pubkey` bytes are not a canonical hybrid public key.
-pub const SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER: u8 = 2;
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER: u8 = 2;
 /// The supplied signature bytes are not a canonical hybrid signature.
-pub const SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER: u8 = 3;
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER: u8 = 3;
 /// `H(pqc_pk)` of the supplied key does not equal the in-circuit committed leaf hash.
-pub const SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH: u8 = 4;
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH: u8 = 4;
 /// The hybrid (Ed25519 + ML-DSA-65) signature did not verify over the message.
-pub const SHEKYL_EMISSION_MLDSA_ERR_VERIFY: u8 = 5;
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY: u8 = 5;
 
-/// Verify the reward-emission ML-DSA vin-auth gate. Given `P`'s canonical hybrid
-/// pubkey, the binding message, a canonical hybrid signature, and the in-circuit
-/// committed leaf hash `H(pqc_pk)`:
+/// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
+/// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
+/// canonical hybrid signature, and the in-circuit committed leaf hash `H(pqc_pk)`:
 ///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
 ///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
 ///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
 ///
+/// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
+/// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
+/// asymmetry, so soundness does not rest on any "Ed25519 non-distinguishing" invariant.
 /// Order matters: the leaf-hash equality is checked first so a signature over an
-/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_MLDSA_OK`] or an
-/// `SHEKYL_EMISSION_MLDSA_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
+/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_HYBRID_AUTH_OK`] or an
+/// `SHEKYL_EMISSION_HYBRID_AUTH_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
 /// canonical hybrid pubkey / signature lengths — a non-canonical length returns
 /// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
 ///
@@ -1718,7 +1730,7 @@ pub const SHEKYL_EMISSION_MLDSA_ERR_VERIFY: u8 = 5;
 /// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
 /// 32 readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_emission_mldsa_gate_verify(
+pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
     pubkey_ptr: *const u8,
     pubkey_len: usize,
     msg_ptr: *const u8,
@@ -1738,23 +1750,23 @@ pub unsafe extern "C" fn shekyl_emission_mldsa_gate_verify(
     // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
     // fixed canonical size.
     if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
-        return SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
     }
     if sig_len != SINGLE_SIG_CANONICAL_LEN {
-        return SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
     }
 
     let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
-        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
     };
     let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
-        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
     };
     let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
-        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
     };
     if leaf_hash_ptr.is_null() {
-        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
     }
     let leaf_hash: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -1764,20 +1776,20 @@ pub unsafe extern "C" fn shekyl_emission_mldsa_gate_verify(
 
     // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
     if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
-        return SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH;
     }
 
     let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
-        return SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
     };
     let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-        return SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER;
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
     };
 
     // (2) Hybrid verify (Ed25519 && ML-DSA-65).
     match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
-        Ok(true) => SHEKYL_EMISSION_MLDSA_OK,
-        _ => SHEKYL_EMISSION_MLDSA_ERR_VERIFY,
+        Ok(true) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
+        _ => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
     }
 }
 
@@ -5279,7 +5291,7 @@ mod tests {
     // ---- PR-E1: reward-emission membership-only + ML-DSA gate primitives ----
 
     #[test]
-    fn emission_mldsa_gate_verify_positive_and_negatives() {
+    fn emission_hybrid_auth_verify_positive_and_negatives() {
         use shekyl_crypto_pq::derivation::hash_pqc_public_key;
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 
@@ -5295,7 +5307,7 @@ mod tests {
 
         let call = |pk: &[u8], m: &[u8], sig: &[u8], leaf: &[u8; 32]| -> u8 {
             unsafe {
-                shekyl_emission_mldsa_gate_verify(
+                shekyl_emission_hybrid_auth_verify(
                     pk.as_ptr(),
                     pk.len(),
                     m.as_ptr(),
@@ -5310,20 +5322,20 @@ mod tests {
         // Positive.
         assert_eq!(
             call(&pk_bytes, &msg, &sig_bytes, &leaf),
-            SHEKYL_EMISSION_MLDSA_OK,
+            SHEKYL_EMISSION_HYBRID_AUTH_OK,
             "valid gate must accept"
         );
 
         // Negative: wrong leaf hash (auth over an unrelated key) — checked first.
         assert_eq!(
             call(&pk_bytes, &msg, &sig_bytes, &[0u8; 32]),
-            SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH
         );
 
         // Negative: signature valid but over a *different* message.
         assert_eq!(
             call(&pk_bytes, b"a different binding message", &sig_bytes, &leaf),
-            SHEKYL_EMISSION_MLDSA_ERR_VERIFY,
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
             "sig must not verify over a different message"
         );
 
@@ -5332,14 +5344,15 @@ mod tests {
         *bad_sig.last_mut().unwrap() ^= 0x01;
         let r = call(&pk_bytes, &msg, &bad_sig, &leaf);
         assert!(
-            r == SHEKYL_EMISSION_MLDSA_ERR_VERIFY || r == SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER,
+            r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY
+                || r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
             "tampered sig must reject, got {r}"
         );
 
         // Negative: null pointer with a nonzero length (len==0 is a valid empty slice,
         // so the null guard only fires when a length is actually claimed).
         let r = unsafe {
-            shekyl_emission_mldsa_gate_verify(
+            shekyl_emission_hybrid_auth_verify(
                 std::ptr::null(),
                 pk_bytes.len(),
                 msg.as_ptr(),
@@ -5349,7 +5362,7 @@ mod tests {
                 leaf.as_ptr(),
             )
         };
-        assert_eq!(r, SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR);
+        assert_eq!(r, SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR);
 
         // Negative: non-canonical pubkey / signature length is rejected up front (the FFI
         // DoS guard) — before any hash or parse touches the oversized buffer. A too-long
@@ -5358,14 +5371,14 @@ mod tests {
         long_pk.push(0);
         assert_eq!(
             call(&long_pk, &msg, &sig_bytes, &leaf),
-            SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER,
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER,
             "non-canonical pubkey length must reject with PUBKEY_DESER"
         );
         let mut long_sig = sig_bytes.clone();
         long_sig.push(0);
         assert_eq!(
             call(&pk_bytes, &msg, &long_sig, &leaf),
-            SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER,
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
             "non-canonical signature length must reject with SIG_DESER"
         );
     }

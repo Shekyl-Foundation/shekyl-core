@@ -381,7 +381,7 @@ uint8_t shekyl_fcmp_verify(
 /// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
 /// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
-/// shekyl_emission_mldsa_gate_verify. po_count must equal pqc_hash_count.
+/// shekyl_emission_hybrid_auth_verify. po_count must equal pqc_hash_count.
 /// Returns 0 on success, else the VerifyError discriminant:
 ///   1 = Deserialization (also: null ptr, or po_count*32 overflow)
 ///   2 = InvalidTreeRoot   3 = PqcCommitmentMismatch
@@ -399,16 +399,20 @@ uint8_t shekyl_fcmp_membership_only_verify(
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
 
-/// Reward-emission ML-DSA vin-auth gate (PR-E1; the C-1 hard-gate core).
+/// Reward-emission hybrid vin-auth verify (PR-E1; the C-1 hard-gate core). C-1 calls
+/// this once per auth (Auth-B backing, Auth-P pseudonym).
 ///   (1) recompute H(pqc_pk) of pubkey and require equality with the in-circuit
 ///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
-///   (2) verify the hybrid (Ed25519 + ML-DSA-65) signature over msg.
+///   (2) verify the HYBRID (Ed25519 + ML-DSA-65) signature over msg.
+/// The auth is hybrid, matching every other signature in the system — NOT ML-DSA-only.
+/// Ratified for defense-in-depth against a classical break of ML-DSA-65 (Auth-P has no
+/// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
 /// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
 /// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed H(pqc_pk).
 /// Returns 0 on success, else:
 ///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
 ///   4 = LeafHashMismatch   5 = Verify (signature did not verify).
-uint8_t shekyl_emission_mldsa_gate_verify(
+uint8_t shekyl_emission_hybrid_auth_verify(
     const uint8_t* pubkey_ptr,
     size_t pubkey_len,
     const uint8_t* msg_ptr,
