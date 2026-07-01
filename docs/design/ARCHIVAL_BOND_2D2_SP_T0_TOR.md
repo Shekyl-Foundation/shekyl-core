@@ -313,65 +313,81 @@ them in rather than discovers them:
     deterministically becomes the backoff/§5 posture, never a silent reconnect that
     retries into the same corruption.
 
-### 3b. SP-T0b bootstrap readiness — the pinned contract (decided: internal tap)
+### 3b. SP-T0b bootstrap readiness — the pinned contract (decided: internal GETINFO poll)
 
 A hindsight review of the **landed** actor (PR #212) surfaced one seam: `TorControl`
-reserves a `bootstrap: BootstrapState` field (implying the actor holds the state
-*internally*), but `STATUS_CLIENT` (which carries `BOOTSTRAP PROGRESS`) currently
-routes straight out to the external `EventSink`. The field implies an internal gate;
-the routing implements an external one. **Decided: the internal tap** — pinned here
-for SP-T0b the way §3a was pinned for PR-2.
+reserves a `bootstrap: BootstrapState` field (the actor is meant to hold readiness
+*internally*), but nothing yet drives it. **Decided: the actor owns a self-contained
+`GETINFO status/bootstrap-phase` poll task** that drives `BootstrapState` and publishes
+it as a `watch` — pinned here for SP-T0b the way §3a was pinned for PR-2.
 
-**Why (the principle, not just elegance).** A consumer should depend on what it
-*needs* — a one-bit "is the transport usable yet?" fact — not on *how the actor
-learned it*. The external-gate option makes every consumer reimplement
-bootstrap-detection against the `STATUS_CLIENT` wire format, subscription lifecycle,
-and `PROGRESS=` parsing; the day Tor changes the event shape (or we swap to **Arti**,
-which reports readiness completely differently) *every* consumer breaks instead of
-just the actor. Deeper: it is a **leak of the abstraction the `TorService` exists to
-provide** — the actor *is* the boundary between "the Tor control protocol" and "the
-rest of the wallet"; a consumer parsing `STATUS_CLIENT` has reached across that
-boundary, so it is no longer a boundary. The internal tap confines the protocol
-knowledge to the one component that already speaks it, and hands everyone else the bit.
+> **Retraction (recorded, not erased — [`21`]).** An earlier draft pinned an *internal
+> tap*: the actor would `SETEVENTS STATUS_CLIENT` and drive `BootstrapState` from the
+> async `BOOTSTRAP PROGRESS` events. **Withdrawn.** The tap makes bootstrap detection
+> ride `SETEVENTS`, which is a **shared, replace-not-add** resource the consumer also
+> uses (the measurement's `SETEVENTS STREAM`) — so the actor would have had to own the
+> *union* (`STREAM STATUS_CLIENT`), track the active set, and never let a consumer's
+> `SetEvents` silently clobber `STATUS_CLIENT`. A `GETINFO` poll is a **command**
+> (request/reply), not a subscription: it never touches `SETEVENTS`, so that entire
+> coupling — the "`SETEVENTS`-union invariant" **and** the tap-vs-route routing change —
+> **does not exist**. Two things the earlier draft asked for are therefore
+> **deliberately absent, and their absence is the retraction holding: no `STATUS_CLIENT`
+> subscription, no union invariant, no routing change.** Stated flatly because it is easy
+> to re-derive by accident: the measurement's bare `SETEVENTS STREAM` is correct
+> **permanently**, not "until SP-T0b" — there is no shared subscription for it to clobber.
+
+**Why (the principle survives the mechanism change).** A consumer should depend on what
+it *needs* — a one-bit "is the transport usable yet?" fact — not on *how the actor learned
+it*. Making every consumer reimplement bootstrap-detection against Tor's wire format (and
+re-break the day Tor changes it, or we swap to **Arti**, which reports readiness
+completely differently) is a **leak of the abstraction the `TorService` exists to
+provide**: the actor *is* the boundary between "the Tor control protocol" and "the rest of
+the wallet." The poll confines the protocol knowledge (`GETINFO` keys, `PROGRESS=`
+parsing) to the one component that already speaks it and hands everyone else the bit —
+exactly what the tap would have, without entangling `SETEVENTS`. The cost is a poll
+instead of a push, but bootstrap is a **one-time** startup event over tens of seconds: a
+~1s poll adds negligible latency, and the decoupling is worth far more.
 
 **The pinned contract (for SP-T0b):**
 
-1. **The actor subscribes `STATUS_CLIENT` itself, at startup** — never engine-driven.
-   A consumer never sends that `SETEVENTS`; if it had to, it would be back to knowing
-   the protocol.
-   - **`SETEVENTS`-union invariant.** `SETEVENTS` is **not** additive — each call
-     *replaces* the subscription set. The actor therefore owns the **union** of its
-     internal needs (`STATUS_CLIENT`) and the consumer's (e.g. the measurement's
-     `STREAM`): a `SetEvents(["STREAM"])` command must put `SETEVENTS STREAM
-     STATUS_CLIENT` on the wire, never bare `STREAM`, or it silently unsubscribes its
-     own bootstrap feed. Track the active event set inside the actor; never let a
-     `SetEvents` command clobber `STATUS_CLIENT`. (It works until the measurement runs
-     and then the gate goes dark — exactly why it's pinned.)
-2. **Tap, don't route.** The `StreamMessage` handler consumes `STATUS_CLIENT`
-   internally — `STATUS_CLIENT → self.bootstrap` — and does **not** forward it to the
-   sink. `STREAM` still flows to the sink (the measurement's input), so the sink
-   becomes single-purpose, which also cleans up the measurement (no bootstrap chatter
-   to filter from its `STREAM` reads).
-3. **Readiness is a fact, not an event:** expose `tokio::sync::watch<BootstrapState>`.
-   A consumer `await`s "ready" and gets the bit, with no notion of how many events it
-   took. `watch` over `broadcast` because a late subscriber sees the **current** state
-   immediately — a `ShardService` that starts *after* bootstrap completed must not
-   wait forever for an event that already fired. The `BootstrapState` transitions
-   (`Unknown → … → Ready`) are the actor's to drive.
-4. **Detection (actor) vs policy (SP-T0b) — the same coupling discipline one level
-   up.** *Detection:* the actor parses `STATUS_CLIENT`, drives `self.bootstrap`,
-   publishes the watch — it knows Tor is at 100%, nothing more. *Policy:* SP-T0b's
-   lifecycle decides how long to wait, the backoff, and timeout → fail → §5; it awaits
-   the readiness bit and acts on it, parsing nothing. So the protocol knowledge lives
-   in exactly one place — the control actor — and both consumers *and* SP-T0b's own
-   lifecycle depend only on the bit.
+1. **Readiness is a fact, not an event:** expose `tokio::sync::watch<BootstrapState>`;
+   the consumer holds the receiver (mirroring how `EventSink` hands out the `STREAM`
+   channel). `watch` over `broadcast` because a **late** subscriber sees the *current*
+   state immediately — a `ShardService` that starts *after* bootstrap completed must not
+   wait forever for an event that already fired.
+2. **An actor-owned poll task, spawned in `on_start`,** drives the watch through the
+   **public `ask`** path — `GETINFO status/bootstrap-phase`, poll-to-100-then-stop. It
+   subscribes nothing (`SETEVENTS` untouched), reshapes no routing, and stops once it
+   observes `PROGRESS=100`/`TAG=done` (the watch then holds `Ready`). This is the same
+   `ask` surface the DQ-T0.4 harness already exercises as its own gate.
+3. **Detection (actor) vs policy (SP-T0b) — the same coupling discipline one level up.**
+   *Detection:* the poll task parses `bootstrap-phase`, drives `BootstrapState`, publishes
+   the watch — it knows Tor is at 100%, nothing more. *Policy:* SP-T0b's lifecycle owns
+   the deadline, the backoff, and timeout → `Failed` → §5; it `await`s the readiness bit
+   and acts on it, parsing nothing. The protocol knowledge lives in exactly one place, and
+   both consumers *and* SP-T0b's own lifecycle depend only on the bit.
+4. **Managed-vs-attached child** on the `child` seam field: SP-T0b decides whether the
+   actor spawned `tor` (managed → it owns shutdown) or attached to a running one (attached
+   → it must not kill it). Shutdown rides the **`TAKEOWNERSHIP`** already landed in PR-2 —
+   the control connection dropping exits a managed `tor` even on a crash — so "kill the
+   child" is a backstop, not the primary path.
 
-> **Note for the DQ-T0.4 measurement (built before SP-T0b):** it gates its first dial
-> on bootstrap=100% via a `GETINFO status/bootstrap-phase` poll — its own apparatus (a
-> test, not a production consumer) — so it does not block on this contract. When
-> SP-T0b lands the readiness `watch`, the measurement can migrate to awaiting the bit;
-> invariant (1) is what keeps its `STREAM` subscription from killing the bootstrap feed
-> once the actor subscribes `STATUS_CLIENT`.
+**One open sub-decision (settle at build, not here): the poll task's own error contract.**
+If `ask` returns `SendError` mid-poll — the actor stopped because the control connection
+dropped *during* bootstrap — the poll task should publish `BootstrapState::Failed` and
+exit, so a consumer awaiting readiness gets `Failed` promptly rather than hanging until the
+lifecycle timeout fires. That keeps **both** failure paths terminating the watch promptly —
+*Tor never reaches 100%* (lifecycle deadline) and *the connection died mid-bootstrap*
+(poll-task error) — differing only in which one the lifecycle policy attributes.
+Recommended resolution above; pin it deliberately when SP-T0b builds. It does not change
+the shape.
+
+> **Note for the DQ-T0.4 measurement (built before SP-T0b):** it gates its first dial on
+> bootstrap=100% via its own `GETINFO status/bootstrap-phase` poll (a test apparatus, not a
+> production consumer), so it does not block on this contract. When SP-T0b lands the
+> `watch`, the measurement's *gate* can migrate to awaiting the bit — but its `SETEVENTS
+> STREAM` **never changes**, because under the poll design there is no `STATUS_CLIENT`
+> subscription and hence no union invariant. That bare subscription is correct for good.
 
 ---
 
@@ -405,8 +421,8 @@ knowledge to the one component that already speaks it, and hands everyone else t
 - **Build order:** SP-T0a is **two PRs of one actor** — PR-1 (landed pure core) → **PR-2** (the `tokio`
   actor + the *authed* control connection) — then **SP-T0b layers onto the same actor**, it is **not** a
   parallel crate. §0/§3 put *one* `TorService` actor over both the child and the control connection, and
-  SP-T0b's load-bearing pieces both ride PR-2's authed connection: the bootstrap gate reads progress over
-  the control port (`GETINFO`/`SETEVENTS STATUS_CLIENT`), and `TAKEOWNERSHIP` (the T1 orphan-prevention)
+  SP-T0b's load-bearing pieces both ride PR-2's authed connection: the bootstrap gate polls progress over
+  the control port (`GETINFO status/bootstrap-phase`, §3b), and `TAKEOWNERSHIP` (the T1 orphan-prevention)
   is a post-auth control command. So **serialize**: PR-2 freezes the actor's shape (struct fields, message
   enum, poll/phase loop) first; SP-T0b builds child-management + bootstrap-gate + `TAKEOWNERSHIP` on top.
   The *only* genuinely PR-2-independent slice is the bare child-spawn + SIGTERM-on-clean-close — pre-stage
@@ -476,3 +492,15 @@ knowledge to the one component that already speaks it, and hands everyone else t
   verify→authenticate typestate (`-> Option<ServerVerified>`), the `Framed` event/command fork at
   ingress, and the four deferred actor obligations (CSPRNG nonce, `AUTHCHALLENGE` parsing, cookie-file
   length, `Err` → DQ-T0.6 teardown). The pure modules correctly defer these; PR-2 designs them in.
+- **2026-06-30 (§3b pinned — SP-T0b bootstrap readiness, poll not tap):** pinned the SP-T0b contract:
+  `watch<BootstrapState>` (consumer holds the receiver, like `EventSink`), driven by an **actor-owned
+  `GETINFO status/bootstrap-phase` poll task** in `on_start` over the public `ask` (poll-to-100-then-stop);
+  detection (actor drives the watch) vs policy (SP-T0b lifecycle owns deadline → `Failed` → §5); managed-
+  vs-attached child on the `child` seam, shutdown riding `TAKEOWNERSHIP`. **Retraction (`21`):** an earlier
+  draft pinned an *internal tap* (`SETEVENTS STATUS_CLIENT`, drive from async `BOOTSTRAP PROGRESS`, with a
+  `SETEVENTS`-union invariant + a tap-vs-route change). Withdrawn — a `GETINFO` poll is a command, not a
+  subscription, so it never touches `SETEVENTS`; the union invariant and routing change **cannot exist**,
+  and the DQ-T0.4 harness's bare `SETEVENTS STREAM` is correct **permanently** (nothing to clobber). One
+  open sub-decision left for the build: the poll task's own error contract (recommended — publish
+  `BootstrapState::Failed` and exit on a mid-poll `SendError`, so readiness never hangs). Corrected the
+  §5 build-order line and the PR-217 harness comment to match; the fossil is caught before SP-T0b builds.
