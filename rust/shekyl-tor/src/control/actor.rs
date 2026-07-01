@@ -139,8 +139,8 @@ pub enum ControlError {
     InvalidCommand,
     /// A **managed** `tor` could not be started or made driveable — every managed-spawn
     /// config/startup failure funnels here: a spawn / `create_dir_all` / stale-port-file
-    /// error, `extra_args` that name a safety invariant, `tor` exiting before it becomes
-    /// driveable, or its `ControlPort` file / cookie not appearing within [`SPAWN_TIMEOUT`].
+    /// error, `tor` exiting before it becomes driveable, or its `ControlPort` file / cookie
+    /// not appearing within [`SPAWN_TIMEOUT`].
     /// Carries no path (forensic discipline); `spawn_managed_tor`'s own `--Log` file in the
     /// `DataDirectory` is where the specific cause is diagnosable.
     Spawn,
@@ -289,9 +289,19 @@ pub struct ManagedTor {
     pub data_dir: PathBuf,
     /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it.
     pub socks_port: u16,
-    /// Extra `tor` CLI/torrc flags (wallet-controlled). Empty in the simplest case; the
-    /// child-lifecycle test passes `--DisableNetwork 1`.
-    pub extra_args: Vec<String>,
+    /// Spawn `tor` with `--DisableNetwork 1` — an offline instance (opens its control port
+    /// and SOCKS port, but never touches the network, so it never bootstraps). The
+    /// child-lifecycle test sets this to isolate spawn+shutdown from a real bootstrap;
+    /// **production always leaves it `false`** (a managed tor must reach the network).
+    ///
+    /// This is deliberately a *typed knob*, not an arbitrary `extra_args` passthrough: the
+    /// managed spawn owns its safety invariants (loopback control port, cookie auth, its
+    /// `DataDirectory`/`SocksPort`), and a free-form flag list can smuggle those open —
+    /// directly, or indirectly via `-f <torrc>` / `+Option` append / `--defaults-torrc`,
+    /// which no denylist reliably covers. Future customization (bridges, an upstream proxy)
+    /// is added as further **typed, safe-by-construction** knobs, so the control-plane
+    /// invariant stays *structural* rather than validated.
+    pub disable_network: bool,
     /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
     /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
     /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (an unclean shutdown — tor
@@ -588,54 +598,15 @@ async fn handshake(
     Ok((reader, writer, framer))
 }
 
-/// Does any caller `extra_args` flag name a managed-mode safety invariant? Compared as a
-/// normalized (leading `-`/`_` stripped, lowercased) **prefix** so a whole family is
-/// covered — e.g. `control` catches `ControlPort` / `ControlSocket` / `ControlListenAddress`
-/// / `ControlPortWriteToFile`, `cookie` catches `CookieAuthentication` / `CookieAuthFile`.
-fn extra_args_touch_safety(extra_args: &[String]) -> bool {
-    const PROTECTED: &[&str] = &[
-        "control",          // the control plane: port / socket / listen-addr / write-to-file
-        "cookie",           // cookie auth: CookieAuthentication / CookieAuthFile
-        "hashedcontrol",    // HashedControlPassword — an alternate control auth
-        "datadirectory",    // the actor-owned DataDirectory
-        "socksport",        // the actor-owned SocksPort
-        "owningcontroller", // __OwningControllerProcess — the ownership handshake
-    ];
-    extra_args.iter().any(|arg| {
-        // Only an option *name* is safety-relevant. Tor CLI names are `-`/`--`-prefixed;
-        // a bare value (a path, a number) is not — so a *value* that merely starts with a
-        // protected prefix (e.g. a `control.log` path) must not trip this.
-        if !arg.starts_with('-') {
-            return false;
-        }
-        // `--Flag` or `--Flag=value`: normalize the name (the part before any `=`, with
-        // the leading `-`/`_` stripped, lowercased).
-        let name = arg
-            .split('=')
-            .next()
-            .unwrap_or(arg)
-            .trim_start_matches(['-', '_'])
-            .to_ascii_lowercase();
-        PROTECTED.iter().any(|p| name.starts_with(p))
-    })
-}
-
 /// Spawn a **managed** `tor` (DQ-T0.1): a wallet-private `DataDirectory`, `ControlPort
-/// auto` written to a file, cookie auth, and the configured `SocksPort`. Waits (bounded)
-/// for the control-port file, then returns the child plus the `(control_addr,
-/// cookie_path)` the handshake connects with. `kill_on_drop` is the last-resort backstop.
+/// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
+/// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
+/// flag). Waits (bounded) for the control-port file + cookie, then returns the child plus
+/// the `(control_addr, cookie_path)` the handshake connects with. `kill_on_drop` is the
+/// last-resort backstop.
 async fn spawn_managed_tor(
     managed: ManagedTor,
 ) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
-    // Refuse `extra_args` that would touch a managed-mode **safety invariant** — the
-    // control plane (loopback control port + cookie auth), the actor-owned DataDirectory,
-    // and SocksPort. Tor's option parsing is *additive* for ports, so neither reordering
-    // nor value-checking is enough: the robust rule is that `extra_args` may not name any
-    // of these flag families at all. Reject up front (a caller-config error) rather than
-    // silently spawn a tor with, e.g., an off-loopback control port.
-    if extra_args_touch_safety(&managed.extra_args) {
-        return Err(ControlError::Spawn);
-    }
     // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
     // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
     // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
@@ -656,8 +627,8 @@ async fn spawn_managed_tor(
         }
     }
 
-    let mut child = tokio::process::Command::new(&managed.tor_binary)
-        .arg("--DataDirectory")
+    let mut cmd = tokio::process::Command::new(&managed.tor_binary);
+    cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
         .arg("auto")
@@ -677,12 +648,16 @@ async fn spawn_managed_tor(
             "notice file {}",
             managed.data_dir.join("tor.log").display()
         ))
-        .args(&managed.extra_args)
         .kill_on_drop(true)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| ControlError::Spawn)?;
+        .stderr(Stdio::null());
+    // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
+    // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
+    // caller intent reaches the command line — a typed bool, not a flag passthrough.
+    if managed.disable_network {
+        cmd.arg("--DisableNetwork").arg("1");
+    }
+    let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
 
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
     // auth cookie. Tor writes them at startup but not atomically, so reading the cookie the
@@ -1123,49 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_args_reject_safety_flags_across_forms() {
-        // The control plane, cookie auth, data dir, socks port, and ownership are rejected —
-        // whatever the flag-name form (case, `__` internal prefix, `=value`, `Group*` suffix).
-        for bad in [
-            "--ControlPort",
-            "--ControlSocket",
-            "--controlportwritetofile",
-            "--CookieAuthentication=0",
-            "--CookieAuthFile",
-            "--HashedControlPassword",
-            "--DataDirectory",
-            "--SocksPort",
-            "--__OwningControllerProcess",
-            "--DataDirectoryGroupReadable",
-        ] {
-            assert!(
-                extra_args_touch_safety(&[bad.to_owned(), "value".to_owned()]),
-                "{bad} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn extra_args_allow_non_safety_flags() {
-        // Legitimate customization the managed spawn should permit — including a *value*
-        // that starts with a protected prefix (only the option *name* is checked).
-        for ok in [
-            vec!["--DisableNetwork".to_owned(), "1".to_owned()],
-            vec!["--Log".to_owned(), "notice stderr".to_owned()],
-            vec![
-                "--Log".to_owned(),
-                "notice".to_owned(),
-                "file".to_owned(),
-                "control.log".to_owned(),
-            ],
-            vec!["--Bridge".to_owned(), "obfs4 ...".to_owned()],
-            vec![],
-        ] {
-            assert!(!extra_args_touch_safety(&ok), "{ok:?} must be allowed");
-        }
-    }
-
-    #[test]
     fn parse_control_port_accepts_socketaddr_and_bare_port() {
         use std::net::SocketAddr;
         // The usual `addr:port` form.
@@ -1387,7 +1319,7 @@ mod live_tests {
                 tor_binary: tor_binary(),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: free_port(),
-                extra_args: vec!["--DisableNetwork".to_owned(), "1".to_owned()],
+                disable_network: true,
                 exit_observer: Some(exit_tx),
             }),
             events: EventSink::new(tx),
