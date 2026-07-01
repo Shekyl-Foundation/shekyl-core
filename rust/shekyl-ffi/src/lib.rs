@@ -1710,7 +1710,9 @@ pub const SHEKYL_EMISSION_MLDSA_ERR_VERIFY: u8 = 5;
 ///
 /// Order matters: the leaf-hash equality is checked first so a signature over an
 /// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_MLDSA_OK`] or an
-/// `SHEKYL_EMISSION_MLDSA_ERR_*` discriminant.
+/// `SHEKYL_EMISSION_MLDSA_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
+/// canonical hybrid pubkey / signature lengths — a non-canonical length returns
+/// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
 ///
 /// # Safety
 /// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
@@ -1725,9 +1727,22 @@ pub unsafe extern "C" fn shekyl_emission_mldsa_gate_verify(
     sig_len: usize,
     leaf_hash_ptr: *const u8,
 ) -> u8 {
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
     use shekyl_crypto_pq::signature::{
         HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
     };
+
+    // FFI DoS guard: `scheme_id = 1` hybrid pubkey/signature are fixed-length canonical, so
+    // reject any other length up front — before slicing, hashing, or parsing an oversized
+    // untrusted buffer. Correct by contract (this function requires canonical encodings), and
+    // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
+    // fixed canonical size.
+    if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
+        return SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER;
+    }
+    if sig_len != SINGLE_SIG_CANONICAL_LEN {
+        return SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER;
+    }
 
     let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
         return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
@@ -5335,6 +5350,24 @@ mod tests {
             )
         };
         assert_eq!(r, SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR);
+
+        // Negative: non-canonical pubkey / signature length is rejected up front (the FFI
+        // DoS guard) — before any hash or parse touches the oversized buffer. A too-long
+        // pubkey would otherwise fall through to a LEAF_HASH_MISMATCH after hashing it.
+        let mut long_pk = pk_bytes.clone();
+        long_pk.push(0);
+        assert_eq!(
+            call(&long_pk, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER,
+            "non-canonical pubkey length must reject with PUBKEY_DESER"
+        );
+        let mut long_sig = sig_bytes.clone();
+        long_sig.push(0);
+        assert_eq!(
+            call(&pk_bytes, &msg, &long_sig, &leaf),
+            SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER,
+            "non-canonical signature length must reject with SIG_DESER"
+        );
     }
 
     #[test]

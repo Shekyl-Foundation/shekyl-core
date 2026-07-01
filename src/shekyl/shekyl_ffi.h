@@ -381,8 +381,13 @@ uint8_t shekyl_fcmp_verify(
 /// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
 /// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
-/// shekyl_emission_mldsa_gate_verify. Returns 0 on success, else the VerifyError
-/// discriminant (see shekyl_fcmp_verify). po_count must equal pqc_hash_count.
+/// shekyl_emission_mldsa_gate_verify. po_count must equal pqc_hash_count.
+/// Returns 0 on success, else the VerifyError discriminant:
+///   1 = Deserialization (also: null ptr, or po_count*32 overflow)
+///   2 = InvalidTreeRoot   3 = PqcCommitmentMismatch
+///   5 = UpstreamError     6 = BatchVerificationFailed   7 = TreeDepthTooLarge
+///   8 = InputCountMismatch (po_count != pqc_hash_count)
+/// Code 4 (KeyImageCountMismatch) is unreachable here — this path has no key images.
 uint8_t shekyl_fcmp_membership_only_verify(
     const uint8_t* proof_ptr,
     size_t proof_len,
