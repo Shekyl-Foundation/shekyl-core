@@ -32,8 +32,8 @@ use shekyl_fcmp_proofs::{
         TreeRoot,
     },
     sal::{OpenedInputTuple, RerandomizedOutput, SpendAuthAndLinkability},
-    Curves, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
-    SELENE_FCMP_GENERATORS,
+    Curves, FcmpMembershipOnly, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS,
+    HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS,
 };
 
 /// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
@@ -791,6 +791,98 @@ pub fn verify(
 
     if !ed_ok || !c1_ok || !c2_ok {
         tracing::debug!(ed_ok, c1_ok, c2_ok, "batch check failed");
+        return Err(VerifyError::BatchVerificationFailed);
+    }
+
+    Ok(true)
+}
+
+/// Verify a **membership-only** FCMP++ proof — the reward-emission backing path
+/// (`REWARD_EMISSION_LEG.md` §7). Mirror of [`verify`] with the key-image leg
+/// removed: it proves membership **and** spend authority (the `R_O` Schnorr leg)
+/// but publishes **no key image**, so anti-replay is the emission per-epoch dedup,
+/// not a spent-set tag. ML-DSA attestation to `H(pqc_pk)` is the caller's obligation
+/// (the sibling vin-layer gate primitive, PR-E1), not this function's.
+///
+/// Transcript domain separation in [`FcmpMembershipOnly`] (`SAL_MEMBERSHIP_ONLY_DST`)
+/// prevents a full proof from being accepted here and vice-versa; the FFI seam test
+/// asserts the cross-type rejection.
+///
+/// # Errors
+/// Same discriminants as [`verify`]: input-count mismatch, tree-root deserialization,
+/// PQC-scalar deserialization, upstream verify, or batch failure.
+pub fn verify_membership_only(
+    proof: &ShekylFcmpProof,
+    pseudo_outs: &[[u8; 32]],
+    pqc_pk_hashes: &[PqcLeafScalar],
+    tree_root: &[u8; 32],
+    tree_depth: u8,
+    signable_tx_hash: [u8; 32],
+) -> Result<bool, VerifyError> {
+    let num_inputs = proof.num_inputs as usize;
+    if pseudo_outs.len() != num_inputs {
+        return Err(VerifyError::KeyImageCountMismatch {
+            expected: num_inputs,
+            got: pseudo_outs.len(),
+        });
+    }
+    if pqc_pk_hashes.len() != num_inputs {
+        return Err(VerifyError::PqcCommitmentMismatch(pqc_pk_hashes.len()));
+    }
+    if proof.tree_depth != tree_depth {
+        return Err(VerifyError::InvalidTreeRoot);
+    }
+    if tree_depth > MAX_TREE_DEPTH {
+        return Err(VerifyError::TreeDepthTooLarge(tree_depth));
+    }
+
+    let layers = tree_depth as usize;
+
+    let tree = deserialize_tree_root(tree_root, layers).ok_or_else(|| {
+        tracing::debug!(layers, "deserialize_tree_root failed");
+        VerifyError::InvalidTreeRoot
+    })?;
+
+    let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut proof.data.as_slice())
+        .map_err(|e| {
+            tracing::debug!(
+                proof_len = proof.data.len(),
+                layers,
+                error = %e,
+                "FcmpMembershipOnly::read failed"
+            );
+            VerifyError::DeserializationFailed
+        })?;
+
+    let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
+    let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
+    let mut c2_verifier = generalized_bulletproofs::Generators::batch_verifier();
+
+    fcmp_mo
+        .verify(
+            &mut OsRng,
+            &mut ed_verifier,
+            &mut c1_verifier,
+            &mut c2_verifier,
+            tree,
+            layers,
+            signable_tx_hash,
+            pqc_selene,
+        )
+        .map_err(|e| VerifyError::UpstreamError(format!("{e:?}")))?;
+
+    let ed_ok = ed_verifier.verify_vartime();
+    let c1_ok = SELENE_FCMP_GENERATORS.generators.verify(c1_verifier);
+    let c2_ok = HELIOS_FCMP_GENERATORS.generators.verify(c2_verifier);
+
+    if !ed_ok || !c1_ok || !c2_ok {
+        tracing::debug!(ed_ok, c1_ok, c2_ok, "membership-only batch check failed");
         return Err(VerifyError::BatchVerificationFailed);
     }
 

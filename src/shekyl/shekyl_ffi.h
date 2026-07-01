@@ -378,6 +378,40 @@ uint8_t shekyl_fcmp_verify(
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
 
+/// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
+/// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
+/// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
+/// shekyl_emission_mldsa_gate_verify. Returns 0 on success, else the VerifyError
+/// discriminant (see shekyl_fcmp_verify). po_count must equal pqc_hash_count.
+uint8_t shekyl_fcmp_membership_only_verify(
+    const uint8_t* proof_ptr,
+    size_t proof_len,
+    const uint8_t* pseudo_outs_ptr,
+    size_t po_count,
+    const uint8_t* pqc_pk_hashes_ptr,
+    size_t pqc_hash_count,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
+
+/// Reward-emission ML-DSA vin-auth gate (PR-E1; the C-1 hard-gate core).
+///   (1) recompute H(pqc_pk) of pubkey and require equality with the in-circuit
+///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
+///   (2) verify the hybrid (Ed25519 + ML-DSA-65) signature over msg.
+/// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
+/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed H(pqc_pk).
+/// Returns 0 on success, else:
+///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
+///   4 = LeafHashMismatch   5 = Verify (signature did not verify).
+uint8_t shekyl_emission_mldsa_gate_verify(
+    const uint8_t* pubkey_ptr,
+    size_t pubkey_len,
+    const uint8_t* msg_ptr,
+    size_t msg_len,
+    const uint8_t* sig_ptr,
+    size_t sig_len,
+    const uint8_t* leaf_hash_ptr);
+
 /// Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
     const uint8_t* outputs_ptr,

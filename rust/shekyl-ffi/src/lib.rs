@@ -1584,6 +1584,167 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     }
 }
 
+/// Verify a **membership-only** FCMP++ proof (reward-emission backing; **no key
+/// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
+/// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
+/// [`shekyl_fcmp::proof::VerifyError`] discriminant (`1=Deserialization`,
+/// `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`, `5=UpstreamError`,
+/// `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`). Anti-replay for this path is
+/// the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the
+/// sibling [`shekyl_emission_mldsa_gate_verify`].
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `tree_root_ptr` and
+/// `signable_tx_hash_ptr` must each point to 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
+    proof_ptr: *const u8,
+    proof_len: usize,
+    pseudo_outs_ptr: *const u8,
+    po_count: usize,
+    pqc_pk_hashes_ptr: *const u8,
+    pqc_hash_count: usize,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+    signable_tx_hash_ptr: *const u8,
+) -> u8 {
+    let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
+        return 1;
+    };
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
+        return 1;
+    };
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
+        return 1;
+    };
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() || po_count != pqc_hash_count {
+        return 1;
+    }
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let signable_tx_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let proof = shekyl_fcmp::proof::ShekylFcmpProof {
+        data: proof_bytes.to_vec(),
+        #[allow(clippy::cast_possible_truncation)]
+        num_inputs: po_count as u32,
+        tree_depth,
+    };
+
+    let mut pseudo_outs = Vec::with_capacity(po_count);
+    let mut pqc_hashes = Vec::with_capacity(pqc_hash_count);
+    for i in 0..po_count {
+        let mut po = [0u8; 32];
+        po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
+        pseudo_outs.push(po);
+
+        let mut ph = [0u8; 32];
+        ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
+        pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
+    }
+
+    match shekyl_fcmp::proof::verify_membership_only(
+        &proof,
+        &pseudo_outs,
+        &pqc_hashes,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
+    ) {
+        Ok(true) => 0,
+        Ok(false) => 6,
+        Err(e) => {
+            tracing::debug!(error = ?e, tree_depth, "membership-only verify error");
+            e.discriminant()
+        }
+    }
+}
+
+/// Reward-emission ML-DSA vin-auth **gate** primitive (PR-E1; the C-1 hard-gate core).
+pub const SHEKYL_EMISSION_MLDSA_OK: u8 = 0;
+/// A required pointer was null.
+pub const SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR: u8 = 1;
+/// The supplied `P_pubkey` bytes are not a canonical hybrid public key.
+pub const SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER: u8 = 2;
+/// The supplied signature bytes are not a canonical hybrid signature.
+pub const SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER: u8 = 3;
+/// `H(pqc_pk)` of the supplied key does not equal the in-circuit committed leaf hash.
+pub const SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH: u8 = 4;
+/// The hybrid (Ed25519 + ML-DSA-65) signature did not verify over the message.
+pub const SHEKYL_EMISSION_MLDSA_ERR_VERIFY: u8 = 5;
+
+/// Verify the reward-emission ML-DSA vin-auth gate. Given `P`'s canonical hybrid
+/// pubkey, the binding message, a canonical hybrid signature, and the in-circuit
+/// committed leaf hash `H(pqc_pk)`:
+///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
+///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
+///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
+///
+/// Order matters: the leaf-hash equality is checked first so a signature over an
+/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_MLDSA_OK`] or an
+/// `SHEKYL_EMISSION_MLDSA_ERR_*` discriminant.
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
+/// 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_emission_mldsa_gate_verify(
+    pubkey_ptr: *const u8,
+    pubkey_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+    sig_ptr: *const u8,
+    sig_len: usize,
+    leaf_hash_ptr: *const u8,
+) -> u8 {
+    use shekyl_crypto_pq::signature::{
+        HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+    };
+
+    let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
+        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+    };
+    let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
+        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+    };
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
+        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+    };
+    if leaf_hash_ptr.is_null() {
+        return SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR;
+    }
+    let leaf_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(leaf_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
+    if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
+        return SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH;
+    }
+
+    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
+        return SHEKYL_EMISSION_MLDSA_ERR_PUBKEY_DESER;
+    };
+    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+        return SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER;
+    };
+
+    // (2) Hybrid verify (Ed25519 && ML-DSA-65).
+    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
+        Ok(true) => SHEKYL_EMISSION_MLDSA_OK,
+        _ => SHEKYL_EMISSION_MLDSA_ERR_VERIFY,
+    }
+}
+
 /// Convert raw output data into serialized 4-scalar leaves.
 ///
 /// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], pqc_pk_hash[32]}`,
@@ -5077,6 +5238,142 @@ mod tests {
     fn test_release_multiplier_ffi() {
         let m = shekyl_calc_release_multiplier(100, 100, 800_000, 1_300_000);
         assert_eq!(m, 1_000_000);
+    }
+
+    // ---- PR-E1: reward-emission membership-only + ML-DSA gate primitives ----
+
+    #[test]
+    fn emission_mldsa_gate_verify_positive_and_negatives() {
+        use shekyl_crypto_pq::derivation::hash_pqc_public_key;
+        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+
+        let (pk, sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+        let pk_bytes = pk.to_canonical_bytes().unwrap();
+        let leaf = hash_pqc_public_key(&pk_bytes);
+        let msg = b"shekyl-emission-auth-msg: payout + epoch binding".to_vec();
+        let sig_bytes = HybridEd25519MlDsa
+            .sign(&sk, &msg)
+            .unwrap()
+            .to_canonical_bytes()
+            .unwrap();
+
+        let call = |pk: &[u8], m: &[u8], sig: &[u8], leaf: &[u8; 32]| -> u8 {
+            unsafe {
+                shekyl_emission_mldsa_gate_verify(
+                    pk.as_ptr(),
+                    pk.len(),
+                    m.as_ptr(),
+                    m.len(),
+                    sig.as_ptr(),
+                    sig.len(),
+                    leaf.as_ptr(),
+                )
+            }
+        };
+
+        // Positive.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_MLDSA_OK,
+            "valid gate must accept"
+        );
+
+        // Negative: wrong leaf hash (auth over an unrelated key) — checked first.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &[0u8; 32]),
+            SHEKYL_EMISSION_MLDSA_ERR_LEAF_HASH_MISMATCH
+        );
+
+        // Negative: signature valid but over a *different* message.
+        assert_eq!(
+            call(&pk_bytes, b"a different binding message", &sig_bytes, &leaf),
+            SHEKYL_EMISSION_MLDSA_ERR_VERIFY,
+            "sig must not verify over a different message"
+        );
+
+        // Negative: tampered signature (leaf matches; verify or deser must reject).
+        let mut bad_sig = sig_bytes.clone();
+        *bad_sig.last_mut().unwrap() ^= 0x01;
+        let r = call(&pk_bytes, &msg, &bad_sig, &leaf);
+        assert!(
+            r == SHEKYL_EMISSION_MLDSA_ERR_VERIFY || r == SHEKYL_EMISSION_MLDSA_ERR_SIG_DESER,
+            "tampered sig must reject, got {r}"
+        );
+
+        // Negative: null pointer with a nonzero length (len==0 is a valid empty slice,
+        // so the null guard only fires when a length is actually claimed).
+        let r = unsafe {
+            shekyl_emission_mldsa_gate_verify(
+                std::ptr::null(),
+                pk_bytes.len(),
+                msg.as_ptr(),
+                msg.len(),
+                sig_bytes.as_ptr(),
+                sig_bytes.len(),
+                leaf.as_ptr(),
+            )
+        };
+        assert_eq!(r, SHEKYL_EMISSION_MLDSA_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn membership_only_verify_rejects_malformed_and_mismatched_inputs() {
+        let root = [0u8; 32];
+        let txh = [0u8; 32];
+
+        // Null proof pointer with a nonzero length -> DeserializationFailed (1).
+        let po1 = [1u8; 32];
+        let ph1 = [2u8; 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                std::ptr::null(),
+                8,
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "null proof must reject");
+
+        // Count mismatch po_count != pqc_hash_count -> 1. Buffers sized to the
+        // declared counts (po = 2×32, ph = 1×32) so no out-of-bounds read.
+        let po2 = [1u8; 64];
+        let proof = [0u8; 8];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po2.as_ptr(),
+                2,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "po/pqc count mismatch must reject");
+
+        // Well-formed call over junk proof bytes must NEVER vacuously verify.
+        let junk = vec![0xABu8; 512];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                junk.as_ptr(),
+                junk.len(),
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_ne!(r, 0, "junk membership-only proof must never verify");
     }
 
     #[test]
