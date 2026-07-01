@@ -612,6 +612,30 @@ decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement
 firewall *logic* is built + fixture-validated; **neither real funding source is wired** yet
 (principal-output access = SP-2.d, `P`-scanning = SP-2.e).
 
+**Convergence — the remaining thread is one gate with three readers, not a list.** Everything
+still open downstream converges on the **2d-1 earnings-ramp sizing**: (a) `stake_in` importing
+`shekyl-standoff` + `construct_output`; (b) `C_min` single-sourcing for the cover draw; (c)
+DQ4's steady-state funding sources. These are **not independent items** — they are **one
+dependency (2d-1 earnings-ramp: `C_min` + funding sources) with multiple readers**, so 2d-1
+unblocks the cover contract *and* DQ4's steady-state regime in one move.
+
+**`C_min` has one author and three readers (a small, non-vicious circularity).** `C_min` feeds
+the send draw (`stake_in`), the SP-7 / `CoverDiscovery` detection side, **and** — because
+`COVER_RUNWAY_FLOOR_ATOMIC` *is* the cover-runway floor — the earnings-ramp economics that size
+it: the ramp sizes `C_min`, and `C_min` sizes the cover the ramp is meant to fund during
+cold-start. Not vicious (the ramp sizing is the **author**; the cover draw is a **consumer** of
+its output), but it means `C_min` **cannot be pinned independently** on the wallet and sim
+sides — it is pinned **once, in the 2d-1 sizing, and read everywhere else**. So the
+single-sourcing discipline is stronger than send-vs-detection congruence: **the 2d-1 sizing is
+the sole author of `C_min`; all consumers are readers.** This relocates the residual to the
+*tractable* side of the same line — a shared-input **value** risk (one constant, single-sourced,
+agreement definitional) rather than a **code** risk (two derivations kept congruent).
+
+**Verify-at-source when 2d-1's earnings-ramp lands:** that `C_min` is **authored once there and
+read everywhere else** — not recomputed from ramp parameters on any consuming surface while the
+constant is read on another. That single check is what turns the whole cover-and-funding
+contract from *provisional, mechanism-sound* to *final*.
+
 ## 6. References (authoritative — reference, do not restate)
 
 - [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 (tx-legs), §3
