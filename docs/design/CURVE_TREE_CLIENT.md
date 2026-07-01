@@ -1,7 +1,20 @@
 # Curve-tree client (design — Round 0)
 
-**Status:** design, Round 0. Named prerequisite extracted from
-`PHASE_2A_SEND_PATH.md` §3.0.4. This is its own phase; 2A does not implement it.
+**Status:** **IMPLEMENTATION LANDED** (currency-check 2026-07-01; the "Round 0"
+design body below is preserved as the design-of-record). The `shekyl-curve-tree`
+crate is **built + KAT-verified** — recon (CT-2), assemble/client (CT-4),
+reference-block selection (§5), and the `LeafStore` on `redb` (CT-1) all landed —
+and the **depth-3 curve-tree consensus cutover shipped** (PR #197: the daemon
+grow/trim was the defect, the wallet `build_layers` oracle was correct; see
+[`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](../completed/DEPTH3_CURVE_TREE_CUTOVER.md)).
+**What REMAINS:** (1) **wire the built client into the Phase 2A send path** — 2A
+still signs against synthetic `TreeContext` vectors; the gap is the
+`AssembledPath → shekyl_tx_builder::SpendInput` adapter + engine lifecycle
+(sync / reference-selection). (2) The **bulk-leaf RPC (§6)**, now **repositioned**
+to non-forward catch-up / archival: CT-3 Round 1 confirmed **block-derived
+forward sync as the default** (the §6 reversion criterion fired), so the bulk-leaf
+endpoint lands with the prune-policy PR, not on the forward path. Named prerequisite
+extracted from `PHASE_2A_SEND_PATH.md` §3.0.4; 2A consumes its output.
 
 **Why it exists.** FCMP++ membership proofs require the wallet to assemble the
 curve-tree branch path (`leaf_chunk` + `c1_layers` + `c2_layers`) for the output

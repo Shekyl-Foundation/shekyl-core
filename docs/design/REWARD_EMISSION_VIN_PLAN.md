@@ -5,7 +5,7 @@
 (multi-round, consensus-critical, FFI boundary) and
 [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
 (evaluated in §4 — exception does **not** apply; standard splitting governs).
-No production code has landed against this plan. The Round-0 substrate
+**Currency-check (2026-07-01):** PR-E0 has since **LANDED** — the F-S1 substrate fix (full-bond writer `put_archival_bond_value` + retention `claimed_epochs.rs` / `reward_arithmetic.rs`, §1.5 / §3). **PR-E1/E2/E3 remain the gated live front** (the C-1 ML-DSA hard gate = PR-E3 step 8). The 2026-06-13 readiness block below is the point-in-time record from before PR-E0 merged. The Round-0 substrate
 re-audit (A2 audit-against-actual-code) is recorded in §1; **Design Round 1**
 (external review — 8 findings, F-E1–F-E3 are PR-E3 holds; follow-on M-1–M-3
 cross-track / sourcing tightenings) is recorded in §R1 (R1.A binding message,
