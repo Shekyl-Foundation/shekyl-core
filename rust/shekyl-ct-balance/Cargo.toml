@@ -4,8 +4,8 @@
 # BSD-3-Clause
 
 [package]
-name = "shekyl-rct-balance"
-description = "Single-sourced RCT cleartext balance equation and typed-side terms, imported by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention) (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2)"
+name = "shekyl-ct-balance"
+description = "Single-sourced CT cleartext balance equation and typed-side terms, imported by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention) (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

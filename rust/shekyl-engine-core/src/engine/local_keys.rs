@@ -1607,7 +1607,7 @@ mod tests {
     ///
     /// The prover, the Bulletproof+ range proof, the FCMP++ membership proof,
     /// the pseudo-out balancing, and both verify entrypoints
-    /// (`verify_join_market_bond_post`, `verify_bond_post_rct_balance`) are the
+    /// (`verify_join_market_bond_post`, `verify_bond_post_ct_balance`) are the
     /// production paths. The curve tree is **synthetic**: a single-leaf-chunk
     /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
     /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
@@ -1628,8 +1628,8 @@ mod tests {
     /// (prime-order `a_i*G + amount*H`, with `sum(a_i) == sum(out_masks)` by the
     /// prover's pseudo-out balancing). `SignedProofs.commitments` are the real
     /// prime-order `C = mask*G + amount*H` — the form `sign.rs` emits and
-    /// consensus stores in `outPk[i].mask`. The RCT balance equation
-    /// (`shekyl-rct-balance`) is defined over prime-order `C`, so the
+    /// consensus stores in `outPk[i].mask`. The CT balance equation
+    /// (`shekyl-ct-balance`) is defined over prime-order `C`, so the
     /// prover-emitted commitments feed the balance check directly; both sides
     /// then carry genuine prover output.
     ///
@@ -1647,8 +1647,8 @@ mod tests {
         use rand_core::OsRng;
         use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
         use shekyl_archival_retention::{
-            bond_floor, verify_bond_post_rct_balance, verify_join_market_bond_post, BondPostError,
-            BondRctBalanceError, HoldingsDescriptor, HoldingsKind,
+            bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post,
+            BondCtBalanceError, BondPostError, HoldingsDescriptor, HoldingsKind,
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
@@ -1847,19 +1847,19 @@ mod tests {
             "FCMP++ verifier must accept the bond-post membership proof"
         );
 
-        // ── RCT cleartext balance over the PROVER-emitted commitments ────
+        // ── CT cleartext balance over the PROVER-emitted commitments ────
         // `signed.commitments` are the real prime-order `C` (see docstring),
         // the encoding the balance equation is defined over, so they feed the
         // check directly alongside the prover's pseudo-outs.
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
         let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
-        verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
-            .expect("bond-post RCT balance closes over prover-emitted commitments");
+        verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
+            .expect("bond-post CT balance closes over prover-emitted commitments");
 
         // ── Reject 1: a wrong bond_credit must not balance ───────────────
         assert_eq!(
-            verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
-            Err(BondRctBalanceError::SumMismatch),
+            verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            Err(BondCtBalanceError::SumMismatch),
             "a bond_credit other than the funded floor must break the balance"
         );
 
@@ -1867,7 +1867,7 @@ mod tests {
         let mut tampered = out_masks_flat.clone();
         tampered[0] ^= 0x01;
         assert!(
-            verify_bond_post_rct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            verify_bond_post_ct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
             "a tampered commitment must not satisfy the balance"
         );
 

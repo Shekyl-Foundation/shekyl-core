@@ -17,10 +17,10 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_ct_balance::{InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_rct_balance::{InputTerm, OutputTerm};
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -69,7 +69,7 @@ pub fn sign_transaction(
 /// Identical to [`sign_transaction`] except for the single-sourced
 /// [`InputTerm`] / [`OutputTerm`] slices, which are cleartext `amount * H`
 /// contributions on the input / output side of the balance — the same terms the
-/// verify side checks (`shekyl-rct-balance`). Because each rides with implicit
+/// verify side checks (`shekyl-ct-balance`). Because each rides with implicit
 /// mask 0 (like `fee`), they affect only the funds-sufficiency validation, not
 /// the pseudo-output mask balancing or the Bulletproof+ range proofs (which
 /// cover only the real output commitments). The caller is responsible for

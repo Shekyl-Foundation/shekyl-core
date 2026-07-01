@@ -14,10 +14,10 @@ use std::io::Cursor;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_seal_height, epoch_close_compute, epoch_close_due_at_height,
     good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_rct_balance,
+    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
-    BondRctBalanceError, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
+    BondPostKind, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
     HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
     CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
@@ -56,19 +56,19 @@ pub const SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH: u8 = 13;
 /// Leaf-layer scalar count is not a multiple of four.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE: u8 = 14;
 
-/// Bond-post RCT balance sum matches (ARCHIVAL_BOND_GATE4.md §3.2).
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK: u8 = 0;
+/// Bond-post CT balance sum matches (ARCHIVAL_BOND_GATE4.md §3.2).
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK: u8 = 0;
 /// Required pointer was null while count > 0.
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR: u8 = 1;
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR: u8 = 1;
 /// Both `bond_credit` and `bond_debit` are non-zero.
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS: u8 = 2;
 /// Invalid commitment point, malformed flat buffer (length not a multiple of 32), or
 /// `count * 32` overflow / oversize slice in the FFI flatten path.
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT: u8 = 3;
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 /// Left and right commitment sums differ.
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
 /// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
-pub const SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
 
 /// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
 pub const SHEKYL_ARCHIVAL_BOND_POST_OK: u8 = 0;
@@ -691,12 +691,12 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
 }
 
-fn map_bond_rct_balance_error(err: BondRctBalanceError) -> u8 {
+fn map_bond_ct_balance_error(err: BondCtBalanceError) -> u8 {
     match err {
-        BondRctBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_BOTH_TERMS,
-        BondRctBalanceError::NoBondTerm => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NO_BOND_TERM,
-        BondRctBalanceError::InvalidPoint => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT,
-        BondRctBalanceError::SumMismatch => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_SUM_MISMATCH,
+        BondCtBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
+        BondCtBalanceError::NoBondTerm => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
+        BondCtBalanceError::InvalidPoint => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT,
+        BondCtBalanceError::SumMismatch => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH,
     }
 }
 
@@ -710,21 +710,21 @@ unsafe fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [
         return Ok(&[]);
     }
     let Some(byte_len) = count.checked_mul(32) else {
-        return Err(SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
+        return Err(SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
     };
     if byte_len > isize::MAX as usize {
-        return Err(SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
+        return Err(SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
     }
     // SAFETY: caller contract per function docs.
     Ok(std::slice::from_raw_parts(ptr, byte_len))
 }
 
-/// Verify bond-post RCT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
+/// Verify bond-post CT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
 ///
 /// `pseudo_outs_ptr` and `out_masks_ptr` are flattened `N × 32` byte arrays; either pointer may
 /// be null when the corresponding count is zero.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
+pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     pseudo_outs_ptr: *const u8,
     num_pseudo_outs: usize,
     out_masks_ptr: *const u8,
@@ -734,10 +734,10 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
     bond_debit: u64,
 ) -> u8 {
     if num_pseudo_outs > 0 && pseudo_outs_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
     }
     if num_out_masks > 0 && out_masks_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
     }
 
     let pseudo_flat = match unsafe { flat_commitment_keys(pseudo_outs_ptr, num_pseudo_outs) } {
@@ -749,9 +749,9 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_rct_balance(
         Err(code) => return code,
     };
 
-    match verify_bond_post_rct_balance(pseudo_flat, mask_flat, txn_fee, bond_credit, bond_debit) {
-        Ok(()) => SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_OK,
-        Err(e) => map_bond_rct_balance_error(e),
+    match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, bond_credit, bond_debit) {
+        Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
+        Err(e) => map_bond_ct_balance_error(e),
     }
 }
 
@@ -853,18 +853,18 @@ mod tests {
     }
 
     #[test]
-    fn bond_rct_balance_ffi_rejects_null_with_nonzero_count() {
+    fn bond_ct_balance_ffi_rejects_null_with_nonzero_count() {
         let code = unsafe {
-            shekyl_archival_verify_bond_post_rct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)
+            shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)
         };
-        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_NULL_PTR);
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR);
     }
 
     #[test]
-    fn bond_rct_balance_ffi_rejects_count_overflow() {
+    fn bond_ct_balance_ffi_rejects_count_overflow() {
         let buf = [0u8; 32];
         let code = unsafe {
-            shekyl_archival_verify_bond_post_rct_balance(
+            shekyl_archival_verify_bond_post_ct_balance(
                 buf.as_ptr(),
                 usize::MAX,
                 ptr::null(),
@@ -874,7 +874,7 @@ mod tests {
                 0,
             )
         };
-        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_RCT_BALANCE_ERR_INVALID_POINT);
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
     }
 
     #[test]

@@ -39,7 +39,7 @@
 //!
 //! Stage 2 extends the same spend to full consensus-valid amount checks:
 //! CT cleartext balance (`sum(pseudoOuts) == sum(outPk) + fee·H`, via
-//! [`shekyl_rct_balance::verify_rct_balance`]) and the Bulletproof+ range proof
+//! [`shekyl_ct_balance::verify_ct_balance`]) and the Bulletproof+ range proof
 //! (via [`Bulletproof::verify`]).
 //!
 //! Stage 3 assembles the validated spend into a [`shekyl_wire::Transaction`]
@@ -68,6 +68,7 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
@@ -75,7 +76,6 @@ use shekyl_curve_tree::{
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_rct_balance::verify_rct_balance;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
     TreeContext,
@@ -507,7 +507,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // both sides sum equal. Both vectors are flattened compressed C points.
     let pseudo_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
     let out_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
-    verify_rct_balance(
+    verify_ct_balance(
         &pseudo_flat,
         &out_flat,
         AtomicUnits::from_raw(fee),

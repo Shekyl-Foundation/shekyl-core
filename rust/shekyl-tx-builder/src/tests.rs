@@ -464,7 +464,7 @@ fn validate_rejects_swapped_c1_c2_alternation() {
 
 #[test]
 fn extra_output_term_raises_required_total() {
-    use shekyl_rct_balance::{InputTerm, OutputTerm};
+    use shekyl_ct_balance::{InputTerm, OutputTerm};
     // input=100, output=100, fee=0 is exactly sufficient with no extra terms.
     let input = dummy_spend_input_at_depth(1);
     let tree = dummy_tree_at_depth(1);

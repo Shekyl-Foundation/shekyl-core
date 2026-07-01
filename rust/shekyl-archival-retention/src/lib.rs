@@ -25,9 +25,9 @@
 
 #![deny(unsafe_code)]
 
+pub mod bond_ct_balance;
 pub mod bond_floor;
 pub mod bond_post;
-pub mod bond_rct_balance;
 pub mod bond_wire;
 pub mod challenge;
 pub mod claimed_epochs;
@@ -42,13 +42,13 @@ pub mod reward_arithmetic;
 pub mod serve_eligibility;
 pub mod wire;
 
+pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
 };
 pub use bond_post::{verify_join_market_bond_post, BondPostError};
-pub use bond_rct_balance::{verify_bond_post_rct_balance, BondRctBalanceError};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,

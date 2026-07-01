@@ -83,8 +83,9 @@ sustainability is unaffected by the recalibration.
     verifier (N× boundary crossings/batch); correctness over perf (priority
     hierarchy); a batched FFI is deferred, not overlooked.
   - Coinbase emission is a different equation — out of scope.
-  - **Depends on** the `rct`→`ct` Rust rename landing first (below), so the new
-    export is born on clean `ct` names (avoids F-6 double-churn). **Target: V3.0.**
+  - **Depends on** the `rct`→`ct` Rust rename landing first (its own PR,
+    resolving the former "Archival RCT naming review" item), so the new export is
+    born on clean `ct` names (avoids F-6 double-churn). **Target: V3.0.**
 
 - **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
   against the canonical spend format (flagged 2026-06-23, the tx-builder
@@ -1465,28 +1466,6 @@ sustainability is unaffected by the recalibration.
     user at opt-in. **Reopen when** a concrete floor-only-staking need surfaces in
     `shekyl-gui-wallet` / `shekyl-web`. **Target: V3.x** (post-launch UX, not
     genesis-frozen).
-
-- **Archival "RCT" naming review (deferred from PR 1, 2026-06-18).** The bond
-  balance surface introduced in PR 1 carries the inherited "RCT" name
-  (`shekyl-rct-balance`, `verify_rct_balance`, `bond_rct_balance`,
-  `verify_bond_post_rct_balance`). The name is *correct* -- "RCT" here is the
-  live curve25519 Pedersen-commitment confidential-tx model
-  (`RCTTypeFcmpPlusPlusPqc`), not the removed ring-signature legacy
-  (`60-no-monero-legacy`); the balance equation and cleartext terms (fee,
-  `bond_credit`, `bond_debit`) are live consensus. But the bare token "RCT"
-  reads as the deleted RingCT lineage at a glance, the same clarity wart already
-  tracked for `ScannableBlock.output_index_for_first_ringct_output` above.
-  Disposition: **naming-only sweep**, no wire-format / consensus / behavior
-  change, to pick ownership-neutral terms (e.g. `confidential-balance` /
-  `commitment-balance`) across the new construct surface and reconcile with the
-  existing `ringct`-residue rename. **This is a separate PR** (the user pinned it
-  out of PR 1 to keep that PR's scope to the construction logic). Placed in the
-  V3.0 pre-genesis queue because the crate name + `verify_*` symbols are
-  cross-crate API: a rename is free pre-genesis and a breaking change
-  post-genesis (`16-architectural-inheritance.mdc` pre-genesis discount).
-  **Target: V3.0.** Reopening is not conditional -- it is scheduled; the only
-  open question is whether to bundle it with the `ringct`-residue rename above
-  (same theme, same pre-genesis-window rationale).
 
 - **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
   corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch

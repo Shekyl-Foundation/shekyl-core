@@ -3324,14 +3324,14 @@ mod tests {
     /// FCMP++ membership proof traverses genuine branch chunks rather than a
     /// single synthetic leaf chunk. Everything else (the prover, BP+, FCMP++
     /// verify, the two retention verify entrypoints, the cofactor recovery for
-    /// the RCT balance) is identical to 2a.
+    /// the CT balance) is identical to 2a.
     ///
     /// # Commitment encoding
     ///
     /// `SignedProofs.pseudo_outs` are the prime-order FCMP++ `C_tilde` points;
     /// `SignedProofs.commitments` are the real prime-order `C = mask*G +
     /// amount*H` (the form `sign.rs` emits and consensus stores in
-    /// `outPk[i].mask`). The RCT balance equation is defined over prime-order
+    /// `outPk[i].mask`). The CT balance equation is defined over prime-order
     /// `C`, so the prover-emitted commitments feed the balance check directly
     /// (see 2a's docstring for the full rationale).
     ///
@@ -3345,8 +3345,8 @@ mod tests {
     async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         use rand_core::OsRng;
         use shekyl_archival_retention::{
-            verify_bond_post_rct_balance, verify_join_market_bond_post, BondPostError,
-            BondRctBalanceError,
+            verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
+            BondPostError,
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
@@ -3410,16 +3410,16 @@ mod tests {
         // the partial-branch-chunk bug was fixed by zero-padding branch chunks to
         // circuit width, so that test now runs as a normal `#[tokio::test]`).
 
-        // ── RCT balance over PROVER-emitted commitments (real prime-order C) ─
+        // ── CT balance over PROVER-emitted commitments (real prime-order C) ─
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
         let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
-        verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
-            .expect("bond-post RCT balance closes over the real-tree prover output");
+        verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
+            .expect("bond-post CT balance closes over the real-tree prover output");
 
         // ── Reject 1: a wrong bond_credit must not balance ───────────────
         assert_eq!(
-            verify_bond_post_rct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
-            Err(BondRctBalanceError::SumMismatch),
+            verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            Err(BondCtBalanceError::SumMismatch),
             "a bond_credit other than the funded floor must break the balance"
         );
 
@@ -3427,7 +3427,7 @@ mod tests {
         let mut tampered = out_masks_flat.clone();
         tampered[0] ^= 0x01;
         assert!(
-            verify_bond_post_rct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            verify_bond_post_ct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
             "a tampered commitment must not satisfy the balance"
         );
 

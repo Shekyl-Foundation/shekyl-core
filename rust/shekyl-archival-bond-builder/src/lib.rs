@@ -9,7 +9,7 @@
 //! `shekyl-archival-retention` **verify** side. It is deterministic, holds no
 //! async runtime, and runs no actor: it builds the bond-post `vin`, signs it
 //! with the `P` identity hybrid key, and supplies the single-sourced
-//! [`OutputTerm`] for the RCT balance. Funding selection, standoff timing, and
+//! [`OutputTerm`] for the CT balance. Funding selection, standoff timing, and
 //! broadcast live in the `StakeEngine` (PR 2);
 //! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
 //!
@@ -48,7 +48,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSignature, SignatureScheme};
-use shekyl_rct_balance::OutputTerm;
+use shekyl_ct_balance::OutputTerm;
 use shekyl_units::AtomicUnits;
 
 /// A constructed, signed JoinMarket bond-post `vin`.
@@ -151,7 +151,7 @@ pub fn build_join_market_vin(
 ///
 /// A credit path's funding inputs must commit to exactly `outputs + fee +
 /// bond_credit`, so that after the cleartext `bond_credit` term is added on the
-/// output side the RCT balance closes
+/// output side the CT balance closes
 /// (`sum(pseudoOuts) = sum(out_masks) + fee + bond_credit`). This is the
 /// amount-level invariant the engine enforces when selecting funding, *before*
 /// the prover builds the masked commitments. All arithmetic is checked.
