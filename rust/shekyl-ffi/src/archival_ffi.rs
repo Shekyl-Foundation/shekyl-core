@@ -24,7 +24,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
 /// Success.
 pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
@@ -749,13 +749,18 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     };
 
     // The C ABI carries the two directions as separate u64s; convert to the
-    // `BondTerm` the (total) core function takes, rejecting the both / neither
-    // states here — at the untrusted-input boundary — with the same status codes.
-    let term = match (bond_credit, bond_debit) {
-        (0, 0) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
-        (credit, 0) => BondTerm::Credit(AtomicUnits::from_raw(credit)),
-        (0, debit) => BondTerm::Debit(AtomicUnits::from_raw(debit)),
-        (_, _) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
+    // `BondTerm` the (total) core function takes, rejecting the both / neither /
+    // zero states here — at the untrusted-input boundary — with the same status
+    // codes. Matching on the `NonZeroAtomicUnits` options folds the zero-amount
+    // case into "neither term" for free (a zero credit or debit is `None`).
+    let term = match (
+        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond_credit)),
+        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond_debit)),
+    ) {
+        (None, None) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
+        (Some(credit), None) => BondTerm::Credit(credit),
+        (None, Some(debit)) => BondTerm::Debit(debit),
+        (Some(_), Some(_)) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
     };
 
     match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, term) {

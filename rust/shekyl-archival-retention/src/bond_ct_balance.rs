@@ -14,25 +14,29 @@
 #![deny(unsafe_code)]
 
 use shekyl_ct_balance::{verify_ct_balance, CtBalanceError, InputTerm, OutputTerm};
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
-/// The single bond direction term a bond-post vin carries (§3.2).
+/// The single non-zero bond direction term a bond-post vin carries (§3.2).
 ///
-/// The "exactly one of credit / debit" rigidity is a *type* property here: a
-/// both-terms or neither-term bond post is **unrepresentable**, so
+/// "Exactly one **non-zero** direction (credit xor debit)" is a *type* property
+/// here: both-terms, neither-term, **and zero-amount** posts are all
+/// **unrepresentable** — the direction is the enum tag (so both/neither cannot
+/// exist) and the amount is a [`NonZeroAtomicUnits`] (so a `Credit(0)` /
+/// `Debit(0)` no-op — a "neither" state in disguise — cannot exist either), while
+/// keeping the `AtomicUnits` money type rather than a bare integer. So
 /// [`verify_bond_post_ct_balance`] is total (its only failures are a bad point or
 /// a sum mismatch). Each variant fixes the genesis-frozen side —
 /// `Credit -> extra_outputs`, `Debit -> extra_inputs` — so construct and verify
 /// cannot pick opposite sides. The C++ ABI hands the two directions as separate
-/// `u64`s; that `(credit, debit) -> BondTerm` conversion, and its both/neither
-/// rejection, lives at the FFI boundary (`shekyl-ffi`) where the untrusted values
-/// enter — not in this consensus core.
+/// `u64`s; that `(credit, debit) -> BondTerm` conversion, including the
+/// both/neither/zero rejection, lives at the FFI boundary (`shekyl-ffi`) where the
+/// untrusted values enter — not in this consensus core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BondTerm {
-    /// A `bond_credit`, contributing `amount * H` to the output side.
-    Credit(AtomicUnits),
-    /// A `bond_debit`, contributing `amount * H` to the input side.
-    Debit(AtomicUnits),
+    /// A non-zero `bond_credit`, contributing `amount * H` to the output side.
+    Credit(NonZeroAtomicUnits),
+    /// A non-zero `bond_debit`, contributing `amount * H` to the input side.
+    Debit(NonZeroAtomicUnits),
 }
 
 /// Bond-post balance sum failure modes.
@@ -75,13 +79,13 @@ pub fn verify_bond_post_ct_balance(
             out_masks_flat,
             fee,
             &[],
-            &[OutputTerm::new(amount)],
+            &[OutputTerm::new(amount.get())],
         ),
         BondTerm::Debit(amount) => verify_ct_balance(
             pseudo_outs_flat,
             out_masks_flat,
             fee,
-            &[InputTerm::new(amount)],
+            &[InputTerm::new(amount.get())],
             &[],
         ),
     };
@@ -106,8 +110,8 @@ mod tests {
             .to_bytes()
     }
 
-    fn au(v: u64) -> AtomicUnits {
-        AtomicUnits::from_raw(v)
+    fn nz(v: u64) -> NonZeroAtomicUnits {
+        NonZeroAtomicUnits::new(AtomicUnits::from_raw(v)).expect("test bond amount is non-zero")
     }
 
     // The both-terms / neither-term rejections are no longer expressible here —
@@ -119,15 +123,15 @@ mod tests {
         const BOND_CREDIT: u64 = 750_000_000;
         let pseudo = h_only(BOND_CREDIT);
         assert!(
-            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Credit(au(BOND_CREDIT))).is_ok()
+            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Credit(nz(BOND_CREDIT))).is_ok()
         );
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Credit(au(BOND_CREDIT - 1))),
+            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Credit(nz(BOND_CREDIT - 1))),
             Err(BondCtBalanceError::SumMismatch)
         );
         // The credit amount placed on the wrong (debit) side no longer balances.
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Debit(au(BOND_CREDIT))),
+            verify_bond_post_ct_balance(&pseudo, &[], 0, BondTerm::Debit(nz(BOND_CREDIT))),
             Err(BondCtBalanceError::SumMismatch)
         );
     }
@@ -142,16 +146,16 @@ mod tests {
             &pseudo,
             &out_mask,
             0,
-            BondTerm::Debit(au(BOND_DEBIT))
+            BondTerm::Debit(nz(BOND_DEBIT))
         )
         .is_ok());
         // The debit amount placed on the wrong (credit) side no longer balances.
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo, &out_mask, 0, BondTerm::Credit(au(BOND_DEBIT))),
+            verify_bond_post_ct_balance(&pseudo, &out_mask, 0, BondTerm::Credit(nz(BOND_DEBIT))),
             Err(BondCtBalanceError::SumMismatch)
         );
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo, &out_mask, 0, BondTerm::Debit(au(BOND_DEBIT - 1))),
+            verify_bond_post_ct_balance(&pseudo, &out_mask, 0, BondTerm::Debit(nz(BOND_DEBIT - 1))),
             Err(BondCtBalanceError::SumMismatch)
         );
     }
@@ -167,7 +171,7 @@ mod tests {
             b
         };
         assert_eq!(
-            verify_bond_post_ct_balance(&torsion, &[], 0, BondTerm::Credit(au(1))),
+            verify_bond_post_ct_balance(&torsion, &[], 0, BondTerm::Credit(nz(1))),
             Err(BondCtBalanceError::InvalidPoint)
         );
     }

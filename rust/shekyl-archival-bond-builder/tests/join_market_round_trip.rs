@@ -25,7 +25,7 @@ use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_ct_balance::amount_commitment;
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
 const MASTER: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 const TX_PREFIX_HASH: [u8; 32] = [0xCDu8; 32];
@@ -97,7 +97,9 @@ fn join_market_construct_verifies_against_retention() {
         &pseudo_outs,
         &out_masks,
         FEE,
-        BondTerm::Credit(AtomicUnits::from_raw(floor)),
+        BondTerm::Credit(
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor)).expect("bond floor is non-zero"),
+        ),
     )
     .expect("bond-post CT balance closes with bond_credit = floor");
 }
@@ -143,7 +145,10 @@ fn wrong_credit_amount_breaks_the_balance() {
         &pseudo_outs,
         &out_masks,
         FEE,
-        BondTerm::Credit(AtomicUnits::from_raw(floor - 1)),
+        BondTerm::Credit(
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor - 1))
+                .expect("bond floor is non-zero"),
+        ),
     );
     assert_eq!(result, Err(BondCtBalanceError::SumMismatch));
     assert_eq!(built.vin().bond_credit, floor);

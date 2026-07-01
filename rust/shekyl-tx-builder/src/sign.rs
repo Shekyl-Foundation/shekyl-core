@@ -219,14 +219,15 @@ pub fn sign_transaction_with_terms(
     // proves its own output balances under the same definitions verify uses.
     // Pure and synchronous (a few point ops), so it is a direct call, not an
     // actor round-trip.
+    // `?` maps `CtBalanceError` into `TxBuilderError::BalanceSelfCheck` via its
+    // `#[from]`; this is the only `CtBalanceError` source in the function.
     verify_ct_balance(
         prove_result.pseudo_outs.as_flattened(),
         out_commitments.as_flattened(),
         fee,
         extra_inputs,
         extra_outputs,
-    )
-    .map_err(TxBuilderError::BalanceSelfCheck)?;
+    )?;
 
     // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {

@@ -3352,7 +3352,7 @@ mod tests {
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
         use shekyl_curve_io::CompressedPoint;
         use shekyl_curve_primitives::Commitment;
-        use shekyl_units::AtomicUnits;
+        use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
         use curve25519_dalek::scalar::Scalar;
 
@@ -3418,7 +3418,10 @@ mod tests {
             &pseudo_outs_flat,
             &out_masks_flat,
             fee,
-            BondTerm::Credit(AtomicUnits::from_raw(floor)),
+            BondTerm::Credit(
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                    .expect("bond floor is non-zero"),
+            ),
         )
         .expect("bond-post CT balance closes over the real-tree prover output");
 
@@ -3428,7 +3431,10 @@ mod tests {
                 &pseudo_outs_flat,
                 &out_masks_flat,
                 fee,
-                BondTerm::Credit(AtomicUnits::from_raw(floor - 1)),
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor - 1))
+                        .expect("bond floor is non-zero")
+                ),
             ),
             Err(BondCtBalanceError::SumMismatch),
             "a bond_credit other than the funded floor must break the balance"
@@ -3442,7 +3448,10 @@ mod tests {
                 &pseudo_outs_flat,
                 &tampered,
                 fee,
-                BondTerm::Credit(AtomicUnits::from_raw(floor)),
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                        .expect("bond floor is non-zero")
+                ),
             )
             .is_err(),
             "a tampered commitment must not satisfy the balance"

@@ -136,6 +136,6 @@ pub enum TxBuilderError {
     /// funds-sufficiency check in `validate_inputs` cannot see (amounts correct,
     /// blinding factors don't balance on the curve) — caught before sign +
     /// broadcast rather than as a daemon rejection.
-    #[error("construct-side CT balance self-check failed: {0:?}")]
-    BalanceSelfCheck(shekyl_ct_balance::CtBalanceError),
+    #[error("construct-side CT balance self-check failed: {0}")]
+    BalanceSelfCheck(#[from] shekyl_ct_balance::CtBalanceError),
 }
