@@ -270,10 +270,11 @@ mod live {
                 s.write_all(&auth_msg).await?;
                 let mut status = [0u8; 2];
                 s.read_exact(&mut status).await?;
-                if status[1] != 0x00 {
+                // RFC 1929 fixes the reply version to 0x01 and success to 0x00; check
+                // both, so a malformed reply is a named failure, not a false success.
+                if status != [0x01, 0x00] {
                     return Err(std::io::Error::other(format!(
-                        "SOCKS5 username/password auth rejected (status {})",
-                        status[1]
+                        "SOCKS5 username/password auth failed or malformed (reply {status:?})"
                     )));
                 }
             }

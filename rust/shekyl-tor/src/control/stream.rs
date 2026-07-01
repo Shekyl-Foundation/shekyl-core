@@ -152,7 +152,7 @@ pub fn parse_stream_event(reply: &ControlReply) -> Option<StreamEvent> {
     }
     let stream_id = fields.next()?.parse().ok()?;
     let status = StreamStatus::parse(fields.next()?);
-    let circ_id = CircId(fields.next()?.parse().ok()?);
+    let circ_id = CircId::new(fields.next()?.parse().ok()?);
     let target = fields.next()?.to_owned();
     Some(StreamEvent {
         stream_id,
