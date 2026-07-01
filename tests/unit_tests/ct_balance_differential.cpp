@@ -51,9 +51,15 @@ namespace
   // known-answer test, not a fuzzer). Distinct per `seed`, hashed to a scalar.
   rct::key det_mask(uint64_t seed)
   {
-    const rct::key preimage = rct::d2h(0x5368656B796C0000ULL + seed); // "Shekyl" || seed
+    // Domain-separated structured preimage: ASCII "Shekyl" followed by the seed
+    // as 8-byte little-endian — a genuine concatenation (no arithmetic carry
+    // into the domain bytes) — hashed to a scalar.
+    uint8_t preimage[14];
+    std::memcpy(preimage, "Shekyl", 6);
+    for (int i = 0; i < 8; ++i)
+      preimage[6 + i] = static_cast<uint8_t>(seed >> (8 * i));
     rct::key scalar;
-    rct::hash_to_scalar(scalar, preimage);
+    rct::hash_to_scalar(scalar, preimage, sizeof(preimage));
     return scalar;
   }
 

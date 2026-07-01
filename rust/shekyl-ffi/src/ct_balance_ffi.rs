@@ -39,14 +39,16 @@ fn map_err(e: CtBalanceError) -> u8 {
     }
 }
 
-/// Flattened `count × 32` commitment keys from a C pointer; rejects overflow.
+/// Validate `(ptr, count)` and return the flattened byte length (`count * 32`).
 ///
-/// # Safety
-///
-/// When `count > 0`, `ptr` must address `count * 32` valid bytes for `'a`.
-unsafe fn flat_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
+/// Deliberately returns the *length*, not the slice: the caller builds the slice
+/// locally so it cannot outlive the FFI call. (An earlier `-> &'a [u8]` form left
+/// `'a` unconstrained, letting a caller pick any lifetime — a footgun even though
+/// the call site consumes the slice immediately.) A safe fn — it never
+/// dereferences `ptr`, only null-checks it and computes the length.
+fn flat_len(ptr: *const u8, count: usize) -> Result<usize, u8> {
     if count == 0 {
-        return Ok(&[]);
+        return Ok(0);
     }
     if ptr.is_null() {
         return Err(SHEKYL_CT_BALANCE_ERR_NULL_PTR);
@@ -57,8 +59,7 @@ unsafe fn flat_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
     if byte_len > isize::MAX as usize {
         return Err(SHEKYL_CT_BALANCE_ERR_INVALID_POINT);
     }
-    // SAFETY: caller contract per the function docs.
-    Ok(std::slice::from_raw_parts(ptr, byte_len))
+    Ok(byte_len)
 }
 
 /// Verify the general CT cleartext balance `ΣpseudoOuts = Σout_masks + fee*H`.
@@ -82,13 +83,28 @@ pub unsafe extern "C" fn shekyl_verify_ct_balance(
     num_out_masks: usize,
     txn_fee: u64,
 ) -> u8 {
-    let pseudo_flat = match unsafe { flat_keys(pseudo_outs_ptr, num_pseudo_outs) } {
-        Ok(s) => s,
+    let pseudo_len = match flat_len(pseudo_outs_ptr, num_pseudo_outs) {
+        Ok(len) => len,
         Err(code) => return code,
     };
-    let mask_flat = match unsafe { flat_keys(out_masks_ptr, num_out_masks) } {
-        Ok(s) => s,
+    let mask_len = match flat_len(out_masks_ptr, num_out_masks) {
+        Ok(len) => len,
         Err(code) => return code,
+    };
+    // Build both slices locally — they are bounded to this scope and never
+    // returned, so no unbounded-lifetime slice escapes.
+    // SAFETY: `flat_len` proved each length is `count * 32 <= isize::MAX` and that
+    // the pointer is non-null whenever its length is nonzero; the caller's safety
+    // contract guarantees those bytes are valid for this call.
+    let pseudo_flat: &[u8] = if pseudo_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(pseudo_outs_ptr, pseudo_len) }
+    };
+    let mask_flat: &[u8] = if mask_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(out_masks_ptr, mask_len) }
     };
     match verify_ct_balance(
         pseudo_flat,
