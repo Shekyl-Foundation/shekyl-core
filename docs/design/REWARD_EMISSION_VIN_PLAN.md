@@ -1024,8 +1024,30 @@ invariant 2, never live):**
 
 **Verify recomputes (A) from (B):** `work_P(E)` = f(`R_market`, `held`, `serve_credit`, `age`) must
 equal `work_claim`; `reward_P(E)` via `reward_arithmetic` must equal `reward_amount_plain` + Σvout;
-dedup via `claimed_epochs_check_and_set`; backing via membership-only + the two ML-DSA auths. **E2
+dedup via `claimed_epochs_check_and_set`; backing via membership-only + the two hybrid auths. **E2
 is unblocked — its wire freeze is (A).**
+
+#### 8.0.3 E2 wire freeze — final pre-freeze checks (2026-07-01)
+
+- **Backing-`pqc_pk` reveal — RESOLVED (freeze; no wire/consensus constraint).** The quantum-auth
+  reveals the backing `pqc_pk` cleartext (`FCMP_MEMBERSHIP_ONLY.md` §7). Verified at source: the
+  ML-DSA keypair is **per-output one-time** (`derivation.rs:13`/`:26`, index-salted `HKDF-Expand` →
+  `ML-DSA-65.KeyGen`), so the reveal is **scoped to exactly one output** — it identifies that
+  backing output and nothing else `P` owns. Safe: principal↔P rests on FCMP++ input-anonymity +
+  cover-amount-decorrelation, not on hiding P's outputs, so the identification does not trace to the
+  funder (`REWARD_EMISSION_LEG.md` §7.3 invariant + rule-21 tripwire). The one dangerous rung (raw
+  pre-bond-post funding backing) is made **structurally empty** by the gate-6 §2.4 GF-4b ladder + the
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §3 GF-4b **sweep**. **No wire/consensus backing-lineage rule** —
+  consensus is lineage-blind (unenforceable by construction) and the sweep empties the bad rung.
+- **`emission_auth_msg` binding — frozen.** The shared cSHAKE256 auth digest commits
+  `reward_amount_plain` + `settlement_epochs` + `signable_tx_hash` (R1.A) — not the tx hash alone —
+  so a valid auth cannot be replayed against a different reward amount or epoch range (Q1
+  non-replay). Both auths sign it.
+- **C-1 activation precondition (rule-21 guard).** Emission **does not activate** (the
+  `check_inputs_types_supported` whitelist flip + gate call at C-1) until the gate-6 backing-lineage
+  **ladder + sweep** are both **specified** (done: gate-6 §2.4 GF-4b, `PRINCIPAL_STAKE_LIFECYCLE.md`
+  §3 GF-4b) **and wired in the wallet's pre-join path** (the `BackingSet` type + zero-pre-bond-output
+  test). Guards against the mechanism going live with its privacy mitigation still on paper.
 
 1. **ML-DSA vin auth shape (F-E4) — RESOLVED 2026-07-01; PR-E2 wire freeze unblocked.**
    Binding message pinned in R1.A (cSHAKE family). Auth *count* = **two** (Q1 ratified,

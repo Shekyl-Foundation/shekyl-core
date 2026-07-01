@@ -373,6 +373,17 @@ check is **load-bearing for the entire quantum spend-authority property**;
 its absence reduces backing ownership to classical security. This is why the
 gate in §12 is phrased as a merge blocker, not a checklist item.
 
+**Backing-`pqc_pk` reveal linkability (cross-ref, 2026-07-01).** The vin carrying the
+prover's `pqc_pk` cleartext (above) also **deterministically identifies the backing
+output** (leaf extra-scalars are publicly enumerable; the key is per-output one-time). That
+linkability class is analyzed and dispositioned in
+[`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §7.3 — invariant: principal↔P
+rests on FCMP++ input-anonymity + cover-amount-decorrelation, **not** on output-hiding, so the
+reveal is a P-public output identification that does not trace to the funder; the one dangerous
+rung (raw pre-bond-post funding backing) is made structurally empty by the gate-6 GF-4b ladder +
+sweep. Noted here because §7 is where the reveal originates; the disposition lives there.
+The auth is **hybrid** (Ed25519 + ML-DSA-65), not ML-DSA-only — see that plan's R1.A(2) retraction.
+
 ## 8. Scope notes
 
 ### 8.1 Bond posture is discharged elsewhere (F-3)
