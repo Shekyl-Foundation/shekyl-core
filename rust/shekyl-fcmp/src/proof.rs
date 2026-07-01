@@ -1073,8 +1073,9 @@ pub fn verify(
 /// asserts the cross-type rejection.
 ///
 /// # Errors
-/// [`VerifyError::InputCountMismatch`] (pseudo-outs vs proof input count),
-/// [`VerifyError::PqcCommitmentMismatch`], [`VerifyError::InvalidTreeRoot`],
+/// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-hash count vs proof input
+/// count), [`VerifyError::PqcCommitmentMismatch`] (per-input scalar deserialization),
+/// [`VerifyError::InvalidTreeRoot`],
 /// [`VerifyError::TreeDepthTooLarge`], [`VerifyError::DeserializationFailed`],
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
 /// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
@@ -1094,7 +1095,10 @@ pub fn verify_membership_only(
         });
     }
     if pqc_pk_hashes.len() != num_inputs {
-        return Err(VerifyError::PqcCommitmentMismatch(pqc_pk_hashes.len()));
+        return Err(VerifyError::InputCountMismatch {
+            expected: num_inputs,
+            got: pqc_pk_hashes.len(),
+        });
     }
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);

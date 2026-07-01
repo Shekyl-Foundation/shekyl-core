@@ -401,14 +401,18 @@ uint8_t shekyl_fcmp_membership_only_verify(
 
 /// Reward-emission hybrid vin-auth verify (PR-E1; the C-1 hard-gate core). C-1 calls
 /// this once per auth (Auth-B backing, Auth-P pseudonym).
-///   (1) recompute H(pqc_pk) of pubkey and require equality with the in-circuit
+///   (1) recompute hash_pqc_public_key(pubkey) and require equality with the in-circuit
 ///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
 ///   (2) verify the HYBRID (Ed25519 + ML-DSA-65) signature over msg.
 /// The auth is hybrid, matching every other signature in the system — NOT ML-DSA-only.
 /// Ratified for defense-in-depth against a classical break of ML-DSA-65 (Auth-P has no
 /// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
 /// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
-/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed H(pqc_pk).
+/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed leaf hash.
+/// LEAF-HASH INPUT — do not get this wrong: despite the pqc_pk naming, the leaf hash is
+/// hash_pqc_public_key over the FULL canonical hybrid pubkey bytes (Ed25519 || ML-DSA-65),
+/// exactly what curve-tree leaves commit (derivation.rs::derive_pqc_leaf_hash). Hashing only
+/// the ML-DSA component yields a different leaf_hash and systematic LeafHashMismatch (code 4).
 /// Returns 0 on success, else:
 ///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
 ///   4 = LeafHashMismatch   5 = Verify (signature did not verify).

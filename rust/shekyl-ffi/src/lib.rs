@@ -1712,10 +1712,16 @@ pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY: u8 = 5;
 
 /// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
 /// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
-/// canonical hybrid signature, and the in-circuit committed leaf hash `H(pqc_pk)`:
+/// canonical hybrid signature, and the in-circuit committed leaf hash:
 ///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
 ///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
 ///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
+///
+/// **Leaf-hash input — do not get this wrong:** despite the `pqc_pk` naming,
+/// `hash_pqc_public_key` hashes the **full canonical hybrid** public key bytes
+/// (Ed25519 ‖ ML-DSA-65), exactly what curve-tree leaves commit
+/// (`shekyl_crypto_pq::derivation::derive_pqc_leaf_hash`). A caller hashing only the ML-DSA
+/// component computes a *different* `leaf_hash` and gets systematic `LEAF_HASH_MISMATCH`.
 ///
 /// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
 /// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
