@@ -354,18 +354,15 @@ impl TorChild {
         // whole shutdown.
         request_graceful_stop(&self.child);
         let exit = match timeout(SHUTDOWN_GRACE, self.child.wait()).await {
-            // Exited within the grace window (SIGTERM or TAKEOWNERSHIP) — reaped.
+            // Exited within the grace window (SIGTERM or TAKEOWNERSHIP) — reaped cleanly.
             Ok(Ok(status)) => TorExit::Reaped(status),
-            // `wait` itself failed (already reaped elsewhere) — the child is gone; treat
-            // the shutdown as complete via the hard-path variant.
-            Ok(Err(_)) => TorExit::Killed,
-            // Wedged past the grace window — SIGKILL, then reap *unconditionally*.
-            // `start_kill` + `wait` rather than `kill()` (whose internal `wait` is skipped
-            // if `start_kill` errors — e.g. the child raced to exit) guarantees the reap
-            // on every path, so no branch leaves a zombie.
-            Err(_) => {
-                self.child.start_kill().ok();
-                self.child.wait().await.ok();
+            // Either the grace `wait` errored, or it timed out (tor wedged): both mean
+            // "not cleanly reaped", so SIGKILL and reap unconditionally. `start_kill` kills
+            // the process even if the reap can't complete, so neither case leaves a running
+            // or zombie tor. (A `wait` error is usually "already reaped", where this is a
+            // harmless no-op; but if it isn't, the child is still terminated.)
+            Ok(Err(_)) | Err(_) => {
+                kill_and_reap(&mut self.child).await;
                 TorExit::Killed
             }
         };
@@ -395,6 +392,15 @@ fn request_graceful_stop(child: &Child) {
 /// — is a follow-up for when a non-Unix target is real; today the managed launch is Unix.
 #[cfg(not(unix))]
 fn request_graceful_stop(_child: &Child) {}
+
+/// SIGKILL a managed child and reap it — a best-effort signal, then an **unconditional**
+/// `wait`, so no path leaves a running process or a zombie. `start_kill` (not `kill()`)
+/// keeps the two separable: even if the signal errors (the child raced to exit), the
+/// `wait` still runs. Bounded — SIGKILL is uninterceptable, so the `wait` returns promptly.
+async fn kill_and_reap(child: &mut Child) {
+    child.start_kill().ok();
+    child.wait().await.ok();
+}
 
 /// How often the bootstrap poll task asks `GETINFO status/bootstrap-phase`. Bootstrap
 /// is a one-time startup event over tens of seconds, so a sub-second poll adds
@@ -567,7 +573,7 @@ async fn spawn_managed_tor(
         }
     }
 
-    let child = tokio::process::Command::new(&managed.tor_binary)
+    let mut child = tokio::process::Command::new(&managed.tor_binary)
         .arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
@@ -585,7 +591,18 @@ async fn spawn_managed_tor(
         .spawn()
         .map_err(|_| ControlError::Spawn)?;
 
-    let control_addr = wait_for_control_port(&port_file, SPAWN_TIMEOUT).await?;
+    // Bounded startup: if tor never opens its control port, terminate + reap the child
+    // *here* rather than deferring to `kill_on_drop`'s background reap, so a startup
+    // failure leaves no lingering process to interfere with the next spawn (or test).
+    // (`kill_on_drop` remains the backstop for a `?`-failure in the *handshake* after this
+    // returns Ok, where the child is held in on_start's local.)
+    let control_addr = match wait_for_control_port(&port_file, SPAWN_TIMEOUT).await {
+        Ok(addr) => addr,
+        Err(e) => {
+            kill_and_reap(&mut child).await;
+            return Err(e);
+        }
+    };
     let cookie_path = managed.data_dir.join("control_auth_cookie");
     Ok((
         TorChild {
