@@ -167,20 +167,20 @@ fn persona_sharing_the_principal_circuit_fails_invariant_b() {
 /// `(control, socks, cookie)` seam at a dev-box `tor` for the real-network run.
 mod live {
     use super::{evaluate, Observations, Verdict};
-    use kameo::actor::{ActorRef, Spawn};
+    use kameo::actor::Spawn;
     use kameo::error::SendError;
     use shekyl_p_transport::derive_socks_user;
     use shekyl_tor::control::{
-        parse_stream_event, CircId, Command, ControlError, ControlReply, EventSink, TorControl,
-        TorControlConfig,
+        parse_stream_event, BootstrapReadiness, BootstrapState, CircId, Command, ControlError,
+        ControlReply, EventSink, TorControl, TorControlConfig,
     };
     use shekyl_types::PCanonicalId;
     use std::net::SocketAddr;
     use std::path::Path;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
     use tokio::time::timeout;
 
     /// The one fixed dial target shared by all four measured dials. Holding the
@@ -364,24 +364,34 @@ mod live {
         )))
     }
 
-    /// Poll `GETINFO status/bootstrap-phase` until `PROGRESS=100`. This is the
-    /// measurement's **own** bootstrap gate (its apparatus): the SP-T0b readiness
-    /// `watch` (design §3b) lands later, so until then the harness gates here — a dial
-    /// must never attach to a half-built network and read a meaningless circuit.
-    async fn wait_for_bootstrap(actor: &ActorRef<TorControl>) -> Result<(), Apparatus> {
-        let deadline = Instant::now() + BOOTSTRAP_TIMEOUT;
-        loop {
-            let reply = actor
-                .ask(Command::GetInfo(vec!["status/bootstrap-phase".to_owned()]))
-                .await
-                .map_err(Apparatus::Control)?;
-            if reply.lines().iter().any(|l| l.contains("PROGRESS=100")) {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(Apparatus::Bootstrap);
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
+    /// Gate on the actor's bootstrap-readiness `watch` reaching a terminal state
+    /// (design §3b). The actor's poll task drives the watch — so the measurement is now
+    /// the watch's **first consumer**, and the robust `parse_bootstrap_progress` (with
+    /// its decoy-proof KATs) replaces the old `contains("PROGRESS=100")` scan. A dial
+    /// must never attach to a half-built network, so this is still a hard gate.
+    async fn wait_for_bootstrap(
+        ready: &mut watch::Receiver<BootstrapState>,
+    ) -> Result<(), Apparatus> {
+        let terminal = timeout(
+            BOOTSTRAP_TIMEOUT,
+            ready.wait_for(|s| !matches!(s, BootstrapState::Connecting { .. })),
+        )
+        .await;
+        match terminal {
+            // Match the `watch::Ref` by reference — explicitly a borrow, nothing moved
+            // out of the guard (the arms are non-binding regardless).
+            Ok(Ok(state)) => match &*state {
+                BootstrapState::Ready => Ok(()),
+                // The poll task saw the control connection die mid-bootstrap.
+                BootstrapState::Failed => Err(Apparatus::Bootstrap),
+                BootstrapState::Connecting { .. } => {
+                    unreachable!("the predicate excludes Connecting")
+                }
+            },
+            // The actor (and its poll task) dropped before publishing a terminal state.
+            Ok(Err(_)) => Err(Apparatus::ActorGone("readiness watch closed before Ready")),
+            // Bootstrap did not reach a terminal state within budget.
+            Err(_) => Err(Apparatus::Bootstrap),
         }
     }
 
@@ -395,13 +405,28 @@ mod live {
         cookie_path: &Path,
     ) -> Result<Observations, Apparatus> {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let actor = TorControl::spawn(TorControlConfig {
             control_addr,
             cookie_path: cookie_path.to_path_buf(),
             events: EventSink::new(tx),
+            readiness,
         });
 
-        wait_for_bootstrap(&actor).await?;
+        wait_for_bootstrap(&mut ready_rx).await?;
+
+        // Late-subscriber property (design §3b): the readiness `watch` delivers the
+        // *current* value on subscribe, not as an edge — so a receiver obtained *after*
+        // Ready reads Ready immediately. This is the cheapest, strictest place to prove
+        // it: the net is already at Ready, so a fresh clone must read it **synchronously**
+        // via `borrow()`. Deliberately NOT `changed().await` — awaiting the *next* edge
+        // would hang forever precisely when the property holds, which is the tell that
+        // this is the right assertion.
+        assert_eq!(
+            *ready_rx.clone().borrow(),
+            BootstrapState::Ready,
+            "a late watch subscriber must read the current Ready state, not wait for an edge",
+        );
 
         // Subscribe to STREAM only, and this is correct *permanently* — not just
         // pre-SP-T0b. SP-T0b drives bootstrap readiness from a `GETINFO

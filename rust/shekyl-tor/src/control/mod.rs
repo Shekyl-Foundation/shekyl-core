@@ -23,16 +23,24 @@
 //! [`auth`] is the handshake plumbing (cookie-file read, `AUTHCHALLENGE` parse).
 //! [`actor`] is the `tokio` + `kameo` driver: it runs the handshake in `on_start`,
 //! then `attach_stream`s the read half so kameo merges replies into the mailbox,
-//! with one-in-flight FIFO command correlation via `DelegatedReply`.
+//! with one-in-flight FIFO command correlation via `DelegatedReply`. [`bootstrap`]
+//! (SP-T0b) is the sans-IO readiness half — the `BootstrapState` a consumer awaits
+//! and the `GETINFO status/bootstrap-phase` parser the actor's poll task drives it
+//! with (design §3b: a poll, never a `STATUS_CLIENT` subscription).
 
 pub mod actor;
 pub mod auth;
+pub mod bootstrap;
 pub mod framing;
 pub mod safecookie;
 pub mod stream;
 
-pub use actor::{Command, CommandResult, ControlError, EventSink, TorControl, TorControlConfig};
+pub use actor::{
+    BootstrapReadiness, Command, CommandResult, ControlError, EventSink, TorControl,
+    TorControlConfig,
+};
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
+pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
 pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};

@@ -66,10 +66,12 @@ use kameo::Actor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
+use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
 use super::safecookie::verify_server_hash;
 
@@ -230,14 +232,17 @@ pub struct TorControlConfig {
     pub cookie_path: PathBuf,
     /// Sink for asynchronous events.
     pub events: EventSink,
+    /// Bootstrap-readiness publisher. The actor's poll task drives the
+    /// `watch<BootstrapState>`; the consumer holds the receiver (design §3b).
+    pub readiness: BootstrapReadiness,
 }
 
-/// The control-port actor (one `TorService` actor — SP-T0a now, SP-T0b later).
+/// The control-port actor (one `TorService` actor). SP-T0b-1 adds the bootstrap poll
+/// task; the `child` field is the remaining seam (managed-vs-attached lifecycle),
+/// present now (unused) so SP-T0b-2 adds behaviour without reshaping the struct.
 ///
 /// Owns the write half and the in-flight bookkeeping; the read half lives in the
-/// attached `ReplyStream`. The `child`/`bootstrap` fields are the **SP-T0b
-/// seam** — present now (unused) so SP-T0b adds behaviour without reshaping the
-/// struct.
+/// attached `ReplyStream`.
 pub struct TorControl {
     /// Write half — commands go out here, one on the wire at a time.
     writer: OwnedWriteHalf,
@@ -250,23 +255,41 @@ pub struct TorControl {
     /// correlation there is) is preserved. Storing the rendered line (not the
     /// `Command`) means `to_wire` runs exactly once per command.
     queue: VecDeque<(String, ReplySender<CommandResult>)>,
-    /// SP-T0b seam: the managed `tor` child process. `None` until SP-T0b owns it.
+    /// SP-T0b-2 seam: the managed `tor` child process. `None` until SP-T0b-2 owns it.
     #[allow(dead_code)]
     child: Option<TorChild>,
-    /// SP-T0b seam: bootstrap-progress gate state, driven via `STATUS_CLIENT`.
-    #[allow(dead_code)]
-    bootstrap: BootstrapState,
+    /// The bootstrap-readiness poll task (design §3b), aborted on drop. Held so the
+    /// actor owns its task; the task also self-terminates (`Ready` / actor-death /
+    /// no-listeners), so this abort is a prompt-cleanup backstop, not the only exit.
+    bootstrap_poll: JoinHandle<()>,
 }
 
-/// SP-T0b seam — the managed `tor` child process handle (fleshed out by SP-T0b).
+/// SP-T0b-2 seam — the managed `tor` child process handle (fleshed out by SP-T0b-2).
 pub struct TorChild;
 
-/// SP-T0b seam — bootstrap-progress gate state (driven via `STATUS_CLIENT`).
-#[derive(Debug, Default)]
-pub enum BootstrapState {
-    /// Bootstrap progress not yet observed.
-    #[default]
-    Unknown,
+/// How often the bootstrap poll task asks `GETINFO status/bootstrap-phase`. Bootstrap
+/// is a one-time startup event over tens of seconds, so a sub-second poll adds
+/// negligible latency to the readiness signal.
+const BOOTSTRAP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// The bootstrap-readiness publisher handed to the actor via [`TorControlConfig`].
+///
+/// Wraps the [`watch`] sender **and owns the channel's creation**, so the initial
+/// state is always [`BootstrapState::Connecting`]` { progress: 0 }` — a consumer never
+/// names an initial value and so cannot seed a spurious `Ready` before bootstrap even
+/// begins. This is one step past [`EventSink`], which takes a pre-made sender: `watch`
+/// has an initial-value footgun `mpsc` lacks, so the wrapper closes exactly that gap
+/// (the make-bad-states-unrepresentable posture).
+pub struct BootstrapReadiness(watch::Sender<BootstrapState>);
+
+impl BootstrapReadiness {
+    /// Create the readiness channel. The consumer keeps the returned receiver and
+    /// awaits [`BootstrapState::Ready`]; the actor takes `self` in its config.
+    #[must_use]
+    pub fn new() -> (Self, watch::Receiver<BootstrapState>) {
+        let (tx, rx) = watch::channel(BootstrapState::Connecting { progress: 0 });
+        (Self(tx), rx)
+    }
 }
 
 impl Actor for TorControl {
@@ -278,6 +301,7 @@ impl Actor for TorControl {
             control_addr,
             cookie_path,
             events,
+            readiness,
         } = args;
 
         let stream = TcpStream::connect(control_addr)
@@ -333,14 +357,80 @@ impl Actor for TorControl {
             (),
         );
 
+        // Spawn the bootstrap poll task (design §3b): it drives the readiness watch
+        // through the public `ask` — a `GETINFO status/bootstrap-phase` poll, *not* a
+        // `STATUS_CLIENT` subscription, so it never touches `SETEVENTS`. Its first
+        // `ask` queues behind the run loop that begins once `on_start` returns.
+        let bootstrap_poll = tokio::spawn(bootstrap_poll_loop(actor_ref.clone(), readiness.0));
+
         Ok(TorControl {
             writer,
             events,
             pending: None,
             queue: VecDeque::new(),
             child: None,
-            bootstrap: BootstrapState::default(),
+            bootstrap_poll,
         })
+    }
+}
+
+impl Drop for TorControl {
+    fn drop(&mut self) {
+        // Stop the bootstrap poll task when the actor goes away. (SP-T0b-2 extends
+        // shutdown to the managed `child`, riding the `TAKEOWNERSHIP` already landed.)
+        self.bootstrap_poll.abort();
+    }
+}
+
+/// The bootstrap-readiness poll task (design §3b). Polls `GETINFO
+/// status/bootstrap-phase` through the actor's **public `ask`** and publishes
+/// [`BootstrapState`] on the watch until Tor reaches 100%, then stops.
+///
+/// The complete error contract — the task's whole failure surface:
+/// - **`ask` fails** → the actor stopped (control connection died mid-bootstrap):
+///   publish [`BootstrapState::Failed`] and exit, so a waiter gets a terminal answer
+///   instead of hanging to the lifecycle deadline (which is T0b-2 *policy*, not this
+///   task's concern).
+/// - **no receivers left** → stop **silently**, checked *unconditionally* at the top of
+///   each iteration via `tx.is_closed()` — so shutdown never depends on a `send`
+///   happening. A run of unparseable replies (parse → `None`, no `send`) must not keep
+///   the task polling a channel no one is listening on. Not a Tor failure; never `Failed`.
+/// - **100% reached** → publish [`BootstrapState::Ready`] (the gate) and stop.
+async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<BootstrapState>) {
+    // The highest progress seen so far; `bootstrap_step` clamps against it so a Tor
+    // `PROGRESS=` regression never renders the "Connecting… n%" UX backward.
+    let mut peak = 0u8;
+    loop {
+        // No receivers left — stop quietly (NOT a failure). Checked here so shutdown is
+        // *unconditional*, not contingent on a `send`: a run of `None` parses must never
+        // keep the task polling a channel no one is listening on.
+        if tx.is_closed() {
+            return;
+        }
+        let Ok(reply) = actor
+            .ask(Command::GetInfo(vec!["status/bootstrap-phase".to_owned()]))
+            .await
+        else {
+            // Actor gone — the control connection died mid-bootstrap.
+            tx.send(BootstrapState::Failed).ok();
+            return;
+        };
+        // The state machine is the pure `bootstrap_step` (KAT'd in `bootstrap`); the loop
+        // owns only the I/O. Sends are fire-and-forget — a dropped-receiver failure is
+        // handled by the `is_closed()` check at the top, the single shutdown path.
+        let (step, new_peak) = bootstrap_step(peak, parse_bootstrap_progress(&reply));
+        peak = new_peak;
+        match step {
+            BootstrapStep::Ready => {
+                tx.send(BootstrapState::Ready).ok();
+                return;
+            }
+            BootstrapStep::Progress(progress) => {
+                tx.send(BootstrapState::Connecting { progress }).ok();
+            }
+            BootstrapStep::Skip => {}
+        }
+        tokio::time::sleep(BOOTSTRAP_POLL_INTERVAL).await;
     }
 }
 
@@ -638,7 +728,7 @@ mod tests {
 /// network egress and lands next.
 #[cfg(test)]
 mod live_tests {
-    use super::{Command, EventSink, TorControl, TorControlConfig};
+    use super::{BootstrapReadiness, Command, EventSink, TorControl, TorControlConfig};
     use kameo::actor::Spawn;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
@@ -761,10 +851,15 @@ mod live_tests {
     async fn handshake_and_getinfo_against_offline_tor() {
         let tor = spawn_offline_tor().await;
         let (tx, _rx) = mpsc::unbounded_channel();
+        // This test exercises the handshake + command correlation, not bootstrap; the
+        // poll task runs harmlessly against `DisableNetwork 1` (never reaches Ready) and
+        // is aborted on drop. Keep the receiver alive so the poll task doesn't stop early.
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
         let actor = TorControl::spawn(TorControlConfig {
             control_addr: tor.control_addr,
             cookie_path: tor.cookie_path.clone(),
             events: EventSink::new(tx),
+            readiness,
         });
 
         // GETINFO version: proves the handshake (on_start), the DelegatedReply
