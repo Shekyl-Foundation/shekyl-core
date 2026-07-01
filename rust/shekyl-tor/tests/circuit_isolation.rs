@@ -172,7 +172,7 @@ mod live {
     use shekyl_p_transport::derive_socks_user;
     use shekyl_tor::control::{
         parse_stream_event, BootstrapReadiness, BootstrapState, CircId, Command, ControlError,
-        ControlReply, EventSink, TorControl, TorControlConfig,
+        ControlReply, EventSink, TorControl, TorControlConfig, TorLaunch,
     };
     use shekyl_types::PCanonicalId;
     use std::net::SocketAddr;
@@ -407,8 +407,10 @@ mod live {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let actor = TorControl::spawn(TorControlConfig {
-            control_addr,
-            cookie_path: cookie_path.to_path_buf(),
+            launch: TorLaunch::Attached {
+                control_addr,
+                cookie_path: cookie_path.to_path_buf(),
+            },
             events: EventSink::new(tx),
             readiness,
         });

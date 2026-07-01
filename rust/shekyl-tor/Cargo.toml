@@ -25,11 +25,16 @@ zeroize = { version = "1", default-features = false, features = ["alloc", "deriv
 # framer through one kameo actor. tokio + kameo are the workspace's established
 # actor stack (shekyl-engine-core); futures-core is just the `Stream` trait
 # `attach_stream` consumes (the read half is wrapped as a `Stream<Item = Framed>`);
-# getrandom is the OS CSPRNG for the SAFECOOKIE client nonce.
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+# getrandom is the OS CSPRNG for the SAFECOOKIE client nonce. `process` is SP-T0b's
+# managed-child launch/shutdown (`tokio::process::{Command, Child}`).
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process"] }
 kameo = { workspace = true }
 futures-core = "0.3"
 getrandom = "0.2"
+# SP-T0b managed-child shutdown: `SIGTERM` for a graceful `tor` exit (tokio/std only
+# expose `SIGKILL` via `Child::kill`). The workspace's already-locked libc; the one
+# `unsafe` call is a documented `kill(2)` on a pid we own.
+libc = "0.2"
 
 [dev-dependencies]
 # The cookie-file reader KATs write a real 32-byte file and read it back (the
