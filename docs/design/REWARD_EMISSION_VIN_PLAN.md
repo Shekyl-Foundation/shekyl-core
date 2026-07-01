@@ -955,6 +955,50 @@ snapshot **field set** (now including the **two** auth fields from Q1); (3) E2's
 around that field set. Buildable-now front unchanged: **E1's two primitives + this round in
 parallel**; E2 opens on the wire freeze.
 
+#### 8.0.2 The two frozen field sets (E2 wire + M-2/Q7 snapshot) — enumerated
+
+With §8.0.1 pinned, both field sets freeze. **(A)** is the emission-vin wire E2's codec freezes;
+**(B)** is the as-of-E consensus snapshot PR-E3 marshals **by value** (Q7), never on the wire.
+
+**(A) Emission-vin wire fields (E2 freezes) — `REWARD_EMISSION_LEG.md` §5.3 + Q1's two auths.**
+
+```text
+ArchivalRewardEmissionVin {
+  P_pubkey:            HybridPublicKey,      // scheme_id=1 canonical bytes
+  holdings:            HoldingsDescriptor,
+  settlement_epochs:   u64[1..=15],          // strictly increasing, unique
+  work_claim:          WorkClaimVector,      // WorkEpochClaim[]{ epoch, ShardWorkEntry[]{ shard_id, serve_credit_bit, scarcity_milli } }
+  backing:             MembershipOnlyBacking,// FCMP++ membership, NO key image (§7)
+  reward_amount_plain: u64[per-epoch|total], // loud (§5.5)
+  auth_backing:        ML-DSA-65 auth,       // Q1 stake-side: P-that-staked ↔ bond — ML-DSA over the backing leaf's committed H(pqc_pk) (the C-1 gate; §9.6)
+  auth_claim:          ML-DSA-65 auth,       // Q1 claim-side: P-that-claims ↔ THIS emission — binds payout output(s) + settlement_epochs (non-replayable)
+}
+```
+
+The **two auths are the Q1 delta over §5.3** (which predates Q1). **Forward-action:**
+`REWARD_EMISSION_LEG.md` §5.3 must be amended to carry both — distinct signatures over distinct
+binding messages (§8.0.1), not one checked twice. Exact wire types follow the `PqcAuthentication` /
+`HybridSignature` house pattern. **This field set is E2's wire freeze.**
+
+**(B) As-of-E consensus snapshot (Q7 — marshaled by value; each field frozen at E-close,
+invariant 2, never live):**
+
+- **height/epoch:** `current_block_height`, current settlement epoch `C` (step 1).
+- **bond record** (by `P_canonical_id`): `P_pubkey`, `bond_spend_pk`, `holdings`, `bonded_total`,
+  `good_standing`, `join_settlement_epoch`, `first_paying_emission_height`,
+  `claimed_settlement_epochs`, `last_served_epoch` (steps 2–3).
+- **per claimed `E`:** finalized `Σwork(E)` (the denominator; steps 1/4).
+- **per (claimed `E`, shard `s`):** `R_market(s,E)`; the **held-at-E inputs** = `join_settlement_epoch`
+  + `bad_intervals` for `(P,s)` — the marshaling that feeds the built `market_member_at_epoch`, **not**
+  tip holdings (the one build, §8.0); `serve_credit_bit(P,s,E)`; `shard age_milli` at E-close (step 4).
+- **economics params** (`BandedCurveParams` / rate schedule) for the `Curve` (step 5).
+- **tree root(s):** main-tree root (backing membership, step 6); fee-input context (FCMP balance, step 7).
+
+**Verify recomputes (A) from (B):** `work_P(E)` = f(`R_market`, `held`, `serve_credit`, `age`) must
+equal `work_claim`; `reward_P(E)` via `reward_arithmetic` must equal `reward_amount_plain` + Σvout;
+dedup via `claimed_epochs_check_and_set`; backing via membership-only + the two ML-DSA auths. **E2
+is unblocked — its wire freeze is (A).**
+
 1. **ML-DSA vin auth shape (F-E4) — gates PR-E2 (wire freeze), not just E3.**
    *Proposal pinned in R1.A* for the round to attack (binding message, two auths,
    cSHAKE family). Remaining: is Auth-P necessary or does the leaf→`P_pubkey`
