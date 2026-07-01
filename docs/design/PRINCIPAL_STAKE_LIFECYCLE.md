@@ -11,7 +11,9 @@ legs (bond-post / drain) remains gated on **Gate-6 R4 + the bond connect-path co
 economic staking surface named unscoped in `WALLET_REWRITE_PLAN.md` Phase-2.
 **Closure posture:** the Round-0-opened DQ set is closed (DQ1/2/5/6) or deferred with named
 gates (DQ3/4) — this is the closure milestone; the single Round-1 entry question (§3.1
-one-shared-derivation) and inherited carries are enumerated in §5.1.
+one-shared-derivation) and inherited carries are enumerated in §5.1. The **Round-1 opening read
+(§5.2, 2026-07-01)** has since resolved §3.1 toward "already structural — wire it, don't unify"
+(the shared draw exists in `shekyl-standoff`); the residual is `C_min` single-sourcing, gated on 2d-1.
 
 Process discipline: [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (cited explicitly — consensus-adjacent multi-round surface). A2 (audit-against-actual-code)
@@ -530,7 +532,9 @@ The Round-0-opened DQ set is **closed** (DQ1/2/5/6) or **deferred with named gat
    shared tagged-key constructor (sameness *structural*) or two functions asserted equal by a
    KAT (sameness *tested*, drift-prone). The **cover-amount entropy draw** wants the
    single-shared-derivation treatment specifically. This is the line between "unrepresentable"
-   and "tested."
+   and "tested." **→ Resolved by the Round-1 opening read (§5.2): already structural
+   (`shekyl-standoff` exists) — the obligation is *wiring* + `C_min` single-sourcing, not a
+   constructor unification.**
 2. **Reward realization = drain-at-exit/rotation; there is *no* non-terminal sweep.** The built
    FSM treats **drain as terminal** (`Bonded`/`Slashed` → `Exited`, FSM-retool transition
    graph) — so a staker realizes returns by **draining-and-rotating** (new `p_slot`, gate-6),
@@ -565,6 +569,48 @@ The Round-0-opened DQ set is **closed** (DQ1/2/5/6) or **deferred with named gat
 5. **Multi-`P` portfolio — explicit scope boundary.** This doc scopes the **single-`P`**
    lifecycle. Multi-`P` orchestration (rotation ceremony, portfolio-wide drain, cross-`P`
    hygiene per gate-6 §4 invariant 5) is **out of scope here**, deferred to the rotation round.
+
+## 5.2 Round-1 opening read — §3.1 resolved by substrate (2026-07-01)
+
+The two §5.1-item-1 substrate reads were run at source. **Result: the entry question resolves
+toward "already structural, use it," not "unify two call sites."**
+
+- **The cover-amount entropy draw already exists as a single shared derivation.**
+  `shekyl-standoff::draw_cover_amount` / `cover_dial_span_atomic`
+  ([`cover.rs`](../../rust/shekyl-standoff/src/cover.rs)) is the single source, and the crate's
+  own contract **is** the structural form: "the simulator, the published conformance vector, and
+  (when the V3.0 funding flow is built) the wallet all import the **same** draw, so 'what we
+  validated is what ships' holds **by construction rather than by vigilance**"
+  ([`lib.rs`](../../rust/shekyl-standoff/src/lib.rs)). Pure-integer, golden-vector-pinned,
+  build-float-free. So §3.1 is **not** a structural-vs-tested *choice* to make in the abstract —
+  the structural form is built.
+- **The output form is the standard construct/recover pair**, not a cover-specific type:
+  `construct_output` ↔ `scan_output_recover_with_ml_kem_dk`
+  ([`output.rs`](../../rust/shekyl-crypto-pq/src/output.rs) L193 / L811), round-trip
+  byte-identity KAT'd (`scan_output_kat.rs`). The cover rides it like any output — confirming
+  §3.1's no-special-field at the code layer.
+- **The obligation is therefore *wiring*, not derivation-unification.** `draw_cover_amount` has
+  **no production consumer yet** (only `shekyl-staking-sim`, a dev-dep + cross-checked copy; the
+  V3.0 wallet funding flow is unbuilt). When it lands, `stake_in`'s cold-start cover **must
+  import `shekyl-standoff`, never an ad-hoc draw** — a discipline 2c-2b already encodes
+  ([`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md): "`shekyl-standoff`,
+  never an ad-hoc draw; the check forbids any inherited jitter", plus an RNG-degeneracy guard
+  and `!Clone` unrepresentability tokens).
+
+**Residual — the real load-bearing agreement is an *input* coupling, not the draw.**
+`draw_cover_amount(count, c_min, rng)`'s **`c_min`** = `COVER_RUNWAY_FLOOR_ATOMIC`, **provisional
+pending the 2d-1 earnings-ramp `C_min` sizing** (`pscan/accrual.rs` SP-7; a partial funding read
+mis-sizes `C_min` — a DQ7-class firewall-parameter risk). The **same `C_min`** (and `count` =
+live-bond `C`) must feed the send-side draw **and** the SP-7 / `CoverDiscovery` detection side; it
+is single-sourced as one const that re-freezes the golden vector when 2d-1 lands. So the
+cross-surface agreement is **`C_min`/`count` single-sourcing** — input plumbing, cleaner than a
+constructor unification, and **gated on 2d-1**.
+
+**Funding-regime confirmation (DQ4).** 2c-2b's SP-2.d *correction* confirms the two-regime split
+this doc's DQ4 lean named: cold-start = **principal-funded** + ≥ 1-SEB-spaced + standoff-
+decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). The
+firewall *logic* is built + fixture-validated; **neither real funding source is wired** yet
+(principal-output access = SP-2.d, `P`-scanning = SP-2.e).
 
 ## 6. References (authoritative — reference, do not restate)
 
