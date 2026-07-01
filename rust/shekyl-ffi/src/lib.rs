@@ -1587,11 +1587,13 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// Verify a **membership-only** FCMP++ proof (reward-emission backing; **no key
 /// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
 /// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
-/// [`shekyl_fcmp::proof::VerifyError`] discriminant (`1=Deserialization`,
-/// `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`, `5=UpstreamError`,
-/// `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`). Anti-replay for this path is
-/// the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the
-/// sibling [`shekyl_emission_mldsa_gate_verify`].
+/// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
+/// pointer, or a count whose `× 32` byte length overflows `usize`), `2=InvalidTreeRoot`,
+/// `3=PqcCommitmentMismatch`, `5=UpstreamError`, `6=BatchVerificationFailed`,
+/// `7=TreeDepthTooLarge`, `8=InputCountMismatch` (`po_count != pqc_hash_count`). Never
+/// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
+/// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
+/// [`shekyl_emission_mldsa_gate_verify`].
 ///
 /// # Safety
 /// Every pointer must be valid for its stated length; `tree_root_ptr` and
@@ -1608,17 +1610,26 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
 ) -> u8 {
+    // Guard the byte-length multiply: a huge count would overflow `usize`, wrap to a
+    // short slice, and then panic on the per-input reads — a panic across the C ABI.
+    let (Some(po_len), Some(ph_len)) = (po_count.checked_mul(32), pqc_hash_count.checked_mul(32))
+    else {
+        return 1;
+    };
     let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
         return 1;
     };
-    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_len) }) else {
         return 1;
     };
-    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, ph_len) }) else {
         return 1;
     };
-    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() || po_count != pqc_hash_count {
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
         return 1;
+    }
+    if po_count != pqc_hash_count {
+        return 8; // VerifyError::InputCountMismatch — the accurate code, not generic deser.
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -1638,17 +1649,24 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
         tree_depth,
     };
 
-    let mut pseudo_outs = Vec::with_capacity(po_count);
-    let mut pqc_hashes = Vec::with_capacity(pqc_hash_count);
-    for i in 0..po_count {
-        let mut po = [0u8; 32];
-        po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
-        pseudo_outs.push(po);
-
-        let mut ph = [0u8; 32];
-        ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
-        pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
-    }
+    // `po_count == pqc_hash_count` and each slice is exactly that many 32-byte chunks, so
+    // `chunks_exact` consumes them fully — no manual indexing, no out-of-bounds risk.
+    let pseudo_outs: Vec<[u8; 32]> = po_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            b
+        })
+        .collect();
+    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcLeafScalar> = ph_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            shekyl_fcmp::leaf::PqcLeafScalar(b)
+        })
+        .collect();
 
     match shekyl_fcmp::proof::verify_membership_only(
         &proof,
@@ -1659,6 +1677,9 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
         signable_tx_hash,
     ) {
         Ok(true) => 0,
+        // `verify_membership_only` returns `Ok(true)` or `Err`, so `Ok(false)` is
+        // unreachable today; mapped defensively to a non-success code (never 0) so a
+        // future `Ok(false)` outcome can never be read as acceptance.
         Ok(false) => 6,
         Err(e) => {
             tracing::debug!(error = ?e, tree_depth, "membership-only verify error");
@@ -5339,8 +5360,8 @@ mod tests {
         };
         assert_eq!(r, 1, "null proof must reject");
 
-        // Count mismatch po_count != pqc_hash_count -> 1. Buffers sized to the
-        // declared counts (po = 2×32, ph = 1×32) so no out-of-bounds read.
+        // Count mismatch po_count != pqc_hash_count -> 8 (InputCountMismatch). Buffers
+        // sized to the declared counts (po = 2×32, ph = 1×32) so no out-of-bounds read.
         let po2 = [1u8; 64];
         let proof = [0u8; 8];
         let r = unsafe {
@@ -5356,7 +5377,28 @@ mod tests {
                 txh.as_ptr(),
             )
         };
-        assert_eq!(r, 1, "po/pqc count mismatch must reject");
+        assert_eq!(
+            r, 8,
+            "po/pqc count mismatch must reject as InputCountMismatch"
+        );
+
+        // A count whose `× 32` byte length overflows `usize` must reject BEFORE any slice
+        // read (the checked_mul guard) — no panic across the FFI. The pointer is never
+        // dereferenced on this path, so a small buffer is safe to pass.
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po1.as_ptr(),
+                usize::MAX,
+                ph1.as_ptr(),
+                usize::MAX,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "overflowing count must reject without dereferencing");
 
         // Well-formed call over junk proof bytes must NEVER vacuously verify.
         let junk = vec![0xABu8; 512];

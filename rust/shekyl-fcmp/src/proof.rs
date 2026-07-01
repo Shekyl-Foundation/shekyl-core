@@ -112,12 +112,18 @@ pub enum VerifyError {
 
     #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
     TreeDepthTooLarge(u8),
+
+    /// The provided per-input arrays do not match the proof's declared input count.
+    /// Distinct from [`Self::KeyImageCountMismatch`]: the membership-only path carries
+    /// no key images, so a count error there is about pseudo-outs / pqc hashes, not KIs.
+    #[error("input count mismatch: expected {expected}, got {got}")]
+    InputCountMismatch { expected: usize, got: usize },
 }
 
 impl VerifyError {
     /// FFI-stable discriminant for crossing the C ABI boundary.
     ///
-    /// Codes 1-7 map to the enum variants in declaration order.
+    /// Codes 1-8 map to the enum variants in declaration order.
     /// Code 0 is reserved for success (not an error).
     pub fn discriminant(&self) -> u8 {
         match self {
@@ -128,6 +134,7 @@ impl VerifyError {
             Self::UpstreamError(_) => 5,
             Self::BatchVerificationFailed => 6,
             Self::TreeDepthTooLarge(_) => 7,
+            Self::InputCountMismatch { .. } => 8,
         }
     }
 }
@@ -469,6 +476,14 @@ pub fn prove(
 /// # Errors
 /// Same class as [`prove`]: empty / too-many inputs, invalid points/scalars, a degenerate
 /// rerandomization, or an upstream prove failure.
+///
+/// # Maintenance
+/// Branch-building, blinds, and `Fcmp::prove` are intentionally identical to [`prove`]; only
+/// the rerandomization, spend-auth, and proof type differ (the three swaps above). A full
+/// extraction into a shared helper is **deferred** — it would restructure the shipped `prove`
+/// path for an additive change. The drift guard is that **both** paths have roundtrip KATs
+/// (`prove_verify_roundtrip`, `membership_only_prove_verify_roundtrip_and_cross_type`): a change
+/// to the shared shape in one that is not mirrored to the other fails the other's KAT.
 #[allow(non_snake_case)]
 pub fn prove_membership_only(
     inputs: &[ProveInput],
@@ -1058,8 +1073,11 @@ pub fn verify(
 /// asserts the cross-type rejection.
 ///
 /// # Errors
-/// Same discriminants as [`verify`]: input-count mismatch, tree-root deserialization,
-/// PQC-scalar deserialization, upstream verify, or batch failure.
+/// [`VerifyError::InputCountMismatch`] (pseudo-outs vs proof input count),
+/// [`VerifyError::PqcCommitmentMismatch`], [`VerifyError::InvalidTreeRoot`],
+/// [`VerifyError::TreeDepthTooLarge`], [`VerifyError::DeserializationFailed`],
+/// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
+/// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
 pub fn verify_membership_only(
     proof: &ShekylFcmpProof,
     pseudo_outs: &[[u8; 32]],
@@ -1070,7 +1088,7 @@ pub fn verify_membership_only(
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
     if pseudo_outs.len() != num_inputs {
-        return Err(VerifyError::KeyImageCountMismatch {
+        return Err(VerifyError::InputCountMismatch {
             expected: num_inputs,
             got: pseudo_outs.len(),
         });
