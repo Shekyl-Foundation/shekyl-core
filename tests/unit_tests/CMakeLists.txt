@@ -110,6 +110,7 @@ set(unit_tests_sources
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
   archival_substrate_lmdb.cpp
+  ct_balance_differential.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp

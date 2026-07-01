@@ -59,7 +59,7 @@ sustainability is unaffected by the recalibration.
     clears the cofactor on `out_masks` at `bulletproofs_plus.cc:931`; the balance
     sums raw points), closing a torsion-**malleability** surface (matched order-8
     `T` → second tx-hash for the same economic tx); adversarial-only.
-  - **Gate F-2 [pre-cutover, must be green before any re-point]:** a
+  - **Gate F-2 [built + green — export + corpus landed ahead of the re-point]:** a
     three-class differential corpus (C++ oracle vs Rust FFI), green on the
     **aarch64 determinism lane**:
     1. **valid canonical** → both accept. Bulk: large batches, the empty-pseudoOut
@@ -75,6 +75,15 @@ sustainability is unaffected by the recalibration.
     3. **non-canonical field encoding** (non-reduced `y`, sign-bit edges) →
        *characterized* against `ge_frombytes_vartime`, not assumed; any divergence
        is ratified, not discovered post-flip.
+  - **[Result 2026-06-30]** Built as the `shekyl_verify_ct_balance` export
+    (`ct_balance_ffi.rs`, dormant until the swap) + the C++<->Rust corpus
+    `tests/unit_tests/ct_balance_differential.cpp` (8 cases). Green on x86_64 (the
+    aarch64 CI lane is the cross-arch determinism confirmation). Class 2
+    empirically confirms the §2.3 divergence (C++ accepts the torsion-laden
+    balanced tx, Rust rejects). **Class 3 caught a live gap:** Rust accepted a
+    non-canonical `y = p + 1` (dalek reduces `y` mod `p` → the identity) that C++
+    rejects — closed by a canonical `compress()` round-trip check in
+    `shekyl-ct-balance::decompress_point`; both sides now reject, in agreement.
   - **Sequence [rule 07 atomic]:** ratify (done) → rename (below) → corpus green
     → ONE commit bundling the `shekyl_verify_ct_balance` export, both
     `rctSigs.cpp` swaps, deletion of the native `addKeys`/`equalKeys` blocks, and
