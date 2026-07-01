@@ -221,19 +221,22 @@ rule this is a **merge blocker**, not a checklist item:
 
 > The consensus-activating sub-PR (**PR-E3**) is not mergeable unless its
 > verify path (a) recomputes `hash_pqc_public_key(P_pubkey)` and demands it
-> equal the in-circuit leaf-committed `H(pqc_pk)`, **and** (b) verifies an
-> ML-DSA-65 signature under that `pqc_pk` over a domain-separated vin context.
+> equal the in-circuit leaf-committed `H(pqc_pk)`, **and** (b) verifies the
+> **hybrid (Ed25519 + ML-DSA-65)** signature under that pubkey over a
+> domain-separated vin context. The **ML-DSA-65 component** carries the
+> load-bearing quantum spend-authority; the **Ed25519 component** is the ratified
+> defense-in-depth leg (§8.0.2 / R1.A(2) retraction) — both must verify.
 
 The gate **primitive** is built in PR-E1; the gate **call** is in PR-E3. The
 quantum-forgery wargame (`FCMP_MEMBERSHIP_ONLY.md` §7) is the acceptance frame
 for PR-E3's gate tests.
 
-**Open (design round):** is the vin auth ML-DSA-65-only (the quantum half) or
-the full `HybridEd25519MlDsa` (ed25519 + ML-DSA)? §10.1 of the spec sizes
-"two ML-DSA-65 auths"; the ed25519 half adds nothing against a CRQC but costs
-bytes. Default to **ML-DSA-65-only** for the gate; confirm in rounds. What
-exactly the signature commits to (tx hash? vin context? settlement-epoch
-set?) is pinned as a proposal in **R1.A** for the round to attack.
+**Resolved 2026-07-01 — hybrid, not ML-DSA-only.** This block originally defaulted
+to ML-DSA-65-only for the gate; that is **retracted** (see R1.A(2) box + §8.0.2). The
+auth is the full `HybridEd25519MlDsa` (Ed25519 + ML-DSA-65) — the ed25519 leg adds
+nothing against a *CRQC* but is load-bearing against a *classical* ML-DSA break, and
+Auth-P has no membership-proof classical fallback. What the signature commits to (the
+binding message) is pinned in **R1.A**; two auths per §8.0.1.
 
 ---
 
@@ -310,8 +313,26 @@ the membership transcript tags.
 Open sub-questions for the round: (1) is **Auth-P** necessary, or is the
 backing leaf's `pqc_pk` already derivationally bound to `P_pubkey` such that
 Auth-B + the in-circuit leaf binding pins P? If so, collapse to one auth and
-re-pin §10.1 sizing. (2) ML-DSA-65-only confirmed (ed25519 half adds nothing
-against a CRQC).
+re-pin §10.1 sizing. (2) ~~ML-DSA-65-only confirmed (ed25519 half adds nothing
+against a CRQC).~~
+
+> **RETRACTED 2026-07-01 — the auths are HYBRID (Ed25519 + ML-DSA-65), not ML-DSA-only.**
+> The struck line is *true but answers the wrong question.* It refutes the **CRQC** threat
+> model — against a quantum adversary ed25519 is already broken, so its signature adds
+> nothing — but the case for keeping the ed25519 leg was never the CRQC model. It is
+> defense-in-depth against a **classical cryptanalytic break of ML-DSA-65**: in that world an
+> attacker forges the ML-DSA auth *without possessing the seed*, so the jointly-derived-seed
+> possession-equivalence (which makes ed25519 redundant against seed *compromise*) never
+> triggers, and an ed25519 co-signature stops the forger cold. That is a different axis than
+> the one the struck line addressed. **Auth-P (stake-side) has no membership-proof classical
+> fallback** (Auth-B does — the membership spend-auth leg carries classical binding), so
+> ML-DSA-only for Auth-P is a genuine single point of cryptographic failure with no hybrid
+> hedge anywhere in its path — disqualifying on a quantum-posture-priority system.
+> `00-mission` #1 ("hybrid PQC ships from genesis; nothing trades it away") is the
+> **codification** of this substantive point, not a substitute for it. Cost of hybrid is
+> 152 B/vin on an infrequent tx; E1's gate was already hybrid (correct) and only mis-named
+> `*_mldsa_*` — the naming lie, now `shekyl_emission_hybrid_auth_verify`, is what fed this
+> conflict. Wire freeze: each auth is `HybridSignature` canonical (3385 B). See §8.0.2.
 
 ### R1.B — F-E2: remainder disposition recommendation (for the gate-1 pin)
 
@@ -722,9 +743,9 @@ arithmetic and crypto never re-appear as C++ logic.
 6. **Membership-only backing** — PR-E1 (`shekyl_fcmp_membership_only_verify`),
    **not** `shekyl_fcmp_verify`.
 7. **FCMP balance** — fee `txin_to_key` via existing `shekyl_fcmp_verify`.
-8. **ML-DSA gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
-   in-circuit leaf scalar, and verify the ML-DSA-65 auth(s) over
-   `emission_auth_msg` (R1.A binding).
+8. **Hybrid auth gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
+   in-circuit leaf scalar, and verify the hybrid (Ed25519 + ML-DSA-65) auth(s) over
+   `emission_auth_msg` (R1.A binding) via `shekyl_emission_hybrid_auth_verify`.
 
 **C++ (thin shim):**
 1. **Structural pre-gate** — extend `check_inputs_types_supported` to accept
@@ -970,15 +991,22 @@ ArchivalRewardEmissionVin {
   work_claim:          WorkClaimVector,      // WorkEpochClaim[]{ epoch, ShardWorkEntry[]{ shard_id, serve_credit_bit, scarcity_milli } }
   backing:             MembershipOnlyBacking,// FCMP++ membership, NO key image (§7)
   reward_amount_plain: u64[per-epoch|total], // loud (§5.5)
-  auth_backing:        ML-DSA-65 auth,       // Q1 stake-side: P-that-staked ↔ bond — ML-DSA over the backing leaf's committed H(pqc_pk) (the C-1 gate; §9.6)
-  auth_claim:          ML-DSA-65 auth,       // Q1 claim-side: P-that-claims ↔ THIS emission — binds payout output(s) + settlement_epochs (non-replayable)
+  auth_backing:        HybridSignature,      // Q1 stake-side: P-that-staked ↔ bond — hybrid (Ed25519+ML-DSA-65) over the backing leaf's committed H(pqc_pk) (the C-1 gate; §9.6)
+  auth_claim:          HybridSignature,      // Q1 claim-side: P-that-claims ↔ THIS emission — binds payout output(s) + settlement_epochs (non-replayable)
 }
 ```
 
+> **Auth type corrected 2026-07-01: hybrid, not ML-DSA-only** (retraction of R1.A(2) above).
+> Each auth is a `HybridSignature` (Ed25519 + ML-DSA-65), canonical `SINGLE_SIG_CANONICAL_LEN`
+> = **3385 B/auth**, length-guarded like every other hybrid sig. The ratified reasoning is in
+> the R1.A(2) retraction: defense-in-depth against a *classical* ML-DSA break, with Auth-P
+> lacking any membership-proof classical fallback. E1's gate `shekyl_emission_hybrid_auth_verify`
+> already verifies the hybrid signature.
+
 The **two auths are the Q1 delta over §5.3** (which predates Q1). **Forward-action:**
-`REWARD_EMISSION_LEG.md` §5.3 must be amended to carry both — distinct signatures over distinct
-binding messages (§8.0.1), not one checked twice. Exact wire types follow the `PqcAuthentication` /
-`HybridSignature` house pattern. **This field set is E2's wire freeze.**
+`REWARD_EMISSION_LEG.md` §5.3 amended 2026-07-01 to carry both — distinct signatures over distinct
+binding messages (§8.0.1), not one checked twice; each is the house `HybridSignature` canonical
+encoding. **This field set is E2's wire freeze.**
 
 **(B) As-of-E consensus snapshot (Q7 — marshaled by value; each field frozen at E-close,
 invariant 2, never live):**
@@ -999,12 +1027,13 @@ equal `work_claim`; `reward_P(E)` via `reward_arithmetic` must equal `reward_amo
 dedup via `claimed_epochs_check_and_set`; backing via membership-only + the two ML-DSA auths. **E2
 is unblocked — its wire freeze is (A).**
 
-1. **ML-DSA vin auth shape (F-E4) — gates PR-E2 (wire freeze), not just E3.**
-   *Proposal pinned in R1.A* for the round to attack (binding message, two auths,
-   cSHAKE family). Remaining: is Auth-P necessary or does the leaf→`P_pubkey`
-   derivation already pin P? The binding *message* is pinned (R1.A) but the auth
-   *count* is not, and the auth bytes are in the vin wire — so **PR-E2's canonical
-   encoding cannot freeze until this is answered**. ML-DSA-65-only confirmed.
+1. **ML-DSA vin auth shape (F-E4) — RESOLVED 2026-07-01; PR-E2 wire freeze unblocked.**
+   Binding message pinned in R1.A (cSHAKE family). Auth *count* = **two** (Q1 ratified,
+   §8.0.1: rotation-forced, Auth-B + Auth-P). Auth *algorithm* = **hybrid** (Ed25519 +
+   ML-DSA-65), `HybridSignature` canonical 3385 B/auth — R1.A(2)'s "ML-DSA-65-only" is
+   **retracted** (see the R1.A(2) box: defense-in-depth vs a classical ML-DSA break; Auth-P
+   has no classical fallback). E1's `shekyl_emission_hybrid_auth_verify` implements it. The
+   auth bytes' wire shape is therefore frozen for E2.
 2. **PR-E4 sequencing** — delete `stake_claim` before or after PR-E3.
 3. **Input distinctness** — does the emission vin require backing-input
    distinctness (membership proof does not dedup, §8.2)? Enforce at vin layer?

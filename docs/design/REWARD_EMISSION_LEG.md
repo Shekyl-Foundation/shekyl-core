@@ -392,15 +392,24 @@ ArchivalRewardEmissionVin {
   settlement_epochs:  u64[MAX],              // 1 ≤ MAX ≤ 15, strictly increasing, unique
   work_claim:         WorkClaimVector,       // per-epoch public work breakdown (§5.4)
   backing:            MembershipOnlyBacking, // FCMP++ membership, NO key image (§7)
-  auth_backing:       MlDsa65Auth,           // stake-side: P-that-staked ↔ bond (§5.3.1)
-  auth_claim:         MlDsa65Auth,           // claim-side: P-that-claims ↔ this emission (§5.3.1)
+  auth_backing:       HybridSignature,       // stake-side: P-that-staked ↔ bond (§5.3.1)
+  auth_claim:         HybridSignature,       // claim-side: P-that-claims ↔ this emission (§5.3.1)
 }
 ```
 
 (Plaintext `reward_amount_plain` is carried per §5.5 and bound by the balance/inflation
 check, so it is not re-listed here.)
 
-#### 5.3.1 The two ML-DSA-65 auths (amendment 2026-07-01)
+#### 5.3.1 The two hybrid auths (amendment 2026-07-01; auth type corrected same day)
+
+> **Correction (2026-07-01).** This section originally specified each auth as
+> **ML-DSA-65-only**. That was reversed the same day: the auths are **hybrid**
+> (Ed25519 + ML-DSA-65), matching every other signature in the system. See the R1.A(2)
+> retraction in [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.0.2 for the
+> reasoning — the ML-DSA-only line refuted only the CRQC threat model; the live threat the
+> Ed25519 leg closes is a *classical* cryptanalytic break of ML-DSA-65, and **Auth-P has no
+> membership-proof classical fallback**, so ML-DSA-only there would be a single point of
+> cryptographic failure. The **two-auth** structure below (rotation-forced) is unchanged.
 
 Added per [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.0.1 (Q1 ratified —
 two auths, rotation-forced) and §8.0.2 (the frozen wire field set). **Why two, not one:**
@@ -411,11 +420,12 @@ stake, by membership) and "`P` authorizes this payout" (at claim) are provably a
 rotation, one auth structurally cannot close the gap. So **two auths, over two distinct
 binding messages** (not one signature checked twice):
 
-- **`auth_backing`** — binds the **`P`-that-staked** to the bond: the ML-DSA-65 attestation
-  over the backing leaf's committed `H(pqc_pk)` (the leaf-bound quantum spend-authority gate,
-  §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7). This is the
-  **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify is the built primitive
-  `shekyl_emission_mldsa_gate_verify` (PR-E1).
+- **`auth_backing`** — binds the **`P`-that-staked** to the bond: the hybrid (Ed25519 +
+  ML-DSA-65) attestation over the backing leaf's committed `H(pqc_pk)` (the leaf-bound
+  spend-authority gate, §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md)
+  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify is the built
+  primitive `shekyl_emission_hybrid_auth_verify` (PR-E1). Because the leaf commits the **full
+  hybrid** pubkey and the auth exercises both halves, it binds `P` exactly as tightly as the leaf.
 - **`auth_claim`** — binds the **`P`-that-claims** to *this specific emission*: its binding
   message commits to the **payout output(s) minted and the `settlement_epochs`**, so a valid
   claim-auth **cannot be replayed** against a different payout or a different epoch set.
@@ -424,9 +434,9 @@ binding messages** (not one signature checked twice):
 **current** `P` — reward **follows the rotation** (the persona that staked earns it, the
 persona that claims receives it, distinct operator-controlled keys). This is the same
 drain-and-rotate degree of freedom (profit-taking = rotation) surfacing at the emission layer;
-the emission wire and the persona-rotation firewall are **designed to fit**. Exact wire types
-(`MlDsa65Auth`) follow the `PqcAuthentication` / `HybridSignature` house encoding; **this field
-set is E2's wire freeze** (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2).
+the emission wire and the persona-rotation firewall are **designed to fit**. Exact wire type is
+the house `HybridSignature` canonical encoding (`SINGLE_SIG_CANONICAL_LEN` = 3385 B/auth);
+**this field set is E2's wire freeze** (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2).
 
 **Not present on the wire (rejected if required by legacy code paths):**
 
@@ -847,7 +857,8 @@ refresh claimed-epoch cache; `Bonded` → `AdmissionPending` on join-Market reve
 **Resolved by the worked byte sweep**
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Close-condition (ii)*, ledger row
 AGG). Per-emission size is dominated by **constant-size crypto** (hybrid pubkey + two
-ML-DSA-65 auths + FCMP++ membership ≈ 15 kB), not the work claim
+hybrid auths + FCMP++ membership ≈ 15 kB; the +152 B vs ML-DSA-only is within the rounding),
+not the work claim
 (`|epochs| × portfolio × 13 B` — ≤ 780 B/epoch at year-30 lean portfolio). At a 20 kB
 per-emission margin, the aggregate across the `N_P` envelope {40, 79, 154} amortizes to
 **80–310 B/block = 0.027–0.103 %** of the 300 kB penalty-free zone; single-tx max
