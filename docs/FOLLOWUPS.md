@@ -7313,6 +7313,25 @@ one place to confirm each item's relationship to the wallet stack.
   measurement + the exit-as-scaffold note) and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (SP-T3 onion
   surface).
+- **2d-2 SP-T3 — inbound onion serving-side hardening (the implementation threat model).** The onion
+  is SP-T3's first **inbound** surface: it accepts connections from **untrusted** peers over
+  high-latency circuits — unlike SP-T0's *trusted loopback* control client or SP-T1/T2's *outbound*
+  dials — so it does **not** inherit SP-T0a's single-mailbox actor pattern (the SP-T0a head-of-line
+  note is benign on loopback control but a real DoS on an inbound listener). Three protections, the
+  inbound analogues of client-side ones already shipped, must land **with** the serving actor:
+  (1) a **decoupled accept loop** — the listener on its own `tokio::spawn`, each connection handled
+  *off* the mailbox (spawn-per-connection), so a slow peer or stalled rendezvous can't
+  head-of-line-block the service; (2) **per-connection `tokio::time::timeout`s** on accept→read, so a
+  stalled peer is dropped rather than holding a file descriptor (bounds FD exhaustion — the client
+  side is already bounded via `HANDSHAKE_READ_TIMEOUT` / DQ-T0.4's `CAPTURE_TIMEOUT`); (3) a
+  **`max_request_size`** capping an inbound payload *before* allocation (the inbound mirror of the
+  control framer's `MAX_REPLY_BYTES`, already an "adversarial-network bound"). **Rule-`21`:** pinned
+  for SP-T3's build, **not code now** — the inbound listener has no consumer until the onion serving
+  surface exists, so provisioning it earlier is the speculation the `owned_net`-extraction discipline
+  avoided. **Target:** V3.x (with the SP-T3 onion-service build). See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §6a and
+  [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md) DQ-T0.2 (the `ADD_ONION`
+  command that creates the service).
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of

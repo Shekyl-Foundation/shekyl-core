@@ -115,7 +115,11 @@ are `legacy_tor_controller.rs` / `legacy_tor_control_stream.rs`, control-spec-se
 - **SAFECOOKIE** — `AuthenticateMethod::SafeCookie`, the `AUTHCHALLENGE SERVERHASH/SERVERNONCE` parse,
   `authenticate_cmd` (control-spec §3.5) — the reference for the dedicated SAFECOOKIE KAT.
 - **`ADD_ONION`/`DEL_ONION`** — `add_onion_cmd`/`del_onion_cmd`
-  (key/flags/max_streams/virt_port/client_auth, §3.27/§3.38) — exactly the SP-T3 surface.
+  (key/flags/max_streams/virt_port/client_auth, §3.27/§3.38) — exactly the SP-T3 surface. These
+  control commands *create* an onion service whose **inbound** serving is a different actor shape
+  from this control client (untrusted peers, high-latency circuits) — its serving-side threat
+  model (decoupled accept loop, per-connection timeouts, `max_request_size`) is pinned in
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §6a for SP-T3.
 - **The demux — adopt its *poll/phase* model, not a concurrent reader.** Gosling's demux is **not** a
   fully-async reader: `read_reply()` returns `Option<Reply>` tagged with a `StatusCode`, and
   `wait_async_events()` drains the `650`s at controlled points (the public `update()` is the same
