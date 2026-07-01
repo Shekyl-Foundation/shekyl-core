@@ -27,7 +27,7 @@ zeroize = { version = "1", default-features = false, features = ["alloc", "deriv
 # `attach_stream` consumes (the read half is wrapped as a `Stream<Item = Framed>`);
 # getrandom is the OS CSPRNG for the SAFECOOKIE client nonce. `process` is SP-T0b's
 # managed-child launch/shutdown (`tokio::process::{Command, Child}`).
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process"] }
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
 futures-core = "0.3"
 getrandom = "0.2"

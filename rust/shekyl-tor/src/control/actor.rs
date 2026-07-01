@@ -274,7 +274,10 @@ pub enum TorLaunch {
 /// `DataDirectory`, a `ControlPort auto` written to a file, cookie authentication, and
 /// the given `SocksPort`, then connects to the port it opened.
 pub struct ManagedTor {
-    /// Path to the `tor` binary.
+    /// Path to the `tor` binary. **The SP-T0c handoff:** SP-T0c's hash-pinned Tor Expert
+    /// Bundle binary flows in here, so the moment that pin resolves a managed `tor` has a
+    /// waiting control/SOCKS socket — T0b-2's launch config and SP-T0c's verified-binary
+    /// pin meet at this field.
     pub tor_binary: PathBuf,
     /// Wallet-private `DataDirectory`. (DQ-T0.7's guard-persistence nuance is deferred;
     /// a wallet-private dir is the safe default until that decision lands.)
@@ -284,10 +287,12 @@ pub struct ManagedTor {
     /// Extra `tor` CLI/torrc flags (wallet-controlled). Empty in the simplest case; the
     /// child-lifecycle test passes `--DisableNetwork 1`.
     pub extra_args: Vec<String>,
-    /// Optional shutdown-outcome observer. After the bounded shutdown wait, `on_stop`
-    /// reports how the child exited ([`TorExit`]). `None` in production unless wired to
-    /// telemetry; the lifecycle test uses it to assert a *real* reap rather than probing
-    /// a pid.
+    /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
+    /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
+    /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (a `tor` that had to be
+    /// SIGKILLed — it wedged past the grace window) is an unclean-shutdown signal the
+    /// wallet-integration layer will want to surface. `None` today; the lifecycle test
+    /// uses it to assert a *real* reap rather than probing a pid.
     pub exit_observer: Option<oneshot::Sender<TorExit>>,
 }
 
@@ -529,8 +534,10 @@ async fn spawn_managed_tor(
 ) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
     let port_file = managed.data_dir.join("control_port");
     // A stale port file from a prior run would be read as *this* run's port — remove it
-    // so `wait_for_control_port` only ever returns a fresh value.
-    std::fs::remove_file(&port_file).ok();
+    // so `wait_for_control_port` only ever returns a fresh value. Async fs throughout so
+    // the spawn never blocks a runtime worker (this actor is the pattern for future
+    // socket actors — the async I/O should be correct, not just fast enough here).
+    tokio::fs::remove_file(&port_file).await.ok();
 
     let child = tokio::process::Command::new(&managed.tor_binary)
         .arg("--DataDirectory")
@@ -571,7 +578,7 @@ async fn wait_for_control_port(
 ) -> Result<SocketAddr, ControlError> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if let Ok(contents) = std::fs::read_to_string(port_file) {
+        if let Ok(contents) = tokio::fs::read_to_string(port_file).await {
             if let Some(addr) = contents
                 .lines()
                 .find_map(|line| line.strip_prefix("PORT="))
