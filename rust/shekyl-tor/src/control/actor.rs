@@ -459,56 +459,20 @@ impl Actor for TorControl {
             } => (control_addr, cookie_path, None),
         };
 
-        // From here down, any handshake `?`-failure drops `child` on the way out: for a
-        // managed child, its `kill_on_drop` SIGKILLs the orphan (immediate kill, background
-        // reap). `spawn_managed_tor` reaps its *own* startup failures explicitly because it
-        // owns the child as a local there; here the child is struct-bound, so the drop path
-        // is the cleanup — sufficient, since it terminates the process at once.
-        let stream = TcpStream::connect(control_addr)
-            .await
-            .map_err(|_| ControlError::Connect)?;
-        let (mut reader, mut writer) = stream.into_split();
-        let mut framer = ReplyFramer::default();
-
-        // SAFECOOKIE handshake — synchronous request/response; no 650 events can
-        // arrive before SETEVENTS, so reading the framer by hand is safe here.
-        let cookie = read_cookie_file(&cookie_path).map_err(ControlError::Auth)?;
-        let mut client_nonce = [0u8; 32];
-        getrandom::getrandom(&mut client_nonce).map_err(|_| ControlError::Nonce)?;
-
-        write_line(
-            &mut writer,
-            &format!("AUTHCHALLENGE SAFECOOKIE {}", hex_upper(&client_nonce)),
-        )
-        .await?;
-        let challenge = read_reply(&mut reader, &mut framer).await?;
-        let (server_hash, server_nonce) =
-            parse_authchallenge(&challenge).map_err(ControlError::Auth)?;
-        let verified = verify_server_hash(
-            &cookie,
-            &client_nonce,
-            server_nonce.as_array(),
-            server_hash.as_array(),
-        )
-        .ok_or(ControlError::ServerHashMismatch)?;
-        let client_hash = verified.client_hash();
-
-        write_line(
-            &mut writer,
-            &format!("AUTHENTICATE {}", hex_upper(&client_hash)),
-        )
-        .await?;
-        expect_status(&mut reader, &mut framer, 250).await?;
-
-        // Orphan protection for the **managed** child (DQ-T0.1): `TAKEOWNERSHIP` makes
-        // tor exit when this connection drops, so even a crash that skips `on_stop`
-        // leaves no orphan. Only for a managed child — `TAKEOWNERSHIP` *takes ownership*,
-        // and an attached tor is explicitly not ours (`TorLaunch::Attached`); issuing it
-        // there would exit a bring-your-own tor when the wallet closes.
-        if child.is_some() {
-            write_line(&mut writer, "TAKEOWNERSHIP").await?;
-            expect_status(&mut reader, &mut framer, 250).await?;
-        }
+        // Run the handshake, then arm the actor. A **managed** child is reaped explicitly on
+        // any handshake failure — uniform with `spawn_managed_tor`, and per tokio's own
+        // guidance an explicit `wait` is preferred over `kill_on_drop`'s best-effort reap for
+        // a stricter cleanup guarantee. (Attached has no child to reap.)
+        let (reader, writer, framer) =
+            match handshake(control_addr, &cookie_path, child.is_some()).await {
+                Ok(halves) => halves,
+                Err(e) => {
+                    if let Some(mut c) = child {
+                        kill_and_reap(&mut c.child).await;
+                    }
+                    return Err(e);
+                }
+            };
 
         // Handshake done — hand the read half to the stream and let kameo merge it
         // into the mailbox.
@@ -563,6 +527,82 @@ impl Drop for TorControl {
     }
 }
 
+/// Run the SAFECOOKIE handshake on a fresh control connection: connect, `AUTHCHALLENGE`,
+/// verify the server hash, `AUTHENTICATE`, and — for a managed child (`take_ownership`) —
+/// `TAKEOWNERSHIP`. Returns the split read/write halves + the framer for the actor to
+/// attach. Synchronous request/response: no `650` events can arrive before `SETEVENTS`, so
+/// the framer is read by hand here. On any `Err`, the caller reaps a managed child (this
+/// function owns no process).
+async fn handshake(
+    control_addr: SocketAddr,
+    cookie_path: &Path,
+    take_ownership: bool,
+) -> Result<(OwnedReadHalf, OwnedWriteHalf, ReplyFramer), ControlError> {
+    let stream = TcpStream::connect(control_addr)
+        .await
+        .map_err(|_| ControlError::Connect)?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut framer = ReplyFramer::default();
+
+    let cookie = read_cookie_file(cookie_path).map_err(ControlError::Auth)?;
+    let mut client_nonce = [0u8; 32];
+    getrandom::getrandom(&mut client_nonce).map_err(|_| ControlError::Nonce)?;
+
+    write_line(
+        &mut writer,
+        &format!("AUTHCHALLENGE SAFECOOKIE {}", hex_upper(&client_nonce)),
+    )
+    .await?;
+    let challenge = read_reply(&mut reader, &mut framer).await?;
+    let (server_hash, server_nonce) =
+        parse_authchallenge(&challenge).map_err(ControlError::Auth)?;
+    let verified = verify_server_hash(
+        &cookie,
+        &client_nonce,
+        server_nonce.as_array(),
+        server_hash.as_array(),
+    )
+    .ok_or(ControlError::ServerHashMismatch)?;
+    let client_hash = verified.client_hash();
+
+    write_line(
+        &mut writer,
+        &format!("AUTHENTICATE {}", hex_upper(&client_hash)),
+    )
+    .await?;
+    expect_status(&mut reader, &mut framer, 250).await?;
+
+    // Orphan protection for the **managed** child (DQ-T0.1): `TAKEOWNERSHIP` makes tor exit
+    // when this connection drops, so even a crash that skips `on_stop` leaves no orphan.
+    // Managed only — it *takes ownership*, and an attached tor is explicitly not ours
+    // (`TorLaunch::Attached`); issuing it there would exit a bring-your-own tor on close.
+    if take_ownership {
+        write_line(&mut writer, "TAKEOWNERSHIP").await?;
+        expect_status(&mut reader, &mut framer, 250).await?;
+    }
+
+    Ok((reader, writer, framer))
+}
+
+/// Does any caller `extra_args` flag name a managed-mode safety invariant? Compared as a
+/// normalized (leading `-`/`_` stripped, lowercased) **prefix** so a whole family is
+/// covered — e.g. `control` catches `ControlPort` / `ControlSocket` / `ControlListenAddress`
+/// / `ControlPortWriteToFile`, `cookie` catches `CookieAuthentication` / `CookieAuthFile`.
+fn extra_args_touch_safety(extra_args: &[String]) -> bool {
+    const PROTECTED: &[&str] = &[
+        "control",          // the control plane: port / socket / listen-addr / write-to-file
+        "cookie",           // cookie auth: CookieAuthentication / CookieAuthFile
+        "hashedcontrol",    // HashedControlPassword — an alternate control auth
+        "datadirectory",    // the actor-owned DataDirectory
+        "socksport",        // the actor-owned SocksPort
+        "owningcontroller", // __OwningControllerProcess — the ownership handshake
+    ];
+    extra_args.iter().any(|arg| {
+        let norm = arg.trim_start_matches(['-', '_']).to_ascii_lowercase();
+        PROTECTED.iter().any(|p| norm.starts_with(p))
+    })
+}
+
 /// Spawn a **managed** `tor` (DQ-T0.1): a wallet-private `DataDirectory`, `ControlPort
 /// auto` written to a file, cookie auth, and the configured `SocksPort`. Waits (bounded)
 /// for the control-port file, then returns the child plus the `(control_addr,
@@ -570,6 +610,15 @@ impl Drop for TorControl {
 async fn spawn_managed_tor(
     managed: ManagedTor,
 ) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
+    // Refuse `extra_args` that would touch a managed-mode **safety invariant** — the
+    // control plane (loopback control port + cookie auth), the actor-owned DataDirectory,
+    // and SocksPort. Tor's option parsing is *additive* for ports, so neither reordering
+    // nor value-checking is enough: the robust rule is that `extra_args` may not name any
+    // of these flag families at all. Reject up front (a caller-config error) rather than
+    // silently spawn a tor with, e.g., an off-loopback control port.
+    if extra_args_touch_safety(&managed.extra_args) {
+        return Err(ControlError::Spawn);
+    }
     // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
     // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
     // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
@@ -601,6 +650,16 @@ async fn spawn_managed_tor(
         .arg("1")
         .arg("--SocksPort")
         .arg(managed.socks_port.to_string())
+        // A file log in the (0700, wallet-private) DataDirectory so a `Spawn` failure is
+        // diagnosable — the actor's own errors stay content-free (no paths), but tor's
+        // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
+        // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
+        // targets / SOCKS usernames are info/debug only), so it's safe to persist.
+        .arg("--Log")
+        .arg(format!(
+            "notice file {}",
+            managed.data_dir.join("tor.log").display()
+        ))
         .args(&managed.extra_args)
         .kill_on_drop(true)
         .stdout(Stdio::null())
@@ -640,9 +699,21 @@ async fn spawn_managed_tor(
     ))
 }
 
-/// Poll the `ControlPortWriteToFile` until it carries a parseable `PORT=<addr>` line,
-/// bounded by `timeout`. Async so the backoff yields the runtime rather than blocking a
-/// worker thread.
+/// Parse a `ControlPortWriteToFile` `PORT=` value. The usual TCP form is `<addr>:<port>`,
+/// but some tor builds/configs write a bare `<port>`; since the actor's `ControlPort auto`
+/// binds **loopback**, a port-only value means `127.0.0.1:<port>`. Accepting both keeps the
+/// managed spawn from spuriously timing out on a valid-but-shorter format.
+fn parse_control_port(value: &str) -> Option<SocketAddr> {
+    let value = value.trim();
+    if let Ok(addr) = value.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    let port: u16 = value.parse().ok()?;
+    Some(SocketAddr::from(([127, 0, 0, 1], port)))
+}
+
+/// Poll the `ControlPortWriteToFile` until it carries a parseable `PORT=` line, bounded by
+/// `timeout`. Async so the backoff yields the runtime rather than blocking a worker thread.
 async fn wait_for_control_port(
     port_file: &Path,
     timeout: Duration,
@@ -653,7 +724,7 @@ async fn wait_for_control_port(
             if let Some(addr) = contents
                 .lines()
                 .find_map(|line| line.strip_prefix("PORT="))
-                .and_then(|a| a.trim().parse::<SocketAddr>().ok())
+                .and_then(parse_control_port)
             {
                 return Ok(addr);
             }
@@ -1024,6 +1095,63 @@ mod tests {
             ControlError::Desync.to_string(),
             "unsolicited control reply (no command in flight)"
         );
+    }
+
+    #[test]
+    fn extra_args_reject_safety_flags_across_forms() {
+        // The control plane, cookie auth, data dir, socks port, and ownership are rejected —
+        // whatever the flag form (with/without `--`, case, `__`, or a `Group*` suffix).
+        for bad in [
+            "--ControlPort",
+            "ControlSocket",
+            "--controlportwritetofile",
+            "--CookieAuthentication",
+            "CookieAuthFile",
+            "--HashedControlPassword",
+            "--DataDirectory",
+            "--SocksPort",
+            "__OwningControllerProcess",
+            "--DataDirectoryGroupReadable",
+        ] {
+            assert!(
+                extra_args_touch_safety(&[bad.to_owned(), "value".to_owned()]),
+                "{bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_args_allow_non_safety_flags() {
+        // Legitimate customization the managed spawn should permit.
+        for ok in [
+            vec!["--DisableNetwork".to_owned(), "1".to_owned()],
+            vec!["--Log".to_owned(), "notice stderr".to_owned()],
+            vec!["--Bridge".to_owned(), "obfs4 ...".to_owned()],
+            vec![],
+        ] {
+            assert!(!extra_args_touch_safety(&ok), "{ok:?} must be allowed");
+        }
+    }
+
+    #[test]
+    fn parse_control_port_accepts_socketaddr_and_bare_port() {
+        use std::net::SocketAddr;
+        // The usual `addr:port` form.
+        assert_eq!(
+            parse_control_port("127.0.0.1:9051"),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        // A bare port → loopback (the actor's ControlPort binds loopback).
+        assert_eq!(
+            parse_control_port("9051"),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        // Surrounding whitespace tolerated; garbage rejected.
+        assert_eq!(
+            parse_control_port("  127.0.0.1:9051  "),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        assert_eq!(parse_control_port("not-a-port"), None);
     }
 }
 
