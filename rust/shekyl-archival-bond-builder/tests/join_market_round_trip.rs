@@ -19,7 +19,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding, BondBuildError};
 use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
-    HoldingsDescriptor, HoldingsKind,
+    BondTerm, HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -93,8 +93,13 @@ fn join_market_construct_verifies_against_retention() {
     let out_masks = commit(CHANGE, &mask);
 
     // --- verify (2/2): CT cleartext balance, bond_credit = floor on output ---
-    verify_bond_post_ct_balance(&pseudo_outs, &out_masks, FEE, floor, 0)
-        .expect("bond-post CT balance closes with bond_credit = floor");
+    verify_bond_post_ct_balance(
+        &pseudo_outs,
+        &out_masks,
+        FEE,
+        BondTerm::Credit(AtomicUnits::from_raw(floor)),
+    )
+    .expect("bond-post CT balance closes with bond_credit = floor");
 }
 
 #[test]
@@ -134,7 +139,12 @@ fn wrong_credit_amount_breaks_the_balance() {
     let out_masks = commit(CHANGE, &mask);
 
     // Claiming a bond_credit other than the funded floor must not balance.
-    let result = verify_bond_post_ct_balance(&pseudo_outs, &out_masks, FEE, floor - 1, 0);
+    let result = verify_bond_post_ct_balance(
+        &pseudo_outs,
+        &out_masks,
+        FEE,
+        BondTerm::Credit(AtomicUnits::from_raw(floor - 1)),
+    );
     assert_eq!(result, Err(BondCtBalanceError::SumMismatch));
     assert_eq!(built.vin().bond_credit, floor);
 }

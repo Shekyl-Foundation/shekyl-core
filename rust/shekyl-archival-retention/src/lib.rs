@@ -42,7 +42,7 @@ pub mod reward_arithmetic;
 pub mod serve_eligibility;
 pub mod wire;
 
-pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError};
+pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,

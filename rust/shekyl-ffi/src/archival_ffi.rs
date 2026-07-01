@@ -17,13 +17,14 @@ use shekyl_archival_retention::{
     serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
-    BondPostKind, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    BondPostKind, BondTerm, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
     HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
     CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
+use shekyl_units::AtomicUnits;
 
 /// Success.
 pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
@@ -693,8 +694,6 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
 
 fn map_bond_ct_balance_error(err: BondCtBalanceError) -> u8 {
     match err {
-        BondCtBalanceError::BothTermsNonzero => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
-        BondCtBalanceError::NoBondTerm => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
         BondCtBalanceError::InvalidPoint => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT,
         BondCtBalanceError::SumMismatch => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH,
     }
@@ -749,7 +748,17 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
         Err(code) => return code,
     };
 
-    match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, bond_credit, bond_debit) {
+    // The C ABI carries the two directions as separate u64s; convert to the
+    // `BondTerm` the (total) core function takes, rejecting the both / neither
+    // states here — at the untrusted-input boundary — with the same status codes.
+    let term = match (bond_credit, bond_debit) {
+        (0, 0) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM,
+        (credit, 0) => BondTerm::Credit(AtomicUnits::from_raw(credit)),
+        (0, debit) => BondTerm::Debit(AtomicUnits::from_raw(debit)),
+        (_, _) => return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS,
+    };
+
+    match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, term) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
         Err(e) => map_bond_ct_balance_error(e),
     }
@@ -875,6 +884,27 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
+    }
+
+    // The both / neither bond-term rigidity is unrepresentable inside the core
+    // `BondTerm`, so it is enforced (and tested) here at the `(credit, debit) ->
+    // BondTerm` FFI conversion — the boundary where the untrusted u64s enter.
+    #[test]
+    fn bond_ct_balance_ffi_rejects_neither_bond_term() {
+        // credit = debit = 0 (empty balance) → NO_BOND_TERM, not OK.
+        let code = unsafe {
+            shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0)
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM);
+    }
+
+    #[test]
+    fn bond_ct_balance_ffi_rejects_both_bond_terms() {
+        // credit and debit both non-zero → BOTH_TERMS.
+        let code = unsafe {
+            shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 1, 1)
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS);
     }
 
     #[test]
