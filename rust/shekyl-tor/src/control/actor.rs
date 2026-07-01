@@ -166,7 +166,7 @@ impl std::fmt::Display for ControlError {
                 f,
                 "control command was malformed (empty or forbidden character)"
             ),
-            Self::Spawn => write!(f, "managed tor failed to launch or open its control port"),
+            Self::Spawn => write!(f, "managed tor failed to launch or become driveable"),
         }
     }
 }
@@ -670,10 +670,16 @@ async fn spawn_managed_tor(
     // port/cookie that will never appear. `child.wait()` in the losing arm reaps that case;
     // the unconditional `kill_and_reap` below then covers the readiness-timeout arm (child
     // still running) and is a harmless no-op after an already-reaped exit.
+    // One shared deadline across *both* readiness waits — the control-port file, then the
+    // cookie. Total startup is bounded by a single `SPAWN_TIMEOUT`, not `SPAWN_TIMEOUT` *per*
+    // wait: the cookie lands moments after the port file, so whatever the port poll leaves of
+    // the budget is ample for it, and a tor that never becomes driveable fails at the *one*
+    // deadline rather than after ~2×. That is what makes "bounded startup" actually bounded.
+    let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
     let ready = tokio::select! {
         r = async {
-            let control_addr = wait_for_control_port(&port_file, SPAWN_TIMEOUT).await?;
-            wait_for_cookie(&cookie_path, SPAWN_TIMEOUT).await?;
+            let control_addr = wait_for_control_port(&port_file, deadline).await?;
+            wait_for_cookie(&cookie_path, deadline).await?;
             Ok::<_, ControlError>(control_addr)
         } => r,
         _ = child.wait() => Err(ControlError::Spawn),
@@ -713,12 +719,12 @@ fn parse_control_port(value: &str) -> Option<SocketAddr> {
 }
 
 /// Poll the `ControlPortWriteToFile` until it carries a parseable `PORT=` line, bounded by
-/// `timeout`. Async so the backoff yields the runtime rather than blocking a worker thread.
+/// the shared startup `deadline` (`spawn_managed_tor` gives one budget to this *and* the
+/// cookie wait). Async so the backoff yields the runtime rather than blocking a worker thread.
 async fn wait_for_control_port(
     port_file: &Path,
-    timeout: Duration,
+    deadline: tokio::time::Instant,
 ) -> Result<SocketAddr, ControlError> {
-    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if let Ok(contents) = tokio::fs::read_to_string(port_file).await {
             if let Some(addr) = contents
@@ -736,17 +742,20 @@ async fn wait_for_control_port(
     }
 }
 
-/// Poll until tor's control-auth cookie is fully written, bounded by `timeout`. Checks the
-/// file **length** via async `metadata` — non-blocking (unlike a `read_cookie_file` poll),
-/// and it never reads the secret in a loop. The SAFECOOKIE cookie is exactly 32 bytes, so a
-/// shorter file is a partial write to retry past; that is the whole condition of the
+/// Poll until tor's control-auth cookie is fully written, bounded by the shared startup
+/// `deadline` (see [`spawn_managed_tor`] — the same budget the control-port wait draws from).
+/// Checks the file **length** via async `metadata` — non-blocking (unlike a `read_cookie_file`
+/// poll), and it never reads the secret in a loop. The SAFECOOKIE cookie is exactly 32 bytes,
+/// so a shorter file is a partial write to retry past; that is the whole condition of the
 /// startup race (tor has written its port file but not yet its complete cookie). The
 /// authoritative validated read — permissions, exact length — happens once, later, in the
 /// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt.
-async fn wait_for_cookie(cookie_path: &Path, timeout: Duration) -> Result<(), ControlError> {
+async fn wait_for_cookie(
+    cookie_path: &Path,
+    deadline: tokio::time::Instant,
+) -> Result<(), ControlError> {
     /// The SAFECOOKIE control-auth cookie (control-spec §3.24) is exactly 32 bytes.
     const COOKIE_LEN: u64 = 32;
-    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if tokio::fs::metadata(cookie_path)
             .await
