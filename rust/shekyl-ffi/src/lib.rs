@@ -104,6 +104,9 @@ pub mod pow_randomx_ffi;
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 
+// General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
+pub mod ct_balance_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into
