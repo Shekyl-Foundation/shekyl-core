@@ -403,10 +403,11 @@ mod live {
 
         wait_for_bootstrap(&actor).await?;
 
-        // Subscribe to STREAM only. Pre-SP-T0b the actor does not subscribe
-        // STATUS_CLIENT, so a bare STREAM is correct here; once SP-T0b owns the
-        // bootstrap feed, the §3b SETEVENTS-union invariant applies and this must
-        // become `SETEVENTS STREAM STATUS_CLIENT` (SETEVENTS replaces, never adds).
+        // Subscribe to STREAM only, and this is correct *permanently* — not just
+        // pre-SP-T0b. SP-T0b drives bootstrap readiness from a `GETINFO
+        // status/bootstrap-phase` poll task (design §3b), a command, not a
+        // `STATUS_CLIENT` subscription, so nothing else ever shares this `SETEVENTS`
+        // set. There is no union invariant to honour and no reason this ever grows.
         actor
             .ask(Command::SetEvents(vec!["STREAM".to_owned()]))
             .await
