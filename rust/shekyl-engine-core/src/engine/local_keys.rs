@@ -1648,7 +1648,7 @@ mod tests {
         use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
         use shekyl_archival_retention::{
             bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post,
-            BondCtBalanceError, BondPostError, HoldingsDescriptor, HoldingsKind,
+            BondCtBalanceError, BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind,
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
@@ -1659,7 +1659,10 @@ mod tests {
         use shekyl_curve_primitives::Commitment;
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
         use shekyl_fcmp::PqcLeafScalar;
-        use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
+        use shekyl_tx_builder::{
+            sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext, TxBuilderError,
+        };
+        use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
         // Wallet keys fund the transaction; the bond persona `P` is a separate
         // identity that authorizes the post (credit paths sign under P_pubkey).
@@ -1783,6 +1786,33 @@ mod tests {
         )
         .expect("sign_transaction_with_terms must succeed for the bond post");
 
+        // ── Negative: the construct-side balance self-verify (Path-1) ────
+        // Re-sign the same real-tree inputs with the change output one atomic
+        // unit short. `validate_inputs` only checks funds *sufficiency*
+        // (available >= required), so an over-funded construct passes it and
+        // reaches the post-prove self-verify — which runs the exact daemon
+        // balance equation over the built commitments and rejects it locally
+        // (fail-fast) rather than leaving a malformed tx for a daemon rejection.
+        let short_change = vec![make_recipient_output_info(
+            &keys,
+            change - 1,
+            change_output_index,
+        )];
+        let self_check_err = sign_transaction_with_terms(
+            signable_tx_hash,
+            &inputs,
+            &short_change,
+            AtomicUnits::from_raw(fee),
+            &[],
+            &[credit_term],
+            &tree,
+        )
+        .expect_err("an over-funded construct must fail the balance self-verify");
+        assert!(
+            matches!(self_check_err, TxBuilderError::BalanceSelfCheck(_)),
+            "expected the construct-side self-verify to return BalanceSelfCheck, got: {self_check_err:?}"
+        );
+
         // ── Verify 1/4: vin semantics, record does not yet exist ─────────
         verify_join_market_bond_post(built.vin(), false)
             .expect("verify accepts a fresh JoinMarket post");
@@ -1853,12 +1883,28 @@ mod tests {
         // check directly alongside the prover's pseudo-outs.
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
         let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
-        verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
-            .expect("bond-post CT balance closes over prover-emitted commitments");
+        verify_bond_post_ct_balance(
+            &pseudo_outs_flat,
+            &out_masks_flat,
+            fee,
+            BondTerm::Credit(
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                    .expect("bond floor is non-zero"),
+            ),
+        )
+        .expect("bond-post CT balance closes over prover-emitted commitments");
 
         // ── Reject 1: a wrong bond_credit must not balance ───────────────
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            verify_bond_post_ct_balance(
+                &pseudo_outs_flat,
+                &out_masks_flat,
+                fee,
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor - 1))
+                        .expect("bond floor is non-zero")
+                ),
+            ),
             Err(BondCtBalanceError::SumMismatch),
             "a bond_credit other than the funded floor must break the balance"
         );
@@ -1867,7 +1913,16 @@ mod tests {
         let mut tampered = out_masks_flat.clone();
         tampered[0] ^= 0x01;
         assert!(
-            verify_bond_post_ct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            verify_bond_post_ct_balance(
+                &pseudo_outs_flat,
+                &tampered,
+                fee,
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                        .expect("bond floor is non-zero")
+                ),
+            )
+            .is_err(),
             "a tampered commitment must not satisfy the balance"
         );
 

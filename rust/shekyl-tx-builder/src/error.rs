@@ -128,4 +128,14 @@ pub enum TxBuilderError {
     /// Wire encoding / phase-1 payload construction failed.
     #[error("wire encoding failed: {0}")]
     WireError(String),
+
+    /// The constructed transaction failed the construct-side CT balance
+    /// self-check: the built pseudo-outputs + output masks do not satisfy the
+    /// commitment-sum balance equation the daemon verifies. This is a local,
+    /// fail-fast catch for a construction/masking bug that the cleartext
+    /// funds-sufficiency check in `validate_inputs` cannot see (amounts correct,
+    /// blinding factors don't balance on the curve) — caught before sign +
+    /// broadcast rather than as a daemon rejection.
+    #[error("construct-side CT balance self-check failed: {0}")]
+    BalanceSelfCheck(#[from] shekyl_ct_balance::CtBalanceError),
 }

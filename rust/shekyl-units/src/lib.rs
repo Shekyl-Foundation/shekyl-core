@@ -208,6 +208,32 @@ impl AtomicUnits {
     }
 }
 
+/// A non-zero [`AtomicUnits`] amount.
+///
+/// Constructed via the fallible [`Self::new`]; a zero amount is *unrepresentable*.
+/// Use it where a type must encode "a real, positive amount" — e.g. a bond
+/// credit/debit direction term, where a zero would be a silent no-op that means
+/// "no term". It keeps the [`AtomicUnits`] money type (unit-safe, atomic units)
+/// rather than dropping to a bare integer newtype.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct NonZeroAtomicUnits(AtomicUnits);
+
+impl NonZeroAtomicUnits {
+    /// Wrap a non-zero amount; `None` if `amount` is [`AtomicUnits::ZERO`].
+    pub const fn new(amount: AtomicUnits) -> Option<Self> {
+        if amount.is_zero() {
+            None
+        } else {
+            Some(Self(amount))
+        }
+    }
+
+    /// The wrapped amount (guaranteed non-zero).
+    pub const fn get(self) -> AtomicUnits {
+        self.0
+    }
+}
+
 impl fmt::Display for AtomicUnits {
     /// Renders raw atomic units with an `au` marker, never SKL. Use
     /// [`Self::to_skl_string`] for SKL display.

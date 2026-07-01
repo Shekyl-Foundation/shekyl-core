@@ -91,6 +91,19 @@ pub enum CtBalanceError {
     SumMismatch,
 }
 
+impl core::fmt::Display for CtBalanceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            CtBalanceError::InvalidPoint => {
+                "a commitment is not a canonical, torsion-free prime-order point"
+            }
+            CtBalanceError::SumMismatch => "input-side and output-side commitment sums differ",
+        })
+    }
+}
+
+impl std::error::Error for CtBalanceError {}
+
 /// Amount encoding for `scalarmultH`: zero-padded 32-byte LE `u64` (Monero
 /// `d2h`). The `mod_order` reduction is a no-op for any `u64` (far below `L`).
 fn d2h_scalar(amount: u64) -> Scalar {

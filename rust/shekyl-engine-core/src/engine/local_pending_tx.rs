@@ -3346,12 +3346,13 @@ mod tests {
         use rand_core::OsRng;
         use shekyl_archival_retention::{
             verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
-            BondPostError,
+            BondPostError, BondTerm,
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
         use shekyl_curve_io::CompressedPoint;
         use shekyl_curve_primitives::Commitment;
+        use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
         use curve25519_dalek::scalar::Scalar;
 
@@ -3413,12 +3414,28 @@ mod tests {
         // ── CT balance over PROVER-emitted commitments (real prime-order C) ─
         let pseudo_outs_flat: Vec<u8> = signed.pseudo_outs.iter().flatten().copied().collect();
         let out_masks_flat: Vec<u8> = signed.commitments.iter().flatten().copied().collect();
-        verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor, 0)
-            .expect("bond-post CT balance closes over the real-tree prover output");
+        verify_bond_post_ct_balance(
+            &pseudo_outs_flat,
+            &out_masks_flat,
+            fee,
+            BondTerm::Credit(
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                    .expect("bond floor is non-zero"),
+            ),
+        )
+        .expect("bond-post CT balance closes over the real-tree prover output");
 
         // ── Reject 1: a wrong bond_credit must not balance ───────────────
         assert_eq!(
-            verify_bond_post_ct_balance(&pseudo_outs_flat, &out_masks_flat, fee, floor - 1, 0),
+            verify_bond_post_ct_balance(
+                &pseudo_outs_flat,
+                &out_masks_flat,
+                fee,
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor - 1))
+                        .expect("bond floor is non-zero")
+                ),
+            ),
             Err(BondCtBalanceError::SumMismatch),
             "a bond_credit other than the funded floor must break the balance"
         );
@@ -3427,7 +3444,16 @@ mod tests {
         let mut tampered = out_masks_flat.clone();
         tampered[0] ^= 0x01;
         assert!(
-            verify_bond_post_ct_balance(&pseudo_outs_flat, &tampered, fee, floor, 0).is_err(),
+            verify_bond_post_ct_balance(
+                &pseudo_outs_flat,
+                &tampered,
+                fee,
+                BondTerm::Credit(
+                    NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
+                        .expect("bond floor is non-zero")
+                ),
+            )
+            .is_err(),
             "a tampered commitment must not satisfy the balance"
         );
 

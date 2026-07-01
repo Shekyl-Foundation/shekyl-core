@@ -17,7 +17,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
-use shekyl_ct_balance::{InputTerm, OutputTerm};
+use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
@@ -206,7 +206,30 @@ pub fn sign_transaction_with_terms(
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
-    // ── 8. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Construct-side balance self-verify ────────────────────────
+    // Run the *same* commitment-sum balance equation the daemon runs, over the
+    // commitments we just built, under the identical single-home code
+    // (`shekyl_ct_balance::verify_ct_balance`) with the identical terms construct
+    // was handed. `validate_inputs` (step 1) only checks amount-level funds
+    // sufficiency in cleartext; it cannot see a masking bug where the amounts are
+    // correct but the blinding factors don't balance on the curve. That bug would
+    // otherwise surface only as a daemon rejection after sign + broadcast (wasted
+    // round-trip, a malformed tx briefly on the wire). Catch it here — locally,
+    // fail-fast — realizing the single-home guarantee symmetrically: construct
+    // proves its own output balances under the same definitions verify uses.
+    // Pure and synchronous (a few point ops), so it is a direct call, not an
+    // actor round-trip.
+    // `?` maps `CtBalanceError` into `TxBuilderError::BalanceSelfCheck` via its
+    // `#[from]`; this is the only `CtBalanceError` source in the function.
+    verify_ct_balance(
+        prove_result.pseudo_outs.as_flattened(),
+        out_commitments.as_flattened(),
+        fee,
+        extra_inputs,
+        extra_outputs,
+    )?;
+
+    // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,

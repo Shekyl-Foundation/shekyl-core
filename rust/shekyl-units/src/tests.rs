@@ -285,3 +285,19 @@ proptest! {
         }
     }
 }
+
+// ---- NonZeroAtomicUnits -----------------------------------------------------
+
+#[test]
+fn non_zero_atomic_units_rejects_zero_and_round_trips() {
+    // Zero is unrepresentable — `new` returns `None`.
+    assert!(NonZeroAtomicUnits::new(AtomicUnits::ZERO).is_none());
+    assert!(NonZeroAtomicUnits::new(AtomicUnits::from_raw(0)).is_none());
+
+    // A non-zero amount wraps and `get()` hands back the same `AtomicUnits`
+    // (the money type is preserved, not dropped to a bare integer).
+    let amount = AtomicUnits::from_raw(750_000_000);
+    let nz = NonZeroAtomicUnits::new(amount).expect("non-zero");
+    assert_eq!(nz.get(), amount);
+    assert_eq!(nz.get().to_raw(), 750_000_000);
+}
