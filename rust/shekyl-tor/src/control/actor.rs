@@ -359,9 +359,13 @@ impl TorChild {
             // `wait` itself failed (already reaped elsewhere) — the child is gone; treat
             // the shutdown as complete via the hard-path variant.
             Ok(Err(_)) => TorExit::Killed,
-            // Wedged past the grace window — escalate to SIGKILL, bounded, and reap.
+            // Wedged past the grace window — SIGKILL, then reap *unconditionally*.
+            // `start_kill` + `wait` rather than `kill()` (whose internal `wait` is skipped
+            // if `start_kill` errors — e.g. the child raced to exit) guarantees the reap
+            // on every path, so no branch leaves a zombie.
             Err(_) => {
-                self.child.kill().await.ok();
+                self.child.start_kill().ok();
+                self.child.wait().await.ok();
                 TorExit::Killed
             }
         };
@@ -551,11 +555,17 @@ async fn spawn_managed_tor(
         .await
         .map_err(|_| ControlError::Spawn)?;
     let port_file = managed.data_dir.join("control_port");
-    // A stale port file from a prior run would be read as *this* run's port — remove it
-    // so `wait_for_control_port` only ever returns a fresh value. Async fs throughout so
-    // the spawn never blocks a runtime worker (this actor is the pattern for future
-    // socket actors — the async I/O should be correct, not just fast enough here).
-    tokio::fs::remove_file(&port_file).await.ok();
+    // A stale port file from a prior run would be read as *this* run's port — remove it so
+    // `wait_for_control_port` can only ever return a fresh value. `NotFound` is the normal
+    // case (no prior run); any *other* error means a stale file we could not clear, so fail
+    // fast rather than risk connecting to a stale control address. Async fs throughout so
+    // the spawn never blocks a runtime worker (this actor is the pattern for future socket
+    // actors — the async I/O should be correct, not just fast enough here).
+    if let Err(e) = tokio::fs::remove_file(&port_file).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(ControlError::Spawn);
+        }
+    }
 
     let child = tokio::process::Command::new(&managed.tor_binary)
         .arg("--DataDirectory")
