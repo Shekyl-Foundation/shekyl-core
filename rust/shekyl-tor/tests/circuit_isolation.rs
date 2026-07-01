@@ -168,9 +168,11 @@ fn persona_sharing_the_principal_circuit_fails_invariant_b() {
 mod live {
     use super::{evaluate, Observations, Verdict};
     use kameo::actor::{ActorRef, Spawn};
+    use kameo::error::SendError;
     use shekyl_p_transport::derive_socks_user;
     use shekyl_tor::control::{
-        parse_stream_event, CircId, Command, ControlReply, EventSink, TorControl, TorControlConfig,
+        parse_stream_event, CircId, Command, ControlError, ControlReply, EventSink, TorControl,
+        TorControlConfig,
     };
     use shekyl_types::PCanonicalId;
     use std::net::SocketAddr;
@@ -221,10 +223,16 @@ mod live {
     #[derive(Debug)]
     #[allow(dead_code)]
     enum Apparatus {
-        /// A control command failed (mailbox/transport).
-        Control(String),
+        /// A control command failed — a mailbox-lifecycle error or a handler
+        /// `ControlError`, both carried typed by kameo's `SendError` (which also names
+        /// the failed `Command`).
+        Control(SendError<Command, ControlError>),
         /// Bootstrap did not reach 100% within budget.
         Bootstrap,
+        /// The SOCKS dial failed before any stream attached — the negotiated method,
+        /// the RFC 1929 auth status, or the underlying I/O. Named here so a SOCKS-layer
+        /// break is not mislabeled, slowly, as a capture timeout.
+        Dial(String),
         /// No `SENTCONNECT` to the target arrived within the capture budget.
         Capture(&'static str),
         /// The actor's event sink closed (the actor stopped) mid-capture.
@@ -246,6 +254,11 @@ mod live {
                 s.write_all(&[0x05, 0x01, 0x02]).await?;
                 let mut method = [0u8; 2];
                 s.read_exact(&mut method).await?;
+                if method != [0x05, 0x02] {
+                    return Err(std::io::Error::other(format!(
+                        "SOCKS5 server did not select username/password auth (got {method:?})"
+                    )));
+                }
                 let ub = user.as_bytes();
                 let ulen = u8::try_from(ub.len()).expect("SOCKS username <= 255 bytes");
                 // RFC 1929: version, ulen, username, plen(=0), (empty password). Tor
@@ -257,11 +270,22 @@ mod live {
                 s.write_all(&auth_msg).await?;
                 let mut status = [0u8; 2];
                 s.read_exact(&mut status).await?;
+                if status[1] != 0x00 {
+                    return Err(std::io::Error::other(format!(
+                        "SOCKS5 username/password auth rejected (status {})",
+                        status[1]
+                    )));
+                }
             }
             None => {
                 s.write_all(&[0x05, 0x01, 0x00]).await?;
                 let mut method = [0u8; 2];
                 s.read_exact(&mut method).await?;
+                if method != [0x05, 0x00] {
+                    return Err(std::io::Error::other(format!(
+                        "SOCKS5 server did not select no-auth (got {method:?})"
+                    )));
+                }
             }
         }
         // CONNECT, IPv4 (atyp 0x01) — sending this is what makes Tor create + attach
@@ -288,31 +312,55 @@ mod live {
     ) -> Result<CircId, Apparatus> {
         // Drop residue from the prior dial so the next attach is attributed correctly.
         while rx.try_recv().is_ok() {}
-        let dialer = tokio::spawn(socks_dial(socks, auth));
-        let captured = timeout(CAPTURE_TIMEOUT, async {
+        let mut dialer = tokio::spawn(socks_dial(socks, auth));
+
+        // Race the event sink against the dialer task. `socks_dial` only *returns* on
+        // failure — on success it parks in `pending()` after CONNECT — so a dialer that
+        // resolves before a `SENTCONNECT` is a SOCKS-layer failure, named here as
+        // `Apparatus::Dial` instead of mislabeled (slowly) as a capture timeout.
+        let outcome = timeout(CAPTURE_TIMEOUT, async {
             loop {
-                match rx.recv().await {
-                    Some(reply) => {
-                        if let Some(ev) = parse_stream_event(&reply) {
-                            if ev.status().is_sent_connect() && ev.target() == TARGET {
-                                return Some(ev.circ_id());
+                tokio::select! {
+                    joined = &mut dialer => {
+                        return Err(match joined {
+                            Ok(Err(e)) => Apparatus::Dial(e.to_string()),
+                            Ok(Ok(())) => {
+                                Apparatus::Dial("dialer returned before attaching".to_owned())
+                            }
+                            Err(j) => Apparatus::Dial(format!("dialer task failed: {j}")),
+                        });
+                    }
+                    event = rx.recv() => match event {
+                        Some(reply) => {
+                            if let Some(ev) = parse_stream_event(&reply) {
+                                if ev.status().is_sent_connect() && ev.target() == TARGET {
+                                    return Ok(ev.circ_id());
+                                }
                             }
                         }
-                    }
-                    // The actor dropped its EventSink sender — it stopped.
-                    None => return None,
+                        // The actor dropped its EventSink sender — it stopped.
+                        None => {
+                            return Err(Apparatus::ActorGone(
+                                "event sink closed before SENTCONNECT",
+                            ))
+                        }
+                    },
                 }
             }
         })
         .await;
+
+        // Reap the dialer. On the `Dial` path it already resolved (and must not be
+        // awaited again); otherwise it is still parked, so abort and await it to ensure
+        // the socket is closed before the next serialized dial.
         dialer.abort();
-        match captured {
-            Ok(Some(c)) => Ok(c),
-            Ok(None) => Err(Apparatus::ActorGone("event sink closed before SENTCONNECT")),
-            Err(_) => Err(Apparatus::Capture(
-                "no SENTCONNECT to the target within budget",
-            )),
+        if !dialer.is_finished() {
+            dialer.await.ok();
         }
+
+        outcome.unwrap_or(Err(Apparatus::Capture(
+            "no SENTCONNECT to the target within budget",
+        )))
     }
 
     /// Poll `GETINFO status/bootstrap-phase` until `PROGRESS=100`. This is the
@@ -325,7 +373,7 @@ mod live {
             let reply = actor
                 .ask(Command::GetInfo(vec!["status/bootstrap-phase".to_owned()]))
                 .await
-                .map_err(|e| Apparatus::Control(format!("{e:?}")))?;
+                .map_err(Apparatus::Control)?;
             if reply.lines().iter().any(|l| l.contains("PROGRESS=100")) {
                 return Ok(());
             }
@@ -361,7 +409,7 @@ mod live {
         actor
             .ask(Command::SetEvents(vec!["STREAM".to_owned()]))
             .await
-            .map_err(|e| Apparatus::Control(format!("{e:?}")))?;
+            .map_err(Apparatus::Control)?;
 
         // Warm-up apparatus-assert: prove dial -> attach -> CircID works *before*
         // measuring. A miss here is a broken rig (surfaced as Apparatus), never a
@@ -597,9 +645,12 @@ mod live {
 
             let cd = root.join("client");
             std::fs::create_dir_all(&cd).expect("client dir");
+            // `IsolateSOCKSAuth` is the exact property under test — spell it out on the
+            // SocksPort rather than leaning on the Tor default, so the measurement can
+            // never accidentally pass on a build/config where the default changed.
             let client_torrc = format!(
                 "{common}\
-                 SocksPort 127.0.0.1:{socks}\n\
+                 SocksPort 127.0.0.1:{socks} IsolateSOCKSAuth\n\
                  ControlPort 127.0.0.1:{ctrl}\n",
                 common = common_torrc(&cd, "client", &dirauth),
                 socks = client_socks,
