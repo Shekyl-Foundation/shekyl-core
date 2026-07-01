@@ -137,8 +137,12 @@ pub enum ControlError {
     /// or desync the FIFO reply correlation. A caller error: the command is
     /// rejected, the connection is untouched.
     InvalidCommand,
-    /// A **managed** `tor` failed to launch, or never wrote its `ControlPort` file
-    /// within [`SPAWN_TIMEOUT`]. Carries no path (forensic discipline).
+    /// A **managed** `tor` could not be started or made driveable — every managed-spawn
+    /// config/startup failure funnels here: a spawn / `create_dir_all` / stale-port-file
+    /// error, `extra_args` that name a safety invariant, `tor` exiting before it becomes
+    /// driveable, or its `ControlPort` file / cookie not appearing within [`SPAWN_TIMEOUT`].
+    /// Carries no path (forensic discipline); `spawn_managed_tor`'s own `--Log` file in the
+    /// `DataDirectory` is where the specific cause is diagnosable.
     Spawn,
 }
 
@@ -598,8 +602,21 @@ fn extra_args_touch_safety(extra_args: &[String]) -> bool {
         "owningcontroller", // __OwningControllerProcess — the ownership handshake
     ];
     extra_args.iter().any(|arg| {
-        let norm = arg.trim_start_matches(['-', '_']).to_ascii_lowercase();
-        PROTECTED.iter().any(|p| norm.starts_with(p))
+        // Only an option *name* is safety-relevant. Tor CLI names are `-`/`--`-prefixed;
+        // a bare value (a path, a number) is not — so a *value* that merely starts with a
+        // protected prefix (e.g. a `control.log` path) must not trip this.
+        if !arg.starts_with('-') {
+            return false;
+        }
+        // `--Flag` or `--Flag=value`: normalize the name (the part before any `=`, with
+        // the leading `-`/`_` stripped, lowercased).
+        let name = arg
+            .split('=')
+            .next()
+            .unwrap_or(arg)
+            .trim_start_matches(['-', '_'])
+            .to_ascii_lowercase();
+        PROTECTED.iter().any(|p| name.starts_with(p))
     })
 }
 
@@ -670,21 +687,29 @@ async fn spawn_managed_tor(
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
     // auth cookie. Tor writes them at startup but not atomically, so reading the cookie the
     // instant the port file appears can race a partial/absent write (an `AuthError` startup
-    // race); waiting for it here means a transient partial cookie isn't a spurious `Auth`
-    // failure that kills the just-spawned tor. On any startup failure, terminate + reap the
-    // child *here* (not via `kill_on_drop`'s background reap) so nothing lingers to disturb
-    // the next spawn/test. (`kill_on_drop` remains the backstop for a `?`-failure in the
-    // *handshake* after this returns Ok, where the child is held in on_start's local.)
+    // race); waiting for the cookie here means a transient partial write isn't a spurious
+    // `Auth` failure that kills the just-spawned tor.
     let cookie_path = managed.data_dir.join("control_auth_cookie");
-    let ready = async {
-        let control_addr = wait_for_control_port(&port_file, SPAWN_TIMEOUT).await?;
-        wait_for_cookie(&cookie_path, SPAWN_TIMEOUT).await?;
-        Ok::<_, ControlError>(control_addr)
-    }
-    .await;
+    // Race the readiness wait against the child's own exit: a tor that dies immediately (bad
+    // binary, bind failure, CLI error) must fail *fast*, not wait out `SPAWN_TIMEOUT` for a
+    // port/cookie that will never appear. `child.wait()` in the losing arm reaps that case;
+    // the unconditional `kill_and_reap` below then covers the readiness-timeout arm (child
+    // still running) and is a harmless no-op after an already-reaped exit.
+    let ready = tokio::select! {
+        r = async {
+            let control_addr = wait_for_control_port(&port_file, SPAWN_TIMEOUT).await?;
+            wait_for_cookie(&cookie_path, SPAWN_TIMEOUT).await?;
+            Ok::<_, ControlError>(control_addr)
+        } => r,
+        _ = child.wait() => Err(ControlError::Spawn),
+    };
     let control_addr = match ready {
         Ok(addr) => addr,
         Err(e) => {
+            // Startup failed — terminate + reap the child *here* (not via `kill_on_drop`'s
+            // best-effort background reap) so nothing lingers to disturb the next spawn/test.
+            // (`kill_on_drop` remains the backstop for a `?`-failure in the *handshake* after
+            // this returns Ok, where the child is held in on_start's local.)
             kill_and_reap(&mut child).await;
             return Err(e);
         }
@@ -1100,17 +1125,17 @@ mod tests {
     #[test]
     fn extra_args_reject_safety_flags_across_forms() {
         // The control plane, cookie auth, data dir, socks port, and ownership are rejected —
-        // whatever the flag form (with/without `--`, case, `__`, or a `Group*` suffix).
+        // whatever the flag-name form (case, `__` internal prefix, `=value`, `Group*` suffix).
         for bad in [
             "--ControlPort",
-            "ControlSocket",
+            "--ControlSocket",
             "--controlportwritetofile",
-            "--CookieAuthentication",
-            "CookieAuthFile",
+            "--CookieAuthentication=0",
+            "--CookieAuthFile",
             "--HashedControlPassword",
             "--DataDirectory",
             "--SocksPort",
-            "__OwningControllerProcess",
+            "--__OwningControllerProcess",
             "--DataDirectoryGroupReadable",
         ] {
             assert!(
@@ -1122,10 +1147,17 @@ mod tests {
 
     #[test]
     fn extra_args_allow_non_safety_flags() {
-        // Legitimate customization the managed spawn should permit.
+        // Legitimate customization the managed spawn should permit — including a *value*
+        // that starts with a protected prefix (only the option *name* is checked).
         for ok in [
             vec!["--DisableNetwork".to_owned(), "1".to_owned()],
             vec!["--Log".to_owned(), "notice stderr".to_owned()],
+            vec![
+                "--Log".to_owned(),
+                "notice".to_owned(),
+                "file".to_owned(),
+                "control.log".to_owned(),
+            ],
             vec!["--Bridge".to_owned(), "obfs4 ...".to_owned()],
             vec![],
         ] {
