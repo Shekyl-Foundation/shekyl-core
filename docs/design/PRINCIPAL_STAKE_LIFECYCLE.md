@@ -96,7 +96,8 @@ Layered on the orchestrator, over the existing persona/bond `StakeEngineHandle`
   (secret-locality). Only `fund_bond`/`unbond`/`partial_unbond` touch the actor's
   bond path.
 - **DQ3 — drain output-count discipline shape** (GF-4): fixed count? amount-scaled?
-  jittered? This is the Round-4 hard exit and blocks `drain()`/`unbond()`.
+  jittered? This is the Gate-6 **R4 hard exit** and the true blocker for `drain()`
+  — **not** the FSM, whose shape is already pinned (see §5).
 - **DQ4 — bond-funding shape** (GF-7): fund-from-earnings ramp vs lump default.
 - **DQ5 — query surface secret-locality**: which projections are owner-grade and
   how they avoid crossing the `P`-secret boundary.
@@ -107,32 +108,53 @@ Layered on the orchestrator, over the existing persona/bond `StakeEngineHandle`
 
 ## 5. Gates — what must close first (and what is buildable now)
 
-**BLOCKED (genesis-seal / consensus-gated) — do not build the surface yet:**
+**Refined 2026-07-01 (grounded against dev).** The coarse "blocked on the FSM pin"
+is inaccurate. The FSM **design is pinned** — [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)
+P2B-1..P2B-7 closed: the 4-state graph, all four `post_kind`s on one
+`txin_archival_bond_post`, custody-as-consensus-balance, the supply-conservation
+law, the cooldown-vs-`W` asymmetry, and the friction pins (per-shard cooldown,
+slashable-through-cooldown anti-dodge). And the **sim reconciliation that gated the
+seal is CLOSED** — the R-3 age-stratified bond-mobility reconciliation was run,
+stress-tested (incl. an adversarial-dodge arm + a Copilot off-by-one fix), and
+sealed **2026-06-16 with zero parameter change** ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
+§L18). **This surface is not waiting on more sim.** The real remaining gates,
+ordered:
 
-1. **Rebond/unbond FSM pin — the hard blocker (genesis-seal dependency).**
-   `HoldingsUpdate` (voluntary partial-unbond) was promoted **V3.1 → V3.0**
-   (2026-06-15); the full `JoinMarket / Rebond / HoldingsUpdate / Unbond` FSM must
-   ship at genesis (bond is a consensus-tracked balance under a gate-4 conservation
-   law — completing it post-genesis is a hard fork). It is also a **pre-genesis-seal
-   sim dependency** — the age-stratified bond-mobility reconciliation cannot be
-   computed until the FSM frictions are pinned. Authority:
-   [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) (P2B-1..7),
-   [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md),
-   [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §6 R4 / §9.6.
-2. **Gate 6 R4 (output + bond-funding hygiene).** GF-4 output-count discipline and
-   GF-7 funding shape are open Round-4 exits; shipping `drain()` before GF-4 is
-   pinned would ship a lump-sweep correlation beacon.
-3. **Reward-emission leg.** The drain consumes reward outputs that do not exist
-   until emission is built ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md);
-   C-1 ML-DSA hard gate = PR-E3 step 8).
+1. **Gate 6 R4 firewall — the true remaining DESIGN gate for this surface.**
+   `GF-4` decorrelated-drain **output-count** discipline and `GF-7` principal→`P`
+   bond-funding separation are open Round-4 exits, now **recurring** (a
+   `HoldingsUpdate`/rebond fires them at every mid-life adjustment, not once);
+   `GF-10` jitter bounds is the Round-3 exit. These — **not** the FSM — are what
+   block **DQ3** (drain output-count) and **DQ4** (bond-funding shape). The
+   entry-seam standoff is already simmed; the wallet output-count / exit-seam
+   defaults are unpinned. Authority: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md)
+   §2.4/§2.5, §6 R4.
+2. **V3.0 connect-path CODE (not design).** Today only **JoinMarket** is
+   implemented — the `BondPostKind` enum + wire codec round-trip all four, but
+   `rust/shekyl-archival-retention/src/bond_post.rs` **rejects** any non-JoinMarket
+   kind (`PostKindNotJoinMarket`). Rebond / Unbond / HoldingsUpdate each need a
+   `verify_*` + FFI error cluster + builder; plus the `bond_spend_pk`
+   debit-authorizer wire+commit+verify and the `archival_p` HKDF-label/KAT (GF-1),
+   and the C++ `has_archival_bond_shard` `at_height` read fix (Pin 4). **This code
+   IS most of the principal lifecycle's `fund_bond` / `partial_unbond` / `unbond`
+   — same work, two labels.** Authority: [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+   §8 checklist.
+3. **Reward-emission leg — paying-side cross-dependency only.** The drain consumes
+   reward outputs that do not exist until emission is built, and KAT phase-2 + the
+   C-1 ML-DSA check gate *verifying* the `Bonded→emit` path — but **not** the
+   bond-lifecycle connect paths themselves ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md);
+   C-1 = PR-E3 step 8).
 
-**BUILDABLE NOW (design + non-consensus enabling work):**
+**BUILDABLE NOW (most of the Round-1 design round is unblocked):**
 
-- **This scoping doc + its Round-1 ratification** — pure design, commit-direct-to-dev.
-- **Persona/bond driving-path completion** — `sign_bond` / `JoinMarketVin` exist
-  but are inert; wiring the driving path forward (2c-2b) is buildable.
-- **Firewall-hygiene defaults** — decorrelated-drain spacing and fund-from-earnings
-  ramp are non-consensus wallet-local, buildable once the FSM shape is pinned.
+- **DQ1 / DQ2 / DQ5 / DQ6** — none depend on Gate-6 R4 or the connect-path code;
+  the FSM shape they ride on is already pinned. Close them in Round 1.
+- **This scoping doc's Round-1 ratification** — pure design, commit-direct-to-dev.
+- **Firewall-hygiene defaults** (decorrelated-drain spacing, fund-from-earnings
+  ramp) — non-consensus wallet-local; buildable as soon as GF-4/GF-7 pin their
+  shape (gate 1 above), itself a design task, not a sim or code gate.
+
+**Only DQ3 and DQ4 wait — and on Gate-6 R4 (GF-4/GF-7), not on the FSM.**
 
 ## 6. References (authoritative — reference, do not restate)
 

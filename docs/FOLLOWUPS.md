@@ -47,8 +47,8 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **CT-balance FFI cutover — `verRctSemanticsSimple` + `verRctSemanticsFeeOnly`
-  → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
+- **[Done 2026-07-01] CT-balance FFI cutover — `verRctSemanticsSimple` +
+  `verRctSemanticsFeeOnly` → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
   is the last native-C++ island in an otherwise-FFI'd FCMP++ verify path
   (`src/fcmp/rctSigs.cpp`); the bond-post sibling already routes through the
   single-sourced `shekyl-ct-balance::verify_ct_balance`. Cut both general balance
@@ -84,10 +84,14 @@ sustainability is unaffected by the recalibration.
     non-canonical `y = p + 1` (dalek reduces `y` mod `p` → the identity) that C++
     rejects — closed by a canonical `compress()` round-trip check in
     `shekyl-ct-balance::decompress_point`; both sides now reject, in agreement.
-  - **Sequence [rule 07 atomic]:** ratify (done) → rename (below) → corpus green
-    → ONE commit bundling the `shekyl_verify_ct_balance` export, both
-    `rctSigs.cpp` swaps, deletion of the native `addKeys`/`equalKeys` blocks, and
-    retirement of the C++ oracle. No dual-path drift window.
+  - **Sequence [rule 07 atomic] — completed:** ratify (§2.3) → rename (PR #218) →
+    corpus + dormant export (PR #219) → construct self-verify + BondTerm (PR #220)
+    → **the two `rctSigs.cpp` re-points landed here**: `verRctSemanticsSimple` and
+    `verRctSemanticsFeeOnly` now call `shekyl_verify_ct_balance`, the native
+    `addKeys`/`equalKeys` balance blocks are deleted, and the C++ balance oracle is
+    retired from the verifiers. The export was dormant on `dev` since #219, so the
+    re-point is a single atomic swap with no dual-path drift window. C++ suites
+    green (fcmp, tx-verification, `archival_bond_post`, `CtBalanceDifferential`).
   - **Tradeoff [noted, not accidental]:** per-rv FFI call inside the batch
     verifier (N× boundary crossings/batch); correctness over perf (priority
     hierarchy); a batched FFI is deferred, not overlooked.

@@ -217,22 +217,27 @@ namespace
         for (const rctSig *rvp: rvv)
         {
           const rctSig &rv = *rvp;
-          const keyV &pseudoOuts = rv.p.pseudoOuts;
 
-          rct::keyV masks(rv.outPk.size());
-          for (size_t i = 0; i < rv.outPk.size(); i++) {
-            masks[i] = rv.outPk[i].mask;
-          }
-          key sumOutpks = addKeys(masks);
-          DP(sumOutpks);
-          const key txnFeeKey = scalarmultH(d2h(rv.txnFee));
-          addKeys(sumOutpks, txnFeeKey, sumOutpks);
-
-          key sumPseudoOuts = addKeys(pseudoOuts);
-          DP(sumPseudoOuts);
-
-          if (!equalKeys(sumPseudoOuts, sumOutpks)) {
-            LOG_PRINT_L1("Sum check failed");
+          // CT cleartext balance `sum(pseudoOuts) = sum(outPk masks) + fee*H`,
+          // single-sourced in Rust (`shekyl-ct-balance::verify_ct_balance`) and
+          // shared with construct (`shekyl-tx-builder`) and the archival bond-post
+          // path, so the three cannot diverge. Canonical prime-order commitment
+          // points per `GENESIS_TX_WIRE_FORMAT.md` §2.3 (the native
+          // `addKeys`/`equalKeys` block this replaces summed raw points).
+          std::vector<uint8_t> pseudo_flat(rv.p.pseudoOuts.size() * 32);
+          for (size_t i = 0; i < rv.p.pseudoOuts.size(); ++i)
+            memcpy(pseudo_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+          std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
+          for (size_t i = 0; i < rv.outPk.size(); ++i)
+            memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
+          const uint8_t balance_rc = shekyl_verify_ct_balance(
+              pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
+              rv.p.pseudoOuts.size(),
+              mask_flat.empty() ? nullptr : mask_flat.data(),
+              rv.outPk.size(),
+              rv.txnFee);
+          if (balance_rc != SHEKYL_CT_BALANCE_OK) {
+            LOG_PRINT_L1("Sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
             return false;
           }
 
@@ -345,15 +350,20 @@ namespace
         CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
             "Mismatched sizes of enc_labels and rv.enc_amounts");
 
-        rct::keyV masks(rv.outPk.size());
+        // Fee-only CT balance: `sum(outPk masks) + fee*H = identity` — the general
+        // balance with an empty pseudoOut side (asserted above), through the same
+        // single-sourced `shekyl_verify_ct_balance` (§2.3).
+        std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
         for (size_t i = 0; i < rv.outPk.size(); ++i)
-          masks[i] = rv.outPk[i].mask;
-        key sumOutpks = addKeys(masks);
-        const key txnFeeKey = scalarmultH(d2h(rv.txnFee));
-        addKeys(sumOutpks, txnFeeKey, sumOutpks);
-        if (!equalKeys(sumOutpks, identity()))
+          memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
+        const uint8_t balance_rc = shekyl_verify_ct_balance(
+            nullptr, 0,
+            mask_flat.empty() ? nullptr : mask_flat.data(),
+            rv.outPk.size(),
+            rv.txnFee);
+        if (balance_rc != SHEKYL_CT_BALANCE_OK)
         {
-          LOG_PRINT_L1("Sum check failed");
+          LOG_PRINT_L1("Sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
           return false;
         }
 
