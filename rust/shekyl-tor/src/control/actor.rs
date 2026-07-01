@@ -140,7 +140,7 @@ pub enum ControlError {
     /// A **managed** `tor` could not be started or made driveable — every managed-spawn
     /// config/startup failure funnels here: a spawn / `create_dir_all` / stale-port-file
     /// error, `tor` exiting before it becomes driveable, or its `ControlPort` file / cookie
-    /// not appearing within [`SPAWN_TIMEOUT`].
+    /// not appearing within the `SPAWN_TIMEOUT` budget.
     /// Carries no path (forensic discipline); `spawn_managed_tor`'s own `--Log` file in the
     /// `DataDirectory` is where the specific cause is diagnosable.
     Spawn,
@@ -262,7 +262,7 @@ pub struct TorControlConfig {
 /// How the [`TorControl`] actor gets its control port (DQ-T0.1 process ownership).
 pub enum TorLaunch {
     /// The actor **spawns and owns** the `tor` process — the production path. It kills
-    /// the child on shutdown ([`TorChild::shutdown`]).
+    /// the child on shutdown (`SIGTERM` → bounded wait → `SIGKILL` → reap).
     Managed(ManagedTor),
     /// Connect to an **already-running** control port the actor does *not* own — the
     /// test path (tor spawned externally), and any bring-your-own-`tor` deployment.
@@ -347,8 +347,8 @@ struct TorChild {
 /// How a managed `tor` child exited at shutdown (observed via [`ManagedTor::exit_observer`]).
 #[derive(Debug)]
 pub enum TorExit {
-    /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within
-    /// [`SHUTDOWN_GRACE`], and was reaped with this status — the clean path.
+    /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within the
+    /// `SHUTDOWN_GRACE` window, and was reaped with this status — the clean path.
     Reaped(std::process::ExitStatus),
     /// Not cleanly reaped with a status: either tor wedged past the `SIGTERM` grace window
     /// and was `SIGKILL`-ed, or the grace `wait` itself errored. Either way the child was
