@@ -40,12 +40,16 @@ pub enum BootstrapState {
 }
 
 /// Extract Tor's bootstrap `PROGRESS=` percent from a `GETINFO status/bootstrap-phase`
-/// reply. Returns `Some(percent)` when the real field is present, or `None` when the
-/// reply is not a bootstrap-phase reply or carries no parseable `PROGRESS=`.
+/// reply. Returns `Some(percent)` (a valid `0..=100`) when the real field is present, or
+/// `None` when the reply is not a bootstrap-phase reply, carries no parseable
+/// `PROGRESS=`, or reports a value outside `0..=100`.
 ///
 /// `None` means **unknown, skip** — *not* "0% bootstrapped": a malformed or missing
 /// field must not publish `Connecting { progress: 0 }` (which would look like a fresh
-/// start), so the poll task holds the last state and keeps polling.
+/// start), so the poll task holds the last state and keeps polling. An **out-of-range**
+/// value (a Tor bug / format change reporting e.g. `PROGRESS=150`) is malformed for the
+/// same reason — and rejecting it here is what stops it being read as `>= 100` and
+/// **falsely gating `Ready`**.
 ///
 /// **Decoy-resistant.** The bootstrap-phase line is `<severity> BOOTSTRAP
 /// PROGRESS=<n> TAG=<t> SUMMARY="<free text>"`; the quoted `SUMMARY` can contain a
@@ -65,7 +69,9 @@ pub fn parse_bootstrap_progress(reply: &ControlReply) -> Option<u8> {
     let value = fields
         .split_ascii_whitespace()
         .find_map(|tok| tok.strip_prefix("PROGRESS="))?;
-    value.parse::<u8>().ok()
+    // A percent is 0..=100; anything outside is malformed (not a reading), so it can
+    // never be seen as `>= 100` and falsely gate `Ready`.
+    value.parse::<u8>().ok().filter(|&percent| percent <= 100)
 }
 
 #[cfg(test)]
@@ -162,5 +168,23 @@ mod tests {
               250 OK\r\n",
         );
         assert_eq!(parse_bootstrap_progress(&reply), None);
+    }
+
+    #[test]
+    fn out_of_range_progress_is_none_not_ready() {
+        // A percent is 0..=100; a bogus 150 (Tor bug / format change) parses as a `u8`
+        // but is NOT a valid reading. It must be None — never seen as `>= 100`, which
+        // would falsely gate Ready.
+        let reply = frame_one(
+            b"250-status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=150 TAG=x SUMMARY=\"x\"\r\n\
+              250 OK\r\n",
+        );
+        assert_eq!(parse_bootstrap_progress(&reply), None);
+        // The boundary holds: exactly 100 is still the valid Ready gate.
+        let ready = frame_one(
+            b"250-status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY=\"Done\"\r\n\
+              250 OK\r\n",
+        );
+        assert_eq!(parse_bootstrap_progress(&ready), Some(100));
     }
 }
