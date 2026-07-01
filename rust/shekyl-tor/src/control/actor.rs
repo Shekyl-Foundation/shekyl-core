@@ -17,8 +17,8 @@
 //!   an actor cannot `select!` on its own mailbox and a socket. So the SAFECOOKIE
 //!   handshake runs *synchronously* in [`on_start`](TorControl) — reading the
 //!   framer by hand, which is safe because no async `650` events can arrive before
-//!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` + `TAKEOWNERSHIP`
-//!   succeed is the read half wrapped as the internal `ReplyStream`
+//!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` (and, for a managed child,
+//!   `TAKEOWNERSHIP`) succeeds is the read half wrapped as the internal `ReplyStream`
 //!   (`Stream<Item = Result<Framed, ControlError>>`) and handed to
 //!   [`ActorRef::attach_stream`]. The stream then feeds the mailbox: each reply
 //!   arrives as `StreamMessage::Next(Ok(Framed))` whether or not a command is in
@@ -37,9 +37,10 @@
 //!   is unrepresentable rather than merely avoided by callers.
 //!
 //! Any framing/socket error or stream close fails the actor rather than
-//! reconnecting into the same desync; `TAKEOWNERSHIP` (issued first, post-auth)
-//! means Tor exits when this connection drops, so a crash one millisecond later is
-//! still orphan-protected.
+//! reconnecting into the same desync; for a **managed** child, `TAKEOWNERSHIP`
+//! (issued first, post-auth) means Tor exits when this connection drops, so a crash
+//! one millisecond later is still orphan-protected (an attached tor is not ours, so
+//! it is not taken).
 //!
 //! One property to know (not a defect): kameo runs handlers to completion on a
 //! single task, so a slow `write_line` inside a command handler stalls event
@@ -289,8 +290,8 @@ pub struct ManagedTor {
     pub extra_args: Vec<String>,
     /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
     /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
-    /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (a `tor` that had to be
-    /// SIGKILLed — it wedged past the grace window) is an unclean-shutdown signal the
+    /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (an unclean shutdown — tor
+    /// wedged and was SIGKILLed, or the grace wait errored) is the signal the
     /// wallet-integration layer will want to surface. `None` today; the lifecycle test
     /// uses it to assert a *real* reap rather than probing a pid.
     pub exit_observer: Option<oneshot::Sender<TorExit>>,
@@ -332,10 +333,12 @@ struct TorChild {
 /// How a managed `tor` child exited at shutdown (observed via [`ManagedTor::exit_observer`]).
 #[derive(Debug)]
 pub enum TorExit {
-    /// Exited on its own (`TAKEOWNERSHIP`) or on `SIGTERM` within [`SHUTDOWN_GRACE`], and
-    /// was reaped with this status — the clean path.
+    /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within
+    /// [`SHUTDOWN_GRACE`], and was reaped with this status — the clean path.
     Reaped(std::process::ExitStatus),
-    /// Did not exit within the `SIGTERM` grace window; `SIGKILL`-ed, then reaped.
+    /// Not cleanly reaped with a status: either tor wedged past the `SIGTERM` grace window
+    /// and was `SIGKILL`-ed, or the grace `wait` itself errored. Either way the child was
+    /// force-killed (best-effort) and reaped — an **unclean** shutdown.
     Killed,
 }
 
@@ -343,11 +346,14 @@ impl TorChild {
     /// Shut the child down: **`SIGTERM` → bounded wait → `SIGKILL` → reap**, publishing
     /// the outcome to the observer if one is wired.
     ///
-    /// Tolerant of an **already-exited** child by design: `TAKEOWNERSHIP` frequently
-    /// wins the race (the control connection dropping exits `tor` before we signal), so
-    /// the `SIGTERM` is harmless (`ESRCH`) and the `wait` reaps immediately. The
-    /// `SIGKILL` escalation is what keeps the wait *bounded* — "SIGTERM + wait" without
-    /// it would hang the wallet forever if `tor` ever wedged.
+    /// Tolerant of an **already-exited** child by design: on the paths that stop the actor
+    /// *because* the control connection dropped (an error-path `ctx.stop`), a managed
+    /// tor's `TAKEOWNERSHIP` has already exited it — or tor died on its own — so the
+    /// `SIGTERM` is a harmless `ESRCH` and the `wait` reaps immediately. (On a clean
+    /// `on_stop` the connection is still open here, so `SIGTERM` is what exits tor;
+    /// `TAKEOWNERSHIP` then fires as a backstop when the struct drops.) The `SIGKILL`
+    /// escalation is what keeps the wait *bounded* — "SIGTERM + wait" without it would
+    /// hang the wallet forever if `tor` ever wedged.
     async fn shutdown(mut self) {
         // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). No-op if it already
         // exited, and a no-op off Unix — there the timeout → `kill()` escalation is the
@@ -439,8 +445,9 @@ impl Actor for TorControl {
         } = args;
 
         // Managed: spawn tor and connect to the port it opened. Attached: connect to the
-        // given one. Everything downstream (connect, handshake, TAKEOWNERSHIP, poll) is
-        // identical — the only new surface is the spawn and, later, `on_stop`'s kill.
+        // given one. `connect`, the handshake, and the poll are identical; the only
+        // mode-specific steps are the spawn, `TAKEOWNERSHIP` (managed only — see below),
+        // and `on_stop`'s kill (managed only).
         let (control_addr, cookie_path, child) = match launch {
             TorLaunch::Managed(managed) => {
                 let (child, addr, cookie) = spawn_managed_tor(managed).await?;
@@ -452,6 +459,11 @@ impl Actor for TorControl {
             } => (control_addr, cookie_path, None),
         };
 
+        // From here down, any handshake `?`-failure drops `child` on the way out: for a
+        // managed child, its `kill_on_drop` SIGKILLs the orphan (immediate kill, background
+        // reap). `spawn_managed_tor` reaps its *own* startup failures explicitly because it
+        // owns the child as a local there; here the child is struct-bound, so the drop path
+        // is the cleanup — sufficient, since it terminates the process at once.
         let stream = TcpStream::connect(control_addr)
             .await
             .map_err(|_| ControlError::Connect)?;
@@ -488,10 +500,15 @@ impl Actor for TorControl {
         .await?;
         expect_status(&mut reader, &mut framer, 250).await?;
 
-        // Orphan protection from millisecond zero: Tor exits when this connection
-        // drops, so even an immediate crash leaves no orphaned tor.
-        write_line(&mut writer, "TAKEOWNERSHIP").await?;
-        expect_status(&mut reader, &mut framer, 250).await?;
+        // Orphan protection for the **managed** child (DQ-T0.1): `TAKEOWNERSHIP` makes
+        // tor exit when this connection drops, so even a crash that skips `on_stop`
+        // leaves no orphan. Only for a managed child — `TAKEOWNERSHIP` *takes ownership*,
+        // and an attached tor is explicitly not ours (`TorLaunch::Attached`); issuing it
+        // there would exit a bring-your-own tor when the wallet closes.
+        if child.is_some() {
+            write_line(&mut writer, "TAKEOWNERSHIP").await?;
+            expect_status(&mut reader, &mut framer, 250).await?;
+        }
 
         // Handshake done — hand the read half to the stream and let kameo merge it
         // into the mailbox.
