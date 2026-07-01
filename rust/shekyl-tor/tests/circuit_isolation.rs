@@ -378,7 +378,9 @@ mod live {
         )
         .await;
         match terminal {
-            Ok(Ok(state)) => match *state {
+            // Match the `watch::Ref` by reference — explicitly a borrow, nothing moved
+            // out of the guard (the arms are non-binding regardless).
+            Ok(Ok(state)) => match &*state {
                 BootstrapState::Ready => Ok(()),
                 // The poll task saw the control connection die mid-bootstrap.
                 BootstrapState::Failed => Err(Apparatus::Bootstrap),

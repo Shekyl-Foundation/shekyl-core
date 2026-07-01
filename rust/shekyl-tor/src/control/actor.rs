@@ -71,7 +71,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
-use super::bootstrap::{parse_bootstrap_progress, BootstrapState};
+use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
 use super::safecookie::verify_server_hash;
 
@@ -397,9 +397,8 @@ impl Drop for TorControl {
 ///   the task polling a channel no one is listening on. Not a Tor failure; never `Failed`.
 /// - **100% reached** → publish [`BootstrapState::Ready`] (the gate) and stop.
 async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<BootstrapState>) {
-    // The highest progress published so far, so a Tor `PROGRESS=` regression never
-    // renders the "Connecting… n%" UX backward (progress is telemetry; monotonicity is
-    // cosmetic, not enforced).
+    // The highest progress seen so far; `bootstrap_step` clamps against it so a Tor
+    // `PROGRESS=` regression never renders the "Connecting… n%" UX backward.
     let mut peak = 0u8;
     loop {
         // No receivers left — stop quietly (NOT a failure). Checked here so shutdown is
@@ -416,20 +415,21 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
             tx.send(BootstrapState::Failed).ok();
             return;
         };
-        if let Some(progress) = parse_bootstrap_progress(&reply) {
-            if progress >= 100 {
-                // `Ready` is the gate; publish and stop.
+        // The state machine is the pure `bootstrap_step` (KAT'd in `bootstrap`); the loop
+        // owns only the I/O. Sends are fire-and-forget — a dropped-receiver failure is
+        // handled by the `is_closed()` check at the top, the single shutdown path.
+        let (step, new_peak) = bootstrap_step(peak, parse_bootstrap_progress(&reply));
+        peak = new_peak;
+        match step {
+            BootstrapStep::Ready => {
                 tx.send(BootstrapState::Ready).ok();
                 return;
             }
-            // Clamp a regression so the "Connecting… n%" UX never renders backward.
-            peak = peak.max(progress);
-            // Fire-and-forget: a dropped-receiver send failure needs no handling here —
-            // the `is_closed()` check at the loop top is the single shutdown path.
-            tx.send(BootstrapState::Connecting { progress: peak }).ok();
+            BootstrapStep::Progress(progress) => {
+                tx.send(BootstrapState::Connecting { progress }).ok();
+            }
+            BootstrapStep::Skip => {}
         }
-        // A `None` parse (malformed / absent `PROGRESS=`) is "unknown, skip": hold the
-        // last published state and poll again — never publish a spurious `Connecting{0}`.
         tokio::time::sleep(BOOTSTRAP_POLL_INTERVAL).await;
     }
 }

@@ -74,6 +74,39 @@ pub fn parse_bootstrap_progress(reply: &ControlReply) -> Option<u8> {
     value.parse::<u8>().ok().filter(|&percent| percent <= 100)
 }
 
+/// One poll iteration's decision: what to publish and whether to keep polling.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BootstrapStep {
+    /// 100% reached — publish [`BootstrapState::Ready`] and stop polling (the gate).
+    Ready,
+    /// Publish [`BootstrapState::Connecting`] with this (already clamped-monotone)
+    /// progress and keep polling.
+    Progress(u8),
+    /// Nothing usable this reply (malformed / absent `PROGRESS=`) — publish nothing,
+    /// hold the last state, keep polling.
+    Skip,
+}
+
+/// The **pure** per-reply state transition (design §3b), split out of [`super::actor`]'s
+/// poll loop (which owns the `ask`/`send`/`sleep` I/O) so the state machine — the
+/// `Ready` gate, the `Connecting` progress clamp, the malformed-skip — is unit-testable
+/// without a live Tor. Takes the highest progress seen so far and the freshly parsed
+/// value; returns the step and the updated peak.
+pub(crate) fn bootstrap_step(peak: u8, parsed: Option<u8>) -> (BootstrapStep, u8) {
+    match parsed {
+        // `parse_bootstrap_progress` already rejects >100, so `Some` is 0..=100; the
+        // `>= 100` guard is kept so the gate is robust independent of that filter.
+        Some(progress) if progress >= 100 => (BootstrapStep::Ready, peak),
+        Some(progress) => {
+            // Clamp: a Tor `PROGRESS=` regression never lowers the published value, so
+            // the "Connecting… n%" UX never renders backward (monotone telemetry).
+            let peak = peak.max(progress);
+            (BootstrapStep::Progress(peak), peak)
+        }
+        None => (BootstrapStep::Skip, peak),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +201,44 @@ mod tests {
               250 OK\r\n",
         );
         assert_eq!(parse_bootstrap_progress(&reply), None);
+    }
+
+    #[test]
+    fn step_reaches_ready_at_100() {
+        // 100 → Ready (the gate), regardless of the prior peak.
+        assert_eq!(bootstrap_step(0, Some(100)), (BootstrapStep::Ready, 0));
+        assert_eq!(bootstrap_step(45, Some(100)), (BootstrapStep::Ready, 45));
+    }
+
+    #[test]
+    fn step_publishes_progress_below_100() {
+        assert_eq!(
+            bootstrap_step(0, Some(45)),
+            (BootstrapStep::Progress(45), 45)
+        );
+    }
+
+    #[test]
+    fn step_clamps_a_regression() {
+        // A backward PROGRESS (30 after 45) never lowers the published value or the peak.
+        assert_eq!(
+            bootstrap_step(45, Some(30)),
+            (BootstrapStep::Progress(45), 45)
+        );
+    }
+
+    #[test]
+    fn step_advances_on_higher_progress() {
+        assert_eq!(
+            bootstrap_step(45, Some(60)),
+            (BootstrapStep::Progress(60), 60)
+        );
+    }
+
+    #[test]
+    fn step_skips_on_none_holding_peak() {
+        // Malformed / absent: publish nothing, peak unchanged, keep polling.
+        assert_eq!(bootstrap_step(45, None), (BootstrapStep::Skip, 45));
     }
 
     #[test]
