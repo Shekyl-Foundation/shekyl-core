@@ -9,8 +9,8 @@ todos:
     content: "Phase 1 CLOSED 2026-06-10 (see docs/design/PHASE_1_ORCHESTRATOR_STATUS.md for the full done-matrix). Landed as shekyl-engine-core::Engine<S: EngineSignerKind> (naming superseded per V3_WALLET_DECISION_LOG.md 2026-04-27 — NOT shekyl-wallet-core::Wallet; production shape Engine<S, D, L, E, R, P, F>): composition over god-object; lifecycle create/open_full/change_password/close; RefreshHandle cancel-on-drop + single-flight slot; apply_scan_result strict merge; PendingTx chain-state pinning + close-refuses-outstanding; primary_address accessor + documented ledger()-guard query patterns; tracing forwarder single-Rust-image contract; RuntimeWalletState folded into (WalletLedger, LedgerIndexes); payment IDs DROPPED, air-gapped flow reshaped as UnsignedTxBundle/SignedTxBundle (Phase 2d). Residue: open_view_only / open_hardware_offload stubs blocked on shekyl-crypto-pq view-only/HW constructors — FOLLOWUPS.md V3.0 entry carries the reversion clause; change_password on-disk tests extend to ViewOnly/HW in the same capability-dispatch commit."
     status: completed
   - id: phase2_ops_refresh_send
-    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed; orchestrator methods (Engine::refresh / start_refresh / apply_scan_result / build_pending_tx / submit_pending_tx / discard_pending_tx) landed with the Phase 1 closeout (2026-06-10) — remaining 2a residue is tracked in PHASE_2A_SEND_PATH.md §10, not Phase 1."
-    status: pending
+    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed; orchestrator methods (Engine::refresh / start_refresh / apply_scan_result / build_pending_tx / submit_pending_tx / discard_pending_tx) landed with the Phase 1 closeout (2026-06-10) — remaining 2a residue is tracked in PHASE_2A_SEND_PATH.md §10, not Phase 1. UPDATE 2026-06-30: 2a-the-phase (synthetic-path build/sign/submit) is DONE per its own DoD. The wallet-local curve-tree client crate (rust/shekyl-curve-tree/) is BUILT + KAT-verified and the depth-3 recon consensus bug is CLOSED (PR #197); real-root MAINNET validity now needs only (a) wiring that client into the 2A send path (2A signs against synthetic TreeContext vectors today) + (b) the deferred bulk-leaf RPC get_curve_tree_leaves (CT-3, repositioned to catch-up/archival) + Phase 6 — see CURVE_TREE_CLIENT.md §7. open_view_only / open_hardware_offload remain CapabilityNotYetImplemented stubs; ProofStale detection deferred to Phase 6."
+    status: completed
   - id: phase2_ops_stake_history
     content: "Phase 2b (SUBSTANTIVE): transfer-shaped admission (PHASE_2B §2.4) → reward-emission leg spec → Round 3–4 close-conditions → Stage 3 StakeEngine. One ship target — no entitlement/3C subtree. Blocks Stage 3, not 2a."
     status: pending
@@ -21,11 +21,11 @@ todos:
     content: "Phase 2b design — Layer 1 emission spec closed; consensus-state schema landed. Decided 2026-06-11: bond-duration shape (age-scaled-constant; sim L10) + ClaimedEpochSet encoding (inline list, ArchivalBondValue v4). Iteration-5 gate-7 RUN: all gauges insensitive → (iii) CLOSED bonds-only (ledger G7); cross-doc spec edits LANDED 2026-06-11 (emission §10.2 + admission_proof/§7.4 deletion, PHASE_2B §2.4 (iii) closed, gate-6 §2.5 sole-owner note + no-minimum policy pin, V3_STAKER_ARCHIVAL). Byte aggregate (ii) CLOSED same day (worked sweep, ledger AGG: ≤ 0.11 % of penalty-free zone across the N_P envelope) — ALL THREE §2.4 close-conditions resolved. Layer-2 margin-robustness band RUN + CLOSED 2026-06-11 (layer2_* axes): decomposition confirmed (giniW tracks leanness, whale gauges flat ≥11× margin) → spread gate re-anchored on direct whale gauges, g sealed as band [1.5,2.5] target ≈2 (g≥3.0 fails coloc coverage at any purse), Curve reserve untriggered, bond 0.75 pin stands; 2026-06-07 gate4 readings superseded by banded-Curve substrate drift (Finding 0); g-units normalization gap → FOLLOWUPS V3.0. Remaining: FcmpMembershipOnly; schema implementation."
     status: in_progress
   - id: phase2b_gate6_p_registration
-    content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain."
+    content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain. UPDATE 2026-06-30: Round 1 CLOSED (2026-06-13 — crypto + P hybrid derivation, §9); Round 2 (network + transport) = the in-progress 2d-2 work (ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md); R3 (timing/rotation/W), R4 (output + bond-funding hygiene, recurring), R5 (cross-layer sign-off) open; archival_p derivation + ARCHIVAL_P_DERIVE_V1 KAT LANDED, the emission-vin verifier (C-1 ML-DSA equality + membership-only verify) remains the hard blocker (§9.8)."
     status: in_progress
   - id: phase2b_stage3_stake_engine
-    content: "Phase 2b implementation — Stage 3: StakeEngine, ordinary principal↔P transfers, reward emission, bond lifecycle, Σwork path. Gated on §2.4 closure. entitlement.rs / 3C / cleartext stake-claim deletion targets."
-    status: pending
+    content: "Phase 2b implementation — Stage 3: StakeEngine, ordinary principal↔P transfers, reward emission, bond lifecycle, Σwork path. Gated on §2.4 closure. entitlement.rs / 3C / cleartext stake-claim deletion targets. UPDATE 2026-06-30: StakeEngine persona/bond/scan surface + P-scan SP-0…SP-7 LANDED (rust/shekyl-engine-core/src/engine/{stake_engine.rs,pscan/}); genuinely unbuilt = the emission-vin verifier (C-1 ML-DSA equality + shekyl_fcmp_membership_only_verify + emission codec/builder + StakeEngine emission handler; archival_p derivation+KAT already landed) — HOMED in REWARD_EMISSION_LEG.md + REWARD_EMISSION_VIN_PLAN.md (PR-E0 done; E1/E2/E3, C-1 = PR-E3 step 8); the principal stake/unstake/drain lifecycle (NOT yet homed in any plan doc); SP-R0 durable-removal GC; Gate 6 Rounds 2–5. In progress via the 2d-2 transport track."
+    status: in_progress
   - id: phase2_ops_addresses_proofs
     content: "Phase 2c (End-state 5): primary_address; create_payment_request / list_payment_requests / match_transfer_to_request; real enc_label outbound when paying a payment URI carrying a rid (ungated as of feat/enc-label-ungate 2026-06-15 — the indistinguishability invariant, SUBADDRESS_UNDER_PQC.md §5.7.10, retired the operational.cooperative_payment_requests gate; GUI rid-URI tooling is the de-facto feature boundary); tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors. Engine substrate lands FA-8 (PR #113) before Wallet orchestrator methods. Does not block Phase 2a (2a-3 uses sentinel enc_label only)."
     status: pending
@@ -414,6 +414,16 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 
 ## Phase 2 — Core operations
 
+> **Fossil-sweep — source-verified against `dev` 2026-06-30 (supersedes the mid-June status rows further down this section).**
+> Phase 2 splits into 2a/2b/2c/2d. Verified state:
+>
+> - **2a (send / refresh) — substantially done.** Engine substrate + orchestrator methods (`refresh` / `build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`) landed. Residue is **integration + a deferred RPC, not new crypto**: the wallet-local **curve-tree client crate** (`rust/shekyl-curve-tree/`) is **built + KAT-verified** and the depth-3 recon consensus bug is **CLOSED** (PR #197; the daemon was the bug, the wallet oracle was correct). Real-root **mainnet** sends now need only (a) **wiring the built client into the 2A send path** (2A signs against synthetic `TreeContext` vectors today — the `AssembledPath → shekyl_tx_builder::SpendInput` adapter + engine wiring) and (b) the **deferred bulk-leaf RPC** `get_curve_tree_leaves` (CT-3, repositioned to catch-up/archival since block-derived forward sync is the default) + Phase 6. See [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7. Plus `ProofStale` detection (→ Phase 6) and the `open_view_only` / `open_hardware_offload` capability stubs.
+> - **2b (stake + `P` + emission) — the bulk of remaining Phase 2, far more built than the rows below claim.** *Landed:* `StakeEngine` (persona/bond/scan surface — `spawn` / `mint_handle` / `activate_persona` / `sign_bond` / `scan_step` / `retire_bonded_persona` in `rust/shekyl-engine-core/src/engine/stake_engine.rs`) and the full `P`-scan **SP-0…SP-7** firewall layer (`rust/shekyl-engine-core/src/engine/pscan/`, including SP-6 `VerifiedRange` / `PReconcileSet` — now built despite older docs calling it "future"); Gate 6 **Round 1 closed** (2026-06-13). *In progress:* the **2d-2 network transport** (`SP-T0…T5`, Tor) = Gate 6 **Round 2**; the SP-5 driving-task wiring (`Engine::start_pscan`, PR-B). *Genuinely unbuilt:* the **reward-emission leg** (no `emit` / `reward` / `payout` methods yet — but **homed** in [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) + [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md), PR-E1/E2/E3) and its **emission-vin verifier** (the **C-1** recompute-`H(pqc_pk)`-and-equate + ML-DSA-65 verify + `shekyl_fcmp_membership_only_verify` FFI — hard emission blocker at PR-E3 step 8; note `archival_p` derivation + KAT are **already landed**); the **principal stake / unstake / drain lifecycle** (engine is persona/bond-only; **not yet homed in any plan doc**); **SP-R0 durable-removal GC**; the **rebond/unbond FSM** (promoted V3.1→V3.0); and **Gate 6 Rounds 2–5**.
+> - **2c (receive / addresses / proofs) — partial.** *Wired Engine methods:* `create_payment_request`, `list_payment_requests`, URI format/parse, `try_from_keys`; inbound reconcile is auto-applied during merge (no explicit `match_transfer_to_request`). *Not wired:* `Engine::tx_proof` / `Engine::reserve_proof` (primitives exist in `rust/shekyl-proofs/` + FFI but no Engine wrapper), `sign_message` / `verify_message` (CLI stubs only).
+> - **2d (air-gapped bundles) — greenfield.** `UnsignedTxBundle` / `SignedTxBundle` + `export_unsigned` / `sign_unsigned` / `submit_signed` exist only as a doc-comment (`rust/shekyl-engine-core/src/engine/mod.rs:45`).
+>
+> **Where the "2d-1 / 2d-2 / SP-\*" work lives:** the Gate-6 firewall spun out into the **archival-bond sub-plan track** — [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) (request layer), [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) (`P`-scan, SP-0…SP-7), [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (Tor transport, current front) + [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md). That track's `2d-1` / `2d-2` numbering is **internal to Phase 2b's gate-6 firewall — it is NOT** this plan's Phase 2d (cold wallet).
+
 ### Phase 2b critical path — one genesis substrate (pay-for-archival + `P`)
 
 Pre-genesis discipline: **one ship target at genesis** — pay-for-service archival
@@ -473,12 +483,13 @@ gates: **gate 6 soundness** + Round 3–5 on rebased substrate + principal-wire 
 | **3 — Economics → params** | Gate 4 bond floor **closed**; gate 1 `Σwork` | Mixed | Gate 1 for reward servo |
 | **4 — Ops / transport** | Arti, firewall ops, UI | Defer post-genesis | No |
 
-**Verified code state (spot-check on `dev`):**
+**Verified code state (re-checked on `dev` 2026-06-30 — supersedes the mid-June reading):**
 
-- `StakeEngine` — **not present** (design-only).
-- `shekyl-staking` `entitlement.rs` — **do not extend for genesis**; deletion target.
-- `P` / retention / registration crypto — **not in production Rust**; sim + spec only.
-- `ARCHIVAL_BOND_FLOOR_ATOMIC` — **landed** (`config/consensus_constants.json`).
+- `StakeEngine` — **present and structurally complete** for the persona/bond/scan surface (`rust/shekyl-engine-core/src/engine/stake_engine.rs`): `spawn`, `mint_handle`, `activate_persona`, `sign_bond`, `scan_step`, `retire_bonded_persona`. **Inert** (no submission path yet — the `TODO(2d)` at `stake_engine.rs:1095` is the broadcast-timing seam). **No** reward-emission or principal stake/unstake/drain methods exist — that economic surface is the genuinely-unbuilt part of 2b.
+- `P`-scan **SP-0…SP-7** — **built** in `rust/shekyl-engine-core/src/engine/pscan/` (`block_source`, `persona_scanner`, `scan_step`, `accrual`, `cadence`, `task`, `exhaustiveness` = `VerifiedRange`, `reconcile` = `PReconcileSet`, `cover_discovery`). Remaining wiring: the SP-5 driving task (`Engine::start_pscan`, PR-B) + SP-7 cold-start lifecycle.
+- `shekyl-staking` `entitlement.rs` — **do not extend for genesis**; deletion target (unchanged).
+- `archival_p` registration crypto — **landed** (`rust/shekyl-crypto-pq/src/archival_p.rs` + the `ARCHIVAL_P_DERIVE_V1` KAT corpus / freeze tripwire / suite). What is **unbuilt** is the **emission-vin verifier** that consumes it: the `shekyl_fcmp_membership_only_verify` FFI, the **C-1** recompute-`H(pqc_pk)`-and-equate + ML-DSA-65 verify step, and the emission codec/builder — all net-new, scoped in [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E1/E2/E3; C-1 = PR-E3 step 8, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.8).
+- `ARCHIVAL_BOND_FLOOR_ATOMIC` — **landed** (`config/consensus_constants.json`) (unchanged).
 
 #### Phase 2b wallet program — what we build
 
@@ -488,15 +499,16 @@ substrate. **Authoritative scope:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STA
 open question). §3–§6 are **pending retool** — use for intent, not wire shapes, until
 gate 6 lands. Historical `StakeState` sketch below is **obsolete**.
 
-**Design round status** (design doc §9):
+**Design round status** (PHASE_2B rounds + Gate-6 rounds; re-checked 2026-06-30):
 
 | Round | Status | Wallet-rewrite implication |
 |-------|--------|---------------------------|
-| 0–2 | **Closed** | Principal FSM, persistence, §4.7, §5, §6 — carry forward |
-| 3 | **Wargame done; transfer-shaped elevated** | F-ARCHIVAL gate-list + **§2.4 (i)** closed at spec layer. **Next:** archival consensus state schema. |
-| 4 | Open | Gate 2/3 schema + `W`; gate 6 firewall ∥ FSM retool; admission + **gate 7** |
-| 5 | Open | Stage 3 PR map |
-| Stage 3 | **Blocked** on archival-state schema + gate 6 | `StakeEngine` + `P` + emission — **not** entitlement claims |
+| 0–2 | **Closed** | Principal FSM, persistence, §4.7, §5, §6 — carried forward (landed) |
+| 3 | **Closed** (2026-06-11) | §2.4 (i)–(iii) all resolved: reward-emission *spec*, per-reward aggregate sim, admission + gate 7 (bonds-only). |
+| 4 | **Largely closed** | Archival consensus-state schema landed; gate-4 bond floor closed. Residual: gate-1 `Σwork` reward servo. |
+| 5 | Deferred | Stage 3 PR map — folded into the archival-bond track's PR sequence (2c-2b / 2d-1 / 2d-2). |
+| **Gate 6 (firewall) — the live design front** | **R1 closed** (2026-06-13: crypto + `P` derivation); **R2 open = network + transport (the 2d-2 work, in progress)**; R3 = timing + rotation + `W`; R4 = output + bond-funding hygiene (recurring); R5 = cross-layer sign-off | Gate-6 rounds now gate Stage-3 emission; the §2.4 rounds no longer do |
+| Stage 3 | **Partially landed** — `StakeEngine` persona/bond/scan + pscan SP-0…7 built; reward path still **blocked** on the emission leg + C-1 + Gate 6 R2–5 | `StakeEngine` + `P` + emission — **not** entitlement claims |
 
 **Build sequence:**
 
@@ -524,14 +536,22 @@ flowchart TD
   SE --> LEDGER --> MERGE --> API
 ```
 
-1. **§2.4** — transfer-shaped form authoritative.
-2. **Reward-emission leg** — membership-only backing, bond-record epoch dedup (no tag).
-3. **Gate 6** — off-chain backing, firewall, bond-funding hygiene.
-4. **Close Round 3–4** — §2.4 conditions (i)–(iii) incl. gate 7 re-pricing.
-5. **Stage 3** — `stake_engine.rs`; ordinary transfers + emission path.
+1. **§2.4** — transfer-shaped form authoritative. **(closed)**
+2. **Reward-emission leg** — membership-only backing, bond-record epoch dedup (no tag). **(spec closed; implementation UNBUILT — no `emit`/`reward` methods on `StakeEngine`)**
+3. **Gate 6** — off-chain backing, firewall, bond-funding hygiene. **(R1 closed; R2 = 2d-2 transport in progress; R3–5 open)**
+4. **Close Round 3–4** — §2.4 conditions (i)–(iii) incl. gate 7 re-pricing. **(closed 2026-06-11)**
+5. **Stage 3** — `stake_engine.rs`; ordinary transfers + emission path. **(engine substrate + pscan SP-0…7 LANDED; emission leg + principal stake/unstake/drain lifecycle still to build)**
 
-**Phase 2b PR shape (after Stage 3):** (2b-1) ledger + `StakeId`; (2b-2) reorg;
-(2b-3) query API; (2b-4) stake/unstake/`P`/payout through engines. ≤ ~10 files per PR.
+**Phase 2b PR shape — SUPERSEDED (reconciled 2026-06-30).** The original entitlement-era
+map — (2b-1) ledger + `StakeId`; (2b-2) reorg; (2b-3) query API; (2b-4) stake/unstake/`P`/payout —
+predates the transfer-shaped rebase and the gate-6 firewall spin-out, and does **not** match
+what was built. The actual PR sequence, by sub-track (≤ ~10 files per PR):
+
+- **`P`-scan firewall (SP-0…SP-7)** — [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md). SP-0…SP-6 **landed** (incl. #194 CT compare, #195 view-pair adapter, #201 dual-extractor scan-step, #215 non-empty BlockRange); SP-5 driving task (**PR-B, in flight**) + SP-7 cold-start remain.
+- **Network transport + reconcile (SP-T0…SP-T5, SP-R0 GC)** — [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md). SP-T0/SP-T1 **in progress** (incl. #204, #212); SP-R0 durable-removal GC consumes SP-6's `PReconcileSet`.
+- **Bond request layer** — [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md). Design rounds 1–6 closed; implementation open (lands inert — no submission path).
+- **Reward-emission leg** — **homed** in [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (consensus spec) + [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E0 landed = F-S1 writer-wipe fix; PR-E1/E2/E3 open, **C-1** = PR-E3 step-8 hard merge gate, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.8). Unbuilt = the emission-vin verifier + the StakeEngine emission handler; `archival_p` + KAT already landed.
+- **Principal stake/unstake/drain lifecycle** — **not yet homed in any plan doc**: the user-facing economic surface (`StakeEngine` is persona/bond-only today). This is the biggest genuinely-unscoped 2b chunk and needs its own PR-decomposition round.
 
 #### What not to do in Phase 2b
 

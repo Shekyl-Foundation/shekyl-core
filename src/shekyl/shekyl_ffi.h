@@ -1752,6 +1752,25 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
     uint64_t bond_credit,
     uint64_t bond_debit);
 
+// General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
+// shape for verRctSemanticsSimple / verRctSemanticsFeeOnly. Canonical prime-order
+// points only; INVALID_POINT is checked before the sum, so a torsion-laden input
+// returns INVALID_POINT (never SUM_MISMATCH).
+#define SHEKYL_CT_BALANCE_OK                  0
+#define SHEKYL_CT_BALANCE_ERR_NULL_PTR        1
+#define SHEKYL_CT_BALANCE_ERR_INVALID_POINT   2
+#define SHEKYL_CT_BALANCE_ERR_SUM_MISMATCH    3
+
+/// Verify `sum(pseudoOuts) = sum(out_masks) + fee*H` over flattened `N x 32`
+/// curve points (the fee contributes its commitment `fee*H`, not a bare scalar).
+/// Either pointer may be null when its count is zero (fee-only shape).
+uint8_t shekyl_verify_ct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee);
+
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1

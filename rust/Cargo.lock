@@ -4118,6 +4118,7 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-generators",
  "shekyl-difficulty",
  "shekyl-economics",

@@ -33,6 +33,10 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# Single-sourced CT cleartext balance equation (`shekyl_verify_ct_balance`
+# general export in `ct_balance_ffi.rs`). Same crate the bond-post path reaches
+# via archival-retention; depended on directly here for the no-bond-term shape.
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 # `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
 # FFI structs stay `#[repr(C)] u64`; this is used only to wrap raw `u64` at
 # the `SpendInput`/`sign_transaction` edge (§4.3).
