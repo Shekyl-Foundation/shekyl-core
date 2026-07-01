@@ -1,7 +1,18 @@
 # Archival Cover-Amount Draw — entropy scoping (genesis-adjacent)
 
 **Status:** SCOPING (2026-06-20, review-revised). Design-questions enumerated;
-not yet decided. Off-wire, scanner-independent, un-vendor-independent —
+not yet decided.
+
+> **Correction (2026-07-01) — `C_min` pinned post-sim; the "pending the 2d-1 ramp" language
+> below is superseded.** `C_min` was scoped here (pre-sim) as a runway floor whose *final value
+> awaited the 2d-1 earnings-ramp sizing*. The sim ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md))
+> is the definitive authority and took a different direction — it does **not** track a runway
+> `C_min`. Disposition: **`C_min = 1 rung = 0.75 SKL`** (`= ARCHIVAL_BOND_FLOOR`, gate-4-pinned and
+> fixed — §2.3), sim-supported (the `--cover` harness shows even `k = 0` / the `cover == 0` opt-out
+> still gets same-rung cover ≈ 1.9). The "pending the 2d-1 ramp for its final value" phrases below
+> (§2.2 / §7.4 / §8) are **retired**; `COVER_RUNWAY_FLOOR_ATOMIC` is not provisional.
+
+Off-wire, scanner-independent, un-vendor-independent —
 parallelizable now (no open upstream decision: the bond-standardization is
 **decided in shape**, flat `floor × shards`, pinned rung — §2.3). **But off-wire
 is *not* re-tunable (§2.5):** the anonymity-uniformity requirement genesis-freezes
@@ -478,7 +489,7 @@ is the realized optimum of the integrated joint × participation pass (§7.6), w
 the freeze forbids approximating. `C_min` stays the runway floor (§2.2), `≥ 1 rung
 (0.75 SKL)`, reserving `cover == 0` for the DQ6 opt-out — which the harness shows
 still gets **same-rung cover** (`k = 0` set `≈ 1.9`, not 1: same-`bond_floor`
-stakers are indistinguishable). Pending the 2d-1 ramp for its final value.
+stakers are indistinguishable). **`C_min = 1 rung` is the pinned value** (sim-definitive; top Correction).
 
 ### 7.5 Economic participation — the honest tail is worse than the uniform one
 
@@ -888,7 +899,7 @@ same epoch-scoped, expensive-to-move quantity — there is no second input to sc
 `C_min` is the **working-capital runway floor** (§2.2): strictly positive, `≥ 1 rung
 (0.75 SKL)`, so even the narrowest draw funds non-trivial runway and `cover == 0` stays
 reserved for the DQ6 opt-out. Sized against **pessimistic slow early yield** (under-funding
-re-links `P` too soon), pending the 2d-1 earnings-ramp numbers. It is the lower edge of
+re-links `P` too soon); pinned at **1 rung** (sim-definitive; top Correction). It is the lower edge of
 every draw, independent of `C` — the envelope's floor.
 
 ### 8.4 The shape `k(C)` — smooth, monotone, *decaying to zero in the low tail* (hard constraint)
@@ -972,7 +983,7 @@ Three reads:
   threshold. The "buys ≥ floor's worth" point (`C = 25`, where `K_sat = 8`) is a *descriptive*
   marker only — conceding out to it would re-introduce a `0 → 8` step. **First-cut genesis
   pins:** just `K_sat(C)` per the table (a smooth monotone ramp under it, decaying to `0` in
-  the tail, capping at `k = 10 / 7.5 SKL`); `C_min` still pending the 2d-1 ramp. Two frozen
+  the tail, capping at `k = 10 / 7.5 SKL`); `C_min = 1 rung`, pinned (top Correction). Two frozen
   magnitudes, not three. Conservative-frozen per §2.5 (confirm-not-fix for `K_sat`).
 
 ### 8.8 The `k(C)` functional form — float-free cubic smoothstep (`--cover-dial`, ref C4 ports)
@@ -1016,6 +1027,6 @@ not open decisions: **variable-span uniformity** (`bounded_uniform` is exact rej
 any bound, golden-vectored at tail/mid/cap spans), **tail smoothness** (`span = 0 ⇒
 cover = C_min` exactly, the continuous `span→0` limit; the first non-zero span ~5.1M atomic
 is no near-constant), and **`C_min` single-sourced** (`COVER_RUNWAY_FLOOR_ATOMIC`, provisional
-pending the 2d-1 ramp; the cover golden vector is provisional-until-`C_min`-lands). The
+`C_min = 1 rung`, pinned; the cover golden vector is frozen against it). The
 `shekyl-staking-sim` copy is independently golden-vectored to the same values, so the two
 can't silently diverge.

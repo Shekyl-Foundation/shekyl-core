@@ -39,12 +39,13 @@ pub const COVER_RAMP_END_COUNT: u64 = 79;
 pub const COVER_SPAN_CAP_ATOMIC: u64 = 7_500_000_000;
 
 /// Working-capital **runway floor** `C_min` in atomic units — the lower edge of
-/// every draw (§8.3). **PROVISIONAL:** `1 rung = 0.75 SKL`, the §8.3 minimum,
-/// pending the 2d-1 earnings-ramp sizing (which may raise it against pessimistic
-/// slow yield). Single-sourced here so that when 2d-1 lands, this const moves and
-/// the golden vector re-freezes against it — the wallet always reads the one
-/// canonical value, never a baked placeholder. **The golden vector below is
-/// provisional-until-`C_min`-lands.**
+/// every draw (§8.3). **Pinned: `C_min = 1 rung = 0.75 SKL`** (`= ARCHIVAL_BOND_FLOOR`;
+/// the rung is gate-4-pinned and fixed). The pre-sim "provisional pending the 2d-1
+/// earnings-ramp sizing (may raise it)" framing is **retired** — the sim
+/// (`STAKER_ARCHIVAL_SIM.md`) is the authority and does not raise it; the `--cover`
+/// harness shows even `k = 0` (the `cover == 0` opt-out) still gets same-rung cover
+/// (≈ 1.9). Single-sourced here so the wallet always reads the one canonical value,
+/// never a baked placeholder; the golden vector below is frozen against it.
 pub const COVER_RUNWAY_FLOOR_ATOMIC: u64 = 750_000_000;
 
 /// `span(C) = C_max − C_min` in atomic units — the §8.8 float-free response form.
@@ -86,8 +87,8 @@ pub fn cover_dial_span_atomic(count: u64) -> u64 {
 /// no draw-layer discontinuity between the conceded tail and the first ramp step.
 ///
 /// `c_min` is taken as an explicit single-sourced input (the wallet passes
-/// [`COVER_RUNWAY_FLOOR_ATOMIC`]) rather than baked, so the pending 2d-1 `C_min`
-/// flows from one canonical constant.
+/// [`COVER_RUNWAY_FLOOR_ATOMIC`]) rather than baked, so `C_min` flows from one
+/// canonical constant.
 ///
 /// # Panics
 ///
@@ -180,7 +181,7 @@ mod tests {
     fn cover_draw_golden_vector_multiple_spans() {
         // Check 1: pin the realized draw at SEVERAL spans (tail / mid / cap), since
         // uniformity-of-the-draw is now a property of the span, not a fixed window.
-        // Provisional-until-C_min-lands (uses COVER_RUNWAY_FLOOR_ATOMIC).
+        // C_min pinned = 1 rung (uses COVER_RUNWAY_FLOOR_ATOMIC).
         let c_min = COVER_RUNWAY_FLOOR_ATOMIC;
         let draw1 = |count: u64, seed: u64| {
             let mut rng = SplitMix64(seed);
