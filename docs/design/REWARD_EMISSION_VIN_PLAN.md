@@ -537,6 +537,71 @@ single consensus-activating cut; PR-E4 is removal; PR-E5 is wiring/docs.
 Function-body-replacement contracts (A1) freeze the inert surfaces so PR-E3 is
 a body-fill, not a signature churn.
 
+**Sequencing refinement (2026-07-01) — gate-last; see §3.0.** The "single
+consensus-activating cut" is **split**: E3 lands the verify **body** (non-activating,
+KAT-tested), and a final gate PR — **C-1** — is the activating cut (ML-DSA gate + the
+consensus whitelist flip). This supersedes the "no emission tx acceptable until PR-E3"
+framing above with "…until **C-1**."
+
+### 3.0 Gate-last sequencing — C-1 as the final activating merge
+
+**Source-check (dev, 2026-07-01): consensus default-rejects emission vins.**
+`check_inputs_types_supported` ([`cryptonote_format_utils.cpp:691`](../../src/cryptonote_basic/cryptonote_format_utils.cpp))
+is a whitelist — `{txin_archival_serve_credit_response, txin_archival_bond_post,
+txin_stake_claim, txin_to_key}` — with a default-reject `else` ("wrong variant type").
+So a `txin_archival_reward_emission` added to the `txin_v` variant (PR-E2) is **rejected by
+consensus** until it is explicitly added to that whitelist. This is the precondition
+"gate-last" requires, and it is met.
+
+**The rule the check yields:** the whitelist entry **is** the activation, so it must ride
+with **C-1**, not with E3's verify body. If E3 whitelisted emission while the ML-DSA auth was
+stubbed, consensus would accept an *unauthed* emission — the exact hole. So:
+
+| Merge | Lands | On-chain | Gate |
+|-------|-------|----------|------|
+| **E1** | membership-only wrapper + ML-DSA vin-auth primitive + C ABIs (wrap **built** `FcmpMembershipOnly` [`shekyl-fcmp-proofs/lib.rs:360`] / `hash_pqc_public_key` [`shekyl-crypto-pq/derivation.rs:58`]) | inert | Q7 for the seam; the two primitives are **buildable-now** (no snapshot-ABI dep) |
+| **E2** | `txin_archival_reward_emission` codec (Rust-owned encode/parse/validate) + C++ transport shim | **inert on BOTH paths** — unwhitelisted → rejected at block verify **and** mempool insertion | Q1 (auth count → wire freeze) |
+| **E3** | `shekyl_emission_vin_verify` **verify body, steps 1–7**; KAT-tested at the Rust layer; **not on the consensus dispatch** (still unwhitelisted) | inert on chain | design cluster: **M-2, Q9, Q10, Q7** |
+| **C-1** | **the activating cut** — ML-DSA gate (mints the `AuthVerified` witness) **+** add emission to `check_inputs_types_supported` **+** C++ shim dispatch (`check_tx_inputs` → marshal → Rust verify → apply) | **consensus now accepts *authed* emission** | `07-consensus-atomic-cutovers`; merge blocker = ML-DSA present + tested; most-scrutinized, isolated from codec mechanics |
+| **E4 / E5** | delete `stake_claim`/`C_stake` (after C-1) / constants + KAT + audit-scope + docs | — | E4 merge gate = **emission accepted-and-applied on regtest through the real C-1 path** (below) |
+
+**Mempool/relay inertness (source-verified, dev 2026-07-01).** The whitelist runs on *both*
+acceptance paths, not just block verify: `check_inputs_types_supported` is inside
+`core::check_tx_semantic` (Rule 5 of `ver_non_input_consensus`), which is called at
+**`tx_pool.cpp:171` (mempool `add_tx`)** and **`blockchain.cpp:2371` (block verify)**. So an
+unwhitelisted `txin_archival_reward_emission` is rejected **at pool insertion** — it cannot
+relay or sit in a mempool as an un-minable nuisance. E2 is inert unqualified.
+
+**The auth stub must be fail-closed by construction — witness-typed, not a flag (load-bearing).**
+"Auth stubbed at the boundary" is safe *only* if the stub cannot pass. A stub returning
+`auth_ok = true` just relocates the unauthed-emission hole from the whitelist to the stub. So
+E3's verify body takes the auth result as an **unforgeable `AuthVerified` witness input it cannot
+construct itself** — nothing in E3 (or its KATs) can mint the witness, so E3 **physically cannot
+accept an authed emission**. C-1 does not flip a flag; it **supplies the real ML-DSA witness
+minter**. This is the same witness-typing discipline as `unbond(ExitedConfirmed)` — the stub is
+*unrepresentable-to-pass*, not a TODO someone can fill wrong. (Fail-closed by type is the pin
+that makes gate-last safe even mid-sequence.)
+
+**E4's "proven" is a concrete merge gate, not a judgment call.** Removing `txin_stake_claim` /
+`C_stake` is the one **irreversible** step, so E4 merges only on **emission accepted-and-applied
+on a regtest chain through the real C-1 consensus path** — *not* E3's Rust KAT. The KAT proves the
+verify math; only the regtest run proves the consensus **dispatch** functions end-to-end. Replace,
+prove on-chain, *then* remove.
+
+**Start-here (the design cluster is a first move, not a parallel note).** E2's codec cannot freeze
+(Q1, auth-count → wire freeze) and E3's work-vector semantics cannot settle (M-2, Q9) until the §8
+cluster closes — so **E2/E3 are blocked on the cluster, not on E1**. The genuine buildable-now
+front is *two things in parallel*: **(1) E1's two primitives** (no snapshot-ABI dep, startable
+now) and **(2) the M-2/Q7/Q9/Q1 design round**. E2 opens when the cluster closes.
+
+**Why gate-last (vs the prior "PR-E3 bundles activation + auth").** Gate-*first* would block
+the whole body (E1–E3) on the auth seam; the *one-PR* form makes the highest-risk review (the
+ML-DSA gate) inseparable from codec mechanics. Gate-last lets E1→E3 land and be KAT-tested
+against known vectors with auth stubbed at the boundary, and isolates **C-1** as the single
+most-scrutinized merge — the thing that must be true before emission can mint spendable value
+on a real chain. The upstream design cluster (§8: M-2/Q7 keystone, Q9, Q1) still gates E2/E3
+**unchanged** — gate-last moves only the auth + activation to the end.
+
 ### PR-E0 — bond-state write-path correctness (precursor, substrate fix) — LANDED
 
 Scope: fix Finding **F-S1** (widened per **F-E5**). The root cause was that
