@@ -665,15 +665,24 @@ async fn wait_for_control_port(
     }
 }
 
-/// Poll until tor's control-auth cookie is fully readable, bounded by `timeout`. Uses
-/// [`read_cookie_file`] itself as the readiness check, so it validates the full 32-byte
-/// cookie (not just that a file exists) — the exact condition the handshake needs — and
-/// discards the result (each read is zeroized). Its purpose is to absorb the startup race
-/// where tor has written its port file but not yet its (complete) cookie.
+/// Poll until tor's control-auth cookie is fully written, bounded by `timeout`. Checks the
+/// file **length** via async `metadata` — non-blocking (unlike a `read_cookie_file` poll),
+/// and it never reads the secret in a loop. The SAFECOOKIE cookie is exactly 32 bytes, so a
+/// shorter file is a partial write to retry past; that is the whole condition of the
+/// startup race (tor has written its port file but not yet its complete cookie). The
+/// authoritative validated read — permissions, exact length — happens once, later, in the
+/// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt.
 async fn wait_for_cookie(cookie_path: &Path, timeout: Duration) -> Result<(), ControlError> {
+    /// The SAFECOOKIE control-auth cookie (control-spec §3.24) is exactly 32 bytes.
+    const COOKIE_LEN: u64 = 32;
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if read_cookie_file(cookie_path).is_ok() {
+        if tokio::fs::metadata(cookie_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0)
+            == COOKIE_LEN
+        {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
