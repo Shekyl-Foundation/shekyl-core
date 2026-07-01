@@ -224,14 +224,12 @@ namespace
           // path, so the three cannot diverge. Canonical prime-order commitment
           // points per `GENESIS_TX_WIRE_FORMAT.md` §2.3 (the native
           // `addKeys`/`equalKeys` block this replaces summed raw points).
-          std::vector<uint8_t> pseudo_flat;
-          pseudo_flat.reserve(rv.p.pseudoOuts.size() * 32);
-          for (const key &k : rv.p.pseudoOuts)
-            pseudo_flat.insert(pseudo_flat.end(), k.bytes, k.bytes + 32);
-          std::vector<uint8_t> mask_flat;
-          mask_flat.reserve(rv.outPk.size() * 32);
-          for (const ctkey &op : rv.outPk)
-            mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
+          std::vector<uint8_t> pseudo_flat(rv.p.pseudoOuts.size() * 32);
+          for (size_t i = 0; i < rv.p.pseudoOuts.size(); ++i)
+            memcpy(pseudo_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+          std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
+          for (size_t i = 0; i < rv.outPk.size(); ++i)
+            memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
           const uint8_t balance_rc = shekyl_verify_ct_balance(
               pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
               rv.p.pseudoOuts.size(),
@@ -355,10 +353,9 @@ namespace
         // Fee-only CT balance: `sum(outPk masks) + fee*H = identity` — the general
         // balance with an empty pseudoOut side (asserted above), through the same
         // single-sourced `shekyl_verify_ct_balance` (§2.3).
-        std::vector<uint8_t> mask_flat;
-        mask_flat.reserve(rv.outPk.size() * 32);
-        for (const ctkey &op : rv.outPk)
-          mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
+        std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
+        for (size_t i = 0; i < rv.outPk.size(); ++i)
+          memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
         const uint8_t balance_rc = shekyl_verify_ct_balance(
             nullptr, 0,
             mask_flat.empty() ? nullptr : mask_flat.data(),
