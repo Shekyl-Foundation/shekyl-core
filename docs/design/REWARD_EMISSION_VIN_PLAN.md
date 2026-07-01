@@ -872,6 +872,51 @@ dedup atomicity model; (3) **Q1** auth count (unblocks PR-E2's wire); (4) the
 policy trio **Q3 / Q11 / Q12**. M-2 and Q9 are the two PR-E3 must not branch
 without.
 
+### 8.0 Round-2 opener — cluster state-map + leans (SCOPING, 2026-07-01)
+
+**These are leans to be ratified in Round 2, not closed decisions** — same honest-reopen
+standard as the DQ set (a lean recorded as a decision is the drift staleness feeds on).
+Verified at source: the cluster is a **design round over an *implemented* substrate**, not a
+build — the economics and epoch-close state are landed; what is open is pinning contracts and
+two decisions.
+
+| Item | Built (verified `dev`) | Open — the lean to ratify |
+|------|------------------------|---------------------------|
+| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi.rs:346`](../../rust/shekyl-ffi/src/archival_ffi.rs) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
+| **M-2** numerator as-of-E | `r_market_count` / `sigma_work_milli` / `scarcity` / `curve_milli` + `EpochCloseOutputs` (`consensus_state.rs`); schema implemented 2026-06-12; invariant-2 finalized-immutable-at-E-close | pin the **as-of-E snapshot field set** = the Q7 struct; every field from the frozen E-close materialization, never live |
+| **Q10 `held(P,E)`** | *(two-condition pin below)* | the one genuine design piece |
+| **Q9** dedup atomicity | `claimed_epochs_check_and_set` ([`claimed_epochs.rs:99`](../../rust/shekyl-archival-retention/src/claimed_epochs.rs)) | **lean:** check/set **fused in tx-connect scope** (tx2 sees tx1's set) over a block-assembly pass — simpler to reason about |
+| **Q1** ML-DSA auth count | binding message pinned (R1.A) | **open question** (not yet a lean): one auth or two — does leaf→`P_pubkey` already pin `P`? Gates E2 wire freeze |
+
+**`held(P,E)` frozen-at-E — two conditions (verified at source, avoiding the "reuses what's
+built" over-claim):**
+
+- **(a) Frozen-E accessor — reuse the *logic*, build the *marshaling* (lean).** The frozen-E
+  membership **function** is built and is exactly what `R_market` already uses:
+  `market_member_at_epoch(join_E, E, bad_intervals, is_foundation)` → `good_through`
+  ([`consensus_state.rs:97`](../../rust/shekyl-archival-retention/src/consensus_state.rs)). What is
+  **not** built is the as-of-E *accessor* feeding it P's intervals: there is **no `BondEventLog`
+  reader in the Rust crate**, and the C++ `has_archival_bond_shard` is **tip-relative**
+  (`db_lmdb.cpp:5054` — the Pin-4-flagged read). So the round's **one build item** is the as-of-E
+  interval **marshaling** for the emission snapshot (C++ reads P's persisted intervals + `join_E`,
+  marshals by value; Rust runs the built `market_member_at_epoch`) — **not** the tip-read. Reuse
+  the logic; build the accessor.
+- **(b) Straddle-safe — VERIFIED built.** `good_through`
+  ([`consensus_state.rs:84–92`](../../rust/shekyl-archival-retention/src/consensus_state.rs))
+  evaluates the intervals **as-of the queried E** (`settlement_epoch < iv.end_exclusive` closes a
+  straddling interval at E for the query), so the as-of-E materialization is a pure function of
+  ≤E-close events. This is the property that makes `held(P,E)` snapshot-by-value-able at all, and
+  it holds in the built code. **State it explicitly in the pin:** if a post-E event could
+  retroactively alter a straddling interval, `held(P,E)` would not be snapshottable and the
+  snapshot-by-value seam would break for that one field — so the pin *is* this property, not just
+  "which source."
+
+**Round order (leans):** (1) M-2 + Q7 + Q10 jointly — enumerate the as-of-E snapshot field set
+(the Q7 struct), reuse `market_member_at_epoch` for the frozen-E logic, land the as-of-E interval
+**marshaling** as the round's one build item (avoiding the Pin-4 tip-read); (2) Q9 dedup atomicity;
+(3) Q1 auth count. The buildable-now front is **E1's two primitives + this round in parallel**;
+E2 opens when the round closes.
+
 1. **ML-DSA vin auth shape (F-E4) — gates PR-E2 (wire freeze), not just E3.**
    *Proposal pinned in R1.A* for the round to attack (binding message, two auths,
    cSHAKE family). Remaining: is Auth-P necessary or does the leaf→`P_pubkey`
