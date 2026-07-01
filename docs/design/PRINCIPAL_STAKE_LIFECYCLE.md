@@ -9,6 +9,9 @@ doc.** The *method-surface contract* closes at Round 1; *code* for the value-bea
 legs (bond-post / drain) remains gated on **Gate-6 R4 + the bond connect-path code**
 (not the FSM/sim — that is sealed; §5). This is the plan-home for the **user-facing**
 economic staking surface named unscoped in `WALLET_REWRITE_PLAN.md` Phase-2.
+**Closure posture:** the Round-0-opened DQ set is closed (DQ1/2/5/6) or deferred with named
+gates (DQ3/4) — this is the closure milestone; the single Round-1 entry question (§3.1
+one-shared-derivation) and inherited carries are enumerated in §5.1.
 
 Process discipline: [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (cited explicitly — consensus-adjacent multi-round surface). A2 (audit-against-actual-code)
@@ -187,6 +190,19 @@ the cover-draw entropy and funding-window semantics as the shared parameters** (
 2c-2b bond-request assembly, [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md)
 §SP-2.d), **not** to invent a shared cover type.
 
+**One shared derivation, not two-plus-a-KAT (the Round-1 entry question).** The relocated
+unrepresentability is subtler than a witness type: with no cover type, the target is not
+"forbid a bad cover value" but **"forbid the send path and the scan path from drifting"** —
+the output `stake_in` builds and the output `P`'s dual-scan recovers must derive from **one
+shared construction**, not two that happen to agree. If they are **one** tagged-key
+constructor both sides call, the sameness is *structural* (unrepresentable); if they are two
+functions with a KAT asserting agreement, that is the *weaker* form — drift compiles clean
+between KAT runs (the Track-B generator-KAT failure mode). §3.1's contract must pin **which**,
+and the **cover-amount entropy draw specifically wants the single-shared-derivation
+treatment**, not assert-two-agree: an entropy draw the send and scan/window paths compute even
+slightly differently is a silent correlation or a missed cover that no type check catches.
+**This is the Round-1 entry question for this surface** (§5.1).
+
 ## 4. Round-1 dispositions (DQ1–DQ6)
 
 ### DQ1 — no principal-side committed-stake wire survives. **CLOSED (plain transfer).**
@@ -292,6 +308,13 @@ finalized against an **unfrozen output byte-shape**. The firewall **intent** (no
 decorrelated temporal spacing) is designable now; the concrete count rule waits on **gate-6
 R4 *and* the emission output shape *and* the emission wire freeze (F3)** — a **three-way**
 deferral, with F3 the tightest (it is on the critical path to the drain).
+
+**Sequencing consequence.** Because F3 (the emission output byte-shape) is the tightest and
+its leg is **not in code**, DQ3 is not merely deferred but **sequenced last** of the three:
+gate-6 R4 and the emission output *shape* can both be pinned while F3 stays open, but F3 cannot
+close until the emission leg **exists**. So DQ3's critical path runs **through the emission
+leg's implementation** ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) **PR-E3**),
+**downstream** of it — not parallel. Do not scope DQ3 as closeable before the emission leg lands.
 
 **Axes R4 must decide** (named now so R4 is a decision, not a discovery):
 `fixed-count` (a fixed `N` is itself a fingerprint and does not scale with amount) vs
@@ -493,6 +516,37 @@ gates, ordered:
   or code gate.
 
 **Only DQ3 and DQ4 wait — and on Gate-6 R4 (GF-4/GF-7), not on the FSM.**
+
+## 5.1 Round-1 entry questions & inherited carries (A5)
+
+The Round-0-opened DQ set is **closed** (DQ1/2/5/6) or **deferred with named gates**
+(DQ3/4); this is the closure milestone. What Round 1 inherits:
+
+1. **§3.1 cover contract — one shared derivation vs two-plus-a-KAT (the entry question).**
+   Pin whether the cover's send path (`stake_in`) and scan path (`CoverDiscovery`) are **one**
+   shared tagged-key constructor (sameness *structural*) or two functions asserted equal by a
+   KAT (sameness *tested*, drift-prone). The **cover-amount entropy draw** wants the
+   single-shared-derivation treatment specifically. This is the line between "unrepresentable"
+   and "tested."
+2. **Reward realization = drain-at-exit/rotation; there is *no* non-terminal sweep.** The built
+   FSM treats **drain as terminal** (`Bonded`/`Slashed` → `Exited`, FSM-retool transition
+   graph) — so a staker realizes returns by **draining-and-rotating** (new `p_slot`, gate-6),
+   **not** a recurring in-place "sweep while still serving." This is deliberate: repeated
+   non-terminal sweeps from one long-lived `P` to the principal build exactly the correlation
+   trail GF-4 exists to prevent. Named so the §1 "reward sweep / terminal drain" leg is not
+   mis-scoped as a standalone recurring method — the *only* realization primitive is `drain`,
+   gated on `P` exiting.
+3. **Witness-typed signatures (§0.2 made concrete).** Round 1 pins the `P`-FSM-state witness
+   set the frozen §2 signatures consume — e.g. `unbond(ExitedConfirmed)`,
+   `drain(DrainableConfirmed)` (valid from `Bonded`/`Slashed`) — the sibling of the built
+   `RetirementWitness`.
+4. **G1a grace-window surfacing in the query read-model (DQ5).** The read-model should surface
+   the slash-grace / challenge-failure-pending **cure window** (FSM-retool R4 **G1a**,
+   priority-1 UX) — a principal-facing read of `P`'s observed `good_standing`, not yet in the
+   DQ5 query set. Failure-mode UX (rule 82) for refused actions is a Round-1+ concern.
+5. **Multi-`P` portfolio — explicit scope boundary.** This doc scopes the **single-`P`**
+   lifecycle. Multi-`P` orchestration (rotation ceremony, portfolio-wide drain, cross-`P`
+   hygiene per gate-6 §4 invariant 5) is **out of scope here**, deferred to the rotation round.
 
 ## 6. References (authoritative — reference, do not restate)
 
