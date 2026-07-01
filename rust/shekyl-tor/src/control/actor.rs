@@ -349,20 +349,10 @@ impl TorChild {
     /// `SIGKILL` escalation is what keeps the wait *bounded* — "SIGTERM + wait" without
     /// it would hang the wallet forever if `tor` ever wedged.
     async fn shutdown(mut self) {
-        // SIGTERM for a graceful exit (DQ-T0.1). No-op if the child already exited.
-        if let Some(pid) = self
-            .child
-            .id()
-            .and_then(|pid| libc::pid_t::try_from(pid).ok())
-        {
-            // SAFETY: `kill(2)` with a pid this process owns and a constant signal
-            // number; it reads/writes no memory. A stale pid returns `ESRCH`, ignored.
-            // (`try_from` guards the u32→pid_t conversion — impossible to overflow for a
-            // real pid, but honest about the width.)
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
-        }
+        // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). No-op if it already
+        // exited, and a no-op off Unix — there the timeout → `kill()` escalation is the
+        // whole shutdown.
+        request_graceful_stop(&self.child);
         let exit = match timeout(SHUTDOWN_GRACE, self.child.wait()).await {
             // Exited within the grace window (SIGTERM or TAKEOWNERSHIP) — reaped.
             Ok(Ok(status)) => TorExit::Reaped(status),
@@ -380,6 +370,27 @@ impl TorChild {
         }
     }
 }
+
+/// Request a graceful stop of a managed `tor` — `SIGTERM` on Unix (DQ-T0.1). Harmless if
+/// the child already exited (`ESRCH`).
+#[cfg(unix)]
+fn request_graceful_stop(child: &Child) {
+    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+        // SAFETY: `kill(2)` with a pid this process owns and a constant signal number; it
+        // reads/writes no memory. A stale pid returns `ESRCH`, ignored. (`try_from` guards
+        // the u32→pid_t width — unreachable for a real pid, but honest about it.)
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
+/// (`TerminateProcess`) escalation drives shutdown there instead. A graceful non-Unix
+/// path — closing the control connection for `TAKEOWNERSHIP`, or a console control event
+/// — is a follow-up for when a non-Unix target is real; today the managed launch is Unix.
+#[cfg(not(unix))]
+fn request_graceful_stop(_child: &Child) {}
 
 /// How often the bootstrap poll task asks `GETINFO status/bootstrap-phase`. Bootstrap
 /// is a one-time startup event over tens of seconds, so a sub-second poll adds
@@ -532,6 +543,13 @@ impl Drop for TorControl {
 async fn spawn_managed_tor(
     managed: ManagedTor,
 ) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
+    // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
+    // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
+    // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
+    // brief window before that is an empty dir, no secrets yet.
+    tokio::fs::create_dir_all(&managed.data_dir)
+        .await
+        .map_err(|_| ControlError::Spawn)?;
     let port_file = managed.data_dir.join("control_port");
     // A stale port file from a prior run would be read as *this* run's port — remove it
     // so `wait_for_control_port` only ever returns a fresh value. Async fs throughout so

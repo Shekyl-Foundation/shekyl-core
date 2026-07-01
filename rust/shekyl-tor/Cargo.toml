@@ -31,9 +31,12 @@ tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "ma
 kameo = { workspace = true }
 futures-core = "0.3"
 getrandom = "0.2"
+
 # SP-T0b managed-child shutdown: `SIGTERM` for a graceful `tor` exit (tokio/std only
-# expose `SIGKILL` via `Child::kill`). The workspace's already-locked libc; the one
-# `unsafe` call is a documented `kill(2)` on a pid we own.
+# expose `SIGKILL` via `Child::kill`). Unix-only — the `kill(2)`/`SIGTERM` symbols don't
+# exist off Unix, so the dep and its one documented `unsafe` call are `cfg(unix)`; non-Unix
+# shuts down via the `Child::kill` (`TerminateProcess`) escalation. Already-locked libc.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
