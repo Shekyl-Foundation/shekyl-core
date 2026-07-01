@@ -12,8 +12,9 @@ economic staking surface named unscoped in `WALLET_REWRITE_PLAN.md` Phase-2.
 **Closure posture:** the Round-0-opened DQ set is closed (DQ1/2/5/6) or deferred with named
 gates (DQ3/4) — this is the closure milestone; the single Round-1 entry question (§3.1
 one-shared-derivation) and inherited carries are enumerated in §5.1. The **Round-1 opening read
-(§5.2, 2026-07-01)** has since resolved §3.1 toward "already structural — wire it, don't unify"
-(the shared draw exists in `shekyl-standoff`); the residual is `C_min` single-sourcing, gated on 2d-1.
+(§5.2, 2026-07-01)** resolved §3.1 toward "already structural — wire it, don't unify" (the shared
+draw exists in `shekyl-standoff`); the once-noted `C_min` "gate" was a **pre-sim phantom** —
+retracted (rung gate-4-pinned; `C_min = 1 rung` sim-supported; the sim is the authority, §5.2).
 
 Process discipline: [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (cited explicitly — consensus-adjacent multi-round surface). A2 (audit-against-actual-code)
@@ -533,8 +534,8 @@ The Round-0-opened DQ set is **closed** (DQ1/2/5/6) or **deferred with named gat
    KAT (sameness *tested*, drift-prone). The **cover-amount entropy draw** wants the
    single-shared-derivation treatment specifically. This is the line between "unrepresentable"
    and "tested." **→ Resolved by the Round-1 opening read (§5.2): already structural
-   (`shekyl-standoff` exists) — the obligation is *wiring* + `C_min` single-sourcing, not a
-   constructor unification.**
+   (`shekyl-standoff` exists) — the obligation is *wiring*, not a constructor unification. (The
+   `C_min` "gate" once noted here was a pre-sim phantom — retracted; see §5.2 Correction.)**
 2. **Reward realization = drain-at-exit/rotation; there is *no* non-terminal sweep.** The built
    FSM treats **drain as terminal** (`Bonded`/`Slashed` → `Exited`, FSM-retool transition
    graph) — so a staker realizes returns by **draining-and-rotating** (new `p_slot`, gate-6),
@@ -597,14 +598,29 @@ toward "already structural, use it," not "unify two call sites."**
   never an ad-hoc draw; the check forbids any inherited jitter", plus an RNG-degeneracy guard
   and `!Clone` unrepresentability tokens).
 
-**Residual — the real load-bearing agreement is an *input* coupling, not the draw.**
-`draw_cover_amount(count, c_min, rng)`'s **`c_min`** = `COVER_RUNWAY_FLOOR_ATOMIC`, **provisional
-pending the 2d-1 earnings-ramp `C_min` sizing** (`pscan/accrual.rs` SP-7; a partial funding read
-mis-sizes `C_min` — a DQ7-class firewall-parameter risk). The **same `C_min`** (and `count` =
-live-bond `C`) must feed the send-side draw **and** the SP-7 / `CoverDiscovery` detection side; it
-is single-sourced as one const that re-freezes the golden vector when 2d-1 lands. So the
-cross-surface agreement is **`C_min`/`count` single-sourcing** — input plumbing, cleaner than a
-constructor unification, and **gated on 2d-1**.
+**Correction (2026-07-01) — the `C_min` "residual/gate" was a pre-sim phantom; retracted.**
+The framing that stood here — a "2d-1 earnings-ramp `C_min` sizing" as the load-bearing residual
+this thread waits on — elevated `C_min` (a **speculative planning variable written in
+[`ARCHIVAL_COVER_DRAW.md`](ARCHIVAL_COVER_DRAW.md) *before the sim was run***) to a definitive
+open gate. It is not one. The **definitive authority is the sim**
+([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)), which took the design in a different
+direction and does **not track a runway `C_min` at all**. What is actually determined:
+
+- **The rung is pinned and fixed** — `ARCHIVAL_BOND_FLOOR = 750_000_000 = 0.75 SKL`, gate-4
+  (`consensus_constants.rs:17`; ARCHIVAL_COVER_DRAW §2.3: "the rung size is **fixed**"). *This
+  was the real determination — and it is done.*
+- **The cover is a sliding window, not a scalar** — `span(C)` is a cubic smoothstep over the
+  live-bond count (`cover_dial_span_atomic`: 0 rungs at the tail → cap at the §8.7 saturation
+  knee, `k ≈ 10`), sim-characterized by the `--cover` harness (ARCHIVAL_COVER_DRAW §7).
+- **`C_min = 1 rung (0.75 SKL)`** — sim-supported: the harness shows even `k = 0` (the
+  `cover == 0` opt-out) still gets same-rung cover (≈ 1.9, not 1). The "PROVISIONAL pending the
+  2d-1 earnings-ramp" comment in `cover.rs:42` / ARCHIVAL_COVER_DRAW §7.4 is **stale pre-sim
+  planning text**; the definitive sim has moved past it.
+
+So there is **no open `C_min` gate** on this thread. The cover-and-funding contract's only live
+obligations are the **wiring** (`stake_in` imports `shekyl-standoff` + `construct_output` when
+V3.0 lands) and **DQ4's steady-state funding sources** — both mechanism-built, neither waiting on
+a `C_min` number.
 
 **Funding-regime confirmation (DQ4).** 2c-2b's SP-2.d *correction* confirms the two-regime split
 this doc's DQ4 lean named: cold-start = **principal-funded** + ≥ 1-SEB-spaced + standoff-
@@ -612,29 +628,12 @@ decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement
 firewall *logic* is built + fixture-validated; **neither real funding source is wired** yet
 (principal-output access = SP-2.d, `P`-scanning = SP-2.e).
 
-**Convergence — the remaining thread is one gate with three readers, not a list.** Everything
-still open downstream converges on the **2d-1 earnings-ramp sizing**: (a) `stake_in` importing
-`shekyl-standoff` + `construct_output`; (b) `C_min` single-sourcing for the cover draw; (c)
-DQ4's steady-state funding sources. These are **not independent items** — they are **one
-dependency (2d-1 earnings-ramp: `C_min` + funding sources) with multiple readers**, so 2d-1
-unblocks the cover contract *and* DQ4's steady-state regime in one move.
-
-**`C_min` has one author and three readers (a small, non-vicious circularity).** `C_min` feeds
-the send draw (`stake_in`), the SP-7 / `CoverDiscovery` detection side, **and** — because
-`COVER_RUNWAY_FLOOR_ATOMIC` *is* the cover-runway floor — the earnings-ramp economics that size
-it: the ramp sizes `C_min`, and `C_min` sizes the cover the ramp is meant to fund during
-cold-start. Not vicious (the ramp sizing is the **author**; the cover draw is a **consumer** of
-its output), but it means `C_min` **cannot be pinned independently** on the wallet and sim
-sides — it is pinned **once, in the 2d-1 sizing, and read everywhere else**. So the
-single-sourcing discipline is stronger than send-vs-detection congruence: **the 2d-1 sizing is
-the sole author of `C_min`; all consumers are readers.** This relocates the residual to the
-*tractable* side of the same line — a shared-input **value** risk (one constant, single-sourced,
-agreement definitional) rather than a **code** risk (two derivations kept congruent).
-
-**Verify-at-source when 2d-1's earnings-ramp lands:** that `C_min` is **authored once there and
-read everywhere else** — not recomputed from ramp parameters on any consuming surface while the
-constant is read on another. That single check is what turns the whole cover-and-funding
-contract from *provisional, mechanism-sound* to *final*.
+**~~Convergence / "one author, three readers" / verify-when-2d-1-lands~~ — RETRACTED (see the
+Correction above).** Those paragraphs built a "the whole thread converges on the 2d-1
+earnings-ramp `C_min` sizing" edifice on the pre-sim `C_min` phantom — rigorous analysis of a
+channel the definitive sim had already superseded. With `C_min = 1 rung` sim-supported and the
+rung gate-4-pinned, there is no such convergence gate; the remaining work is the `stake_in`
+wiring + DQ4's steady-state funding sources named in the Correction.
 
 ## 6. References (authoritative — reference, do not restate)
 
