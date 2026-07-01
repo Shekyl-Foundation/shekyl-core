@@ -56,6 +56,29 @@ so Round 1 designs against what exists, not against the scoping doc's caution:
 
 The orchestrator is `Engine<S,D,L,E,R,P,F>` ([`engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs) L403), holding `key: KeyEngineHandle` (L452), `pending: P` (L522), `stake: Option<StakeEngineHandle>` (L681). Principal transfers already build through `Engine::build_pending_tx_async` → `PendingTxEngine::build` → `KeyEngine` sign ([`pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs) L841). **The principal surface is a composition layer over primitives that already exist**, not a new engine.
 
+### 0.2 Structural principle — projection-and-gate over `P`'s observed FSM (the design spine)
+
+The principal has no consensus FSM (§0); the **positive, load-bearing** statement is
+stronger: **the principal lifecycle is a projection-and-gate over `P`'s scan-observed
+consensus FSM, not an independent state machine.** The orchestrator is a **read-model**
+over `P`'s public FSM (`AdmissionPending / Bonded / Slashed / Exited`, derived by the
+`StakeEngine` scan) **plus a validity gate** on human actions — it *observes* `P`'s
+consensus state and *refuses* actions `P`'s state does not permit; it never drives that
+state. Every principal action is gated on the observed state: `unbond()` is valid only
+when `P` is `Exited` post-cooldown; `drain()` reads `P`'s non-escrowed outputs;
+`unbond_readiness(P)` is a countdown off `P`'s observed exit + the cooldown constant.
+
+**Make-bad-states-unrepresentable target (rule 05 / rule 18).** A principal action must be
+**constructible only from a `P`-FSM-state token that permits it**, so "unbond a still-`Bonded`
+`P`" is *unrepresentable*, not runtime-checked. This is **already the built actor's
+discipline**, not a new invention: `RetireBondedPersona` is constructible only with a
+`RetirementWitness` ([`stake_engine.rs`](../../rust/shekyl-engine-core/src/engine/stake_engine.rs)
+L274 / L1151), and `SignBond` consumes a **single-use** `PersistedBondTicket` (L400 / L1040).
+Round 1 extends the same pattern to the principal surface — e.g. `unbond()` takes an
+`ExitedConfirmed` witness minted from the scan-observed FSM, the sibling of
+`RetirementWitness`. This principle sharpens **DQ2** (orchestrator = read-model + gate;
+actor = secrets + bond path) and **DQ5** (the queries *are* that read-model).
+
 ## 1. The four principal↔`P` legs (all transfers except the bond post)
 
 Per [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 tx-legs table:
@@ -126,7 +149,8 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
 principal → `P` stealth outputs on the main tree. **No `C_stake`, no range proof, no
 band, no minimum.** The §2.1 "principal role open" reopen-pointer is **retired**.
 
-**Rationale (four independent legs, any one sufficient):**
+**Rationale — the committed-stake alternative is *strictly dominated*, not merely
+disfavoured (four independent legs, any one sufficient):**
 
 1. **The consumer is deleted.** `C_stake` / range-proof / band existed only to serve
    the confidential-yield / entitlement superstructure (exact-yield = secret-weight ×
@@ -202,6 +226,14 @@ change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. `
 `unbond()` bodies stay `unimplemented!()` until GF-4 is pinned (shipping a lump sweep
 before GF-4 ships a correlation beacon, gate-6 §2.4).
 
+**Second dependency — the emission output shape.** DQ3's *concrete count rule* is also
+co-sequenced with the reward-emission leg (§5 gate 3): the drain **consumes emission
+outputs**, so their form (how many, what stealth shape, escrowed vs non-escrowed) is what
+GF-4's output-count discipline operates *over*. The firewall **intent** (no lump sweep,
+decorrelated temporal spacing) is designable now; the concrete count rule waits on
+**gate-6 R4 *and* the emission output shape**, not gate-6 alone. State it so the deferral
+is understood as a two-input coupling.
+
 **Axes R4 must decide** (named now so R4 is a decision, not a discovery):
 `fixed-count` (a fixed `N` is itself a fingerprint and does not scale with amount) vs
 `amount-scaled` (leaks magnitude via count) vs `jittered-within-band` (best, but must
@@ -248,7 +280,12 @@ only). Disposition per projection:
 | `drainable_balance(P)` | `P`'s non-escrowed output set (needs `P.view_sk` scan) | **Yes** | computed **inside `StakeEngine`**; returns an **aggregate `Amount` scalar** — `view_sk` and per-output secrets never leave |
 | `principal_stakes()` | wallet-local bookkeeping (which `P`s the principal funded) | **Owner-grade** | **the P↔principal linkage itself** — owner-local only; **must never cross RPC / diagnostic / log surfaces** (gate-6 §5 / §9.6 invariant) |
 
-**Rationale.** `principal_stakes()` *is* the firewalled edge (P↔principal↔human) — it is
+**Rationale.** All four queries *are* the §0.2 read-model — projections, never drivers.
+Three project **public bond state + the principal's own ledger** (`bonded_holdings`,
+`unbond_readiness`, `principal_stakes`); `drainable_balance` projects the `StakeEngine`'s
+**`P`-scanned ledger** — `P.view_sk` is used at *scan* time (`ScanStep`), never at query
+time, and only the aggregate scalar crosses. **No query crosses a `P` secret.**
+`principal_stakes()` *is* the firewalled edge (P↔principal↔human) — it is
 the one projection whose leakage defeats the whole model, so it is owner-local and
 RPC-forbidden, matching the recalled principle that the firewall protects **only** the
 P↔principal edge (`P`'s own shards/rewards are public by design). The single
@@ -287,6 +324,15 @@ dependents — the deletion is not uniform:
   cutover (REWARD_EMISSION_VIN_PLAN PR-E4/E5 doc-sweep), **not** with this surface. **Do
   not build any principal method on Tier-A or Tier-B symbols.**
 
+**Quarantine-then-delete, not delete-someday (ratified).** The live risk is *not* that the
+targets linger — it is that the **new** principal surface accretes a dependency on them (an
+`import StakeInstance`, a `tier` field) and re-entrenches them, making the rule-15 removal
+harder. So Round 1 ratifies a **build-time guard**: the new principal module must not import
+the claim-era types (`StakeInstance` / `claim` / `tier` / entitlement), turning "a method
+carrying `claim`/`tier`/`StakeInstance` is wrong by construction" (§0) into a **mechanical**
+check — a `clippy.toml` `disallowed-types` entry or a module-boundary import test, not a
+review-time discipline. Tier-B symbols are re-pointed off their live consumers, *then* deleted.
+
 **Rule-15 discipline:** per-commit build cleanliness (B5) — Tier A deletes cleanly today
 (no dependents); Tier B is gated on its consumer migration so no intermediate SHA breaks
 `cargo build`.
@@ -323,6 +369,7 @@ Tier-B deletion → REWARD_EMISSION_VIN_PLAN PR-E4/E5 doc-sweep.
 | DQ6 delete dead staking stack; migrate live tier consumers | **rule 15** + **rule 16** | delete Tier-A dead code now; migrate Tier-B claim-era inheritance, don't build on either |
 | §2 frozen signatures / NOP bodies | **rule 26** A1 | freeze the contract; body-replacement in place, no signature churn |
 | §4a bundling by validation surface | **rule 19** | ordinary-transfer / bond-wire / reward-output are distinct validation surfaces |
+| §0.2 projection-and-gate over `P`'s FSM; witness-typed actions | **rule 05** + **rule 18** | orchestrator is a read-model + validity gate, never a driver; bad states unrepresentable via `P`-FSM-state tokens (the built `RetirementWitness`/`PersistedBondTicket` pattern) |
 
 ## 5. Gates — determination and buildable-now slice
 
