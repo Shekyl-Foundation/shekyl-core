@@ -298,7 +298,7 @@ JoinMarket` (§13). (Q11 has no separate wire surface — staking rides these ar
 | `0x01` | `txout_to_scripthash` (:858) | **Shed** | dead. |
 | `0x02` | `txout_to_key` (:859) | **Shed (Q3 resolved)** | No genesis producer — coinbase emits tagged_key; the Rust tx-builder always sets a `view_tag` (`shekyl-tx-builder/src/wire.rs:94-98` → tagged_key); the only `txout_to_key` site is legacy `wallet2.cpp:13220` building a *synthetic local* tx prefix (retiring), not an on-chain producer. **`view_tag` becomes mandatory** — every transfer output is tagged_key. |
 | `0x03` | `txout_to_tagged_key` (:860) | **Ratify** (genesis `0x00`) | `key[32] view_tag(1)`. The **sole** genesis output type. |
-| `0x04` | `txout_to_staked_key` (:861) | **Shed (Q11 resolved)** | Retire C++ legacy — genesis staking outputs are ordinary main-tree stealth (`tagged_key` to `P`); the principal is a `C_stake` Pedersen commitment kept **off-wire** in the wallet's `StakeInstance`, and tier/lock metadata is off-wire too (`PHASE_2B_STAKE_LIFECYCLE.md:259,466`). No on-chain staked-output type. |
+| `0x04` | `txout_to_staked_key` (:861) | **Shed (Q11 resolved)** | Retire C++ legacy — genesis staking outputs are ordinary main-tree stealth (`tagged_key` to `P`). **No principal commitment on- or off-wire:** stake-in is a plain FCMP++ transfer, its amount hidden by the output commitment like any transfer; the `C_stake` / tier / lock metadata is a deleted claim-era artifact (`PRINCIPAL_STAKE_LIFECYCLE.md` DQ1; `PHASE_2B_STAKE_LIFECYCLE.md` §2.1 *Delete*). No on-chain staked-output type. |
 
 Each output is preceded by `VARINT(amount)` (cleartext for the coinbase output;
 `0` for confidential transfer outputs). With plain `txout_to_key` **and**
