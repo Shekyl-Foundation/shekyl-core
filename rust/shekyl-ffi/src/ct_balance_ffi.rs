@@ -21,12 +21,13 @@
 use shekyl_ct_balance::{verify_ct_balance, CtBalanceError};
 use shekyl_units::AtomicUnits;
 
-/// Balance holds (`ΣpseudoOuts = Σout_masks + fee`) over canonical prime-order points.
+/// Balance holds (`ΣpseudoOuts = Σout_masks + fee*H`) over canonical prime-order points.
 pub const SHEKYL_CT_BALANCE_OK: u8 = 0;
 /// A required pointer was null while its count was nonzero.
 pub const SHEKYL_CT_BALANCE_ERR_NULL_PTR: u8 = 1;
-/// A commitment was non-canonical / not torsion-free, the flat buffer was not a
-/// multiple of 32, or `count * 32` overflowed.
+/// A commitment was non-canonical / not torsion-free, or `count * 32` overflowed
+/// in the flatten path. (The flat buffer is always `count * 32` bytes here, so a
+/// non-multiple-of-32 length is not reachable through this `ptr + count` FFI.)
 pub const SHEKYL_CT_BALANCE_ERR_INVALID_POINT: u8 = 2;
 /// The input-side and output-side commitment sums differ.
 pub const SHEKYL_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 3;
@@ -60,7 +61,7 @@ unsafe fn flat_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [u8], u8> {
     Ok(std::slice::from_raw_parts(ptr, byte_len))
 }
 
-/// Verify the general CT cleartext balance `ΣpseudoOuts = Σout_masks + fee`.
+/// Verify the general CT cleartext balance `ΣpseudoOuts = Σout_masks + fee*H`.
 ///
 /// `pseudo_outs_ptr` / `out_masks_ptr` are flattened `N × 32` byte arrays; either
 /// pointer may be null when its count is zero (the fee-only shape has no

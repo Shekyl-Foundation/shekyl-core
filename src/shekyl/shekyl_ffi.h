@@ -1761,8 +1761,9 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
 #define SHEKYL_CT_BALANCE_ERR_INVALID_POINT   2
 #define SHEKYL_CT_BALANCE_ERR_SUM_MISMATCH    3
 
-/// Verify `sum(pseudoOuts) = sum(out_masks) + fee` over flattened `N x 32` curve
-/// points. Either pointer may be null when its count is zero (fee-only shape).
+/// Verify `sum(pseudoOuts) = sum(out_masks) + fee*H` over flattened `N x 32`
+/// curve points (the fee contributes its commitment `fee*H`, not a bare scalar).
+/// Either pointer may be null when its count is zero (fee-only shape).
 uint8_t shekyl_verify_ct_balance(
     const uint8_t* pseudo_outs_ptr,
     size_t num_pseudo_outs,

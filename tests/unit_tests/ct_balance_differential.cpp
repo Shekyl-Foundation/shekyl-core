@@ -46,6 +46,17 @@ namespace
     return k;
   }
 
+  // Deterministic mask scalar for the KAT — no RNG, so the corpus is fully
+  // reproducible across runs and architectures (the differential is a
+  // known-answer test, not a fuzzer). Distinct per `seed`, hashed to a scalar.
+  rct::key det_mask(uint64_t seed)
+  {
+    const rct::key preimage = rct::d2h(0x5368656B796C0000ULL + seed); // "Shekyl" || seed
+    rct::key scalar;
+    rct::hash_to_scalar(scalar, preimage);
+    return scalar;
+  }
+
   // The C++ oracle: the isolated balance block from verRctSemanticsSimple
   // (rctSigs.cpp) — sum(pseudoOuts) == sum(masks) + fee*H.
   bool cpp_oracle(const rct::keyV &pseudoOuts, const rct::keyV &masks, uint64_t fee)
@@ -79,7 +90,7 @@ namespace
   TEST(CtBalanceDifferential, class1_single_output_balanced_both_accept)
   {
     const uint64_t fee = 7;
-    const rct::key m = rct::skGen();
+    const rct::key m = det_mask(1);
     const rct::keyV masks = {rct::commit(100, m)};  // m*G + 100*H
     const rct::keyV pseudo = {rct::commit(107, m)}; // m*G + 107*H
     EXPECT_TRUE(cpp_oracle(pseudo, masks, fee));
@@ -92,7 +103,7 @@ namespace
     rct::keyV masks, pseudo;
     for (int i = 0; i < 12; ++i)
     {
-      const rct::key m = rct::skGen();
+      const rct::key m = det_mask(static_cast<uint64_t>(i));
       masks.push_back(rct::commit(10 + i, m));
       pseudo.push_back(rct::commit(10 + i, m)); // identical G- and H-parts
     }
@@ -117,7 +128,7 @@ namespace
   TEST(CtBalanceDifferential, class1_unbalanced_valid_both_reject)
   {
     const uint64_t fee = 7;
-    const rct::key m = rct::skGen();
+    const rct::key m = det_mask(2);
     const rct::keyV masks = {rct::commit(100, m)};
     const rct::keyV pseudo = {rct::commit(108, m)}; // off by one
     EXPECT_FALSE(cpp_oracle(pseudo, masks, fee));
@@ -131,7 +142,7 @@ namespace
     // rename/cutover. Bond-post balance: sum(pseudo) + debit = sum(mask) + fee + credit.
     // With fee = debit = 0: sum(pseudo) = sum(mask) + credit*H.
     const uint64_t credit = 1000;
-    const rct::key m = rct::skGen();
+    const rct::key m = det_mask(3);
     const rct::keyV masks = {rct::commit(0, m)};      // m*G
     const rct::keyV pseudo = {rct::commit(credit, m)}; // m*G + credit*H
     const std::vector<uint8_t> p = flatten(pseudo);
@@ -149,7 +160,7 @@ namespace
     // The T's cancel in the sum, so the C++ oracle accepts; Rust rejects the
     // non-torsion-free points. Same economic tx, second serialization.
     const uint64_t fee = 7;
-    const rct::key m = rct::skGen();
+    const rct::key m = det_mask(4);
     const rct::key mask = rct::commit(100, m);
     const rct::key pseudo_pt = rct::commit(107, m);
     const rct::key t = torsion_point();
@@ -165,7 +176,7 @@ namespace
     // both reject — but Rust must reject as INVALID_POINT (the decompress check),
     // ordered ahead of SUM_MISMATCH. Pins the FFI error-precedence.
     const uint64_t fee = 7;
-    const rct::key m = rct::skGen();
+    const rct::key m = det_mask(5);
     const rct::key mask = rct::commit(100, m);
     const rct::key pseudo_pt = rct::commit(107, m);
     const rct::key t = torsion_point();
