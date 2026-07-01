@@ -391,8 +391,10 @@ impl Drop for TorControl {
 ///   publish [`BootstrapState::Failed`] and exit, so a waiter gets a terminal answer
 ///   instead of hanging to the lifecycle deadline (which is T0b-2 *policy*, not this
 ///   task's concern).
-/// - **`watch` send fails** → every receiver was dropped (no one is listening): stop
-///   **silently**. This is not a Tor failure and must never publish `Failed`.
+/// - **no receivers left** → stop **silently**, checked *unconditionally* at the top of
+///   each iteration via `tx.is_closed()` — so shutdown never depends on a `send`
+///   happening. A run of unparseable replies (parse → `None`, no `send`) must not keep
+///   the task polling a channel no one is listening on. Not a Tor failure; never `Failed`.
 /// - **100% reached** → publish [`BootstrapState::Ready`] (the gate) and stop.
 async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<BootstrapState>) {
     // The highest progress published so far, so a Tor `PROGRESS=` regression never
@@ -400,6 +402,12 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
     // cosmetic, not enforced).
     let mut peak = 0u8;
     loop {
+        // No receivers left — stop quietly (NOT a failure). Checked here so shutdown is
+        // *unconditional*, not contingent on a `send`: a run of `None` parses must never
+        // keep the task polling a channel no one is listening on.
+        if tx.is_closed() {
+            return;
+        }
         let Ok(reply) = actor
             .ask(Command::GetInfo(vec!["status/bootstrap-phase".to_owned()]))
             .await
@@ -410,19 +418,15 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
         };
         if let Some(progress) = parse_bootstrap_progress(&reply) {
             if progress >= 100 {
-                // `Ready` is the gate; publish and stop. A send error here just means
-                // no listeners, and we are stopping regardless.
+                // `Ready` is the gate; publish and stop.
                 tx.send(BootstrapState::Ready).ok();
                 return;
             }
+            // Clamp a regression so the "Connecting… n%" UX never renders backward.
             peak = peak.max(progress);
-            if tx
-                .send(BootstrapState::Connecting { progress: peak })
-                .is_err()
-            {
-                // No receivers left — stop quietly. NOT a failure.
-                return;
-            }
+            // Fire-and-forget: a dropped-receiver send failure needs no handling here —
+            // the `is_closed()` check at the loop top is the single shutdown path.
+            tx.send(BootstrapState::Connecting { progress: peak }).ok();
         }
         // A `None` parse (malformed / absent `PROGRESS=`) is "unknown, skip": hold the
         // last published state and poll again — never publish a spurious `Connecting{0}`.
