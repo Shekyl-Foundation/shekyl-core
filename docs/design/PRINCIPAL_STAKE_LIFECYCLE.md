@@ -329,6 +329,9 @@ delay floor, not a per-tx output fan-out. Lean: **jittered tx-count over the rel
 window**, output count per tx bounded to avoid a size fingerprint; the `HoldingsUpdate`
 partial-unbond refund rides the same discipline (gate-6 §2.4). This is **non-consensus
 wallet-local**, so it can be prototyped as a default as soon as GF-4 pins its shape.
+**Joint-with-rotation (from §5.1 item 2):** because drain-and-rotate co-triggers GF-4 and the
+persona-rotation network break, the concrete count rule must be **jointly** uncorrelated with
+the new-`P` first-on-network timing — not merely independently well-behaved.
 
 ### DQ4 — bond-funding shape (GF-7). **RE-GATED to gate-6 Round 4.**
 
@@ -536,6 +539,21 @@ The Round-0-opened DQ set is **closed** (DQ1/2/5/6) or **deferred with named gat
    trail GF-4 exists to prevent. Named so the §1 "reward sweep / terminal drain" leg is not
    mis-scoped as a standalone recurring method — the *only* realization primitive is `drain`,
    gated on `P` exiting.
+   **Sim input (not just UX):** profit-taking = rotation, so **profit-taking cadence =
+   persona-churn rate** — a **modeling input** to the pre-genesis-seal age-stratified
+   bond-mobility reconciliation ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 / R-3),
+   not a UX note: collect-in-place would hold one `P` indefinitely, drain-and-rotate cycles
+   `P`s at a liquidity-driven cadence — different bond-age distributions, anonymity-set
+   dynamics, and GF-7 load. Whoever re-runs the reconciliation must read "profit-taking =
+   rotation" as an assumption, not rediscover it.
+   **Second-order — co-triggered firewalls:** because every profit-taking drain **is** a
+   rotation, GF-4 (decorrelated-drain output-count) and the persona-rotation firewall (per-`P`
+   .onion / SOCKS isolation / sequential-succession break, 2d-2) fire on the **same event** and
+   must be **jointly** uncorrelated, not merely independently well-behaved — if the drain
+   spacing and the new-`P` first-on-network appearance are each fine but *jointly* correlated
+   (the new `P` surfaces exactly as the old `P`'s drain completes), that linkage is a gap
+   **neither firewall catches alone**. DQ3-adjacent: fold it into the GF-4 concrete rule when
+   gate-6 R4 + the emission shape pin it.
 3. **Witness-typed signatures (§0.2 made concrete).** Round 1 pins the `P`-FSM-state witness
    set the frozen §2 signatures consume — e.g. `unbond(ExitedConfirmed)`,
    `drain(DrainableConfirmed)` (valid from `Bonded`/`Slashed`) — the sibling of the built
