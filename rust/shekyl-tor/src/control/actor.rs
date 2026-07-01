@@ -608,19 +608,28 @@ async fn spawn_managed_tor(
         .spawn()
         .map_err(|_| ControlError::Spawn)?;
 
-    // Bounded startup: if tor never opens its control port, terminate + reap the child
-    // *here* rather than deferring to `kill_on_drop`'s background reap, so a startup
-    // failure leaves no lingering process to interfere with the next spawn (or test).
-    // (`kill_on_drop` remains the backstop for a `?`-failure in the *handshake* after this
-    // returns Ok, where the child is held in on_start's local.)
-    let control_addr = match wait_for_control_port(&port_file, SPAWN_TIMEOUT).await {
+    // Bounded startup: wait for tor to become driveable — its control-port file *and* its
+    // auth cookie. Tor writes them at startup but not atomically, so reading the cookie the
+    // instant the port file appears can race a partial/absent write (an `AuthError` startup
+    // race); waiting for it here means a transient partial cookie isn't a spurious `Auth`
+    // failure that kills the just-spawned tor. On any startup failure, terminate + reap the
+    // child *here* (not via `kill_on_drop`'s background reap) so nothing lingers to disturb
+    // the next spawn/test. (`kill_on_drop` remains the backstop for a `?`-failure in the
+    // *handshake* after this returns Ok, where the child is held in on_start's local.)
+    let cookie_path = managed.data_dir.join("control_auth_cookie");
+    let ready = async {
+        let control_addr = wait_for_control_port(&port_file, SPAWN_TIMEOUT).await?;
+        wait_for_cookie(&cookie_path, SPAWN_TIMEOUT).await?;
+        Ok::<_, ControlError>(control_addr)
+    }
+    .await;
+    let control_addr = match ready {
         Ok(addr) => addr,
         Err(e) => {
             kill_and_reap(&mut child).await;
             return Err(e);
         }
     };
-    let cookie_path = managed.data_dir.join("control_auth_cookie");
     Ok((
         TorChild {
             child,
@@ -653,6 +662,24 @@ async fn wait_for_control_port(
             return Err(ControlError::Spawn);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Poll until tor's control-auth cookie is fully readable, bounded by `timeout`. Uses
+/// [`read_cookie_file`] itself as the readiness check, so it validates the full 32-byte
+/// cookie (not just that a file exists) — the exact condition the handshake needs — and
+/// discards the result (each read is zeroized). Its purpose is to absorb the startup race
+/// where tor has written its port file but not yet its (complete) cookie.
+async fn wait_for_cookie(cookie_path: &Path, timeout: Duration) -> Result<(), ControlError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if read_cookie_file(cookie_path).is_ok() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ControlError::Spawn);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -1210,15 +1237,23 @@ mod live_tests {
         actor.wait_for_shutdown().await;
 
         // Truthful reap check: a real `wait()`-yielded exit status delivered through the
-        // observer, not a pid probe (which races PID reuse). A cooperative tor exits on
-        // SIGTERM, so the clean `Reaped` path — never the SIGKILL fallback.
+        // observer, not a pid probe (which races PID reuse). The platform-correct outcome:
+        // on Unix a cooperative tor exits on SIGTERM (clean `Reaped`); off Unix there is no
+        // graceful signal, so shutdown escalates to the SIGKILL fallback (`Killed`). Both
+        // are a *reaped* child delivered through the observer — the point of the test.
         let exit = tokio::time::timeout(Duration::from_secs(10), exit_rx)
             .await
             .expect("on_stop reaped the child within the bound")
             .expect("exit observer delivered the outcome");
+        #[cfg(unix)]
         assert!(
             matches!(exit, TorExit::Reaped(_)),
-            "clean shutdown reaps with a status, not the SIGKILL fallback: {exit:?}"
+            "on Unix, SIGTERM reaps with a status, not the SIGKILL fallback: {exit:?}"
+        );
+        #[cfg(not(unix))]
+        assert!(
+            matches!(exit, TorExit::Killed),
+            "off Unix, no graceful signal exists, so shutdown reaps via the SIGKILL fallback: {exit:?}"
         );
     }
 }
