@@ -103,7 +103,9 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   `P`'s stealth receive address (from `ActivePersona`/`PersonaIdentity`). No band /
   range-proof / tier / minimum (DQ1). Composes `build_pending_tx` + `KeyEngine`;
   **touches no `P` secret** (`P` appears only as a public recipient address). GF-7
-  funding-shape hygiene (DQ4) is a wallet-local default, not a consensus gate.
+  funding-shape hygiene (DQ4) is a wallet-local default, not a consensus gate. **Cold-start
+  bond funding is structured `bond_floor + cover`** (not arbitrary) and originates the SP-7
+  cover the built `CoverDiscovery` must later detect — cross-surface contract in §3.1.
 - **`fund_bond` / `join_market(shards) -> PendingTx`** — drives the **existing**
   `StakeEngine::SignBond` → `JoinMarketVin` (built; `#[allow(dead_code)]`/inert until
   the driving path is activated) + submit. Signs with `P`-identity + funding inputs
@@ -141,13 +143,62 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
 - **GF-10 — within-epoch timing** now applies to bond ops, not just emission (gate-6
   §6 Round-4 re-scope).
 
+### 3.1 Cover-form cross-surface contract — `stake_in` ↔ SP-7 `CoverDiscovery`
+
+**Wire-frozen dissociation (GENESIS §2.0, Q11).** The bond floor is **public but
+covered-and-dissociated**: the principal sends `bond_floor + cover (+ operating capital)` to
+`P`; `P` stakes the floor and holds the **`cover`** as a **confidential change-to-`P`
+output**. So `stake_in`'s cold-start bond funding is **not an arbitrary-amount transfer** —
+its amount is structured, and the `cover` output it originates **is** the SP-7 **cold-start
+cover** whose absence induces the **TM-3 re-link** and which the **built** `CoverDiscovery`
+([`cover_discovery.rs`](../../rust/shekyl-engine-core/src/engine/pscan/cover_discovery.rs))
+detects on the `P` side. `stake_in` is the **origination** of that cover; `CoverDiscovery`
+is its **detection** — one design split across two surfaces, which must agree by construction.
+
+**Verified at source — the contract is a recovery-path + window + entropy-draw agreement,
+NOT a shared wire type.** The intuitive "one shared cover type" target does **not** hold, and
+*why* is load-bearing: the wire deliberately gives the cover **no special field** — it is "an
+ordinary confidential `tagged_key` output" (GENESIS §2.0) — for the **identical
+anti-fingerprint reason DQ1 rejects `C_stake`** (a special cover field would itself
+distinguish the funding tx). Consequently:
+
+- `CoverDiscovery::classify(cover_window, cover_found: Option<BlockHeight>, covered)`
+  consumes an **`Option<BlockHeight>`**, not a cover struct; the cover output is recovered
+  **generically** by `P`'s dual-scan (`scan_output_recover_with_ml_kem_dk`) like *any* `P`
+  output — SP-7 does not build or type the cover (module docs, `cover_discovery.rs`).
+- So the cross-surface invariant is that the cover `stake_in` emits must be **(a)** recoverable
+  by the same `P` dual-scan `CoverDiscovery` reads (automatic — it is an ordinary output to
+  `P`'s address), **(b)** landed in the `cover_window` `CoverDiscovery` classifies over, and
+  **(c)** dissociating by the **entropy of the cover-amount draw** (`shekyl-standoff`; GENESIS
+  §2.0 "the cover defense reduces entirely to the entropy of the cover draw" — a
+  genesis-adjacent security crux to pin before bond-tx assembly). *Which* output is the cover
+  is the principal's **owner-local bookkeeping** (DQ5 `principal_stakes()`), not an on-wire
+  marker.
+
+**Make-bad-states-unrepresentable (rule 05) — corrected target.** Because the cover has no
+special form, there is no cover struct to get wrong; the seam's robustness comes from "any
+output `stake_in` sends to `P` is recovered by the same scan," so a `stake_in` cover the scan
+cannot see is nearly unrepresentable. The residual is **window/timing + the entropy draw** —
+and the built `CoverDiscovery` already forecloses the *silent* re-link: a wrong `Found` trips
+a `debug_assert` (recovered cover outside the window), and `AbsentVerified` authorizes only a
+re-fund **consideration** — never an auto-re-fund — and only with a `TipCurrencyToken` +
+operator decision (`refund_consideration`; TM-3). So the Round-1 obligation here is to **pin
+the cover-draw entropy and funding-window semantics as the shared parameters** (jointly with
+2c-2b bond-request assembly, [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md)
+§SP-2.d), **not** to invent a shared cover type.
+
 ## 4. Round-1 dispositions (DQ1–DQ6)
 
 ### DQ1 — no principal-side committed-stake wire survives. **CLOSED (plain transfer).**
 
 **Decision.** Stake-in is a **plain ordinary `RCTTypeFcmpPlusPlusPqc` transfer**,
 principal → `P` stealth outputs on the main tree. **No `C_stake`, no range proof, no
-band, no minimum.** The §2.1 "principal role open" reopen-pointer is **retired**.
+band, no minimum.** The §2.1 "principal role open" reopen-pointer is **retired**. This is
+**not merely a reasoned Round-1 disposition — it is the frozen genesis wire**:
+[`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.0/§2.1 (**Q11, locked
+2026-06-20**) sheds cleartext `txout_to_staked_key` + `txin_stake_claim` and makes staking
+transfer-shaped admission under `P` — transfer legs + the gate-4 bond post, **nothing
+else**. The bond floor is public but **covered-and-dissociated**, not a hidden stake (§3.1).
 
 **Rationale — the committed-stake alternative is *strictly dominated*, not merely
 disfavoured (four independent legs, any one sufficient):**
@@ -173,11 +224,14 @@ disfavoured (four independent legs, any one sufficient):**
    *planned* work, not shipped code (rule 16 — inherited-from-own-prior-design flow that
    contradicts the rebased threat model is *migrated, not rationalized*).
 
-**Reversion clause (rule 21).** Reopen **iff a future V3.x consensus rule reads the
-principal stake amount** (e.g., an emission rule keyed on principal balance, or a
-demonstrated need to prove a per-principal stake bound). Not reopened by "uncertainty
-about future flexibility" — that is the rule-21 optionality-debt anti-pattern that
-gate-7 / gate-6 §2.5 already rejected on the sibling admission-minimum question.
+**Reversion clause (rule 21) — at genesis-tag level.** Reopen **iff a future V3.x consensus
+rule reads the principal stake amount** (e.g., an emission rule keyed on principal balance,
+or a demonstrated need to prove a per-principal stake bound). Not reopened by "uncertainty
+about future flexibility" — that is the rule-21 optionality-debt anti-pattern that gate-7 /
+gate-6 §2.5 already rejected on the sibling admission-minimum question. **Bar note:** because
+plain-transfer *is* the frozen Q11 genesis tag decision (above), reopening it is a
+**genesis-seal / genesis-tag change**, not a Round-1 design edit — a materially higher bar
+than "reopen if a minimum emerges."
 
 **Forward-action (A5 — doc sweep).** [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md)
 Q11 (`0x04 txout_to_staked_key`) still described the principal as "a `C_stake` Pedersen
@@ -226,13 +280,18 @@ change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. `
 `unbond()` bodies stay `unimplemented!()` until GF-4 is pinned (shipping a lump sweep
 before GF-4 ships a correlation beacon, gate-6 §2.4).
 
-**Second dependency — the emission output shape.** DQ3's *concrete count rule* is also
-co-sequenced with the reward-emission leg (§5 gate 3): the drain **consumes emission
-outputs**, so their form (how many, what stealth shape, escrowed vs non-escrowed) is what
-GF-4's output-count discipline operates *over*. The firewall **intent** (no lump sweep,
-decorrelated temporal spacing) is designable now; the concrete count rule waits on
-**gate-6 R4 *and* the emission output shape**, not gate-6 alone. State it so the deferral
-is understood as a two-input coupling.
+**Second and third dependencies — the emission output shape *and* its wire freeze (F3).**
+DQ3's *concrete count rule* is also co-sequenced with the reward-emission leg (§5 gate 3):
+the drain **consumes emission outputs**, so their form (how many, what stealth shape,
+escrowed vs non-escrowed) is what GF-4's output-count discipline operates *over*. Sharper
+still, the emission vin is a **deferred sub-freeze (F3)** — its genesis tag is pinned
+(`0x04` dense / `0x06` C++) but the **leg is not in code yet**, "a forward promise, not a
+freeze" ([`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.1; layout owned by
+[`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md)), so the count rule cannot be
+finalized against an **unfrozen output byte-shape**. The firewall **intent** (no lump sweep,
+decorrelated temporal spacing) is designable now; the concrete count rule waits on **gate-6
+R4 *and* the emission output shape *and* the emission wire freeze (F3)** — a **three-way**
+deferral, with F3 the tightest (it is on the critical path to the drain).
 
 **Axes R4 must decide** (named now so R4 is a decision, not a discovery):
 `fixed-count` (a fixed `N` is itself a fingerprint and does not scale with amount) vs
@@ -285,6 +344,10 @@ Three project **public bond state + the principal's own ledger** (`bonded_holdin
 `unbond_readiness`, `principal_stakes`); `drainable_balance` projects the `StakeEngine`'s
 **`P`-scanned ledger** — `P.view_sk` is used at *scan* time (`ScanStep`), never at query
 time, and only the aggregate scalar crosses. **No query crosses a `P` secret.**
+**Wire-confirmed (two-paths-one-answer):** the split maps onto the frozen wire —
+`bonded_holdings` projects on-chain public state (`bonded_total_atomic == bond_floor` on the
+bond-post arm, GENESIS §2.5), while rewards are stealth emission outputs to `P`, so
+`drainable_balance` needs the scan. The wire produces the same split reasoning did.
 `principal_stakes()` *is* the firewalled edge (P↔principal↔human) — it is
 the one projection whose leakage defeats the whole model, so it is owner-local and
 RPC-forbidden, matching the recalled principle that the firewall protects **only** the
