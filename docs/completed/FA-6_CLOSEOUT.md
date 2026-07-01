@@ -7,10 +7,10 @@ reference device, not faster. Someone who reads only "T6 closed, scan slow" six
 months later will propose the obvious-looking §10.1 waiver; this file is the
 cheapest guard against reopening a settled call.
 
-**Authoritative spec:** [`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md).
+**Authoritative spec:** [`FA-6_VIEW_TAG_ML_KEM.md`](../design/FA-6_VIEW_TAG_ML_KEM.md).
 **Measurement matrix:** [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md)
 §FA-6. **Subaddress round handoff:**
-[`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §10 (Round 3 closed).
+[`SUBADDRESS_UNDER_PQC.md`](../design/SUBADDRESS_UNDER_PQC.md) §10 (Round 3 closed).
 
 ---
 

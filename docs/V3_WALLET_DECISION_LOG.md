@@ -4386,7 +4386,7 @@ make this explicit). The reorg is reversible (rule 21); only the genesis-format-
 `Timelock`/freeze-label touches carry consensus weight.
 
 **Reference.**
-[`docs/design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md) (the binding
+[`docs/completed/SHEKYL_OXIDE_UNVENDOR.md`](completed/SHEKYL_OXIDE_UNVENDOR.md) (the binding
 plan; §0 posture, §6 Tracks A/B, §8 the two-PR split);
 [`docs/FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md);
 [`docs/SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md) (crypto-only workflow).

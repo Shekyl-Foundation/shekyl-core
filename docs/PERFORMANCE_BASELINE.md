@@ -806,7 +806,7 @@ Per [`docs/design/FA-6_VIEW_TAG_ML_KEM.md`](design/FA-6_VIEW_TAG_ML_KEM.md) §8.
 
 **Disposition (2026-06-08):** §8.7 **fail** on budget (A and B); **ship FA-6**
 at genesis; **§10.1 T6 waiver rejected** (classical counterfactual slower on
-Pi 4). Authoritative close-out: [`FA-6_CLOSEOUT.md`](design/FA-6_CLOSEOUT.md).
+Pi 4). Authoritative close-out: [`FA-6_CLOSEOUT.md`](completed/FA-6_CLOSEOUT.md).
 End-to-end restore bench (§8.5.2) remains separate.
 
 Archive captures under

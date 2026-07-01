@@ -6,7 +6,7 @@ post-merge docstring/comment + `LockTier` type sweeps PR #190/#191) shipped; the
 remaining deferred items are tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the
 block-height-only `unlock_time` entry). This doc is the binding record. **This is
 the second slice of the `shekyl-oxide` un-vendor.** Slice 1 is the genesis wire-format extraction
-([`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) Decision 4): it stands
+([`GENESIS_TX_WIRE_FORMAT.md`](../design/GENESIS_TX_WIRE_FORMAT.md) Decision 4): it stands
 up the clean wire crate, retires `shekyl-oxide`'s `block`/`transaction`/`fcmp`
 serializer, and migrates the ~58 `shekyl_oxide::{block,transaction}` sites. This
 doc covers everything the wire slice *leaves behind*: making the kept crypto
@@ -15,9 +15,9 @@ support crates, and reconciling the tracking machinery to one honest story.
 **Process:** the crypto-pristine track is genesis-gate-adjacent (it protects a
 Q6-frozen surface and feeds the divisor EC-membership external review); the
 residual-move track is a **reversible code reorg**, not a consensus decision.
-**Parents:** [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) (slice 1),
+**Parents:** [`GENESIS_TX_WIRE_FORMAT.md`](../design/GENESIS_TX_WIRE_FORMAT.md) (slice 1),
 [`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md),
-[`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
+[`TRACK2_REGTEST_PARITY.md`](../design/TRACK2_REGTEST_PARITY.md).
 
 ## 0. Posture — legibility, not ownership
 
@@ -74,7 +74,7 @@ legibility, not a consensus commitment).
 4. **This slice is sequenced strictly after slice 1.** Block/tx is slice-1
    territory; touching it here would rename the ~58-site surface only for slice 1
    to delete it — the double-handling Decision 4 of
-   [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) explicitly rules out.
+   [`GENESIS_TX_WIRE_FORMAT.md`](../design/GENESIS_TX_WIRE_FORMAT.md) explicitly rules out.
    The crypto-pristine track (§6 Track A) is *decoupled* and may run in parallel.
 
 ## 2. Triage — is the kept crypto set actually pristine?
@@ -348,7 +348,7 @@ empties — the same double-handling trap one level down. Each is a B1 input.
    is a genesis-format change, sequenced with slice 1 (step 2).
 2. **Slice 1 lands** (wire-format extraction; main crate dissolves; ~58 sites
    migrated) — out of this doc's scope, tracked in
-   [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md).
+   [`GENESIS_TX_WIRE_FORMAT.md`](../design/GENESIS_TX_WIRE_FORMAT.md).
 3. **Track B begins** once slice 1 is on `dev`: B0 re-inventory → B1 names → B2
    relocate+rename → B3 metadata → B4 verify+land.
 

@@ -2234,7 +2234,7 @@
   `fa6_decap_prefilter`; Pi capture script `scripts/bench/fa6_pi4_gate.sh`.
   §8.7 recorded **fail** on §8.4 budget (2026-06-08): ship FA-6 at genesis;
   §10.1 T6 waiver rejected (Pi classical path slower than FA-6). Close-out
-  `docs/design/FA-6_CLOSEOUT.md`; Round 3 closed / Round 4 scoped in
+  `docs/completed/FA-6_CLOSEOUT.md`; Round 3 closed / Round 4 scoped in
   `SUBADDRESS_UNDER_PQC.md` §10.1. Matrix in `PERFORMANCE_BASELINE.md` §FA-6;
   Pi scenario B capture pending.
 

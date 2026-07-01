@@ -13,4 +13,4 @@ RUSTFLAGS=-C target-cpu=cortex-a72
 rustc=1.96.0
 target=aarch64-unknown-linux-gnu
 
-# Disposition per docs/design/FA-6_CLOSEOUT.md — ship FA-6 at genesis; §10.1 T6 waiver rejected.
+# Disposition per docs/completed/FA-6_CLOSEOUT.md — ship FA-6 at genesis; §10.1 T6 waiver rejected.

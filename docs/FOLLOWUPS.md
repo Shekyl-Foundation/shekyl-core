@@ -202,7 +202,7 @@ sustainability is unaffected by the recalibration.
   on-curve? That may be redundant` on `Circuit::incomplete_add_pub` (checked
   incomplete addition for a public point and an on-curve point). The Shekyl fork
   had escalated this to a `RELEASE-BLOCKER` comment; the crypto re-baseline
-  ([`design/SHEKYL_OXIDE_UNVENDOR.md`](./design/SHEKYL_OXIDE_UNVENDOR.md) §6 A0)
+  ([`completed/SHEKYL_OXIDE_UNVENDOR.md`](./completed/SHEKYL_OXIDE_UNVENDOR.md) §6 A0)
   reset the subtree to the pristine upstream tip and keeps the kept-vendored
   crypto diff-minimal — so the open question is tracked here rather than as a
   divergent comment in vendored upstream code. The concern: if `c`'s
@@ -2762,7 +2762,7 @@ sustainability is unaffected by the recalibration.
   restore-time math (§8.3.1); `M_margin` for clean vs marginal pass (§8.7);
   scenario B = genesis restore worst case. Pins before benches (§8.6). FA-6b
   budgeted separately. §3.1.1 verified post–PR #100.
-  **Close-out (2026-06-08):** `docs/design/FA-6_CLOSEOUT.md` — §8.7 budget
+  **Close-out (2026-06-08):** `docs/completed/FA-6_CLOSEOUT.md` — §8.7 budget
   **fail**, ship FA-6; §10.1 rejected (classical slower on Pi 4); FA-6b
   genesis-lock vs no-V3.0-user-leak pinned. Round 3 closed; **Round 4 closed**
   (2026-06-09): FA-9 `THREAT_MODEL_WALLET.md`, FA-10 pin in

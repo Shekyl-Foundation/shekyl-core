@@ -7,7 +7,7 @@ for V3.0 genesis wire; cooperative UX sequencing remains in Phase 2c/4b docs.
 at launch; payment-request / meaningful-tag UX behind product flag (later).
 **FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
 §3.1 wire inventory, initial-sync gate); **close-out:**
-[`FA-6_CLOSEOUT.md`](FA-6_CLOSEOUT.md) (§8.7 fail → ship FA-6; §10.1 rejected;
+[`FA-6_CLOSEOUT.md`](../completed/FA-6_CLOSEOUT.md) (§8.7 fail → ship FA-6; §10.1 rejected;
 T6 closed on account path; FA-6b genesis wire pinned).
 **R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
 End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**

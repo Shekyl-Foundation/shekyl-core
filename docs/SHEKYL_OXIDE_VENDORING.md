@@ -7,7 +7,7 @@ vendored from the `monero-oxide` fork: the FCMP++ research crypto crates.
 > layer that used to live under `rust/shekyl-oxide/shekyl-oxide/` — `io`,
 > `generators`, `primitives`, `bulletproofs`, `fcmp++`, `rpc`, the main crate —
 > has been **forked out** into first-party `shekyl-*` crates and is no longer
-> upstream-tracked (see [`design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md)).
+> upstream-tracked (see [`completed/SHEKYL_OXIDE_UNVENDOR.md`](completed/SHEKYL_OXIDE_UNVENDOR.md)).
 > "Vendored" now means exactly the crypto subtree below; everything else is ours.
 
 ## Vendored source location
@@ -72,4 +72,4 @@ upstreamed. The `divisors` `div`/`interpolate` hardening and the PQC extra-leaf
 delta were re-based onto the upstream tip and re-pinned at `2753111c50`
 (slice-2 Track A); the vendored copy is a pristine mirror of the fork at that pin
 (reformatted to the workspace rustfmt style — see
-[`design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md) §6 A0/A1).
+[`completed/SHEKYL_OXIDE_UNVENDOR.md`](completed/SHEKYL_OXIDE_UNVENDOR.md) §6 A0/A1).

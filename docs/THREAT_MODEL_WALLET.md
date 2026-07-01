@@ -15,7 +15,7 @@ It records what Shekyl's wallet privacy claims are, what they are not, and how
 
 - [`docs/POST_QUANTUM_CRYPTOGRAPHY.md`](POST_QUANTUM_CRYPTOGRAPHY.md) — hybrid
   KEM, output derivation, cooperative attribution foundation pin (FA-10)
-- [`docs/design/FA-6_CLOSEOUT.md`](design/FA-6_CLOSEOUT.md) — T6 account-path
+- [`docs/completed/FA-6_CLOSEOUT.md`](completed/FA-6_CLOSEOUT.md) — T6 account-path
   closure at genesis; §10.1 classical pre-filter waiver rejected
 - [`docs/design/SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md) §5.7.8
   — reusable-address UX constraints (FA-4, closed via FA-7)
@@ -141,7 +141,7 @@ attribution foundation pin (FA-10).
 
 This doc **does not** reopen genesis wire. Reopen only per named criteria in
 [`SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md) §7 and
-[`FA-6_CLOSEOUT.md`](design/FA-6_CLOSEOUT.md) §7:
+[`FA-6_CLOSEOUT.md`](completed/FA-6_CLOSEOUT.md) §7:
 
 | Topic | Reopen when |
 |-------|-------------|

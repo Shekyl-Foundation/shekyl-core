@@ -16,7 +16,7 @@
 > The three-upstream confusion this audit documented is resolved to one honest
 > lineage. Current source of truth:
 > [`SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md) (crypto-only workflow)
-> and [`design/SHEKYL_OXIDE_UNVENDOR.md`](design/SHEKYL_OXIDE_UNVENDOR.md).
+> and [`completed/SHEKYL_OXIDE_UNVENDOR.md`](completed/SHEKYL_OXIDE_UNVENDOR.md).
 
 Audit produced for **PR 0.4** of the `shekyl_v3_wallet_rust_rewrite` plan
 (see [`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
