@@ -114,6 +114,19 @@ fn decompress_point(bytes: &[u8; 32]) -> Result<EdwardsPoint, CtBalanceError> {
         .map_err(|_| CtBalanceError::InvalidPoint)?
         .decompress()
         .ok_or(CtBalanceError::InvalidPoint)?;
+    // Canonical-encoding check (`GENESIS_TX_WIRE_FORMAT.md` §2.3). `decompress`
+    // reduces the y-coordinate mod the field prime `p`, so a non-canonical
+    // encoding — `y = p + k`, or a set sign bit over `x = 0` — decodes *silently*
+    // to a valid point. The C++<->Rust differential corpus caught exactly this:
+    // Rust accepted `y = p + 1` (the identity) where C++ `ge_frombytes_vartime`
+    // rejects it, a residual second-serialization (tx-malleability) surface.
+    // Reject any input that does not round-trip through `compress()`.
+    // Adversarial-only: honest `compress()` output is always canonical, so no
+    // valid commitment is affected.
+    let canonical = point.compress();
+    if canonical.as_bytes() != bytes {
+        return Err(CtBalanceError::InvalidPoint);
+    }
     if !point.is_torsion_free() {
         return Err(CtBalanceError::InvalidPoint);
     }
@@ -283,6 +296,22 @@ mod tests {
                 &[],
                 &[OutputTerm::new(au(1))]
             ),
+            Err(CtBalanceError::InvalidPoint)
+        );
+    }
+
+    #[test]
+    fn rejects_non_canonical_encoding() {
+        // `y = p + 1` (bytes `ee ff..ff 7f`) is a non-canonical encoding: dalek's
+        // `decompress` reduces it mod `p` to `y = 1` (the identity) and accepts it,
+        // but the canonical round-trip check rejects the non-canonical bytes. The
+        // C++ `ge_frombytes_vartime` rejects the same encoding (differential corpus,
+        // `tests/unit_tests/ct_balance_differential.cpp`).
+        let mut y_p_plus_1 = [0xffu8; 32];
+        y_p_plus_1[0] = 0xee;
+        y_p_plus_1[31] = 0x7f;
+        assert_eq!(
+            verify_ct_balance(&y_p_plus_1, &[], AtomicUnits::ZERO, &[], &[]),
             Err(CtBalanceError::InvalidPoint)
         );
     }
