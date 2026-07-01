@@ -1588,9 +1588,10 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
 /// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
 /// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
-/// pointer, or a count whose `× 32` byte length overflows `usize`), `2=InvalidTreeRoot`,
-/// `3=PqcCommitmentMismatch`, `5=UpstreamError`, `6=BatchVerificationFailed`,
-/// `7=TreeDepthTooLarge`, `8=InputCountMismatch` (`po_count != pqc_hash_count`). Never
+/// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], or a `× 32`
+/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`,
+/// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
+/// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
 /// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
 /// [`shekyl_emission_hybrid_auth_verify`].
@@ -1610,8 +1611,20 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
 ) -> u8 {
-    // Guard the byte-length multiply: a huge count would overflow `usize`, wrap to a
-    // short slice, and then panic on the per-input reads — a panic across the C ABI.
+    // Reject a per-input count mismatch up front — before slicing either buffer, so a mismatch
+    // never touches the (attacker-controlled, potentially large) `pqc_pk_hashes_ptr` buffer.
+    if po_count != pqc_hash_count {
+        return 8; // VerifyError::InputCountMismatch
+    }
+    // Cap the per-input arity at MAX_INPUTS, mirroring `shekyl_fcmp_prove`: a valid proof never
+    // exceeds it, so this rejects an oversized attacker-controlled count before any allocation,
+    // bounds the `.collect()`s below, and makes `po_count as u32` a lossless narrowing (no
+    // truncation). `po_count == pqc_hash_count` is already established, so this bounds both.
+    if po_count == 0 || po_count > shekyl_fcmp::MAX_INPUTS {
+        return 1; // DeserializationFailed — malformed / oversized request
+    }
+    // Byte-length multiply is now bounded (<= MAX_INPUTS * 32); keep the checked form as
+    // defense-in-depth against a future cap change.
     let (Some(po_len), Some(ph_len)) = (po_count.checked_mul(32), pqc_hash_count.checked_mul(32))
     else {
         return 1;
@@ -1627,9 +1640,6 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     };
     if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
         return 1;
-    }
-    if po_count != pqc_hash_count {
-        return 8; // VerifyError::InputCountMismatch — the accurate code, not generic deser.
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -5434,9 +5444,9 @@ mod tests {
             "po/pqc count mismatch must reject as InputCountMismatch"
         );
 
-        // A count whose `× 32` byte length overflows `usize` must reject BEFORE any slice
-        // read (the checked_mul guard) — no panic across the FFI. The pointer is never
-        // dereferenced on this path, so a small buffer is safe to pass.
+        // A huge (matched) count must reject BEFORE any slice read or allocation — no panic
+        // across the FFI. `usize::MAX` is caught by the MAX_INPUTS arity cap (which fires ahead
+        // of the checked_mul defense-in-depth). The pointer is never dereferenced on this path.
         let r = unsafe {
             shekyl_fcmp_membership_only_verify(
                 proof.as_ptr(),
@@ -5450,7 +5460,27 @@ mod tests {
                 txh.as_ptr(),
             )
         };
-        assert_eq!(r, 1, "overflowing count must reject without dereferencing");
+        assert_eq!(r, 1, "oversized count must reject without dereferencing");
+
+        // Boundary: a within-`usize`, matched count just over MAX_INPUTS must reject via the
+        // arity cap (mirrors shekyl_fcmp_prove) before allocating the per-input Vecs. Buffers
+        // are sized to the declared count so there is no out-of-bounds read on the reject path.
+        let over = shekyl_fcmp::MAX_INPUTS + 1;
+        let big = vec![3u8; over * 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "count over MAX_INPUTS must reject via the arity cap");
 
         // Well-formed call over junk proof bytes must NEVER vacuously verify.
         let junk = vec![0xABu8; 512];
