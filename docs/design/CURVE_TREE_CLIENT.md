@@ -7,14 +7,20 @@ reference-block selection (§5), and the `LeafStore` on `redb` (CT-1) all landed
 and the **depth-3 curve-tree consensus cutover shipped** (PR #197: the daemon
 grow/trim was the defect, the wallet `build_layers` oracle was correct; see
 [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](../completed/DEPTH3_CURVE_TREE_CUTOVER.md)).
-**What REMAINS:** (1) **wire the built client into the Phase 2A send path** — 2A
-still signs against synthetic `TreeContext` vectors; the gap is the
-`AssembledPath → shekyl_tx_builder::SpendInput` adapter + engine lifecycle
-(sync / reference-selection). (2) The **bulk-leaf RPC (§6)**, now **repositioned**
-to non-forward catch-up / archival: CT-3 Round 1 confirmed **block-derived
-forward sync as the default** (the §6 reversion criterion fired), so the bulk-leaf
-endpoint lands with the prune-policy PR, not on the forward path. Named prerequisite
-extracted from `PHASE_2A_SEND_PATH.md` §3.0.4; 2A consumes its output.
+The **2A send-path integration is also DONE**: CT-5c wired real `assemble_path`
+into the signer (`signing_assembly.rs` → `sign_bridge.rs` → `local_pending_tx.rs`
+via `CurveTreeActor`), retiring the synthetic membership vectors (they survive in
+test fixtures only). **What REMAINS** (per
+[`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5, reversion-clause-routed):
+(a) per-input reconstruction reuse (perf — `assemble_path` re-runs `build_layers`
+per input; reopens at mainnet scale); (b) store-backed / pruned-tree assembly
+(F5, the prune-policy PR); (c) reactive `ProofStale` detection (→ Phase 6, needs a
+daemon stale-root signal); (d) Track-2 (FAKECHAIN regtest) depth-3+ real-tree
+verify at scale + C++↔Rust FFI parity + CT-2 Tier-B KATs + the `get_curve_tree_leaves`
+C++ endpoint — the bulk-leaf RPC (§6) is **repositioned** to non-forward
+catch-up / archival (CT-3 Round 1 confirmed block-derived forward sync as the
+default), so it is **off the Phase-2A critical path**. Named prerequisite extracted
+from `PHASE_2A_SEND_PATH.md` §3.0.4; 2A consumes its output.
 
 **Why it exists.** FCMP++ membership proofs require the wallet to assemble the
 curve-tree branch path (`leaf_chunk` + `c1_layers` + `c2_layers`) for the output
