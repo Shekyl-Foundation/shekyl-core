@@ -1584,6 +1584,231 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     }
 }
 
+/// Verify a **membership-only** FCMP++ proof (reward-emission backing; **no key
+/// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
+/// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
+/// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
+/// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], or a `× 32`
+/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`,
+/// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
+/// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
+/// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
+/// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
+/// [`shekyl_emission_hybrid_auth_verify`].
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `tree_root_ptr` and
+/// `signable_tx_hash_ptr` must each point to 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
+    proof_ptr: *const u8,
+    proof_len: usize,
+    pseudo_outs_ptr: *const u8,
+    po_count: usize,
+    pqc_pk_hashes_ptr: *const u8,
+    pqc_hash_count: usize,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+    signable_tx_hash_ptr: *const u8,
+) -> u8 {
+    // Reject a per-input count mismatch up front — before slicing either buffer, so a mismatch
+    // never touches the (attacker-controlled, potentially large) `pqc_pk_hashes_ptr` buffer.
+    if po_count != pqc_hash_count {
+        return 8; // VerifyError::InputCountMismatch
+    }
+    // Cap the per-input arity at MAX_INPUTS, mirroring `shekyl_fcmp_prove`: a valid proof never
+    // exceeds it, so this rejects an oversized attacker-controlled count before any allocation,
+    // bounds the `.collect()`s below, and makes `po_count as u32` a lossless narrowing (no
+    // truncation). `po_count == pqc_hash_count` is already established, so this bounds both.
+    if po_count == 0 || po_count > shekyl_fcmp::MAX_INPUTS {
+        return 1; // DeserializationFailed — malformed / oversized request
+    }
+    // Byte-length multiply is now bounded (<= MAX_INPUTS * 32); keep the checked form as
+    // defense-in-depth against a future cap change.
+    let (Some(po_len), Some(ph_len)) = (po_count.checked_mul(32), pqc_hash_count.checked_mul(32))
+    else {
+        return 1;
+    };
+    let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
+        return 1;
+    };
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_len) }) else {
+        return 1;
+    };
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, ph_len) }) else {
+        return 1;
+    };
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+        return 1;
+    }
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let signable_tx_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let proof = shekyl_fcmp::proof::ShekylFcmpProof {
+        data: proof_bytes.to_vec(),
+        #[allow(clippy::cast_possible_truncation)]
+        num_inputs: po_count as u32,
+        tree_depth,
+    };
+
+    // `po_count == pqc_hash_count` and each slice is exactly that many 32-byte chunks, so
+    // `chunks_exact` consumes them fully — no manual indexing, no out-of-bounds risk.
+    let pseudo_outs: Vec<[u8; 32]> = po_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            b
+        })
+        .collect();
+    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcLeafScalar> = ph_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            shekyl_fcmp::leaf::PqcLeafScalar(b)
+        })
+        .collect();
+
+    match shekyl_fcmp::proof::verify_membership_only(
+        &proof,
+        &pseudo_outs,
+        &pqc_hashes,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
+    ) {
+        Ok(true) => 0,
+        // `verify_membership_only` returns `Ok(true)` or `Err`, so `Ok(false)` is
+        // unreachable today; mapped defensively to a non-success code (never 0) so a
+        // future `Ok(false)` outcome can never be read as acceptance.
+        Ok(false) => 6,
+        Err(e) => {
+            tracing::debug!(error = ?e, tree_depth, "membership-only verify error");
+            e.discriminant()
+        }
+    }
+}
+
+/// Reward-emission **hybrid** vin-auth verify primitive (PR-E1; the C-1 hard-gate core).
+///
+/// The auth is hybrid (Ed25519 + ML-DSA-65), matching every other signature in the
+/// system, **not** ML-DSA-only. This is the ratified posture: the emission auth is a
+/// proof-of-possession-plus-binding, and the live threat the Ed25519 leg closes is a
+/// *classical cryptanalytic break of ML-DSA-65* (orthogonal to seed compromise, where
+/// the jointly-derived halves are possession-equivalent). Auth-P (stake-side) has **no**
+/// membership-proof classical fallback, so ML-DSA-only there would be a single point of
+/// cryptographic failure — disqualifying on a quantum-posture-priority system. See
+/// `REWARD_EMISSION_VIN_PLAN.md` R1.A(2) (retracted) / §8.0.2.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_OK: u8 = 0;
+/// A required pointer was null.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR: u8 = 1;
+/// The supplied `P_pubkey` bytes are not a canonical hybrid public key.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER: u8 = 2;
+/// The supplied signature bytes are not a canonical hybrid signature.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER: u8 = 3;
+/// `H(pqc_pk)` of the supplied key does not equal the in-circuit committed leaf hash.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH: u8 = 4;
+/// The hybrid (Ed25519 + ML-DSA-65) signature did not verify over the message.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY: u8 = 5;
+
+/// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
+/// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
+/// canonical hybrid signature, and the in-circuit committed leaf hash:
+///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
+///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
+///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
+///
+/// **Leaf-hash input — do not get this wrong:** despite the `pqc_pk` naming,
+/// `hash_pqc_public_key` hashes the **full canonical hybrid** public key bytes
+/// (Ed25519 ‖ ML-DSA-65), exactly what curve-tree leaves commit
+/// (`shekyl_crypto_pq::derivation::derive_pqc_leaf_hash`). A caller hashing only the ML-DSA
+/// component computes a *different* `leaf_hash` and gets systematic `LEAF_HASH_MISMATCH`.
+///
+/// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
+/// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
+/// asymmetry, so soundness does not rest on any "Ed25519 non-distinguishing" invariant.
+/// Order matters: the leaf-hash equality is checked first so a signature over an
+/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_HYBRID_AUTH_OK`] or an
+/// `SHEKYL_EMISSION_HYBRID_AUTH_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
+/// canonical hybrid pubkey / signature lengths — a non-canonical length returns
+/// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
+/// 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
+    pubkey_ptr: *const u8,
+    pubkey_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+    sig_ptr: *const u8,
+    sig_len: usize,
+    leaf_hash_ptr: *const u8,
+) -> u8 {
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+    use shekyl_crypto_pq::signature::{
+        HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+    };
+
+    // FFI DoS guard: `scheme_id = 1` hybrid pubkey/signature are fixed-length canonical, so
+    // reject any other length up front — before slicing, hashing, or parsing an oversized
+    // untrusted buffer. Correct by contract (this function requires canonical encodings), and
+    // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
+    // fixed canonical size.
+    if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
+    }
+    if sig_len != SINGLE_SIG_CANONICAL_LEN {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
+    }
+
+    let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    if leaf_hash_ptr.is_null() {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    }
+    let leaf_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(leaf_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
+    if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH;
+    }
+
+    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
+    };
+    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
+    };
+
+    // (2) Hybrid verify (Ed25519 && ML-DSA-65).
+    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
+        Ok(true) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
+        _ => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
+    }
+}
+
 /// Convert raw output data into serialized 4-scalar leaves.
 ///
 /// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], pqc_pk_hash[32]}`,
@@ -5077,6 +5302,202 @@ mod tests {
     fn test_release_multiplier_ffi() {
         let m = shekyl_calc_release_multiplier(100, 100, 800_000, 1_300_000);
         assert_eq!(m, 1_000_000);
+    }
+
+    // ---- PR-E1: reward-emission membership-only + ML-DSA gate primitives ----
+
+    #[test]
+    fn emission_hybrid_auth_verify_positive_and_negatives() {
+        use shekyl_crypto_pq::derivation::hash_pqc_public_key;
+        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+
+        let (pk, sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+        let pk_bytes = pk.to_canonical_bytes().unwrap();
+        let leaf = hash_pqc_public_key(&pk_bytes);
+        let msg = b"shekyl-emission-auth-msg: payout + epoch binding".to_vec();
+        let sig_bytes = HybridEd25519MlDsa
+            .sign(&sk, &msg)
+            .unwrap()
+            .to_canonical_bytes()
+            .unwrap();
+
+        let call = |pk: &[u8], m: &[u8], sig: &[u8], leaf: &[u8; 32]| -> u8 {
+            unsafe {
+                shekyl_emission_hybrid_auth_verify(
+                    pk.as_ptr(),
+                    pk.len(),
+                    m.as_ptr(),
+                    m.len(),
+                    sig.as_ptr(),
+                    sig.len(),
+                    leaf.as_ptr(),
+                )
+            }
+        };
+
+        // Positive.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_OK,
+            "valid gate must accept"
+        );
+
+        // Negative: wrong leaf hash (auth over an unrelated key) — checked first.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &[0u8; 32]),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH
+        );
+
+        // Negative: signature valid but over a *different* message.
+        assert_eq!(
+            call(&pk_bytes, b"a different binding message", &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
+            "sig must not verify over a different message"
+        );
+
+        // Negative: tampered signature (leaf matches; verify or deser must reject).
+        let mut bad_sig = sig_bytes.clone();
+        *bad_sig.last_mut().unwrap() ^= 0x01;
+        let r = call(&pk_bytes, &msg, &bad_sig, &leaf);
+        assert!(
+            r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY
+                || r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
+            "tampered sig must reject, got {r}"
+        );
+
+        // Negative: null pointer with a nonzero length (len==0 is a valid empty slice,
+        // so the null guard only fires when a length is actually claimed).
+        let r = unsafe {
+            shekyl_emission_hybrid_auth_verify(
+                std::ptr::null(),
+                pk_bytes.len(),
+                msg.as_ptr(),
+                msg.len(),
+                sig_bytes.as_ptr(),
+                sig_bytes.len(),
+                leaf.as_ptr(),
+            )
+        };
+        assert_eq!(r, SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR);
+
+        // Negative: non-canonical pubkey / signature length is rejected up front (the FFI
+        // DoS guard) — before any hash or parse touches the oversized buffer. A too-long
+        // pubkey would otherwise fall through to a LEAF_HASH_MISMATCH after hashing it.
+        let mut long_pk = pk_bytes.clone();
+        long_pk.push(0);
+        assert_eq!(
+            call(&long_pk, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER,
+            "non-canonical pubkey length must reject with PUBKEY_DESER"
+        );
+        let mut long_sig = sig_bytes.clone();
+        long_sig.push(0);
+        assert_eq!(
+            call(&pk_bytes, &msg, &long_sig, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
+            "non-canonical signature length must reject with SIG_DESER"
+        );
+    }
+
+    #[test]
+    fn membership_only_verify_rejects_malformed_and_mismatched_inputs() {
+        let root = [0u8; 32];
+        let txh = [0u8; 32];
+
+        // Null proof pointer with a nonzero length -> DeserializationFailed (1).
+        let po1 = [1u8; 32];
+        let ph1 = [2u8; 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                std::ptr::null(),
+                8,
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "null proof must reject");
+
+        // Count mismatch po_count != pqc_hash_count -> 8 (InputCountMismatch). Buffers
+        // sized to the declared counts (po = 2×32, ph = 1×32) so no out-of-bounds read.
+        let po2 = [1u8; 64];
+        let proof = [0u8; 8];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po2.as_ptr(),
+                2,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(
+            r, 8,
+            "po/pqc count mismatch must reject as InputCountMismatch"
+        );
+
+        // A huge (matched) count must reject BEFORE any slice read or allocation — no panic
+        // across the FFI. `usize::MAX` is caught by the MAX_INPUTS arity cap (which fires ahead
+        // of the checked_mul defense-in-depth). The pointer is never dereferenced on this path.
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po1.as_ptr(),
+                usize::MAX,
+                ph1.as_ptr(),
+                usize::MAX,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "oversized count must reject without dereferencing");
+
+        // Boundary: a within-`usize`, matched count just over MAX_INPUTS must reject via the
+        // arity cap (mirrors shekyl_fcmp_prove) before allocating the per-input Vecs. Buffers
+        // are sized to the declared count so there is no out-of-bounds read on the reject path.
+        let over = shekyl_fcmp::MAX_INPUTS + 1;
+        let big = vec![3u8; over * 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "count over MAX_INPUTS must reject via the arity cap");
+
+        // Well-formed call over junk proof bytes must NEVER vacuously verify.
+        let junk = vec![0xABu8; 512];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                junk.as_ptr(),
+                junk.len(),
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_ne!(r, 0, "junk membership-only proof must never verify");
     }
 
     #[test]

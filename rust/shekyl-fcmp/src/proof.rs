@@ -31,9 +31,12 @@ use shekyl_fcmp_proofs::{
         BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path,
         TreeRoot,
     },
-    sal::{OpenedInputTuple, RerandomizedOutput, SpendAuthAndLinkability},
-    Curves, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
-    SELENE_FCMP_GENERATORS,
+    sal::{
+        membership_only::{membership_only_rerandomize, MembershipSpendAuth},
+        OpenedInputTuple, RerandomizedOutput, SpendAuthAndLinkability,
+    },
+    Curves, FcmpMembershipOnly, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS,
+    HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS,
 };
 
 /// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
@@ -109,12 +112,18 @@ pub enum VerifyError {
 
     #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
     TreeDepthTooLarge(u8),
+
+    /// The provided per-input arrays do not match the proof's declared input count.
+    /// Distinct from [`Self::KeyImageCountMismatch`]: the membership-only path carries
+    /// no key images, so a count error there is about pseudo-outs / pqc hashes, not KIs.
+    #[error("input count mismatch: expected {expected}, got {got}")]
+    InputCountMismatch { expected: usize, got: usize },
 }
 
 impl VerifyError {
     /// FFI-stable discriminant for crossing the C ABI boundary.
     ///
-    /// Codes 1-7 map to the enum variants in declaration order.
+    /// Codes 1-8 map to the enum variants in declaration order.
     /// Code 0 is reserved for success (not an error).
     pub fn discriminant(&self) -> u8 {
         match self {
@@ -125,6 +134,7 @@ impl VerifyError {
             Self::UpstreamError(_) => 5,
             Self::BatchVerificationFailed => 6,
             Self::TreeDepthTooLarge(_) => 7,
+            Self::InputCountMismatch { .. } => 8,
         }
     }
 }
@@ -437,6 +447,260 @@ pub fn prove(
 
     let mut data = Vec::new();
     fcmp_pp
+        .write(&mut data)
+        .map_err(|e| ProveError::UpstreamError(format!("write: {e}")))?;
+
+    #[allow(clippy::cast_possible_truncation)]
+    let num_inputs = inputs.len() as u32;
+    Ok(ProveResult {
+        proof: ShekylFcmpProof {
+            data,
+            num_inputs,
+            tree_depth,
+        },
+        pseudo_outs,
+    })
+}
+
+/// Prove a **membership-only** FCMP++ backing proof (reward-emission; **no key image**).
+/// The prover half of [`verify_membership_only`]: the wallet builds this to back a
+/// `txin_archival_reward_emission` (`REWARD_EMISSION_LEG.md` §7). Mirror of [`prove`] with
+/// three swaps — the context-bound [`membership_only_rerandomize`] (instead of a
+/// commitment-blind rerandomization), [`MembershipSpendAuth`] (the `R_O` leg alone,
+/// instead of the full SAL), and [`FcmpMembershipOnly`] (no key image). Every other step
+/// — branch building, blinds, `Fcmp::prove` — is identical.
+///
+/// `context` binds the proof (the emission caller passes the reference root, gate-6 §9.6);
+/// distinct contexts yield distinct rerandomizations even under a degraded RNG.
+///
+/// # Errors
+/// Same class as [`prove`]: empty / too-many inputs, invalid points/scalars, a degenerate
+/// rerandomization, or an upstream prove failure.
+///
+/// # Maintenance
+/// Branch-building, blinds, and `Fcmp::prove` are intentionally identical to [`prove`]; only
+/// the rerandomization, spend-auth, and proof type differ (the three swaps above). A full
+/// extraction into a shared helper is **deferred** — it would restructure the shipped `prove`
+/// path for an additive change. The drift guard is that **both** paths have roundtrip KATs
+/// (`prove_verify_roundtrip`, `membership_only_prove_verify_roundtrip_and_cross_type`): a change
+/// to the shared shape in one that is not mirrored to the other fails the other's KAT.
+#[allow(non_snake_case)]
+pub fn prove_membership_only(
+    inputs: &[ProveInput],
+    _tree_root: &[u8; 32],
+    tree_depth: u8,
+    signable_tx_hash: [u8; 32],
+    context: &[u8],
+) -> Result<ProveResult, ProveError> {
+    if inputs.is_empty() {
+        return Err(ProveError::EmptyInputs);
+    }
+    if inputs.len() > MAX_INPUTS {
+        return Err(ProveError::TooManyInputs(inputs.len()));
+    }
+
+    let mut msa_pairs = Vec::with_capacity(inputs.len());
+    let mut output_blinds_list = Vec::with_capacity(inputs.len());
+    let mut paths = Vec::with_capacity(inputs.len());
+    let mut pseudo_outs = Vec::with_capacity(inputs.len());
+
+    for (idx, input) in inputs.iter().enumerate() {
+        let O = decompress_ed25519(&input.output_key).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "output_key",
+        })?;
+        let I = decompress_ed25519(&input.key_image_gen).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "key_image_gen",
+        })?;
+        let C = decompress_ed25519(&input.commitment).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "commitment",
+        })?;
+
+        let output = Output::new(O, I, C)
+            .map_err(|e| ProveError::UpstreamError(format!("Output::new at input {idx}: {e:?}")))?;
+
+        let x =
+            deserialize_ed25519_scalar(&input.spend_key_x).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "spend_key_x",
+            })?;
+        let y =
+            deserialize_ed25519_scalar(&input.spend_key_y).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "spend_key_y",
+            })?;
+
+        // Membership-only rerandomization: synthesized blinds bound to (x, leaf, context).
+        // No commitment-blind arithmetic (z/a) — those are full-path pseudo-out concerns.
+        let rerand = membership_only_rerandomize(&mut OsRng, output, &x, context).map_err(|e| {
+            ProveError::UpstreamError(format!("membership_only_rerandomize at input {idx}: {e:?}"))
+        })?;
+        let crate_input = rerand.input();
+        let c_tilde_bytes: [u8; 32] = crate_input.C_tilde().to_bytes();
+        pseudo_outs.push(c_tilde_bytes);
+
+        let opening = OpenedInputTuple::open(&rerand, &x, &y).ok_or(ProveError::UpstreamError(
+            format!("OpenedInputTuple::open failed at input {idx}"),
+        ))?;
+        #[allow(clippy::cast_possible_truncation)]
+        let msa = MembershipSpendAuth::prove(&mut OsRng, signable_tx_hash, idx as u32, &opening);
+        msa_pairs.push((crate_input, msa));
+
+        // OutputBlinds from the rerandomization — identical to `prove`.
+        let output_blind = OutputBlinds::new(
+            OBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.o_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+            IBlind::new(
+                EdwardsPoint(*FCMP_PLUS_PLUS_U),
+                EdwardsPoint(*FCMP_PLUS_PLUS_V),
+                ScalarDecomposition::new(rerand.i_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+            IBlindBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.i_blind_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+            CBlind::new(
+                EdwardsPoint::generator(),
+                ScalarDecomposition::new(rerand.c_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+        );
+        output_blinds_list.push(output_blind);
+
+        // Leaf chunk + branch layers — identical to `prove`.
+        if input.leaf_chunk_outputs.is_empty() {
+            return Err(ProveError::TreePathUnavailable(idx));
+        }
+
+        let mut chunk_outputs = Vec::with_capacity(input.leaf_chunk_outputs.len());
+        let mut chunk_extra = Vec::with_capacity(input.leaf_chunk_outputs.len());
+        for (j, (o, i, c)) in input.leaf_chunk_outputs.iter().enumerate() {
+            let lo = decompress_ed25519(o).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "leaf_O",
+            })?;
+            let li = decompress_ed25519(i).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "leaf_I",
+            })?;
+            let lc = decompress_ed25519(c).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "leaf_C",
+            })?;
+            chunk_outputs.push(Output::new(lo, li, lc).map_err(|e| {
+                ProveError::UpstreamError(format!(
+                    "leaf Output::new at input {idx}, leaf {j}: {e:?}"
+                ))
+            })?);
+
+            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_h_pqc[j]).ok_or(
+                ProveError::InvalidScalar {
+                    input_index: idx,
+                    field: "leaf_h_pqc",
+                },
+            )?;
+            chunk_extra.push(vec![h_pqc]);
+        }
+
+        let output_h_pqc =
+            deserialize_selene_scalar(&input.h_pqc.0).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "h_pqc",
+            })?;
+
+        let mut c1_layers = Vec::new();
+        for layer in &input.c1_branch_layers {
+            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
+                .siblings
+                .iter()
+                .map(deserialize_selene_scalar)
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar {
+                    input_index: idx,
+                    field: "c1_branch",
+                })?;
+            c1_layers.push(pad_branch_chunk::<Selene>(
+                scalars,
+                crate::tree::SELENE_CHUNK_WIDTH,
+                idx,
+                "c1_branch",
+            )?);
+        }
+        let mut c2_layers = Vec::new();
+        for layer in &input.c2_branch_layers {
+            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
+                .siblings
+                .iter()
+                .map(deserialize_helios_scalar)
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar {
+                    input_index: idx,
+                    field: "c2_branch",
+                })?;
+            c2_layers.push(pad_branch_chunk::<Helios>(
+                scalars,
+                crate::tree::HELIOS_CHUNK_WIDTH,
+                idx,
+                "c2_branch",
+            )?);
+        }
+
+        paths.push(Path::<Curves> {
+            output,
+            output_extra_scalars: vec![output_h_pqc],
+            leaves: chunk_outputs,
+            leaves_extra_scalars: chunk_extra,
+            curve_2_layers: c2_layers,
+            curve_1_layers: c1_layers,
+        });
+    }
+
+    let branches =
+        Branches::new(paths).ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
+
+    let c1_blind_count = branches.necessary_c1_blinds();
+    let c2_blind_count = branches.necessary_c2_blinds();
+
+    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
+    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
+
+    let c1_blinds: Vec<_> = (0..c1_blind_count)
+        .map(|_| {
+            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
+                c1_h,
+                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ))
+        })
+        .collect::<Result<_, ProveError>>()?;
+    let c2_blinds: Vec<_> = (0..c2_blind_count)
+        .map(|_| {
+            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
+                c2_h,
+                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ))
+        })
+        .collect::<Result<_, ProveError>>()?;
+
+    let blinded = branches
+        .blind(output_blinds_list, c1_blinds, c2_blinds)
+        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
+
+    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
+        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+
+    let fcmp_mo = FcmpMembershipOnly::new(msa_pairs, fcmp);
+
+    let mut data = Vec::new();
+    fcmp_mo
         .write(&mut data)
         .map_err(|e| ProveError::UpstreamError(format!("write: {e}")))?;
 
@@ -797,6 +1061,113 @@ pub fn verify(
     Ok(true)
 }
 
+/// Verify a **membership-only** FCMP++ proof — the reward-emission backing path
+/// (`REWARD_EMISSION_LEG.md` §7). Mirror of [`verify`] with the key-image leg
+/// removed: it proves membership **and** spend authority (the `R_O` Schnorr leg)
+/// but publishes **no key image**, so anti-replay is the emission per-epoch dedup,
+/// not a spent-set tag. ML-DSA attestation to `H(pqc_pk)` is the caller's obligation
+/// (the sibling vin-layer gate primitive, PR-E1), not this function's.
+///
+/// Transcript domain separation in [`FcmpMembershipOnly`] (`SAL_MEMBERSHIP_ONLY_DST`)
+/// prevents a full proof from being accepted here and vice-versa; the FFI seam test
+/// asserts the cross-type rejection.
+///
+/// # Errors
+/// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-hash count vs proof input
+/// count), [`VerifyError::PqcCommitmentMismatch`] (per-input scalar deserialization),
+/// [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
+/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
+/// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
+/// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
+pub fn verify_membership_only(
+    proof: &ShekylFcmpProof,
+    pseudo_outs: &[[u8; 32]],
+    pqc_pk_hashes: &[PqcLeafScalar],
+    tree_root: &[u8; 32],
+    tree_depth: u8,
+    signable_tx_hash: [u8; 32],
+) -> Result<bool, VerifyError> {
+    let num_inputs = proof.num_inputs as usize;
+    // Self-defending arity cap: a crafted `proof.num_inputs` sizes the batch verifiers, so an
+    // out-of-range value drives large allocations/CPU. A valid proof never has 0 inputs (all
+    // provers reject empty) nor exceeds `MAX_INPUTS`, so reject before allocating. Independent
+    // of the FFI's own `po_count` cap — this holds for any Rust caller. `DeserializationFailed`
+    // (code 1) matches the FFI's mapping for the same out-of-range condition.
+    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+        return Err(VerifyError::DeserializationFailed);
+    }
+    if pseudo_outs.len() != num_inputs {
+        return Err(VerifyError::InputCountMismatch {
+            expected: num_inputs,
+            got: pseudo_outs.len(),
+        });
+    }
+    if pqc_pk_hashes.len() != num_inputs {
+        return Err(VerifyError::InputCountMismatch {
+            expected: num_inputs,
+            got: pqc_pk_hashes.len(),
+        });
+    }
+    if proof.tree_depth != tree_depth {
+        return Err(VerifyError::InvalidTreeRoot);
+    }
+    if tree_depth > MAX_TREE_DEPTH {
+        return Err(VerifyError::TreeDepthTooLarge(tree_depth));
+    }
+
+    let layers = tree_depth as usize;
+
+    let tree = deserialize_tree_root(tree_root, layers).ok_or_else(|| {
+        tracing::debug!(layers, "deserialize_tree_root failed");
+        VerifyError::InvalidTreeRoot
+    })?;
+
+    let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut proof.data.as_slice())
+        .map_err(|e| {
+            tracing::debug!(
+                proof_len = proof.data.len(),
+                layers,
+                error = %e,
+                "FcmpMembershipOnly::read failed"
+            );
+            VerifyError::DeserializationFailed
+        })?;
+
+    let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
+    let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
+    let mut c2_verifier = generalized_bulletproofs::Generators::batch_verifier();
+
+    fcmp_mo
+        .verify(
+            &mut OsRng,
+            &mut ed_verifier,
+            &mut c1_verifier,
+            &mut c2_verifier,
+            tree,
+            layers,
+            signable_tx_hash,
+            pqc_selene,
+        )
+        .map_err(|e| VerifyError::UpstreamError(format!("{e:?}")))?;
+
+    let ed_ok = ed_verifier.verify_vartime();
+    let c1_ok = SELENE_FCMP_GENERATORS.generators.verify(c1_verifier);
+    let c2_ok = HELIOS_FCMP_GENERATORS.generators.verify(c2_verifier);
+
+    if !ed_ok || !c1_ok || !c2_ok {
+        tracing::debug!(ed_ok, c1_ok, c2_ok, "membership-only batch check failed");
+        return Err(VerifyError::BatchVerificationFailed);
+    }
+
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // Deserialization helpers
 // ---------------------------------------------------------------------------
@@ -1111,6 +1482,142 @@ mod tests {
         assert!(
             wrong_root.is_err() || matches!(wrong_root, Ok(false)),
             "wrong tree root must not verify"
+        );
+    }
+
+    /// PR-E1 roundtrip KAT: a valid membership-only proof from `prove_membership_only`
+    /// verifies through `verify_membership_only`, and the transcript domain separation
+    /// (`SAL_MEMBERSHIP_ONLY_DST` vs `SAL_FULL_DST`) rejects each proof under the *other*
+    /// verifier — the cross-type seam (full <-> membership-only).
+    #[test]
+    #[allow(non_snake_case)]
+    fn membership_only_prove_verify_roundtrip_and_cross_type() {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xABu8; 32];
+        let context = b"shekyl-emission-membership-only-context".to_vec();
+
+        let x = Scalar::random(&mut OsRng);
+        let y = Scalar::random(&mut OsRng);
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut OsRng);
+        let C = EdwardsPoint::random(&mut OsRng);
+
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
+            + multiexp_vartime(&[
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0,
+                    generators[0],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0,
+                    generators[1],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0,
+                    generators[2],
+                ),
+                (h_pqc_field, generators[3]),
+            ]);
+        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+
+        // `commitment_mask` / `pseudo_out_blind` (z/a) are ignored by
+        // `prove_membership_only` — it synthesizes its own blinds from (x, leaf,
+        // context) — but the shared `ProveInput` requires them; dummies suffice.
+        let input = ProveInput {
+            output_key: o_bytes,
+            key_image_gen: i_bytes,
+            commitment: c_bytes,
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr(),
+            spend_key_y: y.to_repr(),
+            commitment_mask: Scalar::random(&mut OsRng).to_repr(),
+            pseudo_out_blind: Scalar::random(&mut OsRng).to_repr(),
+            leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        };
+        // Both `prove*` take `&[ProveInput]` (shared borrow), so one array serves both.
+        let inputs = [input];
+
+        let mo = prove_membership_only(&inputs, &tree_root, tree_depth, signable_tx_hash, &context)
+            .expect("prove_membership_only should succeed");
+
+        // Positive: membership-only proof verifies through the membership-only verifier.
+        let ok = verify_membership_only(
+            &mo.proof,
+            &mo.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        )
+        .expect("verify_membership_only should succeed");
+        assert!(ok, "valid membership-only proof must verify");
+
+        // Arity cap: a crafted `num_inputs` (0 or > MAX_INPUTS) must reject as
+        // DeserializationFailed before sizing the batch verifiers — self-defending, independent
+        // of the FFI's `po_count` cap.
+        for bad in [0usize, crate::MAX_INPUTS + 1] {
+            let mut tampered = mo.proof.clone();
+            tampered.num_inputs = u32::try_from(bad).expect("test bad-count fits u32");
+            let r = verify_membership_only(
+                &tampered,
+                &mo.pseudo_outs,
+                &[PqcLeafScalar(h_pqc_bytes)],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
+            assert!(
+                matches!(r, Err(VerifyError::DeserializationFailed)),
+                "num_inputs={bad} must reject as DeserializationFailed, got {r:?}"
+            );
+        }
+
+        // Cross-type: the membership-only proof must NOT verify as a full proof. A dummy
+        // key image is supplied only to satisfy the full ABI's arity.
+        let dummy_ki = [KeyImage::from_canonical_bytes((I * x).to_bytes())];
+        let as_full = verify(
+            &mo.proof,
+            &dummy_ki,
+            &mo.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
+        assert!(
+            as_full.is_err() || matches!(as_full, Ok(false)),
+            "membership-only proof must not verify as a full proof, got {as_full:?}"
+        );
+
+        // Cross-type reverse: a full proof must NOT verify as membership-only.
+        let full =
+            prove(&inputs, &tree_root, tree_depth, signable_tx_hash).expect("prove should succeed");
+        let as_mo = verify_membership_only(
+            &full.proof,
+            &full.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
+        assert!(
+            as_mo.is_err() || matches!(as_mo, Ok(false)),
+            "full proof must not verify as membership-only, got {as_mo:?}"
         );
     }
 
