@@ -78,11 +78,25 @@ pub enum TorPosture {
         /// Tor's reported bootstrap percent (0–99), for the "Connecting…" UX.
         progress: u8,
     },
-    /// Usable. The SOCKS endpoint is **data on this channel** — read it here at
-    /// use-time, never cache it (it changes across restarts by design).
+    /// Usable **now**. The SOCKS endpoint is **data on this channel** — read it
+    /// here at use-time, never cache it (it changes across restarts by design).
+    ///
+    /// `Ready` is *always* published when the transport is usable, even during a
+    /// degraded episode — hiding a working transport from SP-T1 would turn a
+    /// partial outage into a total one (missed challenge windows), the exact harm
+    /// this supervisor exists to prevent. The episode is carried alongside
+    /// instead: see `recovering`.
     Ready {
         /// The bound `SocksPort auto` address of the *current* incarnation.
         socks_addr: SocketAddr,
+        /// `true` while the degraded episode has **not yet cleared**: the tor is
+        /// usable now, but has not held `Ready` for `stable_reset` since the
+        /// alarm fired. An operator-alarm layer should render
+        /// `Degraded ∪ Ready{recovering: true}` as **one continuous incident**
+        /// (no flapping); the supervisor republishes
+        /// `Ready { recovering: false }` the moment the sustained-recovery
+        /// threshold is met, which is the alarm-clear edge.
+        recovering: bool,
     },
     /// The incarnation died; the supervisor will retry. Normal-operations
     /// transient — not the alarm state.
@@ -94,11 +108,13 @@ pub enum TorPosture {
     },
     /// The restart limit tripped (or a trust failure occurred) — **retries
     /// continue** at the backoff cap; this is the loud operator-alarm hook
-    /// (rule 82), not a terminal state. Sticky: intermediate `Starting` /
-    /// `Connecting` of retry attempts are *not* published while degraded (the
-    /// alarm must not flap). Cleared only when an incarnation holds `Ready` for
-    /// `stable_reset` — a *sustained* recovery, not a brief flap (a genuinely
-    /// flapping tor keeps alarming).
+    /// (rule 82), not a terminal state. Sticky, as an *episode*: intermediate
+    /// `Starting` / `Connecting` of retry attempts are not published while
+    /// degraded, and a brief recovery publishes `Ready { recovering: true }`
+    /// (usable, but the incident is still open). The episode ends — and the
+    /// alarm clears — only when an incarnation holds `Ready` for `stable_reset`
+    /// (`Ready { recovering: false }` is republished at that moment); a
+    /// genuinely flapping tor never reaches it and keeps alarming.
     Degraded {
         /// The most recent failure (updated on each failed retry).
         last: ServiceFailure,
@@ -338,7 +354,7 @@ impl TorService {
     #[must_use]
     pub fn current_socks(&self) -> Option<SocketAddr> {
         match &*self.posture.borrow() {
-            TorPosture::Ready { socks_addr } => Some(*socks_addr),
+            TorPosture::Ready { socks_addr, .. } => Some(*socks_addr),
             _ => None,
         }
     }
@@ -602,13 +618,22 @@ async fn drive_incarnation(
         }
         Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
     };
-    posture.send(TorPosture::Ready { socks_addr }).ok();
+    // Usable now — published unconditionally (never hide a working transport
+    // from SP-T1). While the degraded episode is still open, `recovering: true`
+    // keeps the operator incident continuous instead of flapping it closed.
+    posture
+        .send(TorPosture::Ready {
+            socks_addr,
+            recovering: *degraded,
+        })
+        .ok();
 
     // Phase 3: hold until death or shutdown. Once this incarnation has held
     // `Ready` for `stable_reset`, forgive prior instability in place (§3c): clear
     // the sticky alarm and the counter so a later isolated failure restarts fresh
-    // rather than re-firing `Degraded`. A tor that never reaches a sustained Ready
-    // (a genuine flapper) never forgives — it keeps alarming.
+    // rather than re-firing `Degraded`, and republish `recovering: false` — the
+    // alarm-clear edge. A tor that never reaches a sustained Ready (a genuine
+    // flapper) never forgives — it keeps alarming.
     let reset_deadline = tokio::time::Instant::now() + policy.stable_reset;
     let mut forgiven = false;
     loop {
@@ -616,9 +641,18 @@ async fn drive_incarnation(
             _ = &mut *shutdown => return IncarnationEnd::Shutdown,
             () = actor.wait_for_shutdown() => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
             () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
+                let was_degraded = *degraded;
                 *attempt = 0;
                 *degraded = false;
                 forgiven = true;
+                if was_degraded {
+                    posture
+                        .send(TorPosture::Ready {
+                            socks_addr,
+                            recovering: false,
+                        })
+                        .ok();
+                }
             }
         }
     }
@@ -853,7 +887,9 @@ mod live_tests {
     use super::*;
     use crate::test_support::tor_binary;
 
-    /// Await a posture state matching `pred`, panicking after `secs`.
+    /// Await a posture state matching `pred`, panicking after `secs`. The value
+    /// is cloned from the SAME borrow the predicate checked — a second borrow
+    /// could observe a newer state that no longer matches.
     async fn await_posture<F: Fn(&TorPosture) -> bool>(
         rx: &mut watch::Receiver<TorPosture>,
         secs: u64,
@@ -862,8 +898,9 @@ mod live_tests {
     ) -> TorPosture {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         loop {
-            if pred(&rx.borrow_and_update()) {
-                return rx.borrow().clone();
+            let current = rx.borrow_and_update().clone();
+            if pred(&current) {
+                return current;
             }
             tokio::select! {
                 changed = rx.changed() => { changed.unwrap_or_else(|_| panic!("supervisor died awaiting {what}")); }
@@ -905,6 +942,7 @@ mod live_tests {
         .await;
         let TorPosture::Ready {
             socks_addr: first_addr,
+            recovering,
         } = first
         else {
             unreachable!()
@@ -913,6 +951,8 @@ mod live_tests {
             first_addr.ip().is_loopback(),
             "SocksPort auto must bind loopback"
         );
+        // A clean first launch is not a degraded-episode recovery.
+        assert!(!recovering, "first Ready must not be flagged recovering");
         // The safe accessor returns the same live endpoint while Ready.
         assert_eq!(service.current_socks(), Some(first_addr));
 
@@ -939,6 +979,7 @@ mod live_tests {
         .await;
         let TorPosture::Ready {
             socks_addr: second_addr,
+            ..
         } = second
         else {
             unreachable!()
