@@ -1,0 +1,79 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Bundled-Tor pin re-verification (2d-2 SP-T0c, docs/RELEASE_CHECKLIST.md
+# "Bundled Tor pin current"). Manual-dispatch: the pin-match KAT
+# (`bundled_tor_matches_recorded_pin`) is #[ignore]d on the unit lane, so
+# without this lane a mistranscribed CURRENT_PIN would pass every automated
+# gate and fail closed for every user at first managed launch. This runs the
+# same chain the checklist prescribes — download the Expert Bundle, GPG-verify
+# it against the Tor Browser Developers key, extract, and prove the extracted
+# binary hashes to the pin recorded in rust/shekyl-tor/src/binary.rs.
+#
+# Dispatch it after every pin bump (and freely at any time — it is read-only).
+
+name: tor-pin-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: >-
+          Tor Expert Bundle version to fetch and verify against CURRENT_PIN
+          (must match the recorded bundle_version, e.g. 15.0.17)
+        required: true
+        default: "15.0.17"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-linux-x86_64:
+    name: pin matches Expert Bundle ${{ inputs.bundle_version }} (linux-x86_64)
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE: tor-expert-bundle-linux-x86_64-${{ inputs.bundle_version }}.tar.gz
+      DIST: https://dist.torproject.org/torbrowser/${{ inputs.bundle_version }}
+      # The Tor Browser Developers signing key — must equal TOR_SIGNING_KEY_FPR
+      # in rust/shekyl-tor/src/binary.rs (the durable pin; a mismatch here means
+      # either this file or the code is stale — reconcile, never override).
+      TOR_FPR: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+    steps:
+      - uses: actions/checkout@v5
+
+      # The fingerprint above is a copy of the code constant; refuse to verify
+      # against a stale one.
+      - name: cross-check fingerprint against binary.rs
+        run: grep -q "$TOR_FPR" rust/shekyl-tor/src/binary.rs
+
+      - name: fetch Expert Bundle + signature
+        run: |
+          curl -fsSL -o "$BUNDLE" "$DIST/$BUNDLE"
+          curl -fsSL -o "$BUNDLE.asc" "$DIST/$BUNDLE.asc"
+
+      - name: import Tor signing key (WKD) and GPG-verify the bundle
+        run: |
+          set -o pipefail
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --status-fd 1 --verify "$BUNDLE.asc" "$BUNDLE" | tee verify.out
+          # Require VALIDSIG terminating in the pinned primary fingerprint —
+          # GOODSIG alone matches any key the keyring happens to hold.
+          grep -E "^\[GNUPG:\] VALIDSIG .* $TOR_FPR$" verify.out
+
+      - name: extract
+        run: tar -xzf "$BUNDLE"
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: pin-match KAT against the verified binary
+        run: |
+          set -o pipefail
+          cd rust
+          SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
+            cargo test -p shekyl-tor --lib -- --ignored --exact \
+            binary::tests::bundled_tor_matches_recorded_pin | tee kat.out
+          # libtest exits 0 on zero matched tests — a renamed KAT must fail
+          # this lane loudly, not vacuously pass it.
+          grep -E "test result: ok\. 1 passed" kat.out
