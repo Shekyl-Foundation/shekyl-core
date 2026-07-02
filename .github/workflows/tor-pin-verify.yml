@@ -89,13 +89,19 @@ jobs:
           SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
           SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
             cargo test --locked -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
-          # libtest exits 0 even if every test was filtered out, so guard the
-          # FULL pinned-tor set — not just the pin KAT. Floor = the current
-          # linux/x86_64 ignored-test count (6: pin + 2 actor + 3 supervisor);
-          # a cfg-gating/removal slip drops below it and fails the lane loudly.
-          # `-ge` (not `-eq`) so adding a live test never breaks the lane; bump
-          # the floor down only on a deliberate removal.
-          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored.out)
+          # The pin-match KAT is this lane's founding guarantee (a mistranscribed
+          # CURRENT_PIN otherwise fails closed for every user at first managed
+          # launch) — assert it specifically ran and PASSED, not merely that some
+          # count held. `--test-threads=1` prints one "test <name> ... ok" line.
+          grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored.out
+          # And guard the FULL pinned-tor set — not just that one — against a
+          # silent coverage drop. Floor = the current linux/x86_64 ignored-test
+          # count (6: pin + 2 actor + 3 supervisor); a cfg-gating/removal slip
+          # drops below it and fails the lane loudly. `-ge` (not `-eq`) so adding
+          # a live test never breaks the lane; bump the floor only on a deliberate
+          # removal. `-m1`/`head -1`: `--lib` prints a single "test result:" line,
+          # but stay single-valued so a stray second line can't break the compare.
+          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored.out | head -1)
           echo "ran ${passed:-0} pinned-tor integration tests"
           [ "${passed:-0}" -ge 6 ]
           # No tor WE launched may survive the run (the reap/shutdown guarantee).
