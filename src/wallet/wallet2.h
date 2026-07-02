@@ -1935,7 +1935,16 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
     {
-      assert(ver == 4);
+      // Real runtime guard (not `assert`, which is a no-op under NDEBUG): the
+      // claim-era cutover removed four stake fields from the *middle* of this
+      // record at v4, so a v3 cache read under the v4 layout would silently
+      // mis-parse. Refuse loudly instead — the wallet cache-load path catches
+      // this and rescans (rule-15: pre-genesis caches are regenerable, refuse +
+      // re-sync, no in-Shekyl migration code).
+      if (ver != 4)
+        throw std::runtime_error(
+          "unsupported transfer_details cache version (expected 4) — "
+          "delete the wallet cache and rescan");
       a & x.m_block_height;
       a & x.m_global_output_index;
       a & x.m_internal_output_index;

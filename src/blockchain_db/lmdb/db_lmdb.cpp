@@ -4778,7 +4778,9 @@ uint64_t BlockchainLMDB::get_block_burn(uint64_t height) const
   if (get_result)
     throw0(DB_ERROR(lmdb_error("Failed to get block burn: ", get_result).c_str()));
   if (v.mv_size != sizeof(uint64_t))
-    throw0(DB_ERROR("Bad block burn size in DB"));
+    throw0(DB_ERROR(("Bad block burn record at height " + std::to_string(height)
+      + ": expected " + std::to_string(sizeof(uint64_t)) + " bytes, got "
+      + std::to_string(v.mv_size)).c_str()));
   uint64_t amount;
   memcpy(&amount, v.mv_data, sizeof(amount));
   TXN_POSTFIX_RDONLY();

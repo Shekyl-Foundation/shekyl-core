@@ -56,11 +56,15 @@ else ()
   # Third-party code compiled under the repo's global -Werror: newer GCC
   # flags benchmark.h's BENCHMARK_MAIN main() re-declaration under
   # -Wredundant-decls. Not our code to fix — exempt the fetched targets.
-  foreach (bench_tgt benchmark benchmark_main)
-    if (TARGET ${bench_tgt})
-      target_compile_options(${bench_tgt} PRIVATE -Wno-redundant-decls -Wno-error)
-    endif ()
-  endforeach ()
+  # GCC/Clang-only flags: MSVC (and other front-ends) hard-error on unknown
+  # `-Wno-*`, which would break an optional MSVC wallet-bench build.
+  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    foreach (bench_tgt benchmark benchmark_main)
+      if (TARGET ${bench_tgt})
+        target_compile_options(${bench_tgt} PRIVATE -Wno-redundant-decls -Wno-error)
+      endif ()
+    endforeach ()
+  endif ()
 endif ()
 
 set(wallet_bench_sources
