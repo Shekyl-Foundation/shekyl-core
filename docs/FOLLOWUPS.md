@@ -7285,6 +7285,21 @@ one place to confirm each item's relationship to the wallet stack.
   dep. **Target:** V3.x (immediately after #205). See
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §15 and
   `rust/shekyl-p-transport/src/lib.rs`.
+- **2d-2 SP-T0 — DQ-T0.4 circuit-isolation measurement has no CI binary source (BLOCKED, not
+  deferred-by-choice).** The `tor-pin-verify` lane now runs the SP-T0 `--lib` live lifecycle tests
+  (actor + supervisor) against the GPG-verified Expert Bundle `tor`, but `tests/circuit_isolation.rs`
+  (DQ-T0.4) also needs **`tor-gencert`** to stand up its hermetic owned-net directory authority, and
+  the Tor Expert Bundle ships only `tor` (verified: no `tor-gencert` in the bundle). So the firewall
+  network-axis measurement still runs only on a dev box with a full tor install. **Reopen when** a
+  pinned `tor-gencert` source exists (a distro `tor` package, or a second hash-pinned artifact) —
+  then add a `SHEKYL_TEST_TOR_GENCERT` step to `tor-pin-verify.yml`. Stated in the workflow header.
+- **Workspace-wide `rustdoc -D warnings` CI lane (BLOCKED on pre-existing cross-crate warnings).**
+  `build.yml` now gates **shekyl-tor** rustdoc at `-D warnings` (its docs carry load-bearing security
+  contracts and its reviews repeatedly surfaced public→private intra-doc links). Widening to
+  `--workspace` currently fails on pre-existing warnings unrelated to 2d-2 (e.g. an unresolved
+  intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
+  deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
+  then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
 - **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
   DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
   puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at

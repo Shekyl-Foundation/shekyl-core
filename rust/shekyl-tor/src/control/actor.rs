@@ -804,8 +804,10 @@ async fn wait_for_control_port(
 /// poll), and it never reads the secret in a loop. The SAFECOOKIE cookie is exactly 32 bytes,
 /// so a shorter file is a partial write to retry past; that is the whole condition of the
 /// startup race (tor has written its port file but not yet its complete cookie). The
-/// authoritative validated read — permissions, exact length — happens once, later, in the
-/// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt.
+/// authoritative validated read — the exact 32-byte length gate — happens once, later, in the
+/// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt. (The
+/// cookie's confidentiality rests on the 0700 wallet-private `DataDirectory`, not on a
+/// wallet-side permission re-check.)
 async fn wait_for_cookie(
     cookie_path: &Path,
     deadline: tokio::time::Instant,
