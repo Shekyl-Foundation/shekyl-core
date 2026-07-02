@@ -10641,3 +10641,20 @@ Retained for citation in review; each links to the canonical record.
   `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
   `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
   claim-era retirement; sweep with the next engine-core error-surface pass.
+
+- **DECIDED (2026-07-02, own PR after #232): delete the M5 citation gate
+  (`scripts/ci/check_phase2h_citations.sh` + its workflow step).** The gate is
+  convention theater: it validates that cited `*_PLAN.md` files EXIST (never
+  reads them — blank/gibberish files pass) and that source cites are within
+  `wc -l` (never the content). Any element of the spec or the code can change
+  and it cannot fire — "that's not the behavior of a rigorously coded program,
+  that's the signature of a virus or trojan." Real spec enforcement in this
+  crate is the differential harness itself (T2 adversarial corpus byte-equality
+  vs the C reference, verifier tests, crate-invariant fork-pin check) — tests
+  that fire on behavioral change. The gate's only yield has been blocking CI on
+  a doc archival (`docs/design/` → `docs/completed/`, 13 false FATALs on #232).
+  #232 carries the minimal unblock (basename resolution + rustdoc link
+  repoints); the deletion PR removes the script, the `M5 citation-validation
+  script` workflow step, and the script's `paths:` trigger entries. Keep
+  `check_randomx_crate_invariants.sh` (the fork-pin-sha check is a real
+  substrate pin). Sequenced after #232 to avoid same-file conflicts.
