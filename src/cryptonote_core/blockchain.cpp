@@ -3312,10 +3312,6 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     return false;
   }
 
-  for (const auto &o : tx.vout)
-  {
-  }
-
   // Commitment mask validation: reject trivial masks (mask=0 or mask=1).
   // Non-coinbase path. Coinbase is validated in prevalidate_miner_transaction.
   if (!check_commitment_mask_valid(tx))
@@ -5006,12 +5002,14 @@ leave:
     const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
     burn.actually_destroyed += staker_inflow;
 
-    // Per-height burn record: the sole persisted per-block bookkeeping this
-    // path needs, so pop_block_from_blockchain can roll total_burned back.
-    m_db->add_block_burn(blockchain_height, burn.actually_destroyed);
-
     if (burn.actually_destroyed > 0)
     {
+      // Per-height burn record — the sole persisted per-block bookkeeping this
+      // path needs, so pop_block_from_blockchain can roll total_burned back.
+      // Only written when nonzero: get_block_burn returns 0 for an absent
+      // height, so a zero row would carry no information (and pop's
+      // remove_block_burn tolerates the missing key).
+      m_db->add_block_burn(blockchain_height, burn.actually_destroyed);
       uint64_t total_burned = m_db->get_total_burned();
       total_burned += burn.actually_destroyed;
       m_db->set_total_burned(total_burned);

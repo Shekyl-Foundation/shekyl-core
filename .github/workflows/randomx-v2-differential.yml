@@ -114,7 +114,17 @@ jobs:
         with:
           submodules: recursive
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Install the exact channel pinned by rust/rust-toolchain.toml (1.94.0)
+        # WITH its components. `@stable` installed rustfmt/clippy only for the
+        # stable toolchain, but every cargo call under rust/ resolves to 1.94.0
+        # per the pin — so `cargo fmt`/`clippy` failed with "'cargo-fmt' is not
+        # installed for the toolchain '1.94.0'". Matches build.yml / depends.yml /
+        # codeql.yml (the toolchain.toml doc's mandate: CI installs the pinned
+        # toolchain + components up front; the .toml only selects it).
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: rustfmt, clippy
       - name: Install CMake + Ninja
         # `ubuntu-latest` images carry CMake by default, but we pin
         # Ninja explicitly because the submodule's CMakeLists builds
@@ -267,7 +277,17 @@ jobs:
         with:
           submodules: recursive
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Install the exact channel pinned by rust/rust-toolchain.toml (1.94.0)
+        # WITH its components. `@stable` installed rustfmt/clippy only for the
+        # stable toolchain, but every cargo call under rust/ resolves to 1.94.0
+        # per the pin — so `cargo fmt`/`clippy` failed with "'cargo-fmt' is not
+        # installed for the toolchain '1.94.0'". Matches build.yml / depends.yml /
+        # codeql.yml (the toolchain.toml doc's mandate: CI installs the pinned
+        # toolchain + components up front; the .toml only selects it).
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: rustfmt, clippy
       - name: Install CMake + Ninja
         run: |
           sudo apt-get update

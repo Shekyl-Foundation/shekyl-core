@@ -73,7 +73,7 @@ pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x02;
 /// error the digest backstops. This digest therefore folds every
 /// calibration value the snapshot displays.
 ///
-/// # Canonical layout (format version `0x01`)
+/// # Canonical layout (format version `0x02`)
 ///
 /// | Width            | Field                                                                |
 /// |------------------|----------------------------------------------------------------------|
@@ -119,11 +119,11 @@ pub(crate) struct CalibrationStamp {
     /// Blake2b-256 over the **full calibration surface this snapshot
     /// exposes** (see [`snapshot_calibration_digest`]): the
     /// [`EconomicParams`](shekyl_economics::EconomicParams) sub-digest
-    /// **plus** the staker-emission share/decay and the staking tier
-    /// table. **Not** raw JSON bytes, **not** bincode. Covering only
-    /// `EconomicParams` (as `shekyl_economics::params_digest` does, for
-    /// the C4 fixture lineage) would false-accept a snapshot whose staker
-    /// or tier calibration changed without a `generation` bump. Catches a
+    /// **plus** the staker-emission share/decay. **Not** raw JSON bytes,
+    /// **not** bincode. Covering only `EconomicParams` (as
+    /// `shekyl_economics::params_digest` does, for the C4 fixture lineage)
+    /// would false-accept a snapshot whose staker calibration changed
+    /// without a `generation` bump. Catches a
     /// generation increment with no parameter change, and silent
     /// serialization drift that `generation` alone would miss.
     pub params_digest: [u8; 32],

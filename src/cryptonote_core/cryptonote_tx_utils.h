@@ -178,9 +178,10 @@ namespace boost
       a & x.original;
       a & x.is_integrated;
       // ver 3 carried the claim-era is_staking/stake_tier pair; ver 4
-      // (claim-era cutover) dropped them. A v3 blob would leave those
-      // bytes unconsumed — refuse by returning defaults (pre-genesis
-      // caches are regenerable; no migration code).
+      // (claim-era cutover) dropped them. These are transient artifacts
+      // (pending_tx / unsigned_tx_set), so a stray v3 blob is drained —
+      // its two legacy bytes read-and-discarded — to keep the boost stream
+      // aligned for whatever follows, rather than silently misparsed.
       if (ver == 3)
       {
         bool legacy_is_staking = false;

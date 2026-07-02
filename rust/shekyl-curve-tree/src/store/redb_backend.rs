@@ -2481,4 +2481,48 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
     }
+
+    /// The exact boundary the claim-era cutover advertises: a v3 store (the
+    /// immediately-prior production layout, the one most likely to be
+    /// encountered) is refused, because it can hold tag-2 `StakedKey` leaf
+    /// rows this v4 build cannot represent. Pins the `<= 3` refusal so a
+    /// future range/shim refactor cannot silently start accepting v3.
+    #[test]
+    fn schema_version_guard_rejects_prior_v3_store() {
+        let path = temp_store_path("schema-guard-v3");
+
+        // Build through the real path, then stamp the version cell back to 3.
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .unwrap();
+        }
+        const PRIOR_V3: u64 = 3;
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_SCHEMA_VERSION, &PRIOR_V3).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        for _ in 0..2 {
+            let err = LeafStore::open(&path).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    StoreError::SchemaVersionMismatch {
+                        found: PRIOR_V3,
+                        expected: SCHEMA_VERSION,
+                    }
+                ),
+                "expected SchemaVersionMismatch(found=3, expected={SCHEMA_VERSION}), got: {err:?}"
+            );
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
 }

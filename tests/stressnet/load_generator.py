@@ -48,8 +48,6 @@ class StressnetStats:
 
     txs_submitted: int = 0
     txs_failed: int = 0
-    stakes_submitted: int = 0
-    claims_submitted: int = 0
     multisig_txs_submitted: int = 0
     consensus_checks: int = 0
     consensus_failures: int = 0
@@ -189,51 +187,13 @@ def submit_transfer(
         return None
 
 
-def submit_stake(
-    wallet: WalletRPC, tier: int, amount: int
-) -> str | None:
-    """Submit a staking transaction. Returns tx hash or None."""
-    try:
-        result = wallet.json_rpc(
-            "stake",
-            {"tier": tier, "amount": amount},
-        )
-        return result.get("tx_hash")
-    except Exception as e:
-        log.warning("Stake failed: %s", e)
-        return None
-
-
-def submit_claim(wallet: WalletRPC) -> str | None:
-    """Submit a claim_rewards transaction. Returns tx hash or None."""
-    try:
-        result = wallet.json_rpc("claim_rewards", {})
-        return result.get("tx_hash")
-    except Exception as e:
-        log.warning("Claim failed: %s", e)
-        return None
-
-
-def pick_staking_tier(tier_distribution: dict) -> int:
-    """Sample a staking tier from the configured distribution."""
-    tiers = {"short": 1, "medium": 2, "long": 3}
-    choices = []
-    weights = []
-    for name, weight in tier_distribution.items():
-        choices.append(tiers[name])
-        weights.append(weight)
-    return random.choices(choices, weights=weights, k=1)[0]
-
-
 def log_status(stats: StressnetStats) -> None:
     log.info(
-        "STATS | uptime=%.1fh txs=%d failed=%d stakes=%d claims=%d "
+        "STATS | uptime=%.1fh txs=%d failed=%d "
         "multisig=%d consensus_checks=%d consensus_failures=%d",
         stats.uptime_hours(),
         stats.txs_submitted,
         stats.txs_failed,
-        stats.stakes_submitted,
-        stats.claims_submitted,
         stats.multisig_txs_submitted,
         stats.consensus_checks,
         stats.consensus_failures,
@@ -253,29 +213,19 @@ def run_load_generation(config: dict) -> None:
     tx_rate = load_cfg["sustained_tx_rate"]
     input_dist = load_cfg["input_distribution"]
 
-    staking_cfg = load_cfg.get("staking", {})
-    stakes_per_day = staking_cfg.get("new_stakes_per_day", 0)
-    claims_per_day = staking_cfg.get("claims_per_day", 0)
-    tier_dist = staking_cfg.get("tier_distribution", {"short": 1.0})
-
     multisig_cfg = load_cfg.get("multisig", {})
     multisig_per_day = multisig_cfg.get("2_of_3_txs_per_day", 0)
 
     blocks_per_day = 86400 / block_time
     tx_interval = block_time / max(tx_rate, 1)
-    stake_interval = 86400 / max(stakes_per_day, 1)
-    claim_interval = 86400 / max(claims_per_day, 1)
     consensus_check_interval = 300  # every 5 minutes
 
     stats = StressnetStats()
-    last_stake_time = time.time()
-    last_claim_time = time.time()
     last_consensus_time = time.time()
     last_status_time = time.time()
 
     log.info("Starting load generation: %d tx/block, block_time=%ds", tx_rate, block_time)
     log.info("Connected to %d daemon(s)", len(daemons))
-    log.info("Staking: %d stakes/day, %d claims/day", stakes_per_day, claims_per_day)
 
     # In a real deployment, wallet RPCs would be initialized and funded here.
     # This skeleton uses daemon RPCs for consensus checks and logs simulated
@@ -312,24 +262,6 @@ def run_load_generation(config: dict) -> None:
                     stats.txs_submitted += 1
                 else:
                     stats.txs_failed += 1
-
-            # --- Staking ---
-            if now - last_stake_time >= stake_interval and wallets:
-                tier = pick_staking_tier(tier_dist)
-                stake_amount = random.randint(100_000_000_000, 1_000_000_000_000)
-                staker = random.choice(wallets)
-                tx_hash = submit_stake(staker, tier, stake_amount)
-                if tx_hash:
-                    stats.stakes_submitted += 1
-                last_stake_time = now
-
-            # --- Claims ---
-            if now - last_claim_time >= claim_interval and wallets:
-                claimer = random.choice(wallets)
-                tx_hash = submit_claim(claimer)
-                if tx_hash:
-                    stats.claims_submitted += 1
-                last_claim_time = now
 
             # --- Consensus check ---
             if now - last_consensus_time >= consensus_check_interval:

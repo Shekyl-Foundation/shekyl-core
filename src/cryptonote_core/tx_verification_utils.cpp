@@ -91,11 +91,11 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (!Blockchain::check_tx_outputs(tx, tvc, hf_version) || tvc.m_verifivation_failed)
             return false;
 
-        // Stake-claim transactions use RCTTypeFcmpPlusPlusPqc but have an empty
-        // FCMP++ proof (ownership is proven via PQC auth on public amounts, not
-        // membership proofs). Exclude them from the RCT semantics batch which
-        // rejects empty fcmp_pp_proof. Serve-credit txs verify BP+/balance on a
-        // dedicated fee-only path (hybrid signature is on the vin).
+        // Serve-credit txs are non-spending: they carry no RCT output material
+        // and verify BP+/balance on a dedicated fee-only path (the hybrid
+        // signature lives on the vin), so they are excluded from the RCT
+        // semantics batch (which would reject their empty fcmp_pp_proof).
+        // Bond-post txs are handled by their own semantics check below.
         if (tx.version >= 2)
         {
             bool archival_serve_credit_only = !tx.vin.empty();

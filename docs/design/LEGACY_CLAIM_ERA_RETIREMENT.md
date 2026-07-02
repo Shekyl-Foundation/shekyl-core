@@ -142,7 +142,7 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
   `staker_claims` watermark table deleted. RPC: `get_staking_info` + `estimate_claim_reward`
   gone; `get_info` drops `stake_ratio`/`staker_pool_balance`. Wallet: transfer_details stake
   fields (cache version 3→4), claim/unstake/stake tx builders, watermark staging, 5 wallet-RPC
-  methods, 5 FFI dispatchers. Rust: `shekyl-staking` crate deleted; the 7 quarantined
+  methods, 5 FFI dispatchers. Rust: `shekyl-staking` crate deleted; the 8 quarantined
   `shekyl_stake_*`/`shekyl_calc_*` FFI exports + header decls gone; curve-tree
   `TargetKind::StakedKey` retired (store schema 3→4, tag 2 unreassigned). Config: the 8 dead
   stake-tier keys left `economics_params.json` + the generator (`staker_pool_share` +

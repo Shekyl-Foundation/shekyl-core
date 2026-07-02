@@ -10597,3 +10597,55 @@ Retained for citation in review; each links to the canonical record.
   `ref_leaf_count`, and applying boundary-chunk hash trimming via
   `shekyl_curve_tree_hash_trim_{selene,helios}` for sibling chunks that
   grew since the reference block.
+
+- **Pre-existing: `total_burned` stat undercounts realized fee-burn (PR-4 review,
+  2026-07-02).** The add-block accounting path
+  (`blockchain.cpp` `handle_block_to_main_chain`) computes its burn with
+  `compute_fee_burn(fee_summary, /*tx_volume*/ 0, …)`, forcing `burn_pct = 0` for
+  the fee portion, while `validate_miner_transaction` uses `tx_volume_avg` (real
+  burn_pct). So the persisted `block_burn` record + `total_burned` stat capture
+  only the staker-inflow burn, never the consensus fee-burn. PRE-EXISTING (the
+  old accrual path passed 0 too); PR-4 only made it a persisted per-height
+  record. It is internally symmetric (pop removes exactly what add wrote — no
+  reorg drift) and `total_burned` is a stat, not consensus, so no fork. Fix:
+  feed the add-path `compute_fee_burn` the same `tx_volume_avg` validation uses,
+  or record `fee - effective_fee` explicitly. Own PR (touches burn-stat
+  semantics, not claim-era).
+
+- **Pre-existing: boost `std::variant` index is position-sensitive; retiring a
+  mid-list variant shifts surviving tags (PR-4 review).** `txin_stake_claim` was
+  removed from the middle of `txin_v` (index 4), shifting
+  `txin_archival_serve_credit_response` 5→4 and `txin_archival_bond_post` 6→5.
+  The on-wire binary tx uses explicit `VARIANT_TAG` bytes (safe), but the
+  **boost** serializer (`cryptonote_boost_serialization.h`) stores the numeric
+  `index()`, so a pre-cutover boost artifact (pending_tx / unsigned_tx_set /
+  multisig partial / cold-sign blob) carrying an **archival** vin mis-decodes
+  under this build. Blast radius: transient, pre-genesis, archival-vin-only
+  (normal `txin_to_key` spends at index 3 are unaffected); regenerable by
+  re-creating the tx. No clean fix without reintroducing a placeholder variant.
+  Disposition: re-create any cross-cutover boost artifact rather than carry it.
+
+- **Pre-existing: LMDB `staker_accrual`→`block_burn` table rename has no DB
+  VERSION bump (still 7) (PR-4 review).** Upgrading a node in place over a
+  pre-PR-4 LMDB opens `block_burn` empty; popping a pre-upgrade block reads 0 and
+  skips its `total_burned` rollback → the `total_burned` **stat** drifts high
+  (not consensus; bounded by pre-genesis delete-and-resync). A clean refuse would
+  need a DB VERSION bump, but Monero's `migrate()` path is migrate-not-refuse, so
+  bumping without a migration case risks a worse silent version-stamp; adding a
+  migration case violates rule-15 (no in-Shekyl migration code). Disposition:
+  resync over the cutover (the standing pre-genesis policy); if a loud refuse is
+  wanted, it needs an LMDB open-time version-gate change of its own.
+
+- **Pre-existing: wallet2 boost serializers version-guard with `assert(ver==N)`,
+  a no-op under NDEBUG (PR-4 review).** `transfer_details` (and its siblings
+  `unconfirmed_transfer_details` / `payment_details`) assert the exact class
+  version rather than throwing, so a release build silently mis-parses an
+  old-version cache instead of cleanly rejecting it. File-wide Monero-inherited
+  pattern (PR-4 followed it correctly for the 3→4 bump); pre-genesis caches are
+  regenerable. Fix belongs to the wallet2→Rust rewrite, not a per-field patch.
+
+- **Pre-existing: `shekyl_engine_core::error::EngineCoreError` still carries dead
+  claim-era variants (PR-4 review):** `NotStaked`, `NoBacklog`, `NotMatured`,
+  `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
+  `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
+  claim-era retirement; sweep with the next engine-core error-surface pass.

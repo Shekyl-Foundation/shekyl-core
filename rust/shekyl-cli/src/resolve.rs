@@ -82,21 +82,6 @@ pub enum ResolvedCommand {
         account_index: u32,
     },
 
-    // -- Staking --
-    Stake {
-        account_index: u32,
-        tier: Option<u8>,
-        amount: u64,
-    },
-    Unstake {
-        account_index: u32,
-    },
-    Claim {
-        account_index: u32,
-    },
-    StakingInfo {
-        account_index: u32,
-    },
     ChainHealth,
 
     // -- Keys --
@@ -360,34 +345,6 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                 }
             }
         }
-        "stake" => {
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(amount_str) = filtered.first() {
-                if let Some(amount) = crate::commands::parse_amount(amount_str) {
-                    let tier = filtered.get(1).and_then(|s| s.parse::<u8>().ok());
-                    ResolvedCommand::Stake {
-                        account_index,
-                        tier,
-                        amount,
-                    }
-                } else {
-                    ResolvedCommand::Unknown {
-                        cmd: format!("stake: invalid amount {amount_str:?}"),
-                    }
-                }
-            } else {
-                ResolvedCommand::Unknown {
-                    cmd: "stake: need <amount>".to_string(),
-                }
-            }
-        }
-        "unstake" => ResolvedCommand::Unstake { account_index },
-        "claim" => ResolvedCommand::Claim { account_index },
-        "staking_info" => ResolvedCommand::StakingInfo { account_index },
         "chain_health" => ResolvedCommand::ChainHealth,
         "seed" => ResolvedCommand::Seed,
         "viewkey" => ResolvedCommand::Viewkey,

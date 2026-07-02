@@ -333,8 +333,8 @@ impl CurveTreeClient {
     ///
     /// `next_gindex = max(persisted gindex) + 1` (0 when empty) is
     /// absolute-exact on any chain whose root the wallet can verify:
-    /// consensus admits only tagged-key and staked-key outputs (both
-    /// leaf-eligible) and every output carries a commitment slot, so
+    /// consensus admits only tagged-key outputs (the claim-era staked-key
+    /// output type is retired) and every output carries a commitment slot, so
     /// gindex is dense over leaves. For the defensively-mirrored
     /// leaf-ineligible class (unreachable on a consensus-valid block) the
     /// guarantee degrades to order-isomorphism with the consensus leaf
@@ -346,7 +346,7 @@ impl CurveTreeClient {
     /// and rejected — schema surface for consensus-unreachable state.
     /// **Reopening criterion:** a consensus change admitting an output
     /// type that is not leaf-eligible (i.e., the daemon's
-    /// `check_output_types` accepted set grows beyond tagged/staked keys)
+    /// `check_output_types` accepted set grows beyond the tagged key)
     /// makes gindex sparse over leaves; that change must land the cursor
     /// as a store-meta field written by `append_block_deltas`, as schema
     /// work with its own KAT, before any such block can be ingested.
@@ -1502,9 +1502,10 @@ mod tests {
         // (height 5 coinbase, maturity 65) drains only on the orphaned
         // suffix block 66. Rollback to fork 65 must migrate it back to
         // pending so the new branch's block 66 drains the same row. The
-        // height-1 staked output pins the never-draining long-maturity half
-        // of the invariant: pending equality catches it even though no
-        // practical root window can.
+        // height-64 second coinbase (maturity 64 + COINBASE_LOCK_WINDOW,
+        // far past the 66-block window) pins the never-draining
+        // long-maturity half of the invariant: pending equality catches it
+        // even though no practical root window can.
         let mut orphaned = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut orphaned, 66);
         assert!(

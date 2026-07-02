@@ -6,13 +6,13 @@
 //! REPL command loop, dispatch, and shared helpers for shekyl-cli.
 
 mod balance;
+mod chain;
 mod keys;
 mod lifecycle;
 mod offline;
 mod payment_requests;
 mod proofs;
 mod sign;
-mod staking;
 mod transfers;
 
 use crate::daemon::DaemonClient;
@@ -57,10 +57,6 @@ Payment requests (FA-8, feature-flagged cooperative path):
   history incoming --unattributed     Show unattributed receives (stub)
 
 Staking:
-  stake <amount> [tier]               Stake SKL
-  unstake [--account N]               Unstake
-  claim [--account N]                 Claim staking rewards
-  staking_info [--account N]          Show staking status
   chain_health                        Show daemon/chain health (separate conn)
 
 Keys (secret-displaying commands excluded from history):
@@ -227,7 +223,7 @@ pub fn repl(
                                 } else {
                                     session.default_account = index;
                                     println!("Session default account is now {index}.");
-                                    println!("Destructive operations (sweep, stake, unstake, key export) still require --account explicitly.");
+                                    println!("Destructive operations (sweep, key export) still require --account explicitly.");
                                 }
                             }
                             Err(e) => eprintln!("Failed to get accounts: {e}"),
@@ -293,25 +289,8 @@ pub fn repl(
                         transfers::cmd_sweep_all(&ctx, account_index, &dest, priority);
                     }
 
-                    // Staking
-                    ResolvedCommand::Stake {
-                        account_index,
-                        tier,
-                        amount,
-                    } => {
-                        staking::cmd_stake(&ctx, account_index, tier, amount);
-                    }
-                    ResolvedCommand::Unstake { account_index } => {
-                        staking::cmd_unstake(&ctx, account_index);
-                    }
-                    ResolvedCommand::Claim { account_index } => {
-                        staking::cmd_claim(&ctx, account_index);
-                    }
-                    ResolvedCommand::StakingInfo { account_index } => {
-                        staking::cmd_staking_info(&ctx, account_index);
-                    }
                     ResolvedCommand::ChainHealth => {
-                        staking::cmd_chain_health(_daemon_client.as_ref());
+                        chain::cmd_chain_health(_daemon_client.as_ref());
                     }
 
                     // Keys
