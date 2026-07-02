@@ -7,6 +7,15 @@ on:
       - '**/README.md'
   workflow_dispatch:
 
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Without a concurrency group, every push to an open PR stacks a full new
+# run behind the old one — with the shared runner pool, repeated pushes
+# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
+# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+concurrency:
+  group: depends-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
