@@ -156,7 +156,7 @@ attack surface inside the wallet.
 
 Before any `PTorClient` is handed out, gate on Tor bootstrap = 100% (poll the bootstrap phase /
 subscribe to client-status events). Surface the phase to the UX (`82`: "Connecting to the network…",
-not a frozen wallet). Timeout → the §5 backoff/posture path, not a hang.
+not a frozen wallet). Timeout → the §3c backoff/posture path, not a hang.
 
 ### DQ-T0.4 — the measured circuit-ID disjointness test (SP-T1's measured half)
 
@@ -257,9 +257,13 @@ would detect**.
 
 ### DQ-T0.6 — failure handling
 
-Tor crash / control-socket drop / bootstrap timeout → the §5 liveness path (backoff + posture),
-**never a panic**. The `TorService` actor is the failure boundary; `PTorClient` construction
-**fails closed** — no silent fallback to a non-isolated connection.
+Tor crash / control-socket drop / bootstrap timeout → the **§3c supervisor/posture path**
+(backoff + posture, retry-forever with a loud `Degraded`), **never a panic**. The
+`TorService` supervisor is the failure boundary; `PTorClient` construction **fails closed**
+— no silent fallback to a non-isolated connection. The full pinned contract — posture
+states, restart classification, per-spawn re-verification, `SocksPort auto` — is §3c; its
+economic driver is the transport plan's §5 slash model (sustained-failure-gated: the risk
+is the *silent* unrecovered crash, not the crash).
 
 ### DQ-T0.7 — `DataDirectory` / cross-session guard posture (don't decide this by accident)
 
@@ -350,9 +354,9 @@ them in rather than discovers them:
   - **Cookie-file length.** `ControlCookie::new([u8; 32])` forces reading exactly 32
     bytes and rejecting a truncated/oversized `control_auth_cookie` at the boundary —
     keep it; do **not** add a `from_slice` escape hatch that bypasses it.
-  - **`Err` → teardown → §5.** Every `FramingError` is a desync with no safe resync
+  - **`Err` → teardown → §3c.** Every `FramingError` is a desync with no safe resync
     (the type says so); wire each to **DQ-T0.6**'s failure path so a desync
-    deterministically becomes the backoff/§5 posture, never a silent reconnect that
+    deterministically becomes the §3c backoff/posture, never a silent reconnect that
     retries into the same corruption.
 
 ### 3b. SP-T0b bootstrap readiness — the pinned contract (decided: internal GETINFO poll)
@@ -405,7 +409,7 @@ instead of a push, but bootstrap is a **one-time** startup event over tens of se
 3. **Detection (actor) vs policy (SP-T0b) — the same coupling discipline one level up.**
    *Detection:* the poll task parses `bootstrap-phase`, drives `BootstrapState`, publishes
    the watch — it knows Tor is at 100%, nothing more. *Policy:* SP-T0b's lifecycle owns
-   the deadline, the backoff, and timeout → `Failed` → §5; it `await`s the readiness bit
+   the deadline, the backoff, and timeout → `Failed` → §3c; it `await`s the readiness bit
    and acts on it, parsing nothing. The protocol knowledge lives in exactly one place, and
    both consumers *and* SP-T0b's own lifecycle depend only on the bit.
 4. **Managed-vs-attached child** on the `child` seam field: SP-T0b decides whether the
@@ -430,6 +434,81 @@ the shape.
 > `watch`, the measurement's *gate* can migrate to awaiting the bit — but its `SETEVENTS
 > STREAM` **never changes**, because under the poll design there is no `STATUS_CLIENT`
 > subscription and hence no union invariant. That bare subscription is correct for good.
+
+### 3c. DQ-T0.6 supervisor + posture — the pinned contract (decided 2026-07-02: retry-forever, auto-SOCKS)
+
+**The economic frame (why this exists, and what it must optimize).** The slash is
+**sliding-window `m`-of-`n`, sustained-failure-gated** (transport plan §5,
+`failure_confirmation.rs::run_sliding`): a single missed challenge window is absorbed;
+challenge cadence is epoch-scale while a tor restart is seconds — ~4 orders of magnitude of
+margin. So the slashing risk DQ-T0.6 defends against is **not the crash; it is the silent,
+unrecovered crash** (tor dies unattended, nothing retries, nobody is told, `m`-of-`n` trips
+days later). The design center, in order: **never-silent** (posture always reflects reality,
+degradation is loud), **never-unverified** (no respawn skips the SP-T0c gate),
+**always-retrying** (an unattended node that stopped trying is a guaranteed slash; one that
+keeps trying may self-heal). Backoff exists to avoid thrash, not to protect the network.
+
+**Shape: a `TorService` supervisor task in `shekyl-tor`, over per-incarnation `TorControl`
+actors.** The supervisor is a plain owned task (spawn incarnation → await its death or a
+shutdown signal → classify → publish posture → back off → respawn), *not* kameo's
+`SupervisedActorBuilder`: kameo 0.20's supervision has restart policies and a
+`restart_limit(n, within)` but **no backoff delay**, and its restart-by-arg-reuse cannot
+model our per-incarnation side effects (fresh readiness channel, re-run of the binary gate).
+The owned-task idiom is also the crate's existing style (the bootstrap poll task). Liveness
+policy lives in `shekyl-tor` because it is transport policy; the wallet layer consumes
+posture and owns only the UX mapping (`82`).
+
+**The posture contract (the SP-T1-facing API).** One **long-lived**
+`tokio::sync::watch<TorPosture>` owned by the supervisor and outliving every incarnation
+(the §3b per-incarnation `BootstrapState` watch becomes supervisor-internal):
+
+- `Starting` — an incarnation is being launched (gate + spawn in progress).
+- `Connecting { progress }` — bootstrapping (§3b telemetry passed through).
+- `Ready { socks_addr }` — usable; **the SOCKS endpoint is data on the posture channel**.
+  Consumers read it from `Ready` at use-time and never cache it, which makes every consumer
+  restart-safe *by construction* (a cached endpoint dies with its incarnation).
+- `Restarting { attempt, retry_in }` — died, will retry; normal-operations transient.
+- `Degraded { last }` — the restart limit tripped inside its window **but retries
+  continue** at the backoff cap. This is the operator-alarm hook (`82`), not a terminal
+  state: there is **no give-up state at all**. Rationale above; a bounded-then-stop
+  supervisor converts every unattended sustained transient into a certain slash.
+
+**SOCKS endpoint: `SocksPort auto`, discovered per incarnation.** A fixed port re-bind can
+race the dying incarnation's socket; `auto` (+ `GETINFO net/listeners/socks` after Ready —
+the same discovery dance the control port already does via `ControlPortWriteToFile`)
+eliminates the bind-conflict class and forces consumers onto the posture channel. The
+`ManagedTor` knob stays typed (`Auto` for production, `Fixed(u16)` for harnesses).
+
+**Restart classification (what retries, at what cadence):**
+
+- **Transient** — child crash / control-socket drop / desync teardown (§3a) / bootstrap
+  timeout / spawn I/O error → capped exponential backoff (~1s doubling to a ~60s cap), the
+  attempt counter resetting after a sustained `Ready` period. This is the path a staker's
+  liveness rides.
+- **Trust failure** — the SP-T0c gate refuses (`HashMismatch` — the binary changed under
+  us — `Unpinned`, `NotFound`, `NotAFile`, `NotExecutable`) → **no fast retry into an
+  untrusted binary**: immediate `Degraded` + a slow re-discovery cadence (minutes), which
+  is safe to retry forever because discovery never launches what it cannot verify — an
+  operator who reinstalls the pinned bundle gets auto-recovery without a restart.
+- **Clean stop** — caller-initiated shutdown → never restarted; the supervisor exits.
+
+**Every spawn re-runs the SP-T0c gate.** `VerifiedTorBinary` is a point-in-time witness; a
+respawn hours later (after, say, a package update replaced `tor`) through a retained witness
+is exactly the TOCTOU-respawn gap the SP-T0c review named. The supervisor holds discovery
+*inputs*, not a cached witness, and re-verifies (~3.6 MB hash) per incarnation. The rule-21
+`fexecve` reopen anchor (DQ-T0.5) is unchanged.
+
+**`DataDirectory` persists across restarts** — every incarnation reuses the same dir, so the
+guard set survives supervision (consistent with DQ-T0.7's lean; a fresh dir per restart
+would set guard-rotation policy *by accident*, the exact failure DQ-T0.7 exists to prevent).
+
+**Detection vs policy, one level up (the §3b discipline).** The incarnation actor *detects*
+and fails fast (it already stops on desync/EOF/spawn failure — never reconnects into a
+desync); the supervisor owns *policy* (classification, backoff, posture). Nothing inside
+the actor grows retry logic.
+
+**Out of scope here:** the UX rendering of `Degraded` (wallet layer, `82`), and
+serving-layer miss accounting (transport plan §5/§6) — both consume the posture watch.
 
 ---
 
@@ -546,3 +625,17 @@ the shape.
   open sub-decision left for the build: the poll task's own error contract (recommended — publish
   `BootstrapState::Failed` and exit on a mid-poll `SendError`, so readiness never hangs). Corrected the
   §5 build-order line and the PR-217 harness comment to match; the fossil is caught before SP-T0b builds.
+- **2026-07-02 (§3c pinned — DQ-T0.6 supervisor + posture, retry-forever / auto-SOCKS):** the "§5
+  liveness path" pointer was dangling — this doc's §5 is build-order and the transport plan's §5 is the
+  slash model; the backoff/posture contract itself was never written. Pinned as §3c: a `TorService`
+  supervisor **task** in `shekyl-tor` (not kameo supervision — no backoff delay, arg-reuse restarts
+  can't model per-incarnation side effects) over per-incarnation `TorControl` actors; one long-lived
+  `watch<TorPosture>` (`Starting`/`Connecting`/`Ready{socks_addr}`/`Restarting`/`Degraded{last}`) with
+  the SOCKS endpoint as *data on the channel* (`SocksPort auto` + `GETINFO net/listeners/socks`;
+  consumers never cache); restart classification (transient → 1s→60s capped backoff; trust failure →
+  no fast retry into an untrusted binary, slow re-discovery; clean stop → no restart); **no give-up
+  state** — after the restart limit, `Degraded` alarms but retries continue (an unattended stopped
+  node is a guaranteed `m`-of-`n` slash; a retrying one may self-heal); **every spawn re-runs the
+  SP-T0c gate** (the witness is point-in-time — closes the TOCTOU-respawn note); `DataDirectory`
+  persists across restarts (else DQ-T0.7 is decided by accident). Repointed the four dangling §5 refs
+  (DQ-T0.3, DQ-T0.6, §3a teardown, §3b policy) to §3c.
