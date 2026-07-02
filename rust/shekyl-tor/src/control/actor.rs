@@ -319,8 +319,15 @@ pub struct ManagedTor {
     /// posture as `disable_network` below). Tests inject an unpinned tor via the
     /// loudly-named `VerifiedTorBinary::unchecked_for_test`.
     pub tor_binary: VerifiedTorBinary,
-    /// Wallet-private `DataDirectory`. (DQ-T0.7's guard-persistence nuance is deferred;
-    /// a wallet-private dir is the safe default until that decision lands.)
+    /// Wallet-private `DataDirectory` — **persistent across wallet sessions**
+    /// (DQ-T0.7, decided): the dir carries tor's entry-guard identity (`state`),
+    /// and reusing it is what keeps the guard set stable (rotating it per session
+    /// would multiply malicious-guard draws and be a deviation-from-defaults
+    /// signature). Placement contract: wallet-adjacent, wallet-controlled,
+    /// **non-world-writable** (also the SP-T0c TOCTOU layout requirement); tor
+    /// tightens it to `0700`. At-rest protection is *inherited* from the storage
+    /// the wallet lives on — tor reads plaintext, so the wallet's file envelope
+    /// cannot cover it (disclosed in the design doc's DQ-T0.7).
     pub data_dir: PathBuf,
     /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it. Production (the
     /// §3c supervisor) uses [`SocksPort::Auto`] and discovers the bound address via

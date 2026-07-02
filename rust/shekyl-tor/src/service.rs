@@ -302,8 +302,12 @@ impl TorBinarySource {
 pub struct TorServiceConfig {
     /// Per-incarnation binary source (the gate re-runs every spawn).
     pub binary: TorBinarySource,
-    /// The wallet-private `DataDirectory`, reused across incarnations (guards
-    /// persist — DQ-T0.7 must not be decided by a restart).
+    /// The wallet-private `DataDirectory`, reused across incarnations **and
+    /// across wallet sessions** (DQ-T0.7, decided: persistent — the dir carries
+    /// the entry-guard identity, and stability is the privacy-preserving
+    /// posture). The caller supplies a wallet-adjacent, wallet-controlled,
+    /// non-world-writable path and hands the *same* path every session; see
+    /// `ManagedTor::data_dir` for the full contract.
     pub data_dir: PathBuf,
     /// The long-lived async-event sink, cloned into each incarnation.
     pub events: EventSink,
