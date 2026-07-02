@@ -660,7 +660,7 @@ jobs:
         # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
         # because other crates carry pre-existing rustdoc warnings; widening this
         # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
-        run: RUSTDOCFLAGS="-D warnings" cargo doc -p shekyl-tor --no-deps --lib
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked -p shekyl-tor --no-deps --lib
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

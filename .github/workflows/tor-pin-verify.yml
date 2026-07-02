@@ -88,7 +88,7 @@ jobs:
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
           SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
-            cargo test -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
+            cargo test --locked -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
           # libtest exits 0 even if every test was filtered out, so guard the
           # FULL pinned-tor set — not just the pin KAT. Floor = the current
           # linux/x86_64 ignored-test count (6: pin + 2 actor + 3 supervisor);
