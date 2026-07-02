@@ -120,14 +120,12 @@ namespace cryptonote
         next_check = candidate;
     }
 
-    // Extract the key_image from a txin_v that is either txin_to_key or
-    // txin_stake_claim.  Returns nullptr for any other variant (txin_gen).
+    // Extract the key_image from a txin_v that is txin_to_key.
+    // Returns nullptr for any other variant (txin_gen, archival vins).
     const crypto::key_image* get_key_image(const txin_v& in)
     {
       if (std::holds_alternative<txin_to_key>(in))
         return &std::get<txin_to_key>(in).k_image;
-      if (std::holds_alternative<txin_stake_claim>(in))
-        return &std::get<txin_stake_claim>(in).k_image;
       return nullptr;
     }
   }

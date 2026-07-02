@@ -102,25 +102,6 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // outputs >= HF_VERSION_SHEKYL_NG — staked outputs with enforced lock period
-  struct txout_to_staked_key
-  {
-    txout_to_staked_key() : lock_tier(0) { }
-    txout_to_staked_key(const crypto::public_key &_key, const crypto::view_tag &_view_tag, uint8_t _tier)
-      : key(_key), view_tag(_view_tag), lock_tier(_tier) { }
-    crypto::public_key key;
-    crypto::view_tag view_tag;
-    uint8_t lock_tier;       // 0=short, 1=medium, 2=long
-    // effective_lock_until is computed dynamically as creation_height + tier_lock_blocks.
-    // Not stored on-chain — eliminates the signing-time/mining-time mismatch.
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(key)
-      FIELD(view_tag)
-      FIELD(lock_tier)
-    END_SERIALIZE()
-  };
-
   /* inputs */
 
   struct txin_gen
@@ -169,23 +150,6 @@ namespace cryptonote
     BEGIN_SERIALIZE_OBJECT()
       VARINT_FIELD(amount)
       FIELD(key_offsets)
-      FIELD(k_image)
-    END_SERIALIZE()
-  };
-
-  struct txin_stake_claim
-  {
-    uint64_t amount;                // claimed reward amount
-    uint64_t staked_output_index;   // global output index of the staked output
-    uint64_t from_height;           // claim range start (exclusive: last_claimed_height)
-    uint64_t to_height;             // claim range end (inclusive)
-    crypto::key_image k_image;      // prevents double-claim for this range
-
-    BEGIN_SERIALIZE_OBJECT()
-      VARINT_FIELD(amount)
-      VARINT_FIELD(staked_output_index)
-      VARINT_FIELD(from_height)
-      VARINT_FIELD(to_height)
       FIELD(k_image)
     END_SERIALIZE()
   };
@@ -313,9 +277,9 @@ namespace cryptonote
   };
 
 
-  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
 
-  typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
+  typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
 
   //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
@@ -700,7 +664,6 @@ namespace cryptonote
       size_t operator()(const txin_to_script& txin) const{return 0;}
       size_t operator()(const txin_to_scripthash& txin) const{return 0;}
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
-      size_t operator()(const txin_stake_claim& txin) const {return 1;}
       size_t operator()(const txin_archival_serve_credit_response& txin) const {return 0;}
       size_t operator()(const txin_archival_bond_post& txin) const {return 0;}
     };
@@ -857,14 +820,12 @@ VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0x00);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0xf0);          // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0xf1);      // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x01);             // fcmp spend
-VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0xf2);        // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x02);
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x03);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0xf0);         // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0xf1);     // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0xf2);            // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x00);     // sole genesis output
-VARIANT_TAG(binary_archive, cryptonote::txout_to_staked_key, 0xf3);     // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::transaction, 0xcc);
 VARIANT_TAG(binary_archive, cryptonote::block, 0xbb);
 
@@ -872,14 +833,12 @@ VARIANT_TAG(json_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(json_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
-VARIANT_TAG(json_archive, cryptonote::txin_stake_claim, "stake_claim");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txout_to_tagged_key, "tagged_key");
-VARIANT_TAG(json_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(json_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(json_archive, cryptonote::block, "block");
 
@@ -887,13 +846,11 @@ VARIANT_TAG(debug_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
-VARIANT_TAG(debug_archive, cryptonote::txin_stake_claim, "stake_claim");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_tagged_key, "tagged_key");
-VARIANT_TAG(debug_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(debug_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(debug_archive, cryptonote::block, "block");

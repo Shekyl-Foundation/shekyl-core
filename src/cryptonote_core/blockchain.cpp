@@ -213,14 +213,6 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_hash(crypto::null_hash),
   m_long_term_block_weights_cache_rolling_median(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
-  m_stake_ratio_cache_initialized(false),
-  m_stake_ratio_cache_height(0),
-  m_stake_ratio_cache_total_staked(0),
-  m_stake_ratio_cache_total_weighted_lo(0),
-  m_stake_ratio_cache_total_weighted_hi(0),
-  m_stake_ratio_cache_last_block_hash(crypto::null_hash),
-  m_stake_unlock_schedule(),
-  m_stake_unlock_schedule_weighted(),
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
@@ -806,28 +798,14 @@ block Blockchain::pop_block_from_blockchain()
   {
     db_wtxn_guard wtxn_guard(m_db);
     const uint64_t popped_height = m_db->height();
-    auto accrual = m_db->get_staker_accrual(popped_height);
-    const uint64_t accrued = accrual.staker_emission + accrual.staker_fee_pool;
-    const bool had_stakers = (accrual.total_weighted_stake_lo | accrual.total_weighted_stake_hi) != 0;
-
-    if (accrued > 0 || accrual.actually_destroyed > 0)
+    const uint64_t destroyed = m_db->get_block_burn(popped_height);
+    if (destroyed > 0)
     {
-      if (had_stakers && accrued > 0)
-      {
-        uint64_t pool_balance = m_db->get_staker_pool_balance();
-        pool_balance = (accrued <= pool_balance) ? pool_balance - accrued : 0;
-        m_db->set_staker_pool_balance(pool_balance);
-      }
-
-      if (accrual.actually_destroyed > 0)
-      {
-        uint64_t total_burned = m_db->get_total_burned();
-        total_burned = (accrual.actually_destroyed <= total_burned) ? total_burned - accrual.actually_destroyed : 0;
-        m_db->set_total_burned(total_burned);
-      }
-
-      m_db->remove_staker_accrual(popped_height);
+      uint64_t total_burned = m_db->get_total_burned();
+      total_burned = (destroyed <= total_burned) ? total_burned - destroyed : 0;
+      m_db->set_total_burned(total_burned);
     }
+    m_db->remove_block_burn(popped_height);
   }
 
   return popped_block;
@@ -1584,7 +1562,10 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t median_weight = m_current_block_cumul_weight_median;
   const uint64_t tx_volume_avg = get_tx_volume_avg(block_height);
   const uint64_t circulating_supply = already_generated_coins;
-  const uint64_t stake_ratio = get_stake_ratio(block_height);
+  // Claim-era staked-output aggregation is retired; with no staked-output
+  // type on the wire the ratio is identically zero. The archival-bond-based
+  // total_staked feed lands with the 2b reward-emission consensus work (C-1).
+  const uint64_t stake_ratio = 0;
 
   if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume_avg))
   {
@@ -1900,7 +1881,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   size_t max_outs = 1;
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
-  const uint64_t stake_ratio = get_stake_ratio(height);
+  const uint64_t stake_ratio = 0; // claim-era source retired; see validate_miner_transaction
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
@@ -2014,144 +1995,6 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   }
 
   return tx_count_sum / blocks;
-}
-//------------------------------------------------------------------
-uint64_t Blockchain::get_stake_ratio(uint64_t height) const
-{
-  if (height == 0)
-    return 0;
-
-  const uint64_t circulating_supply = m_db->get_block_already_generated_coins(height - 1);
-  if (circulating_supply == 0)
-    return 0;
-
-  const auto reset_stake_ratio_cache = [&]()
-  {
-    m_stake_ratio_cache_initialized = true;
-    m_stake_ratio_cache_height = 0;
-    m_stake_ratio_cache_total_staked = 0;
-    m_stake_ratio_cache_total_weighted_lo = 0;
-    m_stake_ratio_cache_total_weighted_hi = 0;
-    m_stake_ratio_cache_last_block_hash = crypto::null_hash;
-    m_stake_unlock_schedule.clear();
-    m_stake_unlock_schedule_weighted.clear();
-  };
-
-  if (!m_stake_ratio_cache_initialized || height < m_stake_ratio_cache_height)
-    reset_stake_ratio_cache();
-
-  if (m_stake_ratio_cache_height > 0)
-  {
-    const crypto::hash cached_tip_hash = m_db->get_block_hash_from_height(m_stake_ratio_cache_height - 1);
-    if (cached_tip_hash != m_stake_ratio_cache_last_block_hash)
-      reset_stake_ratio_cache();
-  }
-
-  auto add_staked_outputs = [&](const transaction &tx, uint64_t creation_height, uint64_t eval_height)
-  {
-    for (const auto &out : tx.vout)
-    {
-      const auto *staked = std::get_if<txout_to_staked_key>(&out.target);
-      if (!staked)
-        continue;
-      const uint64_t effective_lock_until = creation_height + shekyl_stake_lock_blocks(staked->lock_tier);
-      // Inclusive upper bound: output accrues through block lock_until,
-      // matching the claim validation which accepts to_height <= lock_until.
-      if (effective_lock_until < eval_height)
-        continue;
-
-      const uint64_t raw = out.amount;
-      const uint64_t weighted = shekyl_stake_weight(raw, staked->lock_tier);
-
-      // Raw total is bounded by total supply which fits in u64 by design
-      if (raw > UINT64_MAX - m_stake_ratio_cache_total_staked)
-        m_stake_ratio_cache_total_staked = UINT64_MAX;
-      else
-        m_stake_ratio_cache_total_staked += raw;
-
-      // Weighted total uses 128-bit to avoid saturation at moderate adoption
-      {
-        uint64_t old_lo = m_stake_ratio_cache_total_weighted_lo;
-        m_stake_ratio_cache_total_weighted_lo += weighted;
-        if (m_stake_ratio_cache_total_weighted_lo < old_lo)
-          m_stake_ratio_cache_total_weighted_hi += 1; // carry
-      }
-
-      // Schedule subtraction at lock_until + 1 so the output accrues through
-      // block lock_until (inclusive), matching claim's to_height <= lock_until.
-      const uint64_t unlock_height = effective_lock_until + 1;
-      uint64_t &sched_raw = m_stake_unlock_schedule[unlock_height];
-      if (raw > UINT64_MAX - sched_raw) sched_raw = UINT64_MAX;
-      else sched_raw += raw;
-
-      auto &sched_w = m_stake_unlock_schedule_weighted[unlock_height];
-      {
-        uint64_t old_lo = sched_w.first;
-        sched_w.first += weighted;
-        if (sched_w.first < old_lo)
-          sched_w.second += 1; // carry
-      }
-    }
-  };
-
-  while (m_stake_ratio_cache_height < height)
-  {
-    const uint64_t next_eval_height = m_stake_ratio_cache_height + 1;
-    auto unlock_it = m_stake_unlock_schedule.find(next_eval_height);
-    if (unlock_it != m_stake_unlock_schedule.end())
-    {
-      if (unlock_it->second >= m_stake_ratio_cache_total_staked)
-        m_stake_ratio_cache_total_staked = 0;
-      else
-        m_stake_ratio_cache_total_staked -= unlock_it->second;
-      m_stake_unlock_schedule.erase(unlock_it);
-    }
-
-    auto unlock_w_it = m_stake_unlock_schedule_weighted.find(next_eval_height);
-    if (unlock_w_it != m_stake_unlock_schedule_weighted.end())
-    {
-      const auto &sub = unlock_w_it->second;
-      // 128-bit subtraction: total -= sub, clamped to 0
-      if (sub.second > m_stake_ratio_cache_total_weighted_hi ||
-          (sub.second == m_stake_ratio_cache_total_weighted_hi && sub.first >= m_stake_ratio_cache_total_weighted_lo))
-      {
-        m_stake_ratio_cache_total_weighted_lo = 0;
-        m_stake_ratio_cache_total_weighted_hi = 0;
-      }
-      else
-      {
-        uint64_t borrow = (m_stake_ratio_cache_total_weighted_lo < sub.first) ? 1 : 0;
-        m_stake_ratio_cache_total_weighted_lo -= sub.first;
-        m_stake_ratio_cache_total_weighted_hi -= sub.second + borrow;
-      }
-      m_stake_unlock_schedule_weighted.erase(unlock_w_it);
-    }
-
-    const block blk = m_db->get_block_from_height(m_stake_ratio_cache_height);
-    add_staked_outputs(blk.miner_tx, m_stake_ratio_cache_height, next_eval_height);
-
-    if (!blk.tx_hashes.empty())
-    {
-      std::vector<transaction> txs;
-      std::vector<crypto::hash> missed_txs;
-      if (get_transactions(blk.tx_hashes, txs, missed_txs, true))
-      {
-        for (const auto &tx : txs)
-          add_staked_outputs(tx, m_stake_ratio_cache_height, next_eval_height);
-      }
-    }
-
-    m_stake_ratio_cache_last_block_hash = m_db->get_block_hash_from_height(m_stake_ratio_cache_height);
-    m_stake_ratio_cache_height = next_eval_height;
-  }
-
-  return shekyl_calc_stake_ratio(m_stake_ratio_cache_total_staked, circulating_supply);
-}
-//------------------------------------------------------------------
-uint64_t Blockchain::get_total_staked(uint64_t height) const
-{
-  get_stake_ratio(height);
-  return m_stake_ratio_cache_total_staked;
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete
@@ -3283,16 +3126,6 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
     {
       return false;
     }
-    bool operator()(const txin_stake_claim& in) const
-    {
-      const crypto::key_image& ki = in.k_image;
-      auto r = m_spent_keys.insert(ki);
-      if(!r.second || m_db->has_key_image(ki))
-      {
-        return false;
-      }
-      return true;
-    }
     bool operator()(const txin_archival_serve_credit_response& in) const
     {
       (void)in;
@@ -3481,23 +3314,6 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 
   for (const auto &o : tx.vout)
   {
-    if (std::holds_alternative<txout_to_staked_key>(o.target))
-    {
-      const auto &staked = std::get<txout_to_staked_key>(o.target);
-      if (staked.lock_tier > 2)
-      {
-        MERROR_VER("Invalid staking tier " << (int)staked.lock_tier << " (must be 0, 1, or 2)");
-        tvc.m_invalid_output = true;
-        return false;
-      }
-      const uint64_t expected_lock_blocks = shekyl_stake_lock_blocks(staked.lock_tier);
-      if (expected_lock_blocks == 0)
-      {
-        MERROR_VER("Unknown lock duration for tier " << (int)staked.lock_tier);
-        tvc.m_invalid_output = true;
-        return false;
-      }
-    }
   }
 
   // Commitment mask validation: reject trivial masks (mask=0 or mask=1).
@@ -3520,11 +3336,6 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
     if (std::holds_alternative<txin_to_key>(in))
     {
       if (have_tx_keyimg_as_spent(std::get<txin_to_key>(in).k_image))
-        return true;
-    }
-    else if (std::holds_alternative<txin_stake_claim>(in))
-    {
-      if (have_tx_keyimg_as_spent(std::get<txin_stake_claim>(in).k_image))
         return true;
     }
   }
@@ -3559,24 +3370,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   const uint8_t hf_version = m_hardfork->get_current_version();
   const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
 
-  // Detect pure stake-claim transactions: all inputs are txin_stake_claim.
-  // These use RCTTypeFcmpPlusPlusPqc for confidential outputs but bypass
-  // the FCMP++ membership proof (claims reference staked outputs by global
-  // index, not by tree path).
-  bool is_stake_claim_only = false;
   bool is_archival_serve_credit_only = false;
   bool is_archival_bond_post_tx = false;
   size_t archival_bond_post_index = 0;
   if (!tx.vin.empty())
   {
-    is_stake_claim_only = true;
     is_archival_serve_credit_only = true;
     size_t bond_post_count = 0;
     for (size_t i = 0; i < tx.vin.size(); ++i)
     {
       const auto& vin = tx.vin[i];
-      if (!std::holds_alternative<txin_stake_claim>(vin))
-        is_stake_claim_only = false;
       if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
         is_archival_serve_credit_only = false;
       if (std::holds_alternative<txin_archival_bond_post>(vin))
@@ -3642,8 +3445,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       const crypto::key_image* ki = nullptr;
       if (std::holds_alternative<txin_to_key>(txin))
         ki = &std::get<txin_to_key>(txin).k_image;
-      else if (std::holds_alternative<txin_stake_claim>(txin))
-        ki = &std::get<txin_stake_claim>(txin).k_image;
 
       if (ki)
       {
@@ -3666,12 +3467,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;
 
-  if (is_stake_claim_only)
-  {
-    // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
-    // validation (no membership proof needed for claims).
-  }
-  else if (is_archival_serve_credit_only)
+  if (is_archival_serve_credit_only)
   {
     // Serve-credit responses: non-spending archival vins; hybrid signature
     // lives on the vin (gate-2 §5).
@@ -3802,88 +3598,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           if (!check_archival_serve_credit_input(resp, chain_height))
           {
             MERROR_VER("Archival serve-credit validation failed for input " << i);
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-        }
-      }
-      else if (is_stake_claim_only)
-      {
-        // ── Stake claim path: bypass FCMP++ proof, validate claims ────
-        // Claim txs use RCTTypeFcmpPlusPlusPqc for confidential outputs
-        // but have no membership proof (inputs reference staked outputs
-        // by global index). BP+ and balance are checked by
-        // verRctSemanticsSimple in the batch verification path.
-
-        // Verify pseudo-outs are deterministic zero-commitments to claim amounts
-        for (size_t i = 0; i < num_inputs; ++i)
-        {
-          const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
-          const rct::key expected = rct::zeroCommit(claim.amount);
-          if (rv.p.pseudoOuts[i] != expected)
-          {
-            MERROR_VER("Claim tx " << get_transaction_hash(tx)
-              << " pseudoOut[" << i << "] does not match zeroCommit(claim_amount)");
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-        }
-
-        // Validate each claim and cross-check PQC ownership
-        for (size_t i = 0; i < num_inputs; ++i)
-        {
-          const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
-
-          if (have_tx_keyimg_as_spent(claim.k_image))
-          {
-            MERROR_VER("Stake claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
-            tvc.m_double_spend = true;
-            return false;
-          }
-
-          uint8_t leaf_h_pqc[32];
-          if (!check_stake_claim_input(claim, chain_height, leaf_h_pqc))
-          {
-            MERROR_VER("Stake claim validation failed for staked output " << claim.staked_output_index);
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-
-          uint8_t expected_h_pqc[32];
-          const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), expected_h_pqc))
-          {
-            MERROR_VER("Failed to compute PQC leaf hash for stake claim input " << i);
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-          if (memcmp(leaf_h_pqc, expected_h_pqc, 32) != 0)
-          {
-            MERROR_VER("PQC ownership mismatch for stake claim at output " << claim.staked_output_index
-              << ": leaf H(pqc_pk) does not match pqc_auths[" << i << "]");
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-        }
-
-        // Batch pool balance check
-        uint64_t total_claimed = 0;
-        for (const auto& vin : tx.vin)
-        {
-          const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
-          if (total_claimed + claim.amount < total_claimed)
-          {
-            MERROR_VER("Stake claim total amount overflow");
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-          total_claimed += claim.amount;
-        }
-        {
-          const uint64_t pool_balance = m_db->get_staker_pool_balance();
-          if (total_claimed > pool_balance)
-          {
-            MERROR_VER("Total stake claims " << total_claimed << " exceed pool balance " << pool_balance);
             tvc.m_verifivation_failed = true;
             return false;
           }
@@ -4426,188 +4140,6 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
   crypto::hash result;
   crypto::cn_fast_hash(buf.data(), buf.size(), result);
   return result;
-}
-//------------------------------------------------------------------
-bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-
-  const uint64_t max_claim_range = shekyl_stake_max_claim_range();
-
-  if (claim.to_height > current_height)
-  {
-    MERROR_VER("Claim to_height " << claim.to_height << " exceeds current height " << current_height);
-    return false;
-  }
-
-  if (claim.from_height >= claim.to_height)
-  {
-    MERROR_VER("Claim from_height " << claim.from_height << " must be less than to_height " << claim.to_height);
-    return false;
-  }
-
-  if (claim.to_height - claim.from_height > max_claim_range)
-  {
-    MERROR_VER("Claim range " << (claim.to_height - claim.from_height) << " exceeds maximum " << max_claim_range);
-    return false;
-  }
-
-  uint64_t watermark = m_db->get_staker_claim_watermark(claim.staked_output_index);
-
-  tx_out_index oi = m_db->get_output_tx_and_index_from_global(claim.staked_output_index);
-  const uint64_t creation_height = m_db->get_tx_block_height(oi.first);
-
-  if (watermark > 0)
-  {
-    if (claim.from_height != watermark)
-    {
-      MERROR_VER("Claim from_height " << claim.from_height << " does not match watermark " << watermark);
-      return false;
-    }
-  }
-  else
-  {
-    if (claim.from_height < creation_height)
-    {
-      MERROR_VER("First claim from_height " << claim.from_height
-        << " is before staked output creation height " << creation_height);
-      return false;
-    }
-  }
-  transaction staked_tx;
-  if (!m_db->get_tx(oi.first, staked_tx))
-  {
-    MERROR_VER("Cannot find transaction for staked output index " << claim.staked_output_index);
-    return false;
-  }
-  if (oi.second >= staked_tx.vout.size())
-  {
-    MERROR_VER("Output index " << oi.second << " out of range for tx with " << staked_tx.vout.size() << " outputs");
-    return false;
-  }
-  const tx_out& staked_out = staked_tx.vout[oi.second];
-  uint8_t staked_tier = 0;
-  if (!get_output_staking_info(staked_out, staked_tier))
-  {
-    MERROR_VER("Claimed output " << claim.staked_output_index << " is not a staked output");
-    return false;
-  }
-
-  const uint64_t staked_lock_until = creation_height + shekyl_stake_lock_blocks(staked_tier);
-
-  // Accrual cap: rewards accrue only during the committed lock period.
-  // Combined with the to_height <= current_height check above, this
-  // enforces to_height <= min(current_height, effective_lock_until).
-  // NOTE: there is intentionally no rejection for lock_until > current_height.
-  // The principal lock gates spendability (unstake), not reward claimability.
-  if (claim.to_height > staked_lock_until)
-  {
-    MERROR_VER("Claim to_height " << claim.to_height
-      << " exceeds staked output effective_lock_until " << staked_lock_until
-      << " (creation " << creation_height << " + tier " << (int)staked_tier << ")"
-      << " for output " << claim.staked_output_index);
-    return false;
-  }
-
-  // Verify the staked output is present in the curve tree by looking up its
-  // output→leaf mapping. This is the definitive check — an output is "in the
-  // tree" iff it has a mapping entry (written during drain).
-  uint8_t leaf_data[128];
-  if (!m_db->get_curve_tree_leaf_by_output_index(claim.staked_output_index, leaf_data))
-  {
-    MERROR_VER("Staked output " << claim.staked_output_index
-      << " is not in the curve tree (no output→leaf mapping)");
-    return false;
-  }
-
-  // Recompute the expected leaf from the staked output's public data and
-  // verify bytewise equality with the stored leaf.  This binds the claim to
-  // the actual output: without it, any staked_output_index that has a
-  // mapping entry would pass the gate, even if the stored leaf belongs to a
-  // different output (which can't happen if the schema is correct, but the
-  // whole point of defense-in-depth is not trusting the schema).
-  {
-    crypto::public_key output_key{};
-    if (std::holds_alternative<txout_to_staked_key>(staked_out.target))
-      output_key = std::get<txout_to_staked_key>(staked_out.target).key;
-    else if (std::holds_alternative<txout_to_tagged_key>(staked_out.target))
-      output_key = std::get<txout_to_tagged_key>(staked_out.target).key;
-    else if (std::holds_alternative<txout_to_key>(staked_out.target))
-      output_key = std::get<txout_to_key>(staked_out.target).key;
-    else
-    {
-      MERROR_VER("Staked output " << claim.staked_output_index << " has unrecognized target type");
-      return false;
-    }
-
-    if (oi.second >= staked_tx.rct_signatures.outPk.size())
-    {
-      MERROR_VER("Staked output " << claim.staked_output_index
-        << " has no commitment (outPk index " << oi.second << " out of range)");
-      return false;
-    }
-    const rct::key& commitment = staked_tx.rct_signatures.outPk[oi.second].mask;
-
-    uint8_t expected_leaf[128];
-    if (!shekyl_construct_curve_tree_leaf(
-          reinterpret_cast<const uint8_t*>(&output_key),
-          commitment.bytes,
-          leaf_data + 96,
-          expected_leaf))
-    {
-      MERROR_VER("Failed to reconstruct curve tree leaf for staked output " << claim.staked_output_index);
-      return false;
-    }
-
-    if (memcmp(leaf_data, expected_leaf, 128) != 0)
-    {
-      MERROR_VER("Curve tree leaf mismatch for staked output " << claim.staked_output_index
-        << " — stored leaf does not match recomputed leaf from output data");
-      return false;
-    }
-  }
-
-  if (out_leaf_h_pqc)
-    memcpy(out_leaf_h_pqc, leaf_data + 96, 32);
-
-  uint64_t staked_amount = staked_out.amount;
-  if (staked_amount == 0 && staked_tx.version >= 2)
-  {
-    MERROR_VER("Cannot determine staked amount for RCT output in claim validation (output " << claim.staked_output_index << ")");
-    return false;
-  }
-
-  uint64_t computed_reward = 0;
-  for (uint64_t h = claim.from_height + 1; h <= claim.to_height; ++h)
-  {
-    auto accrual = m_db->get_staker_accrual(h);
-    uint64_t total_reward_at_h = accrual.staker_emission + accrual.staker_fee_pool;
-    if (total_reward_at_h == 0 || (accrual.total_weighted_stake_lo | accrual.total_weighted_stake_hi) == 0)
-      continue;
-
-    uint64_t weight = shekyl_stake_weight(staked_amount, staked_tier);
-    {
-      uint8_t reward_overflow = 0;
-      uint64_t q_lo = shekyl_calc_per_block_staker_reward(
-        total_reward_at_h, weight,
-        accrual.total_weighted_stake_lo, accrual.total_weighted_stake_hi,
-        &reward_overflow);
-      if (reward_overflow != 0)
-      {
-        MERROR_VER("Stake claim reward overflow for staked output " << claim.staked_output_index << " at height " << h);
-        return false;
-      }
-      computed_reward += q_lo;
-    }
-  }
-
-  if (claim.amount != computed_reward)
-  {
-    MERROR_VER("Claim amount " << claim.amount << " does not match computed reward " << computed_reward);
-    return false;
-  }
-
-  return true;
 }
 //------------------------------------------------------------------
 namespace
@@ -5331,45 +4863,6 @@ leave:
     cumulative_block_weight = m_blocks_hash_check[blockchain_height].second;
   }
 
-  // Block-level aggregate pool sufficiency check: the sum of all claim
-  // amounts across ALL transactions in this block must not exceed the pool.
-  // Individual per-tx checks in check_tx_inputs each see the pre-block
-  // balance, so N small claims that individually pass can collectively
-  // exceed the pool. This check closes that race.
-  {
-    uint64_t block_total_claims = 0;
-    for (const auto &tx_pair : txs)
-    {
-      for (const auto &vin : tx_pair.first.vin)
-      {
-        if (std::holds_alternative<txin_stake_claim>(vin))
-        {
-          const auto &claim = std::get<txin_stake_claim>(vin);
-          if (block_total_claims + claim.amount < block_total_claims)
-          {
-            MERROR_VER("Block " << id << " aggregate claim overflow");
-            bvc.m_verifivation_failed = true;
-            return_txs_to_pool();
-            return false;
-          }
-          block_total_claims += claim.amount;
-        }
-      }
-    }
-    if (block_total_claims > 0)
-    {
-      const uint64_t pool_balance = m_db->get_staker_pool_balance();
-      if (block_total_claims > pool_balance)
-      {
-        MERROR_VER("Block " << id << " aggregate claims " << block_total_claims
-          << " exceed staker pool balance " << pool_balance);
-        bvc.m_verifivation_failed = true;
-        return_txs_to_pool();
-        return false;
-      }
-    }
-  }
-
   // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
   // duplicate (P, shard, E) credits across multiple txs in the same block.
   {
@@ -5501,33 +4994,21 @@ leave:
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
         full_block_emission, blockchain_height, genesis_ng_height, m_hardfork->get_current_version());
 
-    uint64_t stake_ratio_at_height = get_stake_ratio(blockchain_height);
     shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, 0, prev_already_generated, stake_ratio_at_height, m_hardfork->get_current_version());
+        fee_summary, 0, prev_already_generated, /*stake_ratio*/ 0, m_hardfork->get_current_version());
 
+    // The staker inflow (emission split share + fee-pool share) is burned:
+    // the claim-era pool that once accrued it is retired, and the archival
+    // reward-emission leg (2b, C-1 activation) is where this inflow gets
+    // redirected to fund `txin_archival_reward_emission` payouts. Until that
+    // cutover the shares are destroyed, exactly as the no-staker branch
+    // always did on a chain with no claim-era staked outputs.
     const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
-    const bool has_stakers = (m_stake_ratio_cache_total_weighted_lo | m_stake_ratio_cache_total_weighted_hi) != 0;
+    burn.actually_destroyed += staker_inflow;
 
-    if (has_stakers)
-    {
-      uint64_t pool_balance = m_db->get_staker_pool_balance();
-      pool_balance += staker_inflow;
-      m_db->set_staker_pool_balance(pool_balance);
-    }
-    else if (staker_inflow > 0)
-    {
-      burn.actually_destroyed += staker_inflow;
-    }
-
-    // Persist the accrual record AFTER the no-staker burn decision so
-    // actually_destroyed reflects the full amount (including burned inflow).
-    BlockchainDB::staker_accrual_record accrual_record;
-    accrual_record.staker_emission = em_split.staker_emission;
-    accrual_record.staker_fee_pool = burn.staker_pool_amount;
-    accrual_record.total_weighted_stake_lo = m_stake_ratio_cache_total_weighted_lo;
-    accrual_record.total_weighted_stake_hi = m_stake_ratio_cache_total_weighted_hi;
-    accrual_record.actually_destroyed = burn.actually_destroyed;
-    m_db->add_staker_accrual(blockchain_height, accrual_record);
+    // Per-height burn record: the sole persisted per-block bookkeeping this
+    // path needs, so pop_block_from_blockchain can roll total_burned back.
+    m_db->add_block_burn(blockchain_height, burn.actually_destroyed);
 
     if (burn.actually_destroyed > 0)
     {

@@ -53,6 +53,14 @@ else ()
   set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
   set(BENCHMARK_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googlebenchmark)
+  # Third-party code compiled under the repo's global -Werror: newer GCC
+  # flags benchmark.h's BENCHMARK_MAIN main() re-declaration under
+  # -Wredundant-decls. Not our code to fix — exempt the fetched targets.
+  foreach (bench_tgt benchmark benchmark_main)
+    if (TARGET ${bench_tgt})
+      target_compile_options(${bench_tgt} PRIVATE -Wno-redundant-decls -Wno-error)
+    endif ()
+  endforeach ()
 endif ()
 
 set(wallet_bench_sources

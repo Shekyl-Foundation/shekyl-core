@@ -87,9 +87,6 @@ pub fn maturity_height(block_height: u64, is_miner: bool, target: TargetKind) ->
             let lock = if is_miner { coinbase } else { spendable };
             Some(block_height + lock)
         }
-        TargetKind::StakedKey { lock_blocks } => {
-            Some((block_height + lock_blocks).max(block_height + spendable))
-        }
         TargetKind::Other => None,
     }
 }
@@ -303,18 +300,6 @@ mod tests {
     fn maturity_regular_is_plus_10() {
         let m = maturity_height(100, false, TargetKind::TaggedKey).expect("regular matures");
         assert_eq!(m, 100 + DEFAULT_LOCK_WINDOW as u64);
-    }
-
-    #[test]
-    fn maturity_staked_is_max_of_lock_and_spendable() {
-        // Lock longer than spendable age → lock wins.
-        let long = maturity_height(100, false, TargetKind::StakedKey { lock_blocks: 1000 })
-            .expect("staked matures");
-        assert_eq!(long, 100 + 1000);
-        // Lock shorter than spendable age → spendable floor wins.
-        let short = maturity_height(100, false, TargetKind::StakedKey { lock_blocks: 1 })
-            .expect("staked matures");
-        assert_eq!(short, 100 + DEFAULT_LOCK_WINDOW as u64);
     }
 
     #[test]

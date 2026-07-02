@@ -101,15 +101,12 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
             bool archival_serve_credit_only = !tx.vin.empty();
             bool is_archival_bond_post_tx = false;
             size_t archival_bond_post_index = 0;
-            bool skip_rct_semantics_batch = !tx.vin.empty();
             size_t bond_post_count = 0;
             for (size_t i = 0; i < tx.vin.size(); ++i)
             {
                 const auto& in = tx.vin[i];
                 if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
                     archival_serve_credit_only = false;
-                if (!std::holds_alternative<txin_stake_claim>(in))
-                    skip_rct_semantics_batch = false;
                 if (std::holds_alternative<txin_archival_bond_post>(in))
                 {
                     ++bond_post_count;
@@ -164,7 +161,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     return false;
                 }
             }
-            else if (!skip_rct_semantics_batch)
+            else
                 rvv.push_back(&tx.rct_signatures);
         }
     }

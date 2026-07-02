@@ -13,7 +13,7 @@ license.workspace = true
 # The build script lives at the crate root and is auto-discoverable
 # by Cargo; the explicit `build = "build.rs"` declaration is for
 # manifest-readability per the workspace convention established by
-# `shekyl-engine-core`, `shekyl-economics`, and `shekyl-staking`.
+# `shekyl-engine-core` and `shekyl-economics`.
 build = "build.rs"
 
 # Phase 2g R1-D2 (option (c) closed):

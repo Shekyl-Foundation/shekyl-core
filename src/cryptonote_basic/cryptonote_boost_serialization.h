@@ -195,14 +195,6 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, cryptonote::txout_to_staked_key &x, const boost::serialization::version_type ver)
-  {
-    a & x.key;
-    a & x.view_tag;
-    a & x.lock_tier;
-  }
-
-  template <class Archive>
   inline void serialize(Archive &a, cryptonote::txout_to_scripthash &x, const boost::serialization::version_type ver)
   {
     a & x.hash;
@@ -236,16 +228,6 @@ namespace boost
   {
     a & x.amount;
     a & x.key_offsets;
-    a & x.k_image;
-  }
-
-  template <class Archive>
-  inline void serialize(Archive &a, cryptonote::txin_stake_claim &x, const boost::serialization::version_type ver)
-  {
-    a & x.amount;
-    a & x.staked_output_index;
-    a & x.from_height;
-    a & x.to_height;
     a & x.k_image;
   }
 

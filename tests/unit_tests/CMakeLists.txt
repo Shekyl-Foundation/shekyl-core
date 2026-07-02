@@ -104,7 +104,6 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
-  staking.cpp
   archival_serve_credit.cpp
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp

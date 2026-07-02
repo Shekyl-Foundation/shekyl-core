@@ -378,19 +378,12 @@ namespace tools
       uint64_t m_pk_index = 0;
       cryptonote::subaddress_index m_subaddr_index{};
       std::vector<std::pair<uint64_t, crypto::hash>> m_uses;
-      bool m_staked = false;
-      uint8_t m_stake_tier = 0;
-      uint64_t m_stake_lock_until = 0;
-      uint64_t m_last_claimed_height = 0; // claim watermark: last to_height of a successful claim
       tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop; structurally consistent with m_y / m_mask
       bool m_combined_shared_secret_set = false; // true once populated from KEM decap
 
       transfer_details() = default;
 
       uint64_t amount() const { return m_amount; }
-      bool is_staked() const { return m_staked; }
-      bool is_staked_and_locked(uint64_t current_height) const { return m_staked && current_height < m_stake_lock_until; }
-      bool is_staked_and_matured(uint64_t current_height) const { return m_staked && current_height >= m_stake_lock_until; }
       const crypto::public_key get_public_key() const {
         crypto::public_key output_public_key;
         THROW_WALLET_EXCEPTION_IF(m_tx.vout.size() <= m_internal_output_index,
@@ -419,10 +412,6 @@ namespace tools
         FIELD(m_pk_index)
         FIELD(m_subaddr_index)
         FIELD(m_uses)
-        FIELD(m_staked)
-        FIELD(m_stake_tier)
-        VARINT_FIELD(m_stake_lock_until)
-        VARINT_FIELD(m_last_claimed_height)
         do {
           std::vector<uint8_t> _css_compat;
           if (W) {
@@ -1147,8 +1136,6 @@ namespace tools
     std::vector<wallet2::pending_tx> create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
     std::vector<wallet2::pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra);
     std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, fee_priority priority, const std::vector<uint8_t>& extra);
-    std::vector<wallet2::pending_tx> create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
-    std::vector<wallet2::pending_tx> create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority);
 
     // PQC multisig (scheme_id = 2)
     bool is_pqc_multisig() const { return m_pqc_multisig_n > 0 && m_pqc_multisig_m > 0; }
@@ -1156,15 +1143,6 @@ namespace tools
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-    std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
-    std::vector<size_t> get_matured_staked_outputs() const;
-    std::vector<size_t> get_locked_staked_outputs() const;
-    std::vector<size_t> get_claimable_staked_outputs() const;
-    void stage_claim_watermarks(const pending_tx& ptx);
-    void confirm_claim_watermarks(const crypto::hash& tx_hash);
-    void expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age = 100);
-    uint64_t get_staked_balance(uint64_t current_height) const;
-    uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
     void cold_sign_tx(const std::vector<pending_tx>& ptx_vector, signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::vector<std::string> & tx_device_aux);
@@ -1184,9 +1162,6 @@ namespace tools
     uint64_t get_blockchain_current_height() const { return m_blockchain.size(); }
     void rescan_spent();
     void rescan_blockchain(bool hard, bool refresh = true, bool keep_key_images = false);
-    // Staked outputs always return false here: they are not part of the
-    // regular spendable balance and can only be consumed via the unstake
-    // transaction path after their lock period expires.
     bool is_transfer_unlocked(const transfer_details& td);
     bool is_transfer_unlocked(uint64_t unlock_time, uint64_t block_height);
 
@@ -1720,14 +1695,6 @@ namespace tools
     transfer_container m_transfers;
     payment_container m_payments;
     serializable_unordered_map<crypto::key_image, size_t> m_key_images;
-
-    struct pending_claim_watermark {
-      uint64_t global_output_index;
-      uint64_t to_height;
-      uint64_t broadcast_height;
-      crypto::hash tx_hash;
-    };
-    std::vector<pending_claim_watermark> m_pending_claim_watermarks;
     serializable_unordered_map<crypto::public_key, size_t> m_pub_keys;
     cryptonote::account_public_address m_account_public_address;
     serializable_unordered_map<crypto::public_key, cryptonote::subaddress_index> m_subaddresses;
@@ -1936,7 +1903,7 @@ namespace tools
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 3)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 4)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 3)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 3)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 3)
@@ -1968,7 +1935,7 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
     {
-      assert(ver == 3);
+      assert(ver == 4);
       a & x.m_block_height;
       a & x.m_global_output_index;
       a & x.m_internal_output_index;
@@ -1986,10 +1953,6 @@ namespace boost
       a & x.m_pk_index;
       a & x.m_subaddr_index;
       a & x.m_uses;
-      a & x.m_staked;
-      a & x.m_stake_tier;
-      a & x.m_stake_lock_until;
-      a & x.m_last_claimed_height;
       a & x.m_frozen;
       {
         std::vector<uint8_t> css_vec;

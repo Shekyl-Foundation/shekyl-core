@@ -519,10 +519,7 @@ namespace cryptonote
         vt.data = od.view_tag_prefilter;
 
         tx_out out;
-        if (dst_entr.is_staking)
-          cryptonote::set_staked_tx_out(dst_entr.amount, out_key, vt, dst_entr.stake_tier, out);
-        else
-          cryptonote::set_tx_out(dst_entr.amount, out_key, true, vt, out);
+        cryptonote::set_tx_out(dst_entr.amount, out_key, true, vt, out);
         tx.vout.push_back(out);
 
         memcpy(v3_rct_data[output_index].commitment, od.commitment, 32);

@@ -1922,21 +1922,12 @@ public:
    */
   void set_auto_remove_logs(bool auto_remove) { m_auto_remove_logs = auto_remove; }
 
-  struct staker_accrual_record
-  {
-    uint64_t staker_emission;
-    uint64_t staker_fee_pool;
-    uint64_t total_weighted_stake_lo;
-    uint64_t total_weighted_stake_hi;
-    uint64_t actually_destroyed;
-  };
-
-  virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) = 0;
-  virtual staker_accrual_record get_staker_accrual(uint64_t height) const = 0;
-  virtual void remove_staker_accrual(uint64_t height) = 0;
-
-  virtual void set_staker_pool_balance(uint64_t balance) = 0;
-  virtual uint64_t get_staker_pool_balance() const = 0;
+  // Per-height destroyed-amount record (adaptive fee burn + retired-share
+  // burn), so pop_block can roll `total_burned` back without recomputing
+  // the block's burn.
+  virtual void add_block_burn(uint64_t height, uint64_t amount) = 0;
+  virtual uint64_t get_block_burn(uint64_t height) const = 0;
+  virtual void remove_block_burn(uint64_t height) = 0;
 
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;
@@ -1944,9 +1935,6 @@ public:
   virtual void set_total_burned(uint64_t amount) = 0;
   virtual uint64_t get_total_burned() const = 0;
 
-  virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) = 0;
-  virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
-  virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
 
   // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
 

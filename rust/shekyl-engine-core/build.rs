@@ -5,7 +5,7 @@
 //! constant-drift audit motivated the JSON authority; see
 //! `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 //!
-//! Mirrors the pattern of `rust/shekyl-staking/build.rs`
+//! Mirrors the pattern of `rust/shekyl-economics/build.rs`
 //! (economics-params JSON → generated `tier_params_generated.rs`).
 //! The `multisig` module `include!`s the emitted file; const-evaluated
 //! `assert!` blocks (`const _: () = assert!(...)`) at the consumption

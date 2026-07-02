@@ -694,9 +694,7 @@ namespace cryptonote
       // Shekyl NG four-component economics fields
       uint64_t release_multiplier;
       uint64_t burn_pct;
-      uint64_t stake_ratio;
       uint64_t total_burned;
-      uint64_t staker_pool_balance;
       uint64_t staker_emission_share_effective;
       std::string emission_era;
       uint64_t tx_prune_height;
@@ -745,9 +743,7 @@ namespace cryptonote
         KV_SERIALIZE(restricted)
         KV_SERIALIZE(release_multiplier)
         KV_SERIALIZE(burn_pct)
-        KV_SERIALIZE(stake_ratio)
         KV_SERIALIZE(total_burned)
-        KV_SERIALIZE(staker_pool_balance)
         KV_SERIALIZE(staker_emission_share_effective)
         KV_SERIALIZE(emission_era)
         KV_SERIALIZE_OPT(tx_prune_height, (uint64_t)0)
@@ -2563,42 +2559,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_STAKING_INFO
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t height;
-      uint64_t stake_ratio;
-      uint64_t total_staked;
-      uint64_t staker_pool_balance;
-      uint64_t staker_emission_share;
-      uint64_t tier_0_lock_blocks;
-      uint64_t tier_1_lock_blocks;
-      uint64_t tier_2_lock_blocks;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE(stake_ratio)
-        KV_SERIALIZE(total_staked)
-        KV_SERIALIZE(staker_pool_balance)
-        KV_SERIALIZE(staker_emission_share)
-        KV_SERIALIZE(tier_0_lock_blocks)
-        KV_SERIALIZE(tier_1_lock_blocks)
-        KV_SERIALIZE(tier_2_lock_blocks)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_GET_CURVE_TREE_PATH
   {
     struct request_t: public rpc_request_base
@@ -2704,39 +2664,6 @@ namespace cryptonote
         KV_SERIALIZE(depth)
         KV_SERIALIZE(leaf_count)
         KV_SERIALIZE(block_height)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_ESTIMATE_CLAIM_REWARD
-  {
-    struct request_t: public rpc_request_base
-    {
-      uint64_t staked_output_index;
-      uint64_t from_height;
-      uint64_t to_height;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(staked_output_index)
-        KV_SERIALIZE(from_height)
-        KV_SERIALIZE(to_height)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t reward;
-      uint8_t  tier;
-      uint64_t staked_amount;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(reward)
-        KV_SERIALIZE(tier)
-        KV_SERIALIZE(staked_amount)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

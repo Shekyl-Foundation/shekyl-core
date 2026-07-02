@@ -1012,11 +1012,6 @@ namespace cryptonote
         if(!ki.insert(std::get<txin_to_key>(in).k_image).second)
           return false;
       }
-      else if (std::holds_alternative<txin_stake_claim>(in))
-      {
-        if(!ki.insert(std::get<txin_stake_claim>(in).k_image).second)
-          return false;
-      }
       else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
       {
         continue;
@@ -1039,8 +1034,6 @@ namespace cryptonote
   {
     for(const auto& in: tx.vin)
     {
-      if (std::holds_alternative<txin_stake_claim>(in))
-        continue;
       if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         continue;
       if (std::holds_alternative<txin_archival_bond_post>(in))
@@ -1058,15 +1051,6 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
-      if (std::holds_alternative<txin_stake_claim>(in))
-      {
-        const auto& claim = std::get<txin_stake_claim>(in);
-        if (rct::ki2rct(claim.k_image) == rct::identity())
-          return false;
-        if (!(rct::scalarmultKey(rct::ki2rct(claim.k_image), rct::curveOrder()) == rct::identity()))
-          return false;
-        continue;
-      }
       if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         continue;
       if (std::holds_alternative<txin_archival_bond_post>(in))

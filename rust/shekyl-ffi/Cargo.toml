@@ -31,7 +31,6 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # never enabled in production builds.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
-shekyl-staking = { path = "../shekyl-staking" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Single-sourced CT cleartext balance equation (`shekyl_verify_ct_balance`
 # general export in `ct_balance_ffi.rs`). Same crate the bond-post path reaches

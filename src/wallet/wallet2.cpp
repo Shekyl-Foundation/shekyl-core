@@ -2321,8 +2321,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   if (!miner_tx && !pool)
   {
     process_unconfirmed(txid, tx, height);
-    confirm_claim_watermarks(txid);
-    expire_pending_claim_watermarks(height);
   }
 
   // per receiving subaddress index
@@ -2712,21 +2710,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_combined_shared_secret_set = true;
             }
             td.m_frozen = false;
-            {
-              uint8_t stk_tier = 0;
-              if (cryptonote::get_output_staking_info(tx.vout[o], stk_tier))
-              {
-                td.m_staked = true;
-                td.m_stake_tier = stk_tier;
-                td.m_stake_lock_until = td.m_block_height + shekyl_stake_lock_blocks(stk_tier);
-              }
-              else
-              {
-                td.m_staked = false;
-                td.m_stake_tier = 0;
-                td.m_stake_lock_until = 0;
-              }
-            }
 	    set_unspent(m_transfers.size()-1);
             if (td.m_key_image_known)
 	      m_key_images[td.m_key_image] = m_transfers.size()-1;
@@ -3142,13 +3125,10 @@ void wallet2::precompute_fcmp_paths()
     return;
 
   std::vector<uint64_t> output_indices;
-  const uint64_t current_height = get_blockchain_current_height();
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const auto& td = m_transfers[i];
     if (td.m_spent || td.m_frozen)
-      continue;
-    if (td.m_staked && td.m_stake_lock_until > current_height)
       continue;
     output_indices.push_back(td.m_global_output_index);
   }
@@ -3237,7 +3217,6 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
     return;
   }
 
-  const uint64_t current_height = get_blockchain_current_height();
   std::vector<uint64_t> stale_indices;
   for (const auto& [idx, pp] : m_fcmp_precomputed_paths)
     stale_indices.push_back(idx);
@@ -3247,8 +3226,6 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   {
     const auto& td = m_transfers[i];
     if (td.m_spent || td.m_frozen)
-      continue;
-    if (td.m_staked && td.m_stake_lock_until > current_height)
       continue;
     if (m_fcmp_precomputed_paths.find(td.m_global_output_index) == m_fcmp_precomputed_paths.end())
       stale_indices.push_back(td.m_global_output_index);
@@ -7249,7 +7226,7 @@ std::map<uint32_t, uint64_t> wallet2::balance_per_subaddress(uint32_t index_majo
   std::map<uint32_t, uint64_t> amount_per_subaddr;
   for (const auto& td: m_transfers)
   {
-    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && !td.m_staked)
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
     {
       auto found = amount_per_subaddr.find(td.m_subaddr_index.minor);
       if (found == amount_per_subaddr.end())
@@ -7304,7 +7281,7 @@ std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> wallet2::
   const uint64_t now = time(NULL);
   for(const transfer_details& td: m_transfers)
   {
-    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && !td.m_staked)
+    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
     {
       uint64_t amount = 0, blocks_to_unlock = 0, time_to_unlock = 0;
       if (is_transfer_unlocked(td))
@@ -7509,8 +7486,6 @@ void wallet2::rescan_blockchain(bool hard, bool refresh, bool keep_key_images)
 //----------------------------------------------------------------------------------------------------
 bool wallet2::is_transfer_unlocked(const transfer_details& td)
 {
-  if (td.m_staked)
-    return false;
   return is_transfer_unlocked(td.m_tx.unlock_time, td.m_block_height);
 }
 //----------------------------------------------------------------------------------------------------
@@ -9901,506 +9876,6 @@ skip_tx:
 
   // if we made it this far, we're OK to actually send the transactions
   return ptx_vector;
-}
-
-std::vector<size_t> wallet2::get_matured_staked_outputs() const
-{
-  std::vector<size_t> result;
-  const uint64_t height = get_blockchain_current_height();
-  for (size_t i = 0; i < m_transfers.size(); ++i)
-  {
-    const auto& td = m_transfers[i];
-    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until <= height)
-      result.push_back(i);
-  }
-  return result;
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<size_t> wallet2::get_locked_staked_outputs() const
-{
-  std::vector<size_t> result;
-  const uint64_t height = get_blockchain_current_height();
-  for (size_t i = 0; i < m_transfers.size(); ++i)
-  {
-    const auto& td = m_transfers[i];
-    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until > height)
-      result.push_back(i);
-  }
-  return result;
-}
-//----------------------------------------------------------------------------------------------------
-uint64_t wallet2::get_staked_balance(uint64_t current_height) const
-{
-  uint64_t total = 0;
-  for (const auto& td : m_transfers)
-  {
-    if (td.m_staked && !td.m_spent && !td.m_frozen)
-      total += td.m_amount;
-  }
-  return total;
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
-{
-  THROW_WALLET_EXCEPTION_IF(tier > 2, error::wallet_internal_error, "Staking tier must be 0, 1, or 2");
-  THROW_WALLET_EXCEPTION_IF(amount == 0, error::wallet_internal_error, "Staking amount must be greater than 0");
-  THROW_WALLET_EXCEPTION_IF(!use_fork_rules(HF_VERSION_SHEKYL_NG, 10), error::wallet_internal_error,
-    "Staking requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
-
-  cryptonote::address_parse_info self_address_info;
-  self_address_info.address = get_address();
-  self_address_info.is_subaddress = false;
-
-  cryptonote::tx_destination_entry de;
-  de.amount = amount;
-  de.addr = self_address_info.address;
-  de.is_subaddress = false;
-  de.is_integrated = false;
-  de.is_staking = true;
-  de.stake_tier = tier;
-
-  std::vector<cryptonote::tx_destination_entry> dsts;
-  dsts.push_back(de);
-
-  std::vector<uint8_t> extra;
-  return create_transactions_2(dsts, priority, extra, subaddr_account, subaddr_indices);
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<size_t> wallet2::get_claimable_staked_outputs() const
-{
-  std::vector<size_t> result;
-  const uint64_t height = get_blockchain_current_height();
-  for (size_t i = 0; i < m_transfers.size(); ++i)
-  {
-    const auto& td = m_transfers[i];
-    if (!td.m_staked || td.m_spent || td.m_frozen)
-      continue;
-    // Accrual cap: the output earns rewards up to lock_until.
-    // A claim is possible if the local watermark hasn't reached that cap.
-    const uint64_t accrual_cap = std::min(height, td.m_stake_lock_until);
-    const uint64_t watermark = (td.m_last_claimed_height > 0)
-      ? td.m_last_claimed_height : td.m_block_height;
-    if (watermark < accrual_cap)
-      result.push_back(i);
-  }
-  return result;
-}
-//----------------------------------------------------------------------------------------------------
-void wallet2::stage_claim_watermarks(const pending_tx& ptx)
-{
-  const crypto::hash tx_hash = cryptonote::get_transaction_hash(ptx.tx);
-  const uint64_t broadcast_h = get_blockchain_current_height();
-  for (const auto& inp : ptx.tx.vin)
-  {
-    if (!std::holds_alternative<cryptonote::txin_stake_claim>(inp))
-      continue;
-    const auto& claim = std::get<cryptonote::txin_stake_claim>(inp);
-    m_pending_claim_watermarks.push_back({
-      claim.staked_output_index, claim.to_height, broadcast_h, tx_hash
-    });
-  }
-}
-//----------------------------------------------------------------------------------------------------
-void wallet2::confirm_claim_watermarks(const crypto::hash& tx_hash)
-{
-  auto it = std::remove_if(m_pending_claim_watermarks.begin(),
-                           m_pending_claim_watermarks.end(),
-                           [&](const pending_claim_watermark& pcw) {
-    if (pcw.tx_hash != tx_hash)
-      return false;
-    for (auto& td : m_transfers)
-    {
-      if (td.m_staked && td.m_global_output_index == pcw.global_output_index)
-      {
-        td.m_last_claimed_height = pcw.to_height;
-        break;
-      }
-    }
-    return true;
-  });
-  m_pending_claim_watermarks.erase(it, m_pending_claim_watermarks.end());
-}
-//----------------------------------------------------------------------------------------------------
-void wallet2::expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age)
-{
-  m_pending_claim_watermarks.erase(
-    std::remove_if(m_pending_claim_watermarks.begin(),
-                   m_pending_claim_watermarks.end(),
-                   [&](const pending_claim_watermark& pcw) {
-      return current_height > pcw.broadcast_height + max_age;
-    }),
-    m_pending_claim_watermarks.end()
-  );
-}
-//----------------------------------------------------------------------------------------------------
-uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
-{
-  THROW_WALLET_EXCEPTION_IF(transfer_index >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
-  const auto& td = m_transfers[transfer_index];
-  THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
-
-  const uint64_t current_height = get_blockchain_current_height();
-  // Use the local watermark if we've claimed before, otherwise the creation height
-  uint64_t from_h = (td.m_last_claimed_height > 0) ? td.m_last_claimed_height : td.m_block_height;
-  // Accrual cap: rewards accrue only up to lock_until
-  uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
-  if (from_h >= to_h)
-    return 0;
-  const uint64_t max_claim_range = shekyl_stake_max_claim_range();
-  if (to_h - from_h > max_claim_range)
-    to_h = from_h + max_claim_range;
-
-  cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request req{};
-  cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response res{};
-  req.staked_output_index = td.m_global_output_index;
-  req.from_height = from_h;
-  req.to_height = to_h;
-
-  bool r = epee::net_utils::invoke_http_json_rpc("/json_rpc", "estimate_claim_reward", req, res, *m_http_client, rpc_timeout);
-  THROW_WALLET_EXCEPTION_IF(!r || res.status != "OK", error::wallet_internal_error,
-    "Failed to estimate claim reward from daemon");
-
-  return res.reward;
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::vector<size_t>& staked_indices)
-{
-  THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to claim");
-  THROW_WALLET_EXCEPTION_IF(!use_fork_rules(HF_VERSION_SHEKYL_NG, 10), error::wallet_internal_error,
-    "Claiming requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
-
-  const uint64_t current_height = get_blockchain_current_height();
-  const auto& keys = m_account.get_keys();
-  THROW_WALLET_EXCEPTION_IF(keys.m_account_address.m_pqc_public_key.empty(), error::wallet_internal_error,
-    "Cannot create v3 claim transaction: wallet has no PQC public key");
-
-  cryptonote::transaction tx;
-  tx.version = 3;
-  tx.unlock_time = 0;
-
-  uint64_t total_claimed = 0;
-  std::vector<size_t> ordered_indices(staked_indices);
-
-  for (size_t idx : ordered_indices)
-  {
-    THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
-    const auto& td = m_transfers[idx];
-    THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
-    THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
-
-    // Use the local watermark if we've claimed before, otherwise the creation height
-    uint64_t from_h = (td.m_last_claimed_height > 0) ? td.m_last_claimed_height : td.m_block_height;
-    // Accrual cap: rewards accrue only up to lock_until
-    uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
-    THROW_WALLET_EXCEPTION_IF(from_h >= to_h, error::wallet_internal_error,
-      "No unclaimed reward backlog for staked output " + std::to_string(idx));
-    const uint64_t max_claim_range = shekyl_stake_max_claim_range();
-    if (to_h - from_h > max_claim_range)
-      to_h = from_h + max_claim_range;
-
-    uint64_t reward = estimate_claimable_reward(idx);
-
-    cryptonote::txin_stake_claim claim;
-    claim.amount = reward;
-    claim.staked_output_index = td.m_global_output_index;
-    claim.from_height = from_h;
-    claim.to_height = to_h;
-
-    // v3 key image: KI = (ho + b) * Hp(O), via Rust FFI
-    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
-      error::wallet_internal_error,
-      "Staked output missing combined_shared_secret for key image derivation");
-    crypto::ec_point hp_of_O;
-    crypto::hash_to_ec(td.get_public_key(), hp_of_O);
-    bool ki_ok = shekyl_compute_output_key_image(
-      td.m_combined_shared_secret.data(),
-      td.m_internal_output_index,
-      reinterpret_cast<const uint8_t*>(&keys.m_spend_secret_key),
-      reinterpret_cast<const uint8_t*>(&hp_of_O),
-      reinterpret_cast<uint8_t*>(&claim.k_image));
-    THROW_WALLET_EXCEPTION_IF(!ki_ok, error::wallet_internal_error,
-      "Failed to compute v3 key image for stake claim");
-
-    tx.vin.push_back(claim);
-    total_claimed += reward;
-  }
-
-  THROW_WALLET_EXCEPTION_IF(total_claimed == 0, error::wallet_internal_error, "Total claimable reward is zero");
-
-  // Sort inputs by key image (descending) for canonical ordering
-  {
-    std::vector<size_t> sort_order(tx.vin.size());
-    std::iota(sort_order.begin(), sort_order.end(), 0);
-    std::sort(sort_order.begin(), sort_order.end(), [&](size_t a, size_t b) {
-      const auto& ka = std::get<cryptonote::txin_stake_claim>(tx.vin[a]).k_image;
-      const auto& kb = std::get<cryptonote::txin_stake_claim>(tx.vin[b]).k_image;
-      return memcmp(&ka, &kb, sizeof(ka)) > 0;
-    });
-    std::vector<cryptonote::txin_v> sorted_vin(tx.vin.size());
-    std::vector<size_t> sorted_indices(ordered_indices.size());
-    for (size_t i = 0; i < sort_order.size(); ++i) {
-      sorted_vin[i] = tx.vin[sort_order[i]];
-      sorted_indices[i] = ordered_indices[sort_order[i]];
-    }
-    tx.vin = std::move(sorted_vin);
-    ordered_indices = std::move(sorted_indices);
-  }
-
-  // ── Generate ephemeral tx key ──────────────────────────────────────
-  crypto::secret_key tx_key;
-  crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
-  crypto::public_key txkey_pub;
-  crypto::secret_key_to_public_key(tx_key, txkey_pub);
-  cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
-
-  // ── Two outputs via shekyl_construct_output: reward + dummy change ──
-  const auto& my_addr = keys.m_account_address;
-  const uint64_t out_amounts[2] = {total_claimed, 0};
-
-  THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES,
-    error::wallet_internal_error, "PQC public key size " + std::to_string(my_addr.m_pqc_public_key.size())
-    + " != " + std::to_string(SHEKYL_PQC_PUBLIC_KEY_BYTES));
-
-  const uint8_t* pk_x25519 = my_addr.m_pqc_public_key.data();
-  const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
-  const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
-
-  cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
-  kem_field.blob.reserve(2 * cryptonote::HYBRID_KEM_CT_BYTES);
-  cryptonote::tx_extra_pqc_leaf_hashes leaf_hash_field;
-  leaf_hash_field.blob.reserve(2 * cryptonote::PQC_LEAF_HASH_BYTES);
-
-  rct::keyV claim_commitment_masks(2);
-  std::vector<std::array<uint8_t, 9>> claim_enc_amounts(2);
-  std::vector<std::array<uint8_t, 9>> claim_enc_labels(2);
-
-  for (size_t oi = 0; oi < 2; ++oi)
-  {
-    ShekylOutputData od = shekyl_construct_output(
-      reinterpret_cast<const uint8_t*>(&tx_key),
-      pk_x25519, pk_ml_kem, pk_ml_kem_len,
-      reinterpret_cast<const uint8_t*>(&my_addr.m_spend_public_key),
-      out_amounts[oi], static_cast<uint64_t>(oi));
-    THROW_WALLET_EXCEPTION_IF(!od.success, error::wallet_internal_error,
-      "shekyl_construct_output failed for claim output " + std::to_string(oi));
-
-    crypto::public_key out_key;
-    memcpy(out_key.data, od.output_key, 32);
-    crypto::view_tag vt;
-    vt.data = od.view_tag_prefilter;
-
-    cryptonote::tx_out out;
-    cryptonote::set_tx_out(out_amounts[oi], out_key, true, vt, out);
-    tx.vout.push_back(out);
-
-    memcpy(claim_commitment_masks[oi].bytes, od.z, 32);
-    memcpy(claim_enc_amounts[oi].data(), od.enc_amount, 8);
-    claim_enc_amounts[oi][8] = od.amount_tag;
-    memcpy(claim_enc_labels[oi].data(), od.enc_label, 8);
-    claim_enc_labels[oi][8] = od.label_tag;
-
-    kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
-    if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
-      kem_field.blob.append(
-        reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
-        od.kem_ciphertext_ml_kem.len);
-
-    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc),
-      cryptonote::PQC_LEAF_HASH_BYTES);
-
-    ShekylOutputData tmp = od;
-    shekyl_output_data_free(&tmp);
-  }
-
-  // HKDF z scalars are captured above but NOT used as BP+ blinding factors here.
-  // Claim pseudo-outs use zeroCommit (mask=1), forcing sum(output_masks) = N.
-  // HKDF z values don't satisfy that constraint, so BP+ uses random masks below.
-  // The scanner (PR-wallet) will detect ownership via HKDF view_tag + amount decryption
-  // and use the stored claim amounts rather than HKDF commitment verification.
-  for (auto& m : claim_commitment_masks) memwipe(m.bytes, 32);
-
-  {
-    std::ostringstream oss;
-    binary_archive<true> oar(oss);
-    cryptonote::tx_extra_field variant_field = kem_field;
-    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
-      error::wallet_internal_error, "Failed to serialize KEM ciphertexts for claim tx_extra");
-    std::string blob = oss.str();
-    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-  }
-  {
-    std::ostringstream oss;
-    binary_archive<true> oar(oss);
-    cryptonote::tx_extra_field variant_field = leaf_hash_field;
-    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
-      error::wallet_internal_error, "Failed to serialize PQC leaf hashes for claim tx_extra");
-    std::string blob = oss.str();
-    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-  }
-  THROW_WALLET_EXCEPTION_IF(!cryptonote::sort_tx_extra(tx.extra, tx.extra),
-    error::wallet_internal_error, "Failed to sort claim tx_extra");
-
-  for (auto& out : tx.vout)
-    out.amount = 0;
-
-  // ── Build rctSig: BP+ with HKDF masks + pseudo-outs ──────────────
-  const size_t num_inputs = tx.vin.size();
-  rct::rctSig& rv = tx.rct_signatures;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
-  rv.txnFee = 0;
-  rv.outPk.resize(2);
-  rv.enc_amounts.resize(2);
-  rv.enc_labels.resize(2);
-  rv.p.pseudoOuts.resize(num_inputs);
-
-  // Pseudo-outs use zeroCommit (mask = scalar 1), so output masks must
-  // sum to N (number of inputs) for the balance equation.
-  // Recompute claim_commitment_masks with that constraint.
-  // We can't use the HKDF z directly because the balance equation requires
-  // sum(output_masks) == sum(pseudo_out_masks) == N.
-  // For claims, use random mask0 with mask1 = N - mask0.
-  rct::key mask0, mask1;
-  rct::skGen(mask0);
-  {
-    rct::key n_scalar = rct::d2h(static_cast<rct::xmr_amount>(num_inputs));
-    sc_sub(mask1.bytes, n_scalar.bytes, mask0.bytes);
-  }
-  rct::keyV bp_masks = {mask0, mask1};
-
-  std::vector<uint64_t> out_amounts_vec = {total_claimed, 0};
-  rct::BulletproofPlus bp_proof = rct::bulletproof_plus_PROVE(out_amounts_vec, bp_masks);
-  THROW_WALLET_EXCEPTION_IF(bp_proof.V.size() != 2, error::wallet_internal_error,
-    "BP+ proof V size mismatch");
-
-  rv.p.bulletproofs_plus.clear();
-  rv.p.bulletproofs_plus.push_back(bp_proof);
-
-  for (size_t i = 0; i < 2; ++i)
-  {
-    rv.outPk[i].mask = rct::scalarmult8(bp_proof.V[i]);
-    crypto::public_key out_pk;
-    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(tx.vout[i], out_pk),
-      error::wallet_internal_error, "Cannot extract claim output public key");
-    rv.outPk[i].dest = rct::pk2rct(out_pk);
-  }
-
-  for (size_t i = 0; i < 2; ++i)
-    rv.enc_amounts[i] = claim_enc_amounts[i];
-  for (size_t i = 0; i < 2; ++i)
-    rv.enc_labels[i] = claim_enc_labels[i];
-
-  for (size_t i = 0; i < num_inputs; ++i)
-  {
-    const auto& claim = std::get<cryptonote::txin_stake_claim>(tx.vin[i]);
-    rv.p.pseudoOuts[i] = rct::zeroCommit(claim.amount);
-  }
-
-  rv.p.fcmp_pp_proof.clear();
-  rv.p.curve_trees_tree_depth = 0;
-  rv.referenceBlock = crypto::hash{};
-
-  // ── PQC auth: derive public keys, then sign ─────────────────────
-  tx.pqc_auths.clear();
-  tx.pqc_auths.resize(num_inputs);
-
-  // Loop 1: populate public keys for all inputs before signing
-  for (size_t i = 0; i < num_inputs; ++i)
-  {
-    const size_t td_idx = ordered_indices[i];
-    const auto& td = m_transfers[td_idx];
-
-    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set, error::wallet_internal_error,
-      "Missing per-output combined shared secret for claim input " + std::to_string(i));
-    ShekylBuffer pk_buf = shekyl_derive_pqc_public_key(
-        td.m_combined_shared_secret.data(),
-        static_cast<uint64_t>(td.m_internal_output_index));
-    THROW_WALLET_EXCEPTION_IF(!pk_buf.ptr, error::wallet_internal_error,
-      "PQC public key derivation failed for claim input " + std::to_string(i));
-
-    tx.pqc_auths[i].auth_version = 1;
-    tx.pqc_auths[i].scheme_id = 1;
-    tx.pqc_auths[i].flags = 0;
-    tx.pqc_auths[i].hybrid_public_key.assign(pk_buf.ptr, pk_buf.ptr + pk_buf.len);
-    tx.pqc_auths[i].hybrid_signature.clear();
-    shekyl_buffer_free(pk_buf.ptr, pk_buf.len);
-  }
-
-  // Loop 2: sign all inputs (payload depends on all public keys being set)
-  for (size_t i = 0; i < num_inputs; ++i)
-  {
-    const size_t td_idx = ordered_indices[i];
-    const auto& td = m_transfers[td_idx];
-
-    std::string payload_blob;
-    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
-      error::wallet_internal_error, "Failed to build PQC signed payload for claim input " + std::to_string(i));
-
-    crypto::hash payload_hash;
-    cryptonote::get_blob_hash(payload_blob, payload_hash);
-
-    ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
-        td.m_combined_shared_secret.data(),
-        static_cast<uint64_t>(td.m_internal_output_index),
-        reinterpret_cast<const uint8_t*>(payload_hash.data),
-        sizeof(payload_hash.data));
-    THROW_WALLET_EXCEPTION_IF(!auth.success, error::wallet_internal_error,
-      "PQC signing failed for claim input " + std::to_string(i));
-
-    tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
-        auth.signature.ptr + auth.signature.len);
-    shekyl_pqc_auth_result_free(&auth);
-  }
-
-  tx.invalidate_hashes();
-
-  pending_tx ptx;
-  ptx.tx = tx;
-  ptx.fee = 0;
-  ptx.change_dts = {};
-  ptx.selected_transfers = {};
-  ptx.key_images = "";
-  ptx.tx_key = tx_key;
-  ptx.dests = {};
-  ptx.construction_data = {};
-
-  std::vector<pending_tx> ptx_vector;
-  ptx_vector.push_back(ptx);
-  return ptx_vector;
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority)
-{
-  THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to unstake");
-
-  const uint64_t current_height = get_blockchain_current_height();
-
-  std::vector<size_t> unstake_indices;
-  std::vector<size_t> needs_claim;
-  for (size_t idx : staked_indices)
-  {
-    THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
-    const auto& td = m_transfers[idx];
-    THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
-    THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
-    THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until > current_height, error::wallet_internal_error,
-      "Staked output not yet matured (unlocks at height " + std::to_string(td.m_stake_lock_until) + ", current: " + std::to_string(current_height) + ")");
-
-    const uint64_t accrual_cap = std::min(current_height, td.m_stake_lock_until);
-    const uint64_t watermark = (td.m_last_claimed_height > 0)
-      ? td.m_last_claimed_height : td.m_block_height;
-    if (watermark < accrual_cap)
-      needs_claim.push_back(idx);
-
-    unstake_indices.push_back(idx);
-  }
-
-  THROW_WALLET_EXCEPTION_IF(!needs_claim.empty(), error::wallet_internal_error,
-    "Cannot unstake: " + std::to_string(needs_claim.size()) + " output(s) have unclaimed reward backlog. "
-    "Claim rewards first to avoid forfeiting accrued rewards, then retry the unstake.");
-
-  std::vector<size_t> empty_dust;
-  std::vector<uint8_t> extra;
-  return create_transactions_from(get_address(), false, 1, unstake_indices, empty_dust, priority, extra);
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys)
