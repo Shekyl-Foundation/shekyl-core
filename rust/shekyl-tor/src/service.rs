@@ -144,6 +144,11 @@ pub enum ServiceFailure {
     /// `SIGKILL`-ed — the unclean signal an operator wants), or `None` when the
     /// exit was not observed (e.g. the readiness channel closed first).
     Exited(Option<TorExit>),
+    /// A supervisor-internal fault, not a tor failure — the gate's
+    /// `spawn_blocking` task panicked or was cancelled (a `JoinError`). Carries
+    /// its rendered message (the type is neither `Clone` nor `Eq`, so it is kept
+    /// as text) rather than masquerading as a tor `Exited`.
+    Internal(String),
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -166,7 +171,8 @@ pub fn classify(failure: &ServiceFailure) -> FailureClass {
         ServiceFailure::Control(_)
         | ServiceFailure::NoSocksListener
         | ServiceFailure::BootstrapTimeout
-        | ServiceFailure::Exited(_) => FailureClass::Transient,
+        | ServiceFailure::Exited(_)
+        | ServiceFailure::Internal(_) => FailureClass::Transient,
     }
 }
 
@@ -189,6 +195,11 @@ pub struct SupervisorPolicy {
     /// How long an incarnation gets to reach bootstrap 100% before it is torn
     /// down as [`ServiceFailure::BootstrapTimeout`].
     pub bootstrap_deadline: Duration,
+    /// Bound on the post-bootstrap `GETINFO net/listeners/socks` reply — an alive
+    /// tor answers instantly, so a stall here means a wedged control port; this
+    /// keeps SOCKS discovery from hanging the supervisor (and thus `shutdown()`).
+    /// Policy-driven (like the other timeouts) so tests can shrink it.
+    pub socks_discovery_deadline: Duration,
 }
 
 impl Default for SupervisorPolicy {
@@ -200,6 +211,7 @@ impl Default for SupervisorPolicy {
             stable_reset: Duration::from_secs(600),
             trust_retry: Duration::from_secs(300),
             bootstrap_deadline: Duration::from_secs(300),
+            socks_discovery_deadline: Duration::from_secs(30),
         }
     }
 }
@@ -287,8 +299,9 @@ impl TorBinarySource {
         match outcome {
             Ok(Ok(verified)) => Ok(verified),
             Ok(Err(e)) => Err(ServiceFailure::Binary(e)),
-            // The blocking task itself died — infrastructure, not a gate verdict.
-            Err(_join) => Err(ServiceFailure::Exited(None)),
+            // The blocking task itself died (panic/cancel) — a supervisor-internal
+            // fault, not a tor exit; surface it as such rather than mislabeling.
+            Err(join) => Err(ServiceFailure::Internal(join.to_string())),
         }
     }
 }
@@ -380,15 +393,13 @@ enum IncarnationEnd {
     Shutdown,
 }
 
-/// Bound on the post-bootstrap `GETINFO net/listeners/socks` reply — an alive
-/// tor answers this instantly, so a stall means a wedged control port; this
-/// keeps discovery from hanging the supervisor (and thus `shutdown()`) forever.
-const SOCKS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How long teardown waits for the child's reap signal (the actor's own
-/// `SHUTDOWN_GRACE` is 5s; this is comfortably above it). On the rare miss —
-/// `on_stop` never fired the exit channel — the loop proceeds; `kill_on_drop`
-/// and `TAKEOWNERSHIP` remain reap backstops.
+/// Bound on the **whole** teardown (the graceful-stop signal *and* the child's
+/// reap wait) — the actor's own `SHUTDOWN_GRACE` is 5s, so this sits comfortably
+/// above it. Not a `SupervisorPolicy` field on purpose: it is coupled to the
+/// actor's grace window (it must exceed it), so exposing it as a free knob would
+/// invite a `reap < grace` misconfiguration that gives up on a reap that was
+/// about to succeed. On a genuine miss the loop proceeds; `kill_on_drop` and
+/// `TAKEOWNERSHIP` remain reap backstops.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The supervisor loop (§3c). Owns policy only; the incarnation actor owns
@@ -497,17 +508,30 @@ async fn supervise(
 /// telemetry. The exit channel fires from `on_stop` *after* `TorChild::shutdown`
 /// completes the SIGTERM→wait→SIGKILL→reap, so awaiting it guarantees no tor
 /// lingers to lock the reused `DataDirectory` (and yields `Killed`/`Reaped`).
-/// Bounded by [`REAP_TIMEOUT`] against a teardown that never signals.
+///
+/// The **whole** sequence is bounded by [`REAP_TIMEOUT`], not just the reap wait:
+/// `stop_gracefully` sends `Signal::Stop` on the actor's bounded (cap-64) mailbox,
+/// and a wedged actor with a full mailbox would block that send — so bounding only
+/// the reap could still hang `shutdown()`. On timeout, `kill()` aborts the actor
+/// so it cannot linger (its `on_stop`/`kill_on_drop` still reap the child), and we
+/// proceed best-effort.
 async fn stop_and_reap(
     actor: &kameo::actor::ActorRef<TorControl>,
     exit_rx: oneshot::Receiver<TorExit>,
 ) -> Option<TorExit> {
-    actor.stop_gracefully().await.ok();
-    match tokio::time::timeout(REAP_TIMEOUT, exit_rx).await {
-        Ok(Ok(exit)) => Some(exit),
-        // Channel dropped (on_stop didn't signal) or timed out — proceed; the
-        // reap backstops still apply.
-        Ok(Err(_)) | Err(_) => None,
+    let teardown = async {
+        actor.stop_gracefully().await.ok();
+        exit_rx.await.ok()
+    };
+    match tokio::time::timeout(REAP_TIMEOUT, teardown).await {
+        Ok(exit) => exit,
+        Err(_timeout) => {
+            // Teardown wedged past the grace budget — force the actor down so it
+            // cannot linger; the child reap is backstopped by `kill_on_drop` /
+            // `TAKEOWNERSHIP`.
+            actor.kill();
+            None
+        }
     }
 }
 
@@ -600,7 +624,7 @@ async fn drive_incarnation(
     // control error is preserved rather than collapsed into a generic exit.
     let reply = tokio::select! {
         _ = &mut *shutdown => return IncarnationEnd::Shutdown,
-        () = tokio::time::sleep(SOCKS_DISCOVERY_TIMEOUT) => {
+        () = tokio::time::sleep(policy.socks_discovery_deadline) => {
             return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
         }
         r = actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
@@ -669,6 +693,7 @@ mod tests {
             stable_reset: Duration::from_millis(200),
             trust_retry: Duration::from_millis(20),
             bootstrap_deadline: Duration::from_secs(5),
+            socks_discovery_deadline: Duration::from_secs(2),
         }
     }
 
@@ -739,6 +764,10 @@ mod tests {
         );
         assert_eq!(
             classify(&ServiceFailure::NoSocksListener),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            classify(&ServiceFailure::Internal("gate task panicked".to_owned())),
             FailureClass::Transient
         );
     }
