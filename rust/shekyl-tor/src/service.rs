@@ -234,28 +234,23 @@ pub fn is_degraded(policy: &SupervisorPolicy, class: FailureClass, attempt: u32)
 
 /// Extract the first TCP listener from a `GETINFO net/listeners/socks` reply —
 /// the `SocksPort auto` discovery. Tor normally returns a space-separated list of
-/// **quoted** listener specs (`"127.0.0.1:9050"`, possibly `"unix:/…"`), but its
-/// `getsockname()`-fallback path (exactly the auto-port case discovery relies on)
-/// can emit a single **unquoted** address — so parse quoted segments first and, if
-/// there are none, fall back to whitespace-split raw tokens. The first token that
-/// parses as a socket address wins (unix and other non-TCP entries are skipped).
-/// `None` = no TCP SOCKS listener at all (a tor with nothing for SP-T1 to dial —
-/// [`ServiceFailure::NoSocksListener`], not `Ready`).
+/// **quoted** listener specs (`"127.0.0.1:9050"`, possibly `"unix:/…"`), but each
+/// entry is escaped independently and the `getsockname()`-fallback path (exactly
+/// the auto-port case discovery relies on) emits an **unquoted** `addr:port` — so
+/// a *mixed* list is possible. One uniform pass handles every shape: whitespace
+/// tokens, surrounding quotes stripped per token, first token that parses as a
+/// socket address wins (unix and other non-TCP entries never parse and are
+/// skipped; a quoted unix path containing spaces splits into tokens that also
+/// never parse — harmless). `None` = no TCP SOCKS listener at all (a tor with
+/// nothing for SP-T1 to dial — [`ServiceFailure::NoSocksListener`], not `Ready`).
 pub fn parse_socks_listeners(reply: &ControlReply) -> Option<SocketAddr> {
     let line = reply
         .lines()
         .iter()
         .find_map(|l| l.strip_prefix("net/listeners/socks="))?;
-    if line.contains('"') {
-        line.split('"')
-            .skip(1) // segments alternate outside/inside quotes; odd indices are inside
-            .step_by(2)
-            .find_map(|quoted| quoted.parse::<SocketAddr>().ok())
-    } else {
-        // Unquoted fallback: raw whitespace-split tokens.
-        line.split_ascii_whitespace()
-            .find_map(|tok| tok.parse::<SocketAddr>().ok())
-    }
+    line.split_ascii_whitespace()
+        .map(|tok| tok.trim_matches('"'))
+        .find_map(|tok| tok.parse::<SocketAddr>().ok())
 }
 
 /// Where the supervisor gets each incarnation's binary — discovery *inputs*, so
@@ -792,6 +787,21 @@ mod tests {
         );
     }
 
+    /// Each listener entry is escaped independently, so a MIXED list (a quoted
+    /// unix entry + an unquoted TCP fallback entry) is possible — the uniform
+    /// token pass must still find the TCP listener.
+    #[test]
+    fn socks_listener_mixed_quoted_and_unquoted_parses() {
+        let reply = reply_from(r#"net/listeners/socks="unix:/run/tor/socks" 127.0.0.1:9050"#);
+        assert_eq!(
+            parse_socks_listeners(&reply),
+            Some("127.0.0.1:9050".parse().unwrap())
+        );
+        // Quoted-unix-only genuinely has no TCP listener — still None.
+        let none = reply_from(r#"net/listeners/socks="unix:/run/tor/socks""#);
+        assert_eq!(parse_socks_listeners(&none), None);
+    }
+
     #[test]
     fn socks_listener_empty_or_absent_is_none() {
         assert_eq!(
@@ -919,6 +929,12 @@ mod live_tests {
     /// `Restarting` and then a fresh `Ready`, after which a clean shutdown
     /// leaves no orphan. The SOCKS endpoint is read from the posture channel
     /// both times (the consumers-never-cache contract exercised for real).
+    // Unix-only: the crash is delivered with `pkill -9` (deliberately an
+    // *external* SIGKILL with no handle — the shape of a real crash; exposing
+    // the child pid just for the test would soften the scenario). The
+    // integration lane is Linux; off Unix the test does not exist, so the crate
+    // stays cross-platform-buildable by construction.
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn crash_is_survived_respawn_reaches_ready_again() {
