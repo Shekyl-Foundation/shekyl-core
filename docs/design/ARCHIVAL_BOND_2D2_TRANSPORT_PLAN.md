@@ -165,6 +165,22 @@ into — *"using someone else's node, if it consistently fails to deliver your c
 relay your responses, can eventually cost your bond, and it sees your traffic — run your own
 node, here or on your own server."*
 
+**Enumeration — a per-posture *observability* property, not a throughput one (SP-T2 DQ-T2.5).**
+The postures also differ in **who can count `P`s**, and it cuts against the naive "local is strictly
+safest" read. In the **local** posture every persona connection (plus the principal) is a distinct
+`127.0.0.1` connection to your own daemon, so the daemon — or anyone with a view of its connection
+table (a subpoena of that machine, a compromise, a co-located process) — **can count the concurrent
+per-`P` connections and infer how many personas the wallet is running right now**, which is exactly
+the per-`P` unlinkability the firewall exists to protect. The per-`P` connection is *both* the
+isolation mechanism *and* the enumeration surface. The **remote-over-Tor** postures (②/③) put each
+persona on a **distinct circuit**, so a **path/network** observer cannot link the personas to one
+wallet or count them — though a *single shared remote daemon* still sees N terminating connections,
+so remote hides the count from the network, not unconditionally from the terminating node. Net:
+`local`'s TM-6 win (no network scan) is real, but it carries a **disclosed enumeration cost** against
+a local-daemon-table adversary — *convenience-with-a-named-residual*, not strictly-best; on the
+**unlinkability axis specifically**, remote-over-Tor is stronger. (Whether the *privacy-recommended*
+default shifts is settled by SP-T2's Round-0 measurement, `ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` §2.5/§3.)
+
 ---
 
 ## 5. The liveness model — ordinary, not a capital knife-edge (grounded in code)
@@ -364,7 +380,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 | --- | --- | --- |
 | **SP-T0** | **Bundled-Tor lifecycle** — wallet owns/launches/health-gates/shuts-down a Tor child process; wallet-private SOCKS + control port; **reuse-not-own packaging** (Guix + hash-pin, §15). | — (foundation) |
 | **SP-T1** | **Per-`P` SOCKS-auth client + the circuit-ID verification test** — a `ureq::Agent` with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit); test asserts **control-port circuit-ID disjointness** (§15). **The keystone.** | SP-T0 |
-| **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client; the live impl replacing `DaemonBlockSource`. | SP-T1, SP-0 (landed) |
+| **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client, **added *beside*** the direct-localhost source (posture→impl per §478; *not* a replacement of `DaemonBlockSource` — see `ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` §0). | SP-T1, SP-0 (landed) |
 | **SP-T3** | **v3 onion serving** (GF-9) — `P`'s inbound onion; HS key `p_slot`-bound, rotates with the persona; published only while serving; backoff-gated. | SP-T0; GATE2 serve/challenge surface |
 | **SP-T4** | **All `P` broadcasts** — origin-in-`P`-space *always* (discretionary `_spread`/`_bond_first` **and** the deadline-critical challenge-response submission), write-side no-principal-path (CX-2); anchor-free *timing* where applicable. | SP-T1; broadcast stub |
 | **SP-T5** | **Reconcile the stale 2d-1 comments** (Arti→SOCKS, multi-source→posture) — small code-only PR. | — |
