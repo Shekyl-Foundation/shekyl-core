@@ -1552,12 +1552,6 @@ static uint64_t count_eligible_outputs(const cryptonote::transaction& tx, bool i
           ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
           : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
     }
-    else if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
-    {
-      const auto& staked = std::get<cryptonote::txout_to_staked_key>(vout.target);
-      uint64_t lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
-      maturity = std::max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
-    }
     else
       continue;
 
@@ -1607,12 +1601,6 @@ static uint64_t compute_leaf_count_at_height(
           mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         else if (std::holds_alternative<cryptonote::txout_to_key>(vout.target))
           mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
-        else if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
-        {
-          const auto& staked = std::get<cryptonote::txout_to_staked_key>(vout.target);
-          uint64_t lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
-          mat = std::max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
-        }
         else
           continue;
 

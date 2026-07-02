@@ -8,7 +8,7 @@
 //! [`EconomicsParametersSnapshot`] is the **rulebook** returned by
 //! [`EconomicsEngine::parameters_snapshot`](super::traits::economics::EconomicsEngine::parameters_snapshot):
 //! the resolved [`EconomicParams`](shekyl_economics::EconomicParams)
-//! constants plus the staking [`TierTable`](shekyl_staking::TierTable),
+//! constants plus the staker-emission calibration consts,
 //! tagged with a [`CalibrationStamp`] for staleness detection. It is
 //! **not** a dashboard — time-varying derived state (live burn %,
 //! release multiplier, effective emission share, annualized yield)
@@ -17,12 +17,12 @@
 //!
 //! # Why these types live in `shekyl-engine-core`, not `shekyl-economics`
 //!
-//! The snapshot carries [`shekyl_staking::TierTable`]. `shekyl-staking`
-//! depends on `shekyl-economics`, so placing the snapshot in
-//! `shekyl-economics` would invert that dependency. `shekyl-engine-core`
-//! depends on both, so it is the natural home for the composed type.
-//! `ActivityMetric` and `shekyl_economics::params_digest` (which have no
-//! staking dependency) stay in `shekyl-economics`.
+//! Historical: the snapshot once carried the claim-era tier table, whose
+//! crate depended on `shekyl-economics`, so the composed type had to live
+//! a level up. The tier table is retired; the snapshot stays here because
+//! it is the engine's trait-surface type (`EconomicsEngine` is engine-core).
+//! `ActivityMetric` and `shekyl_economics::params_digest` stay in
+//! `shekyl-economics`.
 //!
 //! For the same reason the snapshot's staleness digest
 //! ([`snapshot_calibration_digest`]) is computed **here**, not in
@@ -64,8 +64,8 @@ pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x02;
 /// fields and backs the C4 fixture lineage guard (whose tested
 /// emission/burn values depend only on `EconomicParams`). The snapshot,
 /// however, also surfaces the staker-emission share/decay
-/// (`shekyl-economics` calibration consts) and the staking tier table
-/// (`shekyl-staking`) — all driven by `config/economics_params.json`. A
+/// (`shekyl-economics` calibration consts) — all driven by
+/// `config/economics_params.json`. A
 /// stamp that hashed only `EconomicParams` would **false-accept** a
 /// snapshot after one of those changed without a
 /// [`CALIBRATION_GENERATION`](shekyl_economics::CALIBRATION_GENERATION)
@@ -73,7 +73,7 @@ pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x02;
 /// error the digest backstops. This digest therefore folds every
 /// calibration value the snapshot displays.
 ///
-/// # Canonical layout (format version `0x01`)
+/// # Canonical layout (format version `0x02`)
 ///
 /// | Width            | Field                                                                |
 /// |------------------|----------------------------------------------------------------------|
@@ -119,11 +119,11 @@ pub(crate) struct CalibrationStamp {
     /// Blake2b-256 over the **full calibration surface this snapshot
     /// exposes** (see [`snapshot_calibration_digest`]): the
     /// [`EconomicParams`](shekyl_economics::EconomicParams) sub-digest
-    /// **plus** the staker-emission share/decay and the staking tier
-    /// table. **Not** raw JSON bytes, **not** bincode. Covering only
-    /// `EconomicParams` (as `shekyl_economics::params_digest` does, for
-    /// the C4 fixture lineage) would false-accept a snapshot whose staker
-    /// or tier calibration changed without a `generation` bump. Catches a
+    /// **plus** the staker-emission share/decay. **Not** raw JSON bytes,
+    /// **not** bincode. Covering only `EconomicParams` (as
+    /// `shekyl_economics::params_digest` does, for the C4 fixture lineage)
+    /// would false-accept a snapshot whose staker calibration changed
+    /// without a `generation` bump. Catches a
     /// generation increment with no parameter change, and silent
     /// serialization drift that `generation` alone would miss.
     pub params_digest: [u8; 32],

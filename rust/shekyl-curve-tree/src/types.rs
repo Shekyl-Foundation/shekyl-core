@@ -25,15 +25,6 @@ pub enum TargetKind {
     /// V3-from-genesis chain, but handled identically so reconstruction
     /// is bit-exact if the daemon ever indexes one.
     Key,
-    /// `txout_to_staked_key` — staking output. `lock_blocks` is the
-    /// tier-resolved lock duration (`shekyl_stake_lock_blocks(lock_tier)`),
-    /// resolved at the decode boundary against `shekyl-staking` so this
-    /// crate does not duplicate the tier→blocks table. Off the Tier-A
-    /// path (CT2_DRAIN_ORDER.md §8.2, Tier B).
-    StakedKey {
-        /// Tier-resolved lock duration in blocks.
-        lock_blocks: u64,
-    },
     /// Any other target variant — not a leaf candidate (the C++ `else
     /// continue`). The output still consumes a global output index.
     Other,

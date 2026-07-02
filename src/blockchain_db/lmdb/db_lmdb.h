@@ -438,18 +438,13 @@ private:
   // fix up anything that may be wrong due to past bugs
   virtual void fixup();
 
-  virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) override;
-  virtual staker_accrual_record get_staker_accrual(uint64_t height) const override;
-  virtual void remove_staker_accrual(uint64_t height) override;
-  virtual void set_staker_pool_balance(uint64_t balance) override;
-  virtual uint64_t get_staker_pool_balance() const override;
+  virtual void add_block_burn(uint64_t height, uint64_t amount) override;
+  virtual uint64_t get_block_burn(uint64_t height) const override;
+  virtual void remove_block_burn(uint64_t height) override;
   virtual void set_total_bonded_atomic(uint64_t balance) override;
   virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
   virtual uint64_t get_total_burned() const override;
-  virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override;
-  virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
-  virtual void remove_staker_claim_watermark(uint64_t output_index) override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const override;
@@ -640,8 +635,7 @@ private:
 
   MDB_dbi m_properties;
 
-  MDB_dbi m_staker_accrual;
-  MDB_dbi m_staker_claims;
+  MDB_dbi m_block_burn;
   MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata

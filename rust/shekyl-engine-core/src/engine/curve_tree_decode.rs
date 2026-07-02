@@ -152,9 +152,8 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.5: `txout_to_tagged_key`
 /// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::TAG_OUTPUT_TAGGED_KEY)) is the
 /// **sole** genesis output type, so every parsed [`Output`] classifies as a
-/// tagged key. [`TargetKind::Key`], [`TargetKind::StakedKey`], and
-/// [`TargetKind::Other`] remain in [`shekyl_curve_tree`] only for daemon
-/// leaf-set parity.
+/// tagged key. [`TargetKind::Key`] and [`TargetKind::Other`] remain in
+/// [`shekyl_curve_tree`] only for daemon leaf-set parity.
 ///
 /// Reversion clause (`21-reversion-clause-discipline.mdc`): if a future hard
 /// fork reintroduces a staked-key or bare-key output tag to the wire format,

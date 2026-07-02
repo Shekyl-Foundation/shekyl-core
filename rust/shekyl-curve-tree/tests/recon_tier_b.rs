@@ -17,12 +17,11 @@
 //! tests reconstruct the root from those inputs, in drain order `(maturity,
 //! gindex)`, and assert it equals consensus at every height.
 //!
-//! Two obligations remain `#[ignore]`d (no fake passes): a **staked** output
-//! (`max(stake_lock, +10)` maturity) — the engine's staking *send* path is being
-//! built separately, so the regtest can't yet mint one — and the adversarial
+//! One obligation remains `#[ignore]`d (no fake passes): the adversarial
 //! duplicate/malformed `0x07` case, which needs a hand-crafted C++ daemon oracle
-//! (no regtest). Their bodies reference the APIs they will use so signature drift
-//! fails compile before they resume.
+//! (no regtest). Its body references the APIs it will use so signature drift
+//! fails compile before it resumes. (The former staked-output obligation was
+//! retired with the claim-era cutover — no staked output type exists to mint.)
 
 use serde_json::Value;
 use shekyl_curve_tree::recon::{
@@ -220,35 +219,6 @@ fn reorg_with_spend_mixed_leaves() {
         "reorg chain must contain a spend"
     );
     assert_reconstructs(&blocks, "reorg");
-}
-
-/// Drift canary for the deferred staked obligation: references the
-/// `StakedKey { lock_blocks }` maturity path the test will assert once the
-/// engine can mint a staked output.
-fn _staked_drift_canary() {
-    let out = OutputIdentity {
-        output_key: [0u8; 32],
-        commitment: Some([0u8; 32]),
-        h_pqc: [0u8; 32],
-        target: TargetKind::StakedKey { lock_blocks: 0 },
-    };
-    let txs = [TxOutputs {
-        is_miner: false,
-        outputs: std::slice::from_ref(&out),
-    }];
-    let mut entries = Vec::new();
-    let gindex = collect_block_leaves(0, &txs, 0, &mut entries);
-    let root = root_from_scalars(&assemble_leaf_stream(&entries, gindex));
-    std::hint::black_box((gindex, root));
-}
-
-#[test]
-#[ignore = "Tier B: needs the engine staking SEND path (built separately) to mint a staked output + a ct2_tier_b staked chain"]
-fn staked_output_uses_max_lock_and_spendable() {
-    _staked_drift_canary();
-    todo!(
-        "staked send path pending; max(stake_lock, +10) maturity not yet mintable on the regtest"
-    );
 }
 
 #[test]

@@ -333,8 +333,8 @@ impl CurveTreeClient {
     ///
     /// `next_gindex = max(persisted gindex) + 1` (0 when empty) is
     /// absolute-exact on any chain whose root the wallet can verify:
-    /// consensus admits only tagged-key and staked-key outputs (both
-    /// leaf-eligible) and every output carries a commitment slot, so
+    /// consensus admits only tagged-key outputs (the claim-era staked-key
+    /// output type is retired) and every output carries a commitment slot, so
     /// gindex is dense over leaves. For the defensively-mirrored
     /// leaf-ineligible class (unreachable on a consensus-valid block) the
     /// guarantee degrades to order-isomorphism with the consensus leaf
@@ -346,7 +346,7 @@ impl CurveTreeClient {
     /// and rejected — schema surface for consensus-unreachable state.
     /// **Reopening criterion:** a consensus change admitting an output
     /// type that is not leaf-eligible (i.e., the daemon's
-    /// `check_output_types` accepted set grows beyond tagged/staked keys)
+    /// `check_output_types` accepted set grows beyond the tagged key)
     /// makes gindex sparse over leaves; that change must land the cursor
     /// as a store-meta field written by `append_block_deltas`, as schema
     /// work with its own KAT, before any such block can be ingested.
@@ -853,14 +853,6 @@ mod tests {
         }
     }
 
-    fn staked_raw(lock_blocks: u64) -> RawOutput {
-        RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
-            target: TargetKind::StakedKey { lock_blocks },
-        }
-    }
-
     /// One coinbase tx carrying a per-output `0x07` hash blob of `n` × 32
     /// bytes (one well-formed hash per output, as a V3 chain always emits).
     fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
@@ -900,8 +892,13 @@ mod tests {
 
     fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
         for height in 0..=tip {
-            if height == 1 {
-                let outputs = [coinbase_raw(), staked_raw(150_000)];
+            if height == 64 {
+                // Two coinbase outputs: the second is the never-draining
+                // long-maturity witness (matures at 64 + COINBASE_LOCK_WINDOW
+                // = 124, far past the test's 66-block window). Post claim-era
+                // cutover the coinbase lock is the longest wire-real maturity,
+                // so a near-tip coinbase replaces the old staked fixture.
+                let outputs = [coinbase_raw(), coinbase_raw()];
                 ingest_outputs_at(client, height, &outputs);
             } else {
                 let outputs = [coinbase_raw()];
@@ -1475,7 +1472,7 @@ mod tests {
         let out0 = [coinbase_raw()];
         let blob0 = [0x07u8; 32];
         let txs0 = coinbase_block(&out0, &blob0);
-        let out1 = [coinbase_raw(), staked_raw(1_000)];
+        let out1 = [coinbase_raw(), coinbase_raw()];
         let blob1 = [0x07u8; 64];
         let txs1 = coinbase_block(&out1, &blob1);
         let blocks = [
@@ -1505,9 +1502,10 @@ mod tests {
         // (height 5 coinbase, maturity 65) drains only on the orphaned
         // suffix block 66. Rollback to fork 65 must migrate it back to
         // pending so the new branch's block 66 drains the same row. The
-        // height-1 staked output pins the never-draining long-maturity half
-        // of the invariant: pending equality catches it even though no
-        // practical root window can.
+        // height-64 second coinbase (maturity 64 + COINBASE_LOCK_WINDOW,
+        // far past the 66-block window) pins the never-draining
+        // long-maturity half of the invariant: pending equality catches it
+        // even though no practical root window can.
         let mut orphaned = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut orphaned, 66);
         assert!(
@@ -1535,8 +1533,8 @@ mod tests {
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .any(|entry| entry.maturity == BlockHeight(150_001)),
-            "long-maturity staked row stays pending and directly compared"
+                .any(|entry| entry.maturity == BlockHeight(64 + COINBASE_LOCK_WINDOW as u64)),
+            "long-maturity coinbase row stays pending and directly compared"
         );
 
         let output = [coinbase_raw()];
@@ -1815,119 +1813,6 @@ mod tests {
                 "height {h}"
             );
         }
-        drop(resumed);
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn staked_locks_drain_and_persist_across_restart() {
-        // B3 split from the plan, both halves over one restart.
-        //
-        // (a) A synthetic 300-block stake lock — tractable in a test, same
-        //     `StakedKey` code path as any consensus tier — must drain at
-        //     the right height on the *resumed* client, identically to a
-        //     run that never restarted.
-        // (b) The adversarial 150_000-block stake must survive the same
-        //     restart byte-correct in the pending table and never drain
-        //     inside the window — asserted directly against the table, so
-        //     a long-maturity resume bug cannot hide behind root checks
-        //     that never reach its maturity.
-        let path = temp_client_path("staked-restart");
-        const SHORT_LOCK: u64 = 300;
-        const LONG_LOCK: u64 = 150_000;
-        let staked = |lock_blocks: u64| RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
-            target: TargetKind::StakedKey { lock_blocks },
-        };
-        let cb = [coinbase_raw()];
-        let outs_short = [staked(SHORT_LOCK)];
-        let outs_long = [staked(LONG_LOCK)];
-        let blob_cb = [0x07u8; 32];
-        let blob_short = [0x11u8; 32];
-        let blob_long = [0x13u8; 32];
-        let block0_txs = vec![
-            TxLeafInputs {
-                is_miner: true,
-                leaf_hash_blob: Some(&blob_cb),
-                outputs: &cb,
-            },
-            TxLeafInputs {
-                is_miner: false,
-                leaf_hash_blob: Some(&blob_short),
-                outputs: &outs_short,
-            },
-            TxLeafInputs {
-                is_miner: false,
-                leaf_hash_blob: Some(&blob_long),
-                outputs: &outs_long,
-            },
-        ];
-
-        {
-            let mut client = CurveTreeClient::open(&path).unwrap();
-            client
-                .ingest_block(BlockLeaves {
-                    height: BlockHeight(0),
-                    txs: &block0_txs,
-                })
-                .unwrap();
-            // Stop inside the short stake's lock window (matures at 300,
-            // drains at 301): the restart lands while both stakes pend.
-            ingest_coinbase_blocks(&mut client, 1, 250);
-        }
-
-        let mut resumed = CurveTreeClient::open(&path).unwrap();
-
-        // (b) pre-drive: the 150k stake came back byte-correct.
-        let pending = resumed.store.read_pending_candidates().unwrap();
-        let long_row = pending
-            .iter()
-            .find(|e| e.gindex == Gindex(2))
-            .expect("150k stake pending after resume");
-        assert_eq!(long_row.maturity, BlockHeight(LONG_LOCK));
-        assert_eq!(long_row.creation_height, BlockHeight(0));
-        assert_eq!(
-            long_row.identity.target,
-            TargetKind::StakedKey {
-                lock_blocks: LONG_LOCK
-            }
-        );
-
-        // (a) drive the resumed client past the short stake's drain
-        // boundary and compare against a continuous run.
-        ingest_coinbase_blocks(&mut resumed, 251, SHORT_LOCK + 1);
-        let mut continuous = CurveTreeClient::new();
-        continuous
-            .ingest_block(BlockLeaves {
-                height: BlockHeight(0),
-                txs: &block0_txs,
-            })
-            .unwrap();
-        ingest_coinbase_blocks(&mut continuous, 1, SHORT_LOCK + 1);
-
-        assert_eq!(resumed.entries, continuous.entries);
-        let drained = resumed.store.read_drained_entries().unwrap();
-        assert_eq!(drained, continuous.store.read_drained_entries().unwrap());
-        assert!(
-            drained
-                .iter()
-                .any(|e| e.maturity == BlockHeight(SHORT_LOCK)),
-            "short stake must drain at lock expiry on the resumed client"
-        );
-        assert_eq!(
-            resumed.root_at(BlockHeight(SHORT_LOCK + 1)).unwrap(),
-            continuous.root_at(BlockHeight(SHORT_LOCK + 1)).unwrap()
-        );
-
-        // (b) post-drive: the 150k stake never drained and still pends.
-        assert!(drained.iter().all(|e| e.gindex != Gindex(2)));
-        assert!(resumed
-            .store
-            .read_pending_candidates()
-            .unwrap()
-            .iter()
-            .any(|e| e.gindex == Gindex(2)));
         drop(resumed);
         std::fs::remove_file(&path).unwrap();
     }

@@ -12,7 +12,6 @@ members = [
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
     "shekyl-wire",
     "shekyl-economics",
-    "shekyl-staking",
     "shekyl-economics-sim",
 
     # Agent-based staker-archival coverage simulation (iteration 1).

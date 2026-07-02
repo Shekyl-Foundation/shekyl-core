@@ -59,10 +59,13 @@ const META_SCHEMA_VERSION: &str = "schema_version";
 /// pending table never maintained) is v2-valid and silently wrong under
 /// the v3 contract — resume would drop every undrained leaf and fail as
 /// a baffling root mismatch at the first post-resume drain. The bump
-/// retires that shape with a typed error. Pre-genesis disposition for a
+/// retires that shape with a typed error. Version 4 retires the claim-era
+/// `StakedKey` target (tag 2 in the `leaf_meta` target byte + its
+/// `lock_blocks` extra at bytes 114..122): a ≤3 store may contain tag-2
+/// rows this build cannot represent. Pre-genesis disposition for any
 /// mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 3;
+const SCHEMA_VERSION: u64 = 4;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -1226,9 +1229,6 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     }
     buf[81..113].copy_from_slice(&entry.identity.h_pqc);
     buf[113] = encode_target(&entry.identity.target);
-    if let TargetKind::StakedKey { lock_blocks } = entry.identity.target {
-        buf[114..122].copy_from_slice(&lock_blocks.to_be_bytes());
-    }
     // Schema v2: creation_height in the formerly-free range. The value
     // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
     // schema_version cell exists — redb cannot see this layout change.
@@ -1303,8 +1303,9 @@ fn decode_pending(buf: &[u8; 320]) -> Result<LeafEntry, StoreError> {
 fn encode_target(target: &TargetKind) -> u8 {
     match target {
         TargetKind::TaggedKey => 0,
+        // Tag 2 was the claim-era `StakedKey { lock_blocks }` (schema ≤ 3);
+        // retired with the claim-era cutover, never reassigned.
         TargetKind::Key => 1,
-        TargetKind::StakedKey { .. } => 2,
         TargetKind::Other => 3,
     }
 }
@@ -1318,14 +1319,12 @@ fn store_mixed_root_err(err: MixedRootError) -> StoreError {
     }
 }
 
-fn decode_target(tag: u8, extra: &[u8]) -> Result<TargetKind, StoreError> {
+fn decode_target(tag: u8, _extra: &[u8]) -> Result<TargetKind, StoreError> {
     Ok(match tag {
         0 => TargetKind::TaggedKey,
         1 => TargetKind::Key,
-        2 => {
-            let lock_blocks = u64::from_be_bytes(extra[..8].try_into().expect("8 bytes"));
-            TargetKind::StakedKey { lock_blocks }
-        }
+        // 2 was the claim-era StakedKey; a schema-4 store never contains it
+        // (the schema gate refuses ≤3 stores before decode reaches here).
         3 => TargetKind::Other,
         _ => return Err(StoreError::CorruptMeta("bad target tag")),
     })
@@ -1949,12 +1948,9 @@ mod tests {
         } else {
             None
         };
-        let target = match rng.next_u32() % 4 {
+        let target = match rng.next_u32() % 3 {
             0 => TargetKind::TaggedKey,
             1 => TargetKind::Key,
-            2 => TargetKind::StakedKey {
-                lock_blocks: u64::from(rng.next_u32()),
-            },
             _ => TargetKind::Other,
         };
         LeafEntry {
@@ -2052,9 +2048,15 @@ mod tests {
                 live_pending.insert(entry.gindex.0, entry);
                 added.push(entry);
             }
+            // Production drain convention (CT-2 KAT, owned by
+            // `CurveTreeClient::drained_through`): the block at height H
+            // drains rows with maturity == H - 1 (inclusive cutoff H - 1).
+            // The fixture used to drain maturity == H, which diverged from
+            // the pinned mapping at exactly a fork boundary — invisible
+            // until a random pattern put a maturity on a fork height.
             let due: Vec<u64> = live_pending
                 .values()
-                .filter(|e| e.maturity.0 == height)
+                .filter(|e| e.maturity.0 + 1 == height)
                 .map(|e| e.gindex.0)
                 .collect();
             let drained: Vec<LeafEntry> = due
@@ -2083,11 +2085,17 @@ mod tests {
         for fork in [55u64, 21] {
             store.rollback_to_fork(BlockHeight(fork)).unwrap();
             let fresh = replay_prefix(&blocks, fork);
-            assert_eq!(
-                logical_snapshot(&store),
-                logical_snapshot(&fresh),
-                "rollback to {fork} must equal prefix replay"
-            );
+            let a = logical_snapshot(&store);
+            let b = logical_snapshot(&fresh);
+            if a != b {
+                // Set-level diff: a raw Snapshot assert is unreadable.
+                let g = |v: &[LeafEntry]| v.iter().map(|e| e.gindex.0).collect::<Vec<_>>();
+                eprintln!("fork={fork}");
+                eprintln!("drained rollback={:?} replay={:?}", g(&a.0), g(&b.0));
+                eprintln!("pending rollback={:?} replay={:?}", g(&a.1), g(&b.1));
+                eprintln!("count {} vs {}, tip {:?} vs {:?}", a.2, b.2, a.3, b.3);
+            }
+            assert_eq!(a, b, "rollback to {fork} must equal prefix replay");
             assert_disjoint(&store);
         }
     }
@@ -2468,6 +2476,50 @@ mod tests {
                 ),
                 "expected SchemaVersionMismatch(found={CT3A_SCHEMA_VERSION}, \
                  expected={SCHEMA_VERSION}), got: {err:?}"
+            );
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// The exact boundary the claim-era cutover advertises: a v3 store (the
+    /// immediately-prior production layout, the one most likely to be
+    /// encountered) is refused, because it can hold tag-2 `StakedKey` leaf
+    /// rows this v4 build cannot represent. Pins the `<= 3` refusal so a
+    /// future range/shim refactor cannot silently start accepting v3.
+    #[test]
+    fn schema_version_guard_rejects_prior_v3_store() {
+        let path = temp_store_path("schema-guard-v3");
+
+        // Build through the real path, then stamp the version cell back to 3.
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .unwrap();
+        }
+        const PRIOR_V3: u64 = 3;
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_SCHEMA_VERSION, &PRIOR_V3).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        for _ in 0..2 {
+            let err = LeafStore::open(&path).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    StoreError::SchemaVersionMismatch {
+                        found: PRIOR_V3,
+                        expected: SCHEMA_VERSION,
+                    }
+                ),
+                "expected SchemaVersionMismatch(found=3, expected={SCHEMA_VERSION}), got: {err:?}"
             );
         }
 

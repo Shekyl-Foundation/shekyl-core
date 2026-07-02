@@ -10636,3 +10636,40 @@ Retained for citation in review; each links to the canonical record.
   existing invalid-parameters code (1), so no error-surface change. The
   original deferral reason ("mid-review of #224") expired with #224's merge;
   fixed on-find per the fix-as-we-find rule.
+
+- **Pre-existing: `total_burned` stat undercounts realized fee-burn (PR-4 review,
+  2026-07-02).** The add-block accounting path
+  (`blockchain.cpp` `handle_block_to_main_chain`) computes its burn with
+  `compute_fee_burn(fee_summary, /*tx_volume*/ 0, …)`, forcing `burn_pct = 0` for
+  the fee portion, while `validate_miner_transaction` uses `tx_volume_avg` (real
+  burn_pct). So the persisted `block_burn` record + `total_burned` stat capture
+  only the staker-inflow burn, never the consensus fee-burn. PRE-EXISTING (the
+  old accrual path passed 0 too); PR-4 only made it a persisted per-height
+  record. It is internally symmetric (pop removes exactly what add wrote — no
+  reorg drift) and `total_burned` is a stat, not consensus, so no fork. Fix:
+  feed the add-path `compute_fee_burn` the same `tx_volume_avg` validation uses,
+  or record `fee - effective_fee` explicitly. Own PR (touches burn-stat
+  semantics, not claim-era).
+
+- **Pre-existing: `shekyl_engine_core::error::EngineCoreError` still carries dead
+  claim-era variants (PR-4 review):** `NotStaked`, `NoBacklog`, `NotMatured`,
+  `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
+  `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
+  claim-era retirement; sweep with the next engine-core error-surface pass.
+
+- **DECIDED (2026-07-02, own PR after #232): delete the M5 citation gate
+  (`scripts/ci/check_phase2h_citations.sh` + its workflow step).** The gate is
+  convention theater: it validates that cited `*_PLAN.md` files EXIST (never
+  reads them — blank/gibberish files pass) and that source cites are within
+  `wc -l` (never the content). Any element of the spec or the code can change
+  and it cannot fire — "that's not the behavior of a rigorously coded program,
+  that's the signature of a virus or trojan." Real spec enforcement in this
+  crate is the differential harness itself (T2 adversarial corpus byte-equality
+  vs the C reference, verifier tests, crate-invariant fork-pin check) — tests
+  that fire on behavioral change. The gate's only yield has been blocking CI on
+  a doc archival (`docs/design/` → `docs/completed/`, 13 false FATALs on #232).
+  #232 carries the minimal unblock (basename resolution + rustdoc link
+  repoints); the deletion PR removes the script, the `M5 citation-validation
+  script` workflow step, and the script's `paths:` trigger entries. Keep
+  `check_randomx_crate_invariants.sh` (the fork-pin-sha check is a real
+  substrate pin). Sequenced after #232 to avoid same-file conflicts.

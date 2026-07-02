@@ -127,7 +127,7 @@ if(UNIX)
   list(REMOVE_DUPLICATES _shekyl_nm_candidates)
   if(_shekyl_nm_candidates)
     add_custom_command(TARGET daemon POST_BUILD
-      COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep -c GLOBAL_DISPATCH || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "$<TARGET_FILE:daemon>" ${_shekyl_nm_candidates}
+      COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep GLOBAL_DISPATCH | grep -cv '[$]got' || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "$<TARGET_FILE:daemon>" ${_shekyl_nm_candidates}
       VERBATIM
       COMMENT "Asserting single tracing GLOBAL_DISPATCH in shekyld")
   endif()

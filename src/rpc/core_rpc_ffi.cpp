@@ -407,8 +407,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_output_distribution", on_get_output_distribution,   COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
-        DJRPC_WE("get_staking_info",       on_get_staking_info,           COMMAND_RPC_GET_STAKING_INFO),
-        DJRPC_WE("estimate_claim_reward",  on_estimate_claim_reward,      COMMAND_RPC_ESTIMATE_CLAIM_REWARD),
         // FCMP++ curve-tree membership-path endpoints. The handlers + KV-serializable
         // request/response structs already exist and are registered in the legacy epee
         // map (core_rpc_server.h); they were missing here, so on the default Rust/Axum

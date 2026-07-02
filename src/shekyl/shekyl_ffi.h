@@ -227,26 +227,6 @@ ShekylBurnSplit shekyl_compute_burn_split(
     uint64_t burn_pct,
     uint64_t staker_pool_share);
 
-/// Compute stake weight for a given amount and tier.
-uint64_t shekyl_stake_weight(uint64_t amount, uint8_t tier_id);
-/// Minimum lock duration in blocks for a stake tier.
-uint64_t shekyl_stake_lock_blocks(uint8_t tier_id);
-/// Yield multiplier (fixed-point) for a stake tier.
-uint64_t shekyl_stake_yield_multiplier(uint8_t tier_id);
-/// Per-block staker reward share: (total_reward_at_height * stake_weight) / total_weighted_stake.
-/// total_weighted_stake is passed as a 128-bit value split into lo/hi u64 halves.
-/// If overflow_out is non-null, *overflow_out is set to 1 when the quotient does not fit in u64.
-uint64_t shekyl_calc_per_block_staker_reward(
-    uint64_t total_reward_at_height,
-    uint64_t stake_weight,
-    uint64_t total_weighted_stake_lo,
-    uint64_t total_weighted_stake_hi,
-    uint8_t *overflow_out);
-uint32_t shekyl_stake_tier_count(void);
-/// Null-terminated UTF-8 tier name, or null if tier_id is invalid.
-const char *shekyl_stake_tier_name(uint8_t tier_id);
-uint64_t shekyl_stake_max_claim_range(void);
-uint64_t shekyl_calc_stake_ratio(uint64_t total_staked, uint64_t circulating_supply);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 

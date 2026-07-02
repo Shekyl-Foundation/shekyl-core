@@ -283,8 +283,7 @@ const char* const LMDB_HF_VERSIONS = "hf_versions";
 
 const char* const LMDB_PROPERTIES = "properties";
 
-const char* const LMDB_STAKER_ACCRUAL = "staker_accrual";
-const char* const LMDB_STAKER_CLAIMS = "staker_claims";
+const char* const LMDB_BLOCK_BURN = "block_burn";
 const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
 const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
 const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
@@ -1627,8 +1626,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
 
   lmdb_db_open(txn, LMDB_PROPERTIES, MDB_CREATE, m_properties, "Failed to open db handle for m_properties");
 
-  lmdb_db_open(txn, LMDB_STAKER_ACCRUAL, MDB_INTEGERKEY | MDB_CREATE, m_staker_accrual, "Failed to open db handle for m_staker_accrual");
-  lmdb_db_open(txn, LMDB_STAKER_CLAIMS, MDB_INTEGERKEY | MDB_CREATE, m_staker_claims, "Failed to open db handle for m_staker_claims");
+  lmdb_db_open(txn, LMDB_BLOCK_BURN, MDB_INTEGERKEY | MDB_CREATE, m_block_burn, "Failed to open db handle for m_block_burn");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SERVE_CREDIT, MDB_CREATE, m_archival_serve_credit,
     "Failed to open db handle for m_archival_serve_credit");
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND, MDB_CREATE, m_archival_bond,
@@ -4751,19 +4749,19 @@ void BlockchainLMDB::fixup()
   BlockchainDB::fixup();
 }
 
-void BlockchainLMDB::add_staker_accrual(uint64_t height, const staker_accrual_record& record)
+void BlockchainLMDB::add_block_burn(uint64_t height, uint64_t amount)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
   MDB_val k = {sizeof(height), (void *)&height};
-  MDB_val v = {sizeof(record), (void *)&record};
-  int result = mdb_put(*m_write_txn, m_staker_accrual, &k, &v, 0);
+  MDB_val v = {sizeof(amount), (void *)&amount};
+  int result = mdb_put(*m_write_txn, m_block_burn, &k, &v, 0);
   if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to add staker accrual: ", result).c_str()));
+    throw0(DB_ERROR(lmdb_error("Failed to add block burn: ", result).c_str()));
 }
 
-BlockchainDB::staker_accrual_record BlockchainLMDB::get_staker_accrual(uint64_t height) const
+uint64_t BlockchainLMDB::get_block_burn(uint64_t height) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -4771,40 +4769,38 @@ BlockchainDB::staker_accrual_record BlockchainLMDB::get_staker_accrual(uint64_t 
   TXN_PREFIX_RDONLY();
   MDB_val k = {sizeof(height), (void *)&height};
   MDB_val v;
-  auto get_result = mdb_get(m_txn, m_staker_accrual, &k, &v);
+  auto get_result = mdb_get(m_txn, m_block_burn, &k, &v);
   if (get_result == MDB_NOTFOUND)
-    return {0, 0, 0, 0, 0};
+  {
+    TXN_POSTFIX_RDONLY();
+    return 0;
+  }
   if (get_result)
-    throw0(DB_ERROR(lmdb_error("Failed to get staker accrual: ", get_result).c_str()));
-  staker_accrual_record record = {0, 0, 0, 0, 0};
-  memcpy(&record, v.mv_data, std::min(v.mv_size, sizeof(record)));
+    throw0(DB_ERROR(lmdb_error("Failed to get block burn: ", get_result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR(("Bad block burn record at height " + std::to_string(height)
+      + ": expected " + std::to_string(sizeof(uint64_t)) + " bytes, got "
+      + std::to_string(v.mv_size)).c_str()));
+  uint64_t amount;
+  memcpy(&amount, v.mv_data, sizeof(amount));
   TXN_POSTFIX_RDONLY();
-  return record;
+  return amount;
 }
 
-void BlockchainLMDB::remove_staker_accrual(uint64_t height)
+void BlockchainLMDB::remove_block_burn(uint64_t height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
   MDB_val k = {sizeof(height), (void *)&height};
-  int result = mdb_del(*m_write_txn, m_staker_accrual, &k, nullptr);
+  int result = mdb_del(*m_write_txn, m_block_burn, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
-    throw0(DB_ERROR(lmdb_error("Failed to remove staker accrual: ", result).c_str()));
+    throw0(DB_ERROR(lmdb_error("Failed to remove block burn: ", result).c_str()));
 }
 
-void BlockchainLMDB::set_staker_pool_balance(uint64_t balance)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
 
-  const std::string key = "staker_pool_balance";
-  MDB_val k = {key.size(), (void *)key.data()};
-  MDB_val v = {sizeof(balance), (void *)&balance};
-  int result = mdb_put(*m_write_txn, m_properties, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to set staker pool balance: ", result).c_str()));
-}
+
+
 
 void BlockchainLMDB::set_total_bonded_atomic(uint64_t balance)
 {
@@ -4844,28 +4840,6 @@ uint64_t BlockchainLMDB::get_total_bonded_atomic() const
   return balance;
 }
 
-uint64_t BlockchainLMDB::get_staker_pool_balance() const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  const std::string key = "staker_pool_balance";
-  MDB_val k = {key.size(), (void *)key.data()};
-  MDB_val v;
-  auto get_result = mdb_get(m_txn, m_properties, &k, &v);
-  if (get_result == MDB_NOTFOUND)
-  {
-    TXN_POSTFIX_RDONLY();
-    return 0;
-  }
-  if (get_result)
-    throw0(DB_ERROR(lmdb_error("Failed to get staker pool balance: ", get_result).c_str()));
-  uint64_t balance;
-  memcpy(&balance, v.mv_data, sizeof(balance));
-  TXN_POSTFIX_RDONLY();
-  return balance;
-}
 
 void BlockchainLMDB::set_total_burned(uint64_t amount)
 {
@@ -4903,50 +4877,8 @@ uint64_t BlockchainLMDB::get_total_burned() const
   return amount;
 }
 
-void BlockchainLMDB::set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
 
-  MDB_val k = {sizeof(output_index), (void *)&output_index};
-  MDB_val v = {sizeof(last_claimed_height), (void *)&last_claimed_height};
-  int result = mdb_put(*m_write_txn, m_staker_claims, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to set staker claim watermark: ", result).c_str()));
-}
 
-uint64_t BlockchainLMDB::get_staker_claim_watermark(uint64_t output_index) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  MDB_val k = {sizeof(output_index), (void *)&output_index};
-  MDB_val v;
-  auto get_result = mdb_get(m_txn, m_staker_claims, &k, &v);
-  if (get_result == MDB_NOTFOUND)
-  {
-    TXN_POSTFIX_RDONLY();
-    return 0;
-  }
-  if (get_result)
-    throw0(DB_ERROR(lmdb_error("Failed to get staker claim watermark: ", get_result).c_str()));
-  uint64_t height;
-  memcpy(&height, v.mv_data, sizeof(height));
-  TXN_POSTFIX_RDONLY();
-  return height;
-}
-
-void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  MDB_val k = {sizeof(output_index), (void *)&output_index};
-  int result = mdb_del(*m_write_txn, m_staker_claims, &k, nullptr);
-  if (result && result != MDB_NOTFOUND)
-    throw0(DB_ERROR(lmdb_error("Failed to remove staker claim watermark: ", result).c_str()));
-}
 
 int BlockchainLMDB::archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const
 {

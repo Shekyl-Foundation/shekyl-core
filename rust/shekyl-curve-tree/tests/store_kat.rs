@@ -116,9 +116,6 @@ fn store_root_matches_oracle_and_header_tier_a() {
                             shekyl_curve_tree::TargetKind::TaggedKey
                         }
                         shekyl_curve_tree::TargetKind::Key => shekyl_curve_tree::TargetKind::Key,
-                        shekyl_curve_tree::TargetKind::StakedKey { lock_blocks } => {
-                            shekyl_curve_tree::TargetKind::StakedKey { lock_blocks }
-                        }
                         shekyl_curve_tree::TargetKind::Other => {
                             shekyl_curve_tree::TargetKind::Other
                         }

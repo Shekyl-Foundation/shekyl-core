@@ -182,8 +182,6 @@ namespace cryptonote
         MAP_JON_RPC_WE("get_output_distribution", on_get_output_distribution, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION)
         MAP_JON_RPC_WE_IF("prune_blockchain",    on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN, !m_restricted)
         MAP_JON_RPC_WE_IF("flush_cache",         on_flush_cache,                COMMAND_RPC_FLUSH_CACHE, !m_restricted)
-        MAP_JON_RPC_WE("get_staking_info",       on_get_staking_info,           COMMAND_RPC_GET_STAKING_INFO)
-        MAP_JON_RPC_WE("estimate_claim_reward", on_estimate_claim_reward,      COMMAND_RPC_ESTIMATE_CLAIM_REWARD)
         MAP_JON_RPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH)
         MAP_JON_RPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO)
         MAP_JON_RPC_WE("get_curve_tree_checkpoint",  on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT)
@@ -256,8 +254,6 @@ namespace cryptonote
     bool on_get_output_distribution(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_prune_blockchain(const COMMAND_RPC_PRUNE_BLOCKCHAIN::request& req, COMMAND_RPC_PRUNE_BLOCKCHAIN::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_flush_cache(const COMMAND_RPC_FLUSH_CACHE::request& req, COMMAND_RPC_FLUSH_CACHE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_get_staking_info(const COMMAND_RPC_GET_STAKING_INFO::request& req, COMMAND_RPC_GET_STAKING_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_estimate_claim_reward(const COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request& req, COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);

@@ -385,8 +385,6 @@ namespace cryptonote
     {
       if (std::holds_alternative<txin_to_key>(in))
         amount_in += std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        amount_in += std::get<txin_stake_claim>(in).amount;
       else
         CHECK_AND_ASSERT_MES(false, 0, "unexpected type id in transaction");
     }
@@ -658,8 +656,6 @@ namespace cryptonote
     {
       if (std::holds_alternative<txin_to_key>(in))
         money += std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        money += std::get<txin_stake_claim>(in).amount;
       else if (std::holds_alternative<txin_gen>(in))
         continue;
       else
@@ -692,7 +688,6 @@ namespace cryptonote
   {
     size_t bond_posts = 0;
     size_t serve_credits = 0;
-    size_t stake_claims = 0;
     size_t spend_keys = 0;
     for (const auto& in : tx.vin)
     {
@@ -706,8 +701,6 @@ namespace cryptonote
         ++serve_credits;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         ++bond_posts;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        ++stake_claims;
       else if (std::holds_alternative<txin_to_key>(in))
         ++spend_keys;
       else
@@ -717,9 +710,9 @@ namespace cryptonote
         return false;
       }
     }
-    if (serve_credits > 0 && (bond_posts + stake_claims + spend_keys) > 0)
+    if (serve_credits > 0 && (bond_posts + spend_keys) > 0)
     {
-      MERROR("archival serve-credit vins cannot mix with spend/claim/bond inputs, tx id="
+      MERROR("archival serve-credit vins cannot mix with spend/bond inputs, tx id="
         << get_transaction_hash(tx));
       return false;
     }
@@ -728,9 +721,9 @@ namespace cryptonote
       MERROR("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
       return false;
     }
-    if (bond_posts == 1 && (serve_credits + stake_claims) > 0)
+    if (bond_posts == 1 && serve_credits > 0)
     {
-      MERROR("archival bond-post cannot mix with serve-credit or stake-claim vins, tx id="
+      MERROR("archival bond-post cannot mix with serve-credit vins, tx id="
         << get_transaction_hash(tx));
       return false;
     }
@@ -764,8 +757,6 @@ namespace cryptonote
       uint64_t amount = 0;
       if (std::holds_alternative<txin_to_key>(in))
         amount = std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        amount = std::get<txin_stake_claim>(in).amount;
       else if (std::holds_alternative<txin_gen>(in))
         continue;
       else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
@@ -809,8 +800,6 @@ namespace cryptonote
       output_public_key = std::get<txout_to_key>(out.target).key;
     else if (std::holds_alternative<txout_to_tagged_key>(out.target))
       output_public_key = std::get<txout_to_tagged_key>(out.target).key;
-    else if (std::holds_alternative<txout_to_staked_key>(out.target))
-      output_public_key = std::get<txout_to_staked_key>(out.target).key;
     else
     {
       LOG_ERROR("Unexpected output target type found (index " << out.target.index() << ")");
@@ -824,8 +813,6 @@ namespace cryptonote
   {
     if (std::holds_alternative<txout_to_tagged_key>(out.target))
       return std::optional<crypto::view_tag>(std::get<txout_to_tagged_key>(out.target).view_tag);
-    if (std::holds_alternative<txout_to_staked_key>(out.target))
-      return std::optional<crypto::view_tag>(std::get<txout_to_staked_key>(out.target).view_tag);
     return std::optional<crypto::view_tag>();
   }
   //---------------------------------------------------------------
@@ -856,26 +843,6 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, tx_out& out)
-  {
-    out.amount = amount;
-    txout_to_staked_key tsk;
-    tsk.key = output_public_key;
-    tsk.view_tag = view_tag;
-    tsk.lock_tier = lock_tier;
-    out.target = tsk;
-  }
-  //---------------------------------------------------------------
-  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier)
-  {
-    if (std::holds_alternative<txout_to_staked_key>(out.target))
-    {
-      const auto& staked = std::get<txout_to_staked_key>(out.target);
-      lock_tier = staked.lock_tier;
-      return true;
-    }
-    return false;
-  }
   //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)
   {
@@ -883,11 +850,13 @@ namespace cryptonote
     {
       if (hf_version >= HF_VERSION_SHEKYL_NG)
       {
-        // post-NG: allow tagged_key and staked_key outputs
+        // txout_to_tagged_key is the sole output type from genesis (the
+        // claim-era txout_to_staked_key was retired with the confidential-
+        // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
         CHECK_AND_ASSERT_MES(
-          std::holds_alternative<txout_to_tagged_key>(o.target) || std::holds_alternative<txout_to_staked_key>(o.target),
+          std::holds_alternative<txout_to_tagged_key>(o.target),
           false, "wrong variant type (index " << o.target.index()
-            << "), expected txout_to_tagged_key or txout_to_staked_key in transaction id=" << get_transaction_hash(tx));
+            << "), expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
       }
       else if (hf_version > HF_VERSION_VIEW_TAGS)
       {

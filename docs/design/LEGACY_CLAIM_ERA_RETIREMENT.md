@@ -128,10 +128,29 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
   survives **quarantined** (tiers.rs + build.rs only, banner in lib.rs): sole consumer =
   shekyl-ffi's four `shekyl_stake_*` C ABI exports that back the not-yet-deleted C++ paths.
   Unblocks `MintLineageOutput` landing in a `StakingMeta`-free `WalletOutput`.
-- **PR-4 (named, C++ consensus cutover):** delete the C++ claim-era wire — `txin_stake_claim`,
-  `txout_to_staked_key`, the stake-ratio cache, claim-range validation — together with the
-  four quarantined FFI exports and the `shekyl-staking` crate. Rule-07 atomic-cutover
-  discipline; coordinate with the 2b emission-leg C++ work (C-1 era).
+- **PR-4 (this PR, the C++ consensus cutover — rule-07 atomic):** the claim-era wire and
+  everything reachable from it, in one cut. Wire types `txin_stake_claim` + `txout_to_staked_key`
+  (variants, boost/json/debug serialization, VARIANT_TAGs 0xf2/0xf3 retired unreassigned) and
+  `check_output_types` narrowed to tagged-key-only — the actual acceptance flip. Blockchain:
+  the stake-ratio cache + unlock schedules, `get_stake_ratio`/`get_total_staked`,
+  `check_stake_claim_input`, the claim-only tx path, the block-aggregate pool check. The burn
+  curve's stake-ratio input is pinned 0 (identical behavior — no staked output could exist);
+  the staker inflow (emission share + fee-pool share) is now unconditionally burned, with the
+  2b reward-emission C-1 cutover named in-code as the redirect point. DB: `staker_accrual`
+  (5-field record) replaced by a purpose-true per-height `block_burn` u64 (the live
+  `total_burned` pop-rollback bookkeeping it was smuggling); `staker_pool_balance` property +
+  `staker_claims` watermark table deleted. RPC: `get_staking_info` + `estimate_claim_reward`
+  gone; `get_info` drops `stake_ratio`/`staker_pool_balance`. Wallet: transfer_details stake
+  fields (cache version 3→4), claim/unstake/stake tx builders, watermark staging, 5 wallet-RPC
+  methods, 5 FFI dispatchers. Rust: `shekyl-staking` crate deleted; the 8 quarantined
+  `shekyl_stake_*`/`shekyl_calc_*` FFI exports + header decls gone; curve-tree
+  `TargetKind::StakedKey` retired (store schema 3→4, tag 2 unreassigned). Config: the 8 dead
+  stake-tier keys left `economics_params.json` + the generator (`staker_pool_share` +
+  `staker_emission_*` stay — live burn/emission split). Bonus fix-on-find: the store rollback
+  property-test fixture drained `maturity == H` at H, diverging from the pinned
+  `drained_through(H) = H − 1` convention — invisible until the claim-era fixture entropy
+  shifted; fixed to the production mapping.
 
-Ordering: dead → entangled → cross-language. Once #231 lands, PR-4 is the sole remaining
-step — everything Rust-side is retired.
+Ordering: dead → entangled → cross-language — complete. With PR-4 merged the claim-era
+system is fully retired; genesis staking is archival bonds (gate 4/7) + the 2b
+reward-emission leg.
