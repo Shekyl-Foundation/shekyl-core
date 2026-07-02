@@ -5,16 +5,10 @@
 
 #![deny(unsafe_code)]
 
-//! Shekyl engine core: orchestrator and transaction builders for staking operations.
-//!
-//! Provides Rust-native builders for:
-//! - Claim transactions (reward withdrawal)
-//! - Stake transactions (creating staked outputs)
-//! - Unstake transactions (spending matured staked outputs)
-//! - Combined claim-and-unstake workflow
+//! Shekyl engine core: the wallet orchestrator ([`engine::Engine`]) and its supporting
+//! transaction/scan builders for the wallet stack.
 
 pub mod attribution;
-pub mod claim_builder;
 pub mod consensus_constants;
 pub mod engine;
 pub mod error;
@@ -22,9 +16,7 @@ pub mod error;
 pub mod multisig;
 pub mod outbound_label;
 pub mod scan;
-pub mod workflow;
 
-pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::{
@@ -40,10 +32,6 @@ pub use engine::{
 pub use error::EngineCoreError;
 pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
-pub use workflow::ClaimAndUnstakePlan;
-
-#[cfg(test)]
-mod tests;
 
 /// **Not part of the public API.** Re-exports otherwise-`pub(crate)`
 /// types so external Criterion benchmarks (`benches/*.rs`) can measure
