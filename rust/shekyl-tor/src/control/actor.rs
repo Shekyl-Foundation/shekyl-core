@@ -643,6 +643,14 @@ async fn spawn_managed_tor(
         // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
         // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
         // targets / SOCKS usernames are info/debug only), so it's safe to persist.
+        //
+        // The path is passed **unquoted on purpose** — do not "fix" this by quoting it. Tor's
+        // `Log <severity> file <FILENAME>` grammar takes the *entire remainder* of the option
+        // value as the filename, so an embedded space (a wallet DataDirectory under a spaced
+        // user profile — `C:\Users\My Name\…`, `/Users/My Name/…`) is preserved verbatim.
+        // Wrapping the path in quotes makes tor treat the literal `"` as part of the filename
+        // and write the log to the wrong place. Verified against the bundled tor: unquoted
+        // writes to the exact spaced path, quoted does not.
         .arg("--Log")
         .arg(format!(
             "notice file {}",
