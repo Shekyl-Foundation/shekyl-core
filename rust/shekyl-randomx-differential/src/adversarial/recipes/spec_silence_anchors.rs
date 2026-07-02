@@ -6,7 +6,7 @@
 //! Category 1 recipes: audit-anchored spec-silence enumeration.
 //!
 //! Per
-//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/completed/RANDOMX_V2_PHASE2H_PLAN.md)
 //! Round 1 R1-D8 close, Category 1 recipes cite a specific
 //! audit-document spec silence, ambiguity, or rare-path enumeration
 //! (e.g., `RANDOMX_V2_PHASE2D_PLAN.md §3.4 spec-silence #N`,

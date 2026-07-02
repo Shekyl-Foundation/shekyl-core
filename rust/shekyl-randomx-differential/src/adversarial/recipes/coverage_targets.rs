@@ -6,7 +6,7 @@
 //! Category 2 recipes: coverage-metric-attested gap targets.
 //!
 //! Per
-//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/completed/RANDOMX_V2_PHASE2H_PLAN.md)
 //! Round 1 R1-D8 close, Category 2 recipes cite a coverage-metric
 //! attestation snapshot identifying a specific rare-path that the
 //! corpus's other recipes do not reach. The attestation snapshot is

@@ -208,16 +208,27 @@ done
 # positive surface to include narrative `.md` references that aren't
 # substrate-anchored plan-docs).
 #
-# Resolution: each match is `<NAME>_PLAN.md` → look up
-# `docs/design/<NAME>_PLAN.md`. Missing files fail the gate.
+# Resolution: each match is `<NAME>_PLAN.md` → the file must exist by
+# that basename ANYWHERE under `docs/` (design, completed, or any future
+# reorg). Missing files fail the gate. Resolving by basename rather than a
+# hard-coded `docs/design/` path is deliberate: the gate validates that the
+# cited plan-doc exists in the repo, and archiving a completed doc to
+# `docs/completed/` must not be a cite-breaking event (it was, until this
+# change — commit 29d267de8's archival dangled every cite).
 #
-# False-positive surface: a plan-doc whose path doesn't follow the
-# `docs/design/` convention (e.g., a future `docs/architecture/`
-# subfolder) would surface as a false positive. The R2-D4 close's
-# reopen criterion (ii) — "If future plan-docs surface a
-# structurally distinct cite-validation requirement" — covers the
-# carve-out shape if the convention extends.
+# False-positive surface: two plan-docs sharing a basename in different
+# docs/ subdirs would let a cite resolve against the wrong one. Plan-doc
+# basenames are globally unique by the `<NAME>_PLAN.md` naming convention,
+# so this is not reachable today; reopens if that uniqueness is dropped.
 PLAN_DOC_PATTERN='[A-Z][A-Z0-9_]*_PLAN\.md'
+# The gate's real invariant is "the cited plan-doc exists in the repo", NOT
+# "it lives at docs/design/". Hard-coding the directory made a routine archival
+# (docs/design/ -> docs/completed/, commit 29d267de8) break every plan-doc cite
+# with zero regression in the cited code. Resolve by basename anywhere under
+# docs/ instead. Built once; membership test is O(1) per cite. (M3 change-class:
+# new resolution rule for Check 2 — decouples cite validation from the doc
+# directory layout so doc reorganization no longer trips the gate.)
+plan_docs_present=" $(find docs -type f -name '*_PLAN.md' -exec basename {} \; | sort -u | tr '\n' ' ') "
 while IFS= read -r line; do
   # Format: <file>:<lineno>:<match content>.
   #
@@ -233,9 +244,8 @@ while IFS= read -r line; do
   match=$(printf '%s\n' "${line}" | cut -d: -f3-)
   # Extract every plan-doc cite from the matched line.
   for plan_doc in $(printf '%s\n' "${match}" | grep -oE "${PLAN_DOC_PATTERN}" | sort -u); do
-    resolved="docs/design/${plan_doc}"
-    if [[ ! -f "${resolved}" ]]; then
-      echo "FATAL: ${file_path}:${line_number}: cited plan-doc not found at ${resolved}:" >&2
+    if [[ "${plan_docs_present}" != *" ${plan_doc} "* ]]; then
+      echo "FATAL: ${file_path}:${line_number}: cited plan-doc ${plan_doc} not found anywhere under docs/:" >&2
       echo "  ${match}" >&2
       failures=$((failures + 1))
     fi

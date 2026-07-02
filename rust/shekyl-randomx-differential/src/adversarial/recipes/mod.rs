@@ -6,7 +6,7 @@
 //! Recipe corpus for the Phase 2h adversarial-test methodology.
 //!
 //! Per
-//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/completed/RANDOMX_V2_PHASE2H_PLAN.md)
 //! Round 1 R1-D3 close, the corpus is organized by the
 //! three-evidence-category structure from R1-D8:
 //!
