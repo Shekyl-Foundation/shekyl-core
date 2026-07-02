@@ -1075,8 +1075,8 @@ pub fn verify(
 /// # Errors
 /// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-hash count vs proof input
 /// count), [`VerifyError::PqcCommitmentMismatch`] (per-input scalar deserialization),
-/// [`VerifyError::InvalidTreeRoot`],
-/// [`VerifyError::TreeDepthTooLarge`], [`VerifyError::DeserializationFailed`],
+/// [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
+/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
 /// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
 pub fn verify_membership_only(
@@ -1088,6 +1088,14 @@ pub fn verify_membership_only(
     signable_tx_hash: [u8; 32],
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
+    // Self-defending arity cap: a crafted `proof.num_inputs` sizes the batch verifiers, so an
+    // out-of-range value drives large allocations/CPU. A valid proof never has 0 inputs (all
+    // provers reject empty) nor exceeds `MAX_INPUTS`, so reject before allocating. Independent
+    // of the FFI's own `po_count` cap — this holds for any Rust caller. `DeserializationFailed`
+    // (code 1) matches the FFI's mapping for the same out-of-range condition.
+    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+        return Err(VerifyError::DeserializationFailed);
+    }
     if pseudo_outs.len() != num_inputs {
         return Err(VerifyError::InputCountMismatch {
             expected: num_inputs,
@@ -1558,6 +1566,26 @@ mod tests {
         )
         .expect("verify_membership_only should succeed");
         assert!(ok, "valid membership-only proof must verify");
+
+        // Arity cap: a crafted `num_inputs` (0 or > MAX_INPUTS) must reject as
+        // DeserializationFailed before sizing the batch verifiers — self-defending, independent
+        // of the FFI's `po_count` cap.
+        for bad in [0usize, crate::MAX_INPUTS + 1] {
+            let mut tampered = mo.proof.clone();
+            tampered.num_inputs = u32::try_from(bad).expect("test bad-count fits u32");
+            let r = verify_membership_only(
+                &tampered,
+                &mo.pseudo_outs,
+                &[PqcLeafScalar(h_pqc_bytes)],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
+            assert!(
+                matches!(r, Err(VerifyError::DeserializationFailed)),
+                "num_inputs={bad} must reject as DeserializationFailed, got {r:?}"
+            );
+        }
 
         // Cross-type: the membership-only proof must NOT verify as a full proof. A dummy
         // key image is supplied only to satisfy the full ABI's arity.

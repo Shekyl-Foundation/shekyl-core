@@ -382,8 +382,9 @@ uint8_t shekyl_fcmp_verify(
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
 /// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
 /// shekyl_emission_hybrid_auth_verify. po_count must equal pqc_hash_count.
+/// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
-///   1 = Deserialization (also: null ptr, or po_count*32 overflow)
+///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
 ///   2 = InvalidTreeRoot   3 = PqcCommitmentMismatch
 ///   5 = UpstreamError     6 = BatchVerificationFailed   7 = TreeDepthTooLarge
 ///   8 = InputCountMismatch (po_count != pqc_hash_count)
@@ -409,6 +410,9 @@ uint8_t shekyl_fcmp_membership_only_verify(
 /// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
 /// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
 /// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed leaf hash.
+/// pubkey_len / sig_len MUST equal the canonical hybrid pubkey / signature lengths — a
+/// non-canonical length is rejected UP FRONT (before any pointer is read) as PubkeyDeser (2) /
+/// SigDeser (3), NOT NullPtr. Pass the exact canonical byte counts, not a buffer capacity.
 /// LEAF-HASH INPUT — do not get this wrong: despite the pqc_pk naming, the leaf hash is
 /// hash_pqc_public_key over the FULL canonical hybrid pubkey bytes (Ed25519 || ML-DSA-65),
 /// exactly what curve-tree leaves commit (derivation.rs::derive_pqc_leaf_hash). Hashing only
