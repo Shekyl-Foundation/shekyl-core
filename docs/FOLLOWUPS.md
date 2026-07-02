@@ -10598,15 +10598,20 @@ Retained for citation in review; each links to the canonical record.
   `shekyl_curve_tree_hash_trim_{selene,helios}` for sibling chunks that
   grew since the reference block.
 
-- **RESOLVED (PR #229, 2026-07-02): bond-post hybrid-pubkey length tightened to
-  exact canonical equality on both sides.** Verified at source: the C++ oracle
-  also only upper-bounded (`cryptonote_basic.h` serialization guard `> LEN`;
-  `blockchain.cpp check_archival_bond_post_input` `empty() || > LEN`), so a
-  truncated non-empty key was structurally accepted by both parsers. Fixed
-  pre-genesis in the same change: `bond_wire.rs` write+read now demand
-  `== SINGLE_KEY_CANONICAL_LEN` (`HybridPubkeyLenNotCanonical`), and both C++
-  checks demand `== config::PQC_HYBRID_SINGLE_KEY_LEN` — matching the emission
-  wire's strict equality.
+- **RESOLVED (PR #229, 2026-07-02, r2+r3): bond-post hybrid-pubkey length
+  tightened to exact canonical equality on ALL parsers.** Verified at source:
+  every parser only upper-bounded, so a truncated non-empty key was
+  structurally accepted everywhere. Fixed pre-genesis to
+  `== config::PQC_HYBRID_SINGLE_KEY_LEN` (`== SINGLE_KEY_CANONICAL_LEN` in Rust)
+  across all four entrypoints of the 0x03 vin: `bond_wire.rs` write+read
+  (`HybridPubkeyLenNotCanonical`), `shekyl-wire` `BondPost` read+validate (both
+  `hybrid_public_key` and `bond_spend_pk`), the C++ binary serializer
+  (`cryptonote_basic.h`), the C++ structural verify
+  (`blockchain.cpp check_archival_bond_post_input`), and — caught by Copilot in
+  r3 after r2 claimed "all three" — the C++ JSON/RPC parser
+  (`json_object.cpp fromJsonValue`, which had stayed `> LEN`). Lesson: "all the
+  parsers" needs an exhaustive grep, not a mental inventory — a fourth
+  entrypoint existed.
 
 - **RESOLVED (PR #229, 2026-07-02): `shekyl_fcmp_verify` (full path) now has
   the same arity hardening as its membership-only sibling.** Rust `verify()`
