@@ -10608,11 +10608,11 @@ Retained for citation in review; each links to the canonical record.
   checks demand `== config::PQC_HYBRID_SINGLE_KEY_LEN` — matching the emission
   wire's strict equality.
 
-- **`shekyl_fcmp_verify` (full path) lacks the arity hardening its
-  membership-only sibling got (PR #224 review, 2026-07-02).** The
-  membership-only FFI + Rust verify now cap `num_inputs`/`po_count` at
-  `MAX_INPUTS` and use `checked_mul` for byte lengths; the shipped full
-  `shekyl_fcmp_verify` has neither (unchecked `ki_count * 32`, no cap).
-  Deferred from the #224 review rounds to avoid changing shipped
-  consensus-path error codes mid-review; apply the same caps in a dedicated
-  pass (batch with other FFI work per the CI-cost discipline).
+- **RESOLVED (PR #229, 2026-07-02): `shekyl_fcmp_verify` (full path) now has
+  the same arity hardening as its membership-only sibling.** Rust `verify()`
+  caps `num_inputs` (0 or > `MAX_INPUTS` → `DeserializationFailed`); the FFI
+  rejects count mismatches and over-cap arity before slicing and guards the
+  ×32 length multiplies with `checked_mul` — all reject paths keep the
+  existing invalid-parameters code (1), so no error-surface change. The
+  original deferral reason ("mid-review of #224") expired with #224's merge;
+  fixed on-find per the fix-as-we-find rule.

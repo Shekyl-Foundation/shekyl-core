@@ -1507,24 +1507,38 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
 ) -> u8 {
+    // Mirror of the membership-only entry point's hardening (PR #229 r2): reject
+    // count mismatches and out-of-range arity BEFORE slicing or allocating, and
+    // guard the ×32 byte-length multiplies against usize overflow. All reject
+    // paths keep this function's existing invalid-parameters code (1), so the
+    // error surface is unchanged.
+    if ki_count != po_count || ki_count != pqc_hash_count {
+        return 1; // DeserializationFailed (invalid parameters)
+    }
+    if ki_count == 0 || ki_count > shekyl_fcmp::MAX_INPUTS {
+        return 1;
+    }
+    let (Some(ki_len), Some(po_len), Some(ph_len)) = (
+        ki_count.checked_mul(32),
+        po_count.checked_mul(32),
+        pqc_hash_count.checked_mul(32),
+    ) else {
+        return 1;
+    };
     let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
         return 1; // DeserializationFailed
     };
-    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_count * 32) }) else {
+    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_len) }) else {
         return 1;
     };
-    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_len) }) else {
         return 1;
     };
-    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, ph_len) }) else {
         return 1;
     };
-    if tree_root_ptr.is_null()
-        || signable_tx_hash_ptr.is_null()
-        || ki_count != po_count
-        || ki_count != pqc_hash_count
-    {
-        return 1; // DeserializationFailed (invalid parameters)
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+        return 1;
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -5397,6 +5411,58 @@ mod tests {
             SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
             "non-canonical signature length must reject with SIG_DESER"
         );
+    }
+
+    /// The full-path FFI shares the membership-only hardening: matched-but-huge
+    /// or over-cap counts reject with code 1 before any slice/allocation.
+    #[test]
+    fn full_verify_ffi_rejects_hostile_counts() {
+        let root = [0u8; 32];
+        let txh = [0u8; 32];
+        let proof = [0u8; 8];
+        let b32 = [1u8; 32];
+
+        // usize::MAX matched counts: rejected by the arity cap, pointers never
+        // dereferenced (small buffers are safe to pass).
+        let r = unsafe {
+            shekyl_fcmp_verify(
+                proof.as_ptr(),
+                proof.len(),
+                b32.as_ptr(),
+                usize::MAX,
+                b32.as_ptr(),
+                usize::MAX,
+                b32.as_ptr(),
+                usize::MAX,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(
+            r, 1,
+            "hostile matched counts must reject without dereferencing"
+        );
+
+        // MAX_INPUTS + 1, buffers sized to the declared count.
+        let over = shekyl_fcmp::MAX_INPUTS + 1;
+        let big = vec![2u8; over * 32];
+        let r = unsafe {
+            shekyl_fcmp_verify(
+                proof.as_ptr(),
+                proof.len(),
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "count over MAX_INPUTS must reject via the arity cap");
     }
 
     #[test]
