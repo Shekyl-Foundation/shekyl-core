@@ -14,7 +14,6 @@ use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
 use shekyl_curve_io::*;
 use shekyl_curve_primitives::Commitment;
-use shekyl_staking::{LockTier, StakingMeta};
 use shekyl_types::Timelock;
 
 use crate::extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE};
@@ -215,7 +214,6 @@ pub struct WalletOutput {
     pub(crate) relative_id: RelativeId,
     pub(crate) data: OutputData,
     pub(crate) metadata: Metadata,
-    pub(crate) staking: Option<StakingMeta>,
 }
 
 impl WalletOutput {
@@ -264,11 +262,6 @@ impl WalletOutput {
         &self.metadata.arbitrary_data
     }
 
-    /// Staking metadata, if this output is a staked output.
-    pub fn staking(&self) -> Option<StakingMeta> {
-        self.staking
-    }
-
     /// Construct a WalletOutput for testing or programmatic use.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(
@@ -278,7 +271,6 @@ impl WalletOutput {
         key: curve25519_dalek::edwards::EdwardsPoint,
         key_offset: curve25519_dalek::Scalar,
         commitment: shekyl_curve_primitives::Commitment,
-        staking: Option<StakingMeta>,
     ) -> Self {
         WalletOutput {
             absolute_id: AbsoluteId {
@@ -298,7 +290,6 @@ impl WalletOutput {
                 payment_id: None,
                 arbitrary_data: vec![],
             },
-            staking,
         }
     }
 
@@ -318,13 +309,6 @@ impl WalletOutput {
         self.relative_id.write(w)?;
         self.data.write(w)?;
         self.metadata.write(w)?;
-        match &self.staking {
-            Some(s) => {
-                w.write_all(&[1])?;
-                w.write_all(&[s.lock_tier.as_id()])?;
-            }
-            None => w.write_all(&[0])?,
-        }
         Ok(())
     }
 
@@ -342,25 +326,11 @@ impl WalletOutput {
         let relative_id = RelativeId::read(r)?;
         let data = OutputData::read(r)?;
         let metadata = Metadata::read(r)?;
-        let staking = match read_byte(r)? {
-            0 => None,
-            1 => {
-                let tier_byte = read_byte(r)?;
-                let lock_tier = LockTier::from_id(tier_byte).ok_or_else(|| {
-                    io::Error::other(format!(
-                        "invalid stake lock tier byte {tier_byte} in WalletOutput"
-                    ))
-                })?;
-                Some(StakingMeta { lock_tier })
-            }
-            _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,
-        };
         Ok(WalletOutput {
             absolute_id,
             relative_id,
             data,
             metadata,
-            staking,
         })
     }
 }

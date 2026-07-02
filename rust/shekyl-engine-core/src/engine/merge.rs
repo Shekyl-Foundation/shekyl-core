@@ -62,7 +62,6 @@
 //!    records the block hash, even when no events fired), process
 //!    detected outputs for that height, mark spent key images for
 //!    that height.
-//!    c. Apply staker-pool aggregate events (`StakeEvent::Accrual`).
 //!
 //! # Internal helper for tests
 //!
@@ -95,7 +94,7 @@ use crate::{
         traits::{DaemonEngine, LedgerEngine},
         Engine, EngineSignerKind, RefreshError,
     },
-    scan::{OwnedTxLeaves, ScanResult, StakeEvent},
+    scan::{OwnedTxLeaves, ScanResult},
 };
 
 // `D: DaemonEngine` private-bound: see the rationale on the
@@ -701,7 +700,6 @@ pub(crate) fn apply_scan_result_to_state(
         block_hashes,
         new_transfers,
         spent_key_images,
-        stake_events,
         reorg_rewind,
         // CT-5 §3.2 transit fields. `block_leaves` is consumed by the
         // curve-tree ingest pre-pass (`ingest_scan_result_into_curve_tree`,
@@ -737,7 +735,6 @@ pub(crate) fn apply_scan_result_to_state(
                 reason: "spent_key_images non-empty for empty processed_height_range",
             });
         }
-        apply_stake_events(indexes, stake_events);
         return Ok(Vec::new());
     }
 
@@ -869,19 +866,7 @@ pub(crate) fn apply_scan_result_to_state(
         });
     }
 
-    apply_stake_events(indexes, stake_events);
-
     Ok(inserted)
-}
-
-fn apply_stake_events(indexes: &mut LedgerIndexes, events: Vec<StakeEvent>) {
-    for event in events {
-        match event {
-            StakeEvent::Accrual { height, record } => {
-                indexes.insert_accrual(height, record);
-            }
-        }
-    }
 }
 
 /// Pre-collected public on-chain residue from a [`ScanResult`]'s
@@ -1036,12 +1021,10 @@ pub(crate) fn populate_engine_handle_fields(
 mod tests {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_curve_primitives::Commitment;
-    use shekyl_scanner::{
-        staker_pool::AccrualRecord, LedgerBlock, LedgerIndexes, RecoveredWalletOutput, WalletOutput,
-    };
+    use shekyl_scanner::{LedgerBlock, LedgerIndexes, RecoveredWalletOutput, WalletOutput};
 
     use crate::engine::RefreshError;
-    use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
+    use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 
     use super::{apply_scan_result_to_state, index_block_leaves};
 
@@ -1061,7 +1044,6 @@ mod tests {
                 mask: Scalar::ONE,
                 amount: 1_000,
             },
-            None,
         );
         RecoveredWalletOutput::new_for_test(base, 1_000)
     }
@@ -1083,7 +1065,6 @@ mod tests {
             block_hashes: vec![(1000, [0x66; 32])],
             new_transfers: vec![],
             spent_key_images: vec![],
-            stake_events: vec![],
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1131,7 +1112,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32]), (3, [0x33; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1152,7 +1132,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1166,7 +1145,6 @@ mod tests {
             block_hashes: vec![(2, [0x22; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1185,7 +1163,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1198,7 +1175,6 @@ mod tests {
             block_hashes: vec![(2, [0x22; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1220,7 +1196,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1248,7 +1223,6 @@ mod tests {
                 block_height: 3,
                 key_image,
             }],
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1292,7 +1266,6 @@ mod tests {
                 },
             ],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1314,7 +1287,6 @@ mod tests {
                 output: make_recovered_output(4, 103),
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1332,7 +1304,6 @@ mod tests {
             block_hashes: vec![(4, [0x44; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1359,7 +1330,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1380,7 +1350,6 @@ mod tests {
                 output: new_output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: Some(ReorgRewind { fork_height: 3 }),
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1394,37 +1363,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_records_stake_accrual_events() {
-        let (mut ledger, mut indexes) = empty_state();
-        let result = ScanResult {
-            processed_height_range: 1..2,
-            parent_hash: None,
-            block_hashes: vec![(1, [0x11; 32])],
-            new_transfers: Vec::new(),
-            spent_key_images: Vec::new(),
-            stake_events: vec![StakeEvent::Accrual {
-                height: 1,
-                record: AccrualRecord {
-                    staker_emission: 100,
-                    staker_fee_pool: 0,
-                    total_weighted_stake: 1_000,
-                },
-            }],
-            reorg_rewind: None,
-            block_leaves: Vec::new(),
-            block_curve_tree_roots: Vec::new(),
-        };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
-        assert_eq!(ledger.height(), 1);
-        // Sanity: the accrual was inserted; the staker pool exposes
-        // `estimate_reward_with_splitting` which reads from the same
-        // map, so we only assert the merge didn't panic and advanced
-        // synced_height; deeper accrual semantics are covered by
-        // staker_pool's own test suite.
-        let _pool = indexes.staker_pool();
-    }
-
-    #[test]
     fn apply_rejects_short_block_hashes_as_malformed() {
         // Range [1..3) demands two entries; only one supplied.
         let (mut ledger, mut indexes) = empty_state();
@@ -1434,7 +1372,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1454,7 +1391,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32]), (1, [0x99; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1511,7 +1447,6 @@ mod tests {
             block_hashes: vec![(0, [0x00; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: Some(ReorgRewind { fork_height: 0 }),
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1538,7 +1473,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32]), (5, [0x55; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1561,7 +1495,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1583,7 +1516,6 @@ mod tests {
                 block_height: 9,
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1603,7 +1535,6 @@ mod tests {
             block_hashes: vec![(1, [0x11; 32])],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1652,7 +1583,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1721,7 +1651,6 @@ mod tests {
                 },
             ],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1770,7 +1699,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1840,7 +1768,6 @@ mod tests {
                 },
             ],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -1971,7 +1898,6 @@ mod tests {
                 })
                 .collect(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -2003,7 +1929,6 @@ mod tests {
                 output: new_output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
@@ -2089,7 +2014,6 @@ mod tests {
                 output,
             }],
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),

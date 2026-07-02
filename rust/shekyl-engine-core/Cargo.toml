@@ -24,7 +24,6 @@ shekyl-scanner = { path = "../shekyl-scanner" }
 # party Shekyl crate; its third-party edges (`shekyl-crypto-hash`) are already in
 # the workspace lockfile, so no new supply-chain surface (`17-dependency-discipline`).
 shekyl-wire = { path = "../shekyl-wire" }
-shekyl-staking = { path = "../shekyl-staking" }
 # `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
 # (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
 # the production `SignBond` message handler calls it directly. No cycle:
@@ -44,14 +43,11 @@ shekyl-standoff = { path = "../shekyl-standoff" }
 # `shekyl-economics` C2 primitives directly (`base_emission_at`,
 # `calc_burn_pct_from_activity`, `params_digest`) and re-export its
 # `ActivityMetric` / `ActivityInvariantViolation` / `EmissionError`
-# types through the trait surface. `shekyl-staking` already depends on
-# `shekyl-economics`, so this promotes a transitive dep to direct; no
-# new crate enters the build graph.
+# types through the trait surface.
 shekyl-economics = { path = "../shekyl-economics" }
 # `EconomicsParametersSnapshot`'s `CalibrationStamp` digest must cover the
 # full calibration surface the snapshot exposes (EconomicParams +
-# staker-emission consts + the `shekyl-staking` tier table), so the
-# composed digest is computed here, where the tier table is visible.
+# staker-emission consts), so the composed digest is computed here.
 # `shekyl_economics::params_digest` stays the EconomicParams-only encoder
 # (it backs the C4 fixture lineage). Same `blake2 0.10` the EconomicParams
 # digest already uses; promotes the transitive dep to direct.

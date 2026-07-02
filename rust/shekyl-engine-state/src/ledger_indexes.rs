@@ -24,17 +24,13 @@
 //! atomically, and `debug_assert!`-driven invariant checks fire
 //! after every mutation.
 //!
-//! Mutators that touch *only* the ledger (`freeze`, `thaw`,
-//! `set_staking_info`, `update_claim_watermark`) live as inherent
-//! methods on [`LedgerBlock`] in [`crate::ledger_block`] — there is no
-//! reason to take a `&mut LedgerIndexes` borrow when the indexes are
-//! never read.
+//! Mutators that touch *only* the ledger (`freeze`, `thaw`) live as
+//! inherent methods on [`LedgerBlock`] in [`crate::ledger_block`] —
+//! there is no reason to take a `&mut LedgerIndexes` borrow when the
+//! indexes are never read.
 //!
-//! Read-only queries that touch only the ledger
-//! (`unspent_transfers`, `staked_outputs`, `claimable_outputs`,
-//! `spendable_outputs`, etc.) likewise live on [`LedgerBlock`]. The
-//! single read-only query that needs indexes ([`Self::staker_pool`])
-//! is exposed here.
+//! Read-only queries that touch only the ledger (`unspent_transfers`,
+//! `spendable_outputs`, etc.) likewise live on [`LedgerBlock`].
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -43,11 +39,7 @@ use shekyl_crypto_pq::key_image::KeyImage;
 use tracing::warn;
 use zeroize::Zeroize;
 
-use crate::{
-    ledger_block::LedgerBlock,
-    staker_pool::{AccrualRecord, StakerPoolState},
-    transfer::TransferDetails,
-};
+use crate::{ledger_block::LedgerBlock, transfer::TransferDetails};
 
 /// Runtime-only state derived from chain replay. None of these fields
 /// are persisted in [`LedgerBlock`]; all are rebuilt by replaying
@@ -57,10 +49,6 @@ use crate::{
 ///   [`LedgerBlock::transfers`] index.
 /// - `pub_keys`: lookup index from output pubkey bytes to the
 ///   [`LedgerBlock::transfers`] index.
-/// - `staker_pool`: aggregated stake-tier accrual state;
-///   `LEDGER_BLOCK_VERSION = 1` deliberately omits persistence per
-///   the staking design notes (see [`crate::ledger_block`] module
-///   docstring).
 ///
 /// Adding a field here means it MUST be reconstructible from
 /// [`LedgerBlock`] + scanner replay. Adding a field that isn't
@@ -79,9 +67,6 @@ pub struct LedgerIndexes {
     /// scanned output reusing a pubkey we already know is dropped
     /// rather than admitted.
     pub(crate) pub_keys: HashMap<[u8; 32], usize>,
-    /// Per-tier accrual aggregate used to estimate claim rewards.
-    /// Rebuilt by replaying the scanned range at open time.
-    pub(crate) staker_pool: StakerPoolState,
 }
 
 impl LedgerIndexes {
@@ -92,20 +77,11 @@ impl LedgerIndexes {
         Self {
             key_images: HashMap::new(),
             pub_keys: HashMap::new(),
-            staker_pool: StakerPoolState::new(),
         }
     }
 
     /// Rebuild the lookup indexes from a freshly-loaded
-    /// [`LedgerBlock`]. The `staker_pool` field is **not** rebuilt
-    /// here — it is reconstructed by daemon-replay of the scanned
-    /// range, owned by the scanner; this method handles only the
-    /// O(1)-lookup half.
-    ///
-    /// On open: load `LedgerBlock` from disk, call
-    /// `LedgerIndexes::rebuild_from_ledger(&ledger)`, then run the
-    /// scanner replay to refill `staker_pool`. Both halves are
-    /// idempotent under repeated calls.
+    /// [`LedgerBlock`]. Idempotent under repeated calls.
     pub fn rebuild_from_ledger(ledger: &LedgerBlock) -> Self {
         let mut indexes = Self::empty();
         for (idx, td) in ledger.transfers.iter().enumerate() {
@@ -301,8 +277,7 @@ impl LedgerIndexes {
     ///
     /// Drops the corresponding `(height, hash)` entries from
     /// `ledger.reorg_blocks`, rewinds `ledger.tip` to the highest
-    /// remaining block, rebuilds `key_images` and `pub_keys`, and
-    /// rolls the staker pool back to `fork_height`.
+    /// remaining block, and rebuilds `key_images` and `pub_keys`.
     pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: u64) {
         for idx in (0..ledger.transfers.len()).rev() {
             if ledger.transfers[idx].block_height >= fork_height {
@@ -347,24 +322,11 @@ impl LedgerIndexes {
             }
         }
 
-        self.staker_pool.handle_reorg(fork_height);
-
         debug_assert!(
             self.check_invariants(ledger).is_ok(),
             "invariant violated after handle_reorg: {}",
             self.check_invariants(ledger).unwrap_err()
         );
-    }
-
-    /// Insert a staker pool accrual record. Touches only
-    /// [`Self::staker_pool`]; does not borrow [`LedgerBlock`].
-    pub fn insert_accrual(&mut self, height: u64, record: AccrualRecord) {
-        self.staker_pool.insert(height, record);
-    }
-
-    /// Read access to the aggregated stake-tier accrual state.
-    pub fn staker_pool(&self) -> &StakerPoolState {
-        &self.staker_pool
     }
 
     /// Verify structural invariants of the indexes against the given
@@ -546,10 +508,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,

@@ -178,7 +178,6 @@
 //! pattern is documented instead (reopen at Phase 2 ops).
 
 pub mod capability;
-pub(crate) mod chain_economics_source;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.
@@ -275,7 +274,6 @@ pub mod view_material;
 pub(crate) mod test_support;
 
 pub use capability::Capability;
-pub use chain_economics_source::LedgerChainEconomicsSource;
 pub use daemon::DaemonClient;
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
@@ -628,11 +626,10 @@ pub struct Engine<
     /// ([`EconomicsEngine`]).
     ///
     /// Production callers default `E = LocalEconomics`
-    /// ([`LocalEconomics<LedgerChainEconomicsSource>`](local_economics::LocalEconomics)),
-    /// constructed at every `Engine::create` / `Engine::open_*` site
-    /// over an [`Arc::clone`] of [`Engine::ledger`] so the one chain
-    /// read (`pool_weighted_total`) observes the same state the rest of
-    /// the engine sees.
+    /// ([`LocalEconomics`](local_economics::LocalEconomics)), constructed
+    /// at every `Engine::create` / `Engine::open_*` site (a pure
+    /// constants rulebook — the claim-era chain-read seam was retired
+    /// with the confidential-staking sweep).
     ///
     /// # Not yet consumed (PR 7 R6)
     ///

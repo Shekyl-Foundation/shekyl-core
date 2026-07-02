@@ -428,34 +428,6 @@
                     }
                   },
                   {
-                    "name": "staked",
-                    "ty": {
-                      "name": "bool",
-                      "ty": "Bool"
-                    }
-                  },
-                  {
-                    "name": "stake_tier",
-                    "ty": {
-                      "name": "u8",
-                      "ty": "U8"
-                    }
-                  },
-                  {
-                    "name": "stake_lock_until",
-                    "ty": {
-                      "name": "u64",
-                      "ty": "U64"
-                    }
-                  },
-                  {
-                    "name": "last_claimed_height",
-                    "ty": {
-                      "name": "u64",
-                      "ty": "U64"
-                    }
-                  },
-                  {
                     "name": "source_ciphertext",
                     "ty": {
                       "name": "Option<T>",

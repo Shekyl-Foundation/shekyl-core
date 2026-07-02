@@ -1,6 +1,6 @@
 //! Generate the canonical atomic-unit denomination constants from
 //! `config/economics_params.json` — the single source of truth shared with
-//! `shekyl-economics`, `shekyl-difficulty`, and `shekyl-staking`.
+//! `shekyl-economics`, `shekyl-difficulty`, and the quarantined `shekyl-staking`.
 //!
 //! Emits `ATOMIC_UNITS_PER_SKL: u64` (the `coin` field) and
 //! `DISPLAY_DECIMAL_POINT: u8` (the `display_decimal_point` field) so that

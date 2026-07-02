@@ -31,11 +31,6 @@ pub fn relatedness(a: &TransferDetails, b: &TransferDetails) -> u32 {
         score += 5;
     }
 
-    // Both staked at same tier hints at same staking decision
-    if a.staked && b.staked && a.stake_tier == b.stake_tier {
-        score += 2;
-    }
-
     // Close block heights suggest temporal correlation
     let height_diff = a.block_height.abs_diff(b.block_height);
     if height_diff > 0 && height_diff <= 10 {
@@ -194,13 +189,13 @@ fn accumulate_selected(total: AtomicUnits, amount: AtomicUnits) -> AtomicUnits {
 mod tests {
     use super::*;
     use crate::ledger_ext::TransferDetailsExt;
-    use crate::tests::staking::make_wallet_output;
+    use crate::tests::ledger_ops::make_wallet_output;
     use shekyl_engine_state::TransferDetails;
 
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];
         tx_hash[..8].copy_from_slice(&global_idx.to_le_bytes());
-        let output = make_wallet_output(tx_hash, 0, global_idx, amount, None);
+        let output = make_wallet_output(tx_hash, 0, global_idx, amount);
         TransferDetails::from_wallet_output(&output, height)
     }
 

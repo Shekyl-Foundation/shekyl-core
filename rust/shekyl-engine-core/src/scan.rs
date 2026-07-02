@@ -29,10 +29,6 @@
 //!   transfer the wallet already owns, observed in the scanned blocks'
 //!   inputs. Drives
 //!   [`shekyl_engine_state::LedgerIndexes::detect_spends`].
-//! - [`ScanResult::stake_events`] — staker-pool aggregate state
-//!   updates derived from the block. Phase 1 ships the
-//!   [`StakeEvent::Accrual`] variant; further variants land alongside
-//!   the `StakeInstance` work in Phase 2b.
 //! - [`ScanResult::reorg_rewind`] — when present, indicates the
 //!   merge must drop wallet state at and above
 //!   [`ReorgRewind::fork_height`] before applying any of the
@@ -74,7 +70,6 @@
 use std::ops::Range;
 
 use shekyl_curve_tree::RawOutput;
-use shekyl_engine_state::staker_pool::AccrualRecord;
 use shekyl_scanner::RecoveredWalletOutput;
 
 /// One transaction's leaf inputs, decoded from a `ScannableBlock` and
@@ -155,12 +150,6 @@ pub struct ScanResult {
     /// [`shekyl_engine_state::LedgerIndexes::detect_spends`].
     pub spent_key_images: Vec<KeyImageObserved>,
 
-    /// Staker-pool aggregate state events derived from the
-    /// scanned blocks. Phase 1 supports the
-    /// [`StakeEvent::Accrual`] variant; further variants land
-    /// alongside the `StakeInstance` work in Phase 2b.
-    pub stake_events: Vec<StakeEvent>,
-
     /// When `Some`, the merge must roll wallet state back to the
     /// fork height *before* applying any per-height events. Drives
     /// [`shekyl_engine_state::LedgerIndexes::handle_reorg`].
@@ -231,26 +220,6 @@ pub struct KeyImageObserved {
     pub key_image: shekyl_crypto_pq::key_image::KeyImage,
 }
 
-/// A staker-pool aggregate state event. The variant set is
-/// `#[non_exhaustive]` because Phase 2b's `StakeInstance` work adds
-/// further variants (broadcast / unconfirmed / locked / accruing
-/// transitions); existing call sites must be prepared for new
-/// variants without breaking.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum StakeEvent {
-    /// Per-height accrual record produced by the staker-pool
-    /// aggregator. Drives
-    /// [`shekyl_engine_state::LedgerIndexes::insert_accrual`].
-    Accrual {
-        /// Block height this accrual applies to.
-        height: u64,
-        /// Accrual aggregate (emission, fee pool, weighted stake)
-        /// for the height.
-        record: AccrualRecord,
-    },
-}
-
 /// A reorg-rewind directive. When present in a [`ScanResult`], the
 /// merge first drops wallet transfers and stored block hashes at and
 /// above `fork_height`, then applies the rest of the result against
@@ -279,7 +248,6 @@ impl ScanResult {
             block_hashes: Vec::new(),
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),

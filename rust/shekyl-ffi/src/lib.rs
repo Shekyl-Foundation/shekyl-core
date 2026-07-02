@@ -701,7 +701,16 @@ pub extern "C" fn shekyl_compute_burn_split(
     }
 }
 
-// ─── Staking ────────────────────────────────────────────────────────────────
+// ─── Staking (QUARANTINED legacy claim-era exports) ─────────────────────────
+//
+// The four `shekyl_stake_*` exports below back the C++ claim-era consensus
+// paths (`txout_to_staked_key` maturity/weight, the stake-ratio cache,
+// claim-range validation in blockchain.cpp / blockchain_db.cpp). The Rust
+// wallet stack no longer uses any of this — the claim-era system is retired
+// (docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md) and `shekyl-staking` survives
+// only as the quarantined tier table these exports read. The exports and the
+// crate are deleted together with the C++ claim-wire removal (retirement map
+// "PR-4"). Do not add callers.
 
 /// Compute the weighted stake for a single entry.
 ///

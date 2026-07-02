@@ -16,7 +16,6 @@
 //!   `neutral_milestones` array (pure projection; multiplier ≡ 1).
 //! - [`burn_amount`](EconomicsEngine::burn_amount) against per-record
 //!   `burn_pct_bp` (the `from_activity` composition).
-//! - [`pool_weighted_total`](EconomicsEngine::pool_weighted_total) against
 //!   the `lo`/`hi` u128 reconstruction.
 //! - [`parameters_snapshot`](EconomicsEngine::parameters_snapshot)
 //!   `CalibrationStamp` lineage.
@@ -35,7 +34,6 @@ use shekyl_economics::{
     CALIBRATION_GENERATION, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
-use super::chain_economics_source::ChainEconomicsSource;
 use super::economics_snapshot::snapshot_calibration_digest;
 use super::local_economics::LocalEconomics;
 use super::traits::economics::EconomicsEngine;
@@ -71,7 +69,13 @@ struct Row {
     circulating_supply: u64,
     total_staked: u64,
     burn_pct_bp: u64,
+    // Present in the recorded fixture rows but no longer consumed: the
+    // claim-era pool_weighted_total round-trip died with the
+    // confidential-staking sweep. Kept in the JSON (fixture lineage is
+    // digest-pinned); ignored here.
+    #[allow(dead_code)]
     total_weighted_stake_lo: u64,
+    #[allow(dead_code)]
     total_weighted_stake_hi: u64,
 }
 
@@ -79,19 +83,6 @@ struct Row {
 struct Milestone {
     height: u64,
     base_emission_at_neutral: u64,
-}
-
-/// Test `ChainEconomicsSource` that echoes a recorded pool-weighted total
-/// — the C4 substitute for the production `LedgerChainEconomicsSource`,
-/// keeping `LocalEconomics` on its real code path (no `MockEconomics`).
-struct ChainMirrorSource {
-    weighted: u128,
-}
-
-impl ChainEconomicsSource for ChainMirrorSource {
-    fn active_weighted_stake(&self) -> u128 {
-        self.weighted
-    }
 }
 
 /// `"blake2b:<lowercase-hex>"` — identical encoding to the sim recorder's
@@ -147,20 +138,9 @@ fn economics_differential_records_match_engine() {
             row.height
         );
 
-        let weighted = u128::from(row.total_weighted_stake_lo)
-            | (u128::from(row.total_weighted_stake_hi) << 64);
-        let econ = LocalEconomics::with_params(params.clone(), ChainMirrorSource { weighted });
+        let econ = LocalEconomics::with_params(params.clone());
 
-        // (2) pool_weighted_total round-trips the u128 lo/hi
-        // reconstruction verbatim from the source.
-        assert_eq!(
-            econ.pool_weighted_total(),
-            weighted,
-            "pool_weighted_total @ height {}",
-            row.height
-        );
-
-        // (3) burn_amount composes the shared `from_activity` path; the
+        // (2) burn_amount composes the shared `from_activity` path; the
         // recorded `burn_pct_bp` must be reproducible (Bug-2 class).
         let metric = ActivityMetric::new(
             row.tx_volume,
@@ -189,7 +169,7 @@ fn economics_differential_records_match_engine() {
             row.height
         );
 
-        // (4) parameters_snapshot stamp lineage matches the resolved
+        // (3) parameters_snapshot stamp lineage matches the resolved
         // params. The stamp covers the full calibration surface (§6.3
         // G5), so it is the composed digest, not the bare EconomicParams
         // one.
@@ -197,12 +177,7 @@ fn economics_differential_records_match_engine() {
         assert_eq!(snap.as_of.generation, CALIBRATION_GENERATION);
         assert_eq!(
             snap.as_of.params_digest,
-            snapshot_calibration_digest(
-                &params,
-                STAKER_EMISSION_SHARE,
-                STAKER_EMISSION_DECAY,
-                &shekyl_staking::TIERS,
-            )
+            snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY)
         );
     }
 }
@@ -211,7 +186,7 @@ fn economics_differential_records_match_engine() {
 fn economics_differential_neutral_milestones_match_base_emission_at() {
     let fx = load_fixture();
     let params = EconomicParams::default();
-    let econ = LocalEconomics::with_params(params, ChainMirrorSource { weighted: 0 });
+    let econ = LocalEconomics::with_params(params);
     for m in &fx.neutral_milestones {
         assert_eq!(
             econ.base_emission_at(m.height).unwrap(),
@@ -234,29 +209,18 @@ fn economics_params_digest_round_trip() {
 
 /// §6.3 G5: the snapshot stamp must cover *every* calibration value the
 /// snapshot exposes, not just `EconomicParams`. Were it the bare
-/// `EconomicParams` digest, a staker-emission or tier change with no
-/// `generation` bump would be a silent false-accept.
+/// `EconomicParams` digest, a staker-emission change with no `generation`
+/// bump would be a silent false-accept.
 #[test]
 fn snapshot_calibration_digest_covers_full_surface() {
     let params = EconomicParams::default();
-    let tiers = shekyl_staking::TIERS;
-    let base = snapshot_calibration_digest(
-        &params,
-        STAKER_EMISSION_SHARE,
-        STAKER_EMISSION_DECAY,
-        &tiers,
-    );
+    let base = snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY);
 
     // Deterministic, and strictly broader than the EconomicParams digest
     // (the gap Copilot flagged: the stamp used to equal this).
     assert_eq!(
         base,
-        snapshot_calibration_digest(
-            &params,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY,
-            &tiers,
-        )
+        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY)
     );
     assert_ne!(
         base,
@@ -267,53 +231,15 @@ fn snapshot_calibration_digest_covers_full_surface() {
     // A staker-emission share change moves the digest.
     assert_ne!(
         base,
-        snapshot_calibration_digest(
-            &params,
-            STAKER_EMISSION_SHARE + 1,
-            STAKER_EMISSION_DECAY,
-            &tiers,
-        ),
+        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE + 1, STAKER_EMISSION_DECAY),
         "staker_emission_share must be covered"
     );
 
     // A staker-emission decay change moves the digest.
     assert_ne!(
         base,
-        snapshot_calibration_digest(
-            &params,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY + 1,
-            &tiers,
-        ),
+        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY + 1),
         "staker_emission_decay must be covered"
-    );
-
-    // A tier-table change (lock_blocks) moves the digest.
-    let mut bumped_tiers = tiers;
-    bumped_tiers[0].lock_blocks += 1;
-    assert_ne!(
-        base,
-        snapshot_calibration_digest(
-            &params,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY,
-            &bumped_tiers,
-        ),
-        "tier table must be covered"
-    );
-
-    // A tier-table change (yield_multiplier) moves the digest.
-    let mut bumped_yield = tiers;
-    bumped_yield[2].yield_multiplier += 1;
-    assert_ne!(
-        base,
-        snapshot_calibration_digest(
-            &params,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY,
-            &bumped_yield,
-        ),
-        "tier yield_multiplier must be covered"
     );
 
     // An EconomicParams change still moves the digest (the sub-digest is
@@ -322,12 +248,7 @@ fn snapshot_calibration_digest_covers_full_surface() {
     bumped_params.burn_cap += 1;
     assert_ne!(
         base,
-        snapshot_calibration_digest(
-            &bumped_params,
-            STAKER_EMISSION_SHARE,
-            STAKER_EMISSION_DECAY,
-            &tiers,
-        ),
+        snapshot_calibration_digest(&bumped_params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY),
         "EconomicParams sub-digest must still be covered"
     );
 }

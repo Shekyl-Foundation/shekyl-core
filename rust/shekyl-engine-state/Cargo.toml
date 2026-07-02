@@ -36,7 +36,6 @@ shekyl-address = { path = "../shekyl-address" }
 # is `#[serde(transparent)]` so the on-disk format is unchanged.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
-shekyl-staking = { path = "../shekyl-staking" }
 # `AtomicUnits` amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md). The
 # `TransferDetails::amount()` accessor returns it; the stored `commitment`
 # stays fork-`u64` and converts at the `commitment_bytes` serializer edge.

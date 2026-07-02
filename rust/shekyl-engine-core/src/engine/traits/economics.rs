@@ -95,33 +95,6 @@ pub(crate) trait EconomicsEngine: Send + Sync + 'static {
     #[allow(dead_code)]
     fn burn_amount(&self, fee: u64, activity: ActivityMetric) -> Result<u64, Self::Error>;
 
-    /// Canonical total weighted stake across the principal pool — the
-    /// denominator intended for Phase 2b's `StakeEngine::projected_yield`
-    /// (2026-05-08 disposition). Sourced from chain-mirror state via
-    /// `ChainEconomicsSource::active_weighted_stake`, not from wallet-local
-    /// `shekyl-staking::Registry` (Bug 2 class).
-    ///
-    /// **`u128` per Bug 7** — aggregation uses `u128` to prevent overflow at
-    /// large pool sizes.
-    ///
-    /// **Zero is valid, not an error.** A return of `0` means no active stake
-    /// at the mirrored height — consensus burns the block's pool contribution
-    /// rather than carrying it ([`STAKER_REWARD_DISBURSEMENT.md`](../../../../../../docs/STAKER_REWARD_DISBURSEMENT.md)
-    /// §"Empty-staker-set behavior"). Do not treat `0` as a failed read.
-    ///
-    /// **Callers using this as a denominator must guard division.** `0` is a
-    /// live divide-by-zero for yield-style computations; check before dividing.
-    ///
-    /// **`0` is overloaded.** The same value can mean (a) no active stake at
-    /// the relevant height (legitimate) or (b) wallet not synced to that height
-    /// / stale mirror (must not be used as denominator). This method is
-    /// infallible (`-> u128`) and cannot signal "unknown." Consumers that must
-    /// distinguish the cases must verify sync state separately before
-    /// interpreting `0`.
-    // R6: zero V3.0 consumer (§5.5); reopens with Phase 2b `StakeEngine::projected_yield`.
-    #[allow(dead_code)]
-    fn pool_weighted_total(&self) -> u128;
-
     /// Parameter snapshot for governance / display.
     ///
     /// At V3.0 the snapshot is constants-derived and stable in

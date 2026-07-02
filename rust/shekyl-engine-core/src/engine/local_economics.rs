@@ -6,20 +6,18 @@
 //! `LocalEconomics` — the V3.0 [`EconomicsEngine`] implementor.
 //!
 //! A **stateless** wrapper (§2.7 Stage 1 implementing-type note): it
-//! holds the build-time-resolved [`EconomicParams`] and the one-read
-//! [`ChainEconomicsSource`] seam, and nothing mutable. Every method is a
-//! pure-function composition over `shekyl-economics` primitives plus
+//! holds the build-time-resolved [`EconomicParams`] and nothing mutable
+//! (the claim-era `ChainEconomicsSource` read seam died with
+//! `pool_weighted_total` — `LEGACY_CLAIM_ERA_RETIREMENT.md`). Every method
+//! is a pure-function composition over `shekyl-economics` primitives plus
 //! caller inputs:
 //!
 //! - [`base_emission_at`](EconomicsEngine::base_emission_at) — pure
-//!   projection (`base_block_reward ∘ projected_already_generated`);
-//!   reads **nothing** from the source.
+//!   projection (`base_block_reward ∘ projected_already_generated`).
 //! - [`burn_amount`](EconomicsEngine::burn_amount) — applies the adaptive
 //!   burn percentage (`calc_burn_pct_from_activity`) to `fee`; the
 //!   `stake_ratio` is formed by the single shared helper, never
 //!   hand-divided here (Bug-2 class).
-//! - [`pool_weighted_total`](EconomicsEngine::pool_weighted_total) — the
-//!   one chain read, delegated verbatim to the source.
 //! - [`parameters_snapshot`](EconomicsEngine::parameters_snapshot) — the
 //!   constants rulebook, rebuilt fresh on every call (no cache).
 //!
@@ -28,7 +26,7 @@
 //! The numeric outputs of these methods depend on
 //! `config/economics_params.json` constants that are **still under
 //! pre-genesis testnet recalibration** (emission speed factor, burn
-//! coefficients, staker shares, tier table). The method *surfaces* are
+//! coefficients, staker shares). The method *surfaces* are
 //! stable; the *values* may churn each calibration generation
 //! ([`CALIBRATION_GENERATION`](shekyl_economics::CALIBRATION_GENERATION)).
 //! Value-vector tests are calibration-tagged; the generation-invariant
@@ -42,66 +40,43 @@
 use shekyl_economics::params::mul_scale;
 use shekyl_economics::{ActivityMetric, EconomicParams, CALIBRATION_GENERATION};
 
-use super::chain_economics_source::{ChainEconomicsSource, LedgerChainEconomicsSource};
 use super::economics_snapshot::{
     snapshot_calibration_digest, CalibrationStamp, EconomicsParametersSnapshot,
 };
 use super::error::EconomicsError;
 use super::traits::economics::EconomicsEngine;
 
-/// V3.0 [`EconomicsEngine`] implementor over a [`ChainEconomicsSource`].
-///
-/// Generic over the source so the production path
-/// ([`LedgerChainEconomicsSource`], the default) and the C4 test substrate
-/// (`RecordedChainFixture` / `ChainMirrorSource`) share the **same**
-/// `LocalEconomics` code path — "real path, real fixture", no
-/// `MockEconomics`.
+/// V3.0 [`EconomicsEngine`] implementor — a pure-projection rulebook over
+/// the build-time-resolved [`EconomicParams`].
 // `pub` (not `pub(crate)`) to match the other default `Engine`
 // implementors (`LocalLedger`, `LocalRefresh`, `LocalPendingTx`): it is
 // the default `E` type argument of the `pub` `Engine`, so a more-private
 // visibility trips `private_interfaces`. The `EconomicsEngine` trait
 // itself stays `pub(crate)`, so R6 holds — external crates cannot name
 // the trait to invoke its methods.
-// The `S: ChainEconomicsSource` bound lives on the impls, not the struct
-// definition (standard Rust idiom): bounding the `pub` struct on the
-// `pub(crate)` trait would trip `private_bounds`, and keeping
-// `ChainEconomicsSource` internal is deliberate — the read seam is not
-// externally implementable. The default `S = LedgerChainEconomicsSource`
-// is the production adapter.
-pub struct LocalEconomics<S = LedgerChainEconomicsSource> {
+pub struct LocalEconomics {
     /// Build-time-resolved economic constants
     /// ([`EconomicParams::default`]). Immutable at V3.0.
     // R6: read only by the trait methods, which have zero V3.0 consumer (§5.5).
     #[allow(dead_code)]
     params: EconomicParams,
-    /// The single V3.0 chain-read seam (pool-weighted stake total).
-    // R6: read only by the trait methods, which have zero V3.0 consumer (§5.5).
-    #[allow(dead_code)]
-    source: S,
 }
 
-// No `S: ChainEconomicsSource` bound here — `new`/`with_params` only
-// store `source`; the bound lives on the `EconomicsEngine` impl (a
-// `pub(crate)` trait impl, which does not expose `ChainEconomicsSource`
-// at `pub`). Bounding this inherent impl on the `pub` type would trip
-// `private_bounds`.
-impl<S> LocalEconomics<S> {
-    /// Construct over `source` with the build-time-resolved
-    /// [`EconomicParams`] loader.
-    pub(crate) fn new(source: S) -> Self {
+impl LocalEconomics {
+    /// Construct with the build-time-resolved [`EconomicParams`] loader.
+    pub(crate) fn new() -> Self {
         Self {
             params: EconomicParams::default(),
-            source,
         }
     }
 
-    /// Construct over `source` with an explicit `params` set. Used by the
-    /// C4 fixtures, whose recorded rows are tagged with the calibration
-    /// generation / `params_digest` they were generated under, so the
-    /// differential must run against those exact constants.
+    /// Construct with an explicit `params` set. Used by the C4 fixtures,
+    /// whose recorded rows are tagged with the calibration generation /
+    /// `params_digest` they were generated under, so the differential must
+    /// run against those exact constants.
     #[cfg(test)]
-    pub(crate) fn with_params(params: EconomicParams, source: S) -> Self {
-        Self { params, source }
+    pub(crate) fn with_params(params: EconomicParams) -> Self {
+        Self { params }
     }
 }
 
@@ -131,7 +106,7 @@ fn scale_to_milli_u32(value: u64) -> u32 {
     u32::try_from(value / 1000).unwrap_or(u32::MAX)
 }
 
-impl<S: ChainEconomicsSource> EconomicsEngine for LocalEconomics<S> {
+impl EconomicsEngine for LocalEconomics {
     type Error = EconomicsError;
 
     fn base_emission_at(&self, height: u64) -> Result<u64, Self::Error> {
@@ -163,12 +138,6 @@ impl<S: ChainEconomicsSource> EconomicsEngine for LocalEconomics<S> {
         Ok(mul_scale(fee, burn_pct))
     }
 
-    fn pool_weighted_total(&self) -> u128 {
-        // Single aggregation path: the source's one read feeds this
-        // verbatim. `0` is valid-but-ambiguous (trait rustdoc).
-        self.source.active_weighted_stake()
-    }
-
     fn parameters_snapshot(&self) -> EconomicsParametersSnapshot {
         // Rebuilt fresh on every call — no process-wide cache (§6.3 G5).
         // The `as_of` stamp lets a consumer detect a stale captured copy.
@@ -188,18 +157,16 @@ impl<S: ChainEconomicsSource> EconomicsEngine for LocalEconomics<S> {
             staker_emission_decay_milli: scale_to_milli_u16(
                 shekyl_economics::STAKER_EMISSION_DECAY,
             ),
-            tiers: shekyl_staking::TIERS,
             as_of: CalibrationStamp {
                 generation: CALIBRATION_GENERATION,
                 // Full-surface digest: covers `EconomicParams` *and* the
-                // staker-emission consts and tier table this snapshot also
-                // exposes (§6.3 G5) — not just the `EconomicParams`
-                // sub-digest `shekyl_economics::params_digest` produces.
+                // staker-emission consts this snapshot also exposes
+                // (§6.3 G5) — not just the `EconomicParams` sub-digest
+                // `shekyl_economics::params_digest` produces.
                 params_digest: snapshot_calibration_digest(
                     p,
                     shekyl_economics::STAKER_EMISSION_SHARE,
                     shekyl_economics::STAKER_EMISSION_DECAY,
-                    &shekyl_staking::TIERS,
                 ),
             },
         }

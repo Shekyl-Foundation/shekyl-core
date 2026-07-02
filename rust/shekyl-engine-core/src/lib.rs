@@ -31,7 +31,7 @@ pub use engine::{
 };
 pub use error::EngineCoreError;
 pub use outbound_label::label_plaintext_for_payment_uri;
-pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
+pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 
 /// **Not part of the public API.** Re-exports otherwise-`pub(crate)`
 /// types so external Criterion benchmarks (`benches/*.rs`) can measure

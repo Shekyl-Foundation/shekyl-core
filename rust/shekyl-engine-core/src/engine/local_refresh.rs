@@ -174,9 +174,7 @@ use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgre
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
 use super::view_material::ViewMaterial;
-use crate::scan::{
-    DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind, ScanResult, StakeEvent,
-};
+use crate::scan::{DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind, ScanResult};
 
 /// Maximum retries for transient per-block RPC failures.
 ///
@@ -617,7 +615,6 @@ impl RefreshEngine for LocalRefresh {
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
-            let stake_events: Vec<StakeEvent> = Vec::new();
             let mut reorg_rewind: Option<ReorgRewind> = None;
             // CT-5 §3.2 transit fields (A1 frozen-contract): the full per-block
             // leaf set and the consensus header `curve_tree_root`, materialized
@@ -848,7 +845,6 @@ impl RefreshEngine for LocalRefresh {
                 block_hashes,
                 new_transfers,
                 spent_key_images,
-                stake_events,
                 reorg_rewind,
                 block_leaves,
                 block_curve_tree_roots,
