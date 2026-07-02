@@ -111,12 +111,13 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
   subdir there).
 - **PR-2 — LANDED (#226):** Tier-2a-i, the claim-tx-building surface (`claim_builder` +
   `workflow`). Verified dead (`projected_yield` is a phantom). Rust-only.
-- **PR-3 — LANDED (Rust-complete, FFI quarantined; scope adjusted at source).** The mapped
-  "paired C++ caller cleanup" turned out to be the full claim-era C++ consensus surface (the
-  `shekyl_stake_*` callers sit inside the stake-ratio cache, `txout_to_staked_key`
-  maturity/validation, and claim-range validation in blockchain.cpp/blockchain_db.cpp — a
-  rule-07 consensus-boundary cutover, not thin call sites), so C++ split off as **PR-4**.
-  PR-3 delivered the complete Rust sweep: 2a-ii (staker_pool + `chain_economics_source` +
+- **PR-3 (#231, the PR carrying this map update) — Rust-complete, FFI quarantined; scope
+  adjusted at source.** The mapped "paired C++ caller cleanup" turned out to be the full
+  claim-era C++ consensus surface (the `shekyl_stake_*` callers sit inside the stake-ratio
+  cache, `txout_to_staked_key` maturity/validation, and claim-range validation in
+  blockchain.cpp/blockchain_db.cpp — a rule-07 consensus-boundary cutover, not thin call
+  sites), so C++ split off as **PR-4**. PR-3 delivers the complete Rust sweep: 2a-ii
+  (staker_pool + `chain_economics_source` +
   `EconomicsEngine::pool_weighted_total` removal; `LocalEconomics` de-genericized to a pure
   constants rulebook; `ScanResult::stake_events`/`StakeEvent` + `RefreshSummary.stake_events`
   gone) and 2b (`StakingMeta` + `WalletOutput.staking` + `TransferDetails.{staked, stake_tier,
@@ -132,5 +133,5 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
   four quarantined FFI exports and the `shekyl-staking` crate. Rule-07 atomic-cutover
   discipline; coordinate with the 2b emission-leg C++ work (C-1 era).
 
-Ordering: dead → entangled → cross-language. PR-4 is the sole remaining step; everything
-Rust-side is retired.
+Ordering: dead → entangled → cross-language. Once #231 lands, PR-4 is the sole remaining
+step — everything Rust-side is retired.
