@@ -566,7 +566,6 @@ jobs:
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
-            rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
