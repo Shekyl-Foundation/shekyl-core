@@ -338,4 +338,44 @@ mod tests {
         assert_eq!(h1, h2);
         assert_ne!(h1, [0u8; 32]);
     }
+
+    /// Golden byte vector for the shared holdings codec.
+    ///
+    /// **Blast radius: TWO consensus wires.** This fragment is byte-identical on
+    /// the bond-post wire (`0x03`, this module) **and** the reward-emission wire
+    /// (`0x04`, [`crate::emission_wire`], which mirrors this exact pin in
+    /// `emission_wire::tests::holdings_codec_golden_vector_shared_with_bond_wire`).
+    /// A change that moves these bytes is a consensus change to both surfaces and
+    /// must fail both suites loudly — do not "fix" this test by updating the pin
+    /// without a genesis-format decision covering both wires.
+    #[test]
+    fn holdings_codec_golden_vector_shared_with_emission_wire() {
+        let shard_set = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        assert_eq!(
+            encode_holdings_descriptor(&shard_set).unwrap(),
+            [0x00, 0x02, 0x07, 0x2A],
+            "ShardSetCompact golden bytes moved — consensus change to BOTH wires"
+        );
+        let complete = HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: Vec::new(),
+        };
+        assert_eq!(
+            encode_holdings_descriptor(&complete).unwrap(),
+            [0x01],
+            "CompleteTree golden byte moved — consensus change to BOTH wires"
+        );
+        // Read side of the same pin: the golden bytes decode back exactly.
+        assert_eq!(
+            read_holdings_descriptor(&mut [0x00u8, 0x02, 0x07, 0x2A].as_slice()).unwrap(),
+            shard_set
+        );
+        assert_eq!(
+            read_holdings_descriptor(&mut [0x01u8].as_slice()).unwrap(),
+            complete
+        );
+    }
 }

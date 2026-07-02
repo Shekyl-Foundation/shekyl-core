@@ -122,6 +122,13 @@ pub struct WorkEpochClaim {
 /// steady state). A multi-input backing therefore reopens the §8.0.1 auth-arity
 /// pin (rule 21), not just this struct. Bonus: the §8 open item 3
 /// (backing-input distinctness) is vacuous at arity 1.
+///
+/// **One backing, many epochs — deliberate asymmetry.** The single backing input
+/// establishes `P`'s authority for the *entire* emission across every claimed
+/// `settlement_epochs[i]`, because backing proves **identity/spend authority**
+/// (membership + the stake-side auth), not per-epoch work — the per-epoch leg is
+/// [`WorkEpochClaim`], recomputed against archival state per epoch (§5.4).
+/// Per-epoch backing would conflate the two legs; do not "fix" the asymmetry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MembershipOnlyBacking {
     /// Opaque `FcmpMembershipOnly` blob (`FCMP_MEMBERSHIP_ONLY.md` §3).
@@ -919,6 +926,37 @@ mod tests {
                 .unwrap(),
             claim,
             "signable_tx_hash must be bound (cross-tx replay)"
+        );
+    }
+
+    /// Mirror of `bond_wire::tests::holdings_codec_golden_vector_shared_with_emission_wire`
+    /// — the SAME pinned bytes, deliberately duplicated so a holdings-codec change
+    /// fails **both** consensus wires' suites loudly (bond-post `0x03` + emission
+    /// `0x04` share one codec; a byte move is a genesis-format decision for both).
+    #[test]
+    fn holdings_codec_golden_vector_shared_with_bond_wire() {
+        const GOLDEN_SHARD_SET: [u8; 4] = [0x00, 0x02, 0x07, 0x2A];
+        let shard_set = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        assert_eq!(
+            encode_holdings_descriptor(&shard_set).unwrap(),
+            GOLDEN_SHARD_SET,
+            "holdings golden bytes moved — consensus change to BOTH wires"
+        );
+
+        // In-situ: the fragment sits byte-identical inside a serialized emission
+        // vin, at tag + varint(pk_len) + pk_bytes.
+        let mut vin = sample_vin();
+        vin.holdings = shard_set;
+        let wire = vin.serialize().unwrap();
+        let off =
+            1 + shekyl_curve_io::varint_len(SINGLE_KEY_CANONICAL_LEN) + SINGLE_KEY_CANONICAL_LEN;
+        assert_eq!(
+            &wire[off..off + GOLDEN_SHARD_SET.len()],
+            GOLDEN_SHARD_SET,
+            "emission wire's holdings fragment diverged from the shared golden pin"
         );
     }
 }
