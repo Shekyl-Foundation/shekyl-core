@@ -78,6 +78,7 @@ use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
 use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
 use super::safecookie::verify_server_hash;
+use crate::binary::VerifiedTorBinary;
 
 /// Per-read bound on a hung control port — a handshake read that does not complete
 /// in this window fails the spawn (DQ-T0.6) rather than hanging the actor.
@@ -279,11 +280,13 @@ pub enum TorLaunch {
 /// `DataDirectory`, a `ControlPort auto` written to a file, cookie authentication, and
 /// the given `SocksPort`, then connects to the port it opened.
 pub struct ManagedTor {
-    /// Path to the `tor` binary. **The SP-T0c handoff:** SP-T0c's hash-pinned Tor Expert
-    /// Bundle binary flows in here, so the moment that pin resolves a managed `tor` has a
-    /// waiting control/SOCKS socket — T0b-2's launch config and SP-T0c's verified-binary
-    /// pin meet at this field.
-    pub tor_binary: PathBuf,
+    /// The `tor` binary to spawn — **only a hash-pin-verified witness is accepted**
+    /// (SP-T0c). The sole production mints are `binary::discover_and_verify` /
+    /// `binary::discover_and_verify_at`, so a spawn path *cannot* skip verification:
+    /// the gate is enforced by this type, not by convention (the same structural
+    /// posture as `disable_network` below). Tests inject an unpinned tor via the
+    /// loudly-named `VerifiedTorBinary::unchecked_for_test`.
+    pub tor_binary: VerifiedTorBinary,
     /// Wallet-private `DataDirectory`. (DQ-T0.7's guard-persistence nuance is deferred;
     /// a wallet-private dir is the safe default until that decision lands.)
     pub data_dir: PathBuf,
@@ -627,7 +630,9 @@ async fn spawn_managed_tor(
         }
     }
 
-    let mut cmd = tokio::process::Command::new(&managed.tor_binary);
+    // The witness type guarantees this path passed the hash-pin gate and is canonical
+    // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
+    let mut cmd = tokio::process::Command::new(managed.tor_binary.as_path());
     cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
@@ -1158,9 +1163,12 @@ mod live_tests {
     use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, oneshot};
 
-    /// The bundled `tor` binary path; **hard-fail** (not skip) when the test runs.
+    /// The test `tor` binary path (**any** tor works here — these are lifecycle
+    /// tests, not the pin gate; the pinned-binary contract is
+    /// `SHEKYL_TEST_PINNED_TOR_BINARY` in `binary.rs`); **hard-fail** (not skip)
+    /// when the test runs. `var_os`: a non-UTF-8 path is a valid path.
     fn tor_binary() -> PathBuf {
-        std::env::var("SHEKYL_TEST_TOR_BINARY")
+        std::env::var_os("SHEKYL_TEST_TOR_BINARY")
             .map(PathBuf::from)
             .expect("SHEKYL_TEST_TOR_BINARY must point at a tor binary on the integration lane")
     }
@@ -1333,7 +1341,10 @@ mod live_tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let actor = TorControl::spawn(TorControlConfig {
             launch: TorLaunch::Managed(ManagedTor {
-                tor_binary: tor_binary(),
+                // The declared test bypass of the hash-pin gate: this lifecycle
+                // test injects an arbitrary tor (any version works — we are
+                // proving spawn/shutdown, not the pin).
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: free_port(),
                 disable_network: true,

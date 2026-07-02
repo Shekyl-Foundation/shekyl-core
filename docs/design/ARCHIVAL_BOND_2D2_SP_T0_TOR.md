@@ -196,22 +196,60 @@ gate. Closes the keystone the SP-T1 crate doc points forward to.
 Do **not** own a Tor build. Inherit reproducible packaging where it exists (Guix `tor`); **hash-pin**
 the Tor Project's official released binary — the **Tor Expert Bundle**
 (<https://www.torproject.org/download/tor/>), the standalone `tor` artifact for embedders — on targets
-you cannot build reproducibly (Windows the trusted-blob exception). The recurring obligation is a **release-checklist line** — watch the Expert Bundle page for releases/advisories → bump the
+you cannot build reproducibly (Windows the trusted-blob exception). *Interim posture:* until Guix
+packaging is actually built, the GPG-verified Expert Bundle blob is the pin for **all** targets —
+including Linux, the most Guix-buildable one — because a verified official blob today beats an unbuilt
+reproducible pipeline; inheriting Guix `tor` where it exists remains the destination, and landing it
+re-verifies rather than replaces the pin. The recurring obligation is a **release-checklist line** —
+watch the Expert Bundle page for releases/advisories → bump the
 pinned version/hash → re-verify — not a maintained build. **This line is an explicit SP-T0c
 deliverable:** `docs/RELEASE_CHECKLIST.md` carries no Tor entry today, and a duty that lives only in a
 design doc evaporates — SP-T0c's definition of done is "the bundle **and** the checklist line," not just
 the bundle. (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Dev pin (recorded 2026-06-29 — the seed for that checklist entry):** verified
-`tor-expert-bundle-linux-x86_64-15.0.16.tar.gz` (Tor `0.4.9.9`) — SHA256
-`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`, GPG-signed by the **Tor Browser
+**Current pin (bumped 2026-07-01, SP-T0c):** verified
+`tor-expert-bundle-linux-x86_64-15.0.17.tar.gz` (Tor `0.4.9.11`) — tarball SHA256
+`4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 `CAAE408AEBE2288E96FC5D5E157432CF78A65729`). The durable pin is *that signing key*, not just this one
-hash — a version bump re-verifies the new manifest's signature against the same fingerprint, then records
-the new tarball hash. Dev/CI integration KATs discover the launchable binary via the
-`SHEKYL_TEST_TOR_BINARY` env var (skip-if-unset), so the unit gate and CI-without-Tor stay green; only an
-integration job with a bundled Tor exercises the live path.
+hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
+the new binary hash. The **runtime gate is the extracted binary's** SHA256
+`660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
+recorded in `rust/shekyl-tor/src/binary.rs::CURRENT_PIN`. (Superseded pin, recorded 2026-06-29: bundle
+`15.0.16` / Tor `0.4.9.9`, tarball SHA256
+`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1` — kept so the earlier verification
+claim stays independently checkable.) Dev/CI integration KATs are `#[ignore]`-gated off the unit lane
+and **hard-fail** (never silently skip) when run without their binary: the lifecycle tests take **any**
+tor via `SHEKYL_TEST_TOR_BINARY`; the pin-match KAT takes **the pinned** tor via the deliberately
+distinct `SHEKYL_TEST_PINNED_TOR_BINARY`, so the two contracts cannot collide. The unit gate and
+CI-without-Tor stay green because the tests are ignored there, not because they skip.
+
+**Runtime discovery + verify (SP-T0c, built in `shekyl-tor::binary`).** The chosen posture is
+*discover-and-verify-at-launch*: `discover_and_verify()` selects exactly **one** `tor` candidate — a
+non-empty `SHEKYL_TOR_BINARY` override, else a binary beside the wallet executable (the intended
+production layout), else `PATH` (bring-your-own-tor / dev convenience) — canonicalizes it, and gates it
+on `SHA256 == CURRENT_PIN`. On success it mints **`VerifiedTorBinary`, a witness type whose only
+production constructors are the gate itself** (`discover_and_verify` / the settings-file seam
+`discover_and_verify_at`), and `ManagedTor::tor_binary` accepts nothing else — so verification cannot
+be skipped on a future spawn path *by construction* (the SP-T0a `ServerVerified` pattern; the one test
+bypass is the greppable `unchecked_for_test`). There is **no fall-through on a verification failure**:
+the selected candidate's mismatch is terminal, so a present-but-tampered bundled binary can never
+silently defer to a different `tor`. (Fall-through on *absence* is how the tiers advance — deleting the
+bundled binary relocates discovery to `PATH`, where the candidate is still hash-gated; the relocation
+itself is silent, which is acceptable only because the gate travels with it.) A target with no
+`CURRENT_PIN` arm hard-refuses a managed launch (`Attached` still works); a new target is enabled by
+*pinning* it (checklist + `cfg` arm), never by relaxing the gate.
+
+**Scope boundary (named, not implied):** the pin defends *at-rest* integrity — a bad download, a
+supply-chain swap, a binary replaced before launch. Verification hashes the file; the launcher later
+`exec`s the canonical path, which re-opens it — so an attacker with write access to the binary's
+directory *inside the check-to-exec window* can still swap it (TOCTOU). Such an attacker can generally
+tamper the wallet binary itself, so the residual is narrow, and it is bounded by the load-bearing
+layout requirement that the production binary live in a wallet-controlled, non-world-writable
+directory. Rule-21 reopening criterion: if the threat model ever includes a local attacker with
+in-window write access to the tor directory, close the window with fd-based exec (verify the fd,
+`fexecve` the same fd) rather than more path-based checking.
 
 The Arti reopen-anchor
 (§10) stays on its real trigger — SOCKS-isolation proving unenforceable — which **DQ-T0.4 is what

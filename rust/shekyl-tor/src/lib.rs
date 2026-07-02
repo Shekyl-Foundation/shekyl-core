@@ -25,5 +25,13 @@
 //! The control port observes circuit metadata for the wallet's *own* clients; it
 //! is a forensic surface (like the SOCKS username) whose data — circuit IDs, our
 //! own targets — **must not be logged**.
+//!
+//! [`binary`] (SP-T0c) is the launch-trust half: it discovers the wallet's
+//! `tor` binary and verifies it against a hash pin, minting the
+//! [`binary::VerifiedTorBinary`] witness a managed launch requires — the
+//! firewall rests on *our* tor, so trusting the binary is a mission-#1
+//! precondition. (Shipping the binary itself is the installer/packaging job,
+//! not this crate's.)
 
+pub mod binary;
 pub mod control;
