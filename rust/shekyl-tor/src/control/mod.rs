@@ -36,8 +36,8 @@ pub mod safecookie;
 pub mod stream;
 
 pub use actor::{
-    BootstrapReadiness, Command, CommandResult, ControlError, EventSink, TorControl,
-    TorControlConfig,
+    BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, TorControl,
+    TorControlConfig, TorExit, TorLaunch,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
