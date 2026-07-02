@@ -150,6 +150,29 @@ pub fn encode_holdings_descriptor(h: &HoldingsDescriptor) -> Result<Vec<u8>, Wir
     Ok(out)
 }
 
+/// Read a [`HoldingsDescriptor`] (kind byte + optional shard list) — the §3.4.1
+/// canonical holdings encoding. Shared with the emission vin
+/// ([`crate::emission_wire`], §5.3 "must match bond record"), so the two wires
+/// cannot drift on the holdings fragment.
+pub fn read_holdings_descriptor<R: Read>(r: &mut R) -> Result<HoldingsDescriptor, WireError> {
+    let kind = HoldingsKind::from_u8(read_byte(r)?)?;
+    let shard_ids = match kind {
+        HoldingsKind::ShardSetCompact => {
+            let count: usize = read_varint(r)?;
+            if count > MAX_HOLDINGS_SHARDS {
+                return Err(WireError::HoldingsCountExceeded { got: count });
+            }
+            let mut ids = Vec::with_capacity(count);
+            for _ in 0..count {
+                ids.push(read_varint(r)?);
+            }
+            ids
+        }
+        HoldingsKind::CompleteTree => Vec::new(),
+    };
+    Ok(HoldingsDescriptor { kind, shard_ids })
+}
+
 impl ArchivalBondPostVin {
     /// `cSHAKE256` spend-auth preimage for the bond vin (`tx_prefix_hash` is 32 bytes).
     pub fn signature_preimage(&self, tx_prefix_hash: &[u8; 32]) -> [u8; 32] {
@@ -209,21 +232,7 @@ impl ArchivalBondPostVin {
         r.read_exact(&mut hybrid_public_key)?;
         let p_canonical_id = read_bytes(r)?;
         let post_kind = BondPostKind::from_u8(read_byte(r)?)?;
-        let holdings_kind = HoldingsKind::from_u8(read_byte(r)?)?;
-        let shard_ids = match holdings_kind {
-            HoldingsKind::ShardSetCompact => {
-                let count: usize = read_varint(r)?;
-                if count > MAX_HOLDINGS_SHARDS {
-                    return Err(WireError::HoldingsCountExceeded { got: count });
-                }
-                let mut ids = Vec::with_capacity(count);
-                for _ in 0..count {
-                    ids.push(read_varint(r)?);
-                }
-                ids
-            }
-            HoldingsKind::CompleteTree => Vec::new(),
-        };
+        let holdings = read_holdings_descriptor(r)?;
         let bonded_total_atomic = read_varint(r)?;
         let bond_credit = read_varint(r)?;
         let bond_debit = read_varint(r)?;
@@ -231,10 +240,7 @@ impl ArchivalBondPostVin {
             hybrid_public_key,
             p_canonical_id,
             post_kind,
-            holdings: HoldingsDescriptor {
-                kind: holdings_kind,
-                shard_ids,
-            },
+            holdings,
             bonded_total_atomic,
             bond_credit,
             bond_debit,

@@ -34,6 +34,7 @@ pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
+pub mod emission_wire;
 pub mod error;
 pub mod hash;
 pub mod id;
