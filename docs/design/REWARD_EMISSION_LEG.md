@@ -387,13 +387,56 @@ A reward emission transaction contains:
 
 ```text
 ArchivalRewardEmissionVin {
-  P_pubkey:           HybridPublicKey,     // wire version per FOUNDATION_GENESIS §5
-  holdings:           HoldingsDescriptor,  // must match bond record after first emission
-  settlement_epochs:  u64[MAX],            // 1 ≤ MAX ≤ 15, strictly increasing, unique
-  work_claim:         WorkClaimVector,     // per-epoch public work breakdown (§5.4)
+  P_pubkey:           HybridPublicKey,       // wire version per FOUNDATION_GENESIS §5
+  holdings:           HoldingsDescriptor,    // must match bond record after first emission
+  settlement_epochs:  u64[MAX],              // 1 ≤ MAX ≤ 15, strictly increasing, unique
+  work_claim:         WorkClaimVector,       // per-epoch public work breakdown (§5.4)
   backing:            MembershipOnlyBacking, // FCMP++ membership, NO key image (§7)
+  auth_backing:       HybridSignature,       // stake-side: P-that-staked ↔ bond (§5.3.1)
+  auth_claim:         HybridSignature,       // claim-side: P-that-claims ↔ this emission (§5.3.1)
 }
 ```
+
+(Plaintext `reward_amount_plain` is carried per §5.5 and bound by the balance/inflation
+check, so it is not re-listed here.)
+
+#### 5.3.1 The two hybrid auths (amendment 2026-07-01; auth type corrected same day)
+
+> **Correction (2026-07-01).** This section originally specified each auth as
+> **ML-DSA-65-only**. That was reversed the same day: the auths are **hybrid**
+> (Ed25519 + ML-DSA-65), matching every other signature in the system. See the R1.A(2)
+> retraction in [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.0.2 for the
+> reasoning — the ML-DSA-only line refuted only the CRQC threat model; the live threat the
+> Ed25519 leg closes is a *classical* cryptanalytic break of ML-DSA-65, and **Auth-P has no
+> membership-proof classical fallback**, so ML-DSA-only there would be a single point of
+> cryptographic failure. The **two-auth** structure below (rotation-forced) is unchanged.
+
+Added per [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.0.1 (Q1 ratified —
+two auths, rotation-forced) and §8.0.2 (the frozen wire field set). **Why two, not one:**
+`P` is **rotatable between stake and claim**, so "the backing output was `P`'s" (proven at
+stake, by membership) and "`P` authorizes this payout" (at claim) are provably about
+*potentially different personas*. The membership proof anchors the backing to the
+**`P`-that-staked** and says nothing about the **`P`-that-claims-now**; if those differ by
+rotation, one auth structurally cannot close the gap. So **two auths, over two distinct
+binding messages** (not one signature checked twice):
+
+- **`auth_backing`** — binds the **`P`-that-staked** to the bond: the hybrid (Ed25519 +
+  ML-DSA-65) attestation over the backing leaf's committed `H(pqc_pk)` (the leaf-bound
+  spend-authority gate, §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md)
+  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify is the built
+  primitive `shekyl_emission_hybrid_auth_verify` (PR-E1). Because the leaf commits the **full
+  hybrid** pubkey and the auth exercises both halves, it binds `P` exactly as tightly as the leaf.
+- **`auth_claim`** — binds the **`P`-that-claims** to *this specific emission*: its binding
+  message commits to the **payout output(s) minted and the `settlement_epochs`**, so a valid
+  claim-auth **cannot be replayed** against a different payout or a different epoch set.
+
+**Rotation-fit (not a new degree of freedom).** The claim-side auth carries the reward to the
+**current** `P` — reward **follows the rotation** (the persona that staked earns it, the
+persona that claims receives it, distinct operator-controlled keys). This is the same
+drain-and-rotate degree of freedom (profit-taking = rotation) surfacing at the emission layer;
+the emission wire and the persona-rotation firewall are **designed to fit**. Exact wire type is
+the house `HybridSignature` canonical encoding (`SINGLE_SIG_CANONICAL_LEN` = 3385 B/auth);
+**this field set is E2's wire freeze** (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2).
 
 **Not present on the wire (rejected if required by legacy code paths):**
 
@@ -741,11 +784,53 @@ zero-knowledge over the FCMP++ anonymity set: repeated membership proofs of the 
 leaf do **not** publish a key image and are **not** linkable by the proof statement
 alone.
 
-**Gate-6 hygiene (optional, named threats only):** Wallet policy may rotate backing
-UTXOs for **non-proof** correlation — timing, amount clustering, mempool metadata,
-fee-input linkage — per the gate-6 firewall spec. Those are operational threats, not
-consensus lemmas; they must be named there. This leg does not impose rotation as a
-verify rule.
+**Gate-6 hygiene:** Wallet policy addresses **non-proof** correlation — timing, amount
+clustering, mempool metadata, fee-input linkage — named in the gate-6 firewall spec. Those are
+operational threats, not consensus lemmas, and this leg imposes no rotation *verify* rule. But
+**backing-output lineage is no longer optional hygiene**: the `pqc_pk` reveal below promotes it to
+a **mandatory, firewall-class** gate-6 policy (the ladder + sweep).
+
+**Backing-`pqc_pk` reveal — the invariant (2026-07-01).** The quantum spend-authority auth
+(§5.3.1 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7) carries the backing
+output's **`pqc_pk` in cleartext** on the vin; verify recomputes `H(pqc_pk)` against the in-circuit
+leaf scalar. Leaf extra-scalars are **publicly enumerable**, so this reveal **deterministically
+identifies the backing output** — a **third linkability class** the two paragraphs above (proof
+statement; non-proof correlation) do not cover. Its scope is **exactly one output**: the ML-DSA
+keypair is **per-output one-time**, derived from the output's `combined_ss` via index-salted
+`HKDF-Expand` → `ML-DSA-65.KeyGen` ([`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs)
+:13/:26, "per-output PQC leaf hash"), so revealing one backing `pqc_pk` identifies that output and
+**nothing else P owns**. Identifying the output identifies its creating tx. That is **inside the
+P-public envelope and does not pierce the firewall**, for a reason that must be stated so a future
+change cannot silently break it:
+
+> **Invariant.** Principal↔P is protected by **FCMP++ input anonymity + the cover's
+> amount-decorrelation** — *never* by P's outputs being unidentifiable. Identifying a backing
+> output reveals a P-owned output (P is public by role) and its creating tx, but the **creating
+> tx's inputs are FCMP++-hidden**, so the identification **does not trace back to the principal**.
+> The forward change-heuristic that would matter on a transparent chain dies under FCMP++ (spends
+> are membership proofs over the whole tree); the only residual surviving raw-funding-output
+> identification is **funding timing** — the soft-correlation class the gate-6 standoff machinery
+> already covers.
+>
+> **Tripwire.** Any future change weakening FCMP++ input anonymity (or letting output
+> identification reach a tx's inputs) **reopens this finding** — the reveal's safety is contingent
+> on input anonymity, not on the reveal being absent.
+
+**Backing-output selection is gate-6's, and the one dangerous rung is designed out.** By lineage,
+most→least safe: **mint/earned** (provenance terminates at consensus — reveals nothing) >
+**bond-post change** (creating tx already P-public; its own backward lineage — which funding it
+consumed — is FCMP++-hidden, so the bond post is itself one churn hop) > **raw pre-bond-post
+funding** (the *only* rung where the reveal newly identifies the funding tx + its timing —
+**forbidden**). The forbidden rung is made **structurally unrepresentable** (not merely
+dispreferred): the wallet rule is that the bond post / re-bond **sweeps P's entire spendable
+funding set**, so no raw funding output survives to be backing-eligible and first-emission backing
+is necessarily the bond-post change. Pinned **mandatory, firewall-class** in the gate-6 spec
+(§2.4/§2.5); bakes into the unbuilt `stake_in` flow at zero cost.
+
+**No wire/consensus backing-lineage rule** — two hard reasons, not a lean: (1) consensus is **blind
+to lineage** (a principal→P and a P→P transfer are indistinguishable stealth txs — that blindness
+*is* the anonymity working), so a consensus rule keying on backing lineage is **unenforceable by
+construction**; (2) the sweep empties the forbidden rung, leaving a wire constraint nothing to do.
 
 ### 7.4 `ADMISSION_MIN` amount proof — deleted (gate 7 closed bonds-only)
 
@@ -814,7 +899,8 @@ refresh claimed-epoch cache; `Bonded` → `AdmissionPending` on join-Market reve
 **Resolved by the worked byte sweep**
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Close-condition (ii)*, ledger row
 AGG). Per-emission size is dominated by **constant-size crypto** (hybrid pubkey + two
-ML-DSA-65 auths + FCMP++ membership ≈ 15 kB), not the work claim
+hybrid auths + FCMP++ membership ≈ 15 kB; the +152 B vs ML-DSA-only is within the rounding),
+not the work claim
 (`|epochs| × portfolio × 13 B` — ≤ 780 B/epoch at year-30 lean portfolio). At a 20 kB
 per-emission margin, the aggregate across the `N_P` envelope {40, 79, 154} amortizes to
 **80–310 B/block = 0.027–0.103 %** of the 300 kB penalty-free zone; single-tx max

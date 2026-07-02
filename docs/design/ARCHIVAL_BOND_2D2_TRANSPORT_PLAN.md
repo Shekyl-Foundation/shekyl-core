@@ -215,6 +215,32 @@ service**. Two pins:
 The retrieval *pattern* and the served shard set are **public by design** (§0) — they map to
 `P`'s public holdings, not to the principal — so they are not a channel to defend.
 
+### 6a. Serving-side hardening — the inbound implementation threat model (SP-T3)
+
+The onion is an **inbound** surface, and that is a *different actor shape* from everything
+built for SP-T0/SP-T1/SP-T2. Those are outbound or loopback: SP-T0's control client is one
+**trusted** loopback request/reply connection; SP-T1/SP-T2 **dial out**. The onion service
+instead **accepts** connections from **untrusted** remote peers over high-latency circuits —
+so it does **not** inherit SP-T0a's single-mailbox actor pattern (the SP-T0a module doc's
+head-of-line note is benign on loopback control but becomes a real DoS here). Three
+protections, the inbound analogues of the client-side ones already shipped:
+
+- **Decoupled accept loop.** The listener runs on its own `tokio::spawn`, and each accepted
+  connection is handled **off** the actor mailbox (spawn-per-connection), so one slow peer or
+  a stalled rendezvous circuit cannot head-of-line-block the service.
+- **Per-connection timeouts.** Tor circuits carry large, attacker-influenced latency, so every
+  accept→read step is `tokio::time::timeout`-bounded; a stalled peer is dropped rather than
+  holding a file descriptor, bounding FD exhaustion. (The client side is already bounded —
+  `HANDSHAKE_READ_TIMEOUT`, the DQ-T0.4 dial `CAPTURE_TIMEOUT`.)
+- **Payload bound.** A `max_request_size` caps an inbound request **before** allocation, so a
+  hostile peer cannot flood memory with an oversized payload — the inbound mirror of the
+  control framer's `MAX_REPLY_BYTES` (already carried as an "adversarial-network bound").
+
+These are **requirements pinned for SP-T3's build, not code now** (`21`): the inbound listener
+has no consumer until the onion serving surface exists, so provisioning it earlier is exactly
+the speculation the `owned_net`-extraction discipline avoided. Captured here so SP-T3 starts
+with the serving threat model in hand rather than rediscovering it under a live onion.
+
 ---
 
 ## 7. The threat model (the one privacy axis)

@@ -112,6 +112,10 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   funding-shape hygiene (DQ4) is a wallet-local default, not a consensus gate. **Cold-start
   bond funding is structured `bond_floor + cover`** (not arbitrary) and originates the SP-7
   cover the built `CoverDiscovery` must later detect — cross-surface contract in §3.1.
+  **Single-output funding (GF-4b support):** each admission funds `P` as **one** structured
+  `bond_floor + cover` output, so the GF-4b bond-post sweep consumes a single input — keeping the
+  P-public bond post's input-count from signalling funding-tranche count. Multi-tranche funding of
+  one admission is a **conscious exception**, not the default.
 - **`fund_bond` / `join_market(shards) -> PendingTx`** — drives the **existing**
   `StakeEngine::SignBond` → `JoinMarketVin` (built; `#[allow(dead_code)]`/inert until
   the driving path is activated) + submit. Signs with `P`-identity + funding inputs
@@ -142,6 +146,41 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   principal cluster even with the delay satisfied* (gate-6 §2.4). **Recurring** exit
   (terminal drain **and** `HoldingsUpdate`), gate-6 Round 4. Blocks `drain()`/`unbond()`
   — DQ3.
+- **GF-4b — emission backing-lineage sweep (mandatory; the `pqc_pk`-reveal fix).** The emission
+  vin reveals the backing output's `pqc_pk`, deterministically identifying that one output
+  ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3; gate-6 §2.4 GF-4b ladder). Safe **iff**
+  the backing is never a **raw pre-bond-post funding output** — the only lineage rung whose reveal
+  newly identifies the funding tx and its timing. Made **structurally empty**, not dispreferred:
+  **the bond post and every re-bond consume ALL of `P`'s spendable funding outputs as inputs —
+  sweep, not coin-select.** Everything `P` holds afterward is bond-post change, so no raw funding
+  output survives backing-eligible and first-emission backing is necessarily bond-post change
+  (rung 2). **Sweep ≠ bond-everything:** the bond-post tx *outputs* return `cover` / operating
+  capital as ordinary change (§3.1), so liquidity survives — laundered through a `P`-public tx whose
+  FCMP++-hidden spend is itself the churn hop; **no separate churn tx exists to fingerprint.**
+  **Wargamed residual:** the input *count* on the P-public bond post weakly signals funding-tranche
+  count — mitigated because `stake_in` funds each admission as a **single structured
+  `bond_floor + cover` output** (§3.1), so the sweep consumes one input in the common case;
+  **multi-tranche funding is a conscious exception** to note in `stake_in`'s design, not the
+  default. Funding↔bond-post *timing* stays the standoff machinery's job (GF-7), unchanged.
+  **Birth condition, not retrofit (verified at source 2026-07-01):** the funding-spend operation
+  **does not exist yet** — `stake_engine.rs` has no `fund_bond`/funding-spend method (the grep
+  finds only comments, tests, and rotation machinery), `build_join_market_vin` never touches
+  funding UTXOs, and bonding references a consensus balance. So the sweep is a **design
+  constraint on the unbuilt `stake_in` funding path**, not a policy bolted onto existing code:
+  when built, its signature takes `P`'s **full spendable-funding set as an invariant, not a
+  selection** (no subset parameter — the non-sweep state is a function that never gets written)
+  and returns `(funding_spend_tx, BondPostChange)` with the change **constructor-minted**
+  (`JoinMarketVin` pattern, `archival-bond-builder/lib.rs:60`). The neighbor to compose with:
+  `stake_engine.rs:1231` already reasons about **funding↔bond-post decorrelation** ("defeating
+  the gate-6 firewall") and the SP-3/SP-5 dual-extract reconciles funding + bond-post as two
+  scanned events — the sweep must land beside that reasoning, not against it (seams verified
+  intact post-#225). **Sequencing:** the `MintLineageOutput` scan-provenance enum (upgrading the
+  `is_miner` bool; `scan.rs:507` — "the type system does not yet prove wire provenance") is the
+  one *existing-code* change and is independently useful — it can land **ahead** of `stake_in`;
+  `BackingSet` (constructor-gated over `MintLineageOutput` ∪ `BondPostChange`, sibling of
+  `RetirementWitness` §0.2) lands with E3-adjacent backing selection; plus a test that
+  post-bond-post `P`'s spendable set contains **zero** pre-bond outputs.
+  Make-bad-states-unrepresentable on the funding shape — designed in at birth.
 - **GF-7 — principal→`P` bond-funding structural distinguishability.** Lump funding
   from a fresh principal output immediately before first emission/join is a correlation
   channel (gate-6 §2.5). Disposition (fund-from-earnings ramp vs lump) is gate-6 Round 4

@@ -188,6 +188,36 @@ output-count discipline** — a single lump sweep still re-links the reward hist
 principal cluster even with the delay satisfied. That output-count discipline is the **Round 4
 hard exit** (§6), not a Round-1 carry.
 
+**GF-4b — emission backing-output lineage (mandatory, firewall-class; 2026-07-01).** The emission
+vin reveals the backing output's `pqc_pk` in cleartext (the quantum spend-authority gate,
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3), which — leaf extra-scalars being publicly
+enumerable — **deterministically identifies that one output** (per-output one-time key, so scoped to
+exactly it) and its creating tx. Per the §7.3 invariant this is safe (principal↔P rests on
+input-anonymity + amount-decorrelation; identification does not reach the funder) **only** when the
+backing is not a raw pre-bond-post funding output. Backing-output selection is therefore a
+**mandatory** firewall policy, not optional hygiene — the lineage ladder, most→least safe:
+
+1. **mint/earned lineage** — reward outputs P earned; provenance terminates at consensus, so
+   identification reveals nothing beyond P's own public emission history.
+2. **bond-post-change lineage** — cover/working-capital change returned by the bond-post tx; its
+   creating tx is already P-public and its backward lineage (which funding it consumed) is
+   FCMP++-hidden, so the bond post is itself one churn hop.
+3. **raw pre-bond-post funding lineage** — **FORBIDDEN**: the only rung whose reveal newly
+   identifies the funding tx and its **timing** (funding height → off-chain-principal correlation).
+
+**Named threat:** emission `pqc_pk` reveal → funding-tx identification → funding-timing correlation.
+**The forbidden rung is made structurally empty** by the sweep rule in
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) (bond post / re-bond consume P's
+entire spendable funding set → nothing raw survives backing-eligible; first-emission backing is
+necessarily bond-post change) — this policy is **enforced by construction**, not left to per-tx
+discipline.
+
+**DQ4 cross-note (two-regime = privacy-exposure transition).** The DQ4 fund-from-earnings transition
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)) is **also** a privacy-exposure
+transition: the first renewal funded from earnings moves P permanently onto **mint-clean** backing
+(rung 1), off even the one-hop bond-post-change rung. Bootstrap sits at rung 2 by construction;
+steady state converges to rung 1.
+
 ### 2.5 Bond-funding layer (fifth surface)
 
 **Goal:** Posting per-shard bonds does not become a **principal→`P` correlation channel**

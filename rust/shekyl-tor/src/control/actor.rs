@@ -17,8 +17,8 @@
 //!   an actor cannot `select!` on its own mailbox and a socket. So the SAFECOOKIE
 //!   handshake runs *synchronously* in [`on_start`](TorControl) — reading the
 //!   framer by hand, which is safe because no async `650` events can arrive before
-//!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` + `TAKEOWNERSHIP`
-//!   succeed is the read half wrapped as the internal `ReplyStream`
+//!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` (and, for a managed child,
+//!   `TAKEOWNERSHIP`) succeeds is the read half wrapped as the internal `ReplyStream`
 //!   (`Stream<Item = Result<Framed, ControlError>>`) and handed to
 //!   [`ActorRef::attach_stream`]. The stream then feeds the mailbox: each reply
 //!   arrives as `StreamMessage::Next(Ok(Framed))` whether or not a command is in
@@ -37,9 +37,10 @@
 //!   is unrepresentable rather than merely avoided by callers.
 //!
 //! Any framing/socket error or stream close fails the actor rather than
-//! reconnecting into the same desync; `TAKEOWNERSHIP` (issued first, post-auth)
-//! means Tor exits when this connection drops, so a crash one millisecond later is
-//! still orphan-protected.
+//! reconnecting into the same desync; for a **managed** child, `TAKEOWNERSHIP`
+//! (issued first, post-auth) means Tor exits when this connection drops, so a crash
+//! one millisecond later is still orphan-protected (an attached tor is not ours, so
+//! it is not taken).
 //!
 //! One property to know (not a defect): kameo runs handlers to completion on a
 //! single task, so a slow `write_line` inside a command handler stalls event
@@ -53,20 +54,23 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use futures_core::Stream;
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, WeakActorRef};
+use kameo::error::ActorStopReason;
 use kameo::message::{Context, Message, StreamMessage};
 use kameo::reply::{DelegatedReply, ReplySender};
 use kameo::Actor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch};
+use tokio::process::Child;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -81,6 +85,15 @@ const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Read-chunk size for draining the socket into the framer.
 const READ_CHUNK: usize = 4096;
+
+/// How long a **managed** `tor` gets to exit on `SIGTERM` before the shutdown escalates
+/// to `SIGKILL`. `tor` flushes and exits within ~a second; this is the bound that makes
+/// "SIGTERM + wait" a *bounded* wait, never an unbounded hang if `tor` wedges.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// How long to wait for a spawned managed `tor` to write its `ControlPort` file before
+/// giving up (a `tor` that never opens the control port cannot be driven).
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A failure in the control connection — handshake or runtime.
 ///
@@ -124,6 +137,13 @@ pub enum ControlError {
     /// or desync the FIFO reply correlation. A caller error: the command is
     /// rejected, the connection is untouched.
     InvalidCommand,
+    /// A **managed** `tor` could not be started or made driveable — every managed-spawn
+    /// config/startup failure funnels here: a spawn / `create_dir_all` / stale-port-file
+    /// error, `tor` exiting before it becomes driveable, or its `ControlPort` file / cookie
+    /// not appearing within the `SPAWN_TIMEOUT` budget.
+    /// Carries no path (forensic discipline); `spawn_managed_tor`'s own `--Log` file in the
+    /// `DataDirectory` is where the specific cause is diagnosable.
+    Spawn,
 }
 
 impl std::fmt::Display for ControlError {
@@ -146,6 +166,7 @@ impl std::fmt::Display for ControlError {
                 f,
                 "control command was malformed (empty or forbidden character)"
             ),
+            Self::Spawn => write!(f, "managed tor failed to launch or become driveable"),
         }
     }
 }
@@ -226,10 +247,11 @@ pub type CommandResult = Result<ControlReply, ControlError>;
 
 /// Spawn-time configuration ([`Actor::Args`]).
 pub struct TorControlConfig {
-    /// The loopback control-port address.
-    pub control_addr: SocketAddr,
-    /// Path to `DataDirectory/control_auth_cookie`.
-    pub cookie_path: PathBuf,
+    /// How the actor obtains its control port — spawn-and-own `tor`, or attach to a
+    /// running one. The **launch mode** is the thing that varies, not a nullable
+    /// address: an attached actor cannot carry a spurious binary path, and a managed
+    /// one cannot be missing it.
+    pub launch: TorLaunch,
     /// Sink for asynchronous events.
     pub events: EventSink,
     /// Bootstrap-readiness publisher. The actor's poll task drives the
@@ -237,12 +259,61 @@ pub struct TorControlConfig {
     pub readiness: BootstrapReadiness,
 }
 
-/// The control-port actor (one `TorService` actor). SP-T0b-1 adds the bootstrap poll
-/// task; the `child` field is the remaining seam (managed-vs-attached lifecycle),
-/// present now (unused) so SP-T0b-2 adds behaviour without reshaping the struct.
-///
-/// Owns the write half and the in-flight bookkeeping; the read half lives in the
-/// attached `ReplyStream`.
+/// How the [`TorControl`] actor gets its control port (DQ-T0.1 process ownership).
+pub enum TorLaunch {
+    /// The actor **spawns and owns** the `tor` process — the production path. It kills
+    /// the child on shutdown (`SIGTERM` → bounded wait → `SIGKILL` → reap).
+    Managed(ManagedTor),
+    /// Connect to an **already-running** control port the actor does *not* own — the
+    /// test path (tor spawned externally), and any bring-your-own-`tor` deployment.
+    /// Shutdown leaves the process alone; it is not ours to kill.
+    Attached {
+        /// The loopback control-port address.
+        control_addr: SocketAddr,
+        /// Path to `DataDirectory/control_auth_cookie`.
+        cookie_path: PathBuf,
+    },
+}
+
+/// A managed `tor` to spawn (DQ-T0.1). The actor launches it with a wallet-private
+/// `DataDirectory`, a `ControlPort auto` written to a file, cookie authentication, and
+/// the given `SocksPort`, then connects to the port it opened.
+pub struct ManagedTor {
+    /// Path to the `tor` binary. **The SP-T0c handoff:** SP-T0c's hash-pinned Tor Expert
+    /// Bundle binary flows in here, so the moment that pin resolves a managed `tor` has a
+    /// waiting control/SOCKS socket — T0b-2's launch config and SP-T0c's verified-binary
+    /// pin meet at this field.
+    pub tor_binary: PathBuf,
+    /// Wallet-private `DataDirectory`. (DQ-T0.7's guard-persistence nuance is deferred;
+    /// a wallet-private dir is the safe default until that decision lands.)
+    pub data_dir: PathBuf,
+    /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it.
+    pub socks_port: u16,
+    /// Spawn `tor` with `--DisableNetwork 1` — an offline instance (opens its control port
+    /// and SOCKS port, but never touches the network, so it never bootstraps). The
+    /// child-lifecycle test sets this to isolate spawn+shutdown from a real bootstrap;
+    /// **production always leaves it `false`** (a managed tor must reach the network).
+    ///
+    /// This is deliberately a *typed knob*, not an arbitrary `extra_args` passthrough: the
+    /// managed spawn owns its safety invariants (loopback control port, cookie auth, its
+    /// `DataDirectory`/`SocksPort`), and a free-form flag list can smuggle those open —
+    /// directly, or indirectly via `-f <torrc>` / `+Option` append / `--defaults-torrc`,
+    /// which no denylist reliably covers. Future customization (bridges, an upstream proxy)
+    /// is added as further **typed, safe-by-construction** knobs, so the control-plane
+    /// invariant stays *structural* rather than validated.
+    pub disable_network: bool,
+    /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
+    /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
+    /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (an unclean shutdown — tor
+    /// wedged and was SIGKILLed, or the grace wait errored) is the signal the
+    /// wallet-integration layer will want to surface. `None` today; the lifecycle test
+    /// uses it to assert a *real* reap rather than probing a pid.
+    pub exit_observer: Option<oneshot::Sender<TorExit>>,
+}
+
+/// The control-port actor (one `TorService` actor). Owns the write half and the
+/// in-flight bookkeeping; the read half lives in the attached `ReplyStream`, the
+/// managed child (if any) in `child`, and the bootstrap poll task in `bootstrap_poll`.
 pub struct TorControl {
     /// Write half — commands go out here, one on the wire at a time.
     writer: OwnedWriteHalf,
@@ -255,8 +326,9 @@ pub struct TorControl {
     /// correlation there is) is preserved. Storing the rendered line (not the
     /// `Command`) means `to_wire` runs exactly once per command.
     queue: VecDeque<(String, ReplySender<CommandResult>)>,
-    /// SP-T0b-2 seam: the managed `tor` child process. `None` until SP-T0b-2 owns it.
-    #[allow(dead_code)]
+    /// The managed `tor` child, for [`TorLaunch::Managed`]. `None` for
+    /// [`TorLaunch::Attached`] — an attached `tor` is not ours to kill. `on_stop` takes
+    /// it and runs the bounded shutdown.
     child: Option<TorChild>,
     /// The bootstrap-readiness poll task (design §3b), aborted on drop. Held so the
     /// actor owns its task; the task also self-terminates (`Ready` / actor-death /
@@ -264,8 +336,91 @@ pub struct TorControl {
     bootstrap_poll: JoinHandle<()>,
 }
 
-/// SP-T0b-2 seam — the managed `tor` child process handle (fleshed out by SP-T0b-2).
-pub struct TorChild;
+/// The managed `tor` child process the actor owns (present only for
+/// [`TorLaunch::Managed`]). Spawned with `kill_on_drop`, so even a panic that skips
+/// `on_stop` still SIGKILLs it — the last-resort backstop under `TAKEOWNERSHIP`.
+struct TorChild {
+    child: Child,
+    exit_observer: Option<oneshot::Sender<TorExit>>,
+}
+
+/// How a managed `tor` child exited at shutdown (observed via [`ManagedTor::exit_observer`]).
+#[derive(Debug)]
+pub enum TorExit {
+    /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within the
+    /// `SHUTDOWN_GRACE` window, and was reaped with this status — the clean path.
+    Reaped(std::process::ExitStatus),
+    /// Not cleanly reaped with a status: either tor wedged past the `SIGTERM` grace window
+    /// and was `SIGKILL`-ed, or the grace `wait` itself errored. Either way the child was
+    /// force-killed (best-effort) and reaped — an **unclean** shutdown.
+    Killed,
+}
+
+impl TorChild {
+    /// Shut the child down: **`SIGTERM` → bounded wait → `SIGKILL` → reap**, publishing
+    /// the outcome to the observer if one is wired.
+    ///
+    /// Tolerant of an **already-exited** child by design: on the paths that stop the actor
+    /// *because* the control connection dropped (an error-path `ctx.stop`), a managed
+    /// tor's `TAKEOWNERSHIP` has already exited it — or tor died on its own — so the
+    /// `SIGTERM` is a harmless `ESRCH` and the `wait` reaps immediately. (On a clean
+    /// `on_stop` the connection is still open here, so `SIGTERM` is what exits tor;
+    /// `TAKEOWNERSHIP` then fires as a backstop when the struct drops.) The `SIGKILL`
+    /// escalation is what keeps the wait *bounded* — "SIGTERM + wait" without it would
+    /// hang the wallet forever if `tor` ever wedged.
+    async fn shutdown(mut self) {
+        // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). No-op if it already
+        // exited, and a no-op off Unix — there the timeout → `kill()` escalation is the
+        // whole shutdown.
+        request_graceful_stop(&self.child);
+        let exit = match timeout(SHUTDOWN_GRACE, self.child.wait()).await {
+            // Exited within the grace window (SIGTERM or TAKEOWNERSHIP) — reaped cleanly.
+            Ok(Ok(status)) => TorExit::Reaped(status),
+            // Either the grace `wait` errored, or it timed out (tor wedged): both mean
+            // "not cleanly reaped", so SIGKILL and reap unconditionally. `start_kill` kills
+            // the process even if the reap can't complete, so neither case leaves a running
+            // or zombie tor. (A `wait` error is usually "already reaped", where this is a
+            // harmless no-op; but if it isn't, the child is still terminated.)
+            Ok(Err(_)) | Err(_) => {
+                kill_and_reap(&mut self.child).await;
+                TorExit::Killed
+            }
+        };
+        if let Some(tx) = self.exit_observer {
+            tx.send(exit).ok();
+        }
+    }
+}
+
+/// Request a graceful stop of a managed `tor` — `SIGTERM` on Unix (DQ-T0.1). Harmless if
+/// the child already exited (`ESRCH`).
+#[cfg(unix)]
+fn request_graceful_stop(child: &Child) {
+    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+        // SAFETY: `kill(2)` with a pid this process owns and a constant signal number; it
+        // reads/writes no memory. A stale pid returns `ESRCH`, ignored. (`try_from` guards
+        // the u32→pid_t width — unreachable for a real pid, but honest about it.)
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
+/// (`TerminateProcess`) escalation drives shutdown there instead. A graceful non-Unix
+/// path — closing the control connection for `TAKEOWNERSHIP`, or a console control event
+/// — is a follow-up for when a non-Unix target is real; today the managed launch is Unix.
+#[cfg(not(unix))]
+fn request_graceful_stop(_child: &Child) {}
+
+/// SIGKILL a managed child and reap it — a best-effort signal, then an **unconditional**
+/// `wait`, so no path leaves a running process or a zombie. `start_kill` (not `kill()`)
+/// keeps the two separable: even if the signal errors (the child raced to exit), the
+/// `wait` still runs. Bounded — SIGKILL is uninterceptable, so the `wait` returns promptly.
+async fn kill_and_reap(child: &mut Child) {
+    child.start_kill().ok();
+    child.wait().await.ok();
+}
 
 /// How often the bootstrap poll task asks `GETINFO status/bootstrap-phase`. Bootstrap
 /// is a one-time startup event over tens of seconds, so a sub-second poll adds
@@ -298,52 +453,40 @@ impl Actor for TorControl {
 
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let TorControlConfig {
-            control_addr,
-            cookie_path,
+            launch,
             events,
             readiness,
         } = args;
 
-        let stream = TcpStream::connect(control_addr)
-            .await
-            .map_err(|_| ControlError::Connect)?;
-        let (mut reader, mut writer) = stream.into_split();
-        let mut framer = ReplyFramer::default();
+        // Managed: spawn tor and connect to the port it opened. Attached: connect to the
+        // given one. `connect`, the handshake, and the poll are identical; the only
+        // mode-specific steps are the spawn, `TAKEOWNERSHIP` (managed only — see below),
+        // and `on_stop`'s kill (managed only).
+        let (control_addr, cookie_path, child) = match launch {
+            TorLaunch::Managed(managed) => {
+                let (child, addr, cookie) = spawn_managed_tor(managed).await?;
+                (addr, cookie, Some(child))
+            }
+            TorLaunch::Attached {
+                control_addr,
+                cookie_path,
+            } => (control_addr, cookie_path, None),
+        };
 
-        // SAFECOOKIE handshake — synchronous request/response; no 650 events can
-        // arrive before SETEVENTS, so reading the framer by hand is safe here.
-        let cookie = read_cookie_file(&cookie_path).map_err(ControlError::Auth)?;
-        let mut client_nonce = [0u8; 32];
-        getrandom::getrandom(&mut client_nonce).map_err(|_| ControlError::Nonce)?;
-
-        write_line(
-            &mut writer,
-            &format!("AUTHCHALLENGE SAFECOOKIE {}", hex_upper(&client_nonce)),
-        )
-        .await?;
-        let challenge = read_reply(&mut reader, &mut framer).await?;
-        let (server_hash, server_nonce) =
-            parse_authchallenge(&challenge).map_err(ControlError::Auth)?;
-        let verified = verify_server_hash(
-            &cookie,
-            &client_nonce,
-            server_nonce.as_array(),
-            server_hash.as_array(),
-        )
-        .ok_or(ControlError::ServerHashMismatch)?;
-        let client_hash = verified.client_hash();
-
-        write_line(
-            &mut writer,
-            &format!("AUTHENTICATE {}", hex_upper(&client_hash)),
-        )
-        .await?;
-        expect_status(&mut reader, &mut framer, 250).await?;
-
-        // Orphan protection from millisecond zero: Tor exits when this connection
-        // drops, so even an immediate crash leaves no orphaned tor.
-        write_line(&mut writer, "TAKEOWNERSHIP").await?;
-        expect_status(&mut reader, &mut framer, 250).await?;
+        // Run the handshake, then arm the actor. A **managed** child is reaped explicitly on
+        // any handshake failure — uniform with `spawn_managed_tor`, and per tokio's own
+        // guidance an explicit `wait` is preferred over `kill_on_drop`'s best-effort reap for
+        // a stricter cleanup guarantee. (Attached has no child to reap.)
+        let (reader, writer, framer) =
+            match handshake(control_addr, &cookie_path, child.is_some()).await {
+                Ok(halves) => halves,
+                Err(e) => {
+                    if let Some(mut c) = child {
+                        kill_and_reap(&mut c.child).await;
+                    }
+                    return Err(e);
+                }
+            };
 
         // Handshake done — hand the read half to the stream and let kameo merge it
         // into the mailbox.
@@ -368,17 +511,272 @@ impl Actor for TorControl {
             events,
             pending: None,
             queue: VecDeque::new(),
-            child: None,
+            child,
             bootstrap_poll,
         })
+    }
+
+    /// Clean shutdown (wallet close): kill the managed child. `TAKEOWNERSHIP` (landed in
+    /// PR-2) is the *crash* backstop — a panic / SIGKILL sends no `on_stop`, and the
+    /// control connection dropping then exits `tor` — but on a clean stop the connection
+    /// is still open here, so this is the primary path. Attached mode has no child to
+    /// kill. (The bootstrap poll task is aborted in `Drop`.)
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Self::Error> {
+        if let Some(child) = self.child.take() {
+            child.shutdown().await;
+        }
+        Ok(())
     }
 }
 
 impl Drop for TorControl {
     fn drop(&mut self) {
-        // Stop the bootstrap poll task when the actor goes away. (SP-T0b-2 extends
-        // shutdown to the managed `child`, riding the `TAKEOWNERSHIP` already landed.)
+        // Stop the bootstrap poll task when the actor goes away. The managed child (if
+        // `on_stop` did not run — a panic path) is SIGKILLed by its `kill_on_drop`.
         self.bootstrap_poll.abort();
+    }
+}
+
+/// Run the SAFECOOKIE handshake on a fresh control connection: connect, `AUTHCHALLENGE`,
+/// verify the server hash, `AUTHENTICATE`, and — for a managed child (`take_ownership`) —
+/// `TAKEOWNERSHIP`. Returns the split read/write halves + the framer for the actor to
+/// attach. Synchronous request/response: no `650` events can arrive before `SETEVENTS`, so
+/// the framer is read by hand here. On any `Err`, the caller reaps a managed child (this
+/// function owns no process).
+async fn handshake(
+    control_addr: SocketAddr,
+    cookie_path: &Path,
+    take_ownership: bool,
+) -> Result<(OwnedReadHalf, OwnedWriteHalf, ReplyFramer), ControlError> {
+    let stream = TcpStream::connect(control_addr)
+        .await
+        .map_err(|_| ControlError::Connect)?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut framer = ReplyFramer::default();
+
+    let cookie = read_cookie_file(cookie_path).map_err(ControlError::Auth)?;
+    let mut client_nonce = [0u8; 32];
+    getrandom::getrandom(&mut client_nonce).map_err(|_| ControlError::Nonce)?;
+
+    write_line(
+        &mut writer,
+        &format!("AUTHCHALLENGE SAFECOOKIE {}", hex_upper(&client_nonce)),
+    )
+    .await?;
+    let challenge = read_reply(&mut reader, &mut framer).await?;
+    let (server_hash, server_nonce) =
+        parse_authchallenge(&challenge).map_err(ControlError::Auth)?;
+    let verified = verify_server_hash(
+        &cookie,
+        &client_nonce,
+        server_nonce.as_array(),
+        server_hash.as_array(),
+    )
+    .ok_or(ControlError::ServerHashMismatch)?;
+    let client_hash = verified.client_hash();
+
+    write_line(
+        &mut writer,
+        &format!("AUTHENTICATE {}", hex_upper(&client_hash)),
+    )
+    .await?;
+    expect_status(&mut reader, &mut framer, 250).await?;
+
+    // Orphan protection for the **managed** child (DQ-T0.1): `TAKEOWNERSHIP` makes tor exit
+    // when this connection drops, so even a crash that skips `on_stop` leaves no orphan.
+    // Managed only — it *takes ownership*, and an attached tor is explicitly not ours
+    // (`TorLaunch::Attached`); issuing it there would exit a bring-your-own tor on close.
+    if take_ownership {
+        write_line(&mut writer, "TAKEOWNERSHIP").await?;
+        expect_status(&mut reader, &mut framer, 250).await?;
+    }
+
+    Ok((reader, writer, framer))
+}
+
+/// Spawn a **managed** `tor` (DQ-T0.1): a wallet-private `DataDirectory`, `ControlPort
+/// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
+/// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
+/// flag). Waits (bounded) for the control-port file + cookie, then returns the child plus
+/// the `(control_addr, cookie_path)` the handshake connects with. `kill_on_drop` is the
+/// last-resort backstop.
+async fn spawn_managed_tor(
+    managed: ManagedTor,
+) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
+    // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
+    // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
+    // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
+    // brief window before that is an empty dir, no secrets yet.
+    tokio::fs::create_dir_all(&managed.data_dir)
+        .await
+        .map_err(|_| ControlError::Spawn)?;
+    let port_file = managed.data_dir.join("control_port");
+    // A stale port file from a prior run would be read as *this* run's port — remove it so
+    // `wait_for_control_port` can only ever return a fresh value. `NotFound` is the normal
+    // case (no prior run); any *other* error means a stale file we could not clear, so fail
+    // fast rather than risk connecting to a stale control address. Async fs throughout so
+    // the spawn never blocks a runtime worker (this actor is the pattern for future socket
+    // actors — the async I/O should be correct, not just fast enough here).
+    if let Err(e) = tokio::fs::remove_file(&port_file).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(ControlError::Spawn);
+        }
+    }
+
+    let mut cmd = tokio::process::Command::new(&managed.tor_binary);
+    cmd.arg("--DataDirectory")
+        .arg(&managed.data_dir)
+        .arg("--ControlPort")
+        .arg("auto")
+        .arg("--ControlPortWriteToFile")
+        .arg(&port_file)
+        .arg("--CookieAuthentication")
+        .arg("1")
+        .arg("--SocksPort")
+        .arg(managed.socks_port.to_string())
+        // A file log in the (0700, wallet-private) DataDirectory so a `Spawn` failure is
+        // diagnosable — the actor's own errors stay content-free (no paths), but tor's
+        // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
+        // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
+        // targets / SOCKS usernames are info/debug only), so it's safe to persist.
+        //
+        // The path is passed **unquoted on purpose** — do not "fix" this by quoting it. Tor's
+        // `Log <severity> file <FILENAME>` grammar takes the *entire remainder* of the option
+        // value as the filename, so an embedded space (a wallet DataDirectory under a spaced
+        // user profile — `C:\Users\My Name\…`, `/Users/My Name/…`) is preserved verbatim.
+        // Wrapping the path in quotes makes tor treat the literal `"` as part of the filename
+        // and write the log to the wrong place. Verified against the bundled tor: unquoted
+        // writes to the exact spaced path, quoted does not.
+        .arg("--Log")
+        .arg(format!(
+            "notice file {}",
+            managed.data_dir.join("tor.log").display()
+        ))
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
+    // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
+    // caller intent reaches the command line — a typed bool, not a flag passthrough.
+    if managed.disable_network {
+        cmd.arg("--DisableNetwork").arg("1");
+    }
+    let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
+
+    // Bounded startup: wait for tor to become driveable — its control-port file *and* its
+    // auth cookie. Tor writes them at startup but not atomically, so reading the cookie the
+    // instant the port file appears can race a partial/absent write (an `AuthError` startup
+    // race); waiting for the cookie here means a transient partial write isn't a spurious
+    // `Auth` failure that kills the just-spawned tor.
+    let cookie_path = managed.data_dir.join("control_auth_cookie");
+    // Race the readiness wait against the child's own exit: a tor that dies immediately (bad
+    // binary, bind failure, CLI error) must fail *fast*, not wait out `SPAWN_TIMEOUT` for a
+    // port/cookie that will never appear. `child.wait()` in the losing arm reaps that case;
+    // the unconditional `kill_and_reap` below then covers the readiness-timeout arm (child
+    // still running) and is a harmless no-op after an already-reaped exit.
+    // One shared deadline across *both* readiness waits — the control-port file, then the
+    // cookie. Total startup is bounded by a single `SPAWN_TIMEOUT`, not `SPAWN_TIMEOUT` *per*
+    // wait: the cookie lands moments after the port file, so whatever the port poll leaves of
+    // the budget is ample for it, and a tor that never becomes driveable fails at the *one*
+    // deadline rather than after ~2×. That is what makes "bounded startup" actually bounded.
+    let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
+    let ready = tokio::select! {
+        r = async {
+            let control_addr = wait_for_control_port(&port_file, deadline).await?;
+            wait_for_cookie(&cookie_path, deadline).await?;
+            Ok::<_, ControlError>(control_addr)
+        } => r,
+        _ = child.wait() => Err(ControlError::Spawn),
+    };
+    let control_addr = match ready {
+        Ok(addr) => addr,
+        Err(e) => {
+            // Startup failed — terminate + reap the child *here* (not via `kill_on_drop`'s
+            // best-effort background reap) so nothing lingers to disturb the next spawn/test.
+            // (`kill_on_drop` remains the backstop for a `?`-failure in the *handshake* after
+            // this returns Ok, where the child is held in on_start's local.)
+            kill_and_reap(&mut child).await;
+            return Err(e);
+        }
+    };
+    Ok((
+        TorChild {
+            child,
+            exit_observer: managed.exit_observer,
+        },
+        control_addr,
+        cookie_path,
+    ))
+}
+
+/// Parse a `ControlPortWriteToFile` `PORT=` value. The usual TCP form is `<addr>:<port>`,
+/// but some tor builds/configs write a bare `<port>`; since the actor's `ControlPort auto`
+/// binds **loopback**, a port-only value means `127.0.0.1:<port>`. Accepting both keeps the
+/// managed spawn from spuriously timing out on a valid-but-shorter format.
+fn parse_control_port(value: &str) -> Option<SocketAddr> {
+    let value = value.trim();
+    if let Ok(addr) = value.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    let port: u16 = value.parse().ok()?;
+    Some(SocketAddr::from(([127, 0, 0, 1], port)))
+}
+
+/// Poll the `ControlPortWriteToFile` until it carries a parseable `PORT=` line, bounded by
+/// the shared startup `deadline` (`spawn_managed_tor` gives one budget to this *and* the
+/// cookie wait). Async so the backoff yields the runtime rather than blocking a worker thread.
+async fn wait_for_control_port(
+    port_file: &Path,
+    deadline: tokio::time::Instant,
+) -> Result<SocketAddr, ControlError> {
+    loop {
+        if let Ok(contents) = tokio::fs::read_to_string(port_file).await {
+            if let Some(addr) = contents
+                .lines()
+                .find_map(|line| line.strip_prefix("PORT="))
+                .and_then(parse_control_port)
+            {
+                return Ok(addr);
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ControlError::Spawn);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Poll until tor's control-auth cookie is fully written, bounded by the shared startup
+/// `deadline` (see [`spawn_managed_tor`] — the same budget the control-port wait draws from).
+/// Checks the file **length** via async `metadata` — non-blocking (unlike a `read_cookie_file`
+/// poll), and it never reads the secret in a loop. The SAFECOOKIE cookie is exactly 32 bytes,
+/// so a shorter file is a partial write to retry past; that is the whole condition of the
+/// startup race (tor has written its port file but not yet its complete cookie). The
+/// authoritative validated read — permissions, exact length — happens once, later, in the
+/// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt.
+async fn wait_for_cookie(
+    cookie_path: &Path,
+    deadline: tokio::time::Instant,
+) -> Result<(), ControlError> {
+    /// The SAFECOOKIE control-auth cookie (control-spec §3.24) is exactly 32 bytes.
+    const COOKIE_LEN: u64 = 32;
+    loop {
+        if tokio::fs::metadata(cookie_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0)
+            == COOKIE_LEN
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ControlError::Spawn);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -715,6 +1113,27 @@ mod tests {
             "unsolicited control reply (no command in flight)"
         );
     }
+
+    #[test]
+    fn parse_control_port_accepts_socketaddr_and_bare_port() {
+        use std::net::SocketAddr;
+        // The usual `addr:port` form.
+        assert_eq!(
+            parse_control_port("127.0.0.1:9051"),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        // A bare port → loopback (the actor's ControlPort binds loopback).
+        assert_eq!(
+            parse_control_port("9051"),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        // Surrounding whitespace tolerated; garbage rejected.
+        assert_eq!(
+            parse_control_port("  127.0.0.1:9051  "),
+            Some(SocketAddr::from(([127, 0, 0, 1], 9051)))
+        );
+        assert_eq!(parse_control_port("not-a-port"), None);
+    }
 }
 
 /// Live-Tor integration KATs (item 5) — the actor's I/O paths against a real
@@ -728,13 +1147,16 @@ mod tests {
 /// network egress and lands next.
 #[cfg(test)]
 mod live_tests {
-    use super::{BootstrapReadiness, Command, EventSink, TorControl, TorControlConfig};
+    use super::{
+        BootstrapReadiness, Command, EventSink, ManagedTor, TorControl, TorControlConfig, TorExit,
+        TorLaunch,
+    };
     use kameo::actor::Spawn;
-    use std::net::SocketAddr;
+    use std::net::{SocketAddr, TcpListener};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command as ProcCommand, Stdio};
     use std::time::{Duration, Instant};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
 
     /// The bundled `tor` binary path; **hard-fail** (not skip) when the test runs.
     fn tor_binary() -> PathBuf {
@@ -856,8 +1278,10 @@ mod live_tests {
         // is aborted on drop. Keep the receiver alive so the poll task doesn't stop early.
         let (readiness, _ready_rx) = BootstrapReadiness::new();
         let actor = TorControl::spawn(TorControlConfig {
-            control_addr: tor.control_addr,
-            cookie_path: tor.cookie_path.clone(),
+            launch: TorLaunch::Attached {
+                control_addr: tor.control_addr,
+                cookie_path: tor.cookie_path.clone(),
+            },
             events: EventSink::new(tx),
             readiness,
         });
@@ -881,5 +1305,73 @@ mod live_tests {
             .await
             .expect("SETEVENTS");
         assert_eq!(reply.status(), 250);
+    }
+
+    /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window
+    /// before `tor` binds it remains — acceptable on a test box.
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral")
+            .local_addr()
+            .expect("local_addr")
+            .port()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn managed_tor_is_spawned_and_reaped_on_shutdown() {
+        // Managed mode: the *actor* spawns tor. Offline (`DisableNetwork 1`) on purpose —
+        // this proves the two things managed mode adds over attached, spawn and kill;
+        // everything else (handshake, bootstrap→Ready) is identical code that attached
+        // mode + T0b-1 already cover. Pulling the network out isolates the new surface, so
+        // a red means "spawn/shutdown broke", never "a relay hiccupped".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (exit_tx, exit_rx) = oneshot::channel();
+        // Keep the readiness receiver alive so the poll task (harmless on DisableNetwork)
+        // doesn't stop early; it is aborted on shutdown regardless.
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let actor = TorControl::spawn(TorControlConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: tor_binary(),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: free_port(),
+                disable_network: true,
+                exit_observer: Some(exit_tx),
+            }),
+            events: EventSink::new(tx),
+            readiness,
+        });
+
+        // Spawn proof: the handshake connected to a control port the *actor* launched.
+        let reply = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version against the actor-spawned tor");
+        assert_eq!(reply.status(), 250);
+
+        // Shutdown proof: stop → on_stop → SIGTERM + bounded wait → the child is reaped.
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+
+        // Truthful reap check: a real `wait()`-yielded exit status delivered through the
+        // observer, not a pid probe (which races PID reuse). The platform-correct outcome:
+        // on Unix a cooperative tor exits on SIGTERM (clean `Reaped`); off Unix there is no
+        // graceful signal, so shutdown escalates to the SIGKILL fallback (`Killed`). Both
+        // are a *reaped* child delivered through the observer — the point of the test.
+        let exit = tokio::time::timeout(Duration::from_secs(10), exit_rx)
+            .await
+            .expect("on_stop reaped the child within the bound")
+            .expect("exit observer delivered the outcome");
+        #[cfg(unix)]
+        assert!(
+            matches!(exit, TorExit::Reaped(_)),
+            "on Unix, SIGTERM reaps with a status, not the SIGKILL fallback: {exit:?}"
+        );
+        #[cfg(not(unix))]
+        assert!(
+            matches!(exit, TorExit::Killed),
+            "off Unix, no graceful signal exists, so shutdown reaps via the SIGKILL fallback: {exit:?}"
+        );
     }
 }
