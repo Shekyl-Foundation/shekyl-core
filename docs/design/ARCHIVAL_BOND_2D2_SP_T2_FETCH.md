@@ -121,27 +121,41 @@ questions**, each with a rule-21 disposition — the success metric is *what lea
    (distinct circuits unlink the personas *at the network layer*; caveat that a single shared remote
    daemon still sees N terminating connections — remote hides the count from a **path/network**
    observer, not unconditionally from the terminating node).
-2. **Cross-persona timing correlation.** If N per-`P` `get_block` streams **serialize on a coarse
-   blockchain lock**, persona A's fetch latency becomes correlated with persona B's fetch activity —
-   a shared-resource **timing side-channel** between personas that must be unlinkable. So "do N
-   streams run in parallel" is partly a *privacy* question in a throughput costume. **The
-   measurement must capture whether serialization is observable as a cross-persona timing signal,
-   not how many blocks/sec.** *Disposition follows the measurement:*
-   - **No measurable signal** (lock held for µs, swamped by Tor jitter in the remote posture): the
-     rust-vs-cpp instinct holds — the lock-granularity change is a **liveness/UX** cost, deferred to
-     the daemon→Rust port with a rule-21 reopen.
-   - **A measurable signal:** it is a **mission-#1** item, and the fork is *who decorrelates* — the
-     **wallet** (a `PBlockSource` fetch-scheduling-jitter / randomized-order responsibility, landed
-     **now**) or the **daemon** (C++ lock surgery, deferred). **Default to the wallet-side
-     mitigation** — it does not wait on the C++ surgery and holds regardless of which daemon `P`
-     dials.
+2. **Cross-persona timing correlation — a *remote-posture* threat, measured now.** The two leaks are
+   **posture-complementary, not parallel**. Enumeration (#1) is the **`local`** leak: N loopback
+   connections already link the personas by source address, so timing adds nothing there — *`local`'s
+   timing story is "don't care, enumeration already dominates."* Cross-persona timing is the
+   **remote-shared-daemon** leak, and it is only reachable *because* remote defeats enumeration:
+   distinct exit circuits unlink the personas at the network layer, so the residual re-linking channel
+   is the daemon's own shared state. If N per-`P` `get_block` streams **serialize on a coarse
+   blockchain lock**, persona A's fetch latency becomes a measurable function of persona B's activity,
+   and a **single shared remote daemon** can **re-link the Tor-unlinked circuits** into one
+   coordinated client through that coupling — undoing exactly the unlinkability remote-over-Tor exists
+   to provide. So this is **mission-#1**, but *in the remote posture specifically*.
+
+   The disposition turns on **magnitude, not presence.** A coupling of tens of µs is swamped by the
+   ms-scale jitter of a Tor circuit and the re-linking fails; a coupling of tens of ms survives Tor
+   jitter and the re-linking succeeds. The measurement (§3) therefore outputs the **coupling-magnitude
+   distribution** — how far a probe persona's latency shifts per unit of a contending persona's
+   activity, in absolute time — not a signal/no-signal boolean. The fork:
+   - **Coupling below the remote-threat floor** (magnitude ≪ Tor circuit jitter): the rust-vs-cpp
+     instinct holds — the lock-granularity change is a **liveness/UX** cost, deferred to the
+     daemon→Rust port with a rule-21 reopen. `PBlockSource` carries **no** decorrelation duty.
+   - **Coupling at or above the floor** (magnitude comparable to / exceeding Tor jitter): a
+     **remote-posture** mitigation lands **now**, and the fork is *who decorrelates* — the **wallet**
+     (a fetch-scheduling-jitter / randomized-order duty scoped to the **remote `PBlockSource` only** —
+     `DaemonBlockSource`/`local` neither needs it, since enumeration already dwarfs timing there, nor
+     gets it) or the **daemon** (C++ lock surgery, deferred). **Default to the wallet-side
+     mitigation:** it does not wait on the C++ surgery, and it belongs at the *`PBlockSource`* layer —
+     not the shared `BlockSource` trait — precisely because the threat is remote-only.
 
 **Why measure *now*, not when the fetch path exists (the sharp reason):** the measurement's *result
-changes the wallet-side design*. If #2 shows a timing signal, `PBlockSource` acquires a
-timing-decorrelation responsibility (a design decision in DQ-T2.2/T2.3). Freezing the `PBlockSource`
-design *before* the measurement means either over-building a decorrelation shim speculatively
-(violating get-it-right-not-speculatively) or under-building and retrofitting. Measure first, and
-`PBlockSource` knows what it is responsible for.
+changes the wallet-side design*. If #2's coupling magnitude survives the remote-threat evaluation
+(§3b), the **remote** `PBlockSource` acquires a timing-decorrelation responsibility (a design
+decision in DQ-T2.2/T2.3); if it does not, `PBlockSource` is a plain fetch shim. Freezing the
+`PBlockSource` design *before* the measurement means either over-building a decorrelation shim
+speculatively (violating get-it-right-not-speculatively) or under-building and retrofitting. Measure
+first, and `PBlockSource` knows what it is responsible for.
 
 ---
 
@@ -153,9 +167,20 @@ concurrent `get_block`-by-height fetchers from `127.0.0.1`.
 - **M-enum:** with N persona connections open, read the daemon's connection table (or the
   `per_private_ip` accounting) — confirm the count is observable, and whether the `per_private_ip`
   cap default gates N. *Output:* the §4 stated-cost paragraph + the cap default to document/set.
-- **M-timing:** drive N concurrent `get_block` streams; instrument the block-fetch lock-hold under
-  contention (lock-hold duration, and whether a probe persona's latency shifts measurably with
-  another persona's fetch activity). *Output:* signal / no-signal, feeding the DQ-T2.5 #2 fork.
+- **M-timing:** drive N concurrent `get_block` streams and instrument the block-fetch lock-hold under
+  contention — but the rig measures the **mechanism**, and the threat evaluation is a separate step on
+  top of it (the reason the harness measures against the right adversary from the first line):
+  - **(a) Mechanism — local Track-2 rig.** Characterize the daemon-internal coupling directly on
+    loopback, *no Tor*: lock-hold duration under contention and — the load-bearing number — **how far a
+    probe persona's `get_block` latency shifts per unit of a contending persona's fetch activity, in
+    absolute time.** *Output:* the **coupling-magnitude distribution**, not a signal/no-signal boolean.
+    Loopback is the *correct* vehicle because the coupling is daemon-internal — Tor would only add noise
+    to a mechanism measurement.
+  - **(b) Threat evaluation — analysis on the magnitude.** Evaluate that distribution against the
+    **remote-shared-daemon adversary**: does the coupling survive a Tor circuit's own jitter (compare
+    the magnitude distribution against known Tor per-circuit latency-jitter)? *Output:* the DQ-T2.5 #2
+    fork — below-floor ⇒ liveness/UX defer; at-or-above-floor ⇒ remote-`PBlockSource` decorrelation now.
+    The `local` posture is **not** evaluated here: its timing is subsumed by enumeration (#1).
 
 Both are read-only against a throwaway regtest chain; neither modifies the daemon.
 
@@ -171,8 +196,9 @@ Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
 3. **The RPC-over-Tor transport** (DQ-T2.2) — the source-verified per-`P`-isolated `Rpc`
    (`SimpleRequestRpc`-per-instance or `PRpc`), with an isolation KAT.
 4. **`PBlockSource`** (DQ-T2.1/.3) — `new(client)` only, `tip_height`/`block_at` over #3 reusing
-   `default_fetch_scannable_block`; plus the timing-decorrelation responsibility **iff** M-timing
-   showed a signal.
+   `default_fetch_scannable_block`; plus a timing-decorrelation responsibility on the **remote** impl
+   **iff** the M-timing coupling magnitude survived the remote-threat evaluation (§3b) — never on
+   `DaemonBlockSource`/`local`.
 5. **Posture→impl selector** at the scan-loop wiring (DQ-T2.3) — local→direct, remote→`PBlockSource`,
    conflation unrepresentable.
 6. **Daemon disposition** — record M-enum / M-timing results + the rule-21 reopen(s) in FOLLOWUPS /
