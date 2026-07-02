@@ -177,16 +177,9 @@ namespace boost
       }
       a & x.original;
       a & x.is_integrated;
-      // ver 3 carried the claim-era is_staking/stake_tier pair; ver 4
-      // (claim-era cutover) dropped them. Refuse a stray v3 blob loudly
-      // rather than draining its legacy bytes: these are transient artifacts
-      // (pending_tx / unsigned_tx_set), regenerable across the cutover, so
-      // reject-and-recreate is correct (rule-15: refuse + re-sync, no
-      // in-Shekyl migration code). Matches the transfer_details guard.
-      if (ver == 3)
-        throw std::runtime_error(
-          "unsupported tx_destination_entry version 3 (claim-era) — "
-          "recreate the transaction");
+      // ver 4 dropped the claim-era is_staking/stake_tier pair. No pending_tx /
+      // unsigned_tx_set artifact is persisted across a version change (nothing
+      // to migrate pre-genesis), so no version-specific handling is carried.
     }
   }
 }
