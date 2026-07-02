@@ -184,6 +184,10 @@ impl std::error::Error for ControlError {}
 /// the read loop. The deliberate residual is that a *stalled* (alive-but-not-
 /// draining) consumer grows memory without bound; this is bounded in practice by
 /// the loopback control port's low event rate.
+///
+/// `Clone` so the §3c supervisor can hand each incarnation the same long-lived
+/// sink (the consumer's receiver survives restarts; senders are per-incarnation).
+#[derive(Clone)]
 pub struct EventSink(mpsc::UnboundedSender<ControlReply>);
 
 impl EventSink {
@@ -276,6 +280,28 @@ pub enum TorLaunch {
     },
 }
 
+/// How the managed tor's `SocksPort` is chosen — a typed knob (like
+/// `disable_network`), not a bare integer with a magic zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocksPort {
+    /// `SocksPort auto`: tor picks a free port; the caller discovers it post-Ready
+    /// via `GETINFO net/listeners/socks`. The production (§3c supervisor) choice —
+    /// immune to restart re-bind races by construction.
+    Auto,
+    /// A caller-chosen fixed port — harnesses and bring-your-own-layout setups.
+    Fixed(u16),
+}
+
+impl SocksPort {
+    /// The `--SocksPort` command-line value.
+    fn as_arg(self) -> String {
+        match self {
+            Self::Auto => "auto".to_owned(),
+            Self::Fixed(port) => port.to_string(),
+        }
+    }
+}
+
 /// A managed `tor` to spawn (DQ-T0.1). The actor launches it with a wallet-private
 /// `DataDirectory`, a `ControlPort auto` written to a file, cookie authentication, and
 /// the given `SocksPort`, then connects to the port it opened.
@@ -290,8 +316,12 @@ pub struct ManagedTor {
     /// Wallet-private `DataDirectory`. (DQ-T0.7's guard-persistence nuance is deferred;
     /// a wallet-private dir is the safe default until that decision lands.)
     pub data_dir: PathBuf,
-    /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it.
-    pub socks_port: u16,
+    /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it. Production (the
+    /// §3c supervisor) uses [`SocksPort::Auto`] and discovers the bound address via
+    /// `GETINFO net/listeners/socks`, publishing it on the posture channel — a fixed
+    /// port can race the previous incarnation's dying socket on restart. Harnesses
+    /// pick [`SocksPort::Fixed`].
+    pub socks_port: SocksPort,
     /// Spawn `tor` with `--DisableNetwork 1` — an offline instance (opens its control port
     /// and SOCKS port, but never touches the network, so it never bootstraps). The
     /// child-lifecycle test sets this to isolate spawn+shutdown from a real bootstrap;
@@ -642,7 +672,7 @@ async fn spawn_managed_tor(
         .arg("--CookieAuthentication")
         .arg("1")
         .arg("--SocksPort")
-        .arg(managed.socks_port.to_string())
+        .arg(managed.socks_port.as_arg())
         // A file log in the (0700, wallet-private) DataDirectory so a `Spawn` failure is
         // diagnosable — the actor's own errors stay content-free (no paths), but tor's
         // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
@@ -1346,7 +1376,7 @@ mod live_tests {
                 // proving spawn/shutdown, not the pin).
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
-                socks_port: free_port(),
+                socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
                 exit_observer: Some(exit_tx),
             }),

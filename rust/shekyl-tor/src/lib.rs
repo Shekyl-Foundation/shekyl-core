@@ -32,6 +32,15 @@
 //! firewall rests on *our* tor, so trusting the binary is a mission-#1
 //! precondition. (Shipping the binary itself is the installer/packaging job,
 //! not this crate's.)
+//!
+//! [`service`] (DQ-T0.6, design §3c) is the liveness half: the `TorService`
+//! supervisor keeps a managed tor alive across crashes — re-running the
+//! [`binary`] gate on **every** spawn, publishing one long-lived
+//! `watch<TorPosture>` (the SOCKS endpoint is data on that channel), and never
+//! giving up: sustained failure alarms loudly (`Degraded`) while retries
+//! continue, because for a bonded archival staker an unattended node that
+//! *stopped* retrying is a guaranteed sliding-window slash.
 
 pub mod binary;
 pub mod control;
+pub mod service;
