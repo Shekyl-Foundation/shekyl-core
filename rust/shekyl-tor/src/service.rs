@@ -1095,6 +1095,14 @@ mod live_tests {
             .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
+        // The crash must actually trip the alarm (degrade_after=1) — assert the
+        // `Degraded` edge before the recovery, so the test can't pass on a
+        // `recovering` flag set without the episode ever opening.
+        await_posture(&mut posture, 30, "Degraded after crash", |p| {
+            matches!(p, TorPosture::Degraded { .. })
+        })
+        .await;
+
         // The next incarnation is usable, but the episode is still open.
         await_posture(&mut posture, 120, "Ready{recovering:true}", |p| {
             matches!(
