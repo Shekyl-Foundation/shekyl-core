@@ -237,7 +237,10 @@ namespace cryptonote
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(hybrid_public_key)
-      if (hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
+      // Exact canonical single-key length: a truncated key is malformed, not a
+      // shorter valid key (matches the Rust bond wire + blockchain.cpp's
+      // structural check; PR #229 review).
+      if (hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
         return false;
       FIELD(p_canonical_id)
       FIELD(post_kind)

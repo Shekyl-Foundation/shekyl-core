@@ -156,6 +156,21 @@ fn read_len_prefixed_bounded<R: Read>(r: &mut R, what: &str, max: usize) -> io::
     Ok(buf)
 }
 
+/// Read a length-prefixed blob whose declared length must equal `expected` —
+/// for fixed-size canonical encodings (hybrid PQC keys) where a shorter value
+/// is malformed, not a smaller valid one. Rejects before allocating.
+fn read_len_prefixed_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> io::Result<Vec<u8>> {
+    let len: usize = read_varint(r)?;
+    if len != expected {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: {what} length {len} != canonical {expected}"
+        )));
+    }
+    let mut buf = vec![0u8; len];
+    r.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
 /// Read `count` fixed 32-byte points (no per-element length prefix).
 ///
 /// The speculative pre-allocation is **clamped**: `count` reaches here validated only
@@ -544,14 +559,14 @@ impl BondPost {
 
     fn read<R: Read>(r: &mut R) -> io::Result<BondPost> {
         let hybrid_public_key =
-            read_len_prefixed_bounded(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
+            read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = read_array(r)?;
         let post_kind = read_byte(r)?;
         // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
         // first arm, so the `write` guard above only fires on a hand-built value.
         let kind = if post_kind == BOND_POST_KIND_JOINMARKET {
             BondPostKind::JoinMarket {
-                bond_spend_pk: read_len_prefixed_bounded(
+                bond_spend_pk: read_len_prefixed_exact(
                     r,
                     "bond_spend_pk",
                     PQC_HYBRID_SINGLE_KEY_LEN,
@@ -576,17 +591,17 @@ impl BondPost {
     /// `write` JoinMarket-tag guard, so a hand-built arm passes
     /// [`Transaction::validate`] iff it would serialize-and-re-parse intact.
     fn validate(&self) -> io::Result<()> {
-        if self.hybrid_public_key.len() > PQC_HYBRID_SINGLE_KEY_LEN {
+        if self.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
             return Err(io::Error::other(format!(
-                "shekyl-wire: bond_post hybrid_public_key {} exceeds {PQC_HYBRID_SINGLE_KEY_LEN}",
+                "shekyl-wire: bond_post hybrid_public_key {} != canonical {PQC_HYBRID_SINGLE_KEY_LEN}",
                 self.hybrid_public_key.len()
             )));
         }
         match &self.kind {
             BondPostKind::JoinMarket { bond_spend_pk } => {
-                if bond_spend_pk.len() > PQC_HYBRID_SINGLE_KEY_LEN {
+                if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                     return Err(io::Error::other(format!(
-                        "shekyl-wire: bond_post bond_spend_pk {} exceeds {PQC_HYBRID_SINGLE_KEY_LEN}",
+                        "shekyl-wire: bond_post bond_spend_pk {} != canonical {PQC_HYBRID_SINGLE_KEY_LEN}",
                         bond_spend_pk.len()
                     )));
                 }

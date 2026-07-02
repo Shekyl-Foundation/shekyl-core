@@ -283,11 +283,31 @@ The tradeoff cuts both ways:
   from Tor defaults = a signature"** principle points the same way: persistent *is* the default.
 - **Ephemeral (wallet-forensic):** no on-disk Tor identity / guard history — a C6/local-forensic win.
 
-**Lean: persistent**, with the forensic concern met by a **wallet-private, encrypted-at-rest**
-`DataDirectory` (no plaintext on-disk identity, *without* fighting Tor's guard design or deviating from
-defaults). **Reopen to ephemeral** if an encrypted wallet-private data dir proves infeasible on a
-target, or if a cross-session-guard correlation against the §7 model is shown to outweigh the
-malicious-guard-draw risk. (Cross-ref §7.)
+**DECIDED (2026-07-02): persistent.** Both privacy arguments point the same way — the guard spec
+exists precisely to minimise lifetime exposure (every fresh draw is a new chance at a malicious
+guard), and rotating per-session is a deviation-from-defaults signature. The earlier lean's
+mitigation clause is **corrected on grounding**: "encrypted-at-rest `DataDirectory`" is *not
+implementable in-process* — tor is an external process that reads/writes its `DataDirectory` as
+plaintext (the `state` file carries the guard identity), and the wallet's own encryption is a file
+envelope (Argon2id + AEAD over `.wallet`/`.wallet.keys`) an external process cannot consume. What
+*is* delivered, honestly stated:
+
+- **Placement contract** (the wallet-integration seam owns it): the `DataDirectory` is
+  **wallet-adjacent** — derived from the wallet's own path, lifetime = the wallet's, in a
+  **wallet-controlled, non-world-writable** directory (also the SP-T0c TOCTOU layout
+  requirement); tor itself tightens it to `0700`. The §3c supervisor reuses one dir across
+  restarts, so supervision cannot rotate guards by accident.
+- **At-rest posture is inherited, and disclosed as such**: tor's guard state is protected exactly
+  as well as the storage the operator keeps the wallet on (FDE/encrypted home covers both; a bare
+  disk covers neither). The residual forensic delta vs ephemeral is tor's plaintext `state` file —
+  a disclosed cost, not a silent one.
+
+**Reopening criteria (`21`):** (a) reopen to **ephemeral** if a C6/target-specific forensic review
+judges the on-disk guard identity to outweigh the malicious-guard-draw cost for a supported
+platform; (b) reopen the **at-rest** half if the stack gains a wallet-controlled encrypted mount
+facility — or if the §10 **arti** anchor ever fires, since an in-process tor's guard state could
+then live inside the wallet's own encrypted store (a second, independent benefit of that anchor).
+(Cross-ref §7 in the transport plan.)
 
 ---
 
@@ -639,3 +659,16 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   SP-T0c gate** (the witness is point-in-time — closes the TOCTOU-respawn note); `DataDirectory`
   persists across restarts (else DQ-T0.7 is decided by accident). Repointed the four dangling §5 refs
   (DQ-T0.3, DQ-T0.6, §3a teardown, §3b policy) to §3c.
+- **2026-07-02 (DQ-T0.7 DECIDED — persistent `DataDirectory`, at-rest honesty):** ratified the lean:
+  **persistent** (guard-spec: rotation multiplies malicious-guard draws; per-session rotation is a
+  deviation-from-defaults signature). **Grounding correction (`21`-style honesty):** the lean's
+  "encrypted-at-rest DataDirectory" mitigation is unimplementable in-process — tor is an external
+  process reading plaintext, and the wallet's encryption is a file envelope (Argon2id+AEAD) it cannot
+  consume. Replaced with what is real: a wallet-adjacent, wallet-controlled, non-world-writable
+  placement contract (also the SP-T0c TOCTOU layout requirement; the §3c supervisor already reuses one
+  dir so restarts cannot rotate guards), and an *inherited, disclosed* at-rest posture (tor's guard
+  state is as protected as the storage the wallet lives on — the plaintext `state` file is the
+  disclosed forensic delta vs ephemeral). Reopens: ephemeral on an adverse C6/target review; the
+  at-rest half on a wallet-controlled encrypted mount **or the §10 arti anchor** (in-process guard
+  state could live inside the wallet's encrypted store — a second benefit of that anchor). With
+  DQ-T0.6 (§3c) built, this closes the last open DQ in the SP-T0 series.

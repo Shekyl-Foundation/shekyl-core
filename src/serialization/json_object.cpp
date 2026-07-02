@@ -693,8 +693,13 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   if (!val.IsObject())
     throw WRONG_TYPE("json object");
   GET_FROM_JSON_OBJECT(val, txin.hybrid_public_key, hybrid_public_key);
-  if (txin.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
-    throw WRONG_TYPE("archival bond-post hybrid_public_key exceeds single-key bound");
+  // Exact canonical single-key length — matches the binary serializer
+  // (cryptonote_basic.h), the structural verify (blockchain.cpp), and the Rust
+  // bond wire. A truncated non-empty key is malformed, not a shorter valid key;
+  // upper-bounding here would let the JSON/RPC entrypoint admit vins the other
+  // parsers reject (PR #229 review r3).
+  if (txin.hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+    throw WRONG_TYPE("archival bond-post hybrid_public_key length not canonical");
   GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
   if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))

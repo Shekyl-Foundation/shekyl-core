@@ -47,7 +47,8 @@ namespace {
 txin_archival_bond_post make_join_market_vin()
 {
   txin_archival_bond_post bond{};
-  bond.hybrid_public_key.assign(64, 0xAB);
+  // Exact canonical single-key length: the serializer rejects any other size.
+  bond.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xAB);
   memset(&bond.p_canonical_id, 0x11, sizeof(bond.p_canonical_id));
   bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
   bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
