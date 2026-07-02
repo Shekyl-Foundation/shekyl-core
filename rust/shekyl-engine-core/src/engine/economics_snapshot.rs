@@ -49,14 +49,13 @@
 use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest};
 use shekyl_economics::{params_digest, EconomicParams};
-use shekyl_staking::TierTable;
 
 /// Format-version tag prefixed to the [`snapshot_calibration_digest`]
 /// preimage. Bump on any change to the covered-field set, order, or
 /// widths in that function's layout table — independent of
 /// `shekyl_economics::DIGEST_FORMAT_VERSION` (the `EconomicParams`
 /// sub-digest), which this preimage embeds as an opaque 32 bytes.
-pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x01;
+pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x02;
 
 /// Blake2b-256 over the **full calibration surface an
 /// [`EconomicsParametersSnapshot`] exposes** — not merely `EconomicParams`.
@@ -82,27 +81,21 @@ pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x01;
 /// | 32               | `params_digest(params)` — the `EconomicParams` sub-digest            |
 /// | 8                | `staker_emission_share` u64 LE                                       |
 /// | 8                | `staker_emission_decay` u64 LE                                       |
-/// | 3 × (1 + 8 + 8)  | per tier in `TierTable` order: `id` u8, `lock_blocks` u64 LE, `yield_multiplier` u64 LE |
 ///
-/// Tier `name` is descriptive, not a calibration value, and is omitted.
 /// The function is pure in its arguments (no global reads) so the
-/// coverage tests can vary each input independently.
+/// coverage tests can vary each input independently. (The claim-era tier
+/// table left the digest with the claim-era retirement; the format
+/// version tag below was bumped to keep old and new digests disjoint.)
 pub(crate) fn snapshot_calibration_digest(
     params: &EconomicParams,
     staker_emission_share: u64,
     staker_emission_decay: u64,
-    tiers: &TierTable,
 ) -> [u8; 32] {
     let mut hasher = Blake2b::<U32>::new();
     hasher.update([SNAPSHOT_DIGEST_FORMAT_VERSION]);
     hasher.update(params_digest(params));
     hasher.update(staker_emission_share.to_le_bytes());
     hasher.update(staker_emission_decay.to_le_bytes());
-    for tier in tiers {
-        hasher.update([tier.id]);
-        hasher.update(tier.lock_blocks.to_le_bytes());
-        hasher.update(tier.yield_multiplier.to_le_bytes());
-    }
     hasher.finalize().into()
 }
 
@@ -187,10 +180,6 @@ pub(crate) struct EconomicsParametersSnapshot {
     /// Per-year staker emission decay factor in milli-units (e.g. `900`
     /// → `0.900/year`).
     pub staker_emission_decay_milli: u16,
-
-    /// Staking tier table read by reference from `shekyl-staking` — not
-    /// redefined here (single source of truth for tier parameters).
-    pub tiers: TierTable,
 
     /// Calibration stamp for staleness detection (§6.3 G5).
     pub as_of: CalibrationStamp,

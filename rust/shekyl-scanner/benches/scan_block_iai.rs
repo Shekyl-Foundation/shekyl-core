@@ -38,7 +38,6 @@ fn build_state_and_outputs(k: usize) -> (LedgerBlock, LedgerIndexes, Timelocked)
                 unique_point(1_000 + i),
                 Scalar::ZERO,
                 Commitment::new(Scalar::ONE, 1_000 + i),
-                None,
             );
             RecoveredWalletOutput::new_for_test(wo, 1_000 + i)
         })

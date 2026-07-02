@@ -362,10 +362,6 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         spent: false,
         spent_height: None,
         key_image: None,
-        staked: false,
-        stake_tier: 0,
-        stake_lock_until: 0,
-        last_claimed_height: 0,
         // The post-pass populates these from `None`; that is the measured work.
         source_ciphertext: None,
         output_handle: None,

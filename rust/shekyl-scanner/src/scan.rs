@@ -748,11 +748,6 @@ impl InternalScanner {
                     payment_id: decrypted_payment_id,
                     arbitrary_data: extra.arbitrary_data(),
                 },
-                // Staking outputs are ordinary tagged_key outputs at genesis;
-                // the stake principal/metadata live off-wire in the wallet's
-                // `StakeInstance` (GENESIS Q11, §9.6). No on-chain staked-output
-                // type exists, so a freshly-scanned output is never staking.
-                staking: None,
             };
 
             res.push(RecoveredWalletOutput {

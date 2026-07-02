@@ -3,8 +3,11 @@
 //! Implements:
 //! 1. Transaction-responsive release rate multiplier
 //! 2. Adaptive fee burn with staker pool allocation
-//! 3. Staking tiers and implicit governance (via shekyl-staking crate)
-//! 4. Decaying staker emission share (bootstrap subsidy)
+//! 3. Decaying staker emission share (bootstrap subsidy)
+//!
+//! (The claim-era staking-tier component was retired with the
+//! confidential-staking sweep — `LEGACY_CLAIM_ERA_RETIREMENT.md`; genesis
+//! staking is archival bonds, `shekyl-archival-retention`.)
 //!
 //! All calculations use u64 fixed-point with 10^6 scale (SCALE = 1_000_000).
 //! A value of 1_000_000 represents 1.0, 400_000 represents 0.4, etc.

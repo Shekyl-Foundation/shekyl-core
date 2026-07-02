@@ -33,10 +33,6 @@ const SCANNER_METHODS: &[&str] = &[
     "get_payments",
     "get_bulk_payments",
     "get_height",
-    "get_staked_outputs",
-    "get_staked_balance",
-    "get_claimable_stakes",
-    "get_unstakeable_outputs",
     "freeze",
     "thaw",
 ];
@@ -79,10 +75,6 @@ fn dispatch_scanner_method(
         "get_height" => scanner_get_height(scanner),
         "get_transfers" => scanner_get_transfers(scanner, params),
         "incoming_transfers" => scanner_incoming_transfers(scanner, params),
-        "get_staked_outputs" => scanner_get_staked_outputs(scanner),
-        "get_staked_balance" => scanner_get_staked_balance(scanner),
-        "get_claimable_stakes" => scanner_get_claimable_stakes(scanner),
-        "get_unstakeable_outputs" => scanner_get_unstakeable_outputs(scanner),
         "freeze" => scanner_freeze(scanner, params),
         "thaw" => scanner_thaw(scanner, params),
         "get_transfer_by_txid" | "get_payments" | "get_bulk_payments" => Err(EngineError {
@@ -180,100 +172,6 @@ fn scanner_incoming_transfers(scanner: &ScannerState, params: Value) -> Result<V
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let staked: Vec<Value> = ledger
-        .staked_outputs()
-        .iter()
-        .map(|td| {
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "output_index": td.internal_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "matured": td.is_matured_stake(height),
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "staked_outputs": staked }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_balance(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-    let summary = ledger.balance(height);
-
-    Ok(serde_json::json!({
-        "staked_total": summary.staked_total,
-        "staked_matured": summary.staked_matured,
-        "staked_locked": summary.staked_locked,
-    }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_claimable_stakes(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let claimable: Vec<Value> = ledger
-        .claimable_outputs(height)
-        .iter()
-        .map(|td| {
-            let accrual_cap = std::cmp::min(height, td.stake_lock_until);
-            let watermark = if td.last_claimed_height > 0 {
-                td.last_claimed_height
-            } else {
-                td.block_height
-            };
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "global_output_index": td.global_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "from_height": watermark,
-                "to_height": accrual_cap,
-                "accrual_frozen": height >= td.stake_lock_until,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "claimable_stakes": claimable }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let unstakeable: Vec<Value> = ledger
-        .unstakeable_outputs(height)
-        .iter()
-        .map(|td| {
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "global_output_index": td.global_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "has_unclaimed_backlog": td.has_claimable_rewards(height),
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "unstakeable_outputs": unstakeable }))
-}
-
-#[cfg(feature = "rust-scanner")]
 fn parse_key_image(params: &Value) -> Result<shekyl_crypto_pq::key_image::KeyImage, EngineError> {
     let key_image = params
         .get("key_image")
@@ -324,9 +222,6 @@ fn transfer_to_json(td: &shekyl_scanner::TransferDetails) -> Value {
         "height": td.block_height,
         "amount": td.amount(),
         "spent": td.spent,
-        "staked": td.staked,
-        "stake_tier": td.stake_tier,
-        "stake_lock_until": td.stake_lock_until,
         "frozen": td.frozen,
         "global_index": td.global_output_index,
     })

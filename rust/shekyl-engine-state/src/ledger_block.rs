@@ -35,14 +35,10 @@
 //!
 //! # What is *not* in this block
 //!
-//! * `StakerPoolState` — the scanner's per-block accrual cache is
-//!   explicitly **not** persisted in `LEDGER_BLOCK_VERSION = 1`. The
-//!   daemon RPC can rebuild it by replaying the scan range, and
-//!   persisting it would couple the wallet's ledger schema to the
-//!   staking accounting format. If a future UX benchmark shows that
-//!   the RPC-refill cost is unacceptable, a follow-up block version
-//!   can add it without migrating existing wallets (the version gate
-//!   will refuse a 1-vs-2 mismatch, forcing users to rescan once).
+//! * Runtime lookup indexes (`LedgerIndexes`) — rebuilt from this block
+//!   at open; never persisted. (The claim-era `StakerPoolState` accrual
+//!   cache that once shared this note was retired with the
+//!   confidential-staking sweep.)
 
 use serde::{Deserialize, Serialize};
 use shekyl_units::AtomicUnits;
@@ -77,7 +73,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 6;
+pub const LEDGER_BLOCK_VERSION: u32 = 7;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -264,53 +260,11 @@ impl LedgerBlock {
             .map(|(_, hash)| hash)
     }
 
-    /// Get staked outputs that have unclaimed reward backlog.
-    pub fn claimable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.has_claimable_rewards(current_height))
-            .collect()
-    }
-
-    /// Get staked outputs that are eligible for unstaking (matured,
-    /// unspent).
-    pub fn unstakeable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_unstakeable(current_height))
-            .collect()
-    }
-
     /// Get unspent, unfrozen transfers.
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
             .filter(|td| !td.spent && !td.frozen)
-            .collect()
-    }
-
-    /// Get staked outputs (all states).
-    pub fn staked_outputs(&self) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.staked && !td.spent)
-            .collect()
-    }
-
-    /// Get matured staked outputs (lock period expired, still
-    /// unspent).
-    pub fn matured_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_matured_stake(current_height) && !td.spent)
-            .collect()
-    }
-
-    /// Get locked staked outputs (still within lock period).
-    pub fn locked_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_locked_stake(current_height) && !td.spent)
             .collect()
     }
 
@@ -350,29 +304,6 @@ impl LedgerBlock {
     /// (`key`, `key_image`).
     pub fn transfer_mut(&mut self, idx: usize) -> Option<&mut TransferDetails> {
         self.transfers.get_mut(idx)
-    }
-
-    /// Set staking info for a transfer at the given index.
-    pub fn set_staking_info(&mut self, transfer_idx: usize, tier: u8) {
-        if let Some(td) = self.transfers.get_mut(transfer_idx) {
-            td.staked = true;
-            td.stake_tier = tier;
-            let lock_blocks = shekyl_staking::tiers::tier_by_id(tier)
-                .map(|t| t.lock_blocks)
-                .unwrap_or(0);
-            td.stake_lock_until = td.block_height + lock_blocks;
-        }
-    }
-
-    /// Update the claim watermark for a staked output identified by
-    /// global output index. No-op if no staked output matches.
-    pub fn update_claim_watermark(&mut self, global_output_index: u64, to_height: u64) {
-        for td in &mut self.transfers {
-            if td.staked && td.global_output_index == global_output_index {
-                td.last_claimed_height = to_height;
-                return;
-            }
-        }
     }
 
     /// Freeze an output by its [`Self::transfers`] index, preventing
@@ -430,10 +361,6 @@ mod tests {
             key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [seed ^ 0xFF; 32],
             )),
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
             // Post-M3d: per-output secrets are no longer persisted on
             // `TransferDetails`; the M3b deterministic-handle pathway
             // (`source_ciphertext`, `output_handle`) carries the

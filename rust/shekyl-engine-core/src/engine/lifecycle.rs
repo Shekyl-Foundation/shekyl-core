@@ -808,19 +808,14 @@ impl Engine<SoloSigner> {
             network,
         );
 
-        // Economics reads the **same** `Arc<LocalLedger>` the ledger and
-        // pending engines share, so `pool_weighted_total` observes the
-        // identical mirrored state (PR 7 §5.2 R3 read contract). The slot
-        // is assembled but not consumed by any production path at V3.0
-        // (PR 7 R6). The base-subsidy consensus cutover (7-cutover / C2c,
-        // #93) routed `get_block_reward` to the Rust primitive
-        // `shekyl_base_block_reward` directly, not through this trait, so
-        // this engine field stays unconsumed.
-        let economics = super::local_economics::LocalEconomics::new(
-            super::chain_economics_source::LedgerChainEconomicsSource::new(std::sync::Arc::clone(
-                &ledger,
-            )),
-        );
+        // The economics slot is assembled but not consumed by any production
+        // path at V3.0 (PR 7 R6). The base-subsidy consensus cutover
+        // (7-cutover / C2c, #93) routed `get_block_reward` to the Rust
+        // primitive `shekyl_base_block_reward` directly, not through this
+        // trait, so this engine field stays unconsumed. (The claim-era
+        // pool_weighted_total chain-read seam was retired with the
+        // confidential-staking sweep.)
+        let economics = super::local_economics::LocalEconomics::new();
 
         Ok(Self {
             persistence: file,

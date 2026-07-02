@@ -909,7 +909,6 @@ mod tests {
                 mask: Scalar::ONE,
                 amount,
             },
-            None,
         );
         RecoveredWalletOutput::new_for_test(base, amount)
     }

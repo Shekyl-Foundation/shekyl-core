@@ -14,7 +14,6 @@
 //!   unencrypted form at parse time).
 //! - [`FcmpPrecomputedPath`] — daemon-provided FCMP++ curve-tree path attached to a transfer.
 //! - [`TransferDetails`] — extended transfer record with PQC/HKDF-derived secrets.
-//! - [`StakerPoolState`] / [`AccrualRecord`] — local per-block accrual data for reward
 //!   estimation.
 //! - [`LedgerBlock`] — the persisted scanner-derived ledger (transfers, tip, reorg
 //!   window). Inherent methods supply read-only queries plus the small set of
@@ -45,7 +44,6 @@ pub mod pscan_state;
 pub mod safety_constants;
 pub mod schema_snapshot;
 pub mod serde_helpers;
-pub mod staker_pool;
 pub mod staking_block;
 pub mod sync_state_block;
 pub mod transfer;
@@ -64,7 +62,6 @@ pub use payment_request::{
     DisputeReason, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
 pub use safety_constants::NetworkSafetyConstants;
-pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};

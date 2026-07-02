@@ -3,28 +3,22 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Balance computation with staking-aware categorization.
+//! Balance computation with lock/frozen categorization.
 
 use serde::Serialize;
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;
 
-/// Complete balance summary with staking breakdown.
+/// Complete balance summary.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct BalanceSummary {
-    /// Total balance of all unspent outputs (including locked, staked, and frozen).
+    /// Total balance of all unspent outputs (including locked and frozen).
     pub total: AtomicUnits,
-    /// Balance available to spend right now (unlocked, not staked, not frozen).
+    /// Balance available to spend right now (unlocked, not frozen).
     pub unlocked: AtomicUnits,
     /// Total balance currently locked (below eligible_height).
     pub locked_by_timelock: AtomicUnits,
-    /// Total staked balance (all staking states combined).
-    pub staked_total: AtomicUnits,
-    /// Staked balance where the lock period has expired (may be unstaked/claimed).
-    pub staked_matured: AtomicUnits,
-    /// Staked balance still within lock period.
-    pub staked_locked: AtomicUnits,
     /// Balance in frozen outputs.
     pub frozen: AtomicUnits,
 }
@@ -60,16 +54,6 @@ impl BalanceSummary {
 
             let timelock_satisfied = current_height >= td.eligible_height;
 
-            if td.staked {
-                summary.staked_total = accumulate(summary.staked_total, amount);
-                if td.is_matured_stake(current_height) {
-                    summary.staked_matured = accumulate(summary.staked_matured, amount);
-                } else {
-                    summary.staked_locked = accumulate(summary.staked_locked, amount);
-                }
-                continue;
-            }
-
             if !timelock_satisfied {
                 summary.locked_by_timelock = accumulate(summary.locked_by_timelock, amount);
                 continue;
@@ -102,10 +86,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: height + SPENDABLE_AGE,
@@ -137,26 +117,6 @@ mod tests {
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.locked_by_timelock, AtomicUnits::from_raw(1000));
-    }
-
-    #[test]
-    fn staked_balance() {
-        let mut td = make_td(5000, 50);
-        td.staked = true;
-        td.stake_tier = 1;
-        td.stake_lock_until = 200;
-        let transfers = vec![td];
-
-        let summary = BalanceSummary::compute(&transfers, 100);
-        assert_eq!(summary.total, AtomicUnits::from_raw(5000));
-        assert_eq!(summary.unlocked, AtomicUnits::ZERO);
-        assert_eq!(summary.staked_total, AtomicUnits::from_raw(5000));
-        assert_eq!(summary.staked_locked, AtomicUnits::from_raw(5000));
-        assert_eq!(summary.staked_matured, AtomicUnits::ZERO);
-
-        let summary = BalanceSummary::compute(&transfers, 300);
-        assert_eq!(summary.staked_matured, AtomicUnits::from_raw(5000));
-        assert_eq!(summary.staked_locked, AtomicUnits::ZERO);
     }
 
     #[test]

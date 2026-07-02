@@ -20,15 +20,13 @@
 //! ### Runtime-state types
 //!
 //! [`TransferDetails`], [`LedgerBlock`], [`LedgerIndexes`],
-//! [`PaymentId`], [`StakerPoolState`], [`AccrualRecord`],
-//! [`FcmpPrecomputedPath`], and [`SPENDABLE_AGE`] are owned by the
+//! [`PaymentId`], [`FcmpPrecomputedPath`], and [`SPENDABLE_AGE`] are owned by the
 //! [`shekyl_engine_state`] crate; this crate re-exports them explicitly (no glob)
 //! so existing `use shekyl_scanner::…` imports keep resolving. Scanner-only
 //! methods on those types (`TransferDetails::from_wallet_output`,
-//! `LedgerIndexes::process_scanned_outputs`, `LedgerBlock::balance`,
-//! `LedgerBlock::claimable_rewards_summary`) are provided by the extension
-//! traits in [`ledger_ext`] and require the trait to be in scope at the
-//! call site:
+//! `LedgerIndexes::process_scanned_outputs`, `LedgerBlock::balance`)
+//! are provided by the extension traits in [`ledger_ext`] and require the
+//! trait to be in scope at the call site:
 //!
 //! ```ignore
 //! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
@@ -46,13 +44,11 @@
 //! invariant that pins the split.
 
 pub mod balance;
-pub mod claim;
 pub mod coin_select;
 pub mod extra;
 pub mod ledger_ext;
 pub mod output;
 pub mod scan;
-pub mod staker_pool;
 pub mod transfer;
 pub mod view_pair;
 
@@ -69,7 +65,6 @@ pub mod bench_fixtures;
 pub(crate) mod tests;
 
 pub use balance::BalanceSummary;
-pub use claim::ClaimableInfo;
 pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
 pub use output::WalletOutput;
@@ -85,6 +80,5 @@ pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 // scanner's public API surface in commit-diffable form: adding a new type in
 // `shekyl-engine-state` does NOT silently expand the scanner's API.
 pub use shekyl_engine_state::{
-    AccrualRecord, ConservationCheck, FcmpPrecomputedPath, LedgerBlock, LedgerIndexes, PaymentId,
-    StakerPoolState, TransferDetails, SPENDABLE_AGE,
+    FcmpPrecomputedPath, LedgerBlock, LedgerIndexes, PaymentId, TransferDetails, SPENDABLE_AGE,
 };

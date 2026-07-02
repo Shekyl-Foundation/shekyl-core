@@ -28,7 +28,7 @@ tracing = "0.1"
 # `shekyl-oxide` reader skipped — the bug this crate's scan path is migrated off
 # (`SHEKYL_OXIDE_UNVENDOR.md` step 4). Block/tx parsing lives here now, and the typed
 # domain elements the scan path needs are first-party: `Timelock` (shekyl-types),
-# `StakingMeta` (shekyl-staking), `CompressedPoint` (shekyl-curve-io),
+# `CompressedPoint` (shekyl-curve-io),
 # `Commitment` (shekyl-curve-primitives) — the `shekyl-oxide` crate is dissolved.
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
@@ -36,7 +36,6 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-staking = { path = "../shekyl-staking" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }

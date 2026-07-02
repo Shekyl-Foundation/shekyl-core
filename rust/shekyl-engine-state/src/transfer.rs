@@ -107,13 +107,6 @@ pub struct TransferDetails {
     /// format is unchanged from `Option<[u8; 32]>`.
     pub key_image: Option<KeyImage>,
 
-    // ── Staking fields ──
-    pub staked: bool,
-    pub stake_tier: u8,
-    pub stake_lock_until: u64,
-    /// Local claim watermark: the `to_height` of the last successful claim.
-    pub last_claimed_height: u64,
-
     // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
     //
     // These two fields replaced the five per-output secret fields
@@ -183,30 +176,10 @@ pub struct TransferDetails {
 impl TransferDetails {
     /// Whether this output is available for regular spending.
     ///
-    /// Staked outputs are NEVER directly spendable -- they must go through
-    /// the unstake transaction path once matured. Outputs below `eligible_height`
-    /// are immature (no curve-tree path yet) and cannot be spent.
+    /// Outputs below `eligible_height` are immature (no curve-tree path yet)
+    /// and cannot be spent.
     pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent && !self.frozen && !self.staked && current_height >= self.eligible_height
-    }
-
-    /// Whether this staked output can be unstaked (lock period expired, not yet spent).
-    pub fn is_unstakeable(&self, current_height: u64) -> bool {
-        self.staked && !self.spent && !self.frozen && self.stake_lock_until <= current_height
-    }
-
-    /// Whether this staked output has unclaimed reward backlog.
-    pub fn has_claimable_rewards(&self, current_height: u64) -> bool {
-        if !self.staked || self.spent {
-            return false;
-        }
-        let accrual_cap = std::cmp::min(current_height, self.stake_lock_until);
-        let watermark = if self.last_claimed_height > 0 {
-            self.last_claimed_height
-        } else {
-            self.block_height
-        };
-        watermark < accrual_cap
+        !self.spent && !self.frozen && current_height >= self.eligible_height
     }
 
     /// The amount held in this output.
@@ -216,16 +189,6 @@ impl TransferDetails {
     /// the typed [`AtomicUnits`] domain (`ATOMIC_UNITS_NEWTYPE.md` §4.1).
     pub fn amount(&self) -> AtomicUnits {
         AtomicUnits::from_raw(self.commitment.amount)
-    }
-
-    /// Whether this is a staked output still within its lock period.
-    pub fn is_locked_stake(&self, current_height: u64) -> bool {
-        self.staked && self.stake_lock_until > current_height
-    }
-
-    /// Whether this is a staked output whose lock period has expired.
-    pub fn is_matured_stake(&self, current_height: u64) -> bool {
-        self.staked && self.stake_lock_until <= current_height
     }
 }
 
@@ -265,10 +228,6 @@ struct TransferDetailsSchema {
     spent: bool,
     spent_height: Option<u64>,
     key_image: Option<[u8; 32]>,
-    staked: bool,
-    stake_tier: u8,
-    stake_lock_until: u64,
-    last_claimed_height: u64,
     // Non-secret on-chain payloads; reference the workspace types
     // directly (their `postcard_schema::Schema` derives lock the wire
     // shape from the source side per
@@ -303,10 +262,6 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
-        self.staked.zeroize();
-        self.stake_tier.zeroize();
-        self.stake_lock_until.zeroize();
-        self.last_claimed_height.zeroize();
         // `source_ciphertext` and `output_handle` are non-secret — see
         // the field docs above. `HybridCiphertext` is on-chain public
         // data; `OutputHandle` is wallet-private-derivable from any
@@ -343,7 +298,6 @@ impl std::fmt::Debug for TransferDetails {
             .field("block_height", &self.block_height)
             .field("amount", &self.amount())
             .field("spent", &self.spent)
-            .field("staked", &self.staked)
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
@@ -368,10 +322,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 110,

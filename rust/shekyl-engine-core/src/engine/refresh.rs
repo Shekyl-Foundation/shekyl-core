@@ -262,12 +262,6 @@ pub struct RefreshSummary {
     /// observation, not the merge's spend count.
     pub key_images_observed: usize,
 
-    /// Count of per-block stake-lifecycle events recorded by the
-    /// producer. Phase 2b grows this to a richer per-event vocabulary;
-    /// today it is always `0` and exists in the summary so the field
-    /// set is stable across the V3.x lifetime.
-    pub stake_events: usize,
-
     /// `Some(_)` when the producer detected a reorg during this
     /// refresh attempt and rewound the scan to the recorded fork
     /// height. `None` on a clean linear scan.
@@ -1335,7 +1329,6 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
         blocks_processed: result.block_hashes.len() as u64,
         transfers_detected: result.new_transfers.len(),
         key_images_observed: result.spent_key_images.len(),
-        stake_events: result.stake_events.len(),
         reorg: result.reorg_rewind.as_ref().map(|r| RefreshReorgEvent {
             fork_height: r.fork_height,
         }),
@@ -1942,7 +1935,6 @@ mod refresh_driver_tests {
         assert!(summary.processed_height_range.start == summary.processed_height_range.end);
         assert_eq!(summary.transfers_detected, 0);
         assert_eq!(summary.key_images_observed, 0);
-        assert_eq!(summary.stake_events, 0);
         assert!(summary.reorg.is_none());
     }
 
@@ -2230,7 +2222,6 @@ mod refresh_driver_tests {
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([8; 32]),
             },
         ];
-        result.stake_events = vec![/* StakeEvent::Accrual omitted: test only counts */];
         result.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 5 });
 
         let summary = summarize(&result, 4);
@@ -2239,7 +2230,6 @@ mod refresh_driver_tests {
         assert_eq!(summary.blocks_processed, 3);
         assert_eq!(summary.transfers_detected, 0);
         assert_eq!(summary.key_images_observed, 2);
-        assert_eq!(summary.stake_events, 0);
         assert_eq!(summary.reorg, Some(RefreshReorgEvent { fork_height: 5 }));
         assert_eq!(summary.merge_attempts, 4);
     }
@@ -2559,7 +2549,6 @@ mod refresh_handle_tests {
             blocks_processed: 5,
             transfers_detected: 0,
             key_images_observed: 0,
-            stake_events: 0,
             reorg: None,
             merge_attempts: 1,
         };

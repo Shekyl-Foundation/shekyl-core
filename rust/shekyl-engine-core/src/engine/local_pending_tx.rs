@@ -2437,7 +2437,6 @@ mod tests {
             key,
             Scalar::ZERO,
             commitment,
-            None,
         );
         RecoveredWalletOutput::new_for_test(base, amount)
     }
