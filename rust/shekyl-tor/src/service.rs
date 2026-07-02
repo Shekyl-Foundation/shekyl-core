@@ -1041,6 +1041,88 @@ mod live_tests {
         while posture.changed().await.is_ok() {}
     }
 
+    /// The degraded-episode continuity (§3c, review round 3): a crash trips the
+    /// sticky alarm, the *next* incarnation is usable-but-still-in-episode
+    /// (`Ready { recovering: true }`), and once it holds `Ready` for `stable_reset`
+    /// the alarm clears in place (`Ready { recovering: false }`). This is the one
+    /// path the pure-core KATs can't reach — it needs a real incarnation to reach
+    /// `Ready`, fail, then recover.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
+    async fn degraded_episode_clears_only_after_sustained_ready() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().join("data");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = TorService::spawn(TorServiceConfig {
+            binary: TorBinarySource::UncheckedForTest(tor_binary()),
+            data_dir: data_dir.clone(),
+            events: EventSink::new(tx),
+            policy: SupervisorPolicy {
+                // One failure trips the alarm; a 5s sustained Ready clears it.
+                degrade_after: 1,
+                stable_reset: Duration::from_secs(5),
+                backoff_base: Duration::from_millis(200),
+                backoff_cap: Duration::from_secs(2),
+                ..SupervisorPolicy::default()
+            },
+            disable_network: false,
+        });
+        let mut posture = service.posture();
+
+        // First Ready: a clean launch is not a recovery.
+        let first = await_posture(&mut posture, 120, "first Ready", |p| {
+            matches!(p, TorPosture::Ready { .. })
+        })
+        .await;
+        assert!(
+            matches!(
+                first,
+                TorPosture::Ready {
+                    recovering: false,
+                    ..
+                }
+            ),
+            "first Ready must not be recovering, got {first:?}"
+        );
+
+        // Crash it → one failure → degrade_after=1 trips the sticky alarm.
+        let killed = std::process::Command::new("pkill")
+            .arg("-9")
+            .arg("-f")
+            .arg(data_dir.to_str().expect("utf8 tmpdir"))
+            .status()
+            .expect("pkill runs");
+        assert!(killed.success(), "pkill must find the managed tor");
+
+        // The next incarnation is usable, but the episode is still open.
+        await_posture(&mut posture, 120, "Ready{recovering:true}", |p| {
+            matches!(
+                p,
+                TorPosture::Ready {
+                    recovering: true,
+                    ..
+                }
+            )
+        })
+        .await;
+
+        // Holding Ready for `stable_reset` clears the alarm in place.
+        await_posture(&mut posture, 30, "Ready{recovering:false}", |p| {
+            matches!(
+                p,
+                TorPosture::Ready {
+                    recovering: false,
+                    ..
+                }
+            )
+        })
+        .await;
+
+        service.shutdown().await;
+        while posture.changed().await.is_ok() {}
+    }
+
     /// The reap-race guard: a bootstrap-timeout restart reuses the same
     /// DataDirectory while the previous (still-alive, network-disabled) tor is
     /// being torn down. If teardown did not AWAIT the child's reap, the respawn

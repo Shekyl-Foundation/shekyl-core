@@ -652,6 +652,15 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: rustdoc -D warnings (shekyl-tor)
+        working-directory: rust
+        # shekyl-tor's docs carry load-bearing security contracts (the trust
+        # gate, the §3c supervisor posture, the pin-time/runtime split) and its
+        # reviews repeatedly turned up public→private intra-doc links that only a
+        # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
+        # because other crates carry pre-existing rustdoc warnings; widening this
+        # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
+        run: RUSTDOCFLAGS="-D warnings" cargo doc -p shekyl-tor --no-deps --lib
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

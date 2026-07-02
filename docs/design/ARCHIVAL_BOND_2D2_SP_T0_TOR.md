@@ -202,10 +202,11 @@ including Linux, the most Guix-buildable one — because a verified official blo
 reproducible pipeline; inheriting Guix `tor` where it exists remains the destination, and landing it
 re-verifies rather than replaces the pin. The recurring obligation is a **release-checklist line** —
 watch the Expert Bundle page for releases/advisories → bump the
-pinned version/hash → re-verify — not a maintained build. **This line is an explicit SP-T0c
-deliverable:** `docs/RELEASE_CHECKLIST.md` carries no Tor entry today, and a duty that lives only in a
-design doc evaporates — SP-T0c's definition of done is "the bundle **and** the checklist line," not just
-the bundle. (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
+pinned version/hash → re-verify — not a maintained build. **This line was an explicit SP-T0c
+deliverable, now landed:** `docs/RELEASE_CHECKLIST.md` "Bundled Tor pin current" carries the
+watch/GPG-verify/hash-record/re-verify procedure (a duty that lives only in a design doc
+evaporates), so SP-T0c's definition of done — "the bundle **and** the checklist line" — is met.
+(Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
 **Current pin (bumped 2026-07-01, SP-T0c):** verified
@@ -316,7 +317,7 @@ then live inside the wallet's own encrypted store (a second, independent benefit
 | SP | Deliverable | Notes |
 | --- | --- | --- |
 | **SP-T0a** | **Control-port client** (DQ-T0.2) — the minimal client + KATs against a real Tor (auth, bootstrap, `STREAM`, **and `ADD_ONION`/`DEL_ONION` for SP-T3**). | The keystone; buildable against a *system* Tor before bundling. The rule-17 call (scoped over the whole consumer set) lives here. |
-| **SP-T0b** | **`TorService` lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. | Develops against a system Tor. |
+| **SP-T0b** | **Lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. *As built, split into `TorControl` (per-incarnation actor, DQ-T0.1/.3) + the `TorService` supervisor (DQ-T0.6/§3c).* | Develops against a system Tor. |
 | **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin the **Tor Expert Bundle**; bundled-binary discovery/launch; **add the watch/bump/re-verify line to `docs/RELEASE_CHECKLIST.md`** (DoD, not just the bundle). | The ship step. |
 | **SP-T1-measured** | **Circuit-ID disjointness test** (DQ-T0.4) — over SP-T0a+b; closes the SP-T1 keystone. | Integration job. **Gated on SP-T0 alone — not #205** (§5). |
 
@@ -484,14 +485,23 @@ posture and owns only the UX mapping (`82`).
 
 - `Starting` — an incarnation is being launched (gate + spawn in progress).
 - `Connecting { progress }` — bootstrapping (§3b telemetry passed through).
-- `Ready { socks_addr }` — usable; **the SOCKS endpoint is data on the posture channel**.
-  Consumers read it from `Ready` at use-time and never cache it, which makes every consumer
-  restart-safe *by construction* (a cached endpoint dies with its incarnation).
+- `Ready { socks_addr, recovering }` — usable; **the SOCKS endpoint is data on the posture
+  channel**. Read it at use-time (or via the `TorService::current_socks` accessor, which
+  returns it only while the live posture is `Ready`), never cache it — a cached endpoint dies
+  with its incarnation. `Ready` is published *unconditionally* the moment the transport is
+  usable, even mid-episode: hiding a working transport from SP-T1 would turn a partial outage
+  into a total one (missed challenge windows). `recovering` carries the episode continuity
+  (see `Degraded`): a brief recovery during a degraded episode is `Ready { recovering: true }`.
 - `Restarting { attempt, retry_in }` — died, will retry; normal-operations transient.
 - `Degraded { last }` — the restart limit tripped inside its window **but retries
   continue** at the backoff cap. This is the operator-alarm hook (`82`), not a terminal
   state: there is **no give-up state at all**. Rationale above; a bounded-then-stop
-  supervisor converts every unattended sustained transient into a certain slash.
+  supervisor converts every unattended sustained transient into a certain slash. The alarm is
+  an **episode**, not a single edge: an operator layer renders
+  `Degraded ∪ Ready { recovering: true }` as one continuous incident (no flapping). It clears
+  only when an incarnation holds `Ready` for `stable_reset` — the `Ready { recovering: false }`
+  edge — which forgives prior instability *in place*; a genuine flapper never reaches a
+  sustained `Ready` and keeps alarming.
 
 **SOCKS endpoint: `SocksPort auto`, discovered per incarnation.** A fixed port re-bind can
 race the dying incarnation's socket; `auto` (+ `GETINFO net/listeners/socks` after Ready —
@@ -502,11 +512,14 @@ eliminates the bind-conflict class and forces consumers onto the posture channel
 **Restart classification (what retries, at what cadence):**
 
 - **Transient** — child crash / control-socket drop / desync teardown (§3a) / bootstrap
-  timeout / spawn I/O error → capped exponential backoff (~1s doubling to a ~60s cap), the
-  attempt counter resetting after a sustained `Ready` period. This is the path a staker's
-  liveness rides.
-- **Trust failure** — the SP-T0c gate refuses (`HashMismatch` — the binary changed under
-  us — `Unpinned`, `NotFound`, `NotAFile`, `NotExecutable`) → **no fast retry into an
+  timeout / a missing SOCKS listener (`NoSocksListener`) / a wedged discovery reply
+  (`socks_discovery_deadline`) / a supervisor-internal gate-task fault (`Internal`, a
+  `spawn_blocking` `JoinError`, not a tor exit) → capped exponential backoff (~1s doubling to
+  a ~60s cap), the attempt counter resetting after a sustained `Ready` period. This is the
+  path a staker's liveness rides.
+- **Trust failure** — the SP-T0c gate refuses (**any** `Binary(TorBinaryError)`:
+  `HashMismatch` — the binary changed under us — `Unpinned`, `NotFound`, `NotAFile`,
+  `NotExecutable`, or an `Io` reading the candidate) → **no fast retry into an
   untrusted binary**: immediate `Degraded` + a slow re-discovery cadence (minutes), which
   is safe to retry forever because discovery never launches what it cannot verify — an
   operator who reinstalls the pinned bundle gets auto-recovery without a restart.

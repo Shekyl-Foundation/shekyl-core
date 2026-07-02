@@ -3,16 +3,28 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Bundled-Tor pin re-verification (2d-2 SP-T0c, docs/RELEASE_CHECKLIST.md
-# "Bundled Tor pin current"). Manual-dispatch: the pin-match KAT
-# (`bundled_tor_matches_recorded_pin`) is #[ignore]d on the unit lane, so
-# without this lane a mistranscribed CURRENT_PIN would pass every automated
-# gate and fail closed for every user at first managed launch. This runs the
-# same chain the checklist prescribes — download the Expert Bundle, GPG-verify
-# it against the Tor Browser Developers key, extract, and prove the extracted
-# binary hashes to the pin recorded in rust/shekyl-tor/src/binary.rs.
+# Bundled-Tor integration lane (2d-2 SP-T0). Manual-dispatch because it needs a
+# real, network-reaching `tor` (the unit lane only compile-checks the
+# `#[ignore]`d live tests). Against ONE GPG-verified Expert Bundle binary it runs:
 #
-# Dispatch it after every pin bump (and freely at any time — it is read-only).
+#  1. pin-match (SP-T0c) — the `bundled_tor_matches_recorded_pin` KAT is
+#     `#[ignore]`d on the unit lane, so without this a mistranscribed CURRENT_PIN
+#     would pass every automated gate and fail closed for users. Runs the
+#     checklist chain: download → GPG-verify against the Tor Browser Developers
+#     key → extract → prove the extracted binary hashes to the pin.
+#  2. live lifecycle (SP-T0a/b + DQ-T0.6) — the `--lib` `#[ignore]`d actor +
+#     supervisor tests (managed spawn/reap, handshake, crash-respawn, reap-race
+#     self-lock, degraded-episode recovery) against that same verified binary.
+#     These are the crash/reap/hang guarantees whose whole point is that a unit
+#     test cannot reach them; before this lane they ran only on a dev box.
+#
+# NOT covered here (stated, not silently skipped): `tests/circuit_isolation.rs`
+# (DQ-T0.4) needs `tor-gencert` to stand up its hermetic owned-net directory
+# authority, and the Tor Expert Bundle ships only `tor` (no `tor-gencert`), so
+# that measurement has no CI binary source yet — it runs on a dev box with a
+# full tor install until a gencert source is wired.
+#
+# Dispatch after every pin bump, and freely otherwise — it is read-only.
 
 name: tor-pin-verify
 
@@ -31,7 +43,7 @@ permissions:
 
 jobs:
   verify-linux-x86_64:
-    name: pin matches Expert Bundle ${{ inputs.bundle_version }} (linux-x86_64)
+    name: tor integration — pin + live lifecycle (linux-x86_64)
     runs-on: ubuntu-latest
     env:
       BUNDLE: tor-expert-bundle-linux-x86_64-${{ inputs.bundle_version }}.tar.gz
@@ -67,13 +79,19 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.94.0
 
-      - name: pin-match KAT against the verified binary
+      # One run covers both jobs: point the pinned-tor var (pin-match KAT) and
+      # the any-tor var (live lifecycle tests) at the same verified binary, and
+      # run the whole `--lib` ignored set on a single tor bootstrap budget.
+      - name: pin-match + live lifecycle against the verified binary
         run: |
           set -o pipefail
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
-            cargo test -p shekyl-tor --lib -- --ignored --exact \
-            binary::tests::bundled_tor_matches_recorded_pin | tee kat.out
-          # libtest exits 0 on zero matched tests — a renamed KAT must fail
-          # this lane loudly, not vacuously pass it.
-          grep -E "test result: ok\. 1 passed" kat.out
+          SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
+            cargo test -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
+          # libtest exits 0 even if every test was filtered out — require that the
+          # ignored set actually ran (the pin KAT alone guarantees >= 1), so a
+          # rename/gating slip fails this lane loudly instead of vacuously passing.
+          grep -E "test result: ok\. [1-9][0-9]* passed" ignored.out
+          # No orphaned tor may survive the run (the reap/shutdown guarantee).
+          ! pgrep -x tor
