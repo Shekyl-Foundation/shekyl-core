@@ -43,10 +43,24 @@ public-but-**retired** workflow `workflow::plan_claim_and_unstake` (claim/unstak
 what DQ1 replaced) — not a genesis-live entry point.
 - `claim_builder` (`ClaimTxBuilder`, `ClaimTxPlan`), `plan_claim_and_unstake`.
 - `staker_pool` (`StakerPoolState`, `AccrualRecord`, `estimate_reward`), scanner `ClaimableInfo`.
-- **Before deleting:** re-read `chain_economics_source` (uses `StakerPoolState::handle_reorg`)
-  to confirm no genesis-live dependency.
 - **Collision-risk:** `staker_pool_share` is a **frozen economics-digest param** (byte 41,
   live — KEEP), a *different thing* from the dead `StakerPoolState` accrual cache. Do not conflate.
+
+> **Verified at source 2026-07-01 — 2a is NOT one clean deletion; it splits.** The
+> `chain_economics_source` re-read (the map's gate) confirmed the cluster is dead: the feared
+> genesis-live consumer `StakeEngine::projected_yield` **does not exist** (a hypothetical `e.g.`
+> in a docstring — no definition, no call site). But the boundary is more interwoven than the
+> tier-based audit assumed:
+> - **2a-i — claim-tx-building surface (clean):** `claim_builder` + `workflow`
+>   (`plan_claim_and_unstake`). No production caller. **Landed — PR #226.**
+> - **2a-ii — pool-division economics (cascades into a trait):** `StakerPoolState` /
+>   `AccrualRecord` / `estimate_reward` + `chain_economics_source` feed the **`EconomicsEngine`
+>   trait** method `pool_weighted_total` — whose *only* consumer is a differential **test**, and
+>   whose engine slot is production-instantiated but "stays unconsumed" (`lifecycle.rs`). This is
+>   the **R0-D5 "Stage 3"** economics retirement (trait-method removal + `LocalEconomics` +
+>   lifecycle rewiring). Folds into the batched final PR below.
+> - **2a-iii — `ClaimableInfo` / `has_claimable_rewards` / `claimable_outputs`** tie into the
+>   persisted **staked-fields**, so they belong with 2b, not 2a.
 
 **2b — tier machinery + `StakingMeta` (cross-language + rule-42).**
 - `tiers.rs` (`LockTier`, `StakeTier`, `TIERS`, `TierTable`, `tier_by_id`, `MAX_CLAIM_RANGE`),
@@ -85,17 +99,27 @@ separate C++ consensus effort coordinated with 2b/2c, not this Rust cleanup.
 
 ---
 
-## PR decomposition
+## PR decomposition (revised 2026-07-01 — batch, don't drip)
 
-- **PR-1 (interim, safe now):** delete the Tier-1 modules (`entitlement`/`registry`/`rewards`/
-  `error` + `property_tests` + the fuzz target); trim `lib.rs`. Rust-only, **no schema bump,
-  no FFI/C++ touch, no consumer updates**. ~1000 lines gone, each gate green. Leaves
-  `shekyl-staking` as just the entangled tier-table + `StakingMeta`, clarifying what remains.
-- **PR-2 (staged):** Tier-2a claim-path cluster, after the `chain_economics_source` re-read.
-- **PR-3 (staged, cross-language + rule-42):** Tier-2b tier machinery + `StakingMeta` + the
-  persisted claim fields (the `LEDGER_BLOCK_VERSION` bump + FFI export removal + C++ caller
-  cleanup) — unblocks `MintLineageOutput` landing in a `StakingMeta`-free `WalletOutput`.
+> **Process correction:** full CI here is ~2h/PR, so the earlier one-PR-per-module drip
+> (#225/#226/#227) was wasteful. Remaining work is **batched into as few PRs as the
+> boundaries allow** — split only on a real reason (schema/consensus boundary, base-skew).
 
-Ordering: dead → entangled → cross-language; each PR independently green. PR-1 is unblocked
-and disjoint from in-flight PRs #223 (shekyl-tor) and #224 (shekyl-fcmp/ffi) — no merge
-ordering constraint.
+- **PR-1 — LANDED (#225):** Tier-1 zero-consumer modules (`entitlement`/`registry`/`rewards`/
+  `error` + `property_tests` + fuzz). Left an orphaned `entitlement/` subdir → **cleanup #227**
+  (couldn't fold into #226: that branch predates #225, so `entitlement.rs` still declares the
+  subdir there).
+- **PR-2 — LANDED (#226):** Tier-2a-i, the claim-tx-building surface (`claim_builder` +
+  `workflow`). Verified dead (`projected_yield` is a phantom). Rust-only.
+- **PR-3 (next, BATCHED) — the economics + tier + schema retirement in one:** combine
+  **2a-ii** (pool-division economics: `StakerPoolState`/`AccrualRecord`/`chain_economics_source`
+  + the `EconomicsEngine::pool_weighted_total` trait-method removal + `LocalEconomics`/lifecycle
+  rewiring, R0-D5 Stage 3) **and 2b** (tier machinery + `StakingMeta` + `ClaimableInfo`/
+  `has_claimable_rewards`/`claimable_outputs` + the persisted staked-fields). Carries the
+  **rule-42** `LEDGER_BLOCK_VERSION` 6→7 bump + `ledger_block.snap` regen, the FFI
+  `shekyl_stake_*` export removal + paired C++ caller cleanup. Unblocks `MintLineageOutput`
+  landing in a `StakingMeta`-free `WalletOutput`. Split off C++ (`txin_stake_claim`/
+  `txout_to_staked_key`) only if the diff gets unreviewable.
+
+Ordering: dead → entangled → cross-language. PRs #226/#227 are disjoint from in-flight
+#223 (shekyl-tor) and #224 (shekyl-fcmp/ffi) — no merge ordering constraint.
