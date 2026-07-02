@@ -31,8 +31,8 @@ use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_
 use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 
 use crate::bond_wire::{
-    encode_holdings_descriptor, read_holdings_descriptor, HoldingsDescriptor, HoldingsKind,
-    WireError as BondWireError, MAX_HOLDINGS_SHARDS,
+    encode_holdings_descriptor, read_holdings_descriptor, write_holdings_descriptor,
+    HoldingsDescriptor, HoldingsKind, WireError as BondWireError, MAX_HOLDINGS_SHARDS,
 };
 use crate::hash::cshake256_64;
 use crate::id::p_canonical_id_from_hybrid_pubkey;
@@ -331,24 +331,51 @@ fn strictly_increasing(epochs: &[u64]) -> bool {
     epochs.windows(2).all(|w| w[0] < w[1])
 }
 
-fn read_canonical_pubkey<R: Read>(r: &mut R, field: &'static str) -> Result<Vec<u8>, WireError> {
+/// Read a varint-length-prefixed blob whose length must equal `expected` —
+/// the one shape both canonical hybrid fields (pubkey, signature) share, so a
+/// validation fix lands in exactly one place.
+fn read_canonical_blob<R: Read>(
+    r: &mut R,
+    expected: usize,
+    mk_err: impl FnOnce(usize) -> WireError,
+) -> Result<Vec<u8>, WireError> {
     let len: usize = read_varint(r)?;
-    if len != SINGLE_KEY_CANONICAL_LEN {
-        return Err(WireError::PubkeyLenNotCanonical { field, got: len });
+    if len != expected {
+        return Err(mk_err(len));
     }
-    let mut key = vec![0u8; len];
-    r.read_exact(&mut key)?;
-    Ok(key)
+    let mut buf = vec![0u8; len];
+    r.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+fn read_canonical_pubkey<R: Read>(r: &mut R, field: &'static str) -> Result<Vec<u8>, WireError> {
+    read_canonical_blob(r, SINGLE_KEY_CANONICAL_LEN, |got| {
+        WireError::PubkeyLenNotCanonical { field, got }
+    })
 }
 
 fn read_canonical_sig<R: Read>(r: &mut R, field: &'static str) -> Result<Vec<u8>, WireError> {
-    let len: usize = read_varint(r)?;
-    if len != SINGLE_SIG_CANONICAL_LEN {
-        return Err(WireError::SigLenNotCanonical { field, got: len });
+    read_canonical_blob(r, SINGLE_SIG_CANONICAL_LEN, |got| {
+        WireError::SigLenNotCanonical { field, got }
+    })
+}
+
+/// TupleHash-style framing: `u64-LE byte length ‖ bytes` (the [`ArchivalRewardEmissionVin::auth_msg`]
+/// field discipline — every digest field goes through this one function).
+fn framed(input: &mut Vec<u8>, bytes: &[u8]) {
+    input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    input.extend_from_slice(bytes);
+}
+
+/// Frame a u64 slice as concatenated LE words — the single encoder for the
+/// digest's `settlement_epochs` and `reward_amount_plain` fields, so the two
+/// cannot drift in width or endianness.
+fn framed_u64_le(input: &mut Vec<u8>, values: &[u64]) {
+    let mut buf = Vec::with_capacity(values.len() * 8);
+    for v in values {
+        buf.extend_from_slice(&v.to_le_bytes());
     }
-    let mut sig = vec![0u8; len];
-    r.read_exact(&mut sig)?;
-    Ok(sig)
+    framed(input, &buf);
 }
 
 impl ArchivalRewardEmissionVin {
@@ -431,23 +458,30 @@ impl ArchivalRewardEmissionVin {
         Ok(())
     }
 
-    /// Canonical work-claim section bytes (also digest field 6 of
-    /// [`Self::auth_msg`], so wire and digest cannot drift). Per epoch, in
+    /// Stream the canonical work-claim section to a sink. Per epoch, in
     /// `settlement_epochs` order: varint entry count, then per entry
     /// `varint shard_id ‖ u8 serve_credit_bit ‖ varint scarcity_milli`.
     /// `WorkEpochClaim::epoch` is intentionally absent (reconstructed from
     /// `settlement_epochs`).
+    fn write_work_claim<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        for claim in &self.work_claim {
+            write_varint(&claim.shard_entries.len(), w)?;
+            for entry in &claim.shard_entries {
+                write_varint(&entry.shard_id, w)?;
+                w.write_all(&[u8::from(entry.serve_credit_bit)])?;
+                write_varint(&u64::from(entry.scarcity_milli), w)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonical work-claim section bytes — digest field 6 of [`Self::auth_msg`].
+    /// Wraps [`Self::write_work_claim`] (the same bytes the wire streams), so
+    /// wire and digest cannot drift.
     #[must_use]
     pub fn encode_work_claim(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        for claim in &self.work_claim {
-            write_varint(&claim.shard_entries.len(), &mut out).expect("vec write");
-            for entry in &claim.shard_entries {
-                write_varint(&entry.shard_id, &mut out).expect("vec write");
-                out.push(u8::from(entry.serve_credit_bit));
-                write_varint(&u64::from(entry.scarcity_milli), &mut out).expect("vec write");
-            }
-        }
+        self.write_work_claim(&mut out).expect("vec write");
         out
     }
 
@@ -459,12 +493,15 @@ impl ArchivalRewardEmissionVin {
         w.write_all(&[VIN_TYPE_ARCHIVAL_REWARD_EMISSION])?;
         write_varint(&self.p_pubkey.len(), w)?;
         w.write_all(&self.p_pubkey)?;
-        w.write_all(&encode_holdings_descriptor(&self.holdings)?)?;
+        // Holdings + work-claim stream straight to the sink (no throwaway Vec);
+        // validate() already established the holdings invariants the bond-side
+        // writer assumes.
+        write_holdings_descriptor(w, &self.holdings)?;
         write_varint(&self.settlement_epochs.len(), w)?;
         for epoch in &self.settlement_epochs {
             write_varint(epoch, w)?;
         }
-        w.write_all(&self.encode_work_claim())?;
+        self.write_work_claim(w)?;
         write_varint(&self.backing.proof.len(), w)?;
         w.write_all(&self.backing.proof)?;
         w.write_all(&self.backing.pseudo_out)?;
@@ -483,7 +520,10 @@ impl ArchivalRewardEmissionVin {
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>, WireError> {
-        let mut out = Vec::new();
+        // Capacity: the payload is dominated by the proof; the fixed allowance
+        // covers two canonical pubkeys (~4 kB), two canonical sigs (~6.8 kB),
+        // and the small varint/holdings/work-claim remainder.
+        let mut out = Vec::with_capacity(self.backing.proof.len() + 12_000);
         self.write(&mut out)?;
         Ok(out)
     }
@@ -570,12 +610,8 @@ impl ArchivalRewardEmissionVin {
     pub fn read_payload_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let vin = Self::read_payload(r)?;
         crate::wire::ensure_payload_fully_consumed(r).map_err(|e| match e {
-            crate::wire::WireError::TrailingBytes => WireError::TrailingBytes,
-            crate::wire::WireError::Io(err) => WireError::Io(err),
-            _ => WireError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unexpected wire error during emission parse",
-            )),
+            crate::wire::ExactParseError::TrailingBytes => WireError::TrailingBytes,
+            crate::wire::ExactParseError::Io(err) => WireError::Io(err),
         })?;
         Ok(vin)
     }
@@ -618,20 +654,45 @@ impl ArchivalRewardEmissionVin {
     ///
     /// `reward_commits` and `signable_tx_hash` are tx-level context supplied by
     /// the caller (wallet builder / PR-E3), not vin fields.
+    ///
+    /// Validates the struct first ([`Self::validate`]) so the digest and wire
+    /// builders share one precondition — a builder cannot sign a digest over a
+    /// struct that `write()` would reject.
     pub fn auth_msg(
         &self,
         reward_commits: &[RewardCommit],
         signable_tx_hash: &[u8; 32],
         role: EmissionAuthRole,
     ) -> Result<[u8; 64], WireError> {
-        let customization = match role {
-            EmissionAuthRole::Backing => EMISSION_AUTH_BACKING_CUSTOMIZATION,
-            EmissionAuthRole::Claim => EMISSION_AUTH_CLAIM_CUSTOMIZATION,
-        };
-        fn framed(input: &mut Vec<u8>, bytes: &[u8]) {
-            input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            input.extend_from_slice(bytes);
-        }
+        let input = self.auth_msg_input(reward_commits, signable_tx_hash)?;
+        Ok(cshake256_64(role.customization(), &input))
+    }
+
+    /// Both role digests in one pass. The framed input is role-independent
+    /// (only the cSHAKE customization differs, and cSHAKE absorbs it at init,
+    /// before the message — SP 800-185), so building it once and hashing it
+    /// under both customizations is byte-identical to two [`Self::auth_msg`]
+    /// calls at half the construction cost. Preferred on the per-vin
+    /// sign/verify paths, which always need both.
+    pub fn auth_msgs(
+        &self,
+        reward_commits: &[RewardCommit],
+        signable_tx_hash: &[u8; 32],
+    ) -> Result<EmissionAuthMsgs, WireError> {
+        let input = self.auth_msg_input(reward_commits, signable_tx_hash)?;
+        Ok(EmissionAuthMsgs {
+            backing: cshake256_64(EMISSION_AUTH_BACKING_CUSTOMIZATION, &input),
+            claim: cshake256_64(EMISSION_AUTH_CLAIM_CUSTOMIZATION, &input),
+        })
+    }
+
+    /// The role-independent framed field inventory (auth_msg doc fields 1–8).
+    fn auth_msg_input(
+        &self,
+        reward_commits: &[RewardCommit],
+        signable_tx_hash: &[u8; 32],
+    ) -> Result<Vec<u8>, WireError> {
+        self.validate()?;
         let mut input = Vec::new();
         framed(
             &mut input,
@@ -639,16 +700,8 @@ impl ArchivalRewardEmissionVin {
         );
         framed(&mut input, &self.p_pubkey);
         framed(&mut input, &encode_holdings_descriptor(&self.holdings)?);
-        let mut epochs = Vec::with_capacity(self.settlement_epochs.len() * 8);
-        for epoch in &self.settlement_epochs {
-            epochs.extend_from_slice(&epoch.to_le_bytes());
-        }
-        framed(&mut input, &epochs);
-        let mut amounts = Vec::with_capacity(self.reward_amount_plain.len() * 8);
-        for amount in &self.reward_amount_plain {
-            amounts.extend_from_slice(&amount.to_le_bytes());
-        }
-        framed(&mut input, &amounts);
+        framed_u64_le(&mut input, &self.settlement_epochs);
+        framed_u64_le(&mut input, &self.reward_amount_plain);
         framed(&mut input, &self.encode_work_claim());
         let mut commits = Vec::with_capacity(reward_commits.len() * 72);
         for rc in reward_commits {
@@ -658,8 +711,29 @@ impl ArchivalRewardEmissionVin {
         }
         framed(&mut input, &commits);
         framed(&mut input, signable_tx_hash);
-        Ok(cshake256_64(customization, &input))
+        Ok(input)
     }
+}
+
+impl EmissionAuthRole {
+    /// The role's cSHAKE customization (the Q1 domain separation).
+    #[must_use]
+    pub const fn customization(self) -> &'static [u8] {
+        match self {
+            Self::Backing => EMISSION_AUTH_BACKING_CUSTOMIZATION,
+            Self::Claim => EMISSION_AUTH_CLAIM_CUSTOMIZATION,
+        }
+    }
+}
+
+/// The two role digests of one emission vin (see
+/// [`ArchivalRewardEmissionVin::auth_msgs`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmissionAuthMsgs {
+    /// Stake-side (`auth_backing`) binding message.
+    pub backing: [u8; 64],
+    /// Claim-side (`auth_claim`) binding message.
+    pub claim: [u8; 64],
 }
 
 #[cfg(test)]
@@ -940,14 +1014,10 @@ mod tests {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: vec![7, 42],
         };
-        assert_eq!(
-            encode_holdings_descriptor(&shard_set).unwrap(),
-            GOLDEN_SHARD_SET,
-            "holdings golden bytes moved — consensus change to BOTH wires"
-        );
-
         // In-situ: the fragment sits byte-identical inside a serialized emission
-        // vin, at tag + varint(pk_len) + pk_bytes.
+        // vin, at tag + varint(pk_len) + pk_bytes. (The direct-encode assertion
+        // lives in bond_wire's twin test; this in-situ check strictly dominates
+        // it on the emission side — it pins the codec bytes AND their offset.)
         let mut vin = sample_vin();
         vin.holdings = shard_set;
         let wire = vin.serialize().unwrap();
@@ -958,5 +1028,122 @@ mod tests {
             GOLDEN_SHARD_SET,
             "emission wire's holdings fragment diverged from the shared golden pin"
         );
+    }
+
+    /// Boundary roundtrips the r5 review found uncovered: the 15-epoch batch
+    /// cap, scarcity at `u32::MAX`, tree_depth extremes, and exact-consumption
+    /// of an unmodified serialize.
+    #[test]
+    fn emission_boundary_roundtrips() {
+        // (a) MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15 epochs, aligned amounts +
+        // claims; roundtrip through the EXACT parser so full consumption of a
+        // clean serialize is proven, not assumed.
+        let epochs: Vec<u64> = (1..=15).collect();
+        let mut vin = sample_vin();
+        vin.settlement_epochs = epochs.clone();
+        vin.reward_amount_plain = epochs.iter().map(|e| e * 1_000).collect();
+        vin.work_claim = epochs
+            .iter()
+            .map(|&epoch| WorkEpochClaim {
+                epoch,
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 7,
+                    serve_credit_bit: true,
+                    scarcity_milli: 1,
+                }],
+            })
+            .collect();
+        let wire = vin.serialize().unwrap();
+        let decoded = ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]).unwrap();
+        assert_eq!(decoded, vin, "15-epoch max batch must roundtrip exactly");
+
+        // (b) One past the cap must reject on write.
+        let mut over = vin.clone();
+        over.settlement_epochs.push(16);
+        over.reward_amount_plain.push(0);
+        over.work_claim.push(WorkEpochClaim {
+            epoch: 16,
+            shard_entries: vec![],
+        });
+        assert!(matches!(
+            over.serialize(),
+            Err(WireError::EpochCountOutOfRange { got: 16 })
+        ));
+
+        // (c) scarcity_milli at u32::MAX roundtrips losslessly.
+        let mut vin = sample_vin();
+        vin.work_claim[0].shard_entries[0].scarcity_milli = u32::MAX;
+        let wire = vin.serialize().unwrap();
+        let decoded = ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]).unwrap();
+        assert_eq!(decoded, vin, "u32::MAX scarcity must roundtrip");
+
+        // (d) tree_depth extremes roundtrip (the field is verify-bounded, not
+        // codec-bounded — the codec must carry any u8 faithfully).
+        for depth in [0u8, 255] {
+            let mut vin = sample_vin();
+            vin.backing.tree_depth = depth;
+            let wire = vin.serialize().unwrap();
+            let decoded = ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]).unwrap();
+            assert_eq!(decoded.backing.tree_depth, depth);
+        }
+    }
+
+    /// A wire scarcity varint exceeding u32 must reject as ScarcityOverflow —
+    /// the one read-side branch the r5 review found unexercised.
+    #[test]
+    fn emission_read_rejects_scarcity_overflow() {
+        // Craft the payload up to the first entry's scarcity field, then plant
+        // a varint of u32::MAX + 1. Single epoch, single entry, CompleteTree
+        // holdings keep the prefix minimal.
+        let mut wire = Vec::new();
+        write_varint(&SINGLE_KEY_CANONICAL_LEN, &mut wire).unwrap();
+        wire.extend_from_slice(&vec![0xA1; SINGLE_KEY_CANONICAL_LEN]);
+        wire.push(HoldingsKind::CompleteTree as u8);
+        write_varint(&1usize, &mut wire).unwrap(); // epoch count
+        write_varint(&11u64, &mut wire).unwrap(); // epoch
+        write_varint(&1usize, &mut wire).unwrap(); // entry count
+        write_varint(&7u64, &mut wire).unwrap(); // shard_id
+        wire.push(1); // serve_credit_bit
+        let too_big = u64::from(u32::MAX) + 1;
+        write_varint(&too_big, &mut wire).unwrap();
+        assert!(matches!(
+            ArchivalRewardEmissionVin::read_payload(&mut wire.as_slice()),
+            Err(WireError::ScarcityOverflow(v)) if v == too_big
+        ));
+    }
+
+    /// auth_msgs() must equal the two individual auth_msg() calls (the shared
+    /// input is role-independent; only the customization differs), and the
+    /// digest builder must share write()'s validate() precondition.
+    #[test]
+    fn auth_msgs_matches_per_role_calls_and_validates() {
+        let vin = sample_vin();
+        let commits = sample_commits();
+        let txh = [0x42u8; 32];
+
+        let pair = vin.auth_msgs(&commits, &txh).unwrap();
+        assert_eq!(
+            pair.backing,
+            vin.auth_msg(&commits, &txh, EmissionAuthRole::Backing)
+                .unwrap()
+        );
+        assert_eq!(
+            pair.claim,
+            vin.auth_msg(&commits, &txh, EmissionAuthRole::Claim)
+                .unwrap()
+        );
+
+        // Precondition unification: a struct write() would reject must not
+        // yield a digest either.
+        let mut bad = sample_vin();
+        bad.reward_amount_plain.pop();
+        assert!(matches!(
+            bad.auth_msg(&commits, &txh, EmissionAuthRole::Claim),
+            Err(WireError::RewardAmountsMisaligned { .. })
+        ));
+        assert!(matches!(
+            bad.auth_msgs(&commits, &txh),
+            Err(WireError::RewardAmountsMisaligned { .. })
+        ));
     }
 }

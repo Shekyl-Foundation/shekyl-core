@@ -129,7 +129,13 @@ impl From<io::Error> for WireError {
     }
 }
 
-fn write_holdings_descriptor<W: Write>(w: &mut W, h: &HoldingsDescriptor) -> io::Result<()> {
+/// Stream the §3.4.1 holdings encoding straight to a sink (no intermediate Vec).
+/// Shared with the emission wire's `write()`; `encode_holdings_descriptor` wraps
+/// this for callers that need the bytes (signature preimages / auth digests).
+pub(crate) fn write_holdings_descriptor<W: Write>(
+    w: &mut W,
+    h: &HoldingsDescriptor,
+) -> io::Result<()> {
     w.write_all(&[h.kind as u8])?;
     match h.kind {
         HoldingsKind::ShardSetCompact => {
@@ -251,12 +257,8 @@ impl ArchivalBondPostVin {
     pub fn read_payload_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let vin = Self::read_payload(r)?;
         crate::wire::ensure_payload_fully_consumed(r).map_err(|e| match e {
-            crate::wire::WireError::TrailingBytes => WireError::TrailingBytes,
-            crate::wire::WireError::Io(err) => WireError::Io(err),
-            _ => WireError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unexpected wire error during bond-post parse",
-            )),
+            crate::wire::ExactParseError::TrailingBytes => WireError::TrailingBytes,
+            crate::wire::ExactParseError::Io(err) => WireError::Io(err),
         })?;
         Ok(vin)
     }

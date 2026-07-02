@@ -75,6 +75,16 @@ pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
+// The emission error is re-exported under a disambiguated name: the bare
+// `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
+// deliberately not re-exported — a crate-root import must not silently resolve
+// to the wrong module's error.
+pub use emission_wire::{
+    ArchivalRewardEmissionVin, EmissionAuthMsgs, EmissionAuthRole, MembershipOnlyBacking,
+    RewardCommit, ShardWorkEntry, WireError as EmissionWireError, WorkEpochClaim,
+    EMISSION_AUTH_BACKING_CUSTOMIZATION, EMISSION_AUTH_CLAIM_CUSTOMIZATION,
+    MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
+};
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};

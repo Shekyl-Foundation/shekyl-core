@@ -10597,3 +10597,23 @@ Retained for citation in review; each links to the canonical record.
   `ref_leaf_count`, and applying boundary-chunk hash trimming via
   `shekyl_curve_tree_hash_trim_{selene,helios}` for sibling chunks that
   grew since the reference block.
+
+- **Bond-post wire accepts truncated hybrid-pubkey lengths — confirm the C++
+  oracle bound (PR-E2 review, 2026-07-02).** `bond_wire.rs::read_payload`
+  accepts any `pk_len <= SINGLE_KEY_CANONICAL_LEN` (1996) — a truncated or
+  empty key parses — while the emission wire (`emission_wire.rs`) requires
+  exact canonical equality for the same encoding. Nothing in the Rust crate
+  re-checks the bond length (`bond_post.rs` header: "Structural bounds (hybrid
+  pubkey length) … stay in C++ consensus glue"). Action: verify the C++
+  bond-post structural validation rejects `pk_len != PQC_HYBRID_SINGLE_KEY_LEN`;
+  if it also only upper-bounds, tighten both sides to exact equality
+  (pre-genesis wire fix, coordinate with the 0x03 tag freeze).
+
+- **`shekyl_fcmp_verify` (full path) lacks the arity hardening its
+  membership-only sibling got (PR #224 review, 2026-07-02).** The
+  membership-only FFI + Rust verify now cap `num_inputs`/`po_count` at
+  `MAX_INPUTS` and use `checked_mul` for byte lengths; the shipped full
+  `shekyl_fcmp_verify` has neither (unchecked `ki_count * 32`, no cap).
+  Deferred from the #224 review rounds to avoid changing shipped
+  consensus-path error codes mid-review; apply the same caps in a dedicated
+  pass (batch with other FFI work per the CI-cost discipline).
